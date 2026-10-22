@@ -28,7 +28,7 @@ Decompose $ARGUMENTS into N coverage-mapped one-issue lanes   (N == 1 ⇒ single
   ↓
 ── per-lane fan-out: N parallel lanes, one issue each, within ONE parent cycle ──
      Step 4   Delegate to BA subagent      — dispatch per lane   → stage barrier
-     Step 5   BA clarification loop         — lane-local (max 3 rounds)
+     Step 5   BA clarification loop         — lane-local
      Step 6   Validate BA output           — per lane            → stage barrier
      Step 7   QA validates BA conclusions  — per lane            → stage barrier
      Step 8   BA-QA iteration              — retry affected lanes → stage barrier
@@ -51,7 +51,7 @@ Emit spec continuation or temp closure update
 - Orchestrator does NO implementation work (dev handles it)
 - All requirement clarification routed through BA subagent
 - BA returns dual output: Markdown spec + JSON context
-- Orchestrator only relays BA's clarification questions to user
+- Orchestrator relays a BA or dev question artifact to the owner with one AskUserQuestion, and asks only a real, specific decision that the request, the code or a sensible default cannot settle; a question never stops or ends the cycle
 - Rich JSON context stored in `docs/dev/`
 - QA verification after each dev cycle
 - Iterate until all quality standards met
@@ -362,8 +362,9 @@ Before proceeding to dev, verify the BA JSON context contains:
   `target_location` (see Contract D extension below)
 - **Location-complaint overlap**: tokens of BA's `affected_files ∪
   located_source` must intersect the complaint's location keywords, OR
-  BA must declare `status: localization_blocked`. Mismatch is a hard
-  reject — re-delegate BA, do NOT dispatch dev.
+  BA's context must record `localization_blocked` (set only after the owner
+  answered BA's localization question; agents/ba.md "Localization blocked").
+  Mismatch is a hard reject — re-delegate BA, do NOT dispatch dev.
 
 If any check fails, the orchestrator re-delegates to BA with explicit
 feedback naming the missing field. Do NOT proceed to dev with an
@@ -381,8 +382,8 @@ judgment: would a reasonable engineer, reading the user complaint and
 seeing BA's three fields side by side, agree that BA looked in the right
 place? Aliases, synonyms, hierarchical names, and indirect references all
 count toward the match — there is no token-splitting or set-intersection
-step. Pass iff the LLM judgment is "yes, plausible match" OR BA emitted
-`status == localization_blocked`. On a "no" verdict, re-delegate to BA
+step. Pass iff the LLM judgment is "yes, plausible match" OR the context
+records `localization_blocked`. On a "no" verdict, re-delegate to BA
 with a one-sentence explanation of which complaint phrase did not find a
 believable home in `affected_files` or `located_source`, and do NOT
 advance to dev.
@@ -399,12 +400,11 @@ different layer OR `jaccard < 0.5` on `target_location`. This blocks the
 
 ### BA rejection handling
 
-If BA returns `status: "rejected"` (Contract D novelty-check failure):
-
-- Do NOT retry BA with the same input (it will reject again)
-- Surface the rejection reason and prior-attempt layer to the user
-- Propose a different-layer approach (use the L1–L5 layer vocabulary)
-- Only after user selects a different layer, re-delegate to BA
+When BA's Contract D novelty check rejects the attempt, BA writes its question
+artifact `docs/dev/producer-question-<timestamp>-ba.json` (options: the
+candidate layers from the L1–L5 vocabulary below; default: BA's
+recommendation) instead of its report. Relay it as in Step 5 and re-dispatch
+BA with the chosen layer.
 
 ### Layer vocabulary (shared with BA)
 
@@ -447,7 +447,7 @@ Use Task tool with:
     "role": "ba",
     "pipeline": "dev",
     "profile": "singular",
-    "dispatched_at": "<ISO-8601, captured immediately before this Agent call>",
+    "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this Agent call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>",
     "artifacts": [
       {"kind": "json", "path": "docs/dev/context-<timestamp>.json", "schema": "context.v1",
        "identity": {"task_id": "<timestamp>", "request_id": "<timestamp>"}},
@@ -490,11 +490,10 @@ Use Task tool with:
 
 ### Step 5: BA Clarification Loop
 
-**If BA returns `status: "needs_clarification"`**:
+**If BA needs clarification** (`needs_clarification`), it writes its question artifact `docs/dev/producer-question-<timestamp>-ba.json` (schema producer-question.v1: `task_id`, `role`, `need`, 2-4 `options` of `{label, description}`, a `default` that is one of the labels, `why`; one decision per artifact) instead of its report, and ends.
 
-1. Present BA's questions to user (relay verbatim)
-2. Collect user answers
-3. Re-invoke BA with answers:
+1. Relay it with ONE AskUserQuestion: the artifact's options become the dialog's options, its default the recommended option.
+2. Re-dispatch BA fresh and synchronously with the answer: same subagent_type, task_id, lane, pipeline, profile and obligation template, a fresh dispatched_at:
 
 ```
 Use Task tool with:
@@ -507,7 +506,7 @@ Use Task tool with:
 
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
-  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1"},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"},{"kind":"json","path":"docs/dev/acceptance-criteria-<timestamp>.json","schema":"acceptance-criteria.v1"}]. Orchestrator instantiates per-dispatch — never hand-invented.
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"},{"kind":"json","path":"docs/dev/acceptance-criteria-<timestamp>.json","schema":"acceptance-criteria.v1","identity":{"task_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
@@ -521,12 +520,7 @@ Use Task tool with:
   "
 ```
 
-**Loop rules**:
-- Maximum 3 clarification rounds
-- After round 3, BA returns best-effort with explicit assumptions
-- If BA returns `status: "ready"`, proceed to Step 6
-
-**If BA returns `status: "ready"` on first invocation**: Skip to Step 6.
+**Loop rule**: repeat this step until BA writes its report (`status: "ready"`), then proceed to Step 6.
 
 ### Step 6: Validate BA Output
 
@@ -601,9 +595,7 @@ The four positive conditions all reduce to the single check `current != new_spec
 
 The patch MUST run after BA validation passes but BEFORE QA (Step 7) is dispatched — QA reads `context-<timestamp>.json` and must see the patched value.
 
-**If validation fails**:
-- Re-invoke BA with specific feedback about what's missing
-- Maximum 2 re-invocations for validation fixes
+**If validation finds a gap**: re-dispatch BA with specific feedback about what's missing, and validate again until it passes.
 
 **If validation passes**: Apply the spec_path patch above, then proceed to Step 7
 
@@ -632,7 +624,7 @@ Use Agent tool with:
 
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
-  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="ba_validation", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1"}] (schema id is a provisional placeholder pending registration in schemas/registry.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="ba_validation", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1","identity":{"task_id":"<timestamp>"}}] (ba-qa-report.v1 is registered in schemas/registry.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the QA subagent in BA-VALIDATION MODE. This is NOT code verification.
   You are verifying the QUALITY OF BA's ANALYSIS, not any implementation.
@@ -679,6 +671,7 @@ Use Agent tool with:
 
   Return JSON:
   {
+    'task_id': '<timestamp>',
     'verdict': 'pass' or 'fail',
     'objections': [
       {
@@ -707,24 +700,9 @@ ELIF verdict == "fail":
 
 ### Step 8: BA-QA Iteration Loop (if QA rejects BA)
 
-**Iteration guard**: Maximum 3 BA-QA iterations to prevent infinite loops
+A BA-QA `fail` loops back to BA until QA's verdict is `pass`; pass is the only exit.
 
-**Current BA-QA iteration**: Track internally (starts at 1)
-
-**If BA-QA iteration > 3**:
-```
-BA-QA validation: 3 iterations exhausted. Proceeding with best-effort BA output.
-
-Unresolved objections:
-{summary of remaining QA objections}
-
-Appending unresolved objections to context JSON under `ba_qa_unresolved_objections`.
-Proceeding to Step 9 with documented assumptions.
-```
-
-**If BA-QA iteration <= 3**:
-
-**Announce**: `BA-QA iteration <N>/3: QA found <count> objections in BA analysis. Re-invoking BA to address objections.`
+**Announce**: `BA-QA iteration <N>: QA found <count> objections in BA analysis. Re-invoking BA to address objections.`
 
 **Re-invoke BA with QA's objections**:
 
@@ -740,7 +718,7 @@ Use Agent tool with:
 
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
-  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1"},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"},{"kind":"json","path":"docs/dev/acceptance-criteria-<timestamp>.json","schema":"acceptance-criteria.v1"}]. Orchestrator instantiates per-dispatch — never hand-invented.
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"},{"kind":"json","path":"docs/dev/acceptance-criteria-<timestamp>.json","schema":"acceptance-criteria.v1","identity":{"task_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
@@ -766,7 +744,7 @@ Use Agent tool with:
   "
 ```
 
-**After BA re-delivers**: Return to Step 6 (validate BA output), then Step 7 (QA re-validates).
+**After BA re-delivers**: Return to Step 6 (validate BA output), then Step 7 (QA re-validates). If BA writes its question artifact instead, relay it as in Step 5.
 
 **Rule**: Every BA invocation MUST be followed by QA validation. No exceptions.
 
@@ -822,7 +800,7 @@ Use Task tool with:
 
   You are the test-writer subagent. Follow agents/test-writer.md instructions precisely.
 
-  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="test-writer", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/test-writer-report-<task_id>.json","schema":"test-writer-report.v1","identity":{"task_id":"<task_id>"}},{"kind":"json","path":"tests/generated/<task_id>/manifest.json","schema":"test-writer-manifest.v1","identity":{"task_id":"<task_id>"}}] (both schema ids are registered in schemas/registry.json -- schemas/test-writer-report.v1.json and schemas/test-writer-manifest.v1.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="test-writer", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own <task_id> placeholder, artifacts=[{"kind":"json","path":"docs/dev/test-writer-report-<task_id>.json","schema":"test-writer-report.v1","identity":{"task_id":"<task_id>"}},{"kind":"json","path":"tests/generated/<task_id>/manifest.json","schema":"test-writer-manifest.v1","identity":{"task_id":"<task_id>"}}] (both schema ids are registered in schemas/registry.json -- schemas/test-writer-report.v1.json and schemas/test-writer-manifest.v1.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
 
   Inputs:
     task_id: <task_id>
@@ -871,7 +849,7 @@ Use Task tool with:
 
   You are the dev subagent. Follow agents/dev.md instructions precisely.
 
-  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"},"required_values":{"dev.status":["completed"]}}]. Terminal state (R10): the dev-report must reach `dev.status` = `completed` before you stop (declared as `required_values` on the artifact entry); deliver it complete in one pass — `blocked`/`needs_review` is not an acceptable hand-back. Orchestrator instantiates per-dispatch — never hand-invented.
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
   <DEV_SCORE_HEADER prepended here — score-inject output is placed AFTER the role declaration above and BEFORE the task instructions below, per spec 5.1 line 113: Injection position: after role declaration, before task instructions>
 
@@ -980,17 +958,15 @@ when N>1 parallel devs were dispatched.
 Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 
 **Sanity checks**:
-- [ ] Status is "completed" (not "blocked")
+- [ ] Status is "completed"
 - [ ] All tasks documented
 - [ ] Scripts created have usage examples
 - [ ] Git rationale references root cause
 - [ ] Files exist that were reported as created/modified
 
-**If dev blocked**:
-- Read blocking issues from report
-- Resolve blockers (e.g., missing information, technical constraints)
-- Refine context JSON with additional information
-- Re-invoke dev subagent (maximum 3 attempts)
+**If dev wrote its question artifact** (`docs/dev/producer-question-<timestamp>-dev.json` instead of its report): relay it as in Step 5 and re-dispatch dev fresh with the answer (Step 10's template, a fresh dispatched_at).
+
+**If a sanity check finds a gap**: refine the context JSON with what is missing and re-dispatch dev (a fresh dispatched_at) until the checks pass.
 
 **If dev completed**: Proceed to Step 13
 
@@ -1020,7 +996,7 @@ Use Task tool with:
 
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
-  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="final_verification", task_id/dispatched_at bound to this dispatch's own timestamp/session-id placeholder, artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>"},"required_values":{"qa.status":["pass"]}}]. Terminal state (R10): the qa-report must reach `qa.status` = `pass` before you stop (declared as `required_values` on the artifact entry); deliver the verdict in one pass — an unfinished hand-back is not acceptable. Orchestrator instantiates per-dispatch — never hand-invented.
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="final_verification", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
   You are the QA subagent. Follow agents/qa.md instructions precisely.
 
@@ -1079,12 +1055,7 @@ After the spec section updates pass completes (or is skipped on non-spec cycles)
 IF qa.status == "pass":
   → Proceed to Step 15 (Update Permissions)
 
-ELIF qa.status == "warning":
-  → Check if minor issues acceptable
-  → If yes: Proceed to Step 15 (Update Permissions)
-  → If no: Proceed to Step 16 (Iteration)
-
-ELIF qa.status == "fail":
+ELIF qa.status == "warning" or "fail":
   → Proceed to Step 16 (Iteration)
 ```
 
@@ -1176,7 +1147,7 @@ You can now use these scripts without permission prompts.
 - If permission already exists → Skip, don't duplicate
 - If user denies update → Log to completion report
 
-### Step 16: Iteration Loop (if QA fails)
+### Step 16: Iteration Loop (QA warning or fail)
 
 #### Layer-escalation gate (mandatory)
 
@@ -1201,40 +1172,7 @@ each attempt. Rules:
    evidence; the orchestrator may override the gate only after user
    confirmation.
 
-**Iteration guard**: Maximum 5 iterations to prevent infinite loops
-
-**Current iteration**: Track internally (starts at 1)
-
-**If iteration > 5**:
-```
-Quality verification failed after 5 iterations.
-
-Issues remaining:
-{summary of critical/major issues}
-
-Recommendation:
-- Manual review needed, OR
-- Requirements need to be broken down into smaller tasks, OR
-- Technical constraints prevent automated solution
-
-Would you like to:
-1. Review current state manually
-2. Break down into smaller tasks
-3. Accept current implementation with known issues
-```
-
-Before presenting those options, create or update a continuation spec using the
-`/spec-update` default continuation-spec mode:
-- If this `/dev` cycle had a `spec_path`, append to that spec.
-- If there was no source spec, create a new spec from
-  `~/.claude/templates/overnight-spec.md`.
-- Populate Sections 2/3/4/6/7/8 with attempted approaches, changed-file
-  references, current QA evidence, unmet gap, concrete next plan, and traps.
-- If updating a spec that already has split views/checkpoints, record that they
-  are stale because the spec now contains a continuation update.
-- Print `Continuation spec: <path>` and `Next: /dev --spec <path>`.
-
-**If iteration <= 5**:
+Dev iterates and QA re-checks until QA's status is `pass`; pass is the only exit.
 
 **Refine context for next iteration**:
 
@@ -1342,8 +1280,6 @@ initial worker shard.
 
 **Iterations**: {N}
 
-**Disclosed Exceptions** (only when `ARTIFACT_CHAIN.status == "pass_with_exceptions"` — ticket 20260911-011232; omit this bullet entirely otherwise): one line per `disclosed_exceptions[]` entry, verbatim — `code` / `path` / `lane_task_id` / `classification`. Never silently absorbed into "PASSED" above.
-
 ## Files Generated
 
 *(Single-lane cycle, N == 1)*
@@ -1390,20 +1326,11 @@ ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
 The fixed entrypoint contract is
 `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
 Completion requires process exit 0 and top-level
-`status in {"pass", "pass_with_exceptions"}`; exit 2 or `status == "fail"`
-blocks with the resolver's exact `errors[]`. Do not reproduce the validator
-with ad-hoc file tests. The same result object (`mode`, `lanes`,
-`report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, `qa_inputs`,
-and `disclosed_exceptions`) is the downstream handoff used by `/close` and
-normal `/commit`. When `status == "pass_with_exceptions"` (ticket
-20260911-011232 — a lane's own deliverable is independently QA-verified
-correct but carries a disclosed, non-defect condition), completion is NOT
-blocked, but the completion report (`docs/dev/completion-<timestamp>.md`)
-MUST explicitly list every `disclosed_exceptions[]` entry verbatim (`code`,
-`path`, `lane_task_id`, `classification`) — never silently absorbed into an
-undifferentiated "complete". Without this symmetry a fan-out `/dev` cycle
-carrying a disclosed exception could never finish to hand off to `/close` at
-all.
+`status == "pass"`; exit 2 or any other status blocks with the resolver's
+exact `errors[]`. Do not reproduce the validator with ad-hoc file tests. The
+same result object (`mode`, `lanes`, `report_paths`, `artifact_paths`,
+`commit_whitelist_artifacts`, `qa_inputs`) is the downstream handoff used by
+`/close` and normal `/commit`.
 
 - **Single-lane cycle (N == 1):** `mode == "singular"` preserves the existing
   five-artifact contract: parent ticket, context, dev-report, QA-report, and
@@ -1431,7 +1358,7 @@ repair, refresh, or fabricate any artifact.
 
 - If there is any unfinished development work (non-empty follow-up work in
   "Next Steps", known unmet acceptance criteria, accepted AC-deviation with
-  future work, max-iteration exit, or user asks to keep improving), use
+  future work, or user asks to keep improving), use
   `/spec-update` default continuation-spec mode. If a source spec exists, update it;
   otherwise create a new spec. The next command is `/dev --spec <spec_path>`.
   Do NOT hand unfinished work to `/close` or `/commit`.
@@ -1650,11 +1577,10 @@ if __name__ == "__main__":
 - No specialists needed for this requirement → skip
 
 **Step 4**: Delegate to BA subagent
-- BA returns `needs_clarification` with questions
+- BA writes its question artifact (which API?)
 
 **Step 5**: BA clarification loop
-- Round 1: Which API? → POST /api/data, timeout 5s, need 95% completion
-- Round 2: BA has enough clarity → returns `ready`
+- AskUserQuestion → POST /api/data; BA re-dispatched with the answer → returns `ready`
 - BA creates: `ba-spec-20251226-114500.md` + `context-20251226-114500.json`
 
 **Step 6**: Validate BA output

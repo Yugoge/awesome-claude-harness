@@ -372,13 +372,21 @@ def test_type_strict_json_equal_is_recursive_and_non_mutating() -> None:
     assert left == before
 
 
-@pytest.mark.parametrize("status", ["completed", "blocked", "needs_review"])
+@pytest.mark.parametrize("status", ["completed"])
 def test_dev_status_projection_positive_and_non_mutating(status: str) -> None:
     report = _dev_report(status)
     before = copy.deepcopy(report)
     assert runtime.validate(report, "dev-report.v1")["ok"]
     assert runtime.validate_artifact(report, "dev-report.v1")["ok"]
     assert report == before
+
+
+@pytest.mark.parametrize("status", ["blocked", "needs_review"])
+def test_dev_status_other_than_completed_is_rejected(status: str) -> None:
+    """D2: dev-report v1 and v2 each have one legal status, completed."""
+    report = _dev_report(status)
+    assert not runtime.validate(report, "dev-report.v1")["ok"]
+    assert not runtime.validate_artifact(report, "dev-report.v1")["ok"]
 
 
 @pytest.mark.parametrize(("mutations", "fragments"), DEV_NEGATIVE_CASES)

@@ -538,6 +538,7 @@ write_checkpoint() {
     fi
 
     rm -f "$TMP_INDEX"
+    mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null  # the 2>> redirects below fail on a fresh home
     if [ -n "$seed_parent_tree" ]; then
         if ! GIT_INDEX_FILE="$TMP_INDEX" $git_cmd read-tree "$seed_parent_tree" 2>>"$CHECKPOINT_LOG_FILE"; then
             _checkpoint_log ERROR "read-tree failed (parent_tree=${seed_parent_tree}, ref=${ref})"

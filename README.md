@@ -252,8 +252,8 @@ logged without the offending values. It never blocks a Stop (with or without
 `stop_hook_active`): the Stop hook's later phases still run and the session shows one line
 naming the refusing rule and `logs/checkpoint.log`, never a value. A broken filter install (the
 filter still `required` but its clean command gone, or `scripts/install/render-settings`
-missing) is a failure, not a refusal: the snapshot fails and blocks the Stop until the install
-is repaired (doctor names what is missing).
+missing) is a failure, not a refusal: the snapshot fails, the failure is logged, the Stop
+proceeds, and doctor names what is missing.
 
 **The private-literal list** is `<harness-home>/private-literals.txt`: untracked and gitignored;
 init creates it empty and only you fill it. One literal per line — account names, e-mail
@@ -865,7 +865,7 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 | PostToolUse | 18 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | PostToolUseFailure | 1 | Allowlist grant consumption on a failed tool result |
 | Notification | 1 | User-facing notification routing |
-| Stop | 4 | Workflow coordinator (overnight time-lock, spec coverage, auto-commit, allowlist cleanup phases), `/do` report gate, obligation gate, completion gate |
+| Stop | 3 | Workflow coordinator (overnight time-lock, spec coverage, auto-commit, allowlist cleanup phases), `/do` report gate, obligation gate |
 | SessionEnd | 1 | Scratch-directory sweep |
 | SubagentStop | 8 | cp-state enforcement, artifact contract, subagent output capture |
 

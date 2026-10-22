@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -2260,29 +2262,54 @@ class TestBlockedAggregateCarriesForwardOwnedEdits:
 # hooks/pretool-aggregate-check.py::_run_obligation_barrier and helpers.
 # See docs/dev/ticket-20260930-132644-l3.md / acceptance-criteria-
 # 20260930-132644-l3.json (AC1-AC12).
+#
+# P1: obligations parse strictly (obligation.parse_obligation), and a prior
+# stage is an Agent/Task tool_use with a NON-ERROR tool_result whose id
+# differs from the payload's tool_use_id, in the same obligation.task_family.
+# Transcripts are written in T1 order: the in-flight tool_use is already in
+# the transcript when PreToolUse runs.
 # ---------------------------------------------------------------------------
 
-def _obligation_block(task_id, role="dev", lane="l3", profile="fanout-lane", artifacts=None):
+IN_FLIGHT_TOOL_USE_ID = "toolu_in_flight"
+# The strict parser rejects an empty artifacts list (artifacts_empty); the
+# default is one response_line entry, which parses and has no on-disk path.
+_DEFAULT_OBLIGATION_ARTIFACTS = ({"kind": "response_line", "terminal_line_regex": "^DONE$"},)
+
+
+def _obligation_block(
+    task_id, role="dev", lane="l3", profile="fanout-lane", artifacts=None,
+    pipeline="dev", dispatched_at="2026-09-30T00:00:00Z", **extra,
+):
     """Build a well-formed <obligation v="1"> block body for test prompts."""
     doc = {
         "task_id": task_id,
         "role": role,
         "lane": lane,
-        "pipeline": "dev",
+        "pipeline": pipeline,
         "profile": profile,
-        "dispatched_at": "2026-09-30T00:00:00Z",
-        "artifacts": artifacts if artifacts is not None else [],
+        "dispatched_at": dispatched_at,
+        "artifacts": (
+            artifacts if artifacts is not None
+            else [dict(a) for a in _DEFAULT_OBLIGATION_ARTIFACTS]
+        ),
     }
+    doc.update(extra)
     return f'<obligation v="1">{json.dumps(doc)}</obligation>'
 
 
-def _barrier_payload(prompt, subagent_type="dev", transcript_path=None, session_id="g3-session"):
+def _barrier_payload(
+    prompt, subagent_type="dev", transcript_path=None, session_id="g3-session",
+    tool_use_id=IN_FLIGHT_TOOL_USE_ID,
+):
     """Build a PreToolUse Agent-matcher dispatch payload. agent_id is always
     set to a truthy value so the pre-existing /do and /allow bypass blocks
-    (scoped to the qa-only branch) never interfere with these tests."""
+    (scoped to the qa-only branch) never interfere with these tests.
+    tool_use_id names the in-flight call, as the CLI's payload does."""
     data = {
+        "hook_event_name": "PreToolUse",
         "tool_name": "Agent",
         "tool_input": {"subagent_type": subagent_type, "prompt": prompt},
+        "tool_use_id": tool_use_id,
         "session_id": session_id,
         "agent_id": "test-agent-id",
     }
@@ -2291,26 +2318,58 @@ def _barrier_payload(prompt, subagent_type="dev", transcript_path=None, session_
     return data
 
 
-def _write_transcript_with_prompts(path, prompts):
-    """Write a JSONL transcript; each prompt becomes one Agent tool_use
-    block on its own line, mirroring the real transcript shape scanned by
-    hooks/lib/subagent_restart.py::_read_parent_calls."""
-    lines = []
-    for i, prompt in enumerate(prompts):
-        record = {
-            "message": {
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": f"toolu_{i}",
-                        "name": "Agent",
-                        "input": {"subagent_type": "dev", "prompt": prompt},
-                    }
-                ]
-            }
-        }
-        lines.append(json.dumps(record))
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+def _write_t1_transcript(path, stages, command="dev"):
+    """Write a main transcript in T1 order: two queue-operation records, the
+    typed slash command, then each stage's Agent tool_use followed by its
+    tool_result.
+
+    ``stages`` holds (tool_use_id, prompt, outcome[, subagent_type
+    [, result_text]]) tuples; outcome "ok" writes a non-error tool_result,
+    "error" one with is_error true (a hook refused the dispatch), None none at
+    all (a parallel sibling still running, or the in-flight call itself)."""
+    records = [
+        {"type": "queue-operation", "operation": "enqueue",
+         "timestamp": "2026-10-19T09:00:00Z", "content": f"/{command}"},
+        {"type": "queue-operation", "operation": "dequeue",
+         "timestamp": "2026-10-19T09:00:00Z"},
+        {"type": "user", "isSidechain": False, "origin": {"kind": "human"},
+         "message": {"role": "user", "content": (
+             f"<command-message>{command}</command-message>\n"
+             f"<command-name>/{command}</command-name>\n"
+             "<command-args>g3 fixture</command-args>"
+         )}},
+    ]
+    for stage in stages:
+        tool_use_id, prompt, outcome = stage[:3]
+        subagent_type = stage[3] if len(stage) > 3 else "dev"
+        records.append({
+            "type": "assistant",
+            "message": {"role": "assistant", "content": [{
+                "type": "tool_use", "id": tool_use_id, "name": "Agent",
+                "input": {"subagent_type": subagent_type, "prompt": prompt},
+            }]},
+        })
+        if outcome is None:
+            continue
+        block = {"type": "tool_result", "tool_use_id": tool_use_id}
+        if outcome == "error":
+            block["is_error"] = True
+            block["content"] = "PreToolUse:Agent hook error: dispatch refused"
+        else:
+            block["content"] = stage[4] if len(stage) > 4 else "subagent finished"
+        records.append({"type": "user", "message": {"role": "user", "content": [block]}})
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+
+def _write_transcript_with_prompts(path, prompts, in_flight=None, outcome="ok"):
+    """Each prompt becomes one Agent dispatch with a tool_result of
+    ``outcome`` (default: completed, non-error). ``in_flight`` (the current
+    dispatch's prompt) is appended last under IN_FLIGHT_TOOL_USE_ID with no
+    result, as under T1."""
+    stages = [(f"toolu_{i}", prompt, outcome) for i, prompt in enumerate(prompts)]
+    if in_flight is not None:
+        stages.append((IN_FLIGHT_TOOL_USE_ID, in_flight, None))
+    _write_t1_transcript(path, stages)
 
 
 def _run_barrier_hook(monkeypatch: pytest.MonkeyPatch, data: dict) -> int:
@@ -2320,6 +2379,38 @@ def _run_barrier_hook(monkeypatch: pytest.MonkeyPatch, data: dict) -> int:
     with pytest.raises(SystemExit) as exc_info:
         _hook_mod.main()
     return exc_info.value.code
+
+
+def _run_barrier_subprocess(project_dir: Path, home_dir: Path, data: dict, mode="block"):
+    """Run the hook the way the CLI does: a subprocess fed the payload on
+    stdin. HOME and CLAUDE_CONFIG_DIR are pinned to a tmp dir, and the
+    barrier switch is set only in this subprocess's environment."""
+    env = dict(os.environ)
+    env["CLAUDE_PROJECT_DIR"] = str(project_dir)
+    env["HOME"] = str(home_dir)
+    env["CLAUDE_CONFIG_DIR"] = str(Path(home_dir) / ".claude")
+    env["CLAUDE_STATE_DIR"] = str(Path(home_dir) / "state")
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env.pop("CLAUDE_OBLIGATION_BARRIER", None)
+    if mode is not None:
+        env["CLAUDE_OBLIGATION_BARRIER"] = mode
+    return subprocess.run(
+        [sys.executable, str(_HOOK)],
+        input=json.dumps(data),
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(project_dir),
+        timeout=30,
+    )
+
+
+def _lenient_obligation(prompt):
+    """The obligation body as plain JSON, without field validation: a
+    stand-in for the parser that accepts any profile."""
+    extracted = _hook_mod.obligation_lib.extract_obligation_block(prompt)
+    body = getattr(extracted, "body", None)
+    return json.loads(body) if isinstance(body, str) else None
 
 
 class TestObligationBarrierZeroIOFastPath:
@@ -2343,34 +2434,74 @@ class TestObligationBarrierZeroIOFastPath:
 
 
 class TestObligationBarrierRepairProfileBypass:
-    """AC2: profile=="repair" -> unconditional exit 0, no re-verification
-    attempted, independent of CLAUDE_OBLIGATION_BARRIER, even when a
-    referenced prior artifact is actually missing."""
+    """AC2 (P1): profile "repair" no longer bypasses G3 -- the REPAIR_PROFILE
+    shortcut is gone. "repair" is not a registered profile, so the strict
+    parser rejects the current block and G3 checks nothing for it: exit 0 in
+    every mode, transcript never scanned. That exit 0 is the strict parser,
+    not a profile exemption; rejecting the dispatch is G1's job
+    (CLAUDE_OBLIGATION_GATE=block exits 2, covered by
+    hooks/tests/test_obligation_gate.py). Were the block to parse, G3 would
+    check it like any other dispatch."""
 
     @pytest.mark.parametrize("mode", ["advisory", "block", "off", None])
     def test_obligation_barrier_repair_profile_bypass(
-        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, mode
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode
     ):
+        fake_home = tmp_path / f"fakehome-repair-{mode}"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
         if mode is None:
             monkeypatch.delenv("CLAUDE_OBLIGATION_BARRIER", raising=False)
         else:
             monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", mode)
+        assert not hasattr(_hook_mod, "REPAIR_PROFILE")
+
+        transcript = project_dir / "transcript.jsonl"
+        missing_rel = "docs/dev/dev-report-missing-repair.json"
+        prior_prompt = _obligation_block(
+            BARE_TID, role="dev", lane="l7",
+            artifacts=[{
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "identity": {"task_id": BARE_TID},
+            }],
+        )
+        prompt = _obligation_block(BARE_TID, profile="repair")
+        _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=prompt)
+        rejection = _hook_mod.obligation_lib.parse_obligation(prompt)
+        assert isinstance(rejection, _hook_mod.obligation_lib.Rejection)
+        assert (rejection.reason, rejection.field) == ("unknown_enum_value", "profile")
+
+        # What the code does: the current block fails the strict parser, so
+        # G3 returns before it scans the transcript (a completed prior stage
+        # with a missing artifact is right there) and exits 0.
+        real_scan = _hook_mod._scan_transcript_for_prior_obligations
 
         def _boom(*_args, **_kwargs):
-            raise AssertionError("must not scan transcript for a repair-profile dispatch")
+            raise AssertionError("G3 must not scan for a block the strict parser rejects")
 
         monkeypatch.setattr(_hook_mod, "_scan_transcript_for_prior_obligations", _boom)
-        prompt = _obligation_block(BARE_TID, profile="repair")
-        data = _barrier_payload(
-            prompt, subagent_type="dev",
-            transcript_path=project_dir / "nonexistent-transcript.jsonl",
-        )
+        data = _barrier_payload(prompt, subagent_type="dev", transcript_path=transcript)
         assert _run_barrier_hook(monkeypatch, data) == 0
+
+        # No profile is exempt any more: with a parser that accepts the
+        # "repair" profile, G3 checks the completed prior stage like any other
+        # dispatch -- block exits 2, advisory logs the violation, off is off.
+        monkeypatch.setattr(_hook_mod, "_scan_transcript_for_prior_obligations", real_scan)
+        monkeypatch.setattr(_hook_mod, "_parsed_obligation", _lenient_obligation)
+        assert _run_barrier_hook(monkeypatch, data) == (2 if mode == "block" else 0)
+        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
+        if mode in (None, "advisory"):
+            records = [json.loads(ln) for ln in log_path.read_text().splitlines() if ln.strip()]
+            assert [r["path"] for r in records] == [missing_rel]
+        else:
+            assert not log_path.exists()
 
 
 class TestObligationBarrierBlockMissingPriorArtifact:
     """AC3: block mode, missing prior json artifact -> exit 2, three-element
-    stderr naming path, prior role/lane, and a fix-action clause."""
+    stderr naming path, prior role/lane, and a fix-action clause. P1: only a
+    COMPLETED stage counts -- a non-error tool_result and an id other than
+    the payload's tool_use_id."""
 
     def test_obligation_barrier_block_missing_prior_artifact(
         self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
@@ -2385,16 +2516,28 @@ class TestObligationBarrierBlockMissingPriorArtifact:
                 "identity": {"task_id": BARE_TID, "request_id": BARE_TID},
             }],
         )
-        _write_transcript_with_prompts(transcript, [prior_prompt])
         current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=current_prompt)
         data = _barrier_payload(
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
         assert _run_barrier_hook(monkeypatch, data) == 2
         err = capsys.readouterr().err
-        assert missing_rel in err
+        assert f"[artifact_missing] {missing_rel}" in err
         assert "dev" in err and "l7" in err
         assert "fix" in err
+
+        # The same prior obligation is not a prior stage when a hook refused
+        # the dispatch, when it has no result yet, or when its id is the
+        # payload's own tool_use_id.
+        for stages in (
+            [("toolu_0", prior_prompt, "error"), (IN_FLIGHT_TOOL_USE_ID, current_prompt, None)],
+            [("toolu_0", prior_prompt, None), (IN_FLIGHT_TOOL_USE_ID, current_prompt, None)],
+            [(IN_FLIGHT_TOOL_USE_ID, prior_prompt, "ok")],
+        ):
+            _write_t1_transcript(transcript, stages)
+            assert _run_barrier_hook(monkeypatch, data) == 0, stages
+            assert capsys.readouterr().err == ""
 
 
 class TestObligationBarrierAdvisoryLogsAndPasses:
@@ -2422,8 +2565,8 @@ class TestObligationBarrierAdvisoryLogsAndPasses:
                 "identity": {"task_id": BARE_TID},
             }],
         )
-        _write_transcript_with_prompts(transcript, [prior_prompt])
         current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=current_prompt)
         data = _barrier_payload(
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
@@ -2458,8 +2601,8 @@ class TestObligationBarrierOffSwitchFullBypass:
                 "schema": "dev-report.v1", "identity": {"task_id": BARE_TID},
             }],
         )
-        _write_transcript_with_prompts(transcript, [prior_prompt])
         current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=current_prompt)
         data = _barrier_payload(
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
@@ -2483,8 +2626,17 @@ class TestObligationBarrierSkipsResponseKinds:
                 {"kind": "response_line", "terminal_line_regex": "^DONE$"},
             ],
         )
-        _write_transcript_with_prompts(transcript, [prior_prompt])
         current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=current_prompt)
+        # The prior is a completed stage of this family: the response kinds
+        # are skipped, not the stage.
+        priors = _hook_mod._scan_transcript_for_prior_obligations(
+            str(transcript), _hook_mod.obligation_lib.task_family(BARE_TID),
+            IN_FLIGHT_TOOL_USE_ID,
+        )
+        assert [[a["kind"] for a in p["obligation"]["artifacts"]] for p in priors] == [
+            ["response_block", "response_line"]
+        ]
         data = _barrier_payload(
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
@@ -2494,14 +2646,19 @@ class TestObligationBarrierSkipsResponseKinds:
 
 class TestObligationBarrierFailOpenOnException:
     """AC7: an unexpected exception inside the new logic -> fail-open, still
-    exits 0 even in block mode."""
+    exits 0 even in block mode (advisory-logged as gate_error)."""
 
     def test_obligation_barrier_fail_open_on_exception(
-        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
+        fake_home = tmp_path / "fakehome-gate-error"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
         monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
+        calls = []
 
-        def _boom(*_args, **_kwargs):
+        def _boom(*args, **_kwargs):
+            calls.append(args)
             raise RuntimeError("transcript truncated mid-JSON-line")
 
         monkeypatch.setattr(_hook_mod, "_scan_transcript_for_prior_obligations", _boom)
@@ -2511,6 +2668,12 @@ class TestObligationBarrierFailOpenOnException:
             transcript_path=project_dir / "whatever-transcript.jsonl",
         )
         assert _run_barrier_hook(monkeypatch, data) == 0
+        # The current block parses, so the scan ran (and raised).
+        assert len(calls) == 1
+        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
+        assert [json.loads(ln) for ln in log_path.read_text().splitlines()] == [
+            {"reason": "gate_error"}
+        ]
 
 
 class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
@@ -2518,7 +2681,9 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
     byte-for-byte unaffected by the new G3 logic, whether or not the qa
     dispatch's own prompt also carries an obligation (including
     profile="repair"); _run_obligation_barrier must never be invoked once
-    _emit_block has already exited 2."""
+    _emit_block has already exited 2. P1: once the canonical aggregate
+    exists, a repair-profile qa dispatch reaches G3, which no longer
+    bypasses it by profile."""
 
     def test_canonical_aggregate_check_unaffected_by_obligation_or_repair_profile(
         self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
@@ -2528,10 +2693,12 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
         _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
 
         calls = []
+        real_barrier = _hook_mod._run_obligation_barrier
         monkeypatch.setattr(_hook_mod, "_run_obligation_barrier", lambda d: calls.append(d))
 
+        repair_prompt = f"dev-report-{BARE_TID}.json\n" + _obligation_block(BARE_TID, profile="repair")
         for prompt in (
-            f"dev-report-{BARE_TID}.json\n" + _obligation_block(BARE_TID, profile="repair"),
+            repair_prompt,
             f"dev-report-{BARE_TID}.json",  # no-obligation baseline
         ):
             data = _barrier_payload(prompt, subagent_type="qa")
@@ -2540,6 +2707,45 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
             assert "BLOCKED Agent dispatch (qa): canonical aggregate dev-report missing." in err
 
         assert calls == []
+
+        # Canonical aggregate present: the qa dispatch passes the QA-only
+        # check and reaches the real barrier, armed, with a completed prior
+        # stage whose artifact is missing. The repair-profile block is
+        # rejected by the strict parser, so G3 checks nothing for it (exit
+        # 0); that is the parser, not a profile bypass -- G1 rejects such a
+        # dispatch. The same qa dispatch with a registered profile is checked
+        # and blocked.
+        _write(dev_dir, f"dev-report-{BARE_TID}.json", _good_shard())
+        monkeypatch.setattr(_hook_mod, "_run_obligation_barrier", real_barrier)
+        monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
+        missing_rel = "docs/dev/dev-report-missing-ac8.json"
+        prior_prompt = _obligation_block(
+            BARE_TID, role="dev", lane="l2",
+            artifacts=[{
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "identity": {"task_id": BARE_TID},
+            }],
+        )
+        transcript = project_dir / "transcript.jsonl"
+        checked_prompt = f"dev-report-{BARE_TID}.json\n" + _obligation_block(
+            BARE_TID, role="qa", profile="final_verification"
+        )
+        assert not hasattr(_hook_mod, "REPAIR_PROFILE")
+        for prompt, expected in ((repair_prompt, 0), (checked_prompt, 2)):
+            _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=prompt)
+            data = _barrier_payload(prompt, subagent_type="qa", transcript_path=transcript)
+            assert _run_barrier_hook(monkeypatch, data) == expected
+            err = capsys.readouterr().err
+            assert "canonical aggregate dev-report missing" not in err
+            assert (f"[artifact_missing] {missing_rel}" in err) is (expected == 2)
+
+        # With a parser that accepts the "repair" profile, the repair-profile
+        # qa dispatch is checked like any other: no profile is exempt.
+        monkeypatch.setattr(_hook_mod, "_parsed_obligation", _lenient_obligation)
+        _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=repair_prompt)
+        data = _barrier_payload(repair_prompt, subagent_type="qa", transcript_path=transcript)
+        assert _run_barrier_hook(monkeypatch, data) == 2
+        assert f"[artifact_missing] {missing_rel}" in capsys.readouterr().err
 
 
 class TestObligationBarrierBlockIdentityMismatch:
@@ -2573,8 +2779,8 @@ class TestObligationBarrierBlockIdentityMismatch:
                 "identity": {"task_id": BARE_TID, "request_id": BARE_TID},
             }],
         )
-        _write_transcript_with_prompts(transcript, [prior_prompt])
         current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=current_prompt)
         data = _barrier_payload(
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
@@ -2607,8 +2813,8 @@ class TestObligationBarrierBlockMarkdownMissingAnchor:
                 "terminal_line_regex": "^END$",
             }],
         )
-        _write_transcript_with_prompts(transcript, [prior_prompt])
         current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=current_prompt)
         data = _barrier_payload(
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
@@ -2648,8 +2854,8 @@ class TestObligationBarrierBlockSchemaInvalidPriorArtifact:
                 "identity": {"task_id": BARE_TID},
             }],
         )
-        _write_transcript_with_prompts(transcript, [prior_prompt])
         current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=current_prompt)
         data = _barrier_payload(
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
@@ -2685,8 +2891,8 @@ class TestObligationBarrierBlockMarkdownTerminalLineMismatch:
                 "terminal_line_regex": "^END$",
             }],
         )
-        _write_transcript_with_prompts(transcript, [prior_prompt])
         current_prompt = _obligation_block(BARE_TID, profile="final_verification")
+        _write_transcript_with_prompts(transcript, [prior_prompt], in_flight=current_prompt)
         data = _barrier_payload(
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
@@ -2695,6 +2901,403 @@ class TestObligationBarrierBlockMarkdownTerminalLineMismatch:
         assert md_rel in err
         assert "terminal_line_regex" in err
         assert "identity_anchor" not in err
+
+
+# ---------------------------------------------------------------------------
+# P1 acceptance (G3 with CLAUDE_OBLIGATION_BARRIER=block): the hook runs as a
+# subprocess, armed only in its own environment, against T1 transcripts (the
+# in-flight tool_use is already present). Obligations follow the dispatch
+# templates in commands/dev.md, dev-overnight.md and close.md.
+# ---------------------------------------------------------------------------
+
+_PRIOR_AT = "2026-10-19T09:00:00Z"
+_FRESH_AT = "2026-10-19T09:30:00Z"
+_CLOSE_VERDICT_RE = r"^(CLOSE: YES([ \-—(].*)?|CLOSE_FINDINGS: [0-9]+ items?)$"
+
+
+@pytest.fixture
+def g3_home(tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    return home
+
+
+def _parses(prompt) -> bool:
+    """True when the strict parser accepts the prompt's block (a test whose
+    current block did not parse would pass vacuously)."""
+    parsed = _hook_mod.obligation_lib.parse_obligation(prompt)
+    return isinstance(parsed, _hook_mod.obligation_lib.ParsedObligation)
+
+
+def _artifact_id(task_id):
+    """Artifacts are named with the id without its minted dev- or
+    dev-command- prefix."""
+    for prefix in ("dev-command-", "dev-"):
+        if task_id.startswith(prefix):
+            return task_id[len(prefix):]
+    return task_id
+
+
+def _json_artifact(path, schema, task_id, **identity):
+    return {
+        "kind": "json", "path": path, "schema": schema,
+        "identity": {"task_id": task_id, **identity},
+    }
+
+
+def _ba_obligation(task_id, dispatched_at=_PRIOR_AT, pipeline="dev", profile="singular"):
+    """The BA dispatch: context, ticket and acceptance criteria, named with
+    the canonical id."""
+    tid = _artifact_id(task_id)
+    return _obligation_block(
+        task_id, role="ba", lane=None, profile=profile, pipeline=pipeline,
+        dispatched_at=dispatched_at,
+        artifacts=[
+            _json_artifact(f"docs/dev/context-{tid}.json", "context.v1", tid, request_id=tid),
+            {"kind": "markdown", "path": f"docs/dev/ticket-{tid}.md", "identity_anchor": tid},
+            _json_artifact(
+                f"docs/dev/acceptance-criteria-{tid}.json", "acceptance-criteria.v1", tid
+            ),
+        ],
+    )
+
+
+def _report_obligation(
+    task_id, role, dispatched_at=_PRIOR_AT, pipeline="dev", profile="singular",
+    lane=None, **extra,
+):
+    """A dev or qa dispatch declaring its own <role>-report-<canonical>.json."""
+    tid = _artifact_id(task_id)
+    schema = {"dev": "dev-report.v2", "qa": "qa-report.v2"}[role]
+    return _obligation_block(
+        task_id, role=role, lane=lane, profile=profile, pipeline=pipeline,
+        dispatched_at=dispatched_at,
+        artifacts=[_json_artifact(f"docs/dev/{role}-report-{tid}.json", schema, tid)],
+        **extra,
+    )
+
+
+def _close_qa_obligation(task_id, dispatched_at, with_report=True):
+    """commands/close.md's close-QA obligation (markdown close-report waived
+    by a CLOSE_REPORT_APPEND_* reply, plus the verdict response_line)."""
+    artifacts = [{"kind": "response_line", "terminal_line_regex": _CLOSE_VERDICT_RE}]
+    if with_report:
+        artifacts.insert(0, {
+            "kind": "markdown", "path": f"docs/dev/close-report-{task_id}.md",
+            "identity_anchor": task_id, "terminal_line_regex": _CLOSE_VERDICT_RE,
+            "waived_by_response": "^CLOSE_REPORT_APPEND_(ERROR|CRITICAL): ",
+        })
+    return _obligation_block(
+        task_id, role="qa", lane=None, profile="final_verification", pipeline="close",
+        dispatched_at=dispatched_at, artifacts=artifacts, consistency="verdict_class",
+    )
+
+
+class TestObligationBarrierInFlightDispatchIsNotPrior:
+    """(a) The in-flight tool_use, already in the transcript under T1,
+    obligating a not-yet-written context: exit 0 (at f8c18c2: exit 2,
+    [artifact_missing] on its own context)."""
+
+    def test_in_flight_ba_dispatch_obligating_unwritten_context_exits_0(
+        self, project_dir: Path, g3_home: Path
+    ):
+        current = _ba_obligation(BARE_TID, dispatched_at=_FRESH_AT)
+        assert _parses(current)
+        assert not (project_dir / f"docs/dev/context-{BARE_TID}.json").exists()
+        transcript = project_dir / "transcript.jsonl"
+        _write_t1_transcript(transcript, [(IN_FLIGHT_TOOL_USE_ID, current, None, "ba")])
+
+        proc = _run_barrier_subprocess(
+            project_dir, g3_home,
+            _barrier_payload(current, subagent_type="ba", transcript_path=transcript),
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "[artifact_missing]" not in proc.stderr
+
+
+class TestObligationBarrierIgnoresRefusedAndUnfinishedDispatches:
+    """(b) A prior dispatch whose tool_result is_error (a hook refused it) and
+    a parallel sibling with no tool_result yet are not prior stages, even
+    though both declare artifacts that are missing and that the current
+    dispatch does not declare: exit 0. The same transcript with those
+    dispatches completed blocks (exit 2), so the outcome is what decides."""
+
+    @pytest.mark.parametrize("which", ["refused", "unfinished_sibling", "both"])
+    def test_refused_prior_and_unfinished_sibling_are_ignored(
+        self, project_dir: Path, g3_home: Path, which
+    ):
+        lane_set = ["l1", "l2"]
+        refused_qa = _report_obligation(BARE_TID, "qa", profile="final_verification")
+        sibling = _report_obligation(
+            f"dev-{BARE_TID}-l2", "dev", profile="fanout-lane", lane="l2", lane_set=lane_set,
+        )
+        current = _report_obligation(
+            f"dev-{BARE_TID}-l1", "dev", dispatched_at=_FRESH_AT, profile="fanout-lane",
+            lane="l1", lane_set=lane_set,
+        )
+        assert all(_parses(p) for p in (refused_qa, sibling, current))
+        refused_stage = ("toolu_refused_qa", refused_qa, "error", "qa")
+        sibling_stage = ("toolu_sibling_l2", sibling, None, "dev")
+        in_flight = (IN_FLIGHT_TOOL_USE_ID, current, None, "dev")
+        stages = {
+            "refused": [refused_stage, in_flight],
+            # Parallel fan-out: both tool_uses are in the transcript before
+            # either PreToolUse runs.
+            "unfinished_sibling": [in_flight, sibling_stage],
+            "both": [refused_stage, in_flight, sibling_stage],
+        }[which]
+        transcript = project_dir / "transcript.jsonl"
+        _write_t1_transcript(transcript, stages)
+        data = _barrier_payload(current, subagent_type="dev", transcript_path=transcript)
+
+        proc = _run_barrier_subprocess(project_dir, g3_home, data)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stderr == ""
+
+        completed = [
+            (s[0], s[1], "ok", s[3]) if s[0] != IN_FLIGHT_TOOL_USE_ID else s for s in stages
+        ]
+        _write_t1_transcript(transcript, completed)
+        proc = _run_barrier_subprocess(project_dir, g3_home, data)
+        assert proc.returncode == 2
+        assert "[artifact_missing] docs/dev/" in proc.stderr
+
+
+class TestObligationBarrierCompletedPriorMissingArtifact:
+    """(c) A completed prior dispatch (non-error tool_result) whose artifact
+    is missing blocks the next stage: exit 2, naming the artifact and the
+    prior role."""
+
+    def test_completed_prior_with_missing_artifact_exits_2(
+        self, project_dir: Path, g3_home: Path
+    ):
+        prior_ba = _ba_obligation(BARE_TID)
+        current = _report_obligation(BARE_TID, "dev", dispatched_at=_FRESH_AT)
+        assert _parses(prior_ba) and _parses(current)
+        transcript = project_dir / "transcript.jsonl"
+        _write_t1_transcript(transcript, [
+            ("toolu_ba", prior_ba, "ok", "ba"),
+            (IN_FLIGHT_TOOL_USE_ID, current, None, "dev"),
+        ])
+
+        proc = _run_barrier_subprocess(
+            project_dir, g3_home,
+            _barrier_payload(current, subagent_type="dev", transcript_path=transcript),
+        )
+        assert proc.returncode == 2
+        assert f"[artifact_missing] docs/dev/context-{BARE_TID}.json" in proc.stderr
+        assert "role: ba(unknown)" in proc.stderr
+        assert "fix:" in proc.stderr
+
+
+class TestObligationBarrierRefusedOvernightRetry:
+    """(d) /dev-overnight: a refused QA dispatch for pipeline <ts>-0 does not
+    block the pipeline-1 QA dispatch for <ts>-1 (at f8c18c2 both shared the
+    bare-timestamp family and the refused dispatch counted: exit 2,
+    [artifact_missing] docs/dev/qa-report-<ts>-0.json)."""
+
+    def test_refused_ts_0_dispatch_does_not_block_ts_1(
+        self, project_dir: Path, g3_home: Path
+    ):
+        refused = _report_obligation(
+            f"{BARE_TID}-0", "qa", pipeline="dev-overnight", profile="final_verification",
+        )
+        current = _report_obligation(
+            f"{BARE_TID}-1", "qa", dispatched_at=_FRESH_AT, pipeline="dev-overnight",
+            profile="final_verification",
+        )
+        assert _parses(refused) and _parses(current)
+        transcript = project_dir / "transcript.jsonl"
+        _write_t1_transcript(transcript, [
+            ("toolu_qa_0", refused, "error", "qa"),
+            (IN_FLIGHT_TOOL_USE_ID, current, None, "qa"),
+        ], command="dev-overnight")
+
+        proc = _run_barrier_subprocess(
+            project_dir, g3_home,
+            _barrier_payload(current, subagent_type="qa", transcript_path=transcript),
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert f"qa-report-{BARE_TID}-0.json" not in proc.stderr
+
+
+class TestObligationBarrierBaRedispatchAfterQuestion:
+    """(e) BA wrote docs/dev/producer-question-<task>-ba.json instead of its
+    declared context/ticket/acceptance criteria. The re-dispatch of BA
+    (fresh dispatched_at) declares the same paths, so they are skipped:
+    exit 0. A later stage that does not re-declare them is still blocked."""
+
+    def test_ba_redispatch_after_question_artifact_exits_0(
+        self, project_dir: Path, g3_home: Path
+    ):
+        question = {
+            "task_id": BARE_TID, "role": "ba",
+            "need": "Which storage backend should the cache use?",
+            "options": [
+                {"label": "sqlite", "description": "One file next to the project."},
+                {"label": "redis", "description": "The shared redis the team runs."},
+            ],
+            "default": "sqlite",
+            "why": "The request names neither, and the two change the schema.",
+        }
+        _write(project_dir / "docs" / "dev", f"producer-question-{BARE_TID}-ba.json", question)
+        prior_ba = _ba_obligation(BARE_TID)
+        redispatch = _ba_obligation(BARE_TID, dispatched_at=_FRESH_AT)
+        assert prior_ba != redispatch
+        assert _parses(prior_ba) and _parses(redispatch)
+        transcript = project_dir / "transcript.jsonl"
+        prior_stage = (
+            "toolu_ba", prior_ba, "ok", "ba",
+            f"Question written to docs/dev/producer-question-{BARE_TID}-ba.json",
+        )
+        _write_t1_transcript(transcript, [
+            prior_stage, (IN_FLIGHT_TOOL_USE_ID, redispatch, None, "ba"),
+        ])
+        proc = _run_barrier_subprocess(
+            project_dir, g3_home,
+            _barrier_payload(redispatch, subagent_type="ba", transcript_path=transcript),
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stderr == ""
+
+        later = _report_obligation(BARE_TID, "dev", dispatched_at=_FRESH_AT)
+        _write_t1_transcript(transcript, [
+            prior_stage, (IN_FLIGHT_TOOL_USE_ID, later, None, "dev"),
+        ])
+        proc = _run_barrier_subprocess(
+            project_dir, g3_home,
+            _barrier_payload(later, subagent_type="dev", transcript_path=transcript),
+        )
+        assert proc.returncode == 2
+        assert f"[artifact_missing] docs/dev/context-{BARE_TID}.json" in proc.stderr
+
+
+class TestObligationBarrierCloseQaSecondRound:
+    """(f) /close: the first close-QA round ended CLOSE_REPORT_APPEND_ERROR,
+    so close-report-<task>.md's last line is stale (no verdict line). The
+    next close-QA round declares the same close-report path: exit 0. A
+    dispatch that does not declare it is blocked on the stale line."""
+
+    def test_second_close_qa_round_after_append_error_exits_0(
+        self, project_dir: Path, g3_home: Path
+    ):
+        report_rel = f"docs/dev/close-report-{BARE_TID}.md"
+        (project_dir / report_rel).write_text(
+            f"# Close report {BARE_TID}\n\n## Round 1\n- finding: lockfile drift\n",
+            encoding="utf-8",
+        )
+        prior = _close_qa_obligation(BARE_TID, _PRIOR_AT)
+        second_round = _close_qa_obligation(BARE_TID, _FRESH_AT)
+        assert _parses(prior) and _parses(second_round)
+        transcript = project_dir / "transcript.jsonl"
+        prior_stage = (
+            "toolu_close_qa_1", prior, "ok", "qa",
+            "Round 1 assessed.\nCLOSE_REPORT_APPEND_ERROR: close-report append failed",
+        )
+        _write_t1_transcript(transcript, [
+            prior_stage, (IN_FLIGHT_TOOL_USE_ID, second_round, None, "qa"),
+        ], command="close")
+        proc = _run_barrier_subprocess(
+            project_dir, g3_home,
+            _barrier_payload(second_round, subagent_type="qa", transcript_path=transcript),
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stderr == ""
+
+        no_report = _close_qa_obligation(BARE_TID, _FRESH_AT, with_report=False)
+        assert _parses(no_report)
+        _write_t1_transcript(transcript, [
+            prior_stage, (IN_FLIGHT_TOOL_USE_ID, no_report, None, "qa"),
+        ], command="close")
+        proc = _run_barrier_subprocess(
+            project_dir, g3_home,
+            _barrier_payload(no_report, subagent_type="qa", transcript_path=transcript),
+        )
+        assert proc.returncode == 2
+        assert f"[terminal_line_mismatch] {report_rel}" in proc.stderr
+
+
+class TestObligationBarrierOvernightAndLaneFamilies:
+    """(g) Overnight pipelines <ts>-1 and <ts>-2 are separate families; fan-out
+    lanes dev-<ts>-l1 and dev-<ts>-l2 share one."""
+
+    def test_overnight_pipelines_are_separate_families(
+        self, project_dir: Path, g3_home: Path
+    ):
+        prior_dev_1 = _report_obligation(
+            f"{BARE_TID}-1", "dev", pipeline="dev-overnight", profile="overnight",
+        )
+        assert _parses(prior_dev_1)
+        transcript = project_dir / "transcript.jsonl"
+        for task_id, expected in ((f"{BARE_TID}-2", 0), (f"{BARE_TID}-1", 2)):
+            current = _report_obligation(
+                task_id, "qa", dispatched_at=_FRESH_AT, pipeline="dev-overnight",
+                profile="final_verification",
+            )
+            assert _parses(current)
+            _write_t1_transcript(transcript, [
+                ("toolu_dev_1", prior_dev_1, "ok", "dev"),
+                (IN_FLIGHT_TOOL_USE_ID, current, None, "qa"),
+            ], command="dev-overnight")
+            proc = _run_barrier_subprocess(
+                project_dir, g3_home,
+                _barrier_payload(current, subagent_type="qa", transcript_path=transcript),
+            )
+            assert proc.returncode == expected, (task_id, proc.stderr)
+            missing = f"[artifact_missing] docs/dev/dev-report-{BARE_TID}-1.json"
+            assert (missing in proc.stderr) is (expected == 2)
+
+    def test_fanout_lanes_share_one_family(self, project_dir: Path, g3_home: Path):
+        lane_set = ["l1", "l2"]
+        prior_l1 = _report_obligation(
+            f"dev-{BARE_TID}-l1", "dev", profile="fanout-lane", lane="l1", lane_set=lane_set,
+        )
+        current_l2 = _report_obligation(
+            f"dev-{BARE_TID}-l2", "qa", dispatched_at=_FRESH_AT, profile="fanout-lane",
+            lane="l2", lane_set=lane_set,
+        )
+        assert _parses(prior_l1) and _parses(current_l2)
+        transcript = project_dir / "transcript.jsonl"
+        _write_t1_transcript(transcript, [
+            ("toolu_dev_l1", prior_l1, "ok", "dev"),
+            (IN_FLIGHT_TOOL_USE_ID, current_l2, None, "qa"),
+        ])
+        proc = _run_barrier_subprocess(
+            project_dir, g3_home,
+            _barrier_payload(current_l2, subagent_type="qa", transcript_path=transcript),
+        )
+        assert proc.returncode == 2
+        assert f"[artifact_missing] docs/dev/dev-report-{BARE_TID}-l1.json" in proc.stderr
+        assert "role: dev(l1)" in proc.stderr
+
+
+class TestObligationBarrierMintedPrefixFamily:
+    """(h) A dev-<ts> (or dev-command-<ts>) prior and a bare <ts> current
+    dispatch are one family (canonical_task_id strips the minted prefix), so
+    the prior's missing artifact blocks: exit 2."""
+
+    @pytest.mark.parametrize("prior_tid, current_tid", [
+        (PREFIXED_TID, BARE_TID),
+        (BARE_TID, PREFIXED_TID),
+        (f"dev-command-{BARE_TID}", BARE_TID),
+    ])
+    def test_minted_prefix_and_bare_ids_share_family(
+        self, project_dir: Path, g3_home: Path, prior_tid, current_tid
+    ):
+        prior_ba = _ba_obligation(prior_tid)
+        current = _report_obligation(current_tid, "dev", dispatched_at=_FRESH_AT)
+        assert _parses(prior_ba) and _parses(current)
+        transcript = project_dir / "transcript.jsonl"
+        _write_t1_transcript(transcript, [
+            ("toolu_ba", prior_ba, "ok", "ba"),
+            (IN_FLIGHT_TOOL_USE_ID, current, None, "dev"),
+        ])
+        proc = _run_barrier_subprocess(
+            project_dir, g3_home,
+            _barrier_payload(current, subagent_type="dev", transcript_path=transcript),
+        )
+        assert proc.returncode == 2
+        assert f"[artifact_missing] docs/dev/context-{BARE_TID}.json" in proc.stderr
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,11 @@ Covers the four implementation ACs of ticket-20260929-104216-b:
 - AC4 (-k fixture): tmpdir fixture store, both persisted content shapes,
   rungs L0 and L1, distinct unresolvable reasons, role mismatch.
 
+Phase P1 (terminal grammar): TERMINAL_VOCABULARY drift against the schemas,
+TASK_ID_RE / schema pattern parity, the closed json kind (no required_values,
+no waived_by_response), producer-question.v1 option bounds, the task-id family
+helpers and read_first_record_prompt skipping non-message records.
+
 Run with: python3 -m pytest hooks/tests/test_obligation.py -v
 """
 
@@ -427,6 +432,216 @@ def test_lane_set_roster_equality_helper():
 
 
 # --------------------------------------------------------------------------
+# P1 grammar: vocabulary drift, task-id parity, closed json kind
+# --------------------------------------------------------------------------
+
+SCHEMAS_DIR = REPO_ROOT / "schemas"
+TS = "20261019-104500"
+TASK_IDS_ACCEPTED = (
+    f"dev-{TS}", f"dev-{TS}-l6", f"dev-command-{TS}-l2", TS, f"{TS}-3",
+)
+TASK_IDS_REJECTED = ("not-a-task-id", "dev-command-x", f"dev-{TS[:8]}")
+
+
+def _schema(schema_id):
+    return json.loads(
+        (SCHEMAS_DIR / f"{schema_id}.json").read_text(encoding="utf-8")
+    )
+
+
+def _enum_at(schema, dotted):
+    """The enum at a dotted path, walked through ``properties``."""
+    node = schema
+    for part in dotted.split("."):
+        node = node["properties"][part]
+    return node["enum"]
+
+
+def test_terminal_vocabulary_drift_equals_schema_enums():
+    registry = json.loads(
+        (SCHEMAS_DIR / "registry.json").read_text(encoding="utf-8")
+    )["schemas"]
+    checked = []
+    for schema_id, paths in obligation.TERMINAL_VOCABULARY.items():
+        assert registry.get(schema_id) == f"{schema_id}.json", schema_id
+        assert paths, schema_id
+        schema = _schema(schema_id)
+        for dotted, legal in paths.items():
+            enum = _enum_at(schema, dotted)
+            assert len(enum) == len(set(enum)), (schema_id, dotted, enum)
+            assert set(enum) == set(legal), (schema_id, dotted, sorted(legal), enum)
+            checked.append((schema_id, dotted))
+    assert ("ba-qa-report.v1", "verdict") in checked
+    assert obligation.TERMINAL_VOCABULARY["ba-qa-report.v1"] == {
+        "verdict": frozenset({"pass", "fail"})
+    }
+
+
+def test_terminal_vocabulary_dev_report_single_completed_status():
+    v2 = obligation.TERMINAL_VOCABULARY["dev-report.v2"]["dev.status"]
+    v1 = obligation.TERMINAL_VOCABULARY["dev-report.v1"]["status"]
+    assert v2 == v1 == {"completed"}
+    assert (
+        set(_enum_at(_schema("dev-report.v2"), "dev.status"))
+        == set(_enum_at(_schema("dev-report.v1"), "status"))
+        == {"completed"}
+    )
+
+
+def test_task_id_pattern_parity_with_schema():
+    import jsonschema
+
+    task_id_schema = _schema("obligation.v1")["properties"]["task_id"]
+    assert obligation.TASK_ID_RE.pattern == task_id_schema["pattern"]
+    validator = jsonschema.Draft7Validator(task_id_schema)
+    for value in TASK_IDS_ACCEPTED:
+        assert obligation.TASK_ID_RE.fullmatch(value), value
+        assert validator.is_valid(value), value
+        doc = _example()
+        doc["task_id"] = value
+        assert isinstance(_parse(doc), obligation.ParsedObligation), value
+    for value in TASK_IDS_REJECTED:
+        assert not obligation.TASK_ID_RE.fullmatch(value), value
+        assert not validator.is_valid(value), value
+        doc = _example()
+        doc["task_id"] = value
+        _assert_rejected(_parse(doc), "bad_task_id", field="task_id")
+
+
+def test_reject_json_artifact_required_values():
+    import jsonschema
+
+    doc = _example()
+    doc["artifacts"][0]["required_values"] = {"dev.status": ["completed"]}
+    _assert_rejected(
+        _parse(doc), "unknown_field", field="artifacts[0].required_values"
+    )
+    validator = jsonschema.Draft7Validator(_schema("obligation.v1"))
+    assert validator.is_valid(_example())
+    assert not validator.is_valid(doc)
+
+
+def test_reject_json_artifact_waived_by_response():
+    doc = _example()
+    doc["artifacts"][0]["waived_by_response"] = (
+        "^CLOSE_REPORT_APPEND_(ERROR|CRITICAL): "
+    )
+    _assert_rejected(
+        _parse(doc), "unknown_field", field="artifacts[0].waived_by_response"
+    )
+    # The markdown kind keeps it as its optional field.
+    assert "waived_by_response" in NORMALIZED_EXAMPLE["artifacts"][1]
+    assert isinstance(_parse(_example()), obligation.ParsedObligation)
+
+
+def test_producer_question_options_two_to_four():
+    import jsonschema
+
+    registry = json.loads(
+        (SCHEMAS_DIR / "registry.json").read_text(encoding="utf-8")
+    )["schemas"]
+    assert registry.get("producer-question.v1") == "producer-question.v1.json"
+    schema = _schema("producer-question.v1")
+    options = schema["properties"]["options"]
+    assert options["minItems"] == 2
+    assert options["maxItems"] == 4
+    validator = jsonschema.Draft7Validator(schema)
+
+    def question(count):
+        return {
+            "task_id": TS,
+            "role": "dev",
+            "need": "which default applies",
+            "options": [
+                {"label": f"option-{n}", "description": f"choice {n}"}
+                for n in range(count)
+            ],
+            "default": "option-0",
+            "why": "the request and the code leave it open",
+        }
+
+    assert [validator.is_valid(question(n)) for n in (1, 2, 3, 4, 5)] == [
+        False, True, True, True, False,
+    ]
+
+
+def test_canonical_task_id_strips_minted_prefix():
+    canonical = obligation.canonical_task_id
+    assert canonical(f"dev-{TS}") == TS
+    assert canonical(f"dev-{TS}-l6") == f"{TS}-l6"
+    assert canonical(f"dev-command-{TS}") == TS
+    assert canonical(f"dev-command-{TS}-l2") == f"{TS}-l2"
+    assert canonical(TS) == TS
+    assert canonical(f"{TS}-3") == f"{TS}-3"
+    assert canonical(f"{TS}-l1") == f"{TS}-l1"
+    # A dev- prefix not followed by a stamp is not a minted prefix.
+    assert canonical("dev-command-x") == "dev-command-x"
+    assert canonical("dev-fix") == "dev-fix"
+    for value in (None, "", 7, [f"dev-{TS}"]):
+        assert canonical(value) is None, value
+
+
+def test_task_family_drops_lane_suffix_only():
+    family = obligation.task_family
+    assert family(TS) == TS
+    assert family(f"dev-{TS}") == TS
+    assert family(f"dev-{TS}-l2") == TS
+    assert family(f"dev-command-{TS}-l3") == TS
+    assert family(f"{TS}-l1") == family(f"dev-{TS}-l2")
+    # Overnight pipelines <ts>-1 / <ts>-2 stay separate families.
+    assert family(f"{TS}-1") == f"{TS}-1"
+    assert family(f"{TS}-2") == f"{TS}-2"
+    assert family(f"{TS}-1") != family(f"{TS}-2")
+    assert family(f"{TS}-b") == f"{TS}-b"
+    for value in (None, "", 7):
+        assert family(value) is None, value
+
+
+def test_registry_dir_for_every_branch(tmp_path):
+    registry_dir_for = obligation.registry_dir_for
+    root = tmp_path / ".claude" / "dev-registry"
+    dev_dir = root / f"dev-{TS}"
+    command_dir = root / f"dev-command-{TS}"
+
+    # No timestamp, or not a string: None.
+    for value in (None, 42, "", "not-a-task-id", "dev-command-x", "dev-fix"):
+        assert registry_dir_for(tmp_path, value) is None, value
+
+    # Nothing on disk: a minted prefix keeps its directory (lane suffix is not
+    # part of the name); a bare <ts> id defaults to dev-<ts>.
+    assert registry_dir_for(tmp_path, f"dev-command-{TS}") == command_dir
+    assert registry_dir_for(tmp_path, f"dev-command-{TS}-l2") == command_dir
+    assert registry_dir_for(tmp_path, f"dev-{TS}") == dev_dir
+    assert registry_dir_for(tmp_path, f"dev-{TS}-l2") == dev_dir
+    assert registry_dir_for(tmp_path, TS) == dev_dir
+    assert registry_dir_for(tmp_path, f"{TS}-3") == dev_dir
+
+    # A regular file is not a registry directory.
+    root.mkdir(parents=True)
+    command_dir.write_text("", encoding="utf-8")
+    assert registry_dir_for(tmp_path, TS) == dev_dir
+    command_dir.unlink()
+
+    # Only dev-command-<ts> exists: a bare id resolves to it; dev- keeps dev-.
+    command_dir.mkdir()
+    assert registry_dir_for(tmp_path, TS) == command_dir
+    assert registry_dir_for(tmp_path, f"{TS}-l2") == command_dir
+    assert registry_dir_for(str(tmp_path), TS) == command_dir
+    assert registry_dir_for(tmp_path, f"dev-{TS}") == dev_dir
+    assert registry_dir_for(tmp_path, f"dev-{TS}-l2") == dev_dir
+
+    # Both exist: dev- first; dev-command- ids keep their own directory.
+    dev_dir.mkdir()
+    assert registry_dir_for(tmp_path, TS) == dev_dir
+    assert registry_dir_for(tmp_path, f"dev-command-{TS}") == command_dir
+
+    # Only dev-<ts> exists.
+    command_dir.rmdir()
+    assert registry_dir_for(tmp_path, TS) == dev_dir
+    assert registry_dir_for(tmp_path, f"dev-command-{TS}-l1") == command_dir
+
+
+# --------------------------------------------------------------------------
 # AC3 -- live_store positive control (read-only, dynamic discovery)
 # --------------------------------------------------------------------------
 
@@ -724,6 +939,133 @@ def test_fixture_no_obligation_prompt_is_distinct_outcome(tmp_path):
     assert not isinstance(outcome, obligation.Unresolvable)
     assert outcome.cross_check == obligation.CROSS_CHECK_OK
     assert outcome.prompt == fx.prompt
+
+
+# --------------------------------------------------------------------------
+# P1: read_first_record_prompt skips records that carry no message
+# --------------------------------------------------------------------------
+
+_CLI_SESSION_ID = "5d0c6e2a-7f3b-4c1e-9a52-1f0e8d4b2c77"
+_CLI_AGENT_ID = "a3f1c2d4e5b6a7980"
+
+
+def _cli_record(record_type, index, **fields):
+    """A subagent-transcript record in the CLI 2.1.303 envelope."""
+    record = {
+        "parentUuid": None if index == 0 else f"uuid-{index - 1:04d}",
+        "isSidechain": True,
+        "agentId": _CLI_AGENT_ID,
+        "type": record_type,
+        "uuid": f"uuid-{index:04d}",
+        "timestamp": f"2026-10-19T10:45:{index:02d}.000Z",
+        "userType": "external",
+        "entrypoint": "cli",
+        "cwd": "/opt/demo/toyproj",
+        "sessionId": _CLI_SESSION_ID,
+        "version": "2.1.303",
+        "gitBranch": "master",
+    }
+    record.update(fields)
+    return record
+
+
+def _queue_operation(operation, **fields):
+    return {
+        "type": "queue-operation",
+        "operation": operation,
+        "timestamp": "2026-10-19T10:44:59.000Z",
+        "sessionId": _CLI_SESSION_ID,
+        **fields,
+    }
+
+
+def _attachment(index):
+    return _cli_record(
+        "attachment", index,
+        attachment={
+            "type": "deferred_tools_delta",
+            "addedNames": ["WebFetch"],
+            "addedLines": ["WebFetch"],
+            "removedNames": [],
+        },
+    )
+
+
+def _write_jsonl(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_read_first_record_prompt_skips_queue_operation_and_attachment(tmp_path):
+    prompt = "FIRST ACTION: read the brief.\nDispatch body."
+    leading = [
+        _queue_operation("enqueue", content=prompt),
+        _queue_operation("dequeue"),
+        _attachment(0),
+        _attachment(1),
+    ]
+    user_record = _cli_record(
+        "user", 2, promptId="prompt-0001",
+        message={"role": "user", "content": prompt},
+    )
+    later = [
+        _attachment(3),
+        _cli_record("user", 4, isMeta=True,
+                    message={"role": "user", "content": "meta body"}),
+        _cli_record("assistant", 5, message={
+            "role": "assistant",
+            "content": [{"type": "text", "text": "working"}],
+        }),
+    ]
+    string_shape = _write_jsonl(
+        tmp_path / "string.jsonl", leading + [user_record] + later
+    )
+    assert obligation.read_first_record_prompt(string_shape) == prompt
+
+    block_record = copy.deepcopy(user_record)
+    block_record["message"]["content"] = [{"type": "text", "text": prompt}]
+    block_shape = _write_jsonl(
+        tmp_path / "blocks.jsonl", leading + [block_record] + later
+    )
+    assert obligation.read_first_record_prompt(block_shape) == prompt
+
+    # The resolver reads the same first message record at rung L1.
+    fx = _build_fixture_store(tmp_path / "store")
+    records = [json.loads(line) for line in
+               fx.transcript.read_text(encoding="utf-8").splitlines()]
+    _write_jsonl(fx.transcript, leading + records)
+    outcome = obligation.resolve_own_obligation(
+        fx.session_id, fx.agent_id, fx.project, roots=[fx.root]
+    )
+    assert isinstance(outcome, obligation.Resolved)
+    assert outcome.rung == "L1"
+    assert outcome.prompt == fx.prompt
+    assert outcome.obligation == fx.doc
+
+
+def test_read_first_record_prompt_assistant_first_message_is_none(tmp_path):
+    transcript = _write_jsonl(tmp_path / "assistant-first.jsonl", [
+        _queue_operation("enqueue", content="queued"),
+        _queue_operation("dequeue"),
+        _attachment(0),
+        _cli_record("assistant", 1, message={
+            "role": "assistant",
+            "content": [{"type": "text", "text": "I start without a prompt."}],
+        }),
+        _cli_record("user", 2, message={
+            "role": "user", "content": "a later user prompt",
+        }),
+    ])
+    assert obligation.read_first_record_prompt(transcript) is None
+    only_leading = _write_jsonl(tmp_path / "no-message.jsonl", [
+        _queue_operation("enqueue", content="queued"),
+        _attachment(0),
+    ])
+    assert obligation.read_first_record_prompt(only_leading) is None
 
 
 # --------------------------------------------------------------------------

@@ -2,10 +2,13 @@
 escalate when it is not, and never release.
 
 Pure stdlib. No gate-specific inputs, no I/O outside the paths a caller hands
-in. Consumers: hooks/stop-completion-gate.py and the L2 SubagentStop
-producer gate. The helper has NO allow outcome: it cannot release anything;
-only a caller whose own trigger became false may release, and it does so by
-calling ``clear_state``.
+in. Consumer: the L2 SubagentStop producer gate
+(hooks/subagentstop-artifact-contract-enforce.py: finding_id,
+world_fingerprint, record_round, clear_state). finding_key and
+declare_awaiting_input served hooks/stop-completion-gate.py, an exit-0 stub
+since P1; only tests call them. The helper has NO allow outcome: it cannot
+release anything; only a caller whose own trigger became false may release,
+and it does so by calling ``clear_state``.
 
 Interface (names are the contract; only underscore-private helpers may be
 added):

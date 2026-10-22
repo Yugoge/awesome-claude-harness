@@ -31,7 +31,7 @@ All counts below were established by enumerating the actual repository, not copi
 | `PreToolUse` | 25 | 35 |
 | `PostToolUse` | 10 | 18 |
 | `Notification` | 1 | 1 |
-| `Stop` | 4 | 4 |
+| `Stop` | 3 | 3 |
 | `SessionEnd` | 1 | 1 |
 | `SubagentStop` | 5 | 8 |
 | `PostToolUseFailure` | 1 | 1 |

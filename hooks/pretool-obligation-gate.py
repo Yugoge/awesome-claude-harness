@@ -16,24 +16,27 @@ turn-1-one-shot-blueprint.md:36-50,147-165), first match wins:
   1. CLAUDE_OBLIGATION_GATE == "off" (case/whitespace-insensitive) -> exit 0
      immediately -- the emergency kill switch, checked OUTSIDE the fail-open
      wrapper below so it can never be defeated by an internal bug.
-  2. Everything else (stdin read, producer-role check, obligation evaluation)
-     runs inside one try/except: tool_input.subagent_type not in the producer
-     set {ba, dev, qa, test-writer, changelog-analyst, style-inspector,
-     cleanliness-inspector, prompt-inspector} -> exit 0, no log (every other
-     dispatch, including the main agent, passes through untouched).
-  3. hooks.lib.obligation.parse_obligation(prompt) on a producer dispatch:
-       - ParsedObligation (valid block) -> exit 0, no log.
-       - NoBlock (no block at all): gated on whether
-         .claude/dev-registry/<session_id>/ exists (an active dev-family
-         session). Absent -> exit 0, nothing logged. Present -> advisory
-         record (reason="missing_block"); advisory mode then exits 0, block
-         mode additionally prints a three-element stderr message and exits 2.
-       - Rejection (malformed block, OR tool_input.prompt absent/non-string --
-         hooks/lib/obligation.py's own bad_prompt case): UNCONDITIONAL, never
-         gated on dev-registry presence -- advisory record carries the
-         validator's own .reason; advisory mode exits 0, block mode also
-         prints the three-element stderr message (with that specific reason)
-         and exits 2.
+  2. Everything else (stdin read, dispatch selection, obligation evaluation)
+     runs inside one try/except. A dispatch is evaluated when its
+     subagent_type is in the producer set {ba, dev, qa, test-writer,
+     changelog-analyst, style-inspector, cleanliness-inspector,
+     prompt-inspector} OR its prompt contains "<obligation" (any
+     subagent_type); every other dispatch passes through untouched.
+  3. hooks.lib.obligation.parse_obligation(prompt), with the schema ids of
+     the harness's own schemas/registry.json (resolved from the hook's
+     location, so a product repo without schemas/ works):
+       - ParsedObligation -> its role must equal the dispatch's subagent_type
+         (role_mismatch) and its dispatched_at must lie within
+         DISPATCH_CLOCK_BOUND_SECONDS of now (dispatch_clock_out_of_bound; an
+         uncomparable value fails closed). Otherwise exit 0, no log.
+       - NoBlock on a producer dispatch: a violation (missing_block) only
+         while the human-typed span (lib/command_span.active_span) is one of
+         SPAN_COMMANDS_REQUIRING_BLOCK (TC-41); otherwise exit 0.
+       - Rejection (malformed block, unregistered schema id, OR
+         tool_input.prompt absent/non-string -- hooks/lib/obligation.py's own
+         bad_prompt case): UNCONDITIONAL.
+     A violation writes an advisory record; advisory mode then exits 0, block
+     mode also prints the three-element stderr message and exits 2.
   4. Any exception raised anywhere in step 2/3 (malformed/empty stdin,
      unreadable dev-registry path, any unexpected internal failure) is caught
      by the single wrapping try/except: a best-effort advisory record with
@@ -51,8 +54,8 @@ grammar or field validation (ticket-20260930-132644-l1 constraint).
 
 Exit codes:
   0 -- allow (pass-through, valid block, or advisory-logged-and-pass).
-  2 -- reject (block mode only: missing block + active dev-family session,
-       or any malformed/invalid block / bad prompt).
+  2 -- reject (block mode only: missing block inside a gated span, or any
+       malformed/invalid block, role mismatch, out-of-bound clock, bad prompt).
 """
 
 from __future__ import annotations
@@ -64,7 +67,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.obligation import NoBlock, ParsedObligation, parse_obligation  # noqa: E402
+from lib import command_span, schema_registry  # noqa: E402
+from lib.obligation import (  # noqa: E402
+    OBLIGATION_OPEN_TOKEN,
+    NoBlock,
+    ParsedObligation,
+    dispatch_clock_within_bound,
+    parse_obligation,
+)
 
 SWITCH_ENV = "CLAUDE_OBLIGATION_GATE"
 PRODUCER_ROLES = frozenset({
@@ -74,17 +84,17 @@ PRODUCER_ROLES = frozenset({
     # above (G1 dispatch gate coverage for their report obligations).
     "style-inspector", "cleanliness-inspector", "prompt-inspector",
 })
+# Spans whose producer dispatches must carry a block (TC-41; D7 for close/commit).
+SPAN_COMMANDS_REQUIRING_BLOCK = frozenset({
+    "dev", "redev", "dev-command", "dev-overnight", "do", "close", "commit",
+})
 ADVISORY_LOG = os.path.join("~", ".claude", "logs", "obligation-gate-advisory.jsonl")
 GRAMMAR_DOC_REF = "docs/reference/close-commit-zero-failure-mechanism-20260928.md"
 
 
-def _resolve_project_dir() -> str:
-    """Mirrors hooks/pretool-aggregate-check.py:386."""
-    return os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-
-
-def _dev_registry_dir_exists(session_id) -> bool:
-    return (Path(_resolve_project_dir()) / ".claude" / "dev-registry" / session_id).is_dir()
+def _span_requires_block(transcript_path) -> bool:
+    span = command_span.active_span(transcript_path) if transcript_path else None
+    return span is not None and span.command in SPAN_COMMANDS_REQUIRING_BLOCK
 
 
 def _emit_advisory(session_id, subagent_type, reason) -> None:
@@ -128,17 +138,28 @@ def _evaluate(data: dict, mode: str) -> None:
     if not isinstance(tool_input, dict):
         tool_input = {}
     subagent_type = tool_input.get("subagent_type")
-    if subagent_type not in PRODUCER_ROLES:
+    prompt = tool_input.get("prompt")
+    carries_block = isinstance(prompt, str) and OBLIGATION_OPEN_TOKEN in prompt
+    if subagent_type not in PRODUCER_ROLES and not carries_block:
         return
     session_id = data.get("session_id")
-    parsed = parse_obligation(tool_input.get("prompt"), known_schema_ids=None)
+    parsed = parse_obligation(prompt, known_schema_ids=frozenset(schema_registry.load_registry()))
     if isinstance(parsed, ParsedObligation):
-        return
-    if isinstance(parsed, NoBlock):
-        if not _dev_registry_dir_exists(session_id):
+        obligation = parsed.obligation
+        clock = dispatch_clock_within_bound(
+            obligation.get("dispatched_at"), datetime.now(timezone.utc)
+        )
+        if obligation.get("role") != subagent_type:
+            reason = "role_mismatch"
+        elif clock is not True:
+            reason = "dispatch_clock_out_of_bound" if clock is False else "dispatch_clock_unverifiable"
+        else:
+            return
+    elif isinstance(parsed, NoBlock):
+        if not _span_requires_block(data.get("transcript_path")):
             return
         reason = "missing_block"
-    else:  # Rejection -- unconditional, never gated on dev-registry presence
+    else:  # Rejection -- unconditional, whatever the span
         reason = parsed.reason
     _emit_advisory(session_id, subagent_type, reason)
     if mode == "block":

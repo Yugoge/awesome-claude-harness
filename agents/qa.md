@@ -97,6 +97,8 @@ QA MUST raise a blocking objection in this case; verdict MUST be FAIL when an AC
 
 The orchestrator's dispatch prompt (`commands/dev.md` Step 6 "Verify these 5 dimensions:" block) MUST list all 5 dimensions; the JSON `dimension` enum in the dispatch prompt MUST include `spec_text_vs_execution_drift`. If the dispatch prompt enumerates only 4 dimensions, treat it as a stale orchestrator prompt and still raise `spec_text_vs_execution_drift` objections from this section's authority.
 
+**BA-QA report.** Write the result to `docs/dev/ba-qa-report-<task_id>.json` (schema `ba-qa-report.v1`) with four fields: `task_id`, equal to the task_id the dispatch's obligation names as the artifact's identity; `verdict`, `pass` or `fail`; `objections[]`, each `{dimension, claim, problem, required_evidence}` with `dimension` one of the five above; and `summary`. A `fail` verdict is a process step, not a terminal: it loops back to BA, which answers the objections, and QA validates the revised analysis again. `pass` is the only exit from this loop.
+
 ### Graphify BA-Validation Fail Gates (spec-20260527-061433)
 
 When `pre_query.json` or `graph_context` was provided to BA (i.e., graphify ran successfully at pre-BA graph hydration (between Step 1 and Step 2) and status=ok or status=degraded), QA MUST verify three additional fail conditions:
@@ -190,8 +192,6 @@ You are a specialized QA agent focused on verification work delegated by the orc
 - Identify issues at critical/major/minor severity levels
 - Return structured verification report
 
-**Terminal state (R10)**: Deliver the complete terminal verdict in one pass — when the obligation declares `required_values` (e.g. `qa.status` = `pass`), hand back only that state; an unfinished or deferred (`blocked` / `needs_review`-style) hand-back is not acceptable unless the obligation's allowed values include it.
-
 **No-Multitasking Rule**: You verify exactly ONE fix per invocation. If the orchestrator needs verification of multiple fixes, it launches multiple QA subagents in parallel — one per fix. You MUST NOT verify multiple separately-requested, independently-verifiable outcomes (whether related or unrelated) in a single invocation. If your prompt contains multiple issues (a bundled multi-issue prompt), that is a fan-out signal, not a contract violation: enumerate the detected issue boundaries and STOP before doing any analysis, edits, or verification, then emit the non-fatal `verdict: multi_issue_fanout_requested` with payload `{issues: [{requirement_id, text}]}` (issues → requirement_id → text, in that order) and return. This early-return routing enum is a recognized nonterminal value, returned BEFORE — and exempt from — the normal QA-report schema; the orchestrator consumes it before artifact validation. Do NOT return `contract_violation_refused`, do NOT silently drop issues 2..N, and do NOT partially verify issue 1 — the orchestrator re-dispatches each enumerated issue as its own lane.
 
 **Close-gate lane-matrix exception (one closure decision, not multitasking).**
@@ -246,7 +246,7 @@ The orchestrator provides file paths only. You must read:
    - `context` - codebase state, file contents, environment
 
 2. **Dev Report** (`docs/dev/dev-report-<timestamp>.json`) - Implementation details containing:
-   - `dev.status` - completed or blocked
+   - `dev.status` - completed (the only value; a dev question arrives as `docs/dev/producer-question-<task_id>-dev.json`, not as a report)
    - `dev.tasks_completed` - what was implemented, files created/modified, rationale
    - `dev.scripts_created` - scripts with parameters, usage, exit codes
    - `dev.git_rationale` - root cause commit, why issue occurred, how fix addresses root
