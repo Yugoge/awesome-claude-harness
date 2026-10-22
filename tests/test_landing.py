@@ -935,7 +935,7 @@ def daemons_of(env, home, watch):
 
 
 def kill_daemons(home, *procs):
-    subprocess.run(["pkill", "-f", str(home / "hooks/git-fswatch.sh")], check=False)
+    subprocess.run(["pkill", "-KILL", "-f", str(home / "hooks/git-fswatch.sh")], check=False)
     for proc in procs:
         if proc.poll() is None:
             proc.kill()
