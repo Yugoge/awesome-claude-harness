@@ -178,7 +178,8 @@ FIRST="$STATE"; state  # again, under the lock: another session may have landed 
 [ "$STATE" = "$FIRST" ] || finish "found-$STATE" ""
 [ "$STATE" != landed ] || restart_daemons landed  # R8: left running before, or stale after a later pull
 GD="$(git rev-parse --absolute-git-dir 2>/dev/null)"
-for op in rebase-merge:rebase rebase-apply:rebase MERGE_HEAD:merge CHERRY_PICK_HEAD:cherry-pick REVERT_HEAD:revert; do
+for op in rebase-merge:rebase rebase-apply:rebase MERGE_HEAD:merge CHERRY_PICK_HEAD:cherry-pick REVERT_HEAD:revert \
+  "SQUASH_MSG:squash merge"; do  # (git merge --squash stops without a MERGE_HEAD)
   [ -e "$GD/${op%%:*}" ] || continue  # R2 S4: a stopped integration holds the owner's commits
   [ "$STATE" != landed ] || [ -n "$REPAIR" ] || break
   n="$(git ls-files -u | cut -f2 | sort -u | wc -l)"

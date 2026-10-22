@@ -506,6 +506,42 @@ def test_s4_stopped_merge_on_pre_p7_head_gets_the_notice(tmp_path, env):
     assert not (home / "settings.machine.json").exists()
 
 
+def settings_commit(env, home, parent, value, msg):
+    """A commit on parent whose settings.json sets env.DEMO_SIDE (plumbing: no filter, no hook)."""
+    doc = json.loads(git(env, home, "show", "%s:settings.json" % parent).stdout)
+    doc["env"]["DEMO_SIDE"] = value
+    data = run(["git", "-C", str(home), "hash-object", "-w", "--no-filters", "--stdin"], env,
+               input=canon(doc).decode()).stdout.strip()
+    index = dict(env, GIT_INDEX_FILE=str(home / ".git" / ("index-" + msg)))
+    git(index, home, "read-tree", parent)
+    git(index, home, "update-index", "--cacheinfo", "100644,%s,settings.json" % data)
+    tree = git(index, home, "write-tree").stdout.strip()
+    os.unlink(index["GIT_INDEX_FILE"])
+    return git(env, home, "commit-tree", tree, "-p", parent, "-m", msg).stdout.strip()
+
+
+def test_a_stopped_squash_merge_is_an_integration_in_progress(tmp_path, env):
+    """S4: `git merge --squash` that conflicts leaves SQUASH_MSG and no MERGE_HEAD. On a landed
+    home with a kept stash entry, settings.json unmerged by that squash is the owner's work in
+    progress, not a pull's pop: nothing is changed. An upgraded home waits with the notice."""
+    home, rev, pop = pulled_home(tmp_path, env, model_and_allow)
+    land(env, home)
+    assert len(git(env, home, "stash", "list").stdout.splitlines()) == 1
+    head = git(env, home, "rev-parse", "HEAD").stdout.strip()
+    git(env, home, "branch", "-q", "side", settings_commit(env, home, head, "side-value", "side"))
+    git(env, home, "merge", "-q", "--ff-only", settings_commit(env, home, head, "master-value", "master"))
+    assert git(env, home, "merge", "--squash", "side", check=False).returncode != 0
+    assert (home / ".git/SQUASH_MSG").exists() and not (home / ".git/MERGE_HEAD").exists()
+    before = (home / ".git/index").read_bytes(), (home / "settings.json").read_bytes()
+    assert land(env, home) == ""
+    assert ((home / ".git/index").read_bytes(), (home / "settings.json").read_bytes()) == before
+    assert "UU settings.json" in git(env, home, "status", "--porcelain").stdout
+    assert "stopped=squash merge" in landing_log(home)
+    home2, _ = make_home(tmp_path, env, name="h2")
+    (home2 / ".git/SQUASH_MSG").write_text("Squashed commit of the following:\n")
+    assert land(env, home2).startswith("Harness landing waits: a squash merge is stopped in the harness home")
+
+
 def test_stash_is_found_by_content_not_by_message(tmp_path, env):
     """Two entries whose first parent is rev: the newest one whose settings.json differs from
     rev's is the pull's, whatever its message."""
