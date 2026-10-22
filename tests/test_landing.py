@@ -608,6 +608,12 @@ def test_stale_daemon_restarts_with_its_own_env_and_without_the_lock(tmp_path, e
         time.sleep(1.2)
         later = time.time() + 2
         os.utime(daemon, (later, later))  # the current script is newer than the running one
+        (home / ".git" / "index.lock").write_text("")  # the daemon in its git work: the landing
+        notice = land(env, home)                        # waits, and nothing is migrated yet
+        assert notice.startswith("Harness landing waits: a stale git-fswatch daemon")
+        assert not (home / "settings.machine.json").exists() and started.poll() is None
+        assert land(env, home, "--state").strip() == "upgraded"
+        (home / ".git" / "index.lock").unlink()
         notice = run(["bash", str(home / "scripts/install/land")], dict(env, GIT_AUTO_PUSH="1"),
                      cwd=str(home)).stdout
         assert "1 stale git-fswatch daemon(s) restarted" in notice

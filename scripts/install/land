@@ -6,12 +6,12 @@
 # installed git hooks equal to hooks/git-hooks/), hooks (landed but a hook differs: step 5 alone
 # runs again), removed (record without overlay: left to doctor), upgraded (the HEAD reflog, else
 # ORIG_HEAD, holds a revision before the settings filter) or none (a fresh clone: left to init).
-# An upgraded home lands under a lock unless a rebase or merge is stopped in it: render-settings
-# land (repair the index a conflicted pull left, migrate, seed the private-literal list), legacy
-# auto-push hooks renamed aside and stale git-fswatch daemons restarted (here and in the
-# repositories under $HOME), then init steps 3-5; each step is idempotent. A landed home whose
-# later pull conflicted on settings.json or on doc-sync's date lines gets render-settings land
-# --repair.
+# An upgraded home lands under a lock unless a rebase or merge is stopped in it: legacy auto-push
+# hooks renamed aside and stale git-fswatch daemons restarted (here and in the repositories under
+# $HOME; a daemon in its git work makes the landing wait), render-settings land (repair the index a
+# conflicted pull left, migrate, seed the private-literal list), then init steps 3-5; each step is
+# idempotent. A landed home whose later pull conflicted on settings.json or on doc-sync's date
+# lines gets render-settings land --repair.
 set -u
 case "${BASH_SOURCE[0]}" in */*) cd -P "${BASH_SOURCE[0]%/*}/../.." ;; *) cd -P ../.. ;; esac 2>/dev/null || exit 0
 H="$PWD" NOTE="" LOG=logs/landing.log  # the harness home is the working directory from here on
@@ -86,9 +86,9 @@ restart_daemons() {  # R8: processes running this home's git-fswatch.sh, started
     st="$(cat "/proc/$pid/stat" 2>/dev/null)" || continue; read -r -a st <<< "${st##*) }"
     cmp -s "/proc/$pid/cmdline" "/proc/${st[1]}/cmdline" 2>/dev/null && continue  # one of its subshells
     [ $((btime + st[19] / tick)) -le "$newest" ] || continue
-    gd="$(git -C "$watch" rev-parse --absolute-git-dir 2>/dev/null)" || gd=""
+    gd="$(git -C "$watch" rev-parse --absolute-git-dir 2>/dev/null)" || continue  # its repository is gone
     for c in $(_tree "$pid"); do [ "$(cat "/proc/$c/comm" 2>/dev/null)" != git ] || gd=busy; done
-    if [ "$gd" = busy ] || [ -z "$gd" ] || [ -e "$gd/index.lock" ]; then busy=$((busy + 1)); continue; fi
+    if [ "$gd" = busy ] || [ -e "$gd/index.lock" ]; then busy=$((busy + 1)); continue; fi
     # A rebase or merge stopped in its repository (another one: the harness home's own was caught
     # before any step): left alone, and it does not hold the landing.
     if [ -e "$gd/rebase-merge" ] || [ -e "$gd/rebase-apply" ] || [ -e "$gd/MERGE_HEAD" ]; then stopped=$((stopped + 1)); continue; fi
@@ -147,10 +147,11 @@ if [ "$STATE" = landed ]; then
 fi
 if [ "$STATE" = upgraded ]; then
   log "landing state=$STATE"
-  settings || finish "failed-${out:-settings}" "Harness landing failed at the ${out:-settings} step (see logs/landing.log); it runs again at the next turn end."
-  NOTE="${out:+; $out}"
   legacy_hooks
-  restart_daemons || finish waits-daemon "Harness landing waits: a stale git-fswatch daemon is in the middle of its git work; the landing goes on at the next turn end${NOTE:+ (done so far: ${NOTE#; })}."
+  # Before the settings: a landing that waits for a busy daemon has not migrated anything yet.
+  restart_daemons || finish waits-daemon "Harness landing waits: a stale git-fswatch daemon is in the middle of its git work; the settings are not touched yet${NOTE:+ (done so far: ${NOTE#; })}; the landing goes on at the next turn end."
+  settings || finish "failed-${out:-settings}" "Harness landing failed at the ${out:-settings} step (see logs/landing.log); it runs again at the next turn end."
+  NOTE="${out:+; $out}$NOTE"
 fi
 steps=3,4,5 did="settings.json rendered from the overlay, settings filter registered, pre-commit hook installed"
 own_hooks || { steps=3,4; did="${did%, pre-commit*}; pre-commit hook not installed: core.hooksPath comes from the $HOOK_SCOPE git config"; }
