@@ -520,6 +520,8 @@ def test_landing_end_to_end_and_idempotent(tmp_path, env):
     snapshot = {p: (home / p).read_bytes() for p in ("settings.json", "settings.machine.json",
                                                      "private-literals.txt")}
     config = git(env, home, "config", "--local", "--list").stdout
+    write(home / "hooks/git-hooks/post-merge-example", "#!/bin/sh\n# an opt-in template\n")
+    assert land(env, home, "--state").strip() == "landed"  # step 5 does not install it
     assert land(env, home) == ""  # landed: nothing to do, no notice, no log line
     assert landing_log(home) == log
     assert {p: (home / p).read_bytes() for p in snapshot} == snapshot

@@ -32,8 +32,9 @@ state() {  # STATE, COMMON, HOOKS, HOOK_SCOPE: two git calls on a landed home
   if [ -f settings.machine.json ] && [ -f "$rec" ] && [[ $cfg == *filter.claude-settings.clean* ]]; then
     STATE=landed
     own_hooks || return 0  # step 5 cannot install there (R4): nothing to compare
-    for f in hooks/git-hooks/*; do
-      case "${f##*/}" in *.md|post-commit-auto-push) continue ;; esac  # docs; the opt-in template
+    for f in hooks/git-hooks/*; do  # the ones step 5 installs say so on their second line
+      s=""; { read -r _; read -r s; } 2>/dev/null < "$f"
+      [[ $s == "# claude-harness "*" (installed by scripts/bootstrap)" ]] || continue
       cmp -s "$f" "$HOOKS/${f##*/}" || { STATE=hooks; return 0; }
     done
   elif [ -f "$rec" ] && [ ! -e settings.machine.json ] && [ ! -L settings.machine.json ]; then
