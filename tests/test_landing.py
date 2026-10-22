@@ -545,6 +545,43 @@ def test_doc_sync_only_conflicts_take_upstreams_side(tmp_path, env):
     assert git(env, home, "pull", "-q", "--rebase", "origin", "master").returncode == 0
 
 
+def test_doc_sync_conflicts_on_an_upgraded_home_whose_pull_left_settings_alone(tmp_path, env):
+    """R2's doc-sync exception in the landing itself: the pull's entry holds only doc-sync's
+    re-dated CLAUDE.md and commands/INDEX.md (settings.json untouched, so no entry differs from
+    rev on it); upstream deleted the index and edited the line next to CLAUDE.md's date. The
+    landing takes upstream's side for both in the same Stop."""
+    origin, rev = make_home(tmp_path, env, name="origin")
+    home = tmp_path / "harness"
+    git(env, tmp_path, "clone", "-q", str(origin), str(home))
+    home = Path(os.path.realpath(home))
+    git(env, home, "checkout", "-q", "-B", "master", rev)
+    git(env, home, "branch", "-q", "-u", "origin/master")
+    write(home / "commands/INDEX.md", DATED % "2026-01-01T00:00:00Z")
+    write(home / "CLAUDE.md", CLAUDE_MD % ("2026-01-01", "---"))
+    git(env, home, "add", "-A")
+    git(env, home, "commit", "-q", "-m", "pre-P7 indexes")
+    git(env, origin, "fetch", "-q", str(home), "master:pre")  # upstream: P7 merged with them
+    git(env, origin, "merge", "-q", "--no-edit", "-X", "theirs", "pre")
+    git(env, origin, "rm", "-q", "commands/INDEX.md")
+    write(origin / "CLAUDE.md", CLAUDE_MD % ("2026-01-01", "--- upstream edit"))
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "upstream")
+    git(env, home, "fetch", "-q", "origin")
+    write(home / "commands/INDEX.md", DATED % "2026-02-02T00:00:00Z")  # doc-sync re-dates both
+    write(home / "CLAUDE.md", CLAUDE_MD % ("2026-02-02", "---"))
+    git(env, home, "stash", "push", "-q", "-m", "Auto-stash before pull")
+    git(env, home, "pull", "-q", "--rebase", "origin", "master")
+    assert git(env, home, "stash", "pop", check=False).returncode != 0
+    status = git(env, home, "status", "--porcelain").stdout
+    assert "DU commands/INDEX.md" in status and "UU CLAUDE.md" in status
+    notice = land(env, home)
+    assert "P7 landed" in notice and "2 conflicted file(s) taken from upstream (2 doc-sync)" in notice
+    assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout == ""
+    assert not (home / "commands/INDEX.md").exists()
+    assert (home / "CLAUDE.md").read_text() == CLAUDE_MD % ("2026-01-01", "--- upstream edit")
+    assert_landed(env, home)
+
+
 # ------------------------------------------------------------------------------ R5: seeding
 
 def test_seeding_sources_filters_and_no_value_printed(tmp_path, env):

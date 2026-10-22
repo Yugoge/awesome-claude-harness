@@ -1238,10 +1238,11 @@ def pre_pull_rev(home):
     return next((r for r in revs if r not in declaring), None) if declaring & set(tips) else None
 
 
-def pull_stash(home, rev):
+def pull_stash(home, rev, settings=True):
     """The pull path's stash entry, by content (messages differ by pull path): the newest one whose
-    first parent is rev and whose settings.json differs from rev's; without rev (a landed home),
-    the newest one whose first parent is an earlier HEAD of the reflog."""
+    first parent is rev and whose settings.json differs from rev's (with settings=False any one at
+    rev: a pull that left settings.json alone, for the doc-sync exception); without rev (a landed
+    home), the newest one whose first parent is an earlier HEAD of the reflog."""
     entries = [(e.split() + [""])[:2] for e in
                (_git_out(home, "log", "-g", "--format=%H %P", "refs/stash") or "").splitlines()]
     if rev is None:
@@ -1249,8 +1250,8 @@ def pull_stash(home, rev):
         seen.discard(_git_out(home, "rev-parse", "HEAD"))
         return next((stash for stash, parent in entries if parent in seen), None)
     before = blob(home, "%s:%s" % (rev, SETTINGS))
-    return next((stash for stash, parent in entries if parent == rev
-                 and blob(home, "%s:%s" % (stash, SETTINGS)) != before), None)
+    return next((stash for stash, parent in entries if parent == rev and (
+        not settings or blob(home, "%s:%s" % (stash, SETTINGS)) != before)), None)
 
 
 def previous_settings(home, rev, stash):
@@ -1427,7 +1428,7 @@ def land(home, mode):
     if not os.path.isfile(OVERLAY):
         _say("%s is not a regular file" % OVERLAY)
         return "overlay", 1
-    res = repair_pop(home, stash, True) if unmerged else (0, 0, 0, 0)
+    res = repair_pop(home, stash or pull_stash(home, rev, False), True) if unmerged else (0, 0, 0, 0)
     _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res)
     if res[0] or res[2]:
         notes.append("%d conflicted file(s) taken from upstream (%d doc-sync), %d staged path(s) "
