@@ -44,8 +44,9 @@ install path, no `CLAUDE_HOME`, no personal tool path and no CLI-owned key (`mod
 `theme`, `tui`, …) — so it is `public-core`.
 
 The machine values live in `settings.machine.json` at the harness home: untracked and
-gitignored, written only by init (`scripts/bootstrap`) and only when absent, never by hooks
-or agents. `settings.machine.example.json` (tracked, `public-core`) documents every key.
+gitignored, written only when absent: by init (`scripts/bootstrap`), or once by the landing
+(`scripts/install/land`, run from `hooks/auto-commit.sh`) on a home upgraded from code before
+the filter; never by agents. `settings.machine.example.json` (tracked, `public-core`) documents every key.
 Optional modules (today only `paseo`) are fragments embedded in
 `scripts/install/render-settings`, switched on by the overlay's `modules` key.
 
@@ -67,8 +68,8 @@ home's own repository, while a plain local write in another repository is allowe
 "Commit protection", names what it denies and what it does not cover.
 
 Personal literals have their own local guard: the private-literal list `private-literals.txt`
-at the harness home (untracked, gitignored; init creates it empty and only the human fills
-it). `scripts/check-public-core.sh` fails on any of its literals in a tracked file, and the
+at the harness home (untracked, gitignored; init creates it empty and the human fills it, or
+the landing seeds it once on an upgraded home and never rewrites a list that has entries). `scripts/check-public-core.sh` fails on any of its literals in a tracked file, and the
 pre-commit hook runs that rule (`--private-literals`) over the staged content. Without the
 list the rule is skipped.
 
