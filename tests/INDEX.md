@@ -57,6 +57,7 @@ tests/
 ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
 ├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
 ├── `test_completeness_span_accounting.py` - halves on one code path
+├── `test_conftest_hermetic.py` - The root conftest drops the inherited variables that point a run at the runner's own project or home.
 ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
 ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
 ├── `test_generate_repair_map.py` - Covers AC-L8-01..04 and AC-L8-13 (docs/dev/acceptance-criteria-20260930-132644-l8.json)

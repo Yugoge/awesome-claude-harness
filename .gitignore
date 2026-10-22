@@ -146,7 +146,7 @@ overnight-delivery-*.json
 /downstream
 
 # Harness-generated output (transient per-cycle; not for version control)
-# tests/generated/ bulk-untracked; only 20260704-134650 and 20260704-225139 retained
+# tests/generated/ is untracked except its manifest.json
 # (ignore children, not parent dir — git negations cannot re-include children of an ignored dir)
 tests/generated/*
 # The global index (kind:"index", tasks[] -> per-task manifest_path) is TRACKED:

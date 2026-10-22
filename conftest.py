@@ -68,6 +68,16 @@ shutil.copyfile(
     _PROTECTED_RUNTIME,
 )
 os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = str(_PROTECTED_RUNTIME)
+# Variables that point a run at the runner's own project, home or optional
+# module. A test that needs one sets it itself; none is inherited.
+for _name in ("CLAUDE_PROJECT_DIR", "PASEO_CONFIG_DIR", "CLAUDE_HOME",
+              "CODEX_HOME", "CLAUDE_RESTART_ACCOUNTS_ROOT"):
+    os.environ.pop(_name, None)
+
+
+def pytest_unconfigure(config):
+    """Remove the session's scratch root, so a run leaves nothing in the temp dir."""
+    shutil.rmtree(_HERMETIC_ROOT, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
