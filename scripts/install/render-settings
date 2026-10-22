@@ -25,6 +25,7 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
                      is refused until `git rm --cached` untracks it.
   migrate --from REV [--settings-file PATH] [--base REV]
                      seed a NEW overlay from previous personal settings (one-time owner step).
+                     A previous GIT_AUTO_PUSH "1" is named, never migrated (push is opt-in).
 
 The record <git dir>/claude-settings.applied (mode 0600, never tracked) lists the layers smudge and
 render applied to the working file since the last render, so that an entry dropped from the overlay
@@ -936,6 +937,8 @@ def cmd_check(home):
     else:
         hooks_ok = check_hook_paths(home, working, overlay)
     filter_ok = check_filter(home, overlay_error, overlay, recorded, working)
+    if _d((overlay or {}).get("env")).get("GIT_AUTO_PUSH") == "1":  # D1: opt-in, so not a failure
+        print('[info] env.GIT_AUTO_PUSH is "1" in %s: automatic pushes are on' % OVERLAY)
     runtime_ok = check_protected_runtime(home)
     return 0 if hooks_ok and filter_ok and runtime_ok else 1
 
@@ -1141,6 +1144,9 @@ def cmd_migrate(home, rev, settings_file, base_rev):
         if name not in env and name not in ref_env:
             env[name] = value
     env.setdefault("CLAUDE_HOME", home)
+    pushed = env.get("GIT_AUTO_PUSH") == "1"  # D1: push is opt-in, never carried into a new overlay
+    if pushed:
+        del env["GIT_AUTO_PUSH"]
     overlay = {"modules": modules, "env": env}
     overlay.update(extra)
     try:
@@ -1160,6 +1166,8 @@ def cmd_migrate(home, rev, settings_file, base_rev):
     print("  modules: %s" % ", ".join("%s=%s" % (n, "on" if on else "off")
                                       for n, on in modules.items()))
     print("  env: %d keys: %s" % (len(env), ", ".join(env)))
+    if pushed:
+        print("  not migrated: GIT_AUTO_PUSH (automatic push is opt-in; set it in %s)" % OVERLAY)
     for name, val in overlay.get("permissions", {}).items():
         print("  permissions.%s: %s" % (name, len(val) if isinstance(val, list) else "set"))
     print("  hooks: %d groups" % sum(len(g) for g in overlay.get("hooks", {}).values()))
