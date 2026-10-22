@@ -823,7 +823,13 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
 
 
 # Sibling-account root (<root>/<account>/claude/projects): no default; unset or empty = no scan, never the cwd.
-_ACCOUNTS_ROOT_ENV = os.environ.get("CLAUDE_RESTART_ACCOUNTS_ROOT")
+# A Claude Code session started before its settings carried the overlay reads it from them (P7b R7).
+try:
+    from .claude_home import settings_env as _settings_env
+except ImportError:
+    from claude_home import settings_env as _settings_env  # type: ignore[no-redef]
+_ACCOUNTS_ROOT_ENV = os.environ.get("CLAUDE_RESTART_ACCOUNTS_ROOT") or _settings_env(
+    "CLAUDE_RESTART_ACCOUNTS_ROOT").get("CLAUDE_RESTART_ACCOUNTS_ROOT")
 ACCOUNTS_ROOT: Path | None = Path(_ACCOUNTS_ROOT_ENV) if _ACCOUNTS_ROOT_ENV else None
 
 

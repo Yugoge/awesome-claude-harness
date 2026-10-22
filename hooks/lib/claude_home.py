@@ -38,7 +38,9 @@ The split mirrors the shell helper ``require_security_file`` / ``resolve_optiona
 
 from __future__ import annotations
 
+import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Optional
@@ -184,6 +186,20 @@ def project_dir() -> Path:
     return Path.cwd()
 
 
+def settings_env(*keys: str) -> dict[str, str]:
+    """P7b R7: a Claude Code process (CLAUDECODE or CLAUDE_PROJECT_DIR set) whose env lacks
+    CLAUDE_HOME started before its settings carried the overlay: the keys it lacks come from the
+    harness home's current settings.json env. {} for any other process or an unreadable file."""
+    if os.environ.get("CLAUDE_HOME") or not (os.environ.get("CLAUDECODE")
+                                             or os.environ.get("CLAUDE_PROJECT_DIR")):
+        return {}
+    try:
+        env = json.loads((resolve() / "settings.json").read_text(encoding="utf-8"))["env"]
+        return {k: env[k] for k in keys if k not in os.environ and isinstance(env.get(k), str)}
+    except Exception:
+        return {}
+
+
 def _main(argv: list[str]) -> int:
     """Tiny CLI so non-python callers/tests can shell out."""
     cmd = argv[1] if len(argv) > 1 else "resolve"
@@ -204,7 +220,10 @@ def _main(argv: list[str]) -> int:
             return 1
         print(res)
         return 0
-    sys.stderr.write(f"claude_home.py: unknown subcommand '{cmd}' (resolve|require|optional)\n")
+    if cmd == "env":  # shell assignments of settings_env(), for eval
+        print("".join(f"{k}={shlex.quote(v)}\n" for k, v in settings_env(*argv[2:]).items()), end="")
+        return 0
+    sys.stderr.write(f"claude_home.py: unknown subcommand '{cmd}' (resolve|require|optional|env)\n")
     return 2
 
 
