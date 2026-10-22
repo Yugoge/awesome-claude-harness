@@ -1274,8 +1274,9 @@ def repair_pop(home, stash, always=False):
     """R2: undo what a conflicted stash pop left. An unmerged settings.json, and an unmerged
     INDEX.md or CLAUDE.md the stash changed only in doc-sync's date lines, take HEAD's side
     (removed where HEAD deleted it); then (once one was, or always on an upgraded home) every path
-    the pop staged (index blob equal to the stash's) is unstaged, its working content unchanged;
-    other unmerged paths stay as they are. Returns (resolved, doc-sync, unstaged, unmerged left)."""
+    the pop staged is unstaged, its working content unchanged: index blob equal to the stash's, or
+    a path the stash changed that the pop merged (index equal to the working file); other
+    unmerged paths stay as they are. Returns (resolved, doc-sync, unstaged, unmerged left)."""
     undated = lambda data: [ln for ln in data.splitlines() if not DOC_SYNC_LINE.match(ln)]  # noqa
     resolved = []
     for path in _unmerged(home):
@@ -1293,8 +1294,11 @@ def repair_pop(home, stash, always=False):
     if stash and (resolved or always):
         index = {e.split("\t", 1)[1]: e.split()[1] for e in _z(home, "ls-files", "-s", "-z")}
         stashed = {e.split("\t", 1)[1]: e.split()[2] for e in _z(home, "ls-tree", "-r", "-z", stash)}
+        merged = set(_z(home, "diff", "--name-only", "-z", "--no-renames", stash + "^1", stash)) - \
+            set(_z(home, "diff", "--name-only", "-z", "--no-renames"))
         unstage = [p for p in _z(home, "diff", "--cached", "--name-only", "-z", "--no-renames",
-                                 "HEAD") if p not in left and index.get(p) == stashed.get(p)]
+                                 "HEAD") if p not in left and (index.get(p) == stashed.get(p) or
+                                                               p in merged)]
     if unstage:  # never an empty list: `git reset` without a pathspec resets the whole index
         subprocess.run(["git", "-C", home, "--literal-pathspecs", "reset", "-q", "HEAD",
                         "--pathspec-from-file=-", "--pathspec-file-nul"], stdout=subprocess.DEVNULL,

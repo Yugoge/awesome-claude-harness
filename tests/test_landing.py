@@ -285,6 +285,41 @@ def test_s3_conflicted_pop_lands_from_the_stash_and_unstages_what_it_staged(tmp_
     assert rendered["model"] == "demo-live-model"
 
 
+def test_a_path_the_pop_merged_and_staged_is_unstaged_too(tmp_path, env):
+    """R2's goal, the index equal to HEAD for the paths the conflicted pop staged: a path changed
+    upstream and in the stash in different lines is merged and staged by the pop (its index blob
+    is the merge, not the stash's). It is unstaged too, its merged working content kept."""
+    lines = "".join("line %d\n" % i for i in range(1, 11))
+    origin, rev = make_home(tmp_path, env, name="origin")
+    home = tmp_path / "harness"
+    git(env, tmp_path, "clone", "-q", str(origin), str(home))
+    home = Path(os.path.realpath(home))
+    git(env, home, "checkout", "-q", "-B", "master", rev)
+    git(env, home, "branch", "-q", "-u", "origin/master")
+    write(home / "multi.txt", lines)
+    git(env, home, "add", "multi.txt")
+    git(env, home, "commit", "-q", "-m", "pre-P7: multi.txt")
+    git(env, origin, "fetch", "-q", str(home), "master:pre")  # upstream: P7 merged with it, line 1 edited
+    git(env, origin, "merge", "-q", "--no-edit", "pre")
+    write(origin / "multi.txt", lines.replace("line 1\n", "line 1 upstream\n"))
+    git(env, origin, "commit", "-q", "-am", "upstream: multi.txt")
+    git(env, home, "fetch", "-q", "origin")
+    write(home / "multi.txt", lines.replace("line 10\n", "line 10 live\n"))
+    write(home / "notes.txt", "owner note\n")
+    live(home, model_and_allow)
+    git(env, home, "stash", "push", "-q")
+    git(env, home, "pull", "-q", "--rebase", "origin", "master")
+    assert git(env, home, "stash", "pop", check=False).returncode != 0
+    status = git(env, home, "status", "--porcelain").stdout.splitlines()
+    assert {"M  multi.txt", "M  notes.txt", "UU settings.json"} <= set(status)
+    notice = land(env, home)
+    assert "1 conflicted file(s) taken from upstream (0 doc-sync), 2 staged path(s) unstaged" in notice
+    assert git(env, home, "diff", "--cached", "--name-only", "HEAD").stdout == ""
+    merged = lines.replace("line 1\n", "line 1 upstream\n").replace("line 10\n", "line 10 live\n")
+    assert (home / "multi.txt").read_text() == merged
+    assert (home / "notes.txt").read_text() == "owner note\n"
+
+
 def test_other_unmerged_paths_stay_and_an_empty_unstage_list_resets_nothing(tmp_path, env):
     """An unmerged file the owner edited stays unmerged (counted); with nothing the pop staged,
     no `git reset` runs (without a pathspec it would reset the whole index)."""
