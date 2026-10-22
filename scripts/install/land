@@ -73,7 +73,7 @@ legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the
 
 _tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do _tree "$c"; done; echo "$1"; }
 restart_daemons() {  # R8: processes running this home's git-fswatch.sh, started before its current code
-  local pid st newest btime tick watch gd unit n=0 busy=0 stopped=0 failed=0 c
+  local pid st newest btime tick watch gd unit n=0 busy=0 stopped=0 failed=0 c e k
   local -a argv envv
   newest="$(stat -c %Y hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null | sort -n | tail -n1)"
   btime="$(awk '$1 == "btime" { print $2 }' /proc/stat 2>/dev/null)"; tick="$(getconf CLK_TCK 2>/dev/null)"
@@ -100,6 +100,10 @@ restart_daemons() {  # R8: processes running this home's git-fswatch.sh, started
       continue
     fi
     mapfile -d '' -t envv < "/proc/$pid/environ" 2>/dev/null || { failed=$((failed + 1)); continue; }
+    # D1, R7: one that a session started before the landing (a Claude Code variable, no
+    # CLAUDE_HOME) does not keep that session's stale GIT_AUTO_PUSH.
+    k=0; for e in "${envv[@]}"; do case "$e" in CLAUDECODE=*|CLAUDE_PROJECT_DIR=*) k=$((k | 1)) ;; CLAUDE_HOME=*) k=$((k | 2)) ;; esac; done
+    [ "$k" -ne 1 ] || for e in "${!envv[@]}"; do [[ ${envv[e]} != GIT_AUTO_PUSH=* ]] || unset 'envv[e]'; done
     kill -TERM $(_tree "$pid") 2>/dev/null
     for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
     kill -0 "$pid" 2>/dev/null && kill -KILL $(_tree "$pid") 2>/dev/null && sleep 0.2

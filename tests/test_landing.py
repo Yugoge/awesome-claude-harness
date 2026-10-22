@@ -685,6 +685,63 @@ def test_stale_daemon_restarts_with_its_own_env_and_without_the_lock(tmp_path, e
             started.kill()
 
 
+DAEMON = '#!/bin/bash\ncd "$1" || exit 1\ntrap "exit 0" TERM\nwhile :; do sleep 1; done\n'
+needs_proc = pytest.mark.skipif(not os.path.isdir("/proc/self") or shutil.which("pgrep") is None,
+                                reason="needs /proc and pgrep")
+
+
+def stale_daemon(env, home, watch, **extra):
+    """A stand-in for home's git-fswatch.sh running on watch, started before the current daemon
+    code: the script's mtime is set between its start and now, 2.5 s away from both (/proc's boot
+    time has whole seconds)."""
+    daemon = home / "hooks/git-fswatch.sh"
+    write(daemon, DAEMON, 0o755)
+    proc = subprocess.Popen(["bash", str(daemon), str(watch)], env=dict(env, **extra),
+                            cwd=str(watch), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+    time.sleep(5)
+    then = time.time() - 2.5
+    os.utime(daemon, (then, then))
+    return proc
+
+
+def daemons_of(env, home, watch):
+    pattern = "%s %s$" % (home / "hooks/git-fswatch.sh", watch)
+    return [int(p) for p in run(["pgrep", "-f", pattern], env, check=False).stdout.split()]
+
+
+def kill_daemons(home, *procs):
+    subprocess.run(["pkill", "-f", str(home / "hooks/git-fswatch.sh")], check=False)
+    for proc in procs:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+
+
+@needs_proc
+@pytest.mark.parametrize("session, kept", [({"CLAUDECODE": "1"}, False),
+                                           ({"CLAUDE_PROJECT_DIR": "/opt/demo/proj"}, False),
+                                           ({"CLAUDECODE": "1", "CLAUDE_HOME": "/opt/demo/h"}, True),
+                                           ({}, True)],
+                         ids=["session", "session-project-dir", "post-landing-session", "shell"])
+def test_a_daemon_a_session_started_loses_that_sessions_push_switch(tmp_path, env, session, kept):
+    """R8 with R7 and D1: a daemon that a session started before the landing (a Claude Code
+    variable, no CLAUDE_HOME) is restarted without its GIT_AUTO_PUSH; any other daemon keeps its
+    own environment, the switch included (a human's own export for fswatch)."""
+    home, rev = make_home(tmp_path, env)
+    old = stale_daemon(env, home, home, GIT_AUTO_PUSH="1", **session)
+    try:
+        assert "1 stale git-fswatch daemon(s) restarted" in land(env, home)
+        old.wait(timeout=10)
+        new = daemons_of(env, home, home)
+        assert len(new) == 1
+        environ = Path("/proc/%d/environ" % new[0]).read_bytes().split(b"\0")
+        assert (b"GIT_AUTO_PUSH=1" in environ) == kept
+        assert all(("%s=%s" % kv).encode() in environ for kv in session.items())
+    finally:
+        kill_daemons(home, old)
+
+
 @pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="needs /proc")
 def test_a_zombie_named_like_the_daemon_leaves_the_landing_at_exit_0(tmp_path, env):
     """R8, R9: an unreaped child that ran a script named git-fswatch.sh (state Z: an empty
