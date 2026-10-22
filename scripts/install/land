@@ -5,13 +5,15 @@
 # and revision ids, never a value. `--state` prints landed (overlay, record, filter registered,
 # installed git hooks equal to hooks/git-hooks/), hooks (landed but a hook differs: step 5 alone
 # runs again), removed (record without overlay: left to doctor), upgraded (the HEAD reflog, else
-# ORIG_HEAD, holds a revision before the settings filter) or none (a fresh clone: left to init).
+# ORIG_HEAD, holds a revision before the settings filter, and does not start with a clone of a
+# later one) or none (a fresh clone: left to init).
 # An upgraded home lands under a lock unless a rebase or merge is stopped in it: legacy auto-push
 # hooks renamed aside and stale git-fswatch daemons restarted (here and in the repositories under
-# $HOME; a daemon in its git work makes the landing wait), render-settings land (repair the index a
-# conflicted pull left, migrate, seed the private-literal list), then init steps 3-5; each step is
-# idempotent. A landed home whose later pull conflicted on settings.json or on doc-sync's date
-# lines gets render-settings land --repair.
+# $HOME; the home's own daemon in its git work makes the landing wait), render-settings land
+# (repair the index a conflicted pull left, migrate, seed the private-literal list), then init
+# steps 3-5; each step is idempotent, and the whole stays under 15 s. A landed home whose later
+# pull conflicted on settings.json or on doc-sync's date lines gets render-settings land --repair,
+# and one with a stale daemon (left running before, or older than a later pull) restarts it.
 set -u
 trap 'exit 0' EXIT  # R9: exit 0 whatever fails below
 case "${BASH_SOURCE[0]}" in */*) cd -P "${BASH_SOURCE[0]%/*}/../.." ;; *) cd -P ../.. ;; esac 2>/dev/null || exit 0

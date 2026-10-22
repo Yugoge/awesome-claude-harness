@@ -138,7 +138,8 @@ the pop staged unstaged, the stash entry kept), migrates the previous personal s
 new overlay (a `GIT_AUTO_PUSH` of `"1"` is not carried over), seeds an empty
 `private-literals.txt` from values the machine already holds, renames aside post-commit hooks
 that push unless `GIT_AUTO_PUSH` is `0` (here and in the repositories under `$HOME`), restarts
-git-fswatch daemons running older code with their own environment, and runs init steps 3-5.
+git-fswatch daemons running older code with their own environment (one in its git work, or in a
+repository with a stopped rebase, at a later turn end), and runs init steps 3-5.
 A rebase or merge stopped in the home is left alone: the landing says so and waits.
 `logs/landing.log` lists what it did (counts and key names, never a value). For a home without
 sessions, `scripts/bootstrap --migrate-from <rev>` and `scripts/install/render-settings migrate`
