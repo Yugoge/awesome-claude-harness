@@ -1095,6 +1095,12 @@ def module_enabled(fragment, prev, base):
     return False
 
 
+def _tracked_hook(home, rev, hook):
+    m = re.search(r"@H/((?:hooks|scripts)/\S+)", norm_command(str(hook.get("command", ""))))
+    proc = _git(home, "cat-file", "-e", "%s:%s" % (rev, m.group(1))) if m else None
+    return proc is not None and proc.returncode == 0
+
+
 def cmd_migrate(home, rev, settings_file, base_rev):
     target = os.path.join(home, OVERLAY)
     if os.path.lexists(target):
@@ -1138,6 +1144,16 @@ def cmd_migrate(home, rev, settings_file, base_rev):
         _err("migrate refused: the clean settings.json has an unexpected structure at %s" % exc)
         return 1
     extra = diff(prev, reference)
+    # A hook running a harness script that rev tracks was public there: missing from the clean form
+    # now means upstream unregistered it (P1's retired Stop gate, an exit-0 stub until P10 deletes
+    # it), so it is not personal and is not migrated.
+    for groups in extra.get("hooks", {}).values():
+        for g in groups:
+            g["hooks"] = [h for h in g["hooks"] if not _tracked_hook(home, rev, h)]
+        groups[:] = [g for g in groups if g["hooks"]]
+    extra["hooks"] = {event: groups for event, groups in extra.get("hooks", {}).items() if groups}
+    if not extra["hooks"]:
+        del extra["hooks"]
     env = extra.pop("env", {})
     ref_env = _d(reference.get("env"))
     for name, value in code_defaults(home, rev):
