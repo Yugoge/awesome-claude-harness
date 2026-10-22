@@ -52,7 +52,7 @@ finish() {  # <log result> <notice>: the one notice line (no quote or backslash)
 }
 
 legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the hook carried them
-  local g repo dir f to n=0 lfs=0 found="" rc=0
+  local g repo dir f to t n=0 lfs=0 found="" rc=0
   # The repositories under $HOME (owner input "also"): a scan cut at 5 s for R1's bound, and said so.
   [ -z "${HOME:-}" ] || { found="$(timeout 5 find "$HOME" -maxdepth 5 -type d -name .git -prune 2>/dev/null)"; rc=$?; }
   while IFS= read -r g; do
@@ -63,8 +63,12 @@ legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the
       to="$f.auto-push-disabled"; [ ! -e "$to" ] || to="$to.$(date +%s)"
       mv -f "$f" "$to" 2>/dev/null || continue
       n=$((n + 1))
-      grep -q 'git lfs' "$to" && command -v git-lfs >/dev/null 2>&1 \
-        && git -C "$repo" lfs update --force >/dev/null 2>&1 && lfs=$((lfs + 1))
+      grep -q 'git lfs' "$to" && command -v git-lfs >/dev/null 2>&1 && t="$(mktemp -d 2>/dev/null)" || continue
+      # It carried the LFS step: git-lfs's own post-commit, written to a scratch hooks dir, takes its
+      # place; `git lfs update --force` would overwrite the repository's other hooks.
+      git -C "$repo" -c core.hooksPath="$t" lfs update >/dev/null 2>&1 && cp "$t/post-commit" "$f" 2>/dev/null \
+        && lfs=$((lfs + 1))
+      rm -rf "$t"
     done
   done < <(printf '%s\n' "$COMMON" "$found" | while IFS= read -r g; do [ -z "$g" ] || realpath -e "$g" 2>/dev/null; done | sort -u)
   [ "$rc" -eq 124 ] && rc=" scan=timed-out" || rc=""

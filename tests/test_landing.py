@@ -542,6 +542,28 @@ def test_seeding_never_rewrites_a_list_that_has_lines(tmp_path, env):
 
 # ------------------------------------------------------- R1, R4, R6, R9: the landing end to end
 
+@pytest.mark.skipif(shutil.which("git-lfs") is None, reason="needs git-lfs")
+def test_the_lfs_post_commit_is_restored_and_no_other_hook_is_touched(tmp_path, env):
+    """R6 / D15: where the renamed combined hook carried the LFS step, git-lfs's own post-commit
+    takes its place; the repository's other hooks (an owner's pre-push, post-merge) stay as they
+    are and no LFS hook is added beside them; no global git config is written."""
+    home, rev = make_home(tmp_path, env)
+    repo = Path(env["HOME"]) / "repos" / "lfs"
+    git(env, tmp_path, "init", "-q", str(repo))
+    hooks = repo / ".git" / "hooks"
+    write(hooks / "post-commit", LFS_LEGACY_HOOK, 0o755)
+    for name in ("pre-push", "post-merge"):
+        write(hooks / name, "#!/bin/sh\n# the owner's own %s\n" % name, 0o755)
+    config = Path(env["GIT_CONFIG_GLOBAL"]).read_bytes()
+    assert "(LFS hooks restored in 1)" in land(env, home)
+    assert "git lfs post-commit" in (hooks / "post-commit").read_text()
+    assert os.access(hooks / "post-commit", os.X_OK)
+    for name in ("pre-push", "post-merge"):
+        assert (hooks / name).read_text() == "#!/bin/sh\n# the owner's own %s\n" % name
+    assert not (hooks / "post-checkout").exists()
+    assert Path(env["GIT_CONFIG_GLOBAL"]).read_bytes() == config
+
+
 def test_a_timed_out_repository_scan_is_logged_and_named(tmp_path, env):
     """R6 / R1: the scan for other repositories under $HOME stops after 5 s; the log and the
     notice say so (the home's own hooks are handled all the same)."""
