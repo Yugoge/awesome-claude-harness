@@ -424,8 +424,50 @@ else
 fi
 
 # ============================================================================
+# AC3b/AC3c: one shape per blob. AC3's fixture holds an e-mail address and an
+# AKIA-shaped string together, so the AKIA alternative alone refuses it. Each
+# blob below holds one shape the old inline default never matched (its first
+# "}" closed the ${...:-...} expansion), so each pins its own alternative.
+# AC3d is the same path with a plain blob, which must still be pushed.
+# ============================================================================
+_shape_only_push() {  # <AC> <label> <repo name> <content> <refused|pushed>
+  local repo="$WORKDIR/$3" origin="$WORKDIR/$3-origin.git" ref sha lines alert pushed
+  git init -q "$repo"; git init -q --bare "$origin"
+  git -C "$repo" config user.name "Test"
+  git -C "$repo" config user.email "test@example.invalid"
+  printf 'hello\n' > "$repo/README.md"
+  git -C "$repo" add README.md && git -C "$repo" commit -q -m "init"
+  printf '%s\n' "$4" > "$repo/shape.txt"
+  write_checkpoint "$repo" "test: $1" "$1 ($2)" >/dev/null 2>&1
+  git -C "$repo" remote add origin "$origin"
+  ref="refs/checkpoints/$(git -C "$repo" branch --show-current)"
+  sha=$(git -C "$repo" rev-parse -q --verify "$ref")
+  if [ -z "$sha" ]; then _fail "$1 setup: no checkpoint ref for the $2 blob"; return; fi
+  lines=$(wc -l < "$push_log" 2>/dev/null | tr -d ' ')
+  _checkpoint_push_worker "$repo" "$ref" "$sha"
+  alert=$(tail -n "+$((${lines:-0} + 1))" "$push_log" 2>/dev/null)
+  pushed=$(git --git-dir="$origin" rev-parse -q --verify "$ref")
+  if [ "$5" = refused ]; then
+    if [ -z "$pushed" ] && printf '%s' "$alert" | grep -q "ALERT.*PII/credential-shaped"; then
+      _ok "$1: a blob holding only $2 is not pushed, ALERT logged"
+    else
+      _fail "$1: a blob holding only $2 was pushed or not reported (log: $alert)"
+    fi
+  elif [ "$pushed" = "$sha" ]; then
+    _ok "$1: a blob holding only $2 is pushed"
+  else
+    _fail "$1: a blob holding only $2 was not pushed (log: $alert)"
+  fi
+}
+_shape_only_push AC3b "an e-mail address" repo6 \
+  "contact fake-user@example-fake.test for the demo login" refused
+_shape_only_push AC3c "a JWT" repo7 \
+  "$(printf '%s.%s.%s' 'eyJhbGciOiJub25lIn0' 'eyJzdWIiOiJkZW1vIn0' 'c2lnbmF0dXJl')" refused
+_shape_only_push AC3d "plain text" repo8 "hello world, nothing shaped here" pushed
+
+# ============================================================================
 if [ "$FAILS" -eq 0 ]; then
-  echo "ALL ASSERTIONS PASS (AC1, AC2, AC3, AC4, AC5, AC6, AC7)"
+  echo "ALL ASSERTIONS PASS (AC1, AC2, AC3, AC3b, AC3c, AC3d, AC4, AC5, AC6, AC7)"
   exit 0
 else
   echo "$FAILS assertion(s) failed" >&2
