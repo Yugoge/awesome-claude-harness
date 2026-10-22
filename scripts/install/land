@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# land — the landing (P7b): a harness home that ran pre-P7 code reaches by itself the state P7's
+# one-time manual migration gives. hooks/auto-commit.sh runs it at every Stop: it always exits 0
+# and prints at most one plain line, the session's notice; logs/landing.log gets counts, key names
+# and revision ids, never a value. `--state` prints landed (overlay, record, filter registered,
+# installed git hooks equal to hooks/git-hooks/), hooks (landed but a hook differs: step 5 alone
+# runs again), removed (record without overlay: left to doctor), upgraded (the HEAD reflog, else
+# ORIG_HEAD, holds a revision before the settings filter) or none (a fresh clone: left to init).
+# An upgraded home lands under a lock unless a rebase or merge is stopped in it: render-settings
+# land (repair the index a conflicted pull left, migrate, seed the private-literal list), legacy
+# auto-push hooks renamed aside and stale git-fswatch daemons restarted (here and in the
+# repositories under $HOME), then init steps 3-5; each step is idempotent. A landed home whose
+# later pull conflicted on settings.json or on doc-sync's date lines gets render-settings land
+# --repair.
+set -u
+case "${BASH_SOURCE[0]}" in */*) cd -P "${BASH_SOURCE[0]%/*}/../.." ;; *) cd -P ../.. ;; esac 2>/dev/null || exit 0
+H="$PWD" NOTE="" LOG=logs/landing.log  # the harness home is the working directory from here on
+
+own_hooks() {  # step 5 installs only into this repository's own hooks directory
+  case "$HOOK_SCOPE" in ""|local|worktree) return 0 ;; esac
+  case "$(realpath -m "$HOOKS")/" in "$(realpath -m "$COMMON")"/*) return 0 ;; esac
+  return 1
+}
+state() {  # STATE, COMMON, HOOKS, HOOK_SCOPE: two git calls on a landed home
+  local rec="" cfg f s
+  STATE=none COMMON="" HOOKS="" HOOK_SCOPE=""
+  { read -r rec; read -r HOOKS; read -r COMMON; } < <(git rev-parse --git-path claude-settings.applied \
+    --git-path hooks --git-common-dir 2>/dev/null)
+  [ -n "$COMMON" ] || return 0
+  cfg="$(git config --show-scope --get-regexp '^(filter\.claude-settings\.clean|core\.hookspath)$' 2>/dev/null)"
+  while read -r s f _; do [ "$f" != core.hookspath ] || HOOK_SCOPE="$s"; done <<< "$cfg"
+  if [ -f settings.machine.json ] && [ -f "$rec" ] && [[ $cfg == *filter.claude-settings.clean* ]]; then
+    STATE=landed
+    own_hooks || return 0  # step 5 cannot install there (R4): nothing to compare
+    for f in hooks/git-hooks/*; do
+      case "${f##*/}" in *.md|post-commit-auto-push) continue ;; esac  # docs; the opt-in template
+      cmp -s "$f" "$HOOKS/${f##*/}" || { STATE=hooks; return 0; }
+    done
+  elif [ -f "$rec" ] && [ ! -e settings.machine.json ] && [ ! -L settings.machine.json ]; then
+    STATE=removed
+  elif python3 scripts/install/render-settings land --rev >/dev/null 2>&1; then
+    STATE=upgraded
+  fi
+}
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG" 2>/dev/null; }
+finish() {  # <log result> <notice>: the one notice line (no quote or backslash), exit 0
+  log "result=$1 head=$(git rev-parse --short=12 HEAD 2>/dev/null)"
+  [ -z "$2" ] || printf '%s\n' "$2" | tr -d '"\\'
+  exit 0
+}
+
+legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the hook carried them
+  local g repo dir f to n=0 lfs=0
+  while IFS= read -r g; do
+    repo="${g%/*}"
+    dir="$(git -C "$repo" config --get core.hooksPath 2>/dev/null)" && dir="$(cd "$repo" && realpath -m "${dir/#\~/${HOME:-~}}")"
+    for f in "$g/hooks/post-commit" "$g/keystone-hooks/preserved/post-commit" ${dir:+"$dir/post-commit"}; do
+      [ -f "$f" ] && grep -q 'GIT_AUTO_PUSH:-1' "$f" 2>/dev/null || continue
+      to="$f.auto-push-disabled"; [ ! -e "$to" ] || to="$to.$(date +%s)"
+      mv -f "$f" "$to" 2>/dev/null || continue
+      n=$((n + 1))
+      grep -q 'git lfs' "$to" && command -v git-lfs >/dev/null 2>&1 \
+        && git -C "$repo" lfs update --force >/dev/null 2>&1 && lfs=$((lfs + 1))
+    done
+  done < <({ echo "$COMMON"; [ -z "${HOME:-}" ] || timeout 10 find "$HOME" -maxdepth 5 -type d -name .git -prune 2>/dev/null; } \
+             | while IFS= read -r g; do realpath -e "$g" 2>/dev/null; done | sort -u)
+  log "legacy-hooks disabled=$n lfs-restored=$lfs"
+  [ "$n" -eq 0 ] || NOTE="$NOTE; $n legacy auto-push hook(s) renamed aside"
+  [ "$lfs" -eq 0 ] || NOTE="$NOTE (LFS hooks restored in $lfs)"
+}
+
+_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do _tree "$c"; done; echo "$1"; }
+restart_daemons() {  # R8: processes running this home's git-fswatch.sh, started before its current code
+  local pid st newest btime tick watch gd unit n=0 busy=0 stopped=0 failed=0 c
+  local -a argv envv
+  newest="$(stat -c %Y hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null | sort -n | tail -n1)"
+  btime="$(awk '$1 == "btime" { print $2 }' /proc/stat 2>/dev/null)"; tick="$(getconf CLK_TCK 2>/dev/null)"
+  [ -n "$newest" ] && [ -n "$btime" ] && [ -n "$tick" ] || return 0
+  for pid in $(pgrep -f 'git-fswatch\.sh' 2>/dev/null); do
+    mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null || continue
+    case "${argv[0]##*/}" in bash|sh) ;; *) continue ;; esac  # the daemon, not an editor on the file
+    watch="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || continue  # its main() cd's to the watched path
+    case "${argv[1]:-}" in /*) c="${argv[1]}" ;; *) c="$watch/${argv[1]:-}" ;; esac
+    [ "$(realpath -e "$c" 2>/dev/null)" = "$H/hooks/git-fswatch.sh" ] || continue
+    st="$(cat "/proc/$pid/stat" 2>/dev/null)" || continue; read -r -a st <<< "${st##*) }"
+    cmp -s "/proc/$pid/cmdline" "/proc/${st[1]}/cmdline" 2>/dev/null && continue  # one of its subshells
+    [ $((btime + st[19] / tick)) -le "$newest" ] || continue
+    gd="$(git -C "$watch" rev-parse --absolute-git-dir 2>/dev/null)" || gd=""
+    for c in $(_tree "$pid"); do [ "$(cat "/proc/$c/comm" 2>/dev/null)" != git ] || gd=busy; done
+    if [ "$gd" = busy ] || [ -z "$gd" ] || [ -e "$gd/index.lock" ]; then busy=$((busy + 1)); continue; fi
+    # A rebase or merge stopped in its repository (another one: the harness home's own was caught
+    # before any step): left alone, and it does not hold the landing.
+    if [ -e "$gd/rebase-merge" ] || [ -e "$gd/rebase-apply" ] || [ -e "$gd/MERGE_HEAD" ]; then stopped=$((stopped + 1)); continue; fi
+    unit="$(grep -o 'git-fswatch@[^/]*\.service' "/proc/$pid/cgroup" 2>/dev/null | head -n1)"
+    if [ -n "$unit" ]; then
+      if grep -q '/user@' "/proc/$pid/cgroup"; then systemctl --user restart "$unit"; else systemctl restart "$unit"; fi >/dev/null 2>&1 \
+        && n=$((n + 1)) || failed=$((failed + 1))
+      continue
+    fi
+    mapfile -d '' -t envv < "/proc/$pid/environ" 2>/dev/null || { failed=$((failed + 1)); continue; }
+    kill -TERM $(_tree "$pid") 2>/dev/null
+    for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    kill -0 "$pid" 2>/dev/null && kill -KILL $(_tree "$pid") 2>/dev/null && sleep 0.2
+    # Its own environment, never this session's; detached, and without the landing lock (fd 9).
+    env -i -C "$watch" "${envv[@]}" setsid "${argv[0]}" "$H/hooks/git-fswatch.sh" "$watch" \
+      </dev/null >/dev/null 2>&1 9>&- &
+    c=$!; sleep 1
+    if kill -0 "$c" 2>/dev/null; then n=$((n + 1)); else failed=$((failed + 1)); fi
+  done
+  log "fswatch restarted=$n busy=$busy stopped-integration=$stopped failed=$failed"
+  [ "$n" -eq 0 ] || NOTE="$NOTE; $n stale git-fswatch daemon(s) restarted"
+  [ "$stopped" -eq 0 ] || NOTE="$NOTE; $stopped stale git-fswatch daemon(s) left running: a rebase or merge is stopped in its repository"
+  [ "$failed" -eq 0 ] || NOTE="$NOTE; $failed git-fswatch restart(s) failed"
+  [ "$busy" -eq 0 ]
+}
+
+state
+[ "${1:-}" = "--state" ] && { echo "$STATE"; exit 0; }
+case "$STATE" in landed|hooks|upgraded) ;; *) exit 0 ;; esac
+if [ "$STATE" = landed ]; then  # only a later pull's conflicted stash pop (its entry is kept) comes here
+  [ -s "$COMMON/logs/refs/stash" ] || exit 0
+  git ls-files -u 2>/dev/null | grep -qE $'\t(settings\\.json|(.*/)?(INDEX|CLAUDE)\\.md)$' || exit 0
+fi
+mkdir -p logs 2>/dev/null
+exec 9>>"$COMMON/claude-landing.lock" || exit 0
+if ! { flock -n 9 || python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)'; } 2>/dev/null; then
+  log "result=skipped lock=taken state=$STATE"
+  [ "$STATE" = upgraded ] && echo "Harness landing: another session is landing this home right now; nothing done here."
+  exit 0
+fi
+FIRST="$STATE"; state  # again, under the lock: another session may have landed it meanwhile
+[ "$STATE" = "$FIRST" ] || finish "found-$STATE" ""
+GD="$(git rev-parse --absolute-git-dir 2>/dev/null)"
+for op in rebase-merge:rebase rebase-apply:rebase MERGE_HEAD:merge CHERRY_PICK_HEAD:cherry-pick REVERT_HEAD:revert; do
+  [ -e "$GD/${op%%:*}" ] || continue  # R2 S4: a stopped integration holds the owner's commits
+  n="$(git ls-files -u | cut -f2 | sort -u | wc -l)"
+  log "state=$STATE stopped=${op#*:} conflicted=$n"
+  [ "$STATE" = upgraded ] || finish "waits-${op#*:}" ""
+  finish "waits-${op#*:}" "Harness landing waits: a ${op#*:} is stopped in the harness home ($n conflicted path(s)); nothing was changed. Once it is finished or aborted, the landing runs at the next turn end."
+done
+
+settings() { out="$(python3 scripts/install/render-settings land "$@" 2>>"$LOG")"; }  # the notice part, or the failed step
+if [ "$STATE" = landed ]; then
+  settings --repair
+  finish repaired "${out:+Harness landing: $out.}"
+fi
+if [ "$STATE" = upgraded ]; then
+  log "landing state=$STATE"
+  settings || finish "failed-${out:-settings}" "Harness landing failed at the ${out:-settings} step (see logs/landing.log); it runs again at the next turn end."
+  NOTE="${out:+; $out}"
+  legacy_hooks
+  restart_daemons || finish waits-daemon "Harness landing waits: a stale git-fswatch daemon is in the middle of its git work; the landing goes on at the next turn end${NOTE:+ (done so far: ${NOTE#; })}."
+fi
+steps=3,4,5 did="settings.json rendered from the overlay, settings filter registered, pre-commit hook installed"
+own_hooks || { steps=3,4; did="${did%, pre-commit*}; pre-commit hook not installed: core.hooksPath comes from the $HOOK_SCOPE git config"; }
+[ "$STATE" = hooks ] && steps=5
+bash scripts/bootstrap --steps "$steps" 2>&1 | sed -e "s#$H#<home>#g" -e "s#${HOME:-/nonexistent}/#~/#g" >> "$LOG"
+[ "${PIPESTATUS[0]}" -eq 0 ] \
+  || finish "failed-steps-$steps" "Harness landing failed at init steps $steps (see logs/landing.log); it runs again at the next turn end."
+[ "$STATE" = hooks ] && finish hooks-refreshed "Harness landing: init step 5 reinstalled the git hooks that changed under hooks/git-hooks/."
+finish landed "Harness landing: P7 landed on this home: $did${NOTE}. Running sessions follow its push and guard settings now; see logs/landing.log."
