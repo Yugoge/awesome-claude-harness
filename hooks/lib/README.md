@@ -8,14 +8,12 @@
 
 ## Files
 - `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
-- `agent_temp_targets.py` - This module is deliberately not an authorization hook and never emits
 - `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 - `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 - `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 - `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
 - `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 - `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
-- `checkpoint_resources.py` - The directory lock is the transaction boundary: primary-template validation,
 - `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 - `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 - `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
@@ -29,7 +27,6 @@
 - `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 - `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 - `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
-- `negative_evidence.py` - The scan root is never an authority source.  A parent-published immutable
 - `obligation.py` - Rollout step S2 of the converged zero-failure design
 - `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 - `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared

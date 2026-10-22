@@ -7,7 +7,7 @@
     {
       "id": "resolver",
       "role": "resolver",
-      "files": ["hooks/lib/claude_home.sh", "hooks/lib/claude_home.py"]
+      "files": ["hooks/lib/claude_home.sh", "hooks/lib/claude_home.py", "hooks/lib/harness_state_dir.py", "hooks/lib/harness_state_dir.sh"]
     },
     {
       "id": "safety-hooks",
@@ -45,6 +45,8 @@
     "copied": [
       { "src": "hooks/lib/claude_home.sh", "dest": "hooks/lib/claude_home.sh", "mode": "0755" },
       { "src": "hooks/lib/claude_home.py", "dest": "hooks/lib/claude_home.py", "mode": "0755" },
+      { "src": "hooks/lib/harness_state_dir.py", "dest": "hooks/lib/harness_state_dir.py", "mode": "0644" },
+      { "src": "hooks/lib/harness_state_dir.sh", "dest": "hooks/lib/harness_state_dir.sh", "mode": "0644" },
       { "src": "hooks/lib/capability_state.py", "dest": "hooks/lib/capability_state.py", "mode": "0644" },
       { "src": "hooks/pretool-block-background-tasks.py", "dest": "hooks/pretool-block-background-tasks.py", "mode": "0755" },
       { "src": "hooks/pretool-block-enterworktree.sh", "dest": "hooks/pretool-block-enterworktree.sh", "mode": "0755" },

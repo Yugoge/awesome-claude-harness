@@ -29,6 +29,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -122,8 +123,18 @@ def _ac(ac_id):
 BLOCK = 2
 ALLOW = 0
 
-DO_FLAG_TMPL = "/tmp/claude-orchestrator-consent-{sid}.flag"
-SENTINEL_DIR = Path("/tmp/claude-grants")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+
+
+def _do_flag_path(sid: str) -> Path:
+    """The /do consent flag under the state root the hook resolves, at call time."""
+    return Path(harness_state_dir()) / ("claude-orchestrator-consent-%s.flag" % sid)
+
+
+def _sentinel_dir() -> Path:
+    """The /allow sentinel directory the hook resolves (hooks/lib/allowlist.py)."""
+    return Path(harness_state_dir()) / "claude-grants"
 
 # Env keys that would otherwise let an ambient grant leak into the hook's
 # session/task resolution and silently turn a BLOCK assertion into an ALLOW.
@@ -174,15 +185,16 @@ def assert_all(forms, expected):
 
 def write_do_flag(sid: str) -> Path:
     """Create the /do consent flag the main-agent short-circuit reads."""
-    path = Path(DO_FLAG_TMPL.format(sid=sid))
+    path = _do_flag_path(sid)
     path.write_text("true")
     return path
 
 
 def write_allow_sentinel(task_id: str) -> Path:
     """Create a structured /allow sentinel matching `git clean …`."""
-    SENTINEL_DIR.mkdir(parents=True, exist_ok=True)
-    path = SENTINEL_DIR / ("%s.json" % task_id)
+    sentinel_dir = _sentinel_dir()
+    sentinel_dir.mkdir(parents=True, exist_ok=True)
+    path = sentinel_dir / ("%s.json" % task_id)
     path.write_text(json.dumps({
         "task_id": task_id,
         "session_id": task_id,

@@ -420,7 +420,7 @@ graph TD
 
     ORC ==>|dispatch WHAT not HOW| SUB[Subagent Pool<br/>23 agents<br/>ba → qa → dev → qa]
 
-    HL[Hook Layer<br/>81 wired hook command entries<br/>9 lifecycle events<br/>PreToolUse / PostToolUse / Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/HEAD<br/>reference-transaction keystone)]
+    HL[Hook Layer<br/>PreToolUse / PostToolUse / Stop] -->|allow exit 0| GK[(Git Kernel<br/>git repo<br/>/tmp/ grants<br/>refs/checkpoints/HEAD<br/>reference-transaction keystone)]
     HL -->|block exit 2| BLK[/BLOCKED/]
 
     GK --> IDX[INDEX files<br/>doc-sync PostToolUse]
@@ -817,8 +817,7 @@ Each row maps to a capability in the dependency table above.
 .claude/
 ├── CLAUDE.md          # The constitution: non-negotiable rules the agent must obey
 ├── ARCHITECTURE.md    # System architecture, verified against the current code
-├── NESTED-REPO.md     # Why ~/.claude is its own git repo on a RAM disk
-├── settings.json      # clean form: 81 wired hook entries across 9 lifecycle events (paseo module off)
+├── settings.json      # clean form: hook wiring and permissions (paseo module off)
 ├── settings.machine.example.json  # documented example of the untracked machine overlay
 ├── agents/            # 23 subagent definitions (BA, dev, QA, architect, …)
 ├── commands/          # 20 slash-command workflows (/spec, /dev, /close, /commit, …)
@@ -826,7 +825,7 @@ Each row maps to a capability in the dependency table above.
 │   ├── lib/           #   shared libs: allowlist (structured sentinel grants), checkpoint-core
 │   ├── doc_sync/      #   self-updating INDEX/README/CLAUDE regeneration
 │   └── git-keystone/  #   git-native reference-transaction protection
-├── scripts/           # 119 helper scripts (graphify, spec resolver, grant writers, execute-push, …)
+├── scripts/           # helper scripts (graphify, spec resolver, grant writers, execute-push, …)
 ├── skills/            # 8 skills: the Playwright UI-audit suite (+ ui-shared support)
 ├── schemas/           # JSON schemas (e.g. cycle-contract.v1.json)
 ├── policies/          # tool-policy and role-restriction definitions

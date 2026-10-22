@@ -71,6 +71,7 @@ if str(HOOKS_DIR) not in sys.path:
 
 import lib.allowlist as AL  # noqa: E402
 import lib.commit_journal as CJ  # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 CHECKS = []
 FAILURES = []
@@ -101,11 +102,16 @@ def _load_script(filename, module_name):
 # paths; its namespace glob is redirected alongside the hooks' templates in main().
 WCG = _load_script("write-commit-grant.py", "write_commit_grant")
 
-# The globs hooks/stop-cleanup-allowlist.sh sweeps at session end, copied verbatim. The
-# event-keyed pointer names must keep matching them, because that Stop hook is now the
-# outer deliberate reaper for anything the mid-session sweep has not yet aged out.
-STOP_CLEANUP_POINTER_GLOB = "/tmp/claude-commit-grant-active-*.json"
-STOP_CLEANUP_LOCKED_GLOB = "/tmp/claude-commit-grant-*.json.lck"
+# The globs hooks/stop-cleanup-allowlist.sh sweeps at session end, copied verbatim under
+# the same state root it resolves (harness_state_dir(); the suite's conftest sets
+# CLAUDE_STATE_DIR before this module is imported). The event-keyed pointer names must
+# keep matching them, because that Stop hook is now the outer deliberate reaper for
+# anything the mid-session sweep has not yet aged out. The name-shape checks below build
+# every sample and every other glob under this same root, so a match or a miss is about
+# the basename alone.
+STATE_ROOT = harness_state_dir()
+STOP_CLEANUP_POINTER_GLOB = os.path.join(STATE_ROOT, "claude-commit-grant-active-*.json")
+STOP_CLEANUP_LOCKED_GLOB = os.path.join(STATE_ROOT, "claude-commit-grant-*.json.lck")
 
 
 def check(name, condition):
@@ -550,14 +556,17 @@ def _run(tmp):
 
     # The record has to be INVISIBLE to every reader that already scans this namespace,
     # or it becomes a grant candidate, an in-flight signal, or sweep bait.
-    sample = "/tmp/claude-commit-grant-sid-nonce.json"
+    sample = os.path.join(STATE_ROOT, "claude-commit-grant-sid-nonce.json")
     record_name = GUARD._use_record_path(sample)
     check("the use record's name matches none of the existing grant / pointer / sweep "
           "globs (it must be inert to every current reader)",
           record_name == sample + ".use"
-          and not fnmatch.fnmatch(record_name, "/tmp/claude-commit-grant-*-*.json")
-          and not fnmatch.fnmatch(record_name, "/tmp/claude-commit-grant-*.json")
-          and not fnmatch.fnmatch(record_name, "/tmp/claude-commit-grant-*.lck")
+          and not fnmatch.fnmatch(record_name,
+                                  os.path.join(STATE_ROOT, "claude-commit-grant-*-*.json"))
+          and not fnmatch.fnmatch(record_name,
+                                  os.path.join(STATE_ROOT, "claude-commit-grant-*.json"))
+          and not fnmatch.fnmatch(record_name,
+                                  os.path.join(STATE_ROOT, "claude-commit-grant-*.lck"))
           and not fnmatch.fnmatch(record_name, STOP_CLEANUP_POINTER_GLOB)
           and not fnmatch.fnmatch(record_name, STOP_CLEANUP_LOCKED_GLOB))
     # Rename-aside failure is the same trade (R2-3a): the grant is still at its
@@ -663,7 +672,7 @@ def _run(tmp):
           and deferred is False)
     check("a stranded .lck still matches the Stop sweep's locked glob, so the residual "
           "the contract accepts is actually reachable by a reaper",
-          fnmatch.fnmatch("/tmp/claude-commit-grant-sid-nonce.json.lck",
+          fnmatch.fnmatch(os.path.join(STATE_ROOT, "claude-commit-grant-sid-nonce.json.lck"),
                           STOP_CLEANUP_LOCKED_GLOB))
     # Teardown must not depend on the checks above having passed: under the very mutant
     # this scenario exists to kill, the .lck is gone, and an unguarded unlink here would
@@ -1567,11 +1576,22 @@ def _run(tmp):
         return (st.st_dev, st.st_ino)
 
     def swap_for_replacement(path, marker):
-        """Remove the file at `path` and put a DIFFERENT, live inode there."""
-        os.unlink(path)
-        with open(path, "w") as handle:
+        """Remove the file at `path` and put a DIFFERENT, live inode there.
+
+        The replacement is created under a side name BEFORE the original is
+        unlinked, then renamed into place. Unlink-then-create would let the
+        filesystem hand the freed inode number straight back (ext4 does, every
+        time), so the "replacement" would carry the validated instance's own
+        (st_dev, st_ino) and the scenario would not be a swap at all. Returns
+        None if the identities still coincide, so no check can pass on that."""
+        old = ident_of(path)
+        side = path + ".replacement"
+        with open(side, "w") as handle:
             json.dump({"replacement": marker}, handle)
-        return ident_of(path)
+        os.unlink(path)
+        os.rename(side, path)
+        new = ident_of(path)
+        return new if new != old else None
 
     def pure_name_unlink(path, ident=None):
         """The pre-fix operation: act on the NAME, whatever now occupies it."""
@@ -2059,10 +2079,11 @@ def _run(tmp):
 
 def main():
     # PT, GUARD and CJ are shared interpreter state, and the pointer namespace these hooks
-    # scan is a single shared /tmp namespace holding OTHER sessions' in-flight commit grants.
+    # scan is a single shared state-root namespace (harness_state_dir(), default /tmp) holding
+    # OTHER sessions' in-flight commit grants.
     # Both the module attributes and the environment are therefore redirected for the run and
     # restored in a finally block, so a raise anywhere above cannot leak the test's pointer
-    # directory into a later test item or, worse, leave this process scanning real /tmp. The
+    # directory into a later test item or, worse, leave this process scanning the live one. The
     # GUARD template is redirected for exactly the same reason: this file drives the real
     # writer, and an un-redirected writer would plant pointers in the live namespace.
     del CHECKS[:]
@@ -2102,7 +2123,7 @@ def main():
             GUARD._COMMIT_GRANT_ACTIVE_TEMPLATE = redirected
             WCG.COMMIT_GRANT_POINTER_GLOB = PT._COMMIT_GRANT_POINTER_GLOB
             # The payload-seam scenarios run the REAL main(), whose sentinel-consume
-            # path scans the shared /tmp/claude-grants namespace; redirect it for the
+            # path scans the shared <state root>/claude-grants namespace; redirect it for the
             # same reason the pointer namespace is redirected.
             sentinels = os.path.join(tmp, "sentinel-grants")
             os.makedirs(sentinels)

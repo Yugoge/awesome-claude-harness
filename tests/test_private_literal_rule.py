@@ -8,8 +8,9 @@ real checkout nor any real home configuration is read or written. The only liter
 listed is the synthetic account-style stand-in LITERAL.
 
 The temporary tree is a minimal harness every OTHER checkout check of check-public-core.sh
-passes on (a ledger classifying each top-level path, an empty residue allowlist), so an
-exit status observed in checkout mode is attributable to the private-literal rule alone.
+passes on (a ledger classifying each top-level path, the harness's own residue-allowlist
+entries for the copied scripts, since the generic residue rule scans every tracked file),
+so an exit status observed in checkout mode is attributable to the private-literal rule alone.
 
 Scopes under test: the default run reads every tracked file's INDEX content;
 --private-literals reads only the lines and path names the staged change adds relative to
@@ -55,7 +56,15 @@ LEDGER = """# Minimal boundary ledger for the private-literal tests
 | `scripts/` | `shared/infra` | copied gate scripts |
 <!-- END:public-core-manifest -->
 """
-EMPTY_ALLOWLIST = '{"self_exempt_paths": [], "legitimate_classes": [], "entries": []}\n'
+ALLOWLIST = "policies/public-core-residue-allowlist.v1.json"
+
+
+def _copied_allowlist() -> str:
+    """The harness allowlist narrowed to the copied scripts (same bytes, same keys)."""
+    doc = json.loads((REPO / ALLOWLIST).read_text(encoding="utf8"))
+    verbatim = COPIED if USING_RENDER_SETTINGS_STUB else (*COPIED, RENDER)
+    doc["entries"] = [e for e in doc["entries"] if e["path"] in verbatim]
+    return json.dumps(doc, indent=2) + "\n"
 
 STUB_RENDER_PASS = (
     "#!/usr/bin/env python3\n"
@@ -147,7 +156,7 @@ def repo(tmp_path: Path, env: dict) -> Path:
         (root / RENDER).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / RENDER, root / RENDER)
     _write(root / "PUBLIC-CORE.md", LEDGER)
-    _write(root / "policies/public-core-residue-allowlist.v1.json", EMPTY_ALLOWLIST)
+    _write(root / ALLOWLIST, _copied_allowlist())
     _write(root / "docs/notes.md", "# Notes\n\nNothing private here.\n")
     _git(root, env, "init", "-q")
     _git(root, env, "config", "user.name", "sandbox")

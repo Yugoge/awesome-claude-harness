@@ -194,7 +194,9 @@ fi
 
 # --- Checkpoint 2: add a PII/credential-shaped fixture, expect BLOCK (AC3) ---
 git -C "$REPO2" remote remove origin
-printf 'contact fake-user@example-fake.test for the demo login\nAKIA1234567890ABCDEF\n' \
+# The AKIA-shaped placeholder is printed from two fragments so the tracked file
+# itself holds no secret-shaped string; the gate still receives the same bytes.
+printf 'contact fake-user@example-fake.test for the demo login\n%s%s\n' 'AKIA' '1234567890ABCDEF' \
   > "$REPO2/incident-fixture.txt"
 write_checkpoint "$REPO2" "test: AC3 fixture" "checkpoint 2 (PII-shaped)" >/dev/null 2>&1
 git -C "$REPO2" remote add origin "$ORIGIN2"
@@ -395,8 +397,77 @@ _snap "AC6 BOM removed" "$H_LIB" "$H"
 _written AC6 "the machine form again, byte order mark removed"
 
 # ============================================================================
+# AC7: the pre-push gate runs the engine's private-literal rule over the new
+# blobs, so a snapshot written before its literal was listed is not pushed.
+# ============================================================================
+REPO5="$WORKDIR/repo5"; ORIGIN5="$WORKDIR/origin5.git"
+git init -q "$REPO5"; git init -q --bare "$ORIGIN5"
+git -C "$REPO5" config user.name "Test"
+git -C "$REPO5" config user.email "test@example.invalid"
+printf '/private-literals.txt\n' > "$REPO5/.gitignore"
+git -C "$REPO5" add -A && git -C "$REPO5" commit -q -m "init"
+printf 'ticket for %s, demo only\n' "$STANDIN" > "$REPO5/early.txt"
+_snap "AC7 before listing" "$CORE_LIB" "$REPO5"
+_written AC7 "a literal not yet listed"
+printf '%s\n' "$STANDIN" > "$REPO5/private-literals.txt"
+git -C "$REPO5" remote add origin "$ORIGIN5"
+ref5="refs/checkpoints/$(git -C "$REPO5" branch --show-current)"
+lines=$(wc -l < "$push_log" 2>/dev/null | tr -d ' ')
+_checkpoint_push_worker "$REPO5" "$ref5" "$snap_after"
+alert=$(tail -n "+$((${lines:-0} + 1))" "$push_log" 2>/dev/null)
+if [ -z "$(git --git-dir="$ORIGIN5" rev-parse -q --verify "$ref5")" ] \
+  && printf '%s' "$alert" | grep -q "ALERT.*the private-literal rule.*early.txt:1" \
+  && ! printf '%s' "$alert" | grep -qF -- "$STANDIN"; then
+  _ok "AC7: push refused naming the private-literal rule and early.txt:1, literal not logged"
+else
+  _fail "AC7: snapshot holding a since-listed literal was pushed or misreported (log: $alert)"
+fi
+
+# ============================================================================
+# AC3b/AC3c: one shape per blob. AC3's fixture holds an e-mail address and an
+# AKIA-shaped string together, so the AKIA alternative alone refuses it. Each
+# blob below holds one shape the old inline default never matched (its first
+# "}" closed the ${...:-...} expansion), so each pins its own alternative.
+# AC3d is the same path with a plain blob, which must still be pushed.
+# ============================================================================
+_shape_only_push() {  # <AC> <label> <repo name> <content> <refused|pushed>
+  local repo="$WORKDIR/$3" origin="$WORKDIR/$3-origin.git" ref sha lines alert pushed
+  git init -q "$repo"; git init -q --bare "$origin"
+  git -C "$repo" config user.name "Test"
+  git -C "$repo" config user.email "test@example.invalid"
+  printf 'hello\n' > "$repo/README.md"
+  git -C "$repo" add README.md && git -C "$repo" commit -q -m "init"
+  printf '%s\n' "$4" > "$repo/shape.txt"
+  write_checkpoint "$repo" "test: $1" "$1 ($2)" >/dev/null 2>&1
+  git -C "$repo" remote add origin "$origin"
+  ref="refs/checkpoints/$(git -C "$repo" branch --show-current)"
+  sha=$(git -C "$repo" rev-parse -q --verify "$ref")
+  if [ -z "$sha" ]; then _fail "$1 setup: no checkpoint ref for the $2 blob"; return; fi
+  lines=$(wc -l < "$push_log" 2>/dev/null | tr -d ' ')
+  _checkpoint_push_worker "$repo" "$ref" "$sha"
+  alert=$(tail -n "+$((${lines:-0} + 1))" "$push_log" 2>/dev/null)
+  pushed=$(git --git-dir="$origin" rev-parse -q --verify "$ref")
+  if [ "$5" = refused ]; then
+    if [ -z "$pushed" ] && printf '%s' "$alert" | grep -q "ALERT.*PII/credential-shaped"; then
+      _ok "$1: a blob holding only $2 is not pushed, ALERT logged"
+    else
+      _fail "$1: a blob holding only $2 was pushed or not reported (log: $alert)"
+    fi
+  elif [ "$pushed" = "$sha" ]; then
+    _ok "$1: a blob holding only $2 is pushed"
+  else
+    _fail "$1: a blob holding only $2 was not pushed (log: $alert)"
+  fi
+}
+_shape_only_push AC3b "an e-mail address" repo6 \
+  "contact fake-user@example-fake.test for the demo login" refused
+_shape_only_push AC3c "a JWT" repo7 \
+  "$(printf '%s.%s.%s' 'eyJhbGciOiJub25lIn0' 'eyJzdWIiOiJkZW1vIn0' 'c2lnbmF0dXJl')" refused
+_shape_only_push AC3d "plain text" repo8 "hello world, nothing shaped here" pushed
+
+# ============================================================================
 if [ "$FAILS" -eq 0 ]; then
-  echo "ALL ASSERTIONS PASS (AC1, AC2, AC3, AC4, AC5, AC6)"
+  echo "ALL ASSERTIONS PASS (AC1, AC2, AC3, AC3b, AC3c, AC3d, AC4, AC5, AC6, AC7)"
   exit 0
 else
   echo "$FAILS assertion(s) failed" >&2

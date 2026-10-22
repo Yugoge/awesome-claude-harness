@@ -608,7 +608,7 @@ def parent_task_id(src_task_id, repo_root):
     A lane id is `<parent>-<worker>` (resolve-dev-artifact-chain.py:229), but the
     split point is NOT lexically determined: worker labels really do contain
     dashes here (measured 2026-09-07 over docs/dev — 21 of 131 lane ids, e.g.
-    `application-assistant`, `subtask-ab`, `fill-tests`), and 6 ids have two
+    `worker-q7x`, `worker-k3m-ab`, `fill-tests`), and 6 ids have two
     distinct dash-prefix ancestors that both exist on disk. So the parent is
     settled on EVIDENCE: the longest ancestor carrying a canonical dev-report.
     Only when the cycle left no canonical at all does it fall back to the

@@ -1,7 +1,6 @@
 """Execution-semantic write-target resolution at the exact sink use site."""
 
 from pathlib import Path
-import subprocess
 import sys
 
 import pytest
@@ -16,7 +15,7 @@ SAFE = "docs/dev/context-x.json"
 
 @pytest.fixture(autouse=True)
 def _bounded_environment(monkeypatch):
-    monkeypatch.setenv("HOME", "/home/tester")
+    monkeypatch.setenv("HOME", "/srv/harness")
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(ROOT))
 
 
@@ -45,12 +44,12 @@ def test_approved_home_and_project_expansions_are_projected():
     assert targets.extract_bash_write_paths(command) == [str(ROOT / SAFE)]
 
 
-def test_projection_timeout_fails_closed(monkeypatch):
-    def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout", 0.5))
-
-    monkeypatch.setattr(targets.subprocess, "run", timeout)
-    assert targets.extract_bash_write_paths(f'OUT={SAFE}; tee "$OUT"') == ["$OUT"]
+def test_projection_failure_fails_closed(monkeypatch):
+    # The projection is pure text (no process); a value it cannot project,
+    # here an approved expansion whose variable is unset, keeps the literal.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR")
+    command = 'OUT="$CLAUDE_PROJECT_DIR/docs/dev/context-x.json"; tee "$OUT"'
+    assert targets.extract_bash_write_paths(command) == ["$OUT"]
 
 
 def test_projected_result_still_traverses_deny_before_allow(monkeypatch):

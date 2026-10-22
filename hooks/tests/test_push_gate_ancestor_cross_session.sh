@@ -24,7 +24,7 @@ fi
 FAIL=0
 
 # ── Extract the REAL scanning block verbatim from hooks/push.sh ───────────
-START_ANCHOR='_TOKEN_BASE_DIR="/tmp/agentic-commit/push/${_REPO_HASH}"'
+START_ANCHOR='_TOKEN_BASE_DIR="$(harness_state_dir)/agentic-commit/push/${_REPO_HASH}"'
 END_ANCHOR='if [ -z "$_TOKEN_PATH" ]; then'
 START_LINE=$(grep -nF "$START_ANCHOR" "$PUSH_SH" | head -1 | cut -d: -f1)
 END_LINE=$(grep -nF "$END_ANCHOR" "$PUSH_SH" | head -1 | cut -d: -f1)
@@ -53,7 +53,13 @@ esac
 
 # ── Build a throwaway scratch git repo with a short commit chain ──────────
 WORKDIR=$(mktemp -d -t push-gate-ancestor-test-XXXXXX)
-trap 'rm -rf "$WORKDIR" "$FAKE_TOKEN_BASE" 2>/dev/null' EXIT INT TERM
+trap 'rm -rf "$WORKDIR" 2>/dev/null' EXIT INT TERM
+
+# The scan block resolves its token root through harness_state_dir (the same
+# library push.sh sources); point it at a state root private to this run so
+# the test never reads or writes the shared default namespace.
+. "${REPO_ROOT}/hooks/lib/harness_state_dir.sh"
+export CLAUDE_STATE_DIR="$WORKDIR/state"
 
 REPO="$WORKDIR/scratch-repo"
 mkdir -p "$REPO"
@@ -79,7 +85,7 @@ git -C "$REPO" branch -q -D disjoint-branch
 # own unique tmpdir path naturally gives a fake-but-real repo-hash that
 # cannot collide with any actual repo's real token directory.
 _REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${REPO}').encode()).hexdigest()[:16])")"
-FAKE_TOKEN_BASE="/tmp/agentic-commit/push/${_REPO_HASH}"
+FAKE_TOKEN_BASE="$(harness_state_dir)/agentic-commit/push/${_REPO_HASH}"
 _BRANCH="test-branch"
 
 run_scan() {

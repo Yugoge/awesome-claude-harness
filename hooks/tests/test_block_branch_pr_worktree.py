@@ -21,6 +21,9 @@ import pytest
 HOOK = os.path.join(
     os.path.dirname(__file__), '..', 'pretool-block-branch-pr-worktree.py')
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
+
 
 def _run(payload, project_dir, env_extra=None):
     """Run the hook with payload on stdin.
@@ -349,7 +352,7 @@ def test_creation_blocked_when_overnight_completed(tmp_path):
 
 def test_do_consent_allows_main_agent(tmp_path):
     sid = f'test-do-{os.getpid()}'
-    flag = f'/tmp/claude-orchestrator-consent-{sid}.flag'
+    flag = os.path.join(harness_state_dir(), f'claude-orchestrator-consent-{sid}.flag')
     with open(flag, 'w') as fh:
         fh.write('true')
     try:
@@ -361,7 +364,7 @@ def test_do_consent_allows_main_agent(tmp_path):
 
 def test_do_consent_does_not_help_subagent(tmp_path):
     sid = f'test-do-sub-{os.getpid()}'
-    flag = f'/tmp/claude-orchestrator-consent-{sid}.flag'
+    flag = os.path.join(harness_state_dir(), f'claude-orchestrator-consent-{sid}.flag')
     with open(flag, 'w') as fh:
         fh.write('true')
     try:
@@ -381,7 +384,7 @@ def test_subagent_blocked_without_bypass(tmp_path):
 # ── Bypass 3: /allow sentinel grant (reaches subagents) ──────────────────────
 
 def test_allow_sentinel_grant_allows(tmp_path):
-    grant_dir = '/tmp/claude-grants'
+    grant_dir = os.path.join(harness_state_dir(), 'claude-grants')
     os.makedirs(grant_dir, exist_ok=True)
     task_id = f'test-grant-{os.getpid()}'
     grant_path = os.path.join(grant_dir, f'{task_id}.json')

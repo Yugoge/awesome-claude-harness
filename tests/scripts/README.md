@@ -13,7 +13,6 @@
 - `validate-debug-file-age.py` - Validator: validate-debug-file-age
 - `validate-file-naming.py` - Validator: validate-file-naming
 - `validate-optionality-language.py` - Validator: validate-optionality-language
-- `validate-posttool-ac-dev-20260524-205811.py` - QA verification for dev-20260524-205811: posttool-allowlist-consume.py AC tests
 - `validate-step-numbering.py` - Validator: validate-step-numbering
 - `validate-todowrite-requirement.py` - Validator: validate-todowrite-requirement
 - `validate-venv-usage.py` - Validator: validate-venv-usage

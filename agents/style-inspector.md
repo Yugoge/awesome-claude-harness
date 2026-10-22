@@ -195,7 +195,7 @@ FOR each .md file in .claude/commands/ and .claude/agents/:
 
 **Rule**: Scripts MUST NOT contain hardcoded URLs, file paths, directory names, or environment-specific values that should be parameterized.
 
-> **PRE-SCAN**: Run `~/.claude/scripts/detect-hardcoded-paths.sh "$PROJECT_ROOT"` first to get a baseline list of hardcoded `/root/`, `/tmp/`, `/home/` paths. Then read each flagged file to confirm or dismiss.
+> **PRE-SCAN**: Run `grep -rnIE '/root/|/home/[a-z]|/tmp/[a-z]|/Users/[A-Z]' --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=venv --exclude-dir=archive "$PROJECT_ROOT"` first (any project root, git checkout or not) to get a baseline list of hardcoded `/root/`, `/home/<user>/`, `/tmp/<x>/` and `/Users/<User>/` paths. Then read each flagged file to confirm or dismiss.
 
 > **CRITICAL: READ EACH SCRIPT FILE**
 >

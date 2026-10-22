@@ -77,8 +77,7 @@ directive to this session's own main agent — see
    A listed candidate must also be structurally interrupted: a child whose own
    transcript reached a `stop_reason: "end_turn"` terminal report finished
    naturally and is excluded, even when its report quotes quota/limit text
-   (the false-positive corpus in
-   `docs/reference/restart-detector-quota-text-match-false-positive-20260915.md`).
+   (a measured false-positive class: reports that merely quote limit banners).
    That exclusion is conditional, not a flat guarantee: each account root holds
    only its own PARTIAL copy of a child transcript, so the verdict is resolved
    across every copy and the strongest wins — an `end_turn` record in any one

@@ -23,6 +23,11 @@ production-side change.  The previous encoding of that shortfall was a
 missing work into a green criterion.  That encoding is gone: the shortfall is
 now RED, which is the correct colour for undelivered work.
 
+Both rows have since been resolved by BEHAVIOURAL checks of the real,
+unmocked consumer (see the UPDATE notes above ROW 1 and in ROW 2's
+docstring): each forces a real refusal through the consumer and proves the
+child's verdict reaches the caller.
+
 Each consumer check is paired with a stub-driven POSITIVE CONTROL
 (test_contract_checker_discriminates_*) that drives the same checker over a
 conforming and a non-conforming stub, so a reader can see the checker responds
@@ -321,8 +326,10 @@ def test_contract_checker_discriminates_on_opaque_result_flattening():
 # primitive directly instead of spawning it.  ROW 1 below has been updated
 # to a behavioral check matching that new architecture; see its own
 # docstring for why this is a resolution by elimination, not a weakening.
-# ROW 2 (check-late-repair-provenance.py) is untouched by that ticket and
-# remains RED exactly as before.
+# ROW 2 (check-late-repair-provenance.py) was later resolved the same way:
+# replaced by a behavioral check that the child's verdict reaches check()'s
+# caller (see its docstring).  The M17c annotation checker and its positive
+# control above are kept as a stand-alone shape checker.
 # --------------------------------------------------------------------------
 
 def test_row1_aggregate_dev_report_does_not_discard_child_verdict(tmp_path):
@@ -373,16 +380,70 @@ def test_row1_aggregate_dev_report_does_not_discard_child_verdict(tmp_path):
         "diagnostic does not identify the file it concerns: %r" % diagnostic)
 
 
-def test_row2_check_late_repair_provenance_result_is_not_opaque():
-    """ROW 2 (M17c).
+def _git_fixture(root, *args):
+    subprocess.run(["git", "-C", str(root), "-c", "user.email=t@example.invalid",
+                    "-c", "user.name=t", *args],
+                   capture_output=True, text=True, check=True)
 
-    `scripts/check-late-repair-provenance.py` reduces each routing outcome to
-    `tuple[bool, str]`, which has nowhere to carry the structured refusal
-    verdict the contract requires a consumer to branch on.
+
+def test_row2_check_late_repair_provenance_result_is_not_opaque(tmp_path):
+    """ROW 2 (M17c) -- RESOLVED BY BEHAVIOURAL CHECK.
+
+    M17c measured the result annotation `tuple[bool, str]` of the routing
+    helpers in `scripts/check-late-repair-provenance.py`. In the modes those
+    helpers drive (`stage-owned-hunks.py --plan-only` with
+    `--provenance-plan` / `--untracked-modified-report`) the child's verdict
+    is its exit code (0 OK, 10 EXCLUDE) plus a reason on stdout (plan JSON)
+    or stderr (`EXCLUDE (fail-closed): ...`); no structured refusal record is
+    emitted there. The helper's bool IS that exit-code verdict, its string IS
+    the child's own reason, and `route_file` branches on the bool. So the
+    property that matters is whether the verdict reaches the caller, and that
+    is what this asserts, through `check()` -- the exact function
+    scripts/late-repair-controller.py calls at finalize -- over the same
+    tracked file in both directions: a reconcilable peer append (child exits
+    0) and a foreign overwrite of the owned hunk (child exits 10). A consumer
+    that dropped or inverted the child's verdict fails one of the two.
     """
-    offenders = results_reduced_to_opaque_bool_and_string(_read(PROVENANCE))
-    assert offenders == [], (
-        "ROW 2 UNDELIVERED (M17c): %s still return tuple[bool, str], an "
-        "opaque boolean-plus-string with no room for a structured verdict. "
-        "Owner: the late-repair provenance owner; this script is outside lane "
-        "r03-conflict-escalation's declared footprint." % (offenders,))
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git_fixture(root, "init", "-q")
+    rel = "src/tracked.py"
+    path = root / rel
+    path.parent.mkdir()
+    baseline = "line1\nline2\nline3\n"
+    path.write_text(baseline, encoding="utf-8")
+    _git_fixture(root, "add", rel)
+    _git_fixture(root, "commit", "-q", "-m", "baseline")
+
+    import hashlib
+    report_path = tmp_path / "dev-report.json"
+    report_path.write_text(json.dumps({
+        "dev": {"files_modified": [rel]},
+        "owned_edits": {rel: [{"old": "line2\n", "new": "CHANGED\n"}]},
+        "pre_edit_snapshots": {rel: baseline},
+        "final_source_hashes": {rel: hashlib.sha256(
+            b"line1\nCHANGED\nline3\n").hexdigest()},
+    }), encoding="utf-8")
+
+    checker = _load_module_by_path(PROVENANCE, "check_late_repair_provenance_row2")
+
+    # Child says OK (exit 0): the caller sees a routed, reconcilable file and
+    # the child's plan as the detail.
+    path.write_text("line1\nCHANGED\nline3\nPEER\n", encoding="utf-8")
+    ok = checker.check(str(root), "task-row2", report_path)
+    assert ok["drift_detected"] == {rel: "hash_mismatch"}, ok
+    assert ok["routing"][rel]["route"] == "tracked_composed", ok
+    assert ok["reconcilable"] is True and ok["unroutable_files"] == [], ok
+    assert json.loads(ok["routing"][rel]["detail"])["path"] == rel, ok
+
+    # Child refuses (exit 10): the refusal reaches the caller as an unroutable
+    # file carrying the child's own fail-closed reason.
+    path.write_text("line1\nFOREIGN\nline3\n", encoding="utf-8")
+    refused = checker.check(str(root), "task-row2", report_path)
+    assert refused["routing"][rel]["route"] == "unroutable", refused
+    assert refused["reconcilable"] is False, refused
+    assert refused["unroutable_files"] == [rel], refused
+    detail = refused["routing"][rel]["detail"]
+    assert detail.startswith("EXCLUDE (fail-closed):"), (
+        "verdict was discarded: the child's refusal reason did not reach the "
+        "caller: %r" % detail)

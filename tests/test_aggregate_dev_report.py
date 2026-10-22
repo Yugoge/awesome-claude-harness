@@ -494,7 +494,7 @@ class TestCanonicalContentFreshness:
         current_r01_paths = [
             "tests/generated/dev-20260722-081544-r01/ac_harness.py",
             "docs/dev/dev-report-dev-20260722-081544-r01.json",
-            "/root/.codex/claude-compat/isomorphism-report.json",
+            "/srv/harness/.codex/claude-compat/isomorphism-report.json",
         ]
         r01["dev"]["files_modified"].extend(current_r01_paths)
         r01["owned_files"] = [{"path": path, "ownership": "current"} for path in current_r01_paths]

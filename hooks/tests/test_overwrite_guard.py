@@ -88,7 +88,7 @@ def rp(path) -> str:
     return os.path.realpath(str(path))
 
 
-def run_guard(command, cwd, *, guard=GUARD, session_id="sid-test", task_id=None,
+def run_guard(command, cwd, *, guard=None, session_id="sid-test", task_id=None,
               env=None, run_from=None):
     payload = {
         "tool_name": "Bash",
@@ -104,7 +104,7 @@ def run_guard(command, cwd, *, guard=GUARD, session_id="sid-test", task_id=None,
     if env:
         child_env.update(env)
     return subprocess.run(
-        [sys.executable, str(guard)],
+        [sys.executable, str(guard or _ISOLATED_GUARD)],
         input=json.dumps(payload),
         capture_output=True, text=True, timeout=60,
         cwd=str(run_from) if run_from else str(REPO),
@@ -116,7 +116,7 @@ def run_guard_tool(tool_name, tool_input, cwd):
     """Drive the guard with a NON-Bash tool envelope."""
     payload = {"tool_name": tool_name, "tool_input": tool_input,
                "session_id": "sid-test", "cwd": str(cwd)}
-    return subprocess.run([sys.executable, str(GUARD)], input=json.dumps(payload),
+    return subprocess.run([sys.executable, str(_ISOLATED_GUARD)], input=json.dumps(payload),
                           capture_output=True, text=True, timeout=60, cwd=str(REPO))
 
 
@@ -173,6 +173,24 @@ def sandbox_home(root: Path) -> Path:
     for module in (REPO / "hooks" / "lib").glob("*.py"):
         shutil.copy2(module, home / "hooks" / "lib" / module.name)
     return home
+
+
+#: The guard every test drives unless it brings its own sandbox: a byte copy of
+#: the checkout's guard and lib/ inside a module-scoped sandbox home (set by
+#: _isolate_audit_sink). The guard resolves its audit sink from its own install
+#: location, so driving the checkout's copy would append to <repo>/logs/ --
+#: leaking into the tree, and failing every recorded verdict closed on a
+#: read-only checkout.
+_ISOLATED_GUARD: Path = GUARD
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _isolate_audit_sink(tmp_path_factory):
+    global _ISOLATED_GUARD
+    home = sandbox_home(tmp_path_factory.mktemp("overwrite-guard"))
+    _ISOLATED_GUARD = home / "hooks" / GUARD.name
+    yield
+    _ISOLATED_GUARD = GUARD
 
 
 def audit_rows(home: Path):
@@ -1240,19 +1258,30 @@ def test_ac10_quoted_paths_are_untouched_by_the_token_terminator():
         "echo x > '/tmp/a (copy).txt'")] == ["/tmp/a (copy).txt"]
 
 
+def py_compile_out_of_tree(path: Path, cache_root: Path):
+    """`python -m py_compile` with the .pyc redirected under ``cache_root``.
+
+    py_compile writes its .pyc even under PYTHONDONTWRITEBYTECODE; left to its
+    default it lands in hooks/__pycache__/ of the checkout (and fails on a
+    read-only one).
+    """
+    env = dict(os.environ, PYTHONPYCACHEPREFIX=str(cache_root))
+    return subprocess.run([sys.executable, "-m", "py_compile", str(path)],
+                          capture_output=True, text=True, env=env)
+
+
 @pytest.mark.parametrize("consumer", CONSUMERS)
-def test_ac10_consumers_still_compile_and_import_the_frozen_symbol(consumer):
+def test_ac10_consumers_still_compile_and_import_the_frozen_symbol(consumer, tmp_path):
     path = REPO / consumer
     text = path.read_text(encoding="utf-8")
     assert "extract_bash_write_paths" in text
     assert "extract_bash_write_targets_with_modes" not in text, (
         "existing consumers must be unaffected by the additive extension")
-    compiled = subprocess.run([sys.executable, "-m", "py_compile", str(path)],
-                              capture_output=True, text=True)
+    compiled = py_compile_out_of_tree(path, tmp_path)
     assert compiled.returncode == 0, compiled.stderr
 
 
-def test_ac10_fourth_consumer_of_the_shared_module_is_pinned_too():
+def test_ac10_fourth_consumer_of_the_shared_module_is_pinned_too(tmp_path):
     """CORRECTION to the analysis: the module has FOUR consumers, not three.
 
     hooks/pretool-wrapper-userintent.py imports command_without_heredoc_bodies
@@ -1262,8 +1291,7 @@ def test_ac10_fourth_consumer_of_the_shared_module_is_pinned_too():
     path = REPO / "hooks" / "pretool-wrapper-userintent.py"
     assert "from lib.bash_write_targets import command_without_heredoc_bodies" in \
         path.read_text(encoding="utf-8")
-    compiled = subprocess.run([sys.executable, "-m", "py_compile", str(path)],
-                              capture_output=True, text=True)
+    compiled = py_compile_out_of_tree(path, tmp_path)
     assert compiled.returncode == 0, compiled.stderr
     signature = inspect.signature(bwt.command_without_heredoc_bodies)
     assert list(signature.parameters) == ["command"]

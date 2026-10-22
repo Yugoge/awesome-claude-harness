@@ -135,6 +135,28 @@ def temp_project(fixture_command_doc: bool = False):
         yield project, home
 
 
+# The temp root the G1 figures below were measured under (tempfile's default
+# /tmp/tmpXXXXXXXX). It is only a length reference -- nothing is created there.
+# The fixture's root recurs in the paths the payload names, so measured raw the
+# budget shrank with every char of TMPDIR and failed under a long one for
+# reasons that have nothing to do with the hook.
+MEASURED_ROOT = '/tmp/tmpXXXXXXXX'
+
+
+def at_measured_root(text: str, project: Path) -> str:
+    """``text`` with the fixture's temp root respelled at MEASURED_ROOT's length.
+
+    This takes the base directory's length out of the budget and nothing else:
+    every other char still counts. The resolved spelling is normalised too, for
+    a TMPDIR reached through a symlink.
+    """
+    root = project.parent
+    roots = {str(root), os.path.realpath(root)}
+    for spelling in sorted(roots, key=len, reverse=True):
+        text = text.replace(spelling, MEASURED_ROOT)
+    return text
+
+
 def installed_hook(home: Path) -> Path:
     """The hook under test, installed in the fixture's harness home.
 
@@ -867,7 +889,9 @@ class TestAC10G1BoundsUnderOptionR(unittest.TestCase):
             write_state(project / '.claude', sid,
                         build_state(sid, future_z(6), cycle_count=3,
                                     worktree=str(project / 'wt')))
-            cls.outputs = [run_hook(project, home, prompt_payload(sid, p)).stdout
+            cls.outputs = [at_measured_root(
+                               run_hook(project, home, prompt_payload(sid, p)).stdout,
+                               project)
                            for p in cls.G1_PROMPTS]
             cls.stranger = run_hook(project, home,
                                     prompt_payload('ZZZZ-stranger', 'what is 2+2')).stdout
@@ -942,7 +966,9 @@ class TestAC10G1BoundsUnderOptionR(unittest.TestCase):
                 'marker_only': False,
             }
             write_state(claude, sid, state)
-            outputs = [run_hook(project, home, prompt_payload(sid, p)).stdout
+            outputs = [at_measured_root(
+                           run_hook(project, home, prompt_payload(sid, p)).stdout,
+                           project)
                        for p in self.G1_PROMPTS]
 
         light = [o for o in outputs if self.spec not in o]

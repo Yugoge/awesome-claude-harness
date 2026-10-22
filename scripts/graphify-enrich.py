@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Sequence
 
 # --- R1 reverse-blast-radius contract (design-input-dev-20260531-134455 lines 26-75) ---
-# Orientation is empirically validated on the real Applio graph (37 AST import pairs,
+# Orientation is empirically validated on a real project graph (37 AST import pairs,
 # 100% importer_to_imported): graphify edges are source=depender, target=dependency.
 # Therefore reverse dependents of a seed X = links where target == X.
 ORIENTATION_MODE = "source_depender_target_dependency"

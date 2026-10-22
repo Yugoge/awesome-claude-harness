@@ -7,6 +7,8 @@ Task: 20260518-155948 — consolidate 5 independent grant-read implementations.
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +16,8 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+
+import pytest
 
 # Add hooks dir to path for lib.allowlist import
 HOOKS_DIR = str(Path(__file__).parent.parent)
@@ -32,18 +36,89 @@ from lib.allowlist import (
     match_sentinel_grant_for_write,
     consume_sentinel_grant_on_terminal_result,
     reap_expired_sentinel_grants,
-    SENTINEL_GRANT_DIR,
 )
+from lib.harness_state_dir import harness_state_dir
+
+
+# Grant and flag locations are derived at call time from the same state root
+# the hooks resolve (CLAUDE_STATE_DIR via hooks/lib/harness_state_dir.py), so
+# neither this process nor a spawned hook touches the shared default root.
+def _grant_dir():
+    return os.path.join(harness_state_dir(), "claude-grants")
+
+
+def _legacy_flag(sid):
+    return os.path.join(harness_state_dir(), f"claude-bash-allowlist-{sid}.json")
+
+
+def _harness_home_consent_hook(root):
+    """Copy the consent hook into a minimal harness home under ``root`` and
+    return the copy's path.
+
+    With CLAUDE_PYTHON_BIN unset the hook takes its interpreter from
+    ``<harness home>/venv/bin/python``, the home being found structurally by
+    hooks/lib/claude_home.sh (settings.json + hooks/ + policies/ + scripts/,
+    walked up from the hook's own physical location). A checkout carries no
+    venv/, so the tests that prove that structural resolution run the hook from
+    a home whose venv/bin/python execs this test's interpreter.
+    """
+    home = Path(root) / "harness-home"
+    (home / "hooks" / "lib").mkdir(parents=True)
+    (home / "policies").mkdir()
+    (home / "scripts").mkdir()
+    (home / "settings.json").write_text("{}\n", encoding="utf-8")
+    for rel in (
+        "userprompt-consent-allowlist.sh",
+        "lib/claude_home.sh",
+        "lib/harness_state_dir.sh",
+    ):
+        shutil.copy2(os.path.join(HOOKS_DIR, rel), home / "hooks" / rel)
+    python = home / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="utf-8"
+    )
+    python.chmod(0o755)
+    return str(home / "hooks" / "userprompt-consent-allowlist.sh")
 
 
 class TestAllowSettingsPreflight(unittest.TestCase):
     """Known file-based settings DENYs resolve before either grant channel writes."""
+
+    @pytest.fixture(autouse=True)
+    def _user_settings(self, tmp_path):
+        """A user settings source of the test's own (the hook reads
+        ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json) holding exactly the
+        rules these cases assert: absolute-path `rm -rf`, `dd`, `sudo` and
+        `su` are DENY; relative `rm -rf` is ASK only. The project sources stay
+        absent. Cases that build their own sources override both."""
+        self.config_dir = tmp_path / "config"
+        self.project_dir = tmp_path / "project"
+        self.config_dir.mkdir()
+        self.project_dir.mkdir()
+        (self.config_dir / "settings.json").write_text(
+            json.dumps({
+                "permissions": {
+                    "deny": [
+                        "Bash(rm -rf /*:*)",
+                        "Bash(rm -rf /:*)",
+                        "Bash(dd:*)",
+                        "Bash(sudo:*)",
+                        "Bash(su:*)",
+                    ],
+                    "ask": ["Bash(rm -rf:*)"],
+                }
+            }),
+            encoding="utf-8",
+        )
 
     def _invoke(self, prompt, task_id, session_id, env_updates=None):
         hook = os.path.join(HOOKS_DIR, "userprompt-consent-allowlist.sh")
         payload = json.dumps({"prompt": prompt, "session_id": session_id})
         env = dict(os.environ)
         env["CLAUDE_TASK_ID"] = task_id
+        env["CLAUDE_CONFIG_DIR"] = str(self.config_dir)
+        env["CLAUDE_PROJECT_DIR"] = str(self.project_dir)
         env.update(env_updates or {})
         return subprocess.run(
             ["bash", hook], input=payload, capture_output=True, text=True,
@@ -52,8 +127,8 @@ class TestAllowSettingsPreflight(unittest.TestCase):
 
     def _paths(self, task_id, session_id):
         return (
-            os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json"),
-            f"/tmp/claude-bash-allowlist-{session_id}.json",
+            os.path.join(_grant_dir(), f"{task_id}.json"),
+            _legacy_flag(session_id),
         )
 
     def _assert_hard_deny_record(
@@ -216,7 +291,7 @@ class TestAllowSettingsPreflight(unittest.TestCase):
                 if os.path.exists(path):
                     os.unlink(path)
 
-            hook = os.path.join(HOOKS_DIR, "userprompt-consent-allowlist.sh")
+            hook = _harness_home_consent_hook(temp)
             payload = json.dumps(
                 {"prompt": "/allow git stash", "session_id": session_id}
             )
@@ -316,7 +391,7 @@ class TestAllowSettingsPreflight(unittest.TestCase):
             task_id = "test-allow-hard-deny-stale"
             session_id = "test-allow-hard-deny-stale-session"
             paths = self._paths(task_id, session_id) + (
-                os.path.join(SENTINEL_GRANT_DIR, f"{task_id}-older.json"),
+                os.path.join(_grant_dir(), f"{task_id}-older.json"),
             )
             for path in paths:
                 Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -516,16 +591,9 @@ class TestReadGrant(unittest.TestCase):
             json.dump({"pattern": pattern, "is_regex": is_regex}, f)
 
     def test_exact_match_returns_true(self):
-        with tempfile.NamedTemporaryFile(
-            dir="/tmp", prefix="claude-bash-allowlist-rg1.", suffix=".json",
-            mode="w", delete=False
-        ) as f:
-            sid = f.name.split("claude-bash-allowlist-rg1.")[1].replace(".json", "")
-            # Reconstruct proper filename
-            proper_path = f"/tmp/claude-bash-allowlist-rg1.{sid}.json"
         # Use a controlled SID
         test_sid = "test-read-grant-unit"
-        grant_path = f"/tmp/claude-bash-allowlist-{test_sid}.json"
+        grant_path = _legacy_flag(test_sid)
         try:
             self._write_grant(grant_path, "Write")
             self.assertTrue(read_grant("Write", test_sid))
@@ -535,7 +603,7 @@ class TestReadGrant(unittest.TestCase):
 
     def test_no_match_returns_false(self):
         test_sid = "test-read-grant-nomatch"
-        grant_path = f"/tmp/claude-bash-allowlist-{test_sid}.json"
+        grant_path = _legacy_flag(test_sid)
         try:
             with open(grant_path, "w") as f:
                 json.dump({"pattern": "Bash", "is_regex": False}, f)
@@ -554,7 +622,7 @@ class TestReadGrant(unittest.TestCase):
     def test_read_grant_exact_only_rejects_substring(self):
         """Grant pattern 'Re' must NOT match tool name 'Read' (AC-D1)."""
         test_sid = "test-read-grant-exact-only"
-        grant_path = f"/tmp/claude-bash-allowlist-{test_sid}.json"
+        grant_path = _legacy_flag(test_sid)
         try:
             with open(grant_path, "w") as f:
                 json.dump({"pattern": "Re", "is_regex": False}, f)
@@ -573,7 +641,7 @@ class TestReadGrant(unittest.TestCase):
     def test_read_grant_exact_only_rejects_write_against_todowrite(self):
         """Grant pattern 'Write' must NOT match tool name 'TodoWrite' (AC-D1)."""
         test_sid = "test-read-grant-write-vs-todowrite"
-        grant_path = f"/tmp/claude-bash-allowlist-{test_sid}.json"
+        grant_path = _legacy_flag(test_sid)
         try:
             with open(grant_path, "w") as f:
                 json.dump({"pattern": "Write", "is_regex": False}, f)
@@ -588,7 +656,7 @@ class TestReadGrantForGitCommand(unittest.TestCase):
 
     def test_substring_match(self):
         test_sid = "test-git-grant-1"
-        grant_path = f"/tmp/claude-bash-allowlist-{test_sid}.json"
+        grant_path = _legacy_flag(test_sid)
         try:
             with open(grant_path, "w") as f:
                 json.dump({"pattern": "git push", "is_regex": False}, f)
@@ -600,7 +668,7 @@ class TestReadGrantForGitCommand(unittest.TestCase):
 
     def test_no_match(self):
         test_sid = "test-git-grant-2"
-        grant_path = f"/tmp/claude-bash-allowlist-{test_sid}.json"
+        grant_path = _legacy_flag(test_sid)
         try:
             with open(grant_path, "w") as f:
                 json.dump({"pattern": "git push", "is_regex": False}, f)
@@ -615,7 +683,7 @@ class TestMatchGrantForBashCommand(unittest.TestCase):
 
     def test_compound_command_match(self):
         test_sid = "test-bash-grant-1"
-        grant_path = f"/tmp/claude-bash-allowlist-{test_sid}.json"
+        grant_path = _legacy_flag(test_sid)
         try:
             with open(grant_path, "w") as f:
                 json.dump({"pattern": "git stash", "is_regex": False}, f)
@@ -630,7 +698,7 @@ class TestMatchGrantForBashCommand(unittest.TestCase):
 
     def test_no_match(self):
         test_sid = "test-bash-grant-2"
-        grant_path = f"/tmp/claude-bash-allowlist-{test_sid}.json"
+        grant_path = _legacy_flag(test_sid)
         try:
             with open(grant_path, "w") as f:
                 json.dump({"pattern": "git push", "is_regex": False}, f)
@@ -649,7 +717,7 @@ class TestConsumeGrantForPosttool(unittest.TestCase):
     """Unit tests for consume_grant_for_posttool (AC5, AC8 scenarios)."""
 
     def _write_grant(self, sid, pattern, is_regex=False):
-        path = f"/tmp/claude-bash-allowlist-{sid}.json"
+        path = _legacy_flag(sid)
         with open(path, "w") as f:
             json.dump({"pattern": pattern, "is_regex": is_regex}, f)
         return path
@@ -766,15 +834,15 @@ class TestSentinelGrantLifecycle(unittest.TestCase):
     terminal-consumption cases: success, failure, non_zero, malformed,
     comment_only, and a terminal_consume integration round-trip.
 
-    Each test asserts the corresponding grant file under SENTINEL_GRANT_DIR
+    Each test asserts the corresponding grant file under the state root's claude-grants/
     is unlinked after consumption — this is the post-condition invariant.
     """
 
     def setUp(self):
-        os.makedirs(SENTINEL_GRANT_DIR, exist_ok=True)
+        os.makedirs(_grant_dir(), exist_ok=True)
 
     def _write_sentinel(self, task_id, ops=None, ttl=300, nonce=""):
-        path = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}{nonce}.json")
+        path = os.path.join(_grant_dir(), f"{task_id}{nonce}.json")
         now = time.time()
         grant = {
             "task_id": task_id,
@@ -824,7 +892,7 @@ class TestSentinelGrantLifecycle(unittest.TestCase):
     def test_terminal_consume_malformed(self):
         """Malformed JSON grant is unlinked at posttool / reap time."""
         task_id = "test-sentinel-malformed"
-        path = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json")
+        path = os.path.join(_grant_dir(), f"{task_id}.json")
         with open(path, "w") as f:
             f.write("{not valid json")
         try:
@@ -844,7 +912,7 @@ class TestSentinelGrantLifecycle(unittest.TestCase):
         """
         task_id = "test-sentinel-comment-only-attack-nonexistent"
         # No sentinel file exists for this task_id.
-        path = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json")
+        path = os.path.join(_grant_dir(), f"{task_id}.json")
         self.assertFalse(os.path.exists(path))
         # Pretool match against a malicious command containing the magic phrase
         # in a comment — no grant, structural match returns None.
@@ -903,7 +971,7 @@ class TestSentinelGrantLifecycle(unittest.TestCase):
         """expires_at in the past → load_sentinel_grant_for_task returns None
         (deny-by-default). Reap should remove it."""
         task_id = "test-sentinel-expired"
-        path = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json")
+        path = os.path.join(_grant_dir(), f"{task_id}.json")
         now = time.time()
         with open(path, "w") as f:
             json.dump({
@@ -931,10 +999,10 @@ class TestMatchSentinelGrantForWrite(unittest.TestCase):
     """
 
     def setUp(self):
-        os.makedirs(SENTINEL_GRANT_DIR, exist_ok=True)
+        os.makedirs(_grant_dir(), exist_ok=True)
 
     def _write_sentinel(self, task_id, session_id, ops, ttl=300):
-        path = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json")
+        path = os.path.join(_grant_dir(), f"{task_id}.json")
         now = time.time()
         grant = {
             "task_id": task_id,
@@ -993,7 +1061,7 @@ class TestMatchSentinelGrantForWrite(unittest.TestCase):
         task_id = "test-write-expired"
         session_id = "test-session-w4"
         target = "/tmp/test-expired-target.json"
-        path = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json")
+        path = os.path.join(_grant_dir(), f"{task_id}.json")
         now = time.time()
         with open(path, "w") as f:
             json.dump({
@@ -1121,8 +1189,8 @@ class TestMatchSentinelGrantForWrite(unittest.TestCase):
         """
         task_id = "test-ac7-e2e-tool-dotted"
         session_id = "test-session-ac7"
-        sentinel_path = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json")
-        legacy_path = f"/tmp/claude-bash-allowlist-{session_id}.json"
+        sentinel_path = os.path.join(_grant_dir(), f"{task_id}.json")
+        legacy_path = _legacy_flag(session_id)
         # Clean up any leftover from a previous run
         for p in (sentinel_path, legacy_path):
             if os.path.exists(p):
@@ -1185,8 +1253,8 @@ class TestMatchSentinelGrantForWrite(unittest.TestCase):
         """
         task_id = "test-ac8-e2e-bare-syntax"
         session_id = "test-session-ac8"
-        sentinel_path = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json")
-        legacy_path = f"/tmp/claude-bash-allowlist-{session_id}.json"
+        sentinel_path = os.path.join(_grant_dir(), f"{task_id}.json")
+        legacy_path = _legacy_flag(session_id)
         for p in (sentinel_path, legacy_path):
             if os.path.exists(p):
                 os.unlink(p)
@@ -1247,7 +1315,6 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
     selector (an explicit selector must never decay into match-all).
     """
 
-    HOOK = os.path.join(HOOKS_DIR, "userprompt-consent-allowlist.sh")
     PRETOOL = os.path.join(HOOKS_DIR, "pretool-bash-safety.sh")
     POSTTOOL = os.path.join(HOOKS_DIR, "posttool-allowlist-consume.py")
 
@@ -1262,15 +1329,18 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
                 os.unlink(path)
 
     def _track(self, task_id, session_id):
-        sentinel = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json")
-        legacy = f"/tmp/claude-bash-allowlist-{session_id}.json"
+        sentinel = os.path.join(_grant_dir(), f"{task_id}.json")
+        legacy = _legacy_flag(session_id)
         self.paths.extend([sentinel, legacy])
         return sentinel, legacy
 
     def _live_env(self, temp, task_id, extra=None):
         """The live environment shape: CLAUDE_CONFIG_DIR names a per-account
         runtime state dir that carries NO interpreter, and CLAUDE_PYTHON_BIN is
-        NOT set. The hook must still resolve its interpreter structurally."""
+        NOT set. The hook must still resolve its interpreter structurally, so
+        the consent hook runs from a harness home under ``temp`` whose
+        venv/bin/python is this test's interpreter."""
+        self.consent_hook = _harness_home_consent_hook(temp)
         config_dir = Path(temp) / "account-state"
         project_dir = Path(temp) / "project"
         config_dir.mkdir()
@@ -1288,7 +1358,7 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
 
     def _consent(self, payload, env):
         return subprocess.run(
-            ["bash", self.HOOK], input=json.dumps(payload), capture_output=True,
+            ["bash", self.consent_hook], input=json.dumps(payload), capture_output=True,
             text=True, env=env, timeout=10,
         )
 
@@ -1471,7 +1541,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
     malformed settings SOURCE (test_malformed_participating_source_fails_closed).
     This class pins the remaining leg: the ENFORCEMENT READ PATH. For every
     corruption shape, on BOTH grant channels (legacy per-session flag file +
-    structured sentinel under SENTINEL_GRANT_DIR):
+    structured sentinel under the state root's claude-grants/):
 
       1. the grant readers in lib/allowlist.py report no-match and never raise;
       2. pretool-bash-safety.sh still BLOCKS (exit 2) a command it genuinely
@@ -1491,7 +1561,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
     PRETOOL = os.path.join(HOOKS_DIR, "pretool-bash-safety.sh")
 
     def setUp(self):
-        os.makedirs(SENTINEL_GRANT_DIR, exist_ok=True)
+        os.makedirs(_grant_dir(), exist_ok=True)
         # Unique ids per test run; per-shape ids derive from this nonce so no
         # probe ever needs a pre-run deletion.
         self.nonce = f"{os.getpid()}-{int(time.time() * 1000)}"
@@ -1512,7 +1582,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
 
     @staticmethod
     def _legacy_corruption_shapes():
-        """Corruption shapes for /tmp/claude-bash-allowlist-<sid>.json
+        """Corruption shapes for <state root>/claude-bash-allowlist-<sid>.json
         (expected well-formed shape: {"pattern": str, "is_regex": bool})."""
         return (
             ("invalid_json_bytes", "{not valid json"),
@@ -1535,7 +1605,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
 
     @staticmethod
     def _sentinel_corruption_body(name, task_id, session_id):
-        """Corruption shapes for SENTINEL_GRANT_DIR/<task_id>.json."""
+        """Corruption shapes for <state root>/claude-grants/<task_id>.json."""
         now = time.time()
         bodies = {
             "invalid_json_bytes": "{not valid json",
@@ -1586,7 +1656,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
         for index, (name, body) in enumerate(self._legacy_corruption_shapes()):
             with self.subTest(shape=name):
                 sid = f"test-corrupt-legacy-lib-{index}-{self.nonce}"
-                flag = f"/tmp/claude-bash-allowlist-{sid}.json"
+                flag = _legacy_flag(sid)
                 self._track(flag, flag + ".lock")
                 with open(flag, "w") as f:
                     f.write(body)
@@ -1604,7 +1674,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
             with self.subTest(shape=name):
                 task_id = f"test-corrupt-sentinel-lib-{index}-{self.nonce}"
                 session_id = task_id
-                path = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json")
+                path = os.path.join(_grant_dir(), f"{task_id}.json")
                 self._track(path)
                 with open(path, "w") as f:
                     f.write(self._sentinel_corruption_body(name, task_id, session_id))
@@ -1624,7 +1694,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
         # Positive control: a VALID legacy grant on this exact harness shape
         # is honored (unlink deferred to PostToolUse, so teardown reaps it).
         control_sid = f"test-corrupt-legacy-hook-control-{self.nonce}"
-        control_flag = f"/tmp/claude-bash-allowlist-{control_sid}.json"
+        control_flag = _legacy_flag(control_sid)
         self._track(control_flag, control_flag + ".lock")
         with open(control_flag, "w") as f:
             json.dump({"pattern": "git stash", "is_regex": False}, f)
@@ -1635,7 +1705,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
         for index, (name, body) in enumerate(self._legacy_corruption_shapes()):
             with self.subTest(shape=name):
                 sid = f"test-corrupt-legacy-hook-{index}-{self.nonce}"
-                flag = f"/tmp/claude-bash-allowlist-{sid}.json"
+                flag = _legacy_flag(sid)
                 self._track(flag, flag + ".lock")
                 with open(flag, "w") as f:
                     f.write(body)
@@ -1651,7 +1721,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
         # Positive control: a VALID unrestricted sentinel on this exact
         # harness shape is honored (consume deferred to PostToolUse).
         control_task = f"test-corrupt-sentinel-hook-control-{self.nonce}"
-        control_path = os.path.join(SENTINEL_GRANT_DIR, f"{control_task}.json")
+        control_path = os.path.join(_grant_dir(), f"{control_task}.json")
         self._track(control_path)
         now = time.time()
         with open(control_path, "w") as f:
@@ -1668,7 +1738,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
             with self.subTest(shape=name):
                 task_id = f"test-corrupt-sentinel-hook-{index}-{self.nonce}"
                 session_id = task_id
-                path = os.path.join(SENTINEL_GRANT_DIR, f"{task_id}.json")
+                path = os.path.join(_grant_dir(), f"{task_id}.json")
                 self._track(path)
                 with open(path, "w") as f:
                     f.write(self._sentinel_corruption_body(name, task_id, session_id))

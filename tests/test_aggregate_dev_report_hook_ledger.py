@@ -522,19 +522,37 @@ def test_m6_hermetic_resolution_over_a_constructed_pair_of_trees(tmp_path):
     ]
 
 
-def test_m6_live_census_is_evidence_not_a_permanent_postcondition(capsys):
+def test_m6_live_census_is_evidence_not_a_permanent_postcondition(tmp_path, capsys):
     """AC4's census half: READ-ONLY, separately timestamped, asserts no count.
 
-    This is the half that may legitimately change between any two runs. It
-    exists so the convention can be seen holding against reality; the hermetic
-    test above is the half that carries the falsifiable content.
+    The census walks a synthetic registry built under tmp_path, never the
+    checkout's own gitignored .claude/dev-registry: that tree is absent on a
+    clean checkout (so a census of it could only skip) and, when present, is
+    whatever earlier runs left behind. The census code path and its positive
+    control are the same; the hermetic test above is the half that carries the
+    falsifiable content.
     """
     import datetime
 
     contract = _contract()
-    registry = contract.dev_registry_root(REPO_ROOT)
-    if not registry.is_dir():
-        pytest.skip("no live registry tree in this checkout (it is gitignored)")
+    project = _repo(tmp_path / "census")
+    _write_ledger_entry(project, "dev-20260101-090000", {
+        "path": "census/a/INDEX.md", "diff_sha256": "c1",
+        "reason": "PostToolUse doc-sync regeneration side effect; not reviewed by dev",
+        "source_agent_id": "agent-c1", "ts": "2026-01-01T00:00:00Z",
+    })
+    _write_ledger_entry(project, "dev-20260101-090000", {
+        "path": "census/b/INDEX.md", "diff_sha256": "c2",
+        "reason": "PostToolUse doc-sync regeneration side effect; not reviewed by dev",
+        "source_agent_id": "agent-c2", "ts": "2026-01-01T00:00:00Z",
+    }, name="second.json")
+    _write_ledger_entry(project, "close-20260101-090000", {
+        "path": "census/c/INDEX.md", "diff_sha256": "c3",
+        "reason": "PostToolUse doc-sync regeneration side effect; not reviewed by dev",
+        "source_agent_id": "agent-c3", "ts": "2026-01-01T00:00:00Z",
+    }, mint=False)
+    contract.ledger_dir(project, "dev-20260102-100000").mkdir(parents=True)
+    registry = contract.dev_registry_root(project)
 
     instant = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
     producers, paired = [], 0
@@ -543,7 +561,7 @@ def test_m6_live_census_is_evidence_not_a_permanent_postcondition(capsys):
         if not records:
             continue
         producers.append((ledger.parent.name, len(records)))
-        if contract.is_minted_identity(REPO_ROOT, ledger.parent.name):
+        if contract.is_minted_identity(project, ledger.parent.name):
             paired += 1
 
     print(f"hook-ledger live census at {instant} (EVIDENCE, not a postcondition):")

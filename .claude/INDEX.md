@@ -8,11 +8,6 @@
 ## Tree
 ```
 .claude/
-├── quarantined-phantom-dev-cycles/
-│   └── dev-20260915-020044/
-│       ├── docs/
-│       ├── `original-path-manifest.json` - JSON config: quarantine_task_id, quarantined_by_task_id, quarantined_at, file_count, move_method
-│       └── `QUARANTINE-NOTE.md` - Quarantine: phantom /dev cycle `dev-20260915-020044`
 ```
 <!-- /AUTO:index-stats -->
 

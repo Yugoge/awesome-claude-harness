@@ -484,7 +484,7 @@ def test_autoseal_disabled_by_default_is_a_true_noop(tmp_path, monkeypatch):
 def test_posttool_hook_autoseals_end_to_end_via_real_subprocess(tmp_path, monkeypatch):
     """The production wiring: posttool-attribution-post.py -> record_post ->
     autoseal_hook_trigger -> seal-attribution-journal.py, as one subprocess
-    call, exactly as settings.json invokes it. Must stay silent on stdout
+    call running the real hook file as __main__, as settings.json invokes it. Must stay silent on stdout
     (the hook's stdout contract) while still producing a durable, checkable
     seal-log.jsonl entry."""
     _env(tmp_path, monkeypatch)
@@ -495,7 +495,20 @@ def test_posttool_hook_autoseals_end_to_end_via_real_subprocess(tmp_path, monkey
     pl = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(f)},
                      "session_id": "sx", "tool_use_id": "tuX", "cwd": str(tmp_path)})
     f.write_text("2")
-    r = subprocess.run([sys.executable, str(ROOT / "hooks" / "posttool-attribution-post.py")],
+    # tmp_path sits on whatever /tmp the runner has (tmpfs in some CI sandboxes),
+    # and the hook path has no --allow-volatile. The wiring, not the refusal, is
+    # the subject here (the refusal has its own test above), so the child sees
+    # one extra disk-backed mount line for `dest` only; real paths keep their class.
+    boot = ("import pathlib, runpy, sys\n"
+            "real, extra = pathlib.Path.read_text, 'standin-disk %s ext4 rw 0 0\\n' % sys.argv[2]\n"
+            "def read_text(self, *a, **k):\n"
+            "    s = real(self, *a, **k)\n"
+            "    return s + extra if str(self) == '/proc/mounts' else s\n"
+            "pathlib.Path.read_text = read_text\n"
+            "sys.argv = sys.argv[1:2]\n"
+            "runpy.run_path(sys.argv[0], run_name='__main__')\n")
+    r = subprocess.run([sys.executable, "-c", boot,
+                        str(ROOT / "hooks" / "posttool-attribution-post.py"), os.path.realpath(dest)],
                        input=pl, text=True, capture_output=True, env=dict(os.environ))
     assert r.returncode == 0 and r.stdout == ""
     last = seal.read_last_evidence(dest)

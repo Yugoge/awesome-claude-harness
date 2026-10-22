@@ -10,7 +10,7 @@ WHY THIS MODULE EXISTS
 Recovery used to hinge on one enumerated phrase list (``QUOTA_RE`` in
 ``subagent_restart.py``), so every banner the author had not personally seen was
 a silent zero-recovery event.  Measured against the real transcript corpus under
-``/var/lib/claude-accounts/*/claude/projects`` on 2026-09-30, that list missed:
+``<accounts-root>/*/claude/projects`` on 2026-09-30, that list missed:
 
 ======================================================  ==============
 banner (all harness-written, all real)                  old detector
@@ -61,8 +61,7 @@ silently weakens a caller that had structural proof available.
 FALSE POSITIVES
 ---------------
 Broadening recall cuts both ways: a child *reporting on* an outage quotes limit
-banners verbatim, and 39 of 217 corpus candidates were exactly that
-(``docs/reference/restart-detector-quota-text-match-false-positive-20260915.md``).
+banners verbatim, and 39 of 217 candidates in a measured corpus were exactly that.
 This module deliberately does not adjudicate that — it reports what a signal
 looks like and how strong it is.  Suppressing self-reports stays with the
 caller's structural gates (``_child_reported_end_turn``, ``RECOVERY_STATUS``),

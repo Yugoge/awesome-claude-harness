@@ -1144,24 +1144,42 @@ def test_119_compliant_empty_baseline_dirty_snapshot_classified_foreign_edit_not
 # --------------------------------------------------------------------------
 # files_landed_whole exemption source (backlog #121): a third, pre-existing
 # whole-file no-authorship declaration channel (agents/changelog-analyst.md:
-# 783-820), never previously read by this gate. AC1/AC4/AC6 use real,
-# unmodified historical docs/dev/dev-report-*.json fixtures (per this
-# ticket's own AC6 requirement: not synthetic-only); AC2/AC5's dual-listing
-# negative case is legitimately synthetic (neither real fixture has a
-# dual-listing conflict to exercise), matching the existing
+# 783-820), never previously read by this gate. AC1/AC4/AC6 originally read
+# historical docs/dev/dev-report-*.json files from the working tree, but
+# docs/dev/ is gitignored and those reports were never tracked, so a clean
+# checkout (CI) has none of them. They now build synthetic reports in
+# tmp_path with the same shape the assertions depend on (which fields are
+# present, which paths each exemption source names). AC2/AC5's dual-listing
+# negative case is synthetic as well, matching the existing
 # test_ac4b_dual_listed_path_not_exempt_from_ownership_ledger convention.
 # --------------------------------------------------------------------------
 
 
-def test_121_ac1_files_landed_whole_exempts_real_fixture_path() -> None:
-    """AC1: real fixture docs/dev/dev-report-20260904-181435.json declares
-    ALL 3 of its files_modified paths in files_landed_whole, with
+def test_121_ac1_files_landed_whole_exempts_real_fixture_path(tmp_path: Path) -> None:
+    """AC1: a report shaped like the historical dev-report-20260904-181435
+    declares ALL 3 of its files_modified paths in files_landed_whole, with
     owned_edits and pre_edit_snapshots both empty -- a full pass post-fix,
-    not a partial 2-of-3 exclusion. Pre-fix, this fixture raises PlanError
-    naming all 3 paths (independently reproduced this session)."""
-    repo_root = Path(__file__).parents[1]
+    not a partial 2-of-3 exclusion. Pre-fix, this shape raises PlanError
+    naming all 3 paths."""
+    repo_root = _repo(tmp_path / "control")
     task = "20260904-181435"
-    report = repo_root / "docs" / "dev" / f"dev-report-{task}.json"
+    paths = [
+        "scripts/paseo-daemon-ledger.py",
+        "commands/paseo-daemon.md",
+        "tests/test_paseo_daemon_ledger.py",
+    ]
+    for rel in paths:
+        (repo_root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo_root / rel).write_text("landed whole\n", encoding="utf-8")
+    report = _report(repo_root, task, paths, owned_edits={}, baseline_dirty_snapshot="")
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    payload["owned_edits"] = {}
+    payload["pre_edit_snapshots"] = {}
+    payload["files_landed_whole"] = [
+        {"path": rel, "diff_sha256": "0" * 64, "reason": "whole-file landing"}
+        for rel in paths
+    ]
+    report.write_text(json.dumps(payload), encoding="utf-8")
 
     plan = MODULE.build_plan(
         task_id=task,
@@ -1225,16 +1243,31 @@ def test_121_ac2_dual_listed_files_landed_whole_not_exempt(tmp_path: Path) -> No
     assert plan["repositories"][0]["owned_paths"] == ["dual.txt"]
 
 
-def test_121_ac4_three_way_absent_real_fixture_still_rejected() -> None:
-    """AC4 (most important): real fixture
-    docs/dev/dev-report-20260923-121345.json -- hooks/tests/INDEX.md is
-    absent from owned_edits, pre_edit_snapshots, baseline_dirty_snapshot's
-    porcelain text, AND files_landed_whole (null in this report). The new
-    third exemption source must not create a false exemption for a path
+def test_121_ac4_three_way_absent_real_fixture_still_rejected(tmp_path: Path) -> None:
+    """AC4 (most important): a report shaped like the historical
+    dev-report-20260923-121345 -- hooks/tests/INDEX.md is absent from
+    owned_edits, pre_edit_snapshots, baseline_dirty_snapshot's porcelain
+    text, AND files_landed_whole (null in this report), while the report's
+    other files_modified paths are each backed by one of those sources. The
+    new third exemption source must not create a false exemption for a path
     genuinely absent from all three sources."""
-    repo_root = Path(__file__).parents[1]
+    repo_root = _repo(tmp_path / "control")
     task = "20260923-121345"
-    report = repo_root / "docs" / "dev" / f"dev-report-{task}.json"
+    modified = ["hooks/tests/INDEX.md", "hooks/ledgered.py", "hooks/baseline.py"]
+    for rel in modified:
+        (repo_root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo_root / rel).write_text("edited\n", encoding="utf-8")
+    report = _report(
+        repo_root,
+        task,
+        modified,
+        owned_edits={"hooks/ledgered.py": [{"old": "before", "new": "after"}]},
+        baseline_dirty_snapshot=" M hooks/baseline.py\n M docs/unrelated.md\n",
+    )
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    payload["pre_edit_snapshots"] = {"hooks/ledgered.py": "0" * 64}
+    payload["files_landed_whole"] = None
+    report.write_text(json.dumps(payload), encoding="utf-8")
 
     # Post-cutover (see test_ac1's comment above): absence from all three
     # self-report exemption sources no longer raises on its own -- the gate
@@ -1259,16 +1292,33 @@ def test_121_ac4_three_way_absent_real_fixture_still_rejected() -> None:
     )
 
 
-def test_121_ac6_real_fixture_20260919_180650_still_succeeds() -> None:
-    """AC6 regression: real fixture
-    docs/dev/dev-report-20260919-180650.json -- files_landed_whole declares
-    one of 17 files_modified paths, but every path is already covered by
-    real porcelain baseline_dirty_snapshot text independently of this fix.
-    Confirms no regression whether the new code path is decisive (AC1) or
-    redundant (this AC)."""
-    repo_root = Path(__file__).parents[1]
+def test_121_ac6_real_fixture_20260919_180650_still_succeeds(tmp_path: Path) -> None:
+    """AC6 regression: a report shaped like the historical
+    dev-report-20260919-180650 -- files_landed_whole declares one of 17
+    files_modified paths, but every path is already covered by porcelain
+    baseline_dirty_snapshot text independently of this fix. Confirms no
+    regression whether the new code path is decisive (AC1) or redundant
+    (this AC)."""
+    repo_root = _repo(tmp_path / "control")
     task = "20260919-180650"
-    report = repo_root / "docs" / "dev" / f"dev-report-{task}.json"
+    modified = [f"pkg/module_{index:02d}.py" for index in range(17)]
+    for rel in modified:
+        (repo_root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo_root / rel).write_text("dirty\n", encoding="utf-8")
+    report = _report(
+        repo_root,
+        task,
+        modified,
+        owned_edits={},
+        baseline_dirty_snapshot="".join(f" M {rel}\n" for rel in modified),
+    )
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    payload["owned_edits"] = {}
+    payload["pre_edit_snapshots"] = {}
+    payload["files_landed_whole"] = [
+        {"path": modified[0], "diff_sha256": "0" * 64, "reason": "whole-file landing"}
+    ]
+    report.write_text(json.dumps(payload), encoding="utf-8")
 
     plan = MODULE.build_plan(
         task_id=task,

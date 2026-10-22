@@ -1093,7 +1093,7 @@ For each active pipeline[i]:
 # directly (it is executable, bash shebang). The write lands in <main_root>/.claude/
 # dev-registry/ and succeeds in all three modes via the hook's qa.json RW bind.
 # Do NOT re-add `bash`, do NOT drop the prefix (write-qa-mode.sh:23 requires it), do
-# NOT substitute an absolute /root/… path (hardcoding), do NOT drop `|| exit 1`.
+# NOT substitute an absolute <home>/… path (hardcoding), do NOT drop `|| exit 1`.
 CLAUDE_PROJECT_DIR='<MAIN_ROOT>' ~/.claude/scripts/write-qa-mode.sh --session-id "<DEV_SESSION_ID>" --mode ba_validation \
   || { echo 'ERROR: Failed to set qa_mode=ba_validation in qa.json — aborting' >&2; exit 1; }
 

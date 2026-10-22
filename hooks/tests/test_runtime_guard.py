@@ -53,6 +53,40 @@ def _live_hook_env(env=None):
     return e
 
 
+def _consent_flag(sid):
+    """/do consent flag path under the harness state root, resolved at call time
+    from the same CLAUDE_STATE_DIR the spawned hook inherits, so a test never
+    shares the default /tmp namespace with a live session."""
+    from lib.harness_state_dir import harness_state_dir
+    root = harness_state_dir()
+    os.makedirs(root, exist_ok=True)
+    return os.path.join(root, f"claude-orchestrator-consent-{sid}.flag")
+
+
+@pytest.fixture(autouse=True)
+def _restore_environ():
+    """The evaluation helpers below pin CLAUDE_PROTECTED_RUNTIME_FILE through
+    os.environ before reloading the engine; put the environment back after
+    every test so none of it reaches a later test."""
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _reload_engine_after_module():
+    """Tests here reload lib.runtime_guard under a pinned HOME and data file.
+    Once the module is done (and the function-scoped environment restores have
+    run), reload it again so later test files see the engine configured by the
+    session's own environment, not by the last test of this file."""
+    yield
+    import importlib
+    mod = sys.modules.get("lib.runtime_guard")
+    if mod is not None:
+        importlib.reload(mod)
+
+
 # ── Test fixture data file (de-drifted values, isolated from the live file) ──
 FIXTURE = {
     "schema_version": 1,
@@ -67,13 +101,13 @@ FIXTURE = {
         "/usr/bin/happy-mcp",
     ],
     "protected_services": [
-        "happy-daemon", "happy-daemon-jade", "happy-daemon-dev", "happy-daemon-qijie",
+        "standin-unit-q7", "standin-unit-q7-altq3", "standin-unit-q7-dev", "standin-unit-q7-boxq7",
     ],
     "protected_hotfiles": ["**/packages/happy-cli/dist/index.mjs"],
     "protected_statefiles": ["/root/.happy*/daemon.state.json"],
     "protected_endpoint_paths": ["/stop"],
     "protected_proc_idents": [
-        "happy-daemon", "packages/happy-cli/dist/index.mjs", "daemon start-sync",
+        "standin-unit-q7", "packages/happy-cli/dist/index.mjs", "daemon start-sync",
     ],
     "protected_global_bins": ["/usr/bin/happy*", "/usr/lib/node_modules/happy*"],
     "protected_build_workspaces": ["happy", "happy-coder"],
@@ -153,7 +187,7 @@ def code_for(decision):
 class TestBlocks:
     def test_launch_cmdword(self, datafile, fixture_repo):
         assert ev("happy daemon start", datafile, fixture_repo) == "BLOCK"
-        assert ev("HAPPY_HOME_DIR=/root/.happy-dev happy daemon start", datafile, fixture_repo) == "BLOCK"
+        assert ev("HAPPY_HOME_DIR=/root/.happy-standin happy daemon start", datafile, fixture_repo) == "BLOCK"
 
     def test_launch_distpath(self, datafile, fixture_repo):
         assert ev("node --no-warnings " + fixture_repo + "/packages/happy-cli/dist/index.mjs daemon start", datafile, fixture_repo) == "BLOCK"
@@ -172,9 +206,9 @@ class TestBlocks:
         assert ev("bunx happy daemon start", datafile, fixture_repo) == "BLOCK"
 
     def test_service(self, datafile, fixture_repo):
-        assert ev("systemctl restart happy-daemon-qijie", datafile, fixture_repo) == "BLOCK"
-        assert ev("systemctl stop happy-daemon", datafile, fixture_repo) == "BLOCK"
-        assert ev("systemctl disable happy-daemon-dev", datafile, fixture_repo) == "BLOCK"
+        assert ev("systemctl restart standin-unit-q7-boxq7", datafile, fixture_repo) == "BLOCK"
+        assert ev("systemctl stop standin-unit-q7", datafile, fixture_repo) == "BLOCK"
+        assert ev("systemctl disable standin-unit-q7-dev", datafile, fixture_repo) == "BLOCK"
 
     def test_build_explicit(self, datafile, fixture_repo):
         assert ev("yarn workspace happy build", datafile, fixture_repo) == "BLOCK"
@@ -196,9 +230,9 @@ class TestBlocks:
         assert ev("sed -i s/a/b/ packages/happy-cli/dist/index.mjs", datafile, fixture_repo) == "BLOCK"
 
     def test_statefile_mutation(self, datafile, fixture_repo):
-        assert ev("echo {} > /root/.happy-dev/daemon.state.json", datafile, fixture_repo) == "BLOCK"
+        assert ev("echo {} > /root/.happy-standin/daemon.state.json", datafile, fixture_repo) == "BLOCK"
         assert ev("cp /tmp/s /root/.happy/daemon.state.json", datafile, fixture_repo) == "BLOCK"
-        assert ev("truncate -s0 /root/.happy-qijie/daemon.state.json", datafile, fixture_repo) == "BLOCK"
+        assert ev("truncate -s0 /root/.happy-boxq7/daemon.state.json", datafile, fixture_repo) == "BLOCK"
 
     def test_endpoint_stop(self, datafile, fixture_repo):
         assert ev("curl -X POST http://127.0.0.1:54321/stop", datafile, fixture_repo) == "BLOCK"
@@ -206,7 +240,7 @@ class TestBlocks:
 
     def test_prockill(self, datafile, fixture_repo):
         assert ev("pkill -f packages/happy-cli/dist/index.mjs", datafile, fixture_repo) == "BLOCK"
-        assert ev("kill -9 $(pgrep -f happy-daemon)", datafile, fixture_repo) == "BLOCK"
+        assert ev("kill -9 $(pgrep -f standin-unit-q7)", datafile, fixture_repo) == "BLOCK"
         assert ev("fuser -k packages/happy-cli/dist/index.mjs", datafile, fixture_repo) == "BLOCK"
 
     def test_globalbin(self, datafile, fixture_repo):
@@ -215,9 +249,9 @@ class TestBlocks:
         assert ev("yarn global add happy", datafile, fixture_repo) == "BLOCK"
         assert ev("npm link happy", datafile, fixture_repo) == "BLOCK"
 
-    def test_datafile_mutation(self, datafile, fixture_repo):
+    def test_datafile_mutation(self, datafile, fixture_repo, monkeypatch):
         # mutation of the actual configured data-file path is STEP0 protected
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = _LIVE_CFG_PATH
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", _LIVE_CFG_PATH)
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         assert rg.evaluate(f"echo {{}} > {_LIVE_CFG_PATH}")[0] == "BLOCK"
@@ -312,9 +346,9 @@ class TestBlocks:
 
 class TestAllows:
     def test_read_statefile(self, datafile, fixture_repo):
-        for c in ("cat /root/.happy-dev/daemon.state.json",
+        for c in ("cat /root/.happy-standin/daemon.state.json",
                   "grep pid /root/.happy/daemon.state.json",
-                  "head /root/.happy-qijie/daemon.state.json"):
+                  "head /root/.happy-boxq7/daemon.state.json"):
             assert ev(c, datafile, fixture_repo) == "ALLOW", c
 
     def test_other_package_build(self, datafile, fixture_repo):
@@ -334,7 +368,7 @@ class TestAllows:
         assert ev("sed -i s/a/b/ packages/happy-cli/src/daemon/run.ts", datafile, fixture_repo) == "ALLOW"
 
     def test_echo_projectname(self, datafile, fixture_repo):
-        assert ev("echo happy-daemon restart", datafile, fixture_repo) == "ALLOW"
+        assert ev("echo standin-unit-q7 restart", datafile, fixture_repo) == "ALLOW"
         assert ev("grep happy somefile", datafile, fixture_repo) == "ALLOW"
 
     def test_pkgscript_nonprotected_workspace_run(self, datafile, fixture_repo):
@@ -400,14 +434,14 @@ class TestLeak1CrossSegmentKill:
     """P6: a protected proc-ident in an upstream pipeline segment feeding a kill
     executor downstream (or kill $(<pipeline naming ident>)) must BLOCK."""
     def test_ps_grep_xargs_kill(self, datafile, fixture_repo):
-        for c in ("ps aux | grep happy-daemon | awk '{print $2}' | xargs kill",
-                  "pgrep -f happy-daemon | xargs kill",
-                  "ps aux | grep happy-daemon | awk '{print $2}' | xargs pkill",
+        for c in ("ps aux | grep standin-unit-q7 | awk '{print $2}' | xargs kill",
+                  "pgrep -f standin-unit-q7 | xargs kill",
+                  "ps aux | grep standin-unit-q7 | awk '{print $2}' | xargs pkill",
                   "pgrep -f packages/happy-cli/dist/index.mjs | xargs -r kill -9"):
             assert ev(c, datafile, fixture_repo) == "BLOCK", c
 
     def test_kill_command_substitution_pipeline(self, datafile, fixture_repo):
-        for c in ("kill $(ps aux | grep happy-daemon | awk '{print $2}')",
+        for c in ("kill $(ps aux | grep standin-unit-q7 | awk '{print $2}')",
                   "kill -9 $(pgrep -f 'daemon start-sync')"):
             assert ev(c, datafile, fixture_repo) == "BLOCK", c
 
@@ -415,8 +449,8 @@ class TestLeak1CrossSegmentKill:
     def test_unrelated_pipeline_kill_allowed(self, datafile, fixture_repo):
         for c in ("ps aux | grep foo | awk '{print $2}' | xargs kill",
                   "pgrep -f some-other-proc | xargs kill",
-                  "ps aux | grep happy-daemon | awk '{print $2}'",
-                  "ps aux | grep happy-daemon"):
+                  "ps aux | grep standin-unit-q7 | awk '{print $2}'",
+                  "ps aux | grep standin-unit-q7"):
             assert ev(c, datafile, fixture_repo) == "ALLOW", c
 
 
@@ -534,12 +568,12 @@ class TestCodexR2Splitting:
     """F1/F2: fd-redirection `&` must not split a pipeline; separators inside
     $()/backticks must not split the kill substitution."""
     def test_redirect_amp_not_separator(self, datafile, fixture_repo):
-        assert ev("pgrep -af happy-daemon 2>&1 | awk '{print $1}' | xargs kill", datafile, fixture_repo) == "BLOCK"
+        assert ev("pgrep -af standin-unit-q7 2>&1 | awk '{print $1}' | xargs kill", datafile, fixture_repo) == "BLOCK"
 
     def test_separators_inside_substitution(self, datafile, fixture_repo):
-        for c in ("kill $(true && pgrep -f happy-daemon)",
-                  "kill $(echo ok >/dev/null; pgrep -f happy-daemon)",
-                  "kill `true; pgrep -f happy-daemon`"):
+        for c in ("kill $(true && pgrep -f standin-unit-q7)",
+                  "kill $(echo ok >/dev/null; pgrep -f standin-unit-q7)",
+                  "kill `true; pgrep -f standin-unit-q7`"):
             assert ev(c, datafile, fixture_repo) == "BLOCK", c
 
     def test_redirect_amp_benign_allowed(self, datafile, fixture_repo):
@@ -552,7 +586,7 @@ class TestCodexR2Splitting:
 class TestCodexR2XargsWrappers:
     """F3: xargs target through a wrapper (sudo/env) and the -I{} placeholder."""
     def test_xargs_wrapped_kill(self, datafile, fixture_repo):
-        assert ev("ps aux | grep happy-daemon | awk '{print $2}' | xargs sudo kill", datafile, fixture_repo) == "BLOCK"
+        assert ev("ps aux | grep standin-unit-q7 | awk '{print $2}' | xargs sudo kill", datafile, fixture_repo) == "BLOCK"
 
     def test_xargs_env_node_path(self, datafile, fixture_repo):
         repo = fixture_repo
@@ -639,7 +673,7 @@ class TestCodexR2RunnerRuntime:
 class TestCodexR2LoopConsumers:
     """F11: pipe-fed while-read loops for kill and launch."""
     def test_while_read_kill(self, datafile, fixture_repo):
-        assert ev("pgrep -af happy-daemon | while read pid; do kill $pid; done", datafile, fixture_repo) == "BLOCK"
+        assert ev("pgrep -af standin-unit-q7 | while read pid; do kill $pid; done", datafile, fixture_repo) == "BLOCK"
 
     def test_while_read_launch(self, datafile, fixture_repo):
         assert ev("printf 'daemon start' | while read args; do happy $args; done", datafile, fixture_repo) == "BLOCK"
@@ -674,7 +708,7 @@ class TestCodexWrapperOperands:
     """Wrappers with operands + process-handoff wrappers must not hide the
     real service/runtime/protected command word."""
     def test_timeout_then_service(self, datafile, fixture_repo):
-        assert ev("timeout 10 systemctl restart happy-daemon-dev", datafile, fixture_repo) == "BLOCK"
+        assert ev("timeout 10 systemctl restart standin-unit-q7-dev", datafile, fixture_repo) == "BLOCK"
         assert ev("timeout --signal=TERM 10 happy daemon start", datafile, fixture_repo) == "BLOCK"
         assert ev("timeout -s TERM 10 happy daemon start", datafile, fixture_repo) == "BLOCK"
 
@@ -813,10 +847,10 @@ class TestFailClosed:
         for c in ("ls", "cat foo", "grep x file", "git status"):
             assert self._ev_no_cfg(c, tmp_path) == "ALLOW", c
 
-    def test_selfprotect_when_config_absent(self, tmp_path):
+    def test_selfprotect_when_config_absent(self, tmp_path, monkeypatch):
         # STEP0 protects the configured path regardless of whether the config
         # file exists. Use the same HOME-relative default path as the engine.
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = _LIVE_CFG_PATH
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", _LIVE_CFG_PATH)
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         # Even with the file present-or-absent, STEP0 runs before config load.
@@ -853,7 +887,7 @@ class TestLiveHook:
         assert run_hook("yarn workspace happy-server build") == ALLOW
 
     def test_hook_allows_read_statefile(self):
-        assert run_hook("cat /root/.happy-dev/daemon.state.json") == ALLOW
+        assert run_hook("cat /root/.happy-standin/daemon.state.json") == ALLOW
 
     @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_hook_allows_meta_query(self):
@@ -877,7 +911,7 @@ class TestLiveHook:
         # Create a /do consent flag for this session; the guard must still block.
         import getpass  # noqa
         sid = "guardtest-" + str(os.getpid())
-        flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
+        flag = _consent_flag(sid)
         with open(flag, "w") as fh:
             fh.write("true")
         try:
@@ -1021,12 +1055,12 @@ class TestR3StatefilePidKill:
     """F7: a kill whose target is resolved by reading the protected statefile,
     and a process-substitution-fed kill."""
     def test_kill_statefile_pid(self, datafile, fixture_repo):
-        for c in ("kill $(jq -r .pid /root/.happy-dev/daemon.state.json)",
+        for c in ("kill $(jq -r .pid /root/.happy-standin/daemon.state.json)",
                   "kill -9 $(cat /root/.happy/daemon.state.json | jq .pid)"):
             assert ev(c, datafile, fixture_repo) == "BLOCK", c
 
     def test_kill_process_substitution(self, datafile, fixture_repo):
-        assert ev("xargs kill <(pgrep -f happy-daemon)", datafile, fixture_repo) == "BLOCK"
+        assert ev("xargs kill <(pgrep -f standin-unit-q7)", datafile, fixture_repo) == "BLOCK"
 
     def test_kill_unrelated_statefile_allowed(self, datafile, fixture_repo):
         # reading an UNRELATED statefile to kill is not protected
@@ -1037,10 +1071,10 @@ class TestR3ServiceVerbs:
     """F8: additional service lifecycle verbs (force-reload / condrestart /
     try-reload-or-restart) in both systemctl VERB UNIT and service UNIT VERB."""
     def test_extra_service_verbs(self, datafile, fixture_repo):
-        for c in ("systemctl try-reload-or-restart happy-daemon",
-                  "systemctl force-reload happy-daemon",
-                  "service happy-daemon condrestart",
-                  "systemctl reload-or-try-restart happy-daemon-dev"):
+        for c in ("systemctl try-reload-or-restart standin-unit-q7",
+                  "systemctl force-reload standin-unit-q7",
+                  "service standin-unit-q7 condrestart",
+                  "systemctl reload-or-try-restart standin-unit-q7-dev"):
             assert ev(c, datafile, fixture_repo) == "BLOCK", c
 
     def test_service_verb_unrelated_unit_allowed(self, datafile, fixture_repo):
@@ -1085,10 +1119,10 @@ class TestR3LoopDepthOverblock:
     """F12: `do` must not increment loop depth (only while/for/until do), so a
     later top-level kill is not over-connected to the protected loop pipeline."""
     def test_post_loop_kill_allowed(self, datafile, fixture_repo):
-        assert ev("pgrep -af happy-daemon | while read pid; do echo $pid; done; kill 123", datafile, fixture_repo) == "ALLOW"
+        assert ev("pgrep -af standin-unit-q7 | while read pid; do echo $pid; done; kill 123", datafile, fixture_repo) == "ALLOW"
 
     def test_in_loop_kill_still_blocked(self, datafile, fixture_repo):
-        assert ev("pgrep -af happy-daemon | while read pid; do kill $pid; done", datafile, fixture_repo) == "BLOCK"
+        assert ev("pgrep -af standin-unit-q7 | while read pid; do kill $pid; done", datafile, fixture_repo) == "BLOCK"
 
 
 class TestR3OtherProjectFalsePositive:
@@ -1226,19 +1260,19 @@ class TestR3CodexStatefileFusedRedirect:
     """codex#9: a kill whose substitution reads the protected statefile via a
     FUSED input redirection (`<path`)."""
     def test_kill_fused_redirect(self, datafile, fixture_repo):
-        assert ev("kill $(jq -r .pid </root/.happy-dev/daemon.state.json)", datafile, fixture_repo) == "BLOCK"
+        assert ev("kill $(jq -r .pid </root/.happy-standin/daemon.state.json)", datafile, fixture_repo) == "BLOCK"
 
 
 class TestR3CodexSystemdTemplate:
     """codex#10: a protected systemd TEMPLATE instance (unit@instance)."""
     def test_template_instance(self, datafile, fixture_repo):
-        for c in ("systemctl restart happy-daemon@dev.service",
-                  "systemctl stop happy-daemon@prod"):
+        for c in ("systemctl restart standin-unit-q7@dev.service",
+                  "systemctl stop standin-unit-q7@prod"):
             assert ev(c, datafile, fixture_repo) == "BLOCK", c
 
     def test_unrelated_hyphenated_unit_allowed(self, datafile, fixture_repo):
         # a longer hyphenated unrelated unit must NOT match a protected prefix
-        assert ev("systemctl restart happy-daemon-clone-xyz", datafile, fixture_repo) == "ALLOW"
+        assert ev("systemctl restart standin-unit-q7-clone-xyz", datafile, fixture_repo) == "ALLOW"
 
 
 class TestR3CodexMutationCwdAndRemoval:
@@ -1251,7 +1285,7 @@ class TestR3CodexMutationCwdAndRemoval:
         assert ev_cwd("rm packages/happy-cli/dist/index.mjs", datafile, fixture_repo) == "BLOCK"
 
     def test_cd_then_truncate_statefile(self, datafile, fixture_repo):
-        assert ev("cd /root/.happy-dev && truncate -s0 daemon.state.json", datafile, fixture_repo) == "BLOCK"
+        assert ev("cd /root/.happy-standin && truncate -s0 daemon.state.json", datafile, fixture_repo) == "BLOCK"
 
 
 class TestR3CodexScopedFilterOverblock:
@@ -1356,7 +1390,7 @@ class TestCycle4WrapperAgnosticFrontends:
         assert ev("watch -n5 ls", datafile, fixture_repo) == "ALLOW"
         assert ev("firejail yarn workspace happy-server build", datafile, fixture_repo) == "ALLOW"
         assert ev("unshare -r yarn workspace happy-server build", datafile, fixture_repo) == "ALLOW"
-        assert ev("nsenter -t 1 -m cat /root/.happy-dev/daemon.state.json", datafile, fixture_repo) == "ALLOW"
+        assert ev("nsenter -t 1 -m cat /root/.happy-standin/daemon.state.json", datafile, fixture_repo) == "ALLOW"
 
     def test_readonly_mentions_allow(self, datafile, fixture_repo):
         assert ev("grep packages/happy-cli/dist/index.mjs -R .", datafile, fixture_repo) == "ALLOW"
@@ -1505,7 +1539,7 @@ class TestCycle5AnchorBasedHeadAgnostic:
         assert ev(f"tini -- pkill -f {ident}", datafile, fixture_repo) == "BLOCK"
         assert ev(f"ssh-agent killall -9 {ident}", datafile, fixture_repo) == "BLOCK"
         # statefile-reaching kill behind a novel wrapper
-        assert ev("numactl kill $(jq .pid /root/.happy-dev/daemon.state.json)", datafile, fixture_repo) == "BLOCK"
+        assert ev("numactl kill $(jq .pid /root/.happy-standin/daemon.state.json)", datafile, fixture_repo) == "BLOCK"
 
     # ── W5: stacked documented + undocumented front-ends ─────────────────────
     def test_w5_stacked_frontends(self, datafile, fixture_repo):
@@ -1540,7 +1574,7 @@ class TestCycle5AnchorBasedHeadAgnostic:
         assert ev(f"lsof {p}", datafile, fixture_repo) == "ALLOW"
         # data forms: the protected string is an ARGUMENT, not an execution
         assert ev("echo happy daemon start", datafile, fixture_repo) == "ALLOW"
-        assert ev("grep happy-daemon-start file", datafile, fixture_repo) == "ALLOW"
+        assert ev("grep standin-unit-q7-start file", datafile, fixture_repo) == "ALLOW"
         assert ev("printf 'numactl happy daemon start'", datafile, fixture_repo) == "ALLOW"
 
     @pytest.mark.parametrize("fe", UNDOC_FRONTENDS)
@@ -1748,8 +1782,8 @@ class TestCycle7ServiceControlAnchor:
     _SV = "ser" + "vice"
     _IC = "init" + "ctl"
     _RESTART = "rest" + "art"
-    _UNIT = "happy-" + "daemon"
-    _UNIT_DEV = "happy-" + "daemon-dev"
+    _UNIT = "standin-unit-" + "q7"
+    _UNIT_DEV = "standin-unit-" + "q7-dev"
 
     def test_w5_wrapped_service_manager_blocks(self, datafile, fixture_repo):
         # the LEAK the fix closes: a service-manager restart of a protected unit
@@ -1848,7 +1882,7 @@ class TestCycle7ServiceControlAnchor:
         # anchor runs in evaluate() BEFORE the hook's /do bypass (unbypassable).
         sc, r, ud = self._SC, self._RESTART, self._UNIT_DEV
         sid = "guardtest-w5-" + str(os.getpid())
-        flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
+        flag = _consent_flag(sid)
         with open(flag, "w") as fh:
             fh.write("true")
         try:
@@ -1956,7 +1990,7 @@ class TestCycle8HeadAgnosticRemainingPrimitives:
         return repo + "/packages/happy-cli/dist/index.mjs"
 
     def _statefile(self):
-        return "/root/.happy-dev/" + "daemon" + ".state.json"
+        return "/root/.happy-standin/" + "daemon" + ".state.json"
 
     # ── W6 BUNDLE mutation BLOCK across {bare, real, invented, stacked} ──────
     @pytest.mark.parametrize("w", WRAPPERS)
@@ -2153,7 +2187,7 @@ class TestCycle8HeadAgnosticRemainingPrimitives:
         env["CLAUDE_GUARD_CWD"] = fixture_repo
         b = self._bundle(fixture_repo)
         sid = "guardtest-w69-" + str(os.getpid())
-        flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
+        flag = _consent_flag(sid)
         with open(flag, "w") as fh:
             fh.write("true")
         try:
@@ -2240,7 +2274,7 @@ def _run_hook_cfg(command, cfg_path, env=None, do_sid=None):
     flag = None
     if do_sid:
         body["session_id"] = do_sid
-        flag = f"/tmp/claude-orchestrator-consent-{do_sid}.flag"
+        flag = _consent_flag(do_sid)
         with open(flag, "w") as fh:
             fh.write("true")
     try:
@@ -2544,7 +2578,7 @@ class TestCycle10MoveSourceMutationUnified:
         return repo + "/packages/happy-cli/dist/index.mjs"
 
     def _statefile(self):
-        return "/root/.happy-dev/" + "daemon" + ".state.json"
+        return "/root/.happy-standin/" + "daemon" + ".state.json"
 
     def _configfile(self, datafile):
         # the active STEP0 anchor IS the override path itself (the data file).
@@ -2675,7 +2709,7 @@ class TestCycle10MoveSourceMutationUnified:
         env["CLAUDE_GUARD_CWD"] = fixture_repo
         sf = self._statefile()
         sid = "guardtest-mvsrc-" + str(os.getpid())
-        flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
+        flag = _consent_flag(sid)
         with open(flag, "w") as fh:
             fh.write("true")
         try:
@@ -2919,7 +2953,7 @@ class TestCycle11CommandWordLaunchHeadAgnostic:
         env["CLAUDE_PROTECTED_RUNTIME_FILE"] = datafile
         env["CLAUDE_GUARD_CWD"] = fixture_repo
         sid = "guardtest-cmdword-" + str(os.getpid())
-        flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
+        flag = _consent_flag(sid)
         with open(flag, "w") as fh:
             fh.write("true")
         try:
@@ -3035,7 +3069,7 @@ class TestCycle12SlashPathNavAllowAndDashOptOverblock:
     @pytest.mark.parametrize("cmd", _CMDS)
     def test_issue1_nav_slash_path_allows(self, w, cmd, datafile, fixture_repo):
         pre = (w + " ") if w else ""
-        d = f"/dev/shm/dev-workspace/{cmd}"          # dir whose basename == cmd
+        d = f"/srv/harness-ws/{cmd}"          # dir whose basename == cmd
         for body in (f"cd {d}",
                      f"pushd {d}",
                      f"ls {d}",
@@ -3051,7 +3085,7 @@ class TestCycle12SlashPathNavAllowAndDashOptOverblock:
 
     # env-prefix + chdir wrapper forms also ALLOW (no launch).
     def test_issue1_env_prefix_nav_allows(self, datafile, fixture_repo):
-        d = "/dev/shm/dev-workspace/happy-dev"
+        d = "/srv/harness-ws/happy-dev"
         assert ev(f"env FOO=bar cd {d}", datafile, fixture_repo) == "ALLOW"
         assert ev(f"nohup ls {d}", datafile, fixture_repo) == "ALLOW"
 
@@ -3153,7 +3187,7 @@ class TestCycle12SlashPathNavAllowAndDashOptOverblock:
             return subprocess.run([HOOK], input=payload, capture_output=True,
                                   text=True, env=env).returncode
 
-        d = "/dev/shm/dev-workspace/happy-dev"
+        d = "/srv/harness-ws/happy-dev"
         # ISSUE 1 ALLOW side on the LIVE hook
         for cmd in (f"cd {d}", f"git -C {d} status", f"cp -r {d} /tmp/bk",
                     f"find {d} -name x"):
@@ -3172,7 +3206,7 @@ class TestCycle12SlashPathNavAllowAndDashOptOverblock:
         # the /do consent surfaces as a per-session flag file; the engine runs
         # BEFORE the hook's /do bypass, so a guard BLOCK is unbypassable.
         sid = "guardtest12-" + str(os.getpid())
-        flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
+        flag = _consent_flag(sid)
         with open(flag, "w") as fh:
             fh.write("true")
 
@@ -3188,7 +3222,7 @@ class TestCycle12SlashPathNavAllowAndDashOptOverblock:
             assert run(f"{self._INV} node {bundle} daemon start") == BLOCK   # real launch
             assert run(f"{self._REAL} -g happy claude") == BLOCK             # issue 2
             # but nav still ALLOWs under /do
-            assert run("cd /dev/shm/dev-workspace/happy-dev") == ALLOW
+            assert run("cd /srv/harness-ws/happy-dev") == ALLOW
         finally:
             os.remove(flag)
 
@@ -3326,10 +3360,10 @@ class TestCycle13Step0AncestorAndFind:
         assert ev_nested(f"mv {df} /tmp/x", nested_datafile) == "BLOCK"
         assert ev_nested(f"shred {df}", nested_datafile) == "BLOCK"
 
-    def test_config_absent_step0_blocks(self):
+    def test_config_absent_step0_blocks(self, monkeypatch):
         # STEP0 runs BEFORE config load -> ancestor + find protection holds absent.
         # Use the live hardcoded path so the absent-file path still has ancestors.
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/tmp/abs/.config/app/protected-runtime.json"
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", "/tmp/abs/.config/app/protected-runtime.json")
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         assert rg.evaluate("find /tmp/abs/.config/app/protected-runtime.json -delete")[0] == "BLOCK"
@@ -3384,12 +3418,12 @@ class TestCycle13ClassSweepSiblingFamilies:
         assert ev_cwd(f"mv {pd} /tmp/x", datafile, fixture_repo) == "BLOCK"
 
     def test_find_destructive_statefile(self, datafile, fixture_repo):
-        assert ev_cwd("find /root/.happy-dev/daemon.state.json -delete", datafile, fixture_repo) == "BLOCK"
-        assert ev_cwd("find /root/.happy-dev -exec rm {} ;", datafile, fixture_repo) == "BLOCK"
+        assert ev_cwd("find /root/.happy-standin/daemon.state.json -delete", datafile, fixture_repo) == "BLOCK"
+        assert ev_cwd("find /root/.happy-standin -exec rm {} ;", datafile, fixture_repo) == "BLOCK"
 
     def test_container_dir_mutation_statefile(self, datafile, fixture_repo):
-        assert ev_cwd("mv /root/.happy-dev /tmp/x", datafile, fixture_repo) == "BLOCK"
-        assert ev_cwd("rm -rf /root/.happy-dev", datafile, fixture_repo) == "BLOCK"
+        assert ev_cwd("mv /root/.happy-standin /tmp/x", datafile, fixture_repo) == "BLOCK"
+        assert ev_cwd("rm -rf /root/.happy-standin", datafile, fixture_repo) == "BLOCK"
 
     def test_find_destructive_globalbin(self, datafile, fixture_repo):
         assert ev_cwd("find /usr/bin/happy -delete", datafile, fixture_repo) == "BLOCK"
@@ -3459,7 +3493,7 @@ class TestCycle13LiveHookAndDoBypass:
 
     @pytest.mark.skipif(not _LIVE_CFG_EXISTS, reason=_LIVE_CFG_SKIP_REASON)
     def test_live_hook_sweep_blocks(self):
-        assert self._run("find /root/.happy-dev/daemon.state.json -delete") == BLOCK
+        assert self._run("find /root/.happy-standin/daemon.state.json -delete") == BLOCK
 
     def test_live_hook_boundary_allows(self):
         # NOTE: bare `kill <pid>` / `xargs kill` are independently blocked by the
@@ -3474,7 +3508,7 @@ class TestCycle13LiveHookAndDoBypass:
 
     def test_live_hook_unbypassable_under_do(self):
         sid = "guardtest13-" + str(os.getpid())
-        flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
+        flag = _consent_flag(sid)
         with open(flag, "w") as fh:
             fh.write("true")
         try:
@@ -3511,7 +3545,7 @@ class TestCycle13CodexFollowup:
         assert ev(f"pidof happy | {_XK}", datafile, fixture_repo) == "BLOCK"
 
     def test_wrapped_pipeline_statefile_kill_blocks(self, datafile, fixture_repo):
-        assert ev(f"cat /root/.happy-dev/daemon.state.json | weirdwrapX {_XK}",
+        assert ev(f"cat /root/.happy-standin/daemon.state.json | weirdwrapX {_XK}",
                   datafile, fixture_repo) == "BLOCK"
 
     def test_wrapped_pipeline_boundary_allows(self, datafile, fixture_repo):
@@ -3532,7 +3566,7 @@ class TestCycle13CodexFollowup:
     def test_find_opts_before_path_sibling_family_blocks(self, datafile, fixture_repo):
         bd = f"{fixture_repo}/packages/happy-cli/dist"
         assert ev_cwd(f"find -L {bd} -delete", datafile, fixture_repo) == "BLOCK"
-        assert ev_cwd("find -maxdepth 1 /root/.happy-dev -delete", datafile, fixture_repo) == "BLOCK"
+        assert ev_cwd("find -maxdepth 1 /root/.happy-standin -delete", datafile, fixture_repo) == "BLOCK"
 
     def test_find_opts_before_path_boundary_allows(self, nested_datafile):
         cfgdir = os.path.dirname(nested_datafile)
@@ -3571,9 +3605,11 @@ class TestCycle13CodexFollowup:
 # non-stop base and reverse-contains the repo, flipping boundary-ALLOW tests to BLOCK.)
 @pytest.fixture(scope="module")
 def isolated_pair(tmp_path_factory):
+    import shutil
     import tempfile
     # CONFIG: direct child of the /tmp stop-root so the ancestor self-protection walk
     # terminates at /tmp, keeping the protected set tight. /tmp is POSIX-guaranteed.
+    # pytest does not manage this dir, so the fixture removes it after the module.
     cfgbase = tempfile.mkdtemp(prefix="c14cfg_", dir="/tmp")
     cfgdir = os.path.join(cfgbase, ".config", "app")
     os.makedirs(cfgdir)
@@ -3587,7 +3623,8 @@ def isolated_pair(tmp_path_factory):
     cfg["protected_root_manifest_paths"] = [repo]
     with open(df, "w") as fh:
         json.dump(cfg, fh)
-    return {"df": df, "cfgdir": cfgdir, "repo": repo}
+    yield {"df": df, "cfgdir": cfgdir, "repo": repo}
+    shutil.rmtree(cfgbase, ignore_errors=True)
 
 
 def ev_iso(command, df, cwd=None):
@@ -3625,12 +3662,12 @@ class TestCycle14DriverGlobMutation:
 
     def test_statefile_dir_glob_blocks(self, isolated_pair):
         df = isolated_pair["df"]
-        assert ev_iso("mv /root/.happy-dev/* /tmp/x", df) == "BLOCK"
-        assert ev_iso("cp /root/.happy-dev/* /tmp/x", df) == "BLOCK"
+        assert ev_iso("mv /root/.happy-standin/* /tmp/x", df) == "BLOCK"
+        assert ev_iso("cp /root/.happy-standin/* /tmp/x", df) == "BLOCK"
 
-    def test_config_absent_glob_blocks(self):
+    def test_config_absent_glob_blocks(self, monkeypatch):
         # STEP0 (config ancestor self-protection) runs before config load.
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/tmp/abs14/.config/app/protected-runtime.json"
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", "/tmp/abs14/.config/app/protected-runtime.json")
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         assert rg.evaluate("mv /tmp/abs14/.config/app/* /tmp/x")[0] == "BLOCK"
@@ -3690,8 +3727,8 @@ class TestCycle14FindPredicate:
         assert ev_nested(f"sudo find /root -path {df} -delete", nested_datafile) == "BLOCK"
         assert ev_nested(f"weirdwrapX find /root -name {os.path.basename(df)} -delete", nested_datafile) == "BLOCK"
 
-    def test_find_predicate_config_absent_blocks(self):
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/tmp/abs14b/.config/app/protected-runtime.json"
+    def test_find_predicate_config_absent_blocks(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", "/tmp/abs14b/.config/app/protected-runtime.json")
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         assert rg.evaluate("find /root -path /tmp/abs14b/.config/app/protected-runtime.json -delete")[0] == "BLOCK"
@@ -3780,11 +3817,11 @@ class TestCycle14ChgrpAndHome:
         df = nested_datafile
         assert ev_nested(f"sudo chgrp root {df}", nested_datafile) == "BLOCK"
 
-    def test_home_expansion_blocks(self):
+    def test_home_expansion_blocks(self, monkeypatch):
         # use a hardcoded /root/.config path so HOME=/root resolves it; STEP0
         # ancestor protection runs config-absent.
-        os.environ["HOME"] = "/root"
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/root/.config/appz14/protected-runtime.json"
+        monkeypatch.setenv("HOME", "/root")
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", "/root/.config/appz14/protected-runtime.json")
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         assert rg.evaluate('mv "$HOME/.config/appz14" /tmp/x')[0] == "BLOCK"
@@ -3792,10 +3829,10 @@ class TestCycle14ChgrpAndHome:
         assert rg.evaluate('rm -rf "$HOME/.config/appz14"')[0] == "BLOCK"
 
     # boundary ALLOW: chgrp unrelated + $HOME read + non-$HOME var
-    def test_chgrp_home_boundary_allows(self, nested_datafile):
+    def test_chgrp_home_boundary_allows(self, nested_datafile, monkeypatch):
         assert ev_nested("chgrp root /tmp/unrelated", nested_datafile) == "ALLOW"
-        os.environ["HOME"] = "/root"
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/root/.config/appz14/protected-runtime.json"
+        monkeypatch.setenv("HOME", "/root")
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", "/root/.config/appz14/protected-runtime.json")
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         assert rg.evaluate('cat "$HOME/.config/appz14/protected-runtime.json"')[0] == "ALLOW"
@@ -3835,7 +3872,7 @@ class TestCycle14LiveHook:
 
     def test_live_driver_glob_unbypassable_under_do(self):
         sid = "guardtest14-" + str(os.getpid())
-        flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
+        flag = _consent_flag(sid)
         with open(flag, "w") as fh:
             fh.write("true")
         try:
@@ -3883,9 +3920,9 @@ class TestCycle14CodexFollowup:
       CF5: git pathspec magic (`:(glob)`/`:(top)`/`:/`) prefixes were not stripped."""
 
     # CF1: $HOME / ~ in cwd resolution (use absent-config hardcoded /root path)
-    def test_home_in_cwd_blocks(self):
-        os.environ["HOME"] = "/root"
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/root/.config/appz14cf/protected-runtime.json"
+    def test_home_in_cwd_blocks(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/root")
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", "/root/.config/appz14cf/protected-runtime.json")
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         assert rg.evaluate('cd "$HOME/.config/appz14cf" && rm protected-runtime.json')[0] == "BLOCK"
@@ -3893,9 +3930,9 @@ class TestCycle14CodexFollowup:
         assert rg.evaluate('cd ~/.config/appz14cf && rm protected-runtime.json')[0] == "BLOCK"
         assert rg.evaluate('cd ${HOME}/.config/appz14cf && rm protected-runtime.json')[0] == "BLOCK"
 
-    def test_home_in_cwd_boundary_allows(self):
-        os.environ["HOME"] = "/root"
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/root/.config/appz14cf/protected-runtime.json"
+    def test_home_in_cwd_boundary_allows(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/root")
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", "/root/.config/appz14cf/protected-runtime.json")
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         assert rg.evaluate('cd "$HOME/.config/unrelated" && rm foo.json')[0] == "ALLOW"
@@ -4026,9 +4063,9 @@ class TestCycle14Codex2:
         assert ev_cwd("git clean -fdx -- . ':!packages/happy-app'", datafile, fixture_repo) == "BLOCK"
 
     # C2G: ~user expansion
-    def test_tilde_user_expansion_blocks(self):
-        os.environ["HOME"] = "/root"
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/root/.config/appz14c2/protected-runtime.json"
+    def test_tilde_user_expansion_blocks(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/root")
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", "/root/.config/appz14c2/protected-runtime.json")
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         assert rg.evaluate("cd ~root/.config/appz14c2 && rm protected-runtime.json")[0] == "BLOCK"
@@ -4165,8 +4202,8 @@ class TestCycle16FlagCollisionMutationTargetClass:
         assert ev_iso(f"{self._RSYNC} -e ssh /tmp/x {cfgfile}", df) == "BLOCK"
 
     # ── config-ABSENT: STEP0 self-protection runs before config load ────────────
-    def test_config_absent_class_blocks(self):
-        os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = "/tmp/abs16/.config/app/protected-runtime.json"
+    def test_config_absent_class_blocks(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_PROTECTED_RUNTIME_FILE", "/tmp/abs16/.config/app/protected-runtime.json")
         import importlib, lib.runtime_guard as rg
         importlib.reload(rg)
         cfgdir = "/tmp/abs16/.config/app"
@@ -4178,7 +4215,7 @@ class TestCycle16FlagCollisionMutationTargetClass:
     # ── purity: the verb-aware fix introduces NO project name into the engine ───
     def test_engine_still_project_name_free(self):
         src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read()
-        for name in ("happy", "jade", "qijie", "life-ai", "slopus", "local-server"):
+        for name in ("happy", "altq3", "boxq7", "life-ai", "slopus", "local-server"):
             assert name not in src.lower(), f"engine must stay project-name-free: {name!r}"
 
 
@@ -4212,7 +4249,7 @@ class TestCycle16LiveHook:
 
     def test_live_class_unbypassable_under_do(self):
         sid = "guardtest16-" + str(os.getpid())
-        flag = f"/tmp/claude-orchestrator-consent-{sid}.flag"
+        flag = _consent_flag(sid)
         with open(flag, "w") as fh:
             fh.write("true")
         try:
@@ -4359,7 +4396,7 @@ class TestCycle16CodexFollowup:
     # purity: the codex fix introduces NO project name into the engine.
     def test_engine_still_project_name_free(self):
         src = open(os.path.join(HOOKS_DIR, "lib", "runtime_guard", "_core.py")).read().lower()
-        for name in ("happy", "jade", "qijie", "life-ai", "slopus", "local-server"):
+        for name in ("happy", "altq3", "boxq7", "life-ai", "slopus", "local-server"):
             assert name not in src, f"engine must stay project-name-free: {name!r}"
 
 

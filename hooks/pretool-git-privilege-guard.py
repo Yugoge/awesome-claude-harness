@@ -174,6 +174,7 @@ from lib.git_command_classifier import (  # noqa: E402
 # scripts/write-commit-grant.py and hooks/pretool-commit-dispatch-attest.py so
 # all three agree by construction. See _grant_provenance_refusal.
 from lib import commit_pipeline  # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 
 BLESSED_BRIDGE_RE = re.compile(r'auto-bulk:\s*end-of-cycle commit for\b')
@@ -628,15 +629,17 @@ def _grant_can_authorize_here(grant, grant_path, command):
 # PostToolUse can locate it for finalization.
 #
 # The `{sid}` slot holds a PER-EVENT key (see _event_key), not a session id. The
-# literal must stay character-identical to _COMMIT_GRANT_POINTER_TEMPLATE in
+# pointer lives under the hook runtime-state root (harness_state_dir(): CLAUDE_STATE_DIR,
+# default /tmp), resolved at import exactly as the reader does. The template must stay
+# character-identical to _COMMIT_GRANT_POINTER_TEMPLATE in
 # hooks/posttool-allowlist-consume.py, and must keep matching the
-# `/tmp/claude-commit-grant-active-*.json` glob that hooks/stop-cleanup-allowlist.sh
-# sweeps at session end; both are pinned by
-# hooks/tests/test_posttool_commit_grant_finalize.py.
-_COMMIT_GRANT_ACTIVE_TEMPLATE = '/tmp/claude-commit-grant-active-{sid}.json'
+# `<state root>/claude-commit-grant-active-*.json` glob that hooks/stop-cleanup-allowlist.sh
+# sweeps at session end and scripts/write-commit-grant.py enumerates on revocation; all
+# are pinned by hooks/tests/test_posttool_commit_grant_finalize.py.
+_COMMIT_GRANT_ACTIVE_TEMPLATE = harness_state_dir() + '/claude-commit-grant-active-{sid}.json'
 
 # Characters kept verbatim from a tool_use_id when it becomes a filename. Everything
-# else folds to '-', so a payload value can neither escape the /tmp pointer namespace
+# else folds to '-', so a payload value can neither escape the pointer namespace
 # (path separators, `..`) nor smuggle a glob metacharacter into the reader's scan.
 _EVENT_KEY_UNSAFE_RE = re.compile(r'[^A-Za-z0-9_-]')
 
@@ -647,7 +650,7 @@ def _raw_tool_use_id(data):
     Recorded verbatim inside the pointer (audit R2-2): the filename derivation in
     _event_key is deliberately lossy (safe-alphabet fold + length cap), so two
     DISTINCT raw ids can share a derived key. The filename may stay lossy — it only
-    has to be a safe /tmp name — but the ownership check inside the pointer must
+    has to be a safe file name — but the ownership check inside the pointer must
     not be, or a colliding second event could finalize the first event's grant.
     """
     try:
@@ -1398,7 +1401,7 @@ def _has_active_commit_grant(command=''):
     undeferrable path, or one belonging to an entirely different repository —
     therefore blocked auto-bulk in THIS repo for its whole TTL, and an
     artificially long expiry blocked it indefinitely. Observed in the wild: a
-    live grant bound to /root deferred an auto-bulk commit in an unrelated
+    live grant bound to the home directory deferred an auto-bulk commit in an unrelated
     checkout. `command` supplies the auto-bulk commit's own target so the same
     binding + spent test decides both; an empty command (or an unresolvable
     target) keeps the old defer-on-doubt behavior.

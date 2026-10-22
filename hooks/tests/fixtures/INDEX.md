@@ -9,7 +9,8 @@
 ```
 fixtures/
 ├── `adversarial_corpus.json` - json config
-└── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
+├── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
+└── `protected-runtime.json` - JSON config: schema_version, protected_cmds, protected_launch_paths, protected_services, protected_hotfiles
 ```
 <!-- /AUTO:index-stats -->
 

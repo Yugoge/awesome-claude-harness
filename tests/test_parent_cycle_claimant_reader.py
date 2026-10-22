@@ -334,13 +334,18 @@ def test_a_claimant_whose_ledger_cannot_replay_is_never_admitted(tmp_path):
     assert observation["gaps"]
 
 
-def test_unattributed_bytes_still_fail_under_their_own_error_code(tmp_path, monkeypatch):
+def test_unattributed_bytes_are_reported_informationally_on_their_own_key(tmp_path, monkeypatch):
     """Positive control: no gap class becomes unreachable.
 
     Identical to the passing scenario except that the live file carries bytes
     NO ledger declares.  The fully-evidenced claimant is admitted, its own
-    edit is claimed, and the gate still fails -- through the real producer and
-    the real resolver, under OWNERSHIP_COMPLETENESS_GAP.
+    edit is claimed, and the gap is still reported under its own channel --
+    through the real producer and the real resolver. This scenario is a full
+    (cross-cycle) gap, which by contract is informational, not blocking: the
+    producer records it under `ownership_completeness_gaps` and exits 0, and
+    the resolver reports it as `ownership_completeness_informational` without
+    raising OWNERSHIP_COMPLETENESS_GAP (that code is reserved for same-cycle
+    gaps; see test_completeness_channel_invariant.py).
     """
     root = tmp_path / "unattributed"
     build_scenario(root, unattributed=True)
@@ -351,11 +356,18 @@ def test_unattributed_bytes_still_fail_under_their_own_error_code(tmp_path, monk
     assert observation["gaps"], "unattributed bytes must still be reported"
 
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(root))
-    assert AGG.main(["--task-id", _TASK_ID]) == 1
+    assert AGG.main(["--task-id", _TASK_ID]) == 0
+    canonical = json.loads(
+        (root / "docs" / "dev" / f"dev-report-{_TASK_ID}.json").read_text(encoding="utf-8")
+    )
+    stored_gaps = canonical.get(AGG.COMPLETENESS_GAPS_KEY) or []
+    assert stored_gaps, "the gap must be recorded on its own key"
+    assert set(observation["gaps"]) <= set(stored_gaps)
     resolved = RESOLVER.resolve_chain(root, _TASK_ID)
+    informational = resolved.get("ownership_completeness_informational") or []
+    assert set(observation["gaps"]) <= set(informational)
     codes = [error["code"] for error in resolved.get("errors") or []]
-    assert GAP_CODE in codes
-    assert resolved["status"] != "pass"
+    assert GAP_CODE not in codes
 
 
 def test_a_parent_cycle_declaration_cannot_create_or_merge_a_lane(tmp_path):
