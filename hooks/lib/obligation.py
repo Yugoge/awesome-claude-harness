@@ -103,7 +103,7 @@ IDENTITY_KEYS = frozenset({"task_id", "request_id"})  # design :98
 # close-QA bundle (design §1.4.5); requiring it would reject the design's own
 # dev-report markdown obligations.
 ARTIFACT_FIELDS_BY_KIND: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "json": (("kind", "path", "schema", "identity"), ("required_values",)),
+    "json": (("kind", "path", "schema", "identity"), ()),
     "markdown": (
         ("kind", "path", "identity_anchor"),
         ("terminal_line_regex", "waived_by_response"),
@@ -116,21 +116,23 @@ ARTIFACT_KINDS = frozenset(ARTIFACT_FIELDS_BY_KIND)
 # task_id shape: the _TASK_ID_ANCHOR_RE precedent
 # (hooks/subagentstop-artifact-contract-enforce.py:114) further pinned to the
 # \d{8}-\d{6} prefix convention (ticket M3).
-# L1 (dev-command-20261002-170011): also accepts the dev-command lane form
-# ``dev-command-<yyyymmdd-hhmmss>[-lN]``. The pattern string is identical to
+# Also accepts the ids /dev and /dev-command mint (hooks/prompt-workflow.py
+# _reserve_dev_registry) and their lane form (commands/dev.md fan-out):
+# ``dev[-command]-<yyyymmdd-hhmmss>[-lN]``. The pattern string is identical to
 # schemas/obligation.v1.json properties.task_id.pattern (parity-tested).
 TASK_ID_RE = re.compile(
-    r"^(?:\d{8}-\d{6}[A-Za-z0-9._-]*|dev-command-\d{8}-\d{6}(?:-l\d+)?)$"
+    r"^(?:\d{8}-\d{6}[A-Za-z0-9._-]*|dev-(?:command-)?\d{8}-\d{6}(?:-l\d+)?)$"
 )
+_MINTED_PREFIX_RE = re.compile(r"^dev-(?:command-)?(?=\d{8}-\d{6})")
+_LANE_SUFFIX_RE = re.compile(r"-l\d+$")
 
 # Closed terminal vocabulary (design D1/R2): schema id -> dotted path -> legal
 # terminal values. Equal to each registered schema's enum (drift-tested);
 # templates and gates import this constant, they never declare their own.
 TERMINAL_VOCABULARY: dict[str, dict[str, frozenset[str]]] = {
-    "dev-report.v2": {"dev.status": frozenset({"completed", "blocked", "needs_review"})},
-    "dev-report.v1": {
-        "status": frozenset({"completed", "blocked", "partial", "needs_review"}),
-    },
+    "dev-report.v2": {"dev.status": frozenset({"completed"})},
+    "dev-report.v1": {"status": frozenset({"completed"})},
+    "ba-qa-report.v1": {"verdict": frozenset({"pass", "fail"})},
     "qa-report.v2": {"qa.status": frozenset({"pass", "warning", "fail"})},
     "qa-report.v1": {"verdict": frozenset({"pass", "warning", "fail"})},
     "do-report.v1": {"do.status": frozenset({"pending", "completed", "blocked"})},
@@ -259,6 +261,9 @@ class Unresolvable:
     reason: str
     detail: str = ""
     outcome: str = "unresolvable"
+    # The dispatch prompt when it was read and correlated but its obligation
+    # failed (invalid_obligation, role_mismatch); empty otherwise.
+    prompt: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -304,36 +309,6 @@ def _legal_repo_relative_path(value: Any) -> bool:
     if value.startswith("/"):
         return False
     return ".." not in value.split("/")
-
-
-def _validate_required_values(
-    required_values: Any, schema_id: Any, label: str
-) -> Rejection | None:
-    """Validate a json entry's ``required_values`` against the closed
-    terminal vocabulary (named reasons: bad_required_values,
-    unknown_terminal_path, unknown_terminal_value)."""
-    if not isinstance(required_values, Mapping) or not required_values:
-        return Rejection(reason="bad_required_values", field=label)
-    for dotted, allowed in required_values.items():
-        field = f"{label}.{dotted}"
-        if (
-            not isinstance(dotted, str)
-            or not dotted
-            or not isinstance(allowed, list)
-            or not allowed
-            or any(not isinstance(v, str) or not v for v in allowed)
-            or len(set(allowed)) != len(allowed)
-        ):
-            return Rejection(reason="bad_required_values", field=field)
-        vocabulary = TERMINAL_VOCABULARY.get(schema_id) if isinstance(schema_id, str) else None
-        if vocabulary is None or dotted not in vocabulary:
-            return Rejection(reason="unknown_terminal_path", field=field)
-        for value in allowed:
-            if value not in vocabulary[dotted]:
-                return Rejection(
-                    reason="unknown_terminal_value", field=field, detail=value
-                )
-    return None
 
 
 def evaluate_required_values(
@@ -416,12 +391,6 @@ def _validate_artifact_entry(
                 return Rejection(
                     reason="bad_identity_value", field=f"{label}.identity.{key}"
                 )
-        if "required_values" in entry:
-            rejection = _validate_required_values(
-                entry["required_values"], entry["schema"], f"{label}.required_values"
-            )
-            if rejection is not None:
-                return rejection
     if kind == "markdown":
         anchor = entry["identity_anchor"]
         if not isinstance(anchor, str) or not anchor:
@@ -638,29 +607,75 @@ def lane_sets_identical(first: Any, second: Any) -> bool:
 
 
 # --------------------------------------------------------------------------
+# Task-id families (pure): the minted ``dev-`` / ``dev-command-`` prefix names
+# the registry directory; artifacts are named with the id without it.
+# --------------------------------------------------------------------------
+
+def canonical_task_id(task_id: Any) -> str | None:
+    """The id artifacts are named with: a leading ``dev-command-`` or ``dev-``
+    stripped (``<ts>``, ``<ts>-l<N>``, ``<ts>-<N>``); None for a non-string."""
+    if not isinstance(task_id, str) or not task_id:
+        return None
+    return _MINTED_PREFIX_RE.sub("", task_id, count=1)
+
+
+def task_family(task_id: Any) -> str | None:
+    """Collection-barrier family: the canonical id without a fan-out lane
+    suffix, so lanes ``-l1``/``-l2`` of one cycle share a family while
+    overnight pipelines ``<ts>-1``/``<ts>-2`` stay apart."""
+    canonical = canonical_task_id(task_id)
+    return _LANE_SUFFIX_RE.sub("", canonical) if canonical else None
+
+
+def registry_dir_for(project_dir: str | Path, task_id: Any) -> Path | None:
+    """The cycle's ``.claude/dev-registry/<name>/`` as the UserPromptSubmit
+    hook names it (``dev-<ts>`` or ``dev-command-<ts>``; a lane suffix is not
+    part of the name). An id minted with a prefix keeps it; a bare ``<ts>``
+    id resolves to whichever of the two directories exists (``dev-`` first)
+    and defaults to ``dev-<ts>``. None when the id carries no timestamp."""
+    if not isinstance(task_id, str):
+        return None
+    stamp = re.search(r"\d{8}-\d{6}", task_id)
+    if stamp is None:
+        return None
+    root = Path(project_dir) / ".claude" / "dev-registry"
+    if task_id.startswith("dev-command-"):
+        return root / f"dev-command-{stamp.group()}"
+    candidates = [root / f"dev-{stamp.group()}"]
+    if not task_id.startswith("dev-"):
+        candidates.append(root / f"dev-command-{stamp.group()}")
+    return next((c for c in candidates if c.is_dir()), candidates[0])
+
+
+# --------------------------------------------------------------------------
 # Resolver: own-dispatch-obligation resolution (design §1.3-G2, rungs L0/L1)
 # --------------------------------------------------------------------------
 
 def read_first_record_prompt(transcript_path: str | Path) -> str | None:
-    """Return the dispatch prompt from a subagent transcript's FIRST JSONL
+    """Return the dispatch prompt from a subagent transcript's first MESSAGE
     record when it is a user message (design §1.3-G2: "first record is a user
-    message").
+    message"). Records that carry no message (queue-operation, attachment and
+    the like) are skipped; the first user/assistant record decides.
 
     Handles both persisted ``message.content`` shapes: plain string (observed
     live on this store) and content-block list (the shape the parent-side
     reader ``_read_parent_calls`` handles at subagent_restart.py:340-346).
     Read-only; returns None when unreadable, not type=user, or textless.
     """
+    record = None
     try:
         with Path(transcript_path).open("r", encoding="utf-8", errors="replace") as handle:
-            first_line = handle.readline()
+            for line in handle:
+                try:
+                    candidate = json.loads(line)
+                except ValueError:
+                    return None
+                if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
+                    record = candidate
+                    break
     except OSError:
         return None
-    try:
-        record = json.loads(first_line)
-    except ValueError:
-        return None
-    if not isinstance(record, dict) or record.get("type") != "user":
+    if record is None or record.get("type") != "user":
         return None
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
@@ -767,10 +782,10 @@ def _finish_resolution(
             cross_check=cross_check,
         )
     if isinstance(parsed, Rejection):
-        return Unresolvable(reason="invalid_obligation", detail=parsed.reason)
+        return Unresolvable(reason="invalid_obligation", detail=parsed.reason, prompt=prompt)
     if expected_role is not None and parsed.obligation.get("role") != expected_role:
         return Unresolvable(
-            reason="role_mismatch", detail=repr(parsed.obligation.get("role"))
+            reason="role_mismatch", detail=repr(parsed.obligation.get("role")), prompt=prompt
         )
     return Resolved(
         obligation=parsed.obligation,

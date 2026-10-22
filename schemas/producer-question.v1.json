@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "producer-question.v1",
+  "title": "Producer question artifact v1",
+  "description": "Written by a ba or dev producer, in place of its report, when it needs one owner decision that the request, the code and a sensible default cannot settle: docs/dev/producer-question-<task_id>-<role>.json. The orchestrator relays it with one AskUserQuestion (options become the dialog's options, default the recommended one) and re-dispatches the same role. The subagentstop artifact-contract hook checks task_id and role against the dispatch's obligation and that default is one of the option labels, which JSON Schema cannot express.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task_id", "role", "need", "options", "default", "why"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "enum": ["ba", "dev"]},
+    "need": {"type": "string", "minLength": 1},
+    "options": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "description"],
+        "properties": {
+          "label": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "default": {"type": "string", "minLength": 1},
+    "why": {"type": "string", "minLength": 1}
+  }
+}

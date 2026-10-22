@@ -1996,6 +1996,26 @@ def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
         pass
 
 
+def _clear_turn_state(session_id: str, cmd_name) -> None:
+    """D5/TC-9: the only clearer of the tool streak and of the /do consent flag
+    (the files hooks/pretool-orchestrator-gate.py reads). Every
+    UserPromptSubmit starts a new turn, typed or not (the CLI also fires it
+    for a scheduled task, a background task or subagent reporting back and a
+    peer message), so the streak resets and /do consent, which lasts one turn,
+    goes unless this prompt is /do itself. An AskUserQuestion answered inside
+    the turn is not a UserPromptSubmit and keeps it."""
+    if not session_id:
+        return
+    names = [f"claude-tool-streak-{session_id}.json"]
+    if cmd_name != 'do':
+        names.append(f"claude-orchestrator-consent-{session_id}.flag")
+    for name in names:
+        try:
+            Path(harness_state_dir(), name).unlink()
+        except OSError:
+            pass
+
+
 def main():
     # In a Codex root the native harness owns task identity, artifacts, workflow
     # generation, projection, and Stop. This Claude hook remains authoritative
@@ -2020,6 +2040,7 @@ def main():
         # fails closed; handle_phase_a mints a unique id for the creation half.
         session_id = data.get('session_id', '')
         cmd_name = extract_command_name(user_input)
+        _clear_turn_state(session_id, cmd_name)
         if not cmd_name:
             handle_phase_b(session_id)
         else:

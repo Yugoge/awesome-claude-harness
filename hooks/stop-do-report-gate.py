@@ -124,29 +124,6 @@ def _compliance_problems(report_path: Path, task_id: str) -> list[str]:
     return problems
 
 
-def _consent_flag_path(sid: str) -> Path:
-    return Path(f"{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag")
-
-
-def _clear_do_consent(sid: str) -> None:
-    """Release the /do cycle's orchestrator-gate consent once its do-report
-    has reached a terminal state (here, or via the deadlock-guard force-
-    allow). Without this, hooks/pretool-do-block-subagents.py (and every
-    other reader of this SAME session-level flag: pretool-orchestrator-
-    gate.py, pretool-subagent-enforce.py, pretool-block-background-tasks.py)
-    keep treating the session as "mid-/do-cycle" forever, since nothing else
-    ever clears a flag handle_do_consent only ever sets. That permanently
-    blocked subagent dispatch (including changelog-analyst, so /commit could
-    never run again) in a session that had already finished and reported its
-    /do work -- the exact incident this closes. Best-effort: a failed unlink
-    leaves the pre-existing (stuck) behavior rather than raising through a
-    Stop hook that must never trap the session."""
-    try:
-        _consent_flag_path(sid).unlink()
-    except OSError:
-        pass
-
-
 def _counter_path(sid: str) -> Path:
     return Path(f"{harness_state_dir()}/claude-do-report-gate-{sid}.json")
 
@@ -228,7 +205,6 @@ def main() -> int:
             _counter_path(sid).unlink()
         except OSError:
             pass
-        _clear_do_consent(sid)
         return 0
 
     if mode != "block":
@@ -239,10 +215,6 @@ def main() -> int:
     blocks = _read_blocks(sid, task_id)
     if blocks >= MAX_BLOCKS:
         rewritten = _rewrite_pending_to_blocked(report_path, task_id)
-        # Force-allow is the deadlock breaker: the session is leaving /do
-        # either way, compliant or not, so it must not stay permanently
-        # marked "mid-/do-cycle" -- same rationale as the compliant branch.
-        _clear_do_consent(sid)
         _log_event({"event": "forced_allow", "mode": mode, "session_id": sid,
                     "task_id": task_id, "report": str(report_path),
                     "blocks": blocks, "problems": problems,

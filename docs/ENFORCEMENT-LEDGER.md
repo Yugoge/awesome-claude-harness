@@ -34,7 +34,7 @@ no more:
   sets declared in `DECLARED_SCHEMA`;
 - `citation` is validated for the presence of an `@<sha8>` revision pin.
 
-**On falsifiability.** 80 of the 82 registered-hook rows carry `proof_layer: source-level`, which
+**On falsifiability.** 79 of the 81 registered-hook rows carry `proof_layer: source-level`, which
 as section 1.3 defines it means those rows rest on **reading the code rather than running it**;
 the remaining 2 carry `component-tested` and none carry `host-observed` or `host-shaped`. The gate validates
 proof-layer membership and a non-blank `verifying_test`, and it does **not** execute the
@@ -169,13 +169,15 @@ be reconciled rather than argued.
 
 ## 3. Registered-hook rows
 
-All **nine** lifecycle event classes are represented. `settings.json @ef6e9037` wires 9 event
-classes / 52 matchers / **82 hook commands**, and there are exactly 82 rows below: 66 recorded
+All **nine** lifecycle event classes are represented. The tracked `settings.json` wires 9 event
+classes / 51 matchers / **81 hook commands**, and there are exactly 81 rows below: 66 recorded
 `@4c33f2f5`; H-071 records the later `PostToolUseFailure` registration and H-072 a later
 `PostToolUse` one; H-073 – H-086 record the hooks the tracked `settings.json @ef6e9037` wires that
 the ledger did not list before. Ids H-060 – H-063 are retired and not reused: those four scripts
 are not direct `Stop` entries in `settings.json` — they run as phases inside
 `stop-workflow-coordinator.py` (row H-084) — so they are recorded in section 4 as S-004 – S-007.
+Id H-081 is retired as well: `stop-completion-gate.py` lost its `Stop` entry in P1 and is an
+exit-0 stub until P10.
 
 **The authoring rule `behavior` follows** — applied by hand, and checked only for closed-set
 membership, not recomputed from the event class: events that can deny a pending action
@@ -262,10 +264,9 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | H-078 | PreToolUse | Write\|Edit\|MultiEdit\|NotebookEdit\|Bash | pretool-attribution-pre.py | observational: records the pre-mutation content hash of each write target in the attribution journal; never blocks, exits 0 on every path | advisory | unexercised | source-level | hooks/pretool-attribution-pre.py:1 @ef6e9037 | hooks/tests/test_attribution_journal.py |
 | H-079 | PostToolUse | Write\|Edit\|MultiEdit\|NotebookEdit\|Bash | posttool-attribution-post.py | observational: appends the attribution event(s) paired with the H-078 record, then runs the periodic journal seal check (skipped under ATTRIBUTION_AUTOSEAL_DISABLE=1); exits 0 on every path | detected | unexercised | source-level | hooks/posttool-attribution-post.py:1 @ef6e9037 | hooks/tests/test_attribution_journal.py |
 | H-080 | PostToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | posttool-lane-completeness-watch.py | acts only when the written file is a lane dev-report shard carrying an authoritative lane_set: on a complete roster with no fresh canonical aggregate it writes aggregate-pending.json and attempts scripts/aggregate-dev-report.py; exits 0 on every path | detected | unexercised | source-level | hooks/posttool-lane-completeness-watch.py:1 @ef6e9037 | none yet |
-| H-081 | Stop | (universal) | stop-completion-gate.py | blocking when CLAUDE_COMPLETION_GATE_MODE is unset (the default) or unrecognised: for a session bridged to a dev-registry cycle, exits 2 while the completion file is missing, the gate errors or a producer escalation is unresolved (an awaiting-input stop instead prints continue false and exits 0 by default); logs only under =advisory, skipped under =off; sessions opened by /close or /commit are exempt | advisory | unexercised | source-level | hooks/stop-completion-gate.py:1 @ef6e9037 | none yet |
 | H-082 | Stop | (universal) | stop-do-report-gate.py | blocking when DO_REPORT_GATE_MODE is unset (the default): only for a session with a /do task sidecar, exits 2 while its docs/dev do-report is missing or not a well-formed terminal report, force-allowing after 2 blocks for the same task; logs only under =advisory, skipped under =off; internal errors exit 0 | advisory | unexercised | source-level | hooks/stop-do-report-gate.py:1 @ef6e9037 | hooks/tests/test_stop_do_report_gate.py |
 | H-083 | Stop | (universal) | stop-obligation-gate.py | advisory when CLAUDE_OBLIGATION_TERMINAL is unset (the default): unresolved dispatch obligations of a dev-family session are logged and the stop allowed; exits 2 for them only under CLAUDE_OBLIGATION_TERMINAL=block; skipped under =off; internal errors exit 0 | advisory | unexercised | source-level | hooks/stop-obligation-gate.py:1 @ef6e9037 | hooks/tests/test_stop_obligation_gate.py |
-| H-084 | Stop | (universal) | stop-workflow-coordinator.py | runs the four Stop phases S-004 – S-007 (section 4) in fixed order and exits 2 at the first one that does not allow, skipping the rest; exits 0 without running any phase when the payload carries an agent_id or no session_id; LANEB_COORDINATOR_PHASES_JSON may replace the phase commands (exit 2 if malformed or reordered); resource finalisation runs only when both LANEB_SESSION_RESOURCE_TRUST_KEY and LANEB_SESSION_RESOURCE_TRUST_ROOT are set | advisory | unexercised | source-level | hooks/stop-workflow-coordinator.py:1 @ef6e9037 | none yet |
+| H-084 | Stop | (universal) | stop-workflow-coordinator.py | runs the four Stop phases S-004 – S-007 (section 4) in fixed order; only timelock and coverage may block, and a block relays failed_phase and the last 4 KB of that phase's stderr; an auto_commit or cleanup failure, or a coverage failure other than exit 2, is recorded in its result JSON and allowed, and the later phases still run; a timelock instrument failure blocks only while the human-typed command is /dev-overnight (a typed /stop releases it), else it is recorded and allowed; exits 0 without running any phase when the payload carries an agent_id or no session_id; LANEB_COORDINATOR_PHASES_JSON may replace the phase commands (exit 2 if malformed or reordered); resource finalisation runs only when both LANEB_SESSION_RESOURCE_TRUST_KEY and LANEB_SESSION_RESOURCE_TRUST_ROOT are set | advisory | unexercised | source-level | hooks/stop-workflow-coordinator.py:1 @ef6e9037 | none yet |
 | H-085 | SessionEnd | (universal) | sessionend-scratch-sweep.sh | removes only `$TMPDIR/<own-session-id>/`, and only when it is a real directory directly under that root whose `.owner` sid equals the session id; skips otherwise; best-effort, exits 0 on every path | detected | unexercised | source-level | hooks/sessionend-scratch-sweep.sh:1 @ef6e9037 | hooks/tests/test_scratch_lifecycle.py |
 | H-086 | SubagentStop | * | subagentstop-artifact-contract-enforce.py | subagent stops only (agent_id present). Obligation path: advisory when CLAUDE_OBLIGATION_STOPGATE is unset (the default), exits 2 on a failed obligated artifact only under =block, skipped under =off. Legacy path (reached unless the obligation path resolved and checked the agent's own obligation): blocking when ARTIFACT_CONTRACT_ENFORCE_MODE is unset (the default), exits 2 when a correlated dev or qa report declares report_version but fails its schema, only while the cycle's artifact-contract-enforce.json is enabled for that agent type and the close is not forced; logs only under =advisory | advisory | unexercised | source-level | hooks/subagentstop-artifact-contract-enforce.py:1 @ef6e9037 | none yet |
 
@@ -305,10 +306,13 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
   `proof_layer`, `citation` and `verifying_test` values are carried over unchanged. How they run,
   from the coordinator source: each phase is a child process that receives the `Stop` payload on
   stdin, with `LANEB_COORDINATED_STOP=1` added to its environment; no phase runs when the payload
-  carries an `agent_id` or no `session_id`; the first phase that does not allow — exit 2, any other
-  non-zero exit, a timeout (30 s; 120 s for `auto_commit`), or, for `timelock` only, an exit-0 run
-  whose last stdout line is JSON that is not an allow decision — ends the run, the later phases
-  are skipped, and the coordinator exits 2. Per phase, from each script's own source at
+  carries an `agent_id` or no `session_id`. Only `timelock` and `coverage` may block: exit 2 (or,
+  for `timelock`, an exit-0 run whose last stdout line is a block decision) ends the run and the
+  coordinator exits 2, relaying `failed_phase` and the phase's stderr tail. Any other failure —
+  another non-zero exit, a timeout (30 s; 120 s for `auto_commit`), a launch error or a missing
+  script — is recorded in the coordinator's result JSON and allowed, and the later phases still
+  run; for `timelock` it is an instrument failure, which blocks only while the human-typed command
+  is `/dev-overnight` (a typed `/stop` releases it). Per phase, from each script's own source at
   `@ef6e9037`:
   - **S-004 `timelock`** (`stop-overnight-timelock.py`): acts only when
     `.claude/overnight-state-<session_id>.json` exists for this session; exits 2 before that
@@ -318,10 +322,10 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
     `spec-verify.py` reports incomplete monolith coverage, and allows the stop when that verifier
     is absent.
   - **S-006 `auto_commit`** (`auto-commit.sh`): writes a `refs/checkpoints/<branch>` snapshot when
-    the working tree is dirty; its exit 1 on a failed checkpoint is a non-allow and therefore
-    becomes a coordinator exit 2.
-  - **S-007 `cleanup`** (`stop-cleanup-allowlist.sh`): exits 0 on every path. Because it runs
-    last, it runs only when the three phases before it allowed; its own header comment
+    the working tree is dirty; its exit 1 on a failed checkpoint is recorded in the coordinator's
+    result JSON and in `logs/checkpoint.log`, and the Stop is allowed.
+  - **S-007 `cleanup`** (`stop-cleanup-allowlist.sh`): exits 0 on every path. It runs last, on
+    every Stop that `timelock` and `coverage` do not block, an `auto_commit` failure included; its own header comment
     ("Registered LAST in Stop hooks array so earlier hook failures do not block cleanup")
     describes the former direct registration, not this sequencing.
 

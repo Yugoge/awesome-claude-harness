@@ -778,9 +778,11 @@ def test_ac6_internal_exception_falls_through_to_legacy_path(
         agent_id,
         _obligation_block(task_id, artifact_path, "dev-report.v1"),
     )
+    # Session-correlated by name, the agent's own by its declared task_id: the
+    # legacy check judges only the stopping producer's own reports.
     _write(
         project / "docs" / "dev" / f"dev-report-{SESSION_TS}.json",
-        _invalid_dev_report(SESSION_TS),
+        _invalid_dev_report(task_id),
     )
 
     def _raise(*_args, **_kwargs):
@@ -1657,8 +1659,19 @@ def _l2_dev_report(task_id, status="completed", ledger_old="alpha", lane=None, l
     return rep
 
 
+def _l2_unattributed_report(s, note="x", lane=None, lane_set=None):
+    """A schema-valid dev report naming another task: an identity_mismatch
+    finding. The failing report of the escalation scenarios below, which
+    used a needs_review report while required_values existed; P1 (D2)
+    removed required_values, so a wrong dev.status is now a schema failure
+    (test_l2_ac1), whose reason is a sentence rather than a finding code."""
+    rep = _l2_dev_report(s.task, note=note, lane=lane, lane_set=lane_set)
+    rep["task_id"] = rep["request_id"] = "20991231-235959"
+    return rep
+
+
 def _l2_setup(tmp_path, *, role="dev", lane=None, lane_set=None, base_task=L2_TASK,
-              required=True, git=True, agent_id="agent-l2-producer", home_name="home",
+              git=True, agent_id="agent-l2-producer", home_name="home",
               project_name="project"):
     s = type("S", (), {})()
     s.project = tmp_path / project_name
@@ -1677,8 +1690,8 @@ def _l2_setup(tmp_path, *, role="dev", lane=None, lane_set=None, base_task=L2_TA
     art = {"kind": "json", "path": s.art_path,
            "schema": "dev-report.v2" if role == "dev" else "qa-report.v2",
            "identity": {"task_id": s.task}}
-    if required and role == "dev":
-        art["required_values"] = {"dev.status": ["completed"]}
+    # P1 (D2): a json artifact carries no required_values; the dev terminal
+    # is the schema's own dev.status enum ({"completed"}).
     doc = {"task_id": s.task, "role": role, "pipeline": "dev",
            "profile": "fanout-lane" if lane else "singular",
            "dispatched_at": datetime.now(timezone.utc).isoformat(), "artifacts": [art]}
@@ -1758,12 +1771,16 @@ def _l2_snapshot(project: Path) -> tuple:
 
 
 def test_l2_ac1_terminal_state_wrong_blocks(tmp_path):
+    """P1 (D2): no required_values check any more; dev-report.v2's own
+    dev.status enum is {"completed"}, so a needs_review report fails the
+    schema."""
     s = _l2_setup(tmp_path)
     _l2_write(s, _l2_dev_report(s.task, status="needs_review"))
     proc = _l2_stop(s)
     assert proc.returncode == 2, proc.stderr
     assert s.art_path in proc.stderr
-    assert "terminal_value_violation" in proc.stderr
+    assert "schema-invalid" in proc.stderr
+    assert "terminal_value_violation" not in proc.stderr
     assert "needs_review" in proc.stderr and "completed" in proc.stderr
 
 
@@ -1904,7 +1921,7 @@ def test_l2_ac6_qa_chain_attribution(tmp_path):
 def test_l2_ac7_progress_bounded_and_nonce_handoff(tmp_path):
     s = _l2_setup(tmp_path)
     for i in range(6):  # bytes change each stop, still failing: always exit 2, no record
-        _l2_write(s, _l2_dev_report(s.task, status="needs_review", note=f"attempt-{i}"))
+        _l2_write(s, _l2_unattributed_report(s, note=f"attempt-{i}"))
         proc = _l2_stop(s)
         assert proc.returncode == 2, proc.stderr
         assert _l2_records(s) == []
@@ -2101,55 +2118,516 @@ def test_l2_ac12_shard_defers_plan_and_replay_single_lane_blocks(tmp_path):
 # AC13 ----------------------------------------------------------------------
 
 
-def _l13_scan(registry_dir: Path):
-    gate = REPO_ROOT / "hooks" / "stop-completion-gate.py"
-    if not gate.is_file():
-        return None
-    spec = importlib.util.spec_from_file_location("l13_completion_gate_under_test", gate)
-    mod = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(REPO_ROOT / "hooks"))
-    try:
-        spec.loader.exec_module(mod)
-    finally:
-        sys.path.pop(0)
-    return getattr(mod, "_scan_escalations", None)
-
-
 def test_l2_ac13_record_lands_where_the_consumer_scans(tmp_path):
-    s = _l2_setup(tmp_path / "lane", lane="l2", lane_set=["l1", "l2"], required=True)
+    """P1 row 5: escalation and progress records land in the cycle's
+    registry directory, obligation.registry_dir_for(project_dir, task_id) --
+    the directory the UserPromptSubmit hook created and P3's resolver reads:
+    dev-command-<ts>/ for a /dev-command id, dev-<ts>/ for a /dev id or a
+    bare <ts> id, never a lane-id or bare <ts>/ directory."""
+    s = _l2_setup(tmp_path / "lane", lane="l2", lane_set=["l1", "l2"])
     s.lane = "l2"
-    _l2_write(s, _l2_dev_report(s.task, status="needs_review", lane="l2", lane_set=["l1", "l2"]))
+    _l2_write(s, _l2_unattributed_report(s, lane="l2", lane_set=["l1", "l2"]))
     _l2_stop(s)
     proc = _l2_stop(s)
     assert proc.returncode == 2 and _NONCE_RE.search(proc.stderr)
     registry = s.project / ".claude" / "dev-registry"
     assert s.cycle == L2_TASK and s.task == L2_TASK + "-l2"
-    cycle_dir = registry / L2_TASK
+    cycle_dir = HOOK.obligation.registry_dir_for(s.project, s.task)
+    assert cycle_dir == registry / L2_TASK
     recs = _l2_records(s)
     assert len(recs) == 1
     _l2_assert_record_fields(recs[0], s)
     assert (cycle_dir / "escalations" / f"{recs[0]['record_id']}.json").is_file()
     assert not (registry / s.task / "escalations").exists()
-    scan = _l13_scan(cycle_dir)
-    if scan is not None:
-        assert [r["record_id"] for r in scan(cycle_dir)] == [recs[0]["record_id"]]
     state = json.loads((cycle_dir / "progress" /
                         f"producer-stop-{HOOK._record_safe(s.agent_id)}.json").read_text("utf-8"))
     assert state["loop_key"] == f"producer-stop|{s.task}|{s.agent_id}"
 
-    # lane null: cycle_id is the task id itself.
+    # lane null: the registry directory is named by the task id itself.
     n = _l2_setup(tmp_path / "nolane")
     _l2_write(n, _l2_dev_report(n.task, status="needs_review"))
     _l2_stop(n)
     assert _l2_stop(n).returncode == 2
     assert len(_l2_records(n)) == 1
+    assert HOOK.obligation.registry_dir_for(n.project, n.task) == (
+        n.project / ".claude" / "dev-registry" / n.task)
     assert (n.project / ".claude" / "dev-registry" / n.task / "escalations").is_dir()
+
+    # A /dev cycle: its lane ids are <ts>-l<N> (or dev-<ts>-l<N>) and its
+    # registry directory is dev-<ts>/; nothing lands in a bare <ts>/.
+    stamp = "20261002-170011"
+    for base in (stamp, f"dev-{stamp}"):
+        d = _l2_setup(tmp_path / f"devcycle-{base}", lane="l1", lane_set=["l1", "l2"],
+                      base_task=base)
+        _l2_write(d, _l2_unattributed_report(d, lane="l1", lane_set=["l1", "l2"]))
+        _l2_stop(d)
+        proc = _l2_stop(d)
+        assert proc.returncode == 2 and _NONCE_RE.search(proc.stderr), proc.stderr
+        dev_registry = d.project / ".claude" / "dev-registry"
+        assert HOOK.obligation.registry_dir_for(d.project, d.task) == dev_registry / f"dev-{stamp}"
+        recs = _l2_records(d, cycle=f"dev-{stamp}")
+        assert len(recs) == 1, recs
+        _l2_assert_record_fields(recs[0], d)
+        assert (dev_registry / f"dev-{stamp}" / "progress"
+                / f"producer-stop-{HOOK._record_safe(d.agent_id)}.json").is_file()
+        assert not (dev_registry / stamp).exists()
+        assert not (dev_registry / d.task).exists()
 
     # upstream_defect_notice carries the same fields (AC6 third case).
     q, hook, env = _l2_qa(tmp_path, "ud", {"status": "fail", "errors": [
         {"code": "DEV_GAP", "path": f"docs/dev/dev-report-{L2_TASK}.json", "detail": "m"}]})
     assert _l2_stop(q, hook_path=hook, extra_env=env).returncode == 0
     _l2_assert_record_fields(_l2_records(q)[0], q, kind="upstream_defect_notice")
+
+
+# ---------------------------------------------------------------------------
+# Phase P1 G2 with CLAUDE_OBLIGATION_STOPGATE=block (acceptance test 5): no
+# required_values (D2), so honest fail verdicts pass on shape, schema and
+# identity alone and dev has the one terminal "completed"; the producer
+# question artifact docs/dev/producer-question-<task_id>-<role>.json of a ba
+# or dev obligation (TC-33); no reply text skips a check; close-QA's
+# markdown waiver is read from the reply's final non-empty line.
+# ---------------------------------------------------------------------------
+
+G2_TASK = "20261018-120000"
+
+
+def _g2_dev_report_v1(task_id: str, status: str = "completed") -> dict:
+    """A dev-report.v1 that passes the projection pre-pass: the flat fields
+    together with the nested dev sources they project."""
+    return {
+        "report_version": 1,
+        "task_id": task_id,
+        "status": status,
+        "files_modified": [],
+        "files_created": [],
+        "root_cause_addressed": "x",
+        "ac_status": {},
+        "dev": {
+            "status": status,
+            "files_modified": [],
+            "files_created": [],
+            "git_rationale": {"how_fix_addresses_root": "x"},
+            "ac_status": {},
+        },
+    }
+
+
+def _g2_ba_qa_report(task_id: str, verdict: str) -> dict:
+    return {
+        "task_id": task_id,
+        "verdict": verdict,
+        "objections": [
+            {
+                "dimension": "scope_alignment",
+                "claim": "the ticket covers the cache only",
+                "problem": "the request also names the index",
+                "required_evidence": "an AC for the index",
+            }
+        ],
+        "summary": "scope does not match the request",
+    }
+
+
+def _g2_question(task_id: str, role: str, labels=("keep", "replace"), default=None) -> dict:
+    """A producer-question.v1 record (schemas/producer-question.v1.json)."""
+    return {
+        "task_id": task_id,
+        "role": role,
+        "need": "whether the cache is kept or replaced",
+        "options": [{"label": label, "description": f"{label} the cache"} for label in labels],
+        "default": labels[0] if default is None else default,
+        "why": "the request, the code and a sensible default do not settle it",
+    }
+
+
+def _g2_question_path(task_id: str, role: str) -> str:
+    return f"docs/dev/producer-question-{task_id}-{role}.json"
+
+
+def _g2_json(path: str, schema: str, task_id: str = G2_TASK) -> dict:
+    return {"kind": "json", "path": path, "schema": schema, "identity": {"task_id": task_id}}
+
+
+def _g2_dev_artifacts(schema: str = "dev-report.v1", task_id: str = G2_TASK) -> list:
+    return [_g2_json(f"docs/dev/dev-report-{task_id}.json", schema, task_id)]
+
+
+def _g2_ba_artifacts(task_id: str = G2_TASK) -> list:
+    """BA's declared artifacts as commands/dev.md's BA obligation lists them."""
+    return [
+        _g2_json(f"docs/dev/context-{task_id}.json", "context.v1", task_id),
+        {"kind": "markdown", "path": f"docs/dev/ticket-{task_id}.md", "identity_anchor": task_id},
+        _g2_json(f"docs/dev/acceptance-criteria-{task_id}.json", "acceptance-criteria.v1", task_id),
+    ]
+
+
+def _g2_setup(tmp_path, role: str, artifacts: list, *, task_id: str = G2_TASK,
+              pipeline: str = "dev", profile: str = "singular", consistency=None):
+    """A registered producer whose dispatch prompt carries one obligation.
+    The legacy correlation path is armed as well (_standard_setup), so a
+    stop the obligation branch did not decide is told apart by
+    _g2_assert_decided_by_obligation."""
+    s = type("G2", (), {})()
+    s.agent_id = f"agent-{role}-g2"
+    s.harness = f"harness-g2-{role}"
+    s.task = task_id
+    s.project, s.home = _standard_setup(tmp_path, role, s.agent_id)
+    s.dispatched_at = datetime.now(timezone.utc)
+    doc = {
+        "task_id": task_id,
+        "role": role,
+        "pipeline": pipeline,
+        "profile": profile,
+        "dispatched_at": s.dispatched_at.isoformat(),
+        "artifacts": artifacts,
+    }
+    if consistency is not None:
+        doc["consistency"] = consistency
+    s.obligation = doc
+    _write_obligation_transcript(
+        s.home, s.project, s.harness, s.agent_id,
+        f'<obligation v="1">\n{json.dumps(doc, indent=2)}\n</obligation>',
+    )
+    return s
+
+
+def _g2_stop(s, msg=None) -> subprocess.CompletedProcess:
+    return _run_hook(s.project, s.home, s.agent_id, session_id=s.harness,
+                     stopgate_mode="block", last_assistant_message=msg)
+
+
+def _g2_assert_decided_by_obligation(s) -> None:
+    """The obligation resolved and the obligation branch made the decision:
+    no unresolvable/invalid-obligation record, no fallback to the legacy
+    path."""
+    kinds = {r.get("kind") for r in _advisory_records(s.home)}
+    assert not kinds & {"obligation_unresolvable", "obligation_gate_error"}, kinds
+
+
+def _g2_assert_blocked_on(proc, path: str, reason: str) -> None:
+    assert proc.returncode == 2, proc.stderr
+    assert "OBLIGATION_STOPGATE_BLOCKED" in proc.stderr
+    assert f"  - {path}: {reason}" in proc.stderr, proc.stderr
+
+
+_G2_MISSING = "obligation-named artifact absent"
+
+
+# (a) honest fail verdicts pass on shape, schema and identity -------------
+
+
+def _g2_write_upstream_chain(project: Path, task_id: str = G2_TASK) -> None:
+    """The artifacts upstream of QA in a /dev cycle (BA's context and ticket,
+    dev's completed report), so the QA chain wire's resolver reaches the
+    qa-report itself instead of stopping at a missing dev report."""
+    _write(project / f"docs/dev/context-{task_id}.json", {
+        "task_id": task_id, "request_id": task_id, "requirement": "x",
+        "root_cause_analysis": {},
+        "waves": [{"wave_id": 1, "tasks": [{"task_id": task_id, "title": "x"}]}],
+    })
+    _write(project / f"docs/dev/ticket-{task_id}.md", f"# Ticket\nRequest ID: {task_id}\n")
+    _write(project / f"docs/dev/dev-report-{task_id}.json", _l2_dev_report(task_id))
+
+
+@pytest.mark.parametrize("qa_status", ["pass", "fail"], ids=["qa_pass_control", "qa_fail"])
+def test_g2_qa_status_fail_passes_on_shape_schema_and_identity(tmp_path, qa_status):
+    """An honest QA fail is a legal terminal (D2): G2 passes the qa-report
+    on shape, schema and identity alone. The pass case is the control: the
+    same cycle, so the two differ only in qa.status."""
+    report = f"docs/dev/qa-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "qa", [_g2_json(report, "qa-report.v2")])
+    _g2_write_upstream_chain(s.project)
+    doc = _valid_qa_report_v2(G2_TASK)
+    doc["qa"]["status"] = qa_status
+    _write(s.project / report, doc)
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    _g2_assert_decided_by_obligation(s)
+
+
+def test_g2_ba_qa_verdict_fail_passes(tmp_path):
+    report = f"docs/dev/ba-qa-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "qa", [_g2_json(report, "ba-qa-report.v1")], profile="ba_validation")
+    _write(s.project / report, _g2_ba_qa_report(G2_TASK, "fail"))
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    _g2_assert_decided_by_obligation(s)
+
+
+# (b) dev has one terminal: blocked fails the enum ------------------------
+
+
+@pytest.mark.parametrize("schema", ["dev-report.v2", "dev-report.v1"])
+def test_g2_dev_status_blocked_fails_the_enum(tmp_path, schema):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts(schema))
+    if schema == "dev-report.v2":
+        _write(s.project / report, _l2_dev_report(G2_TASK, status="blocked"))
+    else:
+        _write(s.project / report, _g2_dev_report_v1(G2_TASK, status="blocked"))
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, "schema-invalid under obligation-supplied schema")
+    assert "'blocked'" in proc.stderr
+
+
+# (c) a valid, fresh question stands in for every declared artifact -------
+
+
+@pytest.mark.parametrize("role", ["dev", "ba"])
+def test_g2_valid_producer_question_stands_in_for_declared_artifacts(tmp_path, role):
+    artifacts = _g2_dev_artifacts("dev-report.v2") if role == "dev" else _g2_ba_artifacts()
+    s = _g2_setup(tmp_path, role, artifacts)
+    _write(s.project / _g2_question_path(G2_TASK, role), _g2_question(G2_TASK, role))
+    proc = _g2_stop(s, msg="One owner decision is needed; see the question artifact.")
+    assert proc.returncode == 0, proc.stderr
+    _g2_assert_decided_by_obligation(s)
+    records = _advisory_records(s.home)
+    assert any(
+        r.get("kind") == "obligation_producer_question" and r.get("task_id") == G2_TASK
+        for r in records
+    ), records
+    assert not any(r.get("kind") == "obligation_verify_fail" for r in records)
+    for art in artifacts:
+        assert not (s.project / art["path"]).exists()
+
+
+# (d) a fresh, invalid question blocks and names why ----------------------
+
+
+@pytest.mark.parametrize(
+    "question, why",
+    [
+        (_g2_question(G2_TASK, "dev", labels=("keep",)), "is too short"),
+        (
+            _g2_question(G2_TASK, "dev", default="maybe"),
+            "default 'maybe' is not one of the option labels",
+        ),
+        (
+            _g2_question("20261018-120001", "dev"),
+            "task_id: obligation declares '20261018-120000', file has '20261018-120001'",
+        ),
+    ],
+    ids=["one_option", "default_not_a_label", "other_task_id"],
+)
+def test_g2_fresh_invalid_producer_question_blocks_naming_why(tmp_path, question, why):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    # The declared report is valid, so the question alone blocks the stop.
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    question_path = _g2_question_path(G2_TASK, "dev")
+    _write(s.project / question_path, question)
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, question_path, "producer_question_invalid")
+    assert why in proc.stderr, proc.stderr
+    assert f"  - {report}:" not in proc.stderr
+
+
+# (e) a question older than the dispatch is ignored -----------------------
+
+
+def test_g2_stale_producer_question_is_ignored(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    question = s.project / _g2_question_path(G2_TASK, "dev")
+    _write(question, _g2_question(G2_TASK, "dev"))
+    earlier = s.dispatched_at.timestamp() - 3600
+    os.utime(question, (earlier, earlier))
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_MISSING)
+    assert "producer_question" not in proc.stderr
+    # A re-dispatched producer that writes its report passes; the stale
+    # question from the earlier round neither helps nor hurts.
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    _g2_assert_decided_by_obligation(s)
+    assert not any(
+        r.get("kind") == "obligation_producer_question" for r in _advisory_records(s.home)
+    )
+
+
+# (f) no reply text stands in for an artifact -----------------------------
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I need an owner decision before I can write the report.\n"
+        "AWAITING_INPUT: keep the cache or replace it?",
+        "Should I keep the cache or replace it?",
+    ],
+    ids=["awaiting_input_line", "question_text"],
+)
+def test_g2_reply_text_without_artifact_is_a_missing_artifact(tmp_path, reply):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    proc = _g2_stop(s, msg=reply)
+    _g2_assert_blocked_on(proc, report, _G2_MISSING)
+
+
+# (g) only ba and dev have the question path ------------------------------
+
+
+def test_g2_qa_question_artifact_does_not_stand_in_for_qa_report(tmp_path):
+    report = f"docs/dev/qa-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "qa", [_g2_json(report, "qa-report.v2")])
+    _write(s.project / _g2_question_path(G2_TASK, "qa"), _g2_question(G2_TASK, "qa"))
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_MISSING)
+    assert "producer_question" not in proc.stderr
+    assert not any(
+        r.get("kind") == "obligation_producer_question" for r in _advisory_records(s.home)
+    )
+
+
+# (h) close-QA: the waiver reads the reply's final non-empty line ---------
+
+
+def _g2_close_qa_obligation() -> dict:
+    """commands/close.md's close-QA obligation (role qa, profile
+    final_verification; the only one), read from the template itself with
+    <TASK_ID> bound. Its response_line regex admits the
+    CLOSE_REPORT_APPEND_(ERROR|CRITICAL) line family (P1 row 21)."""
+    text = (REPO_ROOT / "commands" / "close.md").read_text(encoding="utf-8")
+    found = []
+    for body in _re.findall(r'<obligation v="1">\s*(\{.*?\})\s*</obligation>', text, _re.S):
+        try:
+            doc = json.loads(body.replace("<TASK_ID>", G2_TASK))
+        except ValueError:
+            continue
+        if doc.get("role") == "qa" and doc.get("profile") == "final_verification":
+            found.append(doc)
+    assert len(found) == 1, found
+    return found[0]
+
+
+def _g2_close_qa_setup(tmp_path):
+    doc = _g2_close_qa_obligation()
+    [report] = [a["path"] for a in doc["artifacts"] if a["kind"] == "markdown"]
+    assert report == f"docs/dev/close-report-{G2_TASK}.md"
+    s = _g2_setup(tmp_path, "qa", doc["artifacts"], pipeline=doc["pipeline"],
+                  profile=doc["profile"], consistency=doc.get("consistency"))
+    # The on-disk last line is a prior attempt's: it fails unless waived.
+    _write(s.project / report, f"# Close Debate Report\n{G2_TASK}\nSTALE-UNRELATED-LINE\n")
+    return s, report
+
+
+def test_g2_close_qa_append_error_final_line_waives_markdown(tmp_path):
+    s, report = _g2_close_qa_setup(tmp_path)
+    reply = (
+        "Step 2 reached no verdict for this attempt.\n"
+        "The append helper refused to touch the report.\n"
+        "\n"
+        "CLOSE_REPORT_APPEND_ERROR: append: disk full\n"
+    )
+    proc = _g2_stop(s, msg=reply)
+    assert proc.returncode == 0, proc.stderr
+    _g2_assert_decided_by_obligation(s)
+    waived = [r for r in _advisory_records(s.home) if r.get("kind") == "obligation_markdown_waived"]
+    assert [r["path"] for r in waived] == [report]
+
+
+def test_g2_close_qa_sentinel_quoted_on_earlier_line_does_not_waive(tmp_path):
+    s, report = _g2_close_qa_setup(tmp_path)
+    reply = (
+        "CLOSE_REPORT_APPEND_ERROR: append: disk full\n"
+        "That was the previous attempt; this one is done.\n"
+        "DONE\n"
+    )
+    proc = _g2_stop(s, msg=reply)
+    assert proc.returncode == 2, proc.stderr
+    assert "OBLIGATION_STOPGATE_BLOCKED" in proc.stderr
+    assert f"  - {report}: terminal_line_mismatch" in proc.stderr, proc.stderr
+    assert "  - <response_line>: terminal_line_mismatch" in proc.stderr, proc.stderr
+    assert not any(
+        r.get("kind") == "obligation_markdown_waived" for r in _advisory_records(s.home)
+    )
+
+
+# (i) a missing declared artifact blocks ----------------------------------
+
+
+def test_g2_missing_declared_artifact_blocks(tmp_path):
+    report = f"docs/dev/ba-qa-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "qa", [_g2_json(report, "ba-qa-report.v1")], profile="ba_validation")
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_MISSING)
+    assert "expected artifact missing" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Landing on an in-flight fan-out cycle: the legacy report-schema check judges
+# the stopping producer's own lane report only. A dev lane dispatched from
+# origin/master's template carries required_values, so its obligation no
+# longer parses (invalid_obligation) and the legacy check decides, but the
+# block still names the lane's task_id.
+# ---------------------------------------------------------------------------
+
+_FANOUT_LANES = ("l1", "l2")
+_FANOUT_HARNESS = "harness-fanout-landing"
+
+
+def _pre_p1_lane_obligation(task_id: str, lane: str) -> str:
+    doc = {
+        "task_id": task_id, "role": "dev", "pipeline": "dev", "profile": "fanout-lane",
+        "dispatched_at": datetime.now(timezone.utc).isoformat(),
+        "lane": lane, "lane_set": list(_FANOUT_LANES),
+        "artifacts": [{
+            "kind": "json", "path": f"docs/dev/dev-report-{task_id}.json",
+            "schema": "dev-report.v2", "identity": {"task_id": task_id},
+            "required_values": {"dev.status": ["completed"]},
+        }],
+    }
+    return f'<obligation v="1">\n{json.dumps(doc, indent=2)}\n</obligation>'
+
+
+def _fanout_landing_setup(tmp_path, l2_status: str):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    home.mkdir()
+    _enable_flag(project, SESSION)
+    _write_sentinel(project, SESSION, "dev")
+    tasks = {lane: f"{SESSION}-{lane}" for lane in _FANOUT_LANES}
+    for lane, task in tasks.items():
+        _register_agent(project, f"agent-dev-{lane}", SESSION, "dev")
+        _write_obligation_transcript(
+            home, project, _FANOUT_HARNESS, f"agent-dev-{lane}",
+            "You are the dev subagent.\n" + _pre_p1_lane_obligation(task, lane))
+    # l1 reported needs_review under the pre-P1 schema, before the landing.
+    statuses = {"l1": "needs_review", "l2": l2_status}
+    for lane, task in tasks.items():
+        _write(project / "docs" / "dev" / f"dev-report-{task}.json",
+               _l2_dev_report(task, status=statuses[lane], lane=lane,
+                              lane_set=list(_FANOUT_LANES)))
+    return project, home, tasks
+
+
+@pytest.mark.parametrize("stopgate", [None, "block"], ids=["switch_unset", "stopgate_block"])
+@pytest.mark.parametrize("l2_status,expected", [("completed", 0), ("needs_review", 2)],
+                         ids=["l2_valid", "l2_invalid"])
+def test_fanout_legacy_check_judges_only_the_stopping_lanes_own_report(
+    tmp_path, stopgate, l2_status, expected
+):
+    project, home, tasks = _fanout_landing_setup(tmp_path, l2_status)
+    l1_report = f"dev-report-{tasks['l1']}.json"
+    l2_report = f"dev-report-{tasks['l2']}.json"
+
+    proc = _run_hook(project, home, "agent-dev-l2", session_id=_FANOUT_HARNESS,
+                     stopgate_mode=stopgate)
+    assert proc.returncode == expected, proc.stderr
+    assert l1_report not in proc.stderr
+    if expected == 2:
+        assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr
+        assert l2_report in proc.stderr
+    assert any(r.get("kind") == "obligation_unresolvable"
+               and r.get("reason") == "invalid_obligation" for r in _advisory_records(home))
+
+    # l1 is still judged on its own report, at its own stop.
+    proc_l1 = _run_hook(project, home, "agent-dev-l1", session_id=_FANOUT_HARNESS,
+                        stopgate_mode=stopgate)
+    assert proc_l1.returncode == 2, proc_l1.stderr
+    assert l1_report in proc_l1.stderr and l2_report not in proc_l1.stderr
 
 
 if __name__ == "__main__":

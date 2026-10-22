@@ -798,7 +798,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/stop-workflow-coordinator.py\""
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/stop-workflow-coordinator.py\"",
+            "timeout": 300
           }
         ]
       },
@@ -815,14 +816,6 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/stop-obligation-gate.py\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/stop-completion-gate.py\""
           }
         ]
       }

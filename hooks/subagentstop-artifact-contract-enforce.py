@@ -49,6 +49,10 @@ dev-report-* — but as a UNION of all correlated candidates, each validated,
 rather than a single pick: under fan-out several lane reports share the
 session timestamp, and picking one file would let an invalid lane report be
 shadowed by a valid sibling (codex audit finding, HIGH, fixed in this cycle).
+When the stopping producer's own dispatch obligation names a task_id (also
+when the block fails the grammar, as a pre-P1 template's does), the union is
+narrowed to that task's reports: each producer is judged on its own report
+at its own stop, never on a sibling lane's.
 The algorithm is intentionally NOT imported from the sibling hook: a runtime
 import would let an unrelated refactor of that file silently disable this
 gate via the fail-open wrapper, whereas a local copy degrades observably
@@ -194,11 +198,12 @@ def _find_correlated_reports(
     reports share the session timestamp and a schema-invalid lane report would
     be shadowed by a lexicographically-later valid sibling (codex audit
     finding, do-20260926-073930, HIGH). The dev-registry also carries no
-    per-lane agent→report binding (all dev lanes share one dev.json sentinel),
-    so per-author attribution is structurally unavailable; the enforced
-    invariant is session-scoped, matching the enforce flag's session scope:
-    no dev/qa agent of this session stops while ANY correlated report of its
-    role class is versioned-and-invalid.
+    per-lane agent→report binding (all dev lanes share one dev.json sentinel);
+    the binding comes from the producer's own dispatch obligation instead
+    (``_own_reports``, applied by main()). Without one the enforced invariant
+    is session-scoped, matching the enforce flag's session scope: no dev/qa
+    agent of this session stops while ANY correlated report of its role class
+    is versioned-and-invalid.
 
     Candidates are the union of:
       1. session_ts (from dev_session_id) as a filename substring — all
@@ -244,6 +249,35 @@ def _find_correlated_reports(
     return [candidates[k] for k in sorted(candidates)]
 
 
+def _dispatch_task_id(prompt) -> str | None:
+    """The task_id this producer's own dispatch obligation names, read even
+    when the block fails the grammar (a pre-P1 template still carries
+    required_values), so the legacy check knows which reports are its own."""
+    block = obligation.extract_obligation_block(prompt) if isinstance(prompt, str) else None
+    if not isinstance(block, obligation.ExtractedBlock):
+        return None
+    try:
+        doc = json.loads(block.body)
+    except ValueError:
+        return None
+    task_id = doc.get("task_id") if isinstance(doc, dict) else None
+    return task_id if isinstance(task_id, str) and task_id else None
+
+
+def _own_reports(report_paths: list, prefix: str, task_id: str) -> list:
+    """The correlated reports of this producer's own task: named
+    ``<prefix><task_id>.json`` or declaring that task_id, in its minted or
+    canonical form. A sibling lane's report is judged at that lane's stop."""
+    ids = {task_id, obligation.canonical_task_id(task_id)}
+    own = []
+    for path in report_paths:
+        data = _read_json(path)
+        declared = {data.get("task_id"), data.get("request_id")}
+        if path.name[len(prefix):-len(".json")] in ids or declared & ids:
+            own.append(path)
+    return own
+
+
 # ---------------------------------------------------------------------------
 # Producer stop gate (lane L2): terminal state, downstream wires, bounded
 # blocking with a nonce hand-off. Nothing here releases a producer by itself:
@@ -252,7 +286,8 @@ def _find_correlated_reports(
 #
 # Acknowledgement line: when the gate escalates (no progress, infrastructure
 # fault, or gate exception) it writes a record to
-#   .claude/dev-registry/<cycle_id>/escalations/<record_id>.json
+#   <obligation.registry_dir_for(task_id)>/escalations/<record_id>.json
+# (the cycle's dev-registry directory the UserPromptSubmit hook created)
 # and quotes its nonce. The producer's NEXT final message must carry a whole
 # line equal to  ESCALATION_ACK <nonce>  (last_assistant_message only). The
 # gate admits that stop iff the nonce is the latest not-yet-admitted record of
@@ -292,21 +327,11 @@ def _ack_present(message, nonce: str) -> bool:
     return any(line.strip() == want for line in message.splitlines())
 
 
-def _cycle_id(ob: dict):
-    """C1: the dev-registry directory name of the cycle, or None when the
-    obligation cannot be attributed to one."""
-    task_id = ob.get("task_id")
-    lane = ob.get("lane")
-    if not isinstance(task_id, str) or not _TASK_ID_ANCHOR_RE.match(task_id):
-        return None
-    if lane is None:
-        return task_id
-    if not isinstance(lane, str) or not lane:
-        return None
-    suffix = "-" + lane
-    if task_id.endswith(suffix) and len(task_id) > len(suffix):
-        return task_id[: -len(suffix)]
-    return None
+def _cycle_dir(project_dir: str, ob: dict):
+    """C1: the cycle's dev-registry directory, where the P3 resolver reads the
+    records (obligation.registry_dir_for), or None when the obligation
+    cannot be attributed to a cycle."""
+    return obligation.registry_dir_for(project_dir, ob.get("task_id"))
 
 
 def _now_iso() -> str:
@@ -496,7 +521,11 @@ def _wire_ledger_judgment(report: dict, report_rel: str, project_dir: str, task_
 
 
 def _wire_qa_chain(ob: dict, project_dir: str, qa_owned: set, timeout: float):
-    """Returns (findings, faults, upstream_errors)."""
+    """Returns (findings, faults, upstream_errors). The completion report is
+    written by the orchestrator AFTER QA by design, so its absence is no
+    upstream defect; a QA fail or warning verdict is a process step that loops
+    back to dev (D2), so the resolver's INVALID_QA_STATUS is never a finding."""
+    completion = os.path.normpath(f"docs/dev/completion-{ob.get('task_id')}.md")
     argv = [sys.executable, str(SCRIPTS_DIR / "resolve-dev-artifact-chain.py"),
             "--task-id", str(ob.get("task_id")), "--project-dir", project_dir]
     try:
@@ -522,6 +551,8 @@ def _wire_qa_chain(ob: dict, project_dir: str, qa_owned: set, timeout: float):
             faults.append(_fault("gate_infrastructure_fault", f"unattributable chain error: {err!r}"[:300]))
             continue
         norm = os.path.normpath(os.path.relpath(path, project_dir) if os.path.isabs(path) else path)
+        if (code == "MISSING_ARTIFACT" and norm == completion) or code == "INVALID_QA_STATUS":
+            continue
         if norm in qa_owned:
             findings.append({
                 "path": norm, "reason": code,
@@ -570,10 +601,6 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, qa_o
     return findings, faults, upstream, deferrals
 
 
-def _cycle_dir(project_dir: str, cycle_id: str) -> Path:
-    return Path(project_dir) / ".claude" / "dev-registry" / cycle_id
-
-
 def _artifact_digests(project_dir: str, paths: list) -> dict:
     digests = {}
     for rel in paths:
@@ -584,7 +611,7 @@ def _artifact_digests(project_dir: str, paths: list) -> dict:
     return digests
 
 
-def _mint_record(project_dir: str, ob: dict, cycle_id: str, agent_id: str, agent_type: str,
+def _mint_record(project_dir: str, ob: dict, cycle_dir: Path, agent_id: str, agent_type: str,
                  kind: str, reason, finding_keys: list, paths: list) -> dict:
     """C1/C2 record, atomic. Raises on any failure (caller treats as no hand-off)."""
     record_id = "esc" + secrets.token_hex(10)
@@ -601,15 +628,15 @@ def _mint_record(project_dir: str, ob: dict, cycle_id: str, agent_id: str, agent
     }
     if reason is not None:
         record["reason"] = reason
-    path = _cycle_dir(project_dir, cycle_id) / "escalations" / f"{record_id}.json"
+    path = cycle_dir / "escalations" / f"{record_id}.json"
     _atomic_write_json(path, record)
     record["_path"] = str(path)
     return record
 
 
-def _latest_unadmitted(project_dir: str, cycle_id: str, agent_id: str, task_id, reason):
-    esc = _cycle_dir(project_dir, cycle_id) / "escalations"
-    adm = _cycle_dir(project_dir, cycle_id) / "escalation-admissions"
+def _latest_unadmitted(cycle_dir: Path, agent_id: str, task_id, reason):
+    esc = cycle_dir / "escalations"
+    adm = cycle_dir / "escalation-admissions"
     best = None
     try:
         candidates = sorted(esc.glob("*.json"))
@@ -634,14 +661,14 @@ def _write_side_records(project_dir: str, ob: dict, agent_id: str, agent_type: s
     """Upstream-defect notices (qa, admitted without a nonce) and shard deferrals.
     Returns faults (empty when everything was recorded)."""
     faults = []
-    cycle_id = _cycle_id(ob)
-    if (upstream or deferrals) and cycle_id is None:
+    cycle_dir = _cycle_dir(project_dir, ob)
+    if (upstream or deferrals) and cycle_dir is None:
         return [_fault("gate_infrastructure_fault", "obligation cannot be attributed to a cycle directory")]
     try:
         pm = _load_progress_helper() if upstream else None
         if upstream:
             keys = sorted({_finding_key(pm, e["code"], e["path"], project_dir) for e in upstream})
-            esc = _cycle_dir(project_dir, cycle_id) / "escalations"
+            esc = cycle_dir / "escalations"
             duplicate = False
             if esc.is_dir():
                 for p in esc.glob("*.json"):
@@ -652,7 +679,7 @@ def _write_side_records(project_dir: str, ob: dict, agent_id: str, agent_type: s
                         duplicate = True
                         break
             if not duplicate:
-                rec = _mint_record(project_dir, ob, cycle_id, agent_id, agent_type,
+                rec = _mint_record(project_dir, ob, cycle_dir, agent_id, agent_type,
                                    "upstream_defect_notice", None, keys, paths)
                 rec["upstream_errors"] = upstream
                 _atomic_write_json(Path(rec.pop("_path")), rec)
@@ -661,7 +688,7 @@ def _write_side_records(project_dir: str, ob: dict, agent_id: str, agent_type: s
         if deferrals:
             checks = sorted({c for d in deferrals for c in d["checks"]})
             _atomic_write_json(
-                _cycle_dir(project_dir, cycle_id) / "deferred-checks" / f"{_record_safe(agent_id)}.json",
+                cycle_dir / "deferred-checks" / f"{_record_safe(agent_id)}.json",
                 {"kind": "not_evaluable_at_lane_granularity", "task_id": ob.get("task_id"),
                  "agent_id": agent_id, "lane": ob.get("lane"), "checks": checks,
                  "created_at": _now_iso()},
@@ -677,26 +704,56 @@ def _write_side_records(project_dir: str, ob: dict, agent_id: str, agent_type: s
 def _clear_progress(project_dir: str, ob: dict, agent_id: str) -> None:
     """The producer's own trigger became false: drop its progress state."""
     try:
-        cycle_id = _cycle_id(ob)
-        if cycle_id is None:
+        cycle_dir = _cycle_dir(project_dir, ob)
+        if cycle_dir is None:
             return
         pm = _load_progress_helper()
-        pm.clear_state(_cycle_dir(project_dir, cycle_id) / "progress"
-                       / f"producer-stop-{_record_safe(agent_id)}.json")
+        pm.clear_state(cycle_dir / "progress" / f"producer-stop-{_record_safe(agent_id)}.json")
     except Exception:
         pass
+
+
+QUESTION_ARTIFACT_ROLES = ("ba", "dev")
+
+
+def _producer_question(project_dir: str, ob: dict):
+    """TC-33: docs/dev/producer-question-<task_id>-<role>.json of a ba or dev
+    obligation. Returns None when absent or not fresh against the obligation's
+    dispatched_at (a file from an earlier round; None freshness counts as
+    stale), "valid" when it stands in for the declared artifacts, else a
+    failure naming why it is invalid."""
+    rel = f"docs/dev/producer-question-{ob.get('task_id')}-{ob.get('role')}.json"
+    full = Path(project_dir) / rel
+    try:
+        mtime = full.stat().st_mtime
+    except OSError:
+        return None
+    if obligation.artifact_freshness_satisfied("json", mtime, ob.get("dispatched_at")) is not True:
+        return None
+    result = contract_runtime.validate_artifact_for_obligation(str(full), "producer-question.v1")
+    errors = list(result.get("errors", []))[:10] or [str(result.get("reason"))]
+    if result.get("status") == "pass":
+        record = _read_json(full)
+        labels = [o.get("label") for o in record.get("options", []) if isinstance(o, dict)]
+        errors = [f"{key}: obligation declares {ob.get(key)!r}, file has {record.get(key)!r}"
+                  for key in ("task_id", "role") if record.get(key) != ob.get(key)]
+        if record.get("default") not in labels:
+            errors.append(f"default {record.get('default')!r} is not one of the option labels {labels}")
+        if not errors:
+            return "valid"
+    return {"path": rel, "reason": "producer_question_invalid", "errors": errors}
 
 
 def _gate_decide(project_dir: str, ob: dict, agent_id: str, agent_type: str, failures: list,
                  faults: list, paths: list, message, block_text: str) -> int:
     """Block-mode decision for a failing stop: exit code (stderr already written).
     Never returns 0 unless the producer acknowledged a recorded escalation."""
-    cycle_id = _cycle_id(ob)
+    cycle_dir = _cycle_dir(project_dir, ob)
     task_id = ob.get("task_id")
     faults = list(faults)
     pm = None
     outcome = None
-    if cycle_id is not None:
+    if cycle_dir is not None:
         try:
             pm = _load_progress_helper()
         except Exception as exc:
@@ -706,7 +763,7 @@ def _gate_decide(project_dir: str, ob: dict, agent_id: str, agent_type: str, fai
                 keys = [_finding_key(pm, f["reason"], f["path"], project_dir) for f in failures]
                 keys += [_finding_key(pm, x["code"], x.get("path") or str(task_id), project_dir) for x in faults]
                 rnd = pm.record_round(
-                    _cycle_dir(project_dir, cycle_id) / "progress" / f"producer-stop-{_record_safe(agent_id)}.json",
+                    cycle_dir / "progress" / f"producer-stop-{_record_safe(agent_id)}.json",
                     f"producer-stop|{task_id}|{agent_id}",
                     pm.world_fingerprint(project_dir, paths),
                     keys,
@@ -723,10 +780,10 @@ def _gate_decide(project_dir: str, ob: dict, agent_id: str, agent_type: str, fai
         reason = faults[0]["code"]
     elif outcome == "no_progress":
         reason = "no_progress"
-    if cycle_id is None:
+    if cycle_dir is None:
         sys.stderr.write(
             block_text
-            + "GATE_FAULT: this obligation cannot be attributed to a cycle directory (task_id/lane mismatch), "
+            + "GATE_FAULT: this obligation cannot be attributed to a cycle directory (no task_id timestamp), "
               "so no escalation can be recorded; the stop stays blocked.\n"
         )
         return 2
@@ -735,10 +792,10 @@ def _gate_decide(project_dir: str, ob: dict, agent_id: str, agent_type: str, fai
         return 2
     # Escalation: admit only on the acknowledgement of the latest unadmitted record.
     try:
-        prior = _latest_unadmitted(project_dir, cycle_id, agent_id, task_id, reason)
+        prior = _latest_unadmitted(cycle_dir, agent_id, task_id, reason)
         if prior is not None and _ack_present(message, prior["nonce"]):
             _atomic_write_json(
-                _cycle_dir(project_dir, cycle_id) / "escalation-admissions" / f"{prior['record_id']}.json",
+                cycle_dir / "escalation-admissions" / f"{prior['record_id']}.json",
                 {"record_id": prior["record_id"], "nonce": prior["nonce"], "agent_id": agent_id,
                  "admitted_at": _now_iso()},
             )
@@ -751,7 +808,7 @@ def _gate_decide(project_dir: str, ob: dict, agent_id: str, agent_type: str, fai
     try:
         keys = [_finding_key(pm, f["reason"], f["path"], project_dir) for f in failures]
         keys += [_finding_key(pm, x["code"], x.get("path") or str(task_id), project_dir) for x in faults]
-        rec = _mint_record(project_dir, ob, cycle_id, agent_id, agent_type, "producer_stop_escalation",
+        rec = _mint_record(project_dir, ob, cycle_dir, agent_id, agent_type, "producer_stop_escalation",
                            reason, sorted(set(keys)), paths)
     except Exception as exc:
         sys.stderr.write(
@@ -802,6 +859,7 @@ def main() -> None:
     stopgate_mode = os.environ.get("CLAUDE_OBLIGATION_STOPGATE", "advisory").strip().lower()
     if stopgate_mode not in {"advisory", "block", "off"}:
         stopgate_mode = "advisory"
+    resolution = None
     if stopgate_mode != "off":
         try:
             session_id = data.get("session_id") or data.get("sessionId")
@@ -837,6 +895,20 @@ def main() -> None:
                             }
                         )
                 failures = []
+                question = (
+                    _producer_question(project_dir, resolution.obligation)
+                    if resolution.obligation.get("role") in QUESTION_ARTIFACT_ROLES else None
+                )
+                if question == "valid":
+                    # The question stands in for every declared artifact; nothing
+                    # that reads those artifacts runs for this stop.
+                    _emit_advisory({"kind": "obligation_producer_question", "agent_id": agent_id,
+                                    "task_id": resolution.obligation.get("task_id")})
+                    if stopgate_mode == "block":
+                        _clear_progress(project_dir, resolution.obligation, agent_id)
+                    sys.exit(0)
+                if question is not None:
+                    failures.append(question)
                 for art in json_artifacts:
                     full_path = Path(project_dir) / art["path"]
                     result = contract_runtime.validate_artifact_for_obligation(
@@ -878,38 +950,6 @@ def main() -> None:
                                     ],
                                 }
                             )
-                    # M1: terminal state (L1 required_values). Unevaluable is a
-                    # blocking finding, never a silent skip.
-                    if "required_values" in art:
-                        try:
-                            terminal = obligation.evaluate_required_values(
-                                record, art["required_values"]
-                            )
-                        except Exception as exc:
-                            failures.append(
-                                {
-                                    "path": art["path"],
-                                    "reason": "terminal_constraint_unevaluable",
-                                    "errors": [f"required_values could not be evaluated: {exc!r}"],
-                                }
-                            )
-                        else:
-                            if terminal:
-                                failures.append(
-                                    {
-                                        "path": art["path"],
-                                        "reason": "terminal_value_violation",
-                                        "errors": [
-                                            (
-                                                f"{v.get('path')}: missing, admissible values {v.get('allowed')}"
-                                                if v.get("reason") == "missing_terminal_path"
-                                                else f"{v.get('path')}: actual {v.get('actual')!r}, "
-                                                f"admissible values {v.get('allowed')}"
-                                            )
-                                            for v in terminal
-                                        ],
-                                    }
-                                )
                 markdown_waived_paths: set[str] = set()
                 for art in markdown_artifacts:
                     # M3: markdown-kind entries get the same producer-side
@@ -924,12 +964,13 @@ def main() -> None:
                     # to touch the file -- its on-disk terminal line
                     # reflects a PRIOR, unrelated attempt, so the file
                     # check is SKIPPED (not failed) and excluded from the
-                    # consistency check below.
+                    # consistency check below. Matched against the reply's
+                    # final non-empty line, the line response_line checks.
                     waiver = art.get("waived_by_response")
                     if (
                         isinstance(waiver, str) and waiver
                         and isinstance(last_assistant_message, str)
-                        and re.search(waiver, last_assistant_message)
+                        and re.search(waiver, _last_nonempty_line(last_assistant_message))
                     ):
                         markdown_waived_paths.add(art["path"])
                         _emit_advisory(
@@ -1182,6 +1223,9 @@ def main() -> None:
     report_paths = _find_correlated_reports(
         project_dir, prefix, dev_session_id, sentinel.get("task_id")
     )
+    own_task_id = _dispatch_task_id(getattr(resolution, "prompt", None))
+    if own_task_id:
+        report_paths = _own_reports(report_paths, prefix, own_task_id)
     if not report_paths:
         # Existence enforcement belongs to subagentstop-e2e-enforce.py (qa)
         # and /close's chain resolver (dev). Observe, never block, here.

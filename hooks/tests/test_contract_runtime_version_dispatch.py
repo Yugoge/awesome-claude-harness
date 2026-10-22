@@ -178,14 +178,20 @@ def test_v2_missing_baseline_keys_fail_named(tmp_path):
         assert missing in _joined_errors(result)
 
 
-def test_v2_needs_review_without_rationale_fails_named(tmp_path):
-    record = _valid_v2_dev_record()
-    record["dev"]["status"] = "needs_review"
-    result = cr.validate_report_artifact(
-        _write_report(tmp_path, "dev-report-actest.json", record)
-    )
-    assert result["status"] == "fail"
-    assert "status_rationale" in _joined_errors(result)
+def test_v2_status_other_than_completed_fails_named(tmp_path):
+    """D2: dev has one terminal; needs_review/blocked (with or without a
+    status_rationale) no longer validate."""
+    for status in ("needs_review", "blocked"):
+        record = _valid_v2_dev_record()
+        record["dev"]["status"] = status
+        record["dev"]["status_rationale"] = {
+            "classification": "other_disclosed_handoff", "blocked_by": "x", "forbidden_action": "y",
+        }
+        result = cr.validate_report_artifact(
+            _write_report(tmp_path, "dev-report-actest.json", record)
+        )
+        assert result["status"] == "fail"
+        assert status in _joined_errors(result)
 
 
 # ---------------------------------------------------------------------------
