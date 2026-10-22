@@ -347,6 +347,27 @@ def test_s4_stopped_rebase_changes_nothing(tmp_path, env):
                check=False).returncode == 1
 
 
+def test_s4_stopped_merge_on_pre_p7_head_gets_the_notice(tmp_path, env):
+    """A merge pull stopped on a local commit: HEAD is still the pre-P7 revision, MERGE_HEAD
+    declares the filter. The session that runs the merged hooks sees the S4 notice."""
+    origin, rev = make_home(tmp_path, env, name="origin")
+    home = tmp_path / "harness"
+    git(env, tmp_path, "clone", "-q", str(origin), str(home))
+    git(env, home, "checkout", "-q", "-B", "master", rev)
+    live = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    live["env"]["TMPDIR"] = "/opt/demo/local"  # a local commit on a line P7 changed
+    (home / "settings.json").write_bytes(canon(live))
+    git(env, home, "commit", "-q", "-am", "local")
+    assert git(env, home, "pull", "-q", "--no-rebase", "--no-edit", "origin", "master",
+               check=False).returncode != 0
+    assert (home / ".git" / "MERGE_HEAD").exists()
+    index = (home / ".git" / "index").read_bytes()
+    notice = land(env, home)
+    assert notice.startswith("Harness landing waits: a merge is stopped in the harness home")
+    assert (home / ".git" / "index").read_bytes() == index
+    assert not (home / "settings.machine.json").exists()
+
+
 def test_stash_is_found_by_content_not_by_message(tmp_path, env):
     """Two entries whose first parent is rev: the newest one whose settings.json differs from
     rev's is the pull's, whatever its message."""
