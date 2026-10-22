@@ -71,23 +71,41 @@ legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the
   [ "$lfs" -eq 0 ] || NOTE="$NOTE (LFS hooks restored in $lfs)"
 }
 
+# R8's candidates: bash processes running a git-fswatch.sh (argv[1]) that started at or before
+# this home's current daemon code, in STALE. One builtin read per /proc/<pid>/cmdline and no
+# process started unless one runs such a script: a landed home checks this at every Stop.
+stale() {
+  local f a b k v btime="" tick newest line
+  local -a st
+  STALE=()
+  for f in /proc/[0-9]*/cmdline; do  # a zombie's cmdline is empty
+    { IFS= read -r -d '' a && IFS= read -r -d '' b; } < "$f" 2>/dev/null || continue
+    case "${a##*/}:$b" in bash:*git-fswatch.sh|sh:*git-fswatch.sh) f="${f#/proc/}"; STALE+=("${f%/cmdline}") ;; esac
+  done
+  [ "${#STALE[@]}" -gt 0 ] || return 1
+  newest="$(stat -c %Y hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null | sort -n | tail -n1)"
+  tick="$(getconf CLK_TCK 2>/dev/null)"
+  while read -r k v _; do [ "$k" != btime ] || btime="$v"; done < /proc/stat
+  [ -n "$newest" ] && [ -n "$btime" ] && [ -n "$tick" ] || { STALE=(); return 1; }
+  for k in "${!STALE[@]}"; do
+    line=""; read -r line < "/proc/${STALE[k]}/stat" 2>/dev/null; read -r -a st <<< "${line##*) }"
+    [ "${#st[@]}" -ge 20 ] && [ $((btime + st[19] / tick)) -le "$newest" ] || unset 'STALE[k]'
+  done
+  [ "${#STALE[@]}" -gt 0 ]
+}
 _tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do _tree "$c"; done; echo "$1"; }
-restart_daemons() {  # R8: processes running this home's git-fswatch.sh, started before its current code
-  local pid st newest btime tick now watch gd unit n=0 busy=0 home=0 stopped=0 failed=0 c e k
+restart_daemons() {  # [landed] R8: the stale processes running this home's git-fswatch.sh
+  local pid st now watch gd unit n=0 busy=0 home=0 stopped=0 failed=0 c e k
   local -a argv envv
   printf -v now '%(%s)T' -1
-  newest="$(stat -c %Y hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null | sort -n | tail -n1)"
-  btime="$(awk '$1 == "btime" { print $2 }' /proc/stat 2>/dev/null)"; tick="$(getconf CLK_TCK 2>/dev/null)"
-  [ -n "$newest" ] && [ -n "$btime" ] && [ -n "$tick" ] || return 0
-  for pid in $(pgrep -f 'git-fswatch\.sh' 2>/dev/null); do
+  stale || :
+  for pid in "${STALE[@]}"; do
     mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null && [ "${#argv[@]}" -ge 2 ] || continue  # a zombie has none
-    case "${argv[0]##*/}" in bash|sh) ;; *) continue ;; esac  # the daemon, not an editor on the file
     watch="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || continue  # its main() cd's to the watched path
     case "${argv[1]:-}" in /*) c="${argv[1]}" ;; *) c="$watch/${argv[1]:-}" ;; esac
     [ "$(realpath -e "$c" 2>/dev/null)" = "$H/hooks/git-fswatch.sh" ] || continue
     st="$(cat "/proc/$pid/stat" 2>/dev/null)" || continue; read -r -a st <<< "${st##*) }"; [ "${#st[@]}" -ge 20 ] || continue
     cmp -s "/proc/$pid/cmdline" "/proc/${st[1]}/cmdline" 2>/dev/null && continue  # one of its subshells
-    [ $((btime + st[19] / tick)) -le "$newest" ] || continue
     gd="$(git -C "$watch" rev-parse --absolute-git-dir 2>/dev/null)" || continue  # its repository is gone
     # In its git work: a git child, or a git lock younger than a minute (one a git that is gone
     # left behind is no work). Only the harness home's own daemon holds the landing.
@@ -117,20 +135,26 @@ restart_daemons() {  # R8: processes running this home's git-fswatch.sh, started
     c=$!; sleep 1
     if kill -0 "$c" 2>/dev/null; then n=$((n + 1)); else failed=$((failed + 1)); fi
   done
+  # A landed home tries the ones left running again at every Stop: it says only what it did.
+  [ "${1:-}" = landed ] && [ $((n + failed)) -eq 0 ] && return 0
   log "fswatch restarted=$n busy=$busy busy-home=$home stopped-integration=$stopped failed=$failed"
   [ "$n" -eq 0 ] || NOTE="$NOTE; $n stale git-fswatch daemon(s) restarted"
+  [ "$failed" -eq 0 ] || NOTE="$NOTE; $failed git-fswatch restart(s) failed"
+  [ "${1:-}" != landed ] || return 0
   [ "$busy" -eq 0 ] || NOTE="$NOTE; $busy stale git-fswatch daemon(s) left running: in the middle of their git work"
   [ "$stopped" -eq 0 ] || NOTE="$NOTE; $stopped stale git-fswatch daemon(s) left running: a rebase or merge is stopped in its repository"
-  [ "$failed" -eq 0 ] || NOTE="$NOTE; $failed git-fswatch restart(s) failed"
+  [ $((busy + stopped)) -eq 0 ] || NOTE="$NOTE (tried again at later turn ends)"
   [ "$home" -eq 0 ]
 }
 
 state
 [ "${1:-}" = "--state" ] && { echo "$STATE"; exit 0; }
 case "$STATE" in landed|hooks|upgraded) ;; *) exit 0 ;; esac
-if [ "$STATE" = landed ]; then  # only a later pull's conflicted stash pop (its entry is kept) comes here
-  [ -s "$COMMON/logs/refs/stash" ] || exit 0
-  git ls-files -u 2>/dev/null | grep -qE $'\t(settings\\.json|(.*/)?(INDEX|CLAUDE)\\.md)$' || exit 0
+if [ "$STATE" = landed ]; then  # a later pull's conflicted stash pop (its entry is kept), or a stale daemon
+  REPAIR=""
+  [ -s "$COMMON/logs/refs/stash" ] && git ls-files -u 2>/dev/null \
+    | grep -qE $'\t(settings\\.json|(.*/)?(INDEX|CLAUDE)\\.md)$' && REPAIR=1
+  [ -n "$REPAIR" ] || stale || exit 0
 fi
 mkdir -p logs 2>/dev/null
 exec 9>>"$COMMON/claude-landing.lock" || exit 0
@@ -141,19 +165,22 @@ if ! { flock -n 9 || python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fc
 fi
 FIRST="$STATE"; state  # again, under the lock: another session may have landed it meanwhile
 [ "$STATE" = "$FIRST" ] || finish "found-$STATE" ""
+[ "$STATE" != landed ] || restart_daemons landed  # R8: left running before, or stale after a later pull
 GD="$(git rev-parse --absolute-git-dir 2>/dev/null)"
 for op in rebase-merge:rebase rebase-apply:rebase MERGE_HEAD:merge CHERRY_PICK_HEAD:cherry-pick REVERT_HEAD:revert; do
   [ -e "$GD/${op%%:*}" ] || continue  # R2 S4: a stopped integration holds the owner's commits
+  [ "$STATE" != landed ] || [ -n "$REPAIR" ] || break
   n="$(git ls-files -u | cut -f2 | sort -u | wc -l)"
   log "state=$STATE stopped=${op#*:} conflicted=$n"
-  [ "$STATE" = upgraded ] || finish "waits-${op#*:}" ""
+  [ "$STATE" = upgraded ] || finish "waits-${op#*:}" "${NOTE:+Harness landing: ${NOTE#; }.}"
   finish "waits-${op#*:}" "Harness landing waits: a ${op#*:} is stopped in the harness home ($n conflicted path(s)); nothing was changed. Once it is finished or aborted, the landing runs at the next turn end."
 done
 
 settings() { out="$(python3 scripts/install/render-settings land "$@" 2>>"$LOG")"; }  # the notice part, or the failed step
 if [ "$STATE" = landed ]; then
-  settings --repair
-  finish repaired "${out:+Harness landing: $out.}"
+  [ -z "$REPAIR" ] || { settings --repair; NOTE="${out:+; $out}$NOTE"; }
+  [ -n "$REPAIR$NOTE" ] || exit 0  # only daemons it could not restart yet: no log line, no notice
+  finish repaired "${NOTE:+Harness landing: ${NOTE#; }.}"
 fi
 if [ "$STATE" = upgraded ]; then
   log "landing state=$STATE"

@@ -765,6 +765,36 @@ def test_a_busy_daemon_in_another_repository_does_not_hold_the_landing(tmp_path,
             assert "1 stale git-fswatch daemon(s) left running: in the middle of their git work" \
                 in notice and old.poll() is None
         assert "busy=%d busy-home=0" % (0 if age else 1) in landing_log(home)
+        lock.unlink(missing_ok=True)  # its git work done: restarted at the next turn end
+        assert land(env, home) == ("" if age else "Harness landing: 1 stale git-fswatch daemon(s) restarted.\n")
+        old.wait(timeout=10)
+        assert len(daemons_of(env, home, plain)) == 1
+    finally:
+        kill_daemons(home, old)
+
+
+@needs_proc
+def test_a_daemon_left_running_is_restarted_at_a_later_turn_end(tmp_path, env):
+    """R8: a stale daemon the landing left running (a rebase stopped in its repository) is tried
+    again at later turn ends of the landed home, quietly, and restarted once it can be; a landed
+    home whose daemons run the current code gets no notice and no log line."""
+    home, rev = make_home(tmp_path, env)
+    proj = Path(env["HOME"]) / "proj"
+    git(env, tmp_path, "init", "-q", str(proj))
+    (proj / ".git" / "rebase-merge").mkdir()
+    old = stale_daemon(env, home, proj)
+    try:
+        notice = land(env, home)
+        assert "P7 landed" in notice and "1 stale git-fswatch daemon(s) left running: a rebase " \
+            "or merge is stopped in its repository" in notice
+        log = landing_log(home)
+        assert land(env, home) == "" and landing_log(home) == log and old.poll() is None
+        (proj / ".git" / "rebase-merge").rmdir()
+        assert land(env, home) == "Harness landing: 1 stale git-fswatch daemon(s) restarted.\n"
+        old.wait(timeout=10)
+        assert len(daemons_of(env, home, proj)) == 1
+        log = landing_log(home)
+        assert land(env, home) == "" and landing_log(home) == log
     finally:
         kill_daemons(home, old)
 
