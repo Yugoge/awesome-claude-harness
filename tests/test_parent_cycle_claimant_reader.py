@@ -334,7 +334,7 @@ def test_a_claimant_whose_ledger_cannot_replay_is_never_admitted(tmp_path):
     assert observation["gaps"]
 
 
-def test_unattributed_bytes_still_fail_under_their_own_error_code(tmp_path, monkeypatch):
+def test_unattributed_bytes_are_reported_informationally_on_their_own_key(tmp_path, monkeypatch):
     """Positive control: no gap class becomes unreachable.
 
     Identical to the passing scenario except that the live file carries bytes
