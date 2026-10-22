@@ -37,6 +37,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -116,6 +117,7 @@ class _RouteCase(unittest.TestCase):
     def tearDown(self):
         if self._saved_dir is not None:
             guard._RESIDUAL_OVERRIDE_DIR = self._saved_dir
+        shutil.rmtree(self.ns, ignore_errors=True)
 
     # -- helpers ---------------------------------------------------------
     def journal(self):
@@ -391,6 +393,7 @@ class D15_ClassifierDocstringEscape(unittest.TestCase):
         import warnings
         src = HOOKS_DIR / "lib" / "git_command_classifier.py"
         out = Path(tempfile.mkdtemp(prefix="pyc-", dir=SCRATCH)) / "gcc.pyc"
+        self.addCleanup(shutil.rmtree, out.parent, ignore_errors=True)
         with warnings.catch_warnings():
             warnings.simplefilter("error", SyntaxWarning)
             py_compile.compile(str(src), cfile=str(out), doraise=True)

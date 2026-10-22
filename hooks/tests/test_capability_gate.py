@@ -78,6 +78,10 @@ def _standin_claude(tmp_path_factory, monkeypatch) -> None:
             f'echo "{STANDIN_BUILD} (Claude Code)"\n', encoding="utf-8")
         exe.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
+    # The handshake's status-surface probe runs `tmux list-panes -a`, and tmux
+    # creates its socket dir (tmux-<uid>) under TMUX_TMPDIR, else /tmp. Point it
+    # at pytest's own temp dir so a run leaves nothing in /tmp.
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path_factory.getbasetemp()))
 
 
 @pytest.fixture()

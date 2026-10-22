@@ -33,6 +33,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -46,8 +47,8 @@ REPO = Path(__file__).resolve().parents[2]
 # that passes both before and after the fix proves nothing.
 GUARD_PATH = Path(os.environ.get("OVERNIGHT_GUARD_UNDER_TEST")
                   or REPO / "hooks" / "pretool-overnight-hook-guard.py")
-LAB_BASE = Path(os.environ.get("OVERNIGHT_QA_SENTINEL_LAB_BASE")
-                or "/var/tmp/claude-qa-sentinel-bind-labs")
+# A caller-owned lab base, used as it is; unset, each run makes its own (lab_base).
+LAB_BASE_OVERRIDE = os.environ.get("OVERNIGHT_QA_SENTINEL_LAB_BASE")
 SID = "dev-sentinel-test"
 
 ORCHESTRATOR_PAYLOAD = {"session_id": SID}
@@ -64,10 +65,23 @@ def _load_guard():
 G = _load_guard()
 
 
+@pytest.fixture(scope="module")
+def lab_base():
+    """A fresh per-run base under /var/tmp (see MEASURED TRAP), removed after the
+    module: no fixed shared /var/tmp path is left behind, or collides with a run as
+    another user. OVERNIGHT_QA_SENTINEL_LAB_BASE, when set, is used as it is."""
+    if LAB_BASE_OVERRIDE:
+        yield Path(LAB_BASE_OVERRIDE)
+        return
+    base = Path(tempfile.mkdtemp(prefix="claude-qa-sentinel-bind-labs-", dir="/var/tmp"))
+    yield base
+    shutil.rmtree(base, ignore_errors=True)
+
+
 @pytest.fixture
-def lab(request):
+def lab(request, lab_base):
     """main/ + clone/ + a populated dev-registry session dir, under /var/tmp."""
-    root = LAB_BASE / uuid.uuid4().hex[:12]
+    root = lab_base / uuid.uuid4().hex[:12]
     main = root / "main"
     wt = root / "clone"
     sess = main / ".claude" / "dev-registry" / SID

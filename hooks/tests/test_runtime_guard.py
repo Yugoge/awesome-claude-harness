@@ -3605,9 +3605,11 @@ class TestCycle13CodexFollowup:
 # non-stop base and reverse-contains the repo, flipping boundary-ALLOW tests to BLOCK.)
 @pytest.fixture(scope="module")
 def isolated_pair(tmp_path_factory):
+    import shutil
     import tempfile
     # CONFIG: direct child of the /tmp stop-root so the ancestor self-protection walk
     # terminates at /tmp, keeping the protected set tight. /tmp is POSIX-guaranteed.
+    # pytest does not manage this dir, so the fixture removes it after the module.
     cfgbase = tempfile.mkdtemp(prefix="c14cfg_", dir="/tmp")
     cfgdir = os.path.join(cfgbase, ".config", "app")
     os.makedirs(cfgdir)
@@ -3621,7 +3623,8 @@ def isolated_pair(tmp_path_factory):
     cfg["protected_root_manifest_paths"] = [repo]
     with open(df, "w") as fh:
         json.dump(cfg, fh)
-    return {"df": df, "cfgdir": cfgdir, "repo": repo}
+    yield {"df": df, "cfgdir": cfgdir, "repo": repo}
+    shutil.rmtree(cfgbase, ignore_errors=True)
 
 
 def ev_iso(command, df, cwd=None):
