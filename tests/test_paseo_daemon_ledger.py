@@ -3331,11 +3331,13 @@ def test_tz_trust_fingerprint_tracks_served_rules_not_version_string(tmp_path):
              "m=u.module_from_spec(s);s.loader.exec_module(m);"
              "import datetime as d;"
              # the tz database version string: the tzdata wheel's when it is
-             # installed, else the system database's own version line
-             "import importlib.metadata as md;"
+             # installed, else the system database's own version line, else
+             # None (a database that ships neither file has no version string)
+             "import importlib.metadata as md, os;"
              "tzversion=lambda: md.version('tzdata') if any("
-             "True for _ in md.distributions(name='tzdata')) else open("
-             "'/usr/share/zoneinfo/tzdata.zi').readline().strip();"
+             "True for _ in md.distributions(name='tzdata')) else next("
+             "(open(p).readline().strip() for p in ('/usr/share/zoneinfo/tzdata.zi',"
+             " '/usr/share/zoneinfo/+VERSION') if os.path.isfile(p)), None);"
              "b=d.datetime.fromisoformat('2026-09-04T18:00:00+00:00');"
              "print(json.dumps({'table': m.zone_offset_table(%r, b, "
              "b+d.timedelta(days=30)), 'version': tzversion()}))"
