@@ -1295,9 +1295,9 @@ def repair_pop(home, stash, always=False):
                     or old == new or undated(old) != undated(new):
                 continue
         head = blob(home, "HEAD:" + path) is not None
-        _git(home, "--literal-pathspecs", *(["checkout", "-q", "HEAD"] if head else ["rm", "-q"]),
-             "--", path)
-        resolved.append(path)
+        proc = _git(home, "--literal-pathspecs", *(["checkout", "-q", "HEAD"] if head else
+                                                   ["rm", "-q"]), "--", path)
+        resolved += [path] if proc is not None and proc.returncode == 0 else []  # a lock: not yet
     left, unstage = _unmerged(home), []
     if stash and (resolved or always):
         index = {e.split("\t", 1)[1]: e.split()[1] for e in _z(home, "ls-files", "-s", "-z")}
@@ -1307,10 +1307,11 @@ def repair_pop(home, stash, always=False):
         unstage = [p for p in _z(home, "diff", "--cached", "--name-only", "-z", "--no-renames",
                                  "HEAD") if p not in left and (index.get(p) == stashed.get(p) or
                                                                p in merged)]
-    if unstage:  # never an empty list: `git reset` without a pathspec resets the whole index
-        subprocess.run(["git", "-C", home, "--literal-pathspecs", "reset", "-q", "HEAD",
-                        "--pathspec-from-file=-", "--pathspec-file-nul"], stdout=subprocess.DEVNULL,
-                       input=b"\0".join(os.fsencode(p) for p in unstage), stderr=subprocess.DEVNULL)
+    reset = ["git", "-C", home, "--literal-pathspecs", "reset", "-q", "HEAD",
+             "--pathspec-from-file=-", "--pathspec-file-nul"]  # no pathspec resets the whole index
+    if unstage and subprocess.run(reset, input=b"\0".join(os.fsencode(p) for p in unstage),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+        unstage = []  # a lock: nothing was unstaged
     return len(resolved), sum(p != SETTINGS for p in resolved), len(unstage), len(left)
 
 

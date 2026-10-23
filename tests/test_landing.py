@@ -659,6 +659,48 @@ def test_doc_sync_only_conflicts_take_upstreams_side(tmp_path, env):
     assert git(env, home, "pull", "-q", "--rebase", "origin", "master").returncode == 0
 
 
+def test_a_repair_that_git_refused_claims_nothing_and_runs_again(tmp_path, env):
+    """R2, R9 (review LH-6): while a git lock refuses the checkout or rm, the path stays unmerged
+    and is neither counted as taken from upstream nor said to be; the next Stop resolves it."""
+    origin, _rev = make_home(tmp_path, env, name="origin")
+    write(origin / "commands/INDEX.md", DATED % "2026-01-01T00:00:00Z")
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "index")
+    home = clone_home(env, tmp_path, origin)
+    git(env, home, "checkout", "-q", "-B", "master", _rev)
+    git(env, home, "merge", "-q", "--ff-only", "origin/master")
+    land(env, home)
+    git(env, origin, "rm", "-q", "commands/INDEX.md")
+    git(env, origin, "commit", "-q", "-m", "upstream deletes the index")
+    write(home / "commands/INDEX.md", DATED % "2026-02-02T00:00:00Z")  # doc-sync re-dates it
+    git(env, home, "stash", "push", "-q", "-m", "Auto-stash before pull")
+    git(env, home, "pull", "-q", "--rebase", "origin", "master")
+    assert git(env, home, "stash", "pop", check=False).returncode != 0
+    (home / ".git" / "index.lock").write_text("")
+    assert land(env, home) == ""
+    assert "DU commands/INDEX.md" in git(env, home, "status", "--porcelain").stdout
+    assert "repair resolved=0 doc-sync=0 unstaged=0 unmerged-left=1" in landing_log(home)
+    (home / ".git" / "index.lock").unlink()
+    assert land(env, home).startswith("Harness landing: 1 file(s) a pull left conflicted taken "
+                                      "from upstream (1 doc-sync)")
+    assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout == ""
+
+
+def test_an_upgraded_home_whose_repair_git_refused_claims_nothing(tmp_path, env):
+    """The same on an upgraded S3 home: neither settings.json nor the path the pop staged is
+    counted while the lock refuses them; the next Stop repairs both and lands."""
+    home, rev, pop = pulled_home(tmp_path, env, model_and_allow, {"notes.txt": "owner note\n"})
+    assert pop.returncode != 0
+    (home / ".git" / "index.lock").write_text("")
+    assert "taken from upstream" not in land(env, home)
+    assert "repair resolved=0 doc-sync=0 unstaged=0 unmerged-left=1" in landing_log(home)
+    (home / ".git" / "index.lock").unlink()
+    assert "1 file(s) a pull left conflicted taken from upstream (0 doc-sync), 1 staged path(s) " \
+        "unstaged" in land(env, home)
+    assert land(env, home, "--state").strip() == "landed"
+    assert git(env, home, "status", "--porcelain").stdout == " M notes.txt\n"
+
+
 def test_doc_sync_conflicts_on_an_upgraded_home_whose_pull_left_settings_alone(tmp_path, env):
     """R2's doc-sync exception in the landing itself: the pull's entry holds only doc-sync's
     re-dated CLAUDE.md and commands/INDEX.md (settings.json untouched, so no entry differs from
