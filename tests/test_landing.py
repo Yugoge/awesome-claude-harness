@@ -1276,6 +1276,36 @@ def test_a_daemon_left_running_is_restarted_at_a_later_turn_end(tmp_path, env):
         kill_daemons(home, old)
 
 
+@needs_proc
+def test_a_daemon_started_just_after_its_code_was_written_is_current(tmp_path, env):
+    """R8 (review LH-4): a daemon's start is compared with its code's mtime in centiseconds, not
+    in whole seconds (/proc/stat's btime is truncated): one started 0.4 s or more after the code
+    was written, in a second that whole-second arithmetic makes the same, runs the current code
+    and is not restarted. (One started before the write is: the other daemon tests.)"""
+    home, rev = make_home(tmp_path, env)
+    land(env, home)
+    daemon = home / "hooks/git-fswatch.sh"
+    write(daemon, DAEMON, 0o755)
+    uptime = lambda: float(Path("/proc/uptime").read_text().split()[0])  # noqa: E731
+    while not 0.4 <= uptime() % 1 < 0.6:  # the start's fraction of a second since boot
+        time.sleep(0.01)
+    proc = subprocess.Popen(["bash", str(daemon), str(home)], env=env, cwd=str(home),
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        time.sleep(1)
+        ticks = int(Path("/proc/%d/stat" % proc.pid).read_text().rsplit(") ", 1)[1].split()[19])
+        btime = next(int(ln.split()[1]) for ln in Path("/proc/stat").read_text().splitlines()
+                     if ln.startswith("btime "))
+        whole = btime + ticks // os.sysconf("SC_CLK_TCK")  # the start, rounded down twice
+        for path in (daemon, home / "hooks/lib/checkpoint-core.sh"):
+            os.utime(path, (whole, whole))  # 0.4 s or more before the start
+        assert land(env, home) == ""
+        assert proc.poll() is None and daemons_of(env, home, home) == [proc.pid]
+    finally:
+        kill_daemons(home, proc)
+
+
 @pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="needs /proc")
 def test_a_zombie_named_like_the_daemon_leaves_the_landing_at_exit_0(tmp_path, env):
     """R8, R9: an unreaped child that ran a script named git-fswatch.sh (state Z: an empty

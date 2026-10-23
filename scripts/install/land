@@ -90,7 +90,7 @@ legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the
 # this home's current daemon code, in STALE. One builtin read per /proc/<pid>/cmdline and no
 # process started unless one runs such a script: a landed home checks this at every Stop.
 stale() {
-  local f a b k v btime="" tick newest line
+  local f a b k v up now boot tick newest=0 line
   local -a st
   STALE=()
   for f in /proc/[0-9]*/cmdline; do  # a zombie's cmdline is empty
@@ -98,13 +98,18 @@ stale() {
     case "${a##*/}:$b" in bash:*git-fswatch.sh|sh:*git-fswatch.sh) f="${f#/proc/}"; STALE+=("${f%/cmdline}") ;; esac
   done
   [ "${#STALE[@]}" -gt 0 ] || return 1
-  { read -r k; read -r v; } < <(stat -c %Y hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null)
-  newest=$(( ${k:-0} > ${v:-0} ? ${k:-0} : ${v:-0} )); tick="$(getconf CLK_TCK 2>/dev/null)"
-  while read -r k v _; do [ "$k" != btime ] || btime="$v"; done < /proc/stat
-  [ "$newest" -gt 0 ] && [ -n "$btime" ] && [ -n "$tick" ] || { STALE=(); return 1; }
+  # In centiseconds (review LH-4: /proc/stat's btime has whole seconds): the daemon code's newest
+  # mtime, and the boot time as the clock now minus /proc/uptime.
+  while read -r k _ v _; do [[ $v == *.* ]] && v="${v#*.}00" || v=00
+    v=$((k * 100 + 10#${v:0:2})); [ "$v" -le "$newest" ] || newest=$v
+  done < <(stat -c '%Y %y' hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null)
+  read -r up _ < /proc/uptime; up="${up//[!0-9]/}"; now="${EPOCHREALTIME//[!0-9]/}"
+  [ -n "$now" ] || now="$(date +%s%6N)"; tick="$(getconf CLK_TCK 2>/dev/null)"
+  boot=$(( ${now:-0} / 10000 - 10#${up:-0} ))
+  [ "$newest" -gt 0 ] && [ "${up:-0}" -gt 0 ] && [ -n "$tick" ] || { STALE=(); return 1; }
   for k in "${!STALE[@]}"; do
     line=""; read -r line 2>/dev/null < "/proc/${STALE[k]}/stat"; read -r -a st <<< "${line##*) }"
-    [ "${#st[@]}" -ge 20 ] && [ $((btime + st[19] / tick)) -le "$newest" ] || unset 'STALE[k]'
+    [ "${#st[@]}" -ge 20 ] && [ $((boot + st[19] * 100 / tick)) -le "$newest" ] || unset 'STALE[k]'
   done
   [ "${#STALE[@]}" -gt 0 ]
 }
