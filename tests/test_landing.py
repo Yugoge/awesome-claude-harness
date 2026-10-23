@@ -855,6 +855,39 @@ def test_fswatch_safe_pull_reports_a_failed_pop_as_failed(tmp_path, env):
     assert len(git(env, work, "stash", "list").stdout.splitlines()) == 1
 
 
+@pytest.mark.parametrize("kept", [True, False], ids=["older-entry", "no-entry"])
+def test_fswatch_safe_pull_pops_only_an_entry_its_own_push_made(tmp_path, env, kept):
+    """Review NF-2, /pull's defect of commit 42 in fswatch's safe_pull: has_changes counts an
+    untracked file as a change, but `git stash push` saves nothing for it. With an untracked file
+    alone, a clean pull neither reports a failed restore ("No stash entries found", "MANUAL
+    INTERVENTION REQUIRED") nor pops an older, unrelated entry."""
+    origin, work = tmp_path / "up", tmp_path / "watched"
+    git(env, tmp_path, "init", "-q", "-b", "master", str(origin))
+    write(origin / "a.txt", "one\n")
+    write(origin / "b.txt", "two\n")
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "a")
+    git(env, tmp_path, "clone", "-q", str(origin), str(work))
+    write(origin / "a.txt", "upstream\n")
+    git(env, origin, "commit", "-q", "-am", "upstream")
+    if kept:
+        write(work / "b.txt", "an older change\n")
+        git(env, work, "stash", "push", "-q", "-m", "an entry kept from an earlier pull")
+    entries = git(env, work, "stash", "list", "--format=%H").stdout
+    write(work / "scratch-note.txt", "an untracked file, nothing else\n")
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "logs").mkdir()
+    script = ('source <(sed "\\$d" "$1") "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
+              'echo "safe_pull rc=$?"')
+    proc = run(["bash", "-c", script, "x", str(REPO / "hooks/git-fswatch.sh"), str(work)], env,
+               cwd=str(work), check=False)
+    assert "safe_pull rc=0" in proc.stdout, proc.stdout[-600:]
+    assert "Failed to restore stash" not in proc.stdout and "MANUAL INTERVENTION" not in proc.stdout
+    assert "Nothing was stashed" in proc.stdout
+    assert (work / "a.txt").read_text() == "upstream\n" and (work / "b.txt").read_text() == "two\n"
+    assert git(env, work, "stash", "list", "--format=%H").stdout == entries
+    assert git(env, work, "status", "--porcelain").stdout == "?? scratch-note.txt\n"
+
+
 # ------------------------------------------- a landed home's settings.json stat (review N1)
 
 def cli_write(path, key, value):  # the way the CLI writes a key of its own

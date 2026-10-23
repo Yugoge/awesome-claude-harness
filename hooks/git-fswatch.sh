@@ -194,12 +194,19 @@ safe_pull() {
     log_info "Behind remote by $behind commit(s), pulling..."
 
     # Stash if there are changes
-    local stashed=0
+    local stashed=0 before
     if has_changes; then
         log_info "Stashing local changes..."
+        before=$(git rev-parse -q --verify refs/stash)
         if git stash push -m "fswatch auto-stash $(date +%s)" 2>&1 | tee -a "$LOG_FILE"; then
-            stashed=1
-            log_success "Changes stashed"
+            # Untracked files alone count as changes above, yet the push saves nothing for them:
+            # pop only an entry this push made (an older one, a kept conflicted pop's, is not ours).
+            if [ "$(git rev-parse -q --verify refs/stash)" = "$before" ]; then
+                log_info "Nothing was stashed (untracked files stay where they are)"
+            else
+                stashed=1
+                log_success "Changes stashed"
+            fi
         else
             log_error "Failed to stash changes"
             return 1
