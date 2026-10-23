@@ -934,6 +934,19 @@ def test_stale_installed_hook_is_refreshed_by_step_5_alone(tmp_path, env):
     assert [(home / p).read_bytes() for p in ("settings.json", "settings.machine.json")] == snapshot
 
 
+def test_a_missing_installed_hook_is_reinstalled_and_not_called_changed(tmp_path, env):
+    """R1, R9 (review RQ-7's side note): an installed pre-commit that is gone is reinstalled by
+    step 5 alone, and the notice says the hooks differed, not that their source changed."""
+    home, rev = make_home(tmp_path, env)
+    land(env, home)
+    hooks = home / git(env, home, "rev-parse", "--git-path", "hooks").stdout.strip()
+    (hooks / "pre-commit").unlink()
+    assert land(env, home, "--state").strip() == "hooks"
+    assert land(env, home) == "Harness landing: init step 5 reinstalled the git hooks that differed " \
+        "from hooks/git-hooks/.\n"
+    assert (hooks / "pre-commit").read_bytes() == (home / "hooks/git-hooks/pre-commit").read_bytes()
+
+
 def test_global_hooks_path_gives_one_notice_then_counts_as_landed(tmp_path, env):
     home, rev = make_home(tmp_path, env)
     shared = tmp_path / "shared-hooks"

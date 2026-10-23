@@ -214,5 +214,5 @@ own_hooks || { steps=3,4; did="${did%, pre-commit*}; pre-commit hook not install
 bash scripts/bootstrap --steps "$steps" 2>&1 | sed -e "s#$H#<home>#g" -e "s#${HOME:-/nonexistent}/#~/#g" >> "$LOG"
 [ "${PIPESTATUS[0]}" -eq 0 ] \
   || finish "failed-steps-$steps" "Harness landing failed at init steps $steps (see logs/landing.log)${NOTE:+ (done so far: ${NOTE#; })}; it runs again at the next turn end."
-[ "$STATE" = hooks ] && finish hooks-refreshed "Harness landing: init step 5 reinstalled the git hooks that changed under hooks/git-hooks/."
+[ "$STATE" = hooks ] && finish hooks-refreshed "Harness landing: init step 5 reinstalled the git hooks that differed from hooks/git-hooks/."
 finish landed "Harness landing: P7 landed on this home: $did${NOTE}. Running sessions follow its push and guard settings now; see logs/landing.log."
