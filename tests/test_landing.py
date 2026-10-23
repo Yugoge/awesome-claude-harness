@@ -247,6 +247,28 @@ def test_a_clone_made_after_p7_that_looked_at_history_is_not_landed(tmp_path, en
                 if (clone / p).exists()]
 
 
+@pytest.mark.parametrize("mode", ["--no-rebase", "--rebase"])
+def test_a_home_whose_reflog_expired_before_the_pull_is_upgraded(tmp_path, env, mode):
+    """R1, R3: a home whose HEAD had not moved for longer than the reflog keeps entries (expired by
+    gc) has, after a fast-forward pull, one reflog entry whose new value declares the filter; its
+    old value is rev, and so is ORIG_HEAD. Either one is enough."""
+    origin, rev = make_home(tmp_path, env, name="origin")
+    home = clone_home(env, tmp_path, origin)
+    git(env, home, "checkout", "-q", "-B", "master", rev)
+    git(env, home, "branch", "-q", "-u", "origin/master")
+    git(env, home, "reflog", "expire", "--expire=now", "--all")
+    assert git(env, home, "reflog", "HEAD").stdout == ""
+    git(env, home, "pull", "-q", mode, "--no-edit", "origin", "master")
+    assert len(git(env, home, "reflog", "HEAD").stdout.splitlines()) == 1
+    rs = [sys.executable, str(home / "scripts/install/render-settings"), "land", "--rev"]
+    assert run(rs, env).stdout.strip() == rev
+    git(env, home, "update-ref", "-d", "ORIG_HEAD")  # the reflog's old value alone
+    assert run(rs, env).stdout.strip() == rev
+    assert land(env, home, "--state").strip() == "upgraded"
+    assert land(env, home).startswith("Harness landing: P7 landed on this home")
+    assert_landed(env, home)
+
+
 # ------------------------------------------------------- R2: the states a pull path leaves behind
 
 def clone_home(env, tmp_path, origin):

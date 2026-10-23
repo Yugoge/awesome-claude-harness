@@ -1225,20 +1225,23 @@ def _unmerged(home):
 
 
 def pre_pull_rev(home):
-    """R3's rev: the newest HEAD reflog entry (ORIG_HEAD without a reflog) whose .gitattributes
-    does not declare the settings filter; None unless HEAD's (or a stopped merge's MERGE_HEAD's)
-    declares it, and None when the reflog starts with a clone of a revision that declares it
-    (D13: a fresh clone that checked out an older revision and came back is left to init)."""
-    log = [e.split(" ", 1) for e in (_git_out(home, "log", "-g", "--format=%H %gs", "HEAD")
-                                      or "").splitlines()]
-    revs = list(dict.fromkeys(e[0] for e in log)) \
-        or (_git_out(home, "rev-parse", "-q", "--verify", "ORIG_HEAD^{commit}") or "").split()
+    """R3's rev: the newest revision of the HEAD reflog (each entry's new value, then its old one:
+    after a pull, a reflog that gc had emptied holds rev only as an old value), else ORIG_HEAD,
+    whose .gitattributes does not declare the settings filter; None unless HEAD's (or a stopped
+    merge's MERGE_HEAD's) declares it, and None when the reflog starts with a clone of a revision
+    that declares it (D13: a fresh clone that checked out an older revision and came back)."""
+    path = _git_out(home, "rev-parse", "--git-path", "logs/HEAD")
+    log = [(e[0].split(" ")[:2], e[2]) for e in (ln.decode("utf-8", "replace").partition("\t")
+           for ln in reversed((path and _read(os.path.join(home, path)) or b"").splitlines()))]
+    revs = [r for pair, _ in log for r in reversed(pair)] + \
+        (_git_out(home, "rev-parse", "-q", "--verify", "ORIG_HEAD^{commit}") or "").split()
+    revs = [r for r in dict.fromkeys(revs) if r.strip("0")]  # a clone's old value is all zeros
     tips = ["HEAD"] + (["MERGE_HEAD"] if _git_out(home, "rev-parse", "-q", "--verify",
                                                    "MERGE_HEAD") else [])
     found = _git_out(home, "grep", "-l", "-F", "filter=" + FILTER_NAME, *tips, *revs, "--",
                      ".gitattributes") or ""
     declaring = {line.split(":", 1)[0] for line in found.splitlines()}
-    if log and log[-1][0] in declaring and log[-1][1:] and log[-1][1].startswith("clone: "):
+    if log and log[-1][0][-1:] and log[-1][0][-1] in declaring and log[-1][1].startswith("clone: "):
         return None
     return next((r for r in revs if r not in declaring), None) if declaring & set(tips) else None
 
