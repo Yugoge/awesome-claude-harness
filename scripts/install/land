@@ -168,9 +168,17 @@ state
 [ "${1:-}" = "--state" ] && { echo "$STATE"; exit 0; }
 case "$STATE" in landed|hooks|upgraded) ;; *) exit 0 ;; esac
 if [ "$STATE" = landed ]; then  # a later pull's conflicted stash pop (its entry is kept), or a stale daemon
-  REPAIR=""
-  [ -s "$COMMON/logs/refs/stash" ] && git ls-files -u 2>/dev/null \
-    | grep -qE $'\t(settings\\.json|(.*/)?(INDEX|CLAUDE)\\.md)$' && REPAIR=1
+  # settings.json unmerged, or an index or CLAUDE.md whose stash change is doc-sync's date lines
+  # only (review LH-5: the owner's own conflict there is not the repair's, so no run per Stop).
+  REPAIR="" p0=""
+  [ -s "$COMMON/logs/refs/stash" ] && while IFS=$'\t' read -r _ p; do
+    [ "$p" != "$p0" ] && p0="$p" || continue
+    case "$p" in settings.json) REPAIR=1 ;; INDEX.md|*/INDEX.md|CLAUDE.md|*/CLAUDE.md)
+      d="$(git diff -U0 --output-indicator-old='<' --output-indicator-new='>' refs/stash^1 \
+        refs/stash -- "$p" 2>/dev/null | grep '^[<>]')"
+      [ -n "$d" ] && ! grep -qvE '^[<>](\*Last updated: [^*]*\*|> Last updated: .*)$' <<< "$d" \
+        && REPAIR=1 ;; esac
+  done < <(git ls-files -u 2>/dev/null)
   [ -n "$REPAIR" ] || stale || exit 0
 fi
 mkdir -p logs 2>/dev/null

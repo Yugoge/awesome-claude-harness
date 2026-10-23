@@ -659,6 +659,30 @@ def test_doc_sync_only_conflicts_take_upstreams_side(tmp_path, env):
     assert git(env, home, "pull", "-q", "--rebase", "origin", "master").returncode == 0
 
 
+def test_an_owners_own_doc_conflict_runs_no_repair_at_each_stop(tmp_path, env):
+    """R1 (review LH-5): a landed home whose later pull left CLAUDE.md unmerged with the owner's
+    own change (more than doc-sync's date line) runs no repair at its Stops (no python process,
+    no log line, no notice) until the owner resolves it; nothing in it is the repair's to take."""
+    origin, rev = make_home(tmp_path, env, name="origin")
+    write(origin / "CLAUDE.md", CLAUDE_MD % ("2026-01-01", "---"))
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "CLAUDE.md")
+    home = clone_home(env, tmp_path, origin)
+    git(env, home, "checkout", "-q", "-B", "master", rev)
+    git(env, home, "merge", "-q", "--ff-only", "origin/master")
+    land(env, home)
+    write(origin / "CLAUDE.md", CLAUDE_MD % ("2026-01-01", "--- upstream edit"))
+    git(env, origin, "commit", "-q", "-am", "upstream")
+    write(home / "CLAUDE.md", CLAUDE_MD % ("2026-02-02", "--- the owner's edit"))
+    git(env, home, "stash", "push", "-q", "-m", "Auto-stash before pull")
+    git(env, home, "pull", "-q", "--rebase", "origin", "master")
+    assert git(env, home, "stash", "pop", check=False).returncode != 0
+    log = landing_log(home)
+    assert land(env, home) == "" and land(env, home) == ""
+    assert landing_log(home) == log
+    assert "UU CLAUDE.md" in git(env, home, "status", "--porcelain").stdout
+
+
 def append_allow(path, entry):  # at the end of the list, the way the CLI adds one
     doc = json.loads(path.read_text(encoding="utf-8"))
     doc["permissions"]["allow"].append(entry)
