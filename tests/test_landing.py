@@ -873,11 +873,14 @@ def landed_home_behind(tmp_path, env):
 
 
 def update_index_runs(env, home, trace):
-    """The landing's stdout, and how many `git update-index` it ran (GIT_TRACE to a file)."""
+    """The landing's stdout, and how many `git update-index` and `git diff` (through the filter)
+    it ran (GIT_TRACE to a file)."""
     trace.write_text("")
     notice = land(dict(env, GIT_TRACE=str(trace)), home)
-    return notice, sum(" update-index" in line for line in trace.read_text().splitlines()
-                       if "trace: built-in: git" in line)
+    runs = [line.split("trace: built-in: git ", 1)[1] for line in trace.read_text().splitlines()
+            if "trace: built-in: git " in line]
+    return notice, sum(r.startswith("update-index") for r in runs), \
+        sum(r.startswith("diff ") for r in runs)
 
 
 @pytest.mark.parametrize("path", ["pull.sh", "fswatch"])
@@ -920,17 +923,21 @@ def test_a_cli_write_of_its_own_key_does_not_stop_the_pulls_after_a_stop(tmp_pat
 def test_a_real_change_is_left_as_it_is_and_only_a_clean_one_is_re_recorded(tmp_path, env):
     """Review N1, the other side: a write the clean form keeps (an allow entry) is a change;
     the landing re-records nothing for it (a cleared stat would cost every later `git status` a
-    filter run), stages nothing, and /pull stashes it as before. A clean landed home runs no
-    update-index; a CLI-owned write runs the two of refresh_index once, then none."""
+    filter run), stages nothing, and /pull stashes it as before; it diffs it once per write, not
+    at every Stop. A clean landed home runs neither; a CLI-owned write runs the diff and the two
+    update-index of refresh_index once, then none."""
     home = landed_home_behind(tmp_path, env)
     trace = tmp_path / "git-trace.txt"
-    assert update_index_runs(env, home, trace) == ("", 0)
+    assert update_index_runs(env, home, trace) == ("", 0, 0)
     blob = git(env, home, "rev-parse", ":settings.json").stdout
     cli_write(home / "settings.json", "theme", "demo-theme")
-    assert update_index_runs(env, home, trace) == ("", 2)
-    assert update_index_runs(env, home, trace) == ("", 0)
+    assert update_index_runs(env, home, trace) == ("", 2, 1)
+    assert update_index_runs(env, home, trace) == ("", 0, 0)
     append_allow(home / "settings.json", "Bash(/opt/demo/bin/live-tool3:*)")
-    assert update_index_runs(env, home, trace) == ("", 0)
+    assert update_index_runs(env, home, trace) == ("", 0, 1)
+    assert update_index_runs(env, home, trace) == ("", 0, 0)
+    cli_write(home / "settings.json", "model", "demo-live-model-3")  # a later write: diffed again
+    assert update_index_runs(env, home, trace) == ("", 0, 1)
     assert git(env, home, "rev-parse", ":settings.json").stdout == blob
     assert git(env, home, "diff", "--cached", "--name-only").stdout == ""
     assert git(env, home, "status", "--porcelain").stdout == " M settings.json\n"
