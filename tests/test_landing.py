@@ -796,6 +796,40 @@ def test_doc_sync_conflicts_on_an_upgraded_home_whose_pull_left_settings_alone(t
     assert_landed(env, home)
 
 
+# ------------------------------------- the pull paths' own stash and pop (routed by PR #6's review)
+
+def upstream_commit(env, origin, rel="upstream-note.md"):
+    write(origin / rel, "an upstream change\n")
+    git(env, origin, "add", rel)
+    git(env, origin, "commit", "-q", "-m", "upstream: " + rel)
+
+
+@pytest.mark.parametrize("kept", [True, False], ids=["kept-entry", "no-entry"])
+def test_pull_sh_pops_only_an_entry_its_own_push_made(tmp_path, env, kept):
+    """hooks/pull.sh counts untracked files as changes, but `git stash push` saves nothing for
+    them. With only an untracked file, a clean fast-forward must not pop anything: not the entry a
+    conflicted pop kept (the landing keeps it, R2), and not "no entry" as a failure."""
+    if kept:
+        home, rev, pop = pulled_home(tmp_path, env, model_and_allow)
+        land(env, home)
+    else:
+        home, rev = pre_pull_clone(tmp_path, env)
+        git(env, home, "merge", "-q", "--ff-only", "origin/master")
+        land(env, home)
+    assert_landed(env, home)
+    entries = git(env, home, "stash", "list", "--format=%H").stdout
+    assert len(entries.splitlines()) == (1 if kept else 0)
+    settings = (home / "settings.json").read_bytes()
+    upstream_commit(env, tmp_path / "origin")
+    write(home / "scratch-note.txt", "an untracked file, nothing else\n")
+    proc = run(["bash", str(REPO / "hooks/pull.sh")], env, cwd=str(home), check=False)
+    assert proc.returncode == 0, proc.stdout[-600:] + proc.stderr[-600:]
+    assert (home / "upstream-note.md").exists() and (home / "scratch-note.txt").exists()
+    assert git(env, home, "stash", "list", "--format=%H").stdout == entries
+    assert (home / "settings.json").read_bytes() == settings
+    assert git(env, home, "status", "--porcelain").stdout == "?? scratch-note.txt\n"
+
+
 # ------------------------------------------------------------------------------ R5: seeding
 
 def test_seeding_sources_filters_and_no_value_printed(tmp_path, env):
