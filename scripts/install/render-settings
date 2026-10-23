@@ -1364,7 +1364,7 @@ def seed_literals(home, rev):
     email = _git_out(home, "config", "--local", "--get", "user.email") or \
         _git_out(home, "config", "--global", "--get", "user.email")
     homes = {home, os.path.realpath(home), env.get("CLAUDE_HOME") or home}
-    # The harness home rev's hook commands name for the scripts rev tracks (/root/.claude in a
+    # The harness home rev's hook commands name for the scripts rev tracks (root's home in a
     # /home/<user> layout, review F3): a path under it is the tracked tree's, not a personal tool.
     prev, tracked = parse(blob(home, "%s:%s" % (rev, SETTINGS))) or {}, set(_z(
         home, "ls-tree", "-r", "-z", "--name-only", rev))

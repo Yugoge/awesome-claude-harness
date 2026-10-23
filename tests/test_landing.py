@@ -858,9 +858,9 @@ def test_fswatch_safe_pull_reports_a_failed_pop_as_failed(tmp_path, env):
 
 def test_seeding_sources_filters_and_no_value_printed(tmp_path, env):
     """R5's sources and filters. A permission path under the harness home that rev's hook
-    commands name for the scripts rev tracks (the old settings' /opt/demo/.claude here, as
-    /root/.claude in a /home/<user> layout: review F3) is a harness script, not a personal tool
-    path: it is not seeded."""
+    commands name for the scripts rev tracks (the old settings' /opt/demo/.claude here, as root's
+    home in a /home/<user> layout: review F3) is a harness script, not a personal tool path: it is
+    not seeded."""
     prev = previous_settings()
     prev["permissions"]["allow"] += ["Read(//opt/demo/notes/**)", "Bash(/tmp:*)"]
     home, rev = make_home(tmp_path, env, prev)
