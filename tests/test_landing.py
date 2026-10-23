@@ -907,10 +907,34 @@ def test_a_timed_out_repository_scan_is_logged_and_named(tmp_path, env):
           % shutil.which("find"), 0o755)
     notice = land(dict(env, PATH="%s:%s" % (stub.parent, env["PATH"])), home)
     assert "P7 landed" in notice and "1 legacy auto-push hook(s) renamed aside" in notice
-    assert "the scan for other repositories under ~ stopped after 5 s; those it did not reach keep " \
-        "their legacy hooks" in notice
+    assert "the scan for other repositories under ~ stopped at its time limit; those it did not " \
+        "reach keep their legacy hooks" in notice
     assert "legacy-hooks disabled=1 lfs-restored=0 scan=timed-out" in landing_log(home)
     assert (late / ".git/hooks/post-commit").exists()
+
+
+def test_the_loop_over_the_repositories_found_keeps_to_the_time_bound(tmp_path, env):
+    """R1 / R6 (review RQ-4): the loop over the repositories the scan found (one git call each)
+    stops taking new ones after 8 s, so thousands of repositories under $HOME cannot push the
+    landing past its 15 s bound; the harness home's own hooks come first, and the cut is logged
+    and named like a cut scan. Here each of 5 repositories takes 3 s (a slow git stand-in)."""
+    home, rev = make_home(tmp_path, env, name="zz-harness")  # not first by name
+    write(home / ".git/hooks/post-commit", LEGACY_HOOK, 0o755)
+    many = [Path(env["HOME"]) / "many" / ("r%d" % i) for i in range(5)]
+    for repo in many:
+        git(env, tmp_path, "init", "-q", str(repo))
+        write(repo / ".git/hooks/post-commit", LEGACY_HOOK, 0o755)
+    stub = tmp_path / "slow-bin" / "git"
+    write(stub, '#!/bin/bash\ncase "$*" in "-C $HOME/many/"*" config --get core.hooksPath")'
+          ' sleep 3 ;; esac\nexec %s "$@"\n' % shutil.which("git"), 0o755)
+    started = time.time()
+    notice = land(dict(env, PATH="%s:%s" % (stub.parent, env["PATH"])), home)
+    assert time.time() - started < 15
+    assert "P7 landed" in notice and "the scan for other repositories under ~ stopped at its time " \
+        "limit" in notice
+    assert "scan=timed-out" in landing_log(home)
+    assert (home / ".git/hooks/post-commit.auto-push-disabled").exists()
+    assert [(r / ".git/hooks/post-commit").exists() for r in many].count(True) >= 2
 
 
 def test_a_legacy_hook_a_repository_tracks_is_left_and_counted(tmp_path, env):
