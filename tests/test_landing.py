@@ -1071,6 +1071,34 @@ def test_a_zombie_named_like_the_daemon_leaves_the_landing_at_exit_0(tmp_path, e
         zombie.wait()
 
 
+@needs_proc
+def test_a_process_that_exits_during_the_daemon_scan_prints_nothing(tmp_path, env):
+    """R9: a process listed by the /proc scan that is gone when its cmdline, stat or environ is
+    read (short-lived processes, some of them named like the daemon) makes the landed home's check
+    print nothing on stderr: the shell reports a failed input redirection before a later 2>/dev/null
+    applies, so the redirection to /dev/null comes first."""
+    home, rev = make_home(tmp_path, env)
+    land(env, home)
+    daemon = home / "hooks/git-fswatch.sh"  # newer than any process: each one named like it is a
+    write(daemon, DAEMON, 0o755)            # stale candidate, read again by restart_daemons
+    os.utime(daemon, (time.time() + 3600, time.time() + 3600))
+    write(tmp_path / "z" / "git-fswatch.sh", "exit 0\n")  # gone within a few ms, or 0-30 ms:
+    write(tmp_path / "y" / "git-fswatch.sh", "read -t 0.0$((RANDOM % 4)) <> <(:)\n")
+    churn = [subprocess.Popen(["bash", "-c", "while :; do %s; done" % cmd], env=env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+             for cmd in ("/bin/true", "bash %s" % (tmp_path / "z" / "git-fswatch.sh"),
+                         "bash %s" % (tmp_path / "y" / "git-fswatch.sh"))]
+    try:
+        procs = [run(["bash", str(home / "scripts/install/land")], env, cwd=str(home), check=False)
+                 for _ in range(40)]
+    finally:
+        for proc in churn:
+            proc.kill()
+            proc.wait()
+    assert [(p.returncode, p.stderr) for p in procs if (p.returncode, p.stderr) != (0, "")] == []
+    assert land(env, home, "--state").strip() == "landed"
+
+
 # --------------------------------------------------------- R7: processes started before the landing
 
 def r7_home(tmp_path, settings_env, raw=None):

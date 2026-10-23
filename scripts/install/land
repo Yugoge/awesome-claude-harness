@@ -88,7 +88,7 @@ stale() {
   local -a st
   STALE=()
   for f in /proc/[0-9]*/cmdline; do  # a zombie's cmdline is empty
-    { IFS= read -r -d '' a && IFS= read -r -d '' b; } < "$f" 2>/dev/null || continue
+    { IFS= read -r -d '' a && IFS= read -r -d '' b; } 2>/dev/null < "$f" || continue
     case "${a##*/}:$b" in bash:*git-fswatch.sh|sh:*git-fswatch.sh) f="${f#/proc/}"; STALE+=("${f%/cmdline}") ;; esac
   done
   [ "${#STALE[@]}" -gt 0 ] || return 1
@@ -97,7 +97,7 @@ stale() {
   while read -r k v _; do [ "$k" != btime ] || btime="$v"; done < /proc/stat
   [ "$newest" -gt 0 ] && [ -n "$btime" ] && [ -n "$tick" ] || { STALE=(); return 1; }
   for k in "${!STALE[@]}"; do
-    line=""; read -r line < "/proc/${STALE[k]}/stat" 2>/dev/null; read -r -a st <<< "${line##*) }"
+    line=""; read -r line 2>/dev/null < "/proc/${STALE[k]}/stat"; read -r -a st <<< "${line##*) }"
     [ "${#st[@]}" -ge 20 ] && [ $((btime + st[19] / tick)) -le "$newest" ] || unset 'STALE[k]'
   done
   [ "${#STALE[@]}" -gt 0 ]
@@ -109,7 +109,7 @@ restart_daemons() {  # [landed] R8: the stale processes running this home's git-
   printf -v now '%(%s)T' -1
   stale || :
   for pid in "${STALE[@]}"; do
-    mapfile -d '' -t argv < "/proc/$pid/cmdline" 2>/dev/null && [ "${#argv[@]}" -ge 2 ] || continue  # a zombie has none
+    mapfile -d '' -t argv 2>/dev/null < "/proc/$pid/cmdline" && [ "${#argv[@]}" -ge 2 ] || continue  # a zombie has none
     watch="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || continue  # its main() cd's to the watched path
     case "${argv[1]:-}" in /*) c="${argv[1]}" ;; *) c="$watch/${argv[1]:-}" ;; esac
     [ "$(realpath -e "$c" 2>/dev/null)" = "$H/hooks/git-fswatch.sh" ] || continue
@@ -129,11 +129,11 @@ restart_daemons() {  # [landed] R8: the stale processes running this home's git-
     [ "$SECONDS" -lt 8 ] || { later=$((later + 1)); continue; }
     unit="$(grep -o 'git-fswatch@[^/]*\.service' "/proc/$pid/cgroup" 2>/dev/null | head -n1)"
     if [ -n "$unit" ]; then
-      if grep -q '/user@' "/proc/$pid/cgroup"; then systemctl --user restart "$unit"; else systemctl restart "$unit"; fi >/dev/null 2>&1 \
+      if grep -qs '/user@' "/proc/$pid/cgroup"; then systemctl --user restart "$unit"; else systemctl restart "$unit"; fi >/dev/null 2>&1 \
         && n=$((n + 1)) || failed=$((failed + 1))
       continue
     fi
-    mapfile -d '' -t envv < "/proc/$pid/environ" 2>/dev/null || { failed=$((failed + 1)); continue; }
+    mapfile -d '' -t envv 2>/dev/null < "/proc/$pid/environ" || { failed=$((failed + 1)); continue; }
     # D1, R7: one that a session started before the landing (a Claude Code variable, no
     # CLAUDE_HOME) does not keep that session's stale GIT_AUTO_PUSH.
     k=0; for e in "${envv[@]}"; do case "$e" in CLAUDECODE=*|CLAUDE_PROJECT_DIR=*) k=$((k | 1)) ;; CLAUDE_HOME=*) k=$((k | 2)) ;; esac; done
