@@ -745,6 +745,26 @@ def test_seeding_never_rewrites_a_list_that_has_lines(tmp_path, env):
     assert (home2 / "private-literals.txt").read_bytes() == before
 
 
+def test_a_value_the_tracked_tree_holds_in_100_lines_is_not_seeded(tmp_path, env):
+    """R5 (review LH-2): a value that HEAD's tracked files hold in 100 or more lines is the tree's
+    own vocabulary; the list cannot keep it out of the tree, and seeded it would refuse every
+    snapshot that adds one more such line. A value in 99 lines is seeded; the log counts the one
+    left out, and no value is printed."""
+    home, rev = make_home(tmp_path, env)
+    write(home / "docs/family.md", "demo-family runs here\n" * 100 + "demo-fam2 runs here\n" * 99)
+    git(env, home, "add", "docs/family.md")
+    git(env, home, "commit", "-q", "-m", "a public doc")
+    (home / "settings.machine.json").write_bytes(canon(
+        {"modules": {"paseo": False}, "env": {"CLAUDE_HOME": str(home),
+                                              "CLAUDE_PROTECTED_PROCESS_FAMILY": "demo-family|demo-fam2"}}))
+    (home / "settings.machine.json").chmod(0o600)
+    notice = land(env, home)
+    lines = (home / "private-literals.txt").read_text().splitlines()
+    assert "demo-fam2" in lines and "demo-family" not in lines
+    assert "not seeded, in 100 or more tracked lines at HEAD: 1 value(s)" in landing_log(home)
+    assert not [v for v in lines + ["demo-family"] if v in notice + landing_log(home)]
+
+
 # ------------------------------------------------------- R1, R4, R6, R9: the landing end to end
 
 @pytest.mark.skipif(shutil.which("git-lfs") is None, reason="needs git-lfs")

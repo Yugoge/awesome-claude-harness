@@ -1375,10 +1375,20 @@ def seed_literals(home, rev):
     m = re.search(r"[:/]([^/:]+)/[^/:]+/?$", _git_out(home, "config", "--get",
                                                      "remote.origin.url") or "")
     owner = m.group(1).lower() if m else None  # in the project's public URL: never seeded
+    # A value HEAD's tracked files hold in 100 or more lines is the tree's own vocabulary (review
+    # LH-2): the list cannot keep it out, and it would refuse every snapshot adding one more line.
+    cands = "\n".join({v.strip() for f in sources.values() for v in f if len(v.strip()) >= 4})
+    grep = subprocess.run(["git", "-C", home, "grep", "-h", "-I", "-F", "-f", "-", "HEAD", "--"],
+                          input=cands.encode("utf-8", "surrogateescape"), stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL) if cands else None
+    lines = grep.stdout.decode("utf-8", "replace").splitlines() if grep else []
+    common = {v for v in cands.split("\n") if v and sum(v in ln for ln in lines) >= 100}
+    if common:
+        _say("not seeded, in 100 or more tracked lines at HEAD: %d value(s)" % len(common))
     seeded, counts = [], {}
     for source, found in sources.items():
         keep = [v for v in dict.fromkeys(v.strip() for v in found) if len(v) >= 4
-                and v not in shipped and v.lower() != owner and v not in seeded]
+                and v not in shipped | common and v.lower() != owner and v not in seeded]
         seeded += keep
         counts[source] = len(keep)
     if seeded:
