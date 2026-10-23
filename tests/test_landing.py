@@ -760,6 +760,27 @@ def test_an_upgraded_home_whose_repair_git_refused_claims_nothing(tmp_path, env)
     assert git(env, home, "status", "--porcelain").stdout == " M notes.txt\n"
 
 
+def test_a_settings_json_git_refused_to_repair_is_named_apart_from_other_paths(tmp_path, env):
+    """Review NF-3: while a git lock refuses the repair, the notice counted the unmerged
+    settings.json among the "other conflicted path(s) left as they are". It is named apart, as
+    the path the next Stop repairs; an unmerged file of the owner's is still the one other path."""
+    owner = {"hooks/lib/subagent_restart.py": "# owner's edit\n"}  # tracked; P7 rewrote it
+    home, rev, pop = pulled_home(tmp_path, env, model_and_allow, owner)
+    assert set(git(env, home, "diff", "--name-only", "--diff-filter=U").stdout.split()) == \
+        {"settings.json", "hooks/lib/subagent_restart.py"}
+    (home / ".git" / "index.lock").write_text("")
+    notice = land(env, home)
+    assert "settings.json still conflicted: git refused its repair, tried again at the next " \
+        "turn end; 1 other conflicted path(s) left as they are" in notice
+    assert "2 other conflicted" not in notice
+    (home / ".git" / "index.lock").unlink()
+    notice = land(env, home)
+    assert "1 other conflicted path(s) left as they are" in notice
+    assert "settings.json still conflicted" not in notice
+    assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout.split() == \
+        ["hooks/lib/subagent_restart.py"]
+
+
 def test_doc_sync_conflicts_on_an_upgraded_home_whose_pull_left_settings_alone(tmp_path, env):
     """R2's doc-sync exception in the landing itself: the pull's entry holds only doc-sync's
     re-dated CLAUDE.md and commands/INDEX.md (settings.json untouched, so no entry differs from

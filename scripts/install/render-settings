@@ -1405,11 +1405,16 @@ def seed_literals(home, rev):
     return counts
 
 
-def repaired(res):
-    """The notice parts for repair_pop's result."""
+def repaired(res, home):
+    """The notice parts for repair_pop's result. settings.json stays unmerged only when git refused
+    its repair (a lock), which the next Stop runs again: it is named apart from the other paths."""
+    stuck = SETTINGS in _unmerged(home)
     return (["%d file(s) a pull left conflicted taken from upstream (%d doc-sync), %d staged "
              "path(s) unstaged, the stash entry kept" % res[:3]] if res[0] or res[2] else []) + (
-        ["%d other conflicted path(s) left as they are" % res[3]] if res[3] else [])
+        ["settings.json still conflicted: git refused its repair, tried again at the next turn end"]
+        if stuck else []) + (
+        ["%d other conflicted path(s) left as they are" % (res[3] - stuck)]
+        if res[3] > stuck else [])
 
 
 def from_head(home):
@@ -1451,7 +1456,7 @@ def land(home, mode):
             _say("settings.json taken from HEAD; dropped: %s" % ", ".join(lost))
             notes.append("dropped from settings.json, as the overlay does not hold them: %s (in "
                          "the stash entry)" % ", ".join(lost))
-        return "; ".join((repaired(res) if res[0] else []) + notes), 0
+        return "; ".join((repaired(res, home) if res[0] else []) + notes), 0
     rev = pre_pull_rev(home)
     if rev is None:
         _say("no revision from before the settings filter in the HEAD reflog or ORIG_HEAD")
@@ -1475,7 +1480,7 @@ def land(home, mode):
     res = (0, 0, 0, 0) if not unmerged else repair_pop(home, stash or pull_stash(home, rev, False),
                                                        True)
     _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res)
-    notes += repaired(res)
+    notes += repaired(res, home)
     counts = seed_literals(home, rev)
     if counts is not None:
         _say("seeded " + " ".join("%s=%d" % kv for kv in counts.items()))
