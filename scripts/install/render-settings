@@ -1439,9 +1439,19 @@ def land(home, mode):
     "repair" a landed home whose later pull left a conflicted stash pop."""
     unmerged, notes = _unmerged(home), []
     if mode == "repair":  # a notice only once a path was taken from upstream
-        res = repair_pop(home, pull_stash(home, None)) if unmerged else (0, 0, 0, 0)
+        stash = pull_stash(home, None)
+        # The live entries beyond the clean form that upstream's side lacks (review LH-7): named
+        # by key path once settings.json is taken from HEAD (the stash entry keeps them).
+        docs = [parse(blob(home, "%s:%s" % (r, SETTINGS))) for r in (stash, stash + "^1", "HEAD")] \
+            if stash and SETTINGS in unmerged else [None]
+        lost = describe(diff(diff(docs[0], docs[1]), docs[2])) if None not in docs else []
+        res = repair_pop(home, stash) if unmerged else (0, 0, 0, 0)
         _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res)
-        return "; ".join(repaired(res) if res[0] else []), 0
+        if lost and SETTINGS not in _unmerged(home):
+            _say("settings.json taken from HEAD; dropped: %s" % ", ".join(lost))
+            notes.append("dropped from settings.json, as the overlay does not hold them: %s (in "
+                         "the stash entry)" % ", ".join(lost))
+        return "; ".join((repaired(res) if res[0] else []) + notes), 0
     rev = pre_pull_rev(home)
     if rev is None:
         _say("no revision from before the settings filter in the HEAD reflog or ORIG_HEAD")

@@ -659,6 +659,41 @@ def test_doc_sync_only_conflicts_take_upstreams_side(tmp_path, env):
     assert git(env, home, "pull", "-q", "--rebase", "origin", "master").returncode == 0
 
 
+def append_allow(path, entry):  # at the end of the list, the way the CLI adds one
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["permissions"]["allow"].append(entry)
+    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def test_a_landed_repair_names_the_live_entries_it_drops(tmp_path, env):
+    """R2, R9 (review LH-7): a landed home's later pull conflicts on settings.json (upstream and
+    the CLI each appended an allow entry). settings.json takes upstream's side; the live entry the
+    overlay does not hold is then only in the kept stash entry, and the notice and the log name
+    it by key path, never by value."""
+    origin, rev = make_home(tmp_path, env, name="origin")
+    home = clone_home(env, tmp_path, origin)
+    git(env, home, "checkout", "-q", "-B", "master", rev)
+    git(env, home, "merge", "-q", "--ff-only", "origin/master")
+    land(env, home)
+    assert land(env, home, "--state").strip() == "landed"
+    append_allow(origin / "settings.json", "Bash(demo-upstream-tool:*)")
+    git(env, origin, "commit", "-q", "-am", "upstream allow")
+    append_allow(home / "settings.json", "Bash(/opt/demo/bin/live-tool2:*)")
+    git(env, home, "stash", "push", "-q", "-m", "Auto-stash before pull")
+    git(env, home, "pull", "-q", "--rebase", "origin", "master")
+    assert git(env, home, "stash", "pop", check=False).returncode != 0
+    assert "UU settings.json" in git(env, home, "status", "--porcelain").stdout
+    notice = land(env, home)
+    assert notice.startswith("Harness landing: 1 file(s) a pull left conflicted taken from upstream")
+    assert "dropped from settings.json, as the overlay does not hold them: permissions.allow: 1 " \
+        "entry (in the stash entry)" in notice
+    assert "settings.json taken from HEAD; dropped: permissions.allow: 1 entry" in landing_log(home)
+    rendered = (home / "settings.json").read_text(encoding="utf-8")
+    assert "demo-upstream-tool" in rendered and "live-tool2" not in rendered
+    assert "live-tool2" in git(env, home, "show", "stash@{0}:settings.json").stdout
+    assert "live-tool2" not in notice + landing_log(home)
+
+
 def test_a_repair_that_git_refused_claims_nothing_and_runs_again(tmp_path, env):
     """R2, R9 (review LH-6): while a git lock refuses the checkout or rm, the path stays unmerged
     and is neither counted as taken from upstream nor said to be; the next Stop resolves it."""
