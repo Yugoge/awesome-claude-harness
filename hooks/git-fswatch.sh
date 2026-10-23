@@ -213,7 +213,8 @@ safe_pull() {
         # Pop stash if we stashed
         if [ "$stashed" = "1" ]; then
             log_info "Restoring stashed changes..."
-            if git stash pop 2>&1 | tee -a "$LOG_FILE"; then
+            git stash pop 2>&1 | tee -a "$LOG_FILE"
+            if [ "${PIPESTATUS[0]}" -eq 0 ]; then  # the pop's own status, not tee's
                 log_success "Stashed changes restored"
             else
                 log_error "Failed to restore stash, conflicts may exist"

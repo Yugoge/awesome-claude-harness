@@ -830,6 +830,30 @@ def test_pull_sh_pops_only_an_entry_its_own_push_made(tmp_path, env, kept):
     assert git(env, home, "status", "--porcelain").stdout == "?? scratch-note.txt\n"
 
 
+
+def test_fswatch_safe_pull_reports_a_failed_pop_as_failed(tmp_path, env):
+    """hooks/git-fswatch.sh safe_pull pipes `git stash pop` into tee: tee's exit status chose the
+    branch, so a conflicted pop was logged as "Stashed changes restored" and safe_pull returned
+    0. The pop's own status decides now: the failure branch, return 1."""
+    origin, work = tmp_path / "up", tmp_path / "watched"
+    git(env, tmp_path, "init", "-q", "-b", "master", str(origin))
+    write(origin / "a.txt", "one\n")
+    git(env, origin, "add", "a.txt")
+    git(env, origin, "commit", "-q", "-m", "a")
+    git(env, tmp_path, "clone", "-q", str(origin), str(work))
+    write(origin / "a.txt", "upstream\n")
+    git(env, origin, "commit", "-q", "-am", "upstream")
+    write(work / "a.txt", "local, uncommitted\n")
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "logs").mkdir()  # a live home has it (fact 1: tee needs it)
+    script = ('source <(sed "\\$d" "$1") "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
+              'echo "safe_pull rc=$?"')
+    proc = run(["bash", "-c", script, "x", str(REPO / "hooks/git-fswatch.sh"), str(work)], env,
+               cwd=str(work), check=False)
+    assert "CONFLICT" in proc.stdout and "UU a.txt" in git(env, work, "status", "--porcelain").stdout
+    assert "Stashed changes restored" not in proc.stdout
+    assert "Failed to restore stash" in proc.stdout and "safe_pull rc=1" in proc.stdout
+    assert len(git(env, work, "stash", "list").stdout.splitlines()) == 1
+
 # ------------------------------------------------------------------------------ R5: seeding
 
 def test_seeding_sources_filters_and_no_value_printed(tmp_path, env):
