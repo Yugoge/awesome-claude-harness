@@ -201,7 +201,7 @@ if [ "$STATE" = upgraded ]; then
   legacy_hooks
   # Before the settings: a landing that waits for a busy daemon has not migrated anything yet.
   restart_daemons || finish waits-daemon "Harness landing waits: a stale git-fswatch daemon is in the middle of its git work; the settings are not touched yet${NOTE:+ (done so far: ${NOTE#; })}; the landing goes on at the next turn end."
-  settings || finish "failed-${out:-settings}" "Harness landing failed at the ${out:-settings} step (see logs/landing.log); it runs again at the next turn end."
+  settings || finish "failed-${out:-settings}" "Harness landing failed at the ${out:-settings} step (see logs/landing.log)${NOTE:+ (done so far: ${NOTE#; })}; it runs again at the next turn end."
   NOTE="${out:+; $out}$NOTE"
 fi
 steps=3,4,5 did="settings.json rendered from the overlay, settings filter registered, pre-commit hook installed"
@@ -209,6 +209,6 @@ own_hooks || { steps=3,4; did="${did%, pre-commit*}; pre-commit hook not install
 [ "$STATE" = hooks ] && steps=5
 bash scripts/bootstrap --steps "$steps" 2>&1 | sed -e "s#$H#<home>#g" -e "s#${HOME:-/nonexistent}/#~/#g" >> "$LOG"
 [ "${PIPESTATUS[0]}" -eq 0 ] \
-  || finish "failed-steps-$steps" "Harness landing failed at init steps $steps (see logs/landing.log); it runs again at the next turn end."
+  || finish "failed-steps-$steps" "Harness landing failed at init steps $steps (see logs/landing.log)${NOTE:+ (done so far: ${NOTE#; })}; it runs again at the next turn end."
 [ "$STATE" = hooks ] && finish hooks-refreshed "Harness landing: init step 5 reinstalled the git hooks that changed under hooks/git-hooks/."
 finish landed "Harness landing: P7 landed on this home: $did${NOTE}. Running sessions follow its push and guard settings now; see logs/landing.log."

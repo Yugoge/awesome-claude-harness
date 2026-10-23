@@ -901,6 +901,26 @@ def test_a_failed_step_is_a_notice_and_retried(tmp_path, env, kind):
     assert_landed(env, home)
 
 
+@pytest.mark.parametrize("step", ["overlay", "steps"])
+def test_a_failed_landing_names_what_it_did_before_the_failure(tmp_path, env, step):
+    """R9 (review F2): the legacy hook a failed landing renamed aside is named in that Stop's
+    notice; the next landing finds none to rename, so no later notice would name it."""
+    home, rev = make_home(tmp_path, env)
+    write(home / ".git/hooks/post-commit", LEGACY_HOOK, 0o755)
+    if step == "overlay":
+        (home / "settings.machine.json").symlink_to(tmp_path / "nowhere")
+    else:  # init step 4 cannot create the protected-runtime file
+        write(tmp_path / "blocker", "a file where a directory goes\n")
+        env = dict(env, CLAUDE_PROTECTED_RUNTIME_FILE=str(tmp_path / "blocker" / "runtime.json"))
+    notice = land(env, home)
+    assert notice.startswith("Harness landing failed at %s" % ("the overlay step" if step ==
+                                                                "overlay" else "init steps 3,4,5"))
+    done = notice.split(" (done so far: ", 1)[1]
+    assert "1 legacy auto-push hook(s) renamed aside" in done
+    assert ("overlay migrated" in done) == (step == "steps")  # migrated once: said once
+    assert (home / ".git/hooks/post-commit.auto-push-disabled").exists()
+
+
 def test_lock_taken_lands_nothing(tmp_path, env):
     home, rev = make_home(tmp_path, env)
     import fcntl
