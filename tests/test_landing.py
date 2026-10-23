@@ -740,6 +740,10 @@ def test_doc_sync_conflicts_on_an_upgraded_home_whose_pull_left_settings_alone(t
 # ------------------------------------------------------------------------------ R5: seeding
 
 def test_seeding_sources_filters_and_no_value_printed(tmp_path, env):
+    """R5's sources and filters. A permission path under the harness home that rev's hook
+    commands name for the scripts rev tracks (the old settings' /opt/demo/.claude here, as
+    /root/.claude in a /home/<user> layout: review F3) is a harness script, not a personal tool
+    path: it is not seeded."""
     prev = previous_settings()
     prev["permissions"]["allow"] += ["Read(//opt/demo/notes/**)", "Bash(/tmp:*)"]
     home, rev = make_home(tmp_path, env, prev)
@@ -757,15 +761,15 @@ def test_seeding_sources_filters_and_no_value_printed(tmp_path, env):
     (home / "settings.machine.json").chmod(0o600)
     notice = land(env, home)
     lines = (home / "private-literals.txt").read_text().splitlines()
+    assert "Bash(/opt/demo/.claude/scripts/demo-tool.sh:*)" in prev["permissions"]["allow"]
     assert lines == ["demo-web-dev", "demo-api-dev", "demo-recovery", "demo-bot@example.invalid",
-                     "acct-test-123", "/opt/demo/bin/graphify",
-                     "/opt/demo/.claude/scripts/demo-tool.sh", "/opt/demo/bin/helper",
+                     "acct-test-123", "/opt/demo/bin/graphify", "/opt/demo/bin/helper",
                      "/opt/demo/notes", "demo@example.invalid", "git@example.invalid:demo-owner",
                      "/home/demo-user", "demo-private-proj", "/opt/demo/ws-marker"]
     assert stat.S_IMODE((home / "private-literals.txt").stat().st_mode) == 0o600
     shown = notice + landing_log(home)
-    assert "seeded with 14 value(s)" in notice
-    assert "overlay-env=6 permission-paths=3 git-e-mail=1 check-markers=4" in shown
+    assert "seeded with 13 value(s)" in notice
+    assert "overlay-env=6 permission-paths=2 git-e-mail=1 check-markers=4" in shown
     assert not [v for v in lines if v in shown]
 
 

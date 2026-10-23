@@ -1208,6 +1208,7 @@ def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
 LANDING_LOG = os.path.join("logs", "landing.log")  # append-only; no code reads it
 DOC_SYNC_LINE = re.compile(rb"^(\*Last updated: [^*]*\*|> Last updated: .*)$")  # doc-sync's dates
 SEED_KEYS = tuple(name for name, _, _ in CODE_DEFAULTS) + ("GRAPHIFY_BIN",)
+_HOME_OF = re.compile(r"""(?<![^\s"'])(/[^\s"']*?)/((?:hooks|scripts)/[^\s"';]+)""")
 
 
 def _say(msg):
@@ -1363,6 +1364,13 @@ def seed_literals(home, rev):
     email = _git_out(home, "config", "--local", "--get", "user.email") or \
         _git_out(home, "config", "--global", "--get", "user.email")
     homes = {home, os.path.realpath(home), env.get("CLAUDE_HOME") or home}
+    # The harness home rev's hook commands name for the scripts rev tracks (/root/.claude in a
+    # /home/<user> layout, review F3): a path under it is the tracked tree's, not a personal tool.
+    prev, tracked = parse(blob(home, "%s:%s" % (rev, SETTINGS))) or {}, set(_z(
+        home, "ls-tree", "-r", "-z", "--name-only", rev))
+    homes |= {m.group(1) for g in _d(prev.get("hooks")).values() for grp in _list(g)
+              for h in _list(_d(grp).get("hooks"))
+              for m in _HOME_OF.finditer(str(_d(h).get("command", ""))) if m.group(2) in tracked}
     sources = {"overlay-env": values, "permission-paths": _paths(
         [e for v in perms.values() for e in _list(v)], homes), "git-e-mail": [email] if email else [],
         "check-markers": _markers((blob(home, rev + ":scripts/check-public-core.sh") or b"")
