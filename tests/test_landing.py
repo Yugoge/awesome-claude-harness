@@ -854,6 +854,91 @@ def test_fswatch_safe_pull_reports_a_failed_pop_as_failed(tmp_path, env):
     assert "Failed to restore stash" in proc.stdout and "safe_pull rc=1" in proc.stdout
     assert len(git(env, work, "stash", "list").stdout.splitlines()) == 1
 
+
+# ------------------------------------------- a landed home's settings.json stat (review N1)
+
+def cli_write(path, key, value):  # the way the CLI writes a key of its own
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc[key] = value
+    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def landed_home_behind(tmp_path, env):
+    home, _rev = pre_pull_clone(tmp_path, env)
+    git(env, home, "merge", "-q", "--ff-only", "origin/master")
+    land(env, home)
+    assert_landed(env, home)
+    upstream_commit(env, tmp_path / "origin")
+    return home
+
+
+def update_index_runs(env, home, trace):
+    """The landing's stdout, and how many `git update-index` it ran (GIT_TRACE to a file)."""
+    trace.write_text("")
+    notice = land(dict(env, GIT_TRACE=str(trace)), home)
+    return notice, sum(" update-index" in line for line in trace.read_text().splitlines()
+                       if "trace: built-in: git" in line)
+
+
+@pytest.mark.parametrize("path", ["pull.sh", "fswatch"])
+def test_a_cli_write_of_its_own_key_does_not_stop_the_pulls_after_a_stop(tmp_path, env, path):
+    """Review N1: the CLI writes `model`, a key the clean form leaves out, into a landed home's
+    settings.json. Its size changes, and git trusts a size change without running the filter:
+    `git diff --quiet` says clean (so no stash) and `git pull --rebase` refuses ("You have unstaged
+    changes"). /pull exited 1 and fswatch's safe_pull returned 0, neither pulled, at every later
+    Stop too. The landed fast path re-records the stat the way render's refresh_index does, with
+    no notice and no log line: the next pull goes through, and the CLI's value stays."""
+    home = landed_home_behind(tmp_path, env)
+    blob = git(env, home, "rev-parse", ":settings.json").stdout
+    cli_write(home / "settings.json", "model", "demo-live-model-2")
+    git(env, home, "update-index", "-q", "--refresh", check=False)
+    assert git(env, home, "diff-files", "--name-only").stdout == "settings.json\n"
+    assert git(env, home, "diff", "--quiet", check=False).returncode == 0
+    log = landing_log(home)
+    assert land(env, home) == "" and landing_log(home) == log
+    assert git(env, home, "rev-parse", ":settings.json").stdout == blob
+    if path == "pull.sh":
+        proc = run(["bash", str(REPO / "hooks/pull.sh")], env, cwd=str(home), check=False)
+        assert proc.returncode == 0, proc.stdout[-600:] + proc.stderr[-600:]
+    else:
+        (Path(env["CLAUDE_CONFIG_DIR"]) / "logs").mkdir()
+        script = ('source <(sed "\\$d" "$1") "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
+                  'echo "safe_pull rc=$?"')
+        proc = run(["bash", "-c", script, "x", str(REPO / "hooks/git-fswatch.sh"), str(home)],
+                   env, cwd=str(home), check=False)
+        assert "safe_pull rc=0" in proc.stdout, proc.stdout[-600:]
+    assert git(env, home, "rev-parse", "HEAD").stdout == \
+        git(env, home, "rev-parse", "origin/master").stdout
+    assert (home / "upstream-note.md").exists()
+    assert json.loads((home / "settings.json").read_text(encoding="utf-8"))["model"] == \
+        "demo-live-model-2"
+    assert git(env, home, "diff-files", "--name-only").stdout == ""
+    assert git(env, home, "status", "--porcelain").stdout == ""
+    assert git(env, home, "stash", "list").stdout == ""
+
+
+def test_a_real_change_is_left_as_it_is_and_only_a_clean_one_is_re_recorded(tmp_path, env):
+    """Review N1, the other side: a write the clean form keeps (an allow entry) is a change;
+    the landing re-records nothing for it (a cleared stat would cost every later `git status` a
+    filter run), stages nothing, and /pull stashes it as before. A clean landed home runs no
+    update-index; a CLI-owned write runs the two of refresh_index once, then none."""
+    home = landed_home_behind(tmp_path, env)
+    trace = tmp_path / "git-trace.txt"
+    assert update_index_runs(env, home, trace) == ("", 0)
+    blob = git(env, home, "rev-parse", ":settings.json").stdout
+    cli_write(home / "settings.json", "theme", "demo-theme")
+    assert update_index_runs(env, home, trace) == ("", 2)
+    assert update_index_runs(env, home, trace) == ("", 0)
+    append_allow(home / "settings.json", "Bash(/opt/demo/bin/live-tool3:*)")
+    assert update_index_runs(env, home, trace) == ("", 0)
+    assert git(env, home, "rev-parse", ":settings.json").stdout == blob
+    assert git(env, home, "diff", "--cached", "--name-only").stdout == ""
+    assert git(env, home, "status", "--porcelain").stdout == " M settings.json\n"
+    proc = run(["bash", str(REPO / "hooks/pull.sh")], env, cwd=str(home), check=False)
+    assert proc.returncode == 0, proc.stdout[-600:] + proc.stderr[-600:]
+    assert (home / "upstream-note.md").exists()
+    assert "live-tool3" in (home / "settings.json").read_text(encoding="utf-8")
+
 # ------------------------------------------------------------------------------ R5: seeding
 
 def test_seeding_sources_filters_and_no_value_printed(tmp_path, env):

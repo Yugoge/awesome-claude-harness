@@ -13,7 +13,8 @@
 # (repair the index a conflicted pull left, migrate, seed the private-literal list), then init
 # steps 3-5; each step is idempotent, and the whole stays under 15 s. A landed home whose later
 # pull conflicted on settings.json or on doc-sync's date lines gets render-settings land --repair,
-# and one with a stale daemon (left running before, or older than a later pull) restarts it.
+# and one with a stale daemon (left running before, or older than a later pull) restarts it; a
+# settings.json that a CLI write left stat-dirty gets its index stat re-recorded (review N1).
 set -u
 trap 'exit 0' EXIT  # R9: exit 0 whatever fails below
 case "${BASH_SOURCE[0]}" in */*) cd -P "${BASH_SOURCE[0]%/*}/../.." ;; *) cd -P ../.. ;; esac 2>/dev/null || exit 0
@@ -186,6 +187,15 @@ if [ "$STATE" = landed ]; then  # a later pull's conflicted stash pop (its entry
       [ -n "$d" ] && ! grep -qvE '^[<>](\*Last updated: [^*]*\*|> Last updated: .*)$' <<< "$d" \
         && REPAIR=1 ;; esac
   done < <(git ls-files -u 2>/dev/null)
+  # Review N1: a CLI write of a key the clean form leaves out (model) changes settings.json's size,
+  # which git trusts without the filter, so `git pull --rebase` refused. As render's refresh_index,
+  # while the content through the filter is unchanged: the same mode and blob again, then a refresh.
+  re=$'^H ([0-7]+) ([0-9a-f]+) 0\tsettings\\.json$'
+  if ! git diff-files --quiet -- settings.json && git diff --quiet -- settings.json \
+    && [[ $(git ls-files -s -v -- settings.json) =~ $re ]]; then
+    git update-index --cacheinfo "${BASH_REMATCH[1]},${BASH_REMATCH[2]},settings.json" \
+      && git update-index -q --refresh
+  fi >/dev/null 2>&1
   [ -n "$REPAIR" ] || stale || exit 0
 fi
 mkdir -p logs 2>/dev/null
