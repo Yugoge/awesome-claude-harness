@@ -689,11 +689,9 @@ def append_allow(path, entry):  # at the end of the list, the way the CLI adds o
     path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def test_a_landed_repair_names_the_live_entries_it_drops(tmp_path, env):
-    """R2, R9 (review LH-7): a landed home's later pull conflicts on settings.json (upstream and
-    the CLI each appended an allow entry). settings.json takes upstream's side; the live entry the
-    overlay does not hold is then only in the kept stash entry, and the notice and the log name
-    it by key path, never by value."""
+def landed_settings_conflict(tmp_path, env):
+    """A landed home whose later pull's stash pop conflicts on settings.json: upstream and the CLI
+    each appended an allow entry. Returns the home."""
     origin, rev = make_home(tmp_path, env, name="origin")
     home = clone_home(env, tmp_path, origin)
     git(env, home, "checkout", "-q", "-B", "master", rev)
@@ -707,6 +705,15 @@ def test_a_landed_repair_names_the_live_entries_it_drops(tmp_path, env):
     git(env, home, "pull", "-q", "--rebase", "origin", "master")
     assert git(env, home, "stash", "pop", check=False).returncode != 0
     assert "UU settings.json" in git(env, home, "status", "--porcelain").stdout
+    return home
+
+
+def test_a_landed_repair_names_the_live_entries_it_drops(tmp_path, env):
+    """R2, R9 (review LH-7): a landed home's later pull conflicts on settings.json (upstream and
+    the CLI each appended an allow entry). settings.json takes upstream's side; the live entry the
+    overlay does not hold is then only in the kept stash entry, and the notice and the log name
+    it by key path, never by value."""
+    home = landed_settings_conflict(tmp_path, env)
     notice = land(env, home)
     assert notice.startswith("Harness landing: 1 file(s) a pull left conflicted taken from upstream")
     assert "dropped from settings.json, as the overlay does not hold them: permissions.allow: 1 " \
@@ -716,6 +723,23 @@ def test_a_landed_repair_names_the_live_entries_it_drops(tmp_path, env):
     assert "demo-upstream-tool" in rendered and "live-tool2" not in rendered
     assert "live-tool2" in git(env, home, "show", "stash@{0}:settings.json").stdout
     assert "live-tool2" not in notice + landing_log(home)
+
+
+def test_a_landed_settings_json_git_refused_to_repair_is_named_and_logged_apart(tmp_path, env):
+    """Review V1-1: while a git lock refused a landed home's repair, settings.json kept its
+    conflict markers, the Stop gave no notice and the log said result=repaired. The notice names it
+    as on an upgraded home and the log result is repair-refused; the next Stop repairs it."""
+    home = landed_settings_conflict(tmp_path, env)
+    (home / ".git" / "index.lock").write_text("")
+    assert land(env, home) == "Harness landing: settings.json still conflicted: git refused its " \
+        "repair, tried again at the next turn end.\n"
+    assert landing_log(home).split()[-2] == "result=repair-refused"
+    assert "UU settings.json" in git(env, home, "status", "--porcelain").stdout
+    (home / ".git" / "index.lock").unlink()
+    assert land(env, home).startswith("Harness landing: 1 file(s) a pull left conflicted taken "
+                                      "from upstream (0 doc-sync)")
+    assert landing_log(home).split()[-2] == "result=repaired"
+    assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout == ""
 
 
 def test_a_repair_that_git_refused_claims_nothing_and_runs_again(tmp_path, env):

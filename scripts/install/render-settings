@@ -1443,7 +1443,7 @@ def land(home, mode):
     """(notice part or the step that failed, rc): the landing of an upgraded home, or with mode
     "repair" a landed home whose later pull left a conflicted stash pop."""
     unmerged, notes = _unmerged(home), []
-    if mode == "repair":  # a notice only once a path was taken from upstream
+    if mode == "repair":  # a notice once a path was taken or settings.json stays unmerged
         stash = pull_stash(home, None)
         # The live entries beyond the clean form that upstream's side lacks (review LH-7): named
         # by key path once settings.json is taken from HEAD (the stash entry keeps them).
@@ -1452,11 +1452,12 @@ def land(home, mode):
         lost = describe(diff(diff(docs[0], docs[1]), docs[2])) if None not in docs else []
         res = repair_pop(home, stash) if unmerged else (0, 0, 0, 0)
         _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res)
-        if lost and SETTINGS not in _unmerged(home):
+        stuck = SETTINGS in _unmerged(home)  # git refused its repair (a lock): review V1-1
+        if lost and not stuck:
             _say("settings.json taken from HEAD; dropped: %s" % ", ".join(lost))
             notes.append("dropped from settings.json, as the overlay does not hold them: %s (in "
                          "the stash entry)" % ", ".join(lost))
-        return "; ".join((repaired(res, home) if res[0] else []) + notes), 0
+        return "; ".join((repaired(res, home) if res[0] or stuck else []) + notes), 0
     rev = pre_pull_rev(home)
     if rev is None:
         _say("no revision from before the settings filter in the HEAD reflog or ORIG_HEAD")
