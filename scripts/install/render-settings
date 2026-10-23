@@ -31,7 +31,7 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
                      the settings half of the landing (scripts/install/land, at every Stop, on a
                      home that ran pre-P7 code): undo what a conflicted pull left in the index,
                      migrate, seed private-literals.txt. --rev prints the pre-pull revision;
-                     --repair only undoes a conflicted pull.
+                     --repair only undoes a conflicted pull (exit 1 while git refuses it).
 
 The record <git dir>/claude-settings.applied (mode 0600, never tracked) lists the layers smudge and
 render applied to the working file since the last render, so that an entry dropped from the overlay
@@ -1285,9 +1285,10 @@ def repair_pop(home, stash, always=False):
     (removed where HEAD deleted it); then (once one was, or always on an upgraded home) every path
     the pop staged is unstaged, its working content unchanged: index blob equal to the stash's, or
     a path the stash changed that the pop merged (index equal to the working file); other
-    unmerged paths stay as they are. Returns (resolved, doc-sync, unstaged, unmerged left)."""
+    unmerged paths stay as they are. Returns (resolved, doc-sync, unstaged, unmerged left, the
+    paths of the first two kinds git refused to take: a lock)."""
     undated = lambda data: [ln for ln in data.splitlines() if not DOC_SYNC_LINE.match(ln)]  # noqa
-    resolved = []
+    resolved, refused = [], []
     for path in _unmerged(home):
         if path != SETTINGS:
             old, new = [blob(home, "%s%s:%s" % (stash, side, path)) if stash else None
@@ -1298,7 +1299,7 @@ def repair_pop(home, stash, always=False):
         head = blob(home, "HEAD:" + path) is not None
         proc = _git(home, "--literal-pathspecs", *(["checkout", "-q", "HEAD"] if head else
                                                    ["rm", "-q"]), "--", path)
-        resolved += [path] if proc is not None and proc.returncode == 0 else []  # a lock: not yet
+        (resolved if proc is not None and proc.returncode == 0 else refused).append(path)
     left, unstage = _unmerged(home), []
     if stash and (resolved or always):
         index = {e.split("\t", 1)[1]: e.split()[1] for e in _z(home, "ls-files", "-s", "-z")}
@@ -1313,7 +1314,7 @@ def repair_pop(home, stash, always=False):
     if unstage and subprocess.run(reset, input=b"\0".join(os.fsencode(p) for p in unstage),
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         unstage = []  # a lock: nothing was unstaged
-    return len(resolved), sum(p != SETTINGS for p in resolved), len(unstage), len(left)
+    return len(resolved), sum(p != SETTINGS for p in resolved), len(unstage), len(left), refused
 
 
 def _words(value):
@@ -1405,16 +1406,15 @@ def seed_literals(home, rev):
     return counts
 
 
-def repaired(res, home):
-    """The notice parts for repair_pop's result. settings.json stays unmerged only when git refused
-    its repair (a lock), which the next Stop runs again: it is named apart from the other paths."""
-    stuck = SETTINGS in _unmerged(home)
+def repaired(res):
+    """The notice parts for repair_pop's result. A path git refused to take (a lock) stays unmerged
+    and the next Stop runs the repair again: it is named apart from the other unmerged paths."""
     return (["%d file(s) a pull left conflicted taken from upstream (%d doc-sync), %d staged "
              "path(s) unstaged, the stash entry kept" % res[:3]] if res[0] or res[2] else []) + (
-        ["settings.json still conflicted: git refused its repair, tried again at the next turn end"]
-        if stuck else []) + (
-        ["%d other conflicted path(s) left as they are" % (res[3] - stuck)]
-        if res[3] > stuck else [])
+        ["%s still conflicted: git refused its repair, tried again at the next turn end"
+         % ", ".join(res[4])] if res[4] else []) + (
+        ["%d other conflicted path(s) left as they are" % (res[3] - len(res[4]))]
+        if res[3] > len(res[4]) else [])
 
 
 def from_head(home):
@@ -1441,23 +1441,22 @@ def from_head(home):
 
 def land(home, mode):
     """(notice part or the step that failed, rc): the landing of an upgraded home, or with mode
-    "repair" a landed home whose later pull left a conflicted stash pop."""
+    "repair" a landed home whose later pull left a conflicted stash pop (rc 1: git refused it)."""
     unmerged, notes = _unmerged(home), []
-    if mode == "repair":  # a notice once a path was taken or settings.json stays unmerged
+    if mode == "repair":  # a notice once a path was taken or one git refused stays unmerged
         stash = pull_stash(home, None)
         # The live entries beyond the clean form that upstream's side lacks (review LH-7): named
         # by key path once settings.json is taken from HEAD (the stash entry keeps them).
         docs = [parse(blob(home, "%s:%s" % (r, SETTINGS))) for r in (stash, stash + "^1", "HEAD")] \
             if stash and SETTINGS in unmerged else [None]
         lost = describe(diff(diff(docs[0], docs[1]), docs[2])) if None not in docs else []
-        res = repair_pop(home, stash) if unmerged else (0, 0, 0, 0)
-        _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res)
-        stuck = SETTINGS in _unmerged(home)  # git refused its repair (a lock): review V1-1
-        if lost and not stuck:
+        res = repair_pop(home, stash) if unmerged else (0, 0, 0, 0, [])
+        _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])
+        if lost and SETTINGS not in res[4]:
             _say("settings.json taken from HEAD; dropped: %s" % ", ".join(lost))
             notes.append("dropped from settings.json, as the overlay does not hold them: %s (in "
                          "the stash entry)" % ", ".join(lost))
-        return "; ".join((repaired(res, home) if res[0] or stuck else []) + notes), 0
+        return "; ".join((repaired(res) if res[0] or res[4] else []) + notes), int(bool(res[4]))
     rev = pre_pull_rev(home)
     if rev is None:
         _say("no revision from before the settings filter in the HEAD reflog or ORIG_HEAD")
@@ -1478,10 +1477,10 @@ def land(home, mode):
     if not os.path.isfile(OVERLAY):
         _say("%s is not a regular file" % OVERLAY)
         return "overlay", 1
-    res = (0, 0, 0, 0) if not unmerged else repair_pop(home, stash or pull_stash(home, rev, False),
-                                                       True)
-    _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res)
-    notes += repaired(res, home)
+    res = repair_pop(home, stash or pull_stash(home, rev, False), True) if unmerged else \
+        (0, 0, 0, 0, [])
+    _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])
+    notes += repaired(res)
     counts = seed_literals(home, rev)
     if counts is not None:
         _say("seeded " + " ".join("%s=%d" % kv for kv in counts.items()))

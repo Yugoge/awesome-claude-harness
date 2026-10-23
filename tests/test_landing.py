@@ -742,6 +742,41 @@ def test_a_landed_settings_json_git_refused_to_repair_is_named_and_logged_apart(
     assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout == ""
 
 
+@pytest.mark.parametrize("settings", [False, True])
+def test_a_doc_sync_file_git_refused_to_repair_is_named_and_logged_apart(tmp_path, env, settings):
+    """Review NV-1: while a git lock refused a landed home's repair of CLAUDE.md (doc-sync's date
+    line), the Stop gave no notice and logged result=repaired; with settings.json refused as well,
+    CLAUDE.md was one of the "other conflicted path(s) left as they are". Every path the repair
+    owns is named as refused and logged repair-refused; the next Stop repairs them."""
+    origin, rev = make_home(tmp_path, env, name="origin")
+    write(origin / "CLAUDE.md", CLAUDE_MD % ("2026-01-01", "---"))
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "CLAUDE.md")
+    home = clone_home(env, tmp_path, origin)
+    git(env, home, "checkout", "-q", "-B", "master", rev)
+    git(env, home, "merge", "-q", "--ff-only", "origin/master")
+    land(env, home)
+    write(origin / "CLAUDE.md", CLAUDE_MD % ("2026-01-01", "--- upstream edit"))
+    write(home / "CLAUDE.md", CLAUDE_MD % ("2026-02-02", "---"))  # doc-sync re-dates it
+    if settings:
+        append_allow(origin / "settings.json", "Bash(demo-upstream-tool:*)")
+        append_allow(home / "settings.json", "Bash(/opt/demo/bin/live-tool2:*)")
+    git(env, origin, "commit", "-q", "-am", "upstream")
+    git(env, home, "stash", "push", "-q", "-m", "Auto-stash before pull")
+    git(env, home, "pull", "-q", "--rebase", "origin", "master")
+    assert git(env, home, "stash", "pop", check=False).returncode != 0
+    paths = ["CLAUDE.md"] + ["settings.json"] * settings
+    (home / ".git" / "index.lock").write_text("")
+    assert land(env, home) == "Harness landing: %s still conflicted: git refused its repair, " \
+        "tried again at the next turn end.\n" % ", ".join(paths)
+    assert landing_log(home).split()[-2] == "result=repair-refused"
+    (home / ".git" / "index.lock").unlink()
+    assert land(env, home).startswith("Harness landing: %d file(s) a pull left conflicted taken "
+                                      "from upstream (1 doc-sync)" % len(paths))
+    assert landing_log(home).split()[-2] == "result=repaired"
+    assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout == ""
+
+
 def test_a_repair_that_git_refused_claims_nothing_and_runs_again(tmp_path, env):
     """R2, R9 (review LH-6): while a git lock refuses the checkout or rm, the path stays unmerged
     and is neither counted as taken from upstream nor said to be; the next Stop resolves it."""
@@ -760,7 +795,8 @@ def test_a_repair_that_git_refused_claims_nothing_and_runs_again(tmp_path, env):
     git(env, home, "pull", "-q", "--rebase", "origin", "master")
     assert git(env, home, "stash", "pop", check=False).returncode != 0
     (home / ".git" / "index.lock").write_text("")
-    assert land(env, home) == ""
+    assert land(env, home) == "Harness landing: commands/INDEX.md still conflicted: git refused " \
+        "its repair, tried again at the next turn end.\n"  # review NV-1: before, no notice
     assert "DU commands/INDEX.md" in git(env, home, "status", "--porcelain").stdout
     assert "repair resolved=0 doc-sync=0 unstaged=0 unmerged-left=1" in landing_log(home)
     (home / ".git" / "index.lock").unlink()

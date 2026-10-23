@@ -225,10 +225,9 @@ done
 
 settings() { out="$(python3 scripts/install/render-settings land "$@" 2>>"$LOG")"; }  # the notice part, or the failed step
 if [ "$STATE" = landed ]; then
-  [ -z "$REPAIR" ] || { settings --repair; NOTE="${out:+; $out}$NOTE"; }
+  res=repaired  # a path git refused to repair (a lock: render-settings exits 1) is logged apart
+  [ -z "$REPAIR" ] || { settings --repair || res=repair-refused; NOTE="${out:+; $out}$NOTE"; }
   [ -n "$REPAIR$NOTE" ] || exit 0  # only daemons it could not restart yet: no log line, no notice
-  res=repaired  # review V1-1: a settings.json git refused to repair (a lock) is logged apart
-  [[ -z $REPAIR || -z $(git ls-files -u -- settings.json 2>/dev/null) ]] || res=repair-refused
   finish "$res" "${NOTE:+Harness landing: ${NOTE#; }.}"
 fi
 if [ "$STATE" = upgraded ]; then
