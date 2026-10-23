@@ -924,8 +924,9 @@ def test_a_real_change_is_left_as_it_is_and_only_a_clean_one_is_re_recorded(tmp_
     """Review N1, the other side: a write the clean form keeps (an allow entry) is a change;
     the landing re-records nothing for it (a cleared stat would cost every later `git status` a
     filter run), stages nothing, and /pull stashes it as before; it diffs it once per write, not
-    at every Stop. A clean landed home runs neither; a CLI-owned write runs the diff and the two
-    update-index of refresh_index once, then none."""
+    at every Stop, and a later write of the index alone does not count as one (review NF-1). A
+    clean landed home runs neither; a CLI-owned write runs the diff and the two update-index of
+    refresh_index once, then none."""
     home = landed_home_behind(tmp_path, env)
     trace = tmp_path / "git-trace.txt"
     assert update_index_runs(env, home, trace) == ("", 0, 0)
@@ -936,6 +937,8 @@ def test_a_real_change_is_left_as_it_is_and_only_a_clean_one_is_re_recorded(tmp_
     append_allow(home / "settings.json", "Bash(/opt/demo/bin/live-tool3:*)")
     assert update_index_runs(env, home, trace) == ("", 0, 1)
     assert update_index_runs(env, home, trace) == ("", 0, 0)
+    git(env, home, "update-index", "-q", "--force-write-index")  # a later write of the index
+    assert update_index_runs(env, home, trace) == ("", 0, 0)
     cli_write(home / "settings.json", "model", "demo-live-model-3")  # a later write: diffed again
     assert update_index_runs(env, home, trace) == ("", 0, 1)
     assert git(env, home, "rev-parse", ":settings.json").stdout == blob
@@ -945,6 +948,38 @@ def test_a_real_change_is_left_as_it_is_and_only_a_clean_one_is_re_recorded(tmp_
     assert proc.returncode == 0, proc.stdout[-600:] + proc.stderr[-600:]
     assert (home / "upstream-note.md").exists()
     assert "live-tool3" in (home / "settings.json").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("case", ["index-written-after-the-write", "file-back-with-an-older-mtime"])
+def test_a_cli_write_is_re_recorded_whatever_wrote_the_index_since(tmp_path, env, case):
+    """Review NF-1's experiment, two cases a newer-than-the-index test misses: git wrote the index
+    after the CLI's write of `model` and before the Stop (an owner's commit of another file); and
+    the clean file came back with an older mtime, after a real change was diffed (a copy that
+    keeps mtimes: a newer-than-the-marker test missed it too). Either way settings.json is
+    stat-dirty with no change through the filter; the next Stop re-records it and /pull pulls."""
+    home = landed_home_behind(tmp_path, env)
+    settings, past = home / "settings.json", time.time() - 60
+    keep = tmp_path / "settings.copy.json"
+    shutil.copy2(settings, keep)
+    os.utime(keep, (past, past))
+    cli_write(settings, "model", "demo-live-model-2")
+    if case == "index-written-after-the-write":
+        os.utime(settings, (past + 50, past + 50))  # the commit's index write is surely later
+        write(home / "notes.txt", "an owner's note, committed\n")
+        git(env, home, "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "owner", "notes.txt")
+    else:
+        land(env, home)  # the stat of the file with model re-recorded
+        append_allow(settings, "Bash(/opt/demo/bin/live-tool4:*)")
+        land(env, home)  # a real change, diffed
+        shutil.copy2(keep, settings)
+    assert git(env, home, "diff-files", "--name-only").stdout == "settings.json\n"
+    assert git(env, home, "diff", "--quiet", check=False).returncode == 0
+    assert land(env, home) == ""
+    assert git(env, home, "diff-files", "--name-only").stdout == ""
+    proc = run(["bash", str(REPO / "hooks/pull.sh")], env, cwd=str(home), check=False)
+    assert proc.returncode == 0, proc.stdout[-600:] + proc.stderr[-600:]
+    assert git(env, home, "merge-base", "--is-ancestor", "origin/master", "HEAD").returncode == 0
+    assert (home / "upstream-note.md").exists()
 
 # ------------------------------------------------------------------------------ R5: seeding
 
