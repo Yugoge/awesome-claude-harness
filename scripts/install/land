@@ -54,7 +54,7 @@ finish() {  # <log result> <notice>: the one notice line (no quote or backslash)
 }
 
 legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the hook carried them
-  local g repo dir f to t n=0 lfs=0 found="" rc=0
+  local g repo dir f to t n=0 lfs=0 kept="" found="" rc=0
   # The repositories under $HOME (owner input "also"): a scan cut at 5 s for R1's bound, and said so.
   [ -z "${HOME:-}" ] || { found="$(timeout 5 find "$HOME" -maxdepth 5 -type d -name .git -prune 2>/dev/null)"; rc=$?; }
   while IFS= read -r g; do
@@ -62,6 +62,9 @@ legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the
     dir="$(git -C "$repo" config --get core.hooksPath 2>/dev/null)" && dir="$(cd "$repo" && realpath -m "${dir/#\~/${HOME:-~}}")"
     for f in "$g/hooks/post-commit" "$g/keystone-hooks/preserved/post-commit" ${dir:+"$dir/post-commit"}; do
       [ -f "$f" ] && grep -q 'GIT_AUTO_PUSH:-1' "$f" 2>/dev/null || continue
+      # One the repository tracks (a shared .githooks/) stays: renamed, its next commit -a deletes it.
+      git -C "$repo" --literal-pathspecs ls-files --error-unmatch -- "$f" >/dev/null 2>&1 \
+        && { kept=$((kept + 1)); continue; }
       to="$f.auto-push-disabled"; [ ! -e "$to" ] || to="$to.$(date +%s)"
       mv -f "$f" "$to" 2>/dev/null || continue
       n=$((n + 1))
@@ -74,9 +77,10 @@ legacy_hooks() {  # R6: renamed aside (reversible); LFS hooks restored where the
     done
   done < <(printf '%s\n' "$COMMON" "$found" | while IFS= read -r g; do [ -z "$g" ] || realpath -e "$g" 2>/dev/null; done | sort -u)
   [ "$rc" -eq 124 ] && rc=" scan=timed-out" || rc=""
-  log "legacy-hooks disabled=$n lfs-restored=$lfs$rc"
+  log "legacy-hooks disabled=$n lfs-restored=$lfs${kept:+ tracked-left=$kept}$rc"
   [ "$n" -eq 0 ] || NOTE="$NOTE; $n legacy auto-push hook(s) renamed aside"
   [ "$lfs" -eq 0 ] || NOTE="$NOTE (LFS hooks restored in $lfs)"
+  [ -z "$kept" ] || NOTE="$NOTE; $kept tracked legacy auto-push hook(s) left as they are"
   [ -z "$rc" ] || NOTE="$NOTE; the scan for other repositories under ~ stopped after 5 s; those it did not reach keep their legacy hooks"
 }
 

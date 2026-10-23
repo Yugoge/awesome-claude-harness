@@ -850,6 +850,26 @@ def test_a_timed_out_repository_scan_is_logged_and_named(tmp_path, env):
     assert (late / ".git/hooks/post-commit").exists()
 
 
+def test_a_legacy_hook_a_repository_tracks_is_left_and_counted(tmp_path, env):
+    """R6 (review LH-3): a legacy post-commit that a repository tracks (core.hooksPath naming a
+    tracked .githooks/) is left as it is, counted in the notice and the log: renamed, it would be
+    deleted from that repository by its next `git commit -a`. Untracked ones are renamed."""
+    home, rev = make_home(tmp_path, env)
+    write(home / ".git/hooks/post-commit", LEGACY_HOOK, 0o755)
+    team = Path(env["HOME"]) / "repos" / "team"
+    git(env, tmp_path, "init", "-q", str(team))
+    write(team / ".githooks/post-commit", LEGACY_HOOK, 0o755)
+    git(env, team, "add", ".githooks/post-commit")
+    git(env, team, "commit", "-q", "-m", "shared hooks")
+    git(env, team, "config", "core.hooksPath", ".githooks")
+    notice = land(env, home)
+    assert "1 legacy auto-push hook(s) renamed aside" in notice
+    assert "1 tracked legacy auto-push hook(s) left as they are" in notice
+    assert "legacy-hooks disabled=1 lfs-restored=0 tracked-left=1" in landing_log(home)
+    assert git(env, team, "status", "--porcelain").stdout == ""
+    assert not (home / ".git/hooks/post-commit").exists()
+
+
 def test_landing_end_to_end_and_idempotent(tmp_path, env):
     home, rev = make_home(tmp_path, env)
     gd = home / ".git"
