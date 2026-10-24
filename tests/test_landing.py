@@ -800,12 +800,15 @@ def test_a_doc_sync_file_git_refused_to_repair_is_named_and_logged_apart(tmp_pat
     assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout == ""
 
 
-@pytest.mark.parametrize("char", ["\t", "\n"], ids=["tab", "newline"])
+@pytest.mark.parametrize("char", ["\t", "\n", "\u2028", "\x85"],
+                         ids=["tab", "newline", "u2028", "u0085"])
 def test_a_refused_path_with_a_control_character_keeps_the_notice_one_line(tmp_path, env, char):
     """Review NV1-2-1: a doc-sync INDEX.md in a directory whose name holds a tab or a newline,
     refused by git (a lock) next to settings.json, was named verbatim: the notice broke into two
     lines, or auto-commit.sh's JSON line did not parse, and that Stop relayed nothing. The
-    character is named as "?"; the next Stop repairs both paths as before."""
+    character is named as "?"; the next Stop repairs both paths as before. Review NVF-1: U+2028
+    or U+0085 kept that JSON line valid, but the Stop coordinator reads its last line with
+    str.splitlines(), which breaks at both, so that Stop relayed nothing either."""
     odd = "tools/odd%sdir/INDEX.md" % char
     origin, rev = make_home(tmp_path, env, name="origin")
     write(origin / odd, DATED % "2026-01-01T00:00:00Z")
@@ -828,6 +831,8 @@ def test_a_refused_path_with_a_control_character_keeps_the_notice_one_line(tmp_p
     assert notice == "Harness landing: settings.json, tools/odd?dir/INDEX.md still conflicted: " \
         "git refused its repair, tried again at the next turn end.\n"
     assert json.loads('{"systemMessage": "%s"}' % notice[:-1])  # auto-commit.sh's line parses
+    line = '{"systemMessage": "%s"}\n' % notice[:-1]  # as hooks/stop-workflow-coordinator.py reads it
+    assert json.loads(line.strip().splitlines()[-1])["systemMessage"] == notice[:-1]
     assert landing_log(home).split()[-2] == "result=repair-refused"
     (home / ".git" / "index.lock").unlink()
     assert land(env, home).startswith("Harness landing: 2 file(s) a pull left conflicted taken "
