@@ -777,6 +777,41 @@ def test_a_doc_sync_file_git_refused_to_repair_is_named_and_logged_apart(tmp_pat
     assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout == ""
 
 
+@pytest.mark.parametrize("char", ["\t", "\n"], ids=["tab", "newline"])
+def test_a_refused_path_with_a_control_character_keeps_the_notice_one_line(tmp_path, env, char):
+    """Review NV1-2-1: a doc-sync INDEX.md in a directory whose name holds a tab or a newline,
+    refused by git (a lock) next to settings.json, was named verbatim: the notice broke into two
+    lines, or auto-commit.sh's JSON line did not parse, and that Stop relayed nothing. The
+    character is named as "?"; the next Stop repairs both paths as before."""
+    odd = "tools/odd%sdir/INDEX.md" % char
+    origin, rev = make_home(tmp_path, env, name="origin")
+    write(origin / odd, DATED % "2026-01-01T00:00:00Z")
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "an index")
+    home = clone_home(env, tmp_path, origin)
+    git(env, home, "checkout", "-q", "-B", "master", rev)
+    git(env, home, "merge", "-q", "--ff-only", "origin/master")
+    land(env, home)
+    write(origin / odd, DATED % "2026-01-15T00:00:00Z")
+    append_allow(origin / "settings.json", "Bash(demo-upstream-tool:*)")
+    git(env, origin, "commit", "-q", "-am", "upstream")
+    write(home / odd, DATED % "2026-02-02T00:00:00Z")  # doc-sync re-dates it
+    append_allow(home / "settings.json", "Bash(/opt/demo/bin/live-tool2:*)")
+    git(env, home, "stash", "push", "-q", "-m", "Auto-stash before pull")
+    git(env, home, "pull", "-q", "--rebase", "origin", "master")
+    assert git(env, home, "stash", "pop", check=False).returncode != 0
+    (home / ".git" / "index.lock").write_text("")
+    notice = land(env, home)
+    assert notice == "Harness landing: settings.json, tools/odd?dir/INDEX.md still conflicted: " \
+        "git refused its repair, tried again at the next turn end.\n"
+    assert json.loads('{"systemMessage": "%s"}' % notice[:-1])  # auto-commit.sh's line parses
+    assert landing_log(home).split()[-2] == "result=repair-refused"
+    (home / ".git" / "index.lock").unlink()
+    assert land(env, home).startswith("Harness landing: 2 file(s) a pull left conflicted taken "
+                                      "from upstream (1 doc-sync)")
+    assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout == ""
+
+
 def test_a_repair_that_git_refused_claims_nothing_and_runs_again(tmp_path, env):
     """R2, R9 (review LH-6): while a git lock refuses the checkout or rm, the path stays unmerged
     and is neither counted as taken from upstream nor said to be; the next Stop resolves it."""

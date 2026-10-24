@@ -1408,11 +1408,11 @@ def seed_literals(home, rev):
 
 def repaired(res):
     """The notice parts for repair_pop's result. A path git refused to take (a lock) stays unmerged
-    and the next Stop runs the repair again: it is named apart from the other unmerged paths."""
+    and is tried again at the next Stop: named apart from the others, a control character as "?"."""
     return (["%d file(s) a pull left conflicted taken from upstream (%d doc-sync), %d staged "
              "path(s) unstaged, the stash entry kept" % res[:3]] if res[0] or res[2] else []) + (
         ["%s still conflicted: git refused its repair, tried again at the next turn end"
-         % ", ".join(res[4])] if res[4] else []) + (
+         % ", ".join(re.sub(r"[\x00-\x1f\x7f]", "?", p) for p in res[4])] if res[4] else []) + (
         ["%d other conflicted path(s) left as they are" % (res[3] - len(res[4]))]
         if res[3] > len(res[4]) else [])
 
