@@ -742,6 +742,29 @@ def test_a_landed_settings_json_git_refused_to_repair_is_named_and_logged_apart(
     assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout == ""
 
 
+def test_a_landed_repair_that_fails_outright_says_so_and_is_logged_apart(tmp_path, env):
+    """Review NV1-2-2 (fault injection): a landed home's repair run that raised printed its failed
+    step, so the notice read "Harness landing: settings." and the log result was repair-refused.
+    The notice says the repair failed and runs again, the log result is repair-failed after the
+    exception's type; with the file back, the next Stop repairs settings.json."""
+    home = landed_settings_conflict(tmp_path, env)
+    script = home / "scripts/install/render-settings"
+    code = script.read_text(encoding="utf-8")
+    head = "def repair_pop(home, stash, always=False):\n"
+    script.write_text(code.replace(head, head + '    raise RuntimeError("injected")\n'),
+                      encoding="utf-8")
+    assert land(env, home) == "Harness landing: the settings repair failed (see " \
+        "logs/landing.log); it runs again at the next turn end.\n"
+    failed, result = landing_log(home).splitlines()[-2:]
+    assert failed.endswith(" land: failed: RuntimeError")
+    assert result.split()[1] == "result=repair-failed"
+    assert "UU settings.json" in git(env, home, "status", "--porcelain").stdout
+    script.write_text(code, encoding="utf-8")
+    assert land(env, home).startswith("Harness landing: 1 file(s) a pull left conflicted taken "
+                                      "from upstream (0 doc-sync)")
+    assert landing_log(home).split()[-2] == "result=repaired"
+
+
 @pytest.mark.parametrize("settings", [False, True])
 def test_a_doc_sync_file_git_refused_to_repair_is_named_and_logged_apart(tmp_path, env, settings):
     """Review NV-1: while a git lock refused a landed home's repair of CLAUDE.md (doc-sync's date
