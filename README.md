@@ -124,9 +124,26 @@ files in it to have the guard protect them.
 | `--migrate-from <rev>` [`--settings-file <path>`] | Seed a **new** overlay from a previous personal `settings.json` — the file at git revision `<rev>`, or the given file — instead of the default overlay: the entries the clean form lacks (env values, permission entries, hook groups, top-level keys), the previous built-in defaults of the personal-value settings, and the enabled modules. Refused when an overlay already exists. |
 | `--force` | Back up and re-create the venv. Also lets the render replace a working `settings.json` holding entries the overlay does not explain (those entries are dropped — move them into the overlay first). |
 | `--no-doctor` | Skip the final `scripts/doctor` run. |
+| `--steps <list>` | Run only the given steps among 2-5 (comma-separated), without asking and without the venv, resolver and doctor steps (the landing below runs `--steps 3,4,5`). |
 
 Module flags take effect only when init writes a new overlay. Once an overlay exists its
 `modules` key wins: change it there and re-run init.
+
+**Upgrading a home that predates the overlay.** A home that ran code from before the settings
+filter (its HEAD reflog, or `ORIG_HEAD`, holds such a revision) lands by itself at the next turn
+end of any of its sessions; nothing has to be stopped or typed. `hooks/auto-commit.sh` runs
+`scripts/install/land`, one session at a time, which never blocks the Stop and shows one line:
+it undoes what a conflicted stash pop of the pull left (`settings.json` from upstream, the paths
+the pop staged unstaged, the stash entry kept), migrates the previous personal settings into a
+new overlay (a `GIT_AUTO_PUSH` of `"1"` is not carried over), seeds an empty
+`private-literals.txt` from values the machine already holds, renames aside post-commit hooks
+that push unless `GIT_AUTO_PUSH` is `0` (here and in the repositories under `$HOME`), restarts
+git-fswatch daemons running older code with their own environment (one in its git work, or in a
+repository with a stopped rebase, at a later turn end), and runs init steps 3-5.
+A rebase or merge stopped in the home is left alone: the landing says so and waits.
+`logs/landing.log` lists what it did (counts and key names, never a value). For a home without
+sessions, `scripts/bootstrap --migrate-from <rev>` and `scripts/install/render-settings migrate`
+remain.
 
 ### Other install locations
 
@@ -164,7 +181,8 @@ variable expansion) — so prompt-issued commands assume the default location.
   hand-maintained settings file; there is no separate template. It carries no machine values:
   no install path, no `CLAUDE_HOME`, no personal tool paths, no CLI-owned keys.
 - **The overlay.** Everything machine-specific lives in `<harness-home>/settings.machine.json`
-  — untracked and gitignored, written by init only when absent, never by hooks or agents.
+  — untracked and gitignored, written only when absent: by init, or once by the landing on a
+  home upgraded from code before the filter (see the install section); never by agents.
   [`settings.machine.example.json`](settings.machine.example.json) documents every key:
   `modules`; `env` (sets or replaces a value); `permissions.allow` / `deny` / `ask` (appended —
   the overlay cannot remove a clean-form entry); `hooks` groups; any other top-level key
@@ -256,7 +274,10 @@ missing) is a failure, not a refusal: the snapshot fails, the failure is logged,
 proceeds, and doctor names what is missing.
 
 **The private-literal list** is `<harness-home>/private-literals.txt`: untracked and gitignored;
-init creates it empty and only you fill it. One literal per line — account names, e-mail
+init creates it empty and you fill it; on a home upgraded from code before the filter, the
+landing seeds it once, while it is absent or empty, from values the machine already holds (the
+overlay's personal keys, its personal-path permissions, the git e-mail, the previous revision's
+marker lists), and never rewrites a list that has lines. One literal per line — account names, e-mail
 addresses, private host, product or container names, personal home paths; blank lines and lines
 whose first non-blank character is `#` are ignored; matching is case-sensitive, fixed-string and
 byte-wise, so the same text in another encoding (UTF-16, say) is not matched. No setting or

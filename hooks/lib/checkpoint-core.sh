@@ -317,7 +317,12 @@ _checkpoint_push_gate_pii_signature() {
 # Skips if another push was attempted within CHECKPOINT_PUSH_MIN_INTERVAL seconds
 # for this repo. Uses repo-hash stamp file in /tmp/.
 _checkpoint_rate_limited_push() {
-    [ "${GIT_AUTO_PUSH:-}" = "1" ] || return 0
+    # P7b R7: a Claude Code process without CLAUDE_HOME started before the overlay: the harness
+    # home's current settings.json decides (unreadable = no push), never its stale env.
+    local GIT_AUTO_PUSH="${GIT_AUTO_PUSH:-}"
+    [ -n "${CLAUDE_HOME:-}" ] || [ -z "${CLAUDECODE:-}${CLAUDE_PROJECT_DIR:-}" ] || eval "GIT_AUTO_PUSH=; $(env \
+        -u GIT_AUTO_PUSH python3 "${BASH_SOURCE[0]%/*}/claude_home.py" env GIT_AUTO_PUSH 2>/dev/null)"
+    [ "$GIT_AUTO_PUSH" = "1" ] || return 0
     local work_dir="$1"
     local ref="$2"
     local git_cmd
