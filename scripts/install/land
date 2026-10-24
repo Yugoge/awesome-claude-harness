@@ -226,8 +226,8 @@ done
 settings() { out="$(python3 scripts/install/render-settings land "$@" 2>>"$LOG")"; }  # the notice part, or the failed step
 if [ "$STATE" = landed ]; then
   res=repaired  # render-settings exits 1 for a path git refused to repair (a lock) or a failed run
-  [ -z "$REPAIR" ] || { settings --repair || res=repair-refused; [ "$out" != settings ] || res=repair-failed \
-    out="the settings repair failed (see logs/landing.log); it runs again at the next turn end"; NOTE="${out:+; $out}$NOTE"; }
+  [ -z "$REPAIR" ] || { settings --repair || { res=repair-refused; [ "${out:-settings}" != settings ] || res=repair-failed \
+    out="the settings repair failed (see logs/landing.log); it runs again at the next turn end"; }; NOTE="${out:+; $out}$NOTE"; }
   [ -n "$REPAIR$NOTE" ] || exit 0  # only daemons it could not restart yet: no log line, no notice
   finish "$res" "${NOTE:+Harness landing: ${NOTE#; }.}"
 fi

@@ -765,6 +765,30 @@ def test_a_landed_repair_that_fails_outright_says_so_and_is_logged_apart(tmp_pat
     assert landing_log(home).split()[-2] == "result=repaired"
 
 
+def test_a_landed_repair_whose_render_settings_does_not_compile_says_it_failed(tmp_path, env):
+    """Review NVF-2 (fault injection): when a landed home's render-settings did not compile,
+    python3 exited 1 before cmd_land and printed nothing, so land logged result=repair-refused
+    and the Stop gave no notice. A failed run is told by its exit and its stdout (nothing, or the
+    failed step), not by the step alone: the notice says the repair failed and runs again, the log
+    result is repair-failed after python3's own error; with the file back, the next Stop repairs
+    settings.json."""
+    home = landed_settings_conflict(tmp_path, env)
+    script = home / "scripts/install/render-settings"
+    code = script.read_text(encoding="utf-8")
+    first, rest = code.split("\n", 1)
+    script.write_text(first + "\n)\n" + rest, encoding="utf-8")  # an unmatched ")": no compile
+    assert land(env, home) == "Harness landing: the settings repair failed (see " \
+        "logs/landing.log); it runs again at the next turn end.\n"
+    failed, result = landing_log(home).splitlines()[-2:]
+    assert failed.startswith("SyntaxError: ")
+    assert result.split()[1] == "result=repair-failed"
+    assert "UU settings.json" in git(env, home, "status", "--porcelain").stdout
+    script.write_text(code, encoding="utf-8")
+    assert land(env, home).startswith("Harness landing: 1 file(s) a pull left conflicted taken "
+                                      "from upstream (0 doc-sync)")
+    assert landing_log(home).split()[-2] == "result=repaired"
+
+
 @pytest.mark.parametrize("settings", [False, True])
 def test_a_doc_sync_file_git_refused_to_repair_is_named_and_logged_apart(tmp_path, env, settings):
     """Review NV-1: while a git lock refused a landed home's repair of CLAUDE.md (doc-sync's date
