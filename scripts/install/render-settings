@@ -1491,9 +1491,9 @@ def land(home, mode):
 
 
 def cmd_land(home, mode):
-    """render-settings land, run by scripts/install/land under its lock once it found no rebase or
-    merge stopped. Log lines (counts, key names, revision ids; never a value) go to
-    logs/landing.log; stdout is one line: the notice part, or the step that failed (exit 1)."""
+    """render-settings land, run by scripts/install/land under its lock once no rebase or merge is
+    stopped. It logs counts, key names and revision ids (never a value) to logs/landing.log; stdout
+    is one line: the notice part, or the failed step (exit 1; with --repair also a refused path)."""
     os.chdir(home)
     if mode == "rev":
         rev = pre_pull_rev(home)
