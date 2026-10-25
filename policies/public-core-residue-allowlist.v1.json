@@ -1422,6 +1422,27 @@
       "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
+      "path": "tests/test_landing.py",
+      "fingerprint": "698e2ca745682dcf",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_landing.py",
+      "fingerprint": "9b0e184356daff46",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_landing.py",
+      "fingerprint": "e84d83f2c59368ef",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
       "path": "tests/test_public_core_residue_gate.py",
       "fingerprint": "0dcb3952449405d2",
       "ordinal": 1,
