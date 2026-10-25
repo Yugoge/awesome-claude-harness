@@ -5,6 +5,13 @@
 # Read full JSON from stdin
 INPUT=$(cat)
 
+# P7b R7: a Claude Code process without CLAUDE_HOME started before its settings carried the overlay;
+# the guard keys it lacks come from the harness home's current settings.json.
+[ -n "${CLAUDE_HOME:-}" ] || [ -z "${CLAUDECODE:-}${CLAUDE_PROJECT_DIR:-}" ] \
+  || ! grep -qs '"CLAUDE_HOME"' "$(dirname "${BASH_SOURCE[0]}")/../settings.json" || eval "$(python3 \
+  "$(dirname "${BASH_SOURCE[0]}")/lib/claude_home.py" env CLAUDE_DEV_CONTAINERS CLAUDE_DEV_SYSTEMD \
+  CLAUDE_DAEMON_RESTART_GRANT_HELPER CLAUDE_PROTECTED_DAEMON_PREFIX CLAUDE_PROTECTED_DAEMON_TARGETS \
+  CLAUDE_PROTECTED_PROCESS_FAMILY CLAUDE_HARD_BANNED_SCRIPTS 2>/dev/null)"
 CLAUDE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"  # harness home: script-relative
 CLAUDE_TMPDIR="${CLAUDE_TMPDIR:-${TMPDIR:-/tmp}}"
 # Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.

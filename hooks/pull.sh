@@ -25,14 +25,22 @@ if [ "$HAS_CHANGES" = "1" ]; then
   echo -e "${YELLOW}📦 Uncommitted changes detected${NC}"
   echo "Stashing changes before pull..."
   TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
+  STASH_BEFORE=$(git rev-parse -q --verify refs/stash)
   git stash push -m "Auto-stash before pull ($TIMESTAMP)"
   if [ $? -ne 0 ]; then
     echo -e "${RED}❌ Error: Failed to stash changes${NC}"
     exit 1
   fi
-  echo -e "${GREEN}✅ Stashed as: stash@{0}${NC}"
+  # Untracked files alone count as changes above, yet the push saves nothing for them: pop only
+  # an entry this push made (an older one, such as a kept conflicted pop's, is not this pull's).
+  if [ "$(git rev-parse -q --verify refs/stash)" = "$STASH_BEFORE" ]; then
+    echo "Nothing was stashed (untracked files stay where they are)"
+    STASHED=0
+  else
+    echo -e "${GREEN}✅ Stashed as: stash@{0}${NC}"
+    STASHED=1
+  fi
   echo ""
-  STASHED=1
 else
   STASHED=0
   echo "Working directory clean, no stash needed"

@@ -24,7 +24,14 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
                      tracked, so after a forced add or an earlier commit of either, every commit
                      is refused until `git rm --cached` untracks it.
   migrate --from REV [--settings-file PATH] [--base REV]
-                     seed a NEW overlay from previous personal settings (one-time owner step).
+                     seed a NEW overlay from previous personal settings: run by init
+                     (scripts/bootstrap --migrate-from), or once by the landing on an upgraded
+                     home. A previous GIT_AUTO_PUSH "1" is named, never migrated (push is opt-in).
+  land [--rev | --repair]
+                     the settings half of the landing (scripts/install/land, at every Stop, on a
+                     home that ran pre-P7 code): undo what a conflicted pull left in the index,
+                     migrate, seed private-literals.txt. --rev prints the pre-pull revision;
+                     --repair only undoes a conflicted pull (exit 1 while git refuses it).
 
 The record <git dir>/claude-settings.applied (mode 0600, never tracked) lists the layers smudge and
 render applied to the working file since the last render, so that an entry dropped from the overlay
@@ -37,6 +44,7 @@ starts with "_". Exit codes: 0 success, 1 failure, 2 usage error. Python 3.10+, 
 """
 import argparse
 import ast
+import contextlib
 import copy
 import importlib.util
 import json
@@ -46,6 +54,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.dont_write_bytecode = True  # check imports harness modules; leave no caches in the checkout
 
@@ -936,6 +945,8 @@ def cmd_check(home):
     else:
         hooks_ok = check_hook_paths(home, working, overlay)
     filter_ok = check_filter(home, overlay_error, overlay, recorded, working)
+    if _d((overlay or {}).get("env")).get("GIT_AUTO_PUSH") == "1":  # D1: opt-in, so not a failure
+        print('[info] env.GIT_AUTO_PUSH is "1" in %s: automatic pushes are on' % OVERLAY)
     runtime_ok = check_protected_runtime(home)
     return 0 if hooks_ok and filter_ok and runtime_ok else 1
 
@@ -1092,7 +1103,13 @@ def module_enabled(fragment, prev, base):
     return False
 
 
-def cmd_migrate(home, rev, settings_file, base_rev):
+def _tracked_hook(home, rev, hook):
+    m = re.search(r"@H/((?:hooks|scripts)/\S+)", norm_command(str(hook.get("command", ""))))
+    proc = _git(home, "cat-file", "-e", "%s:%s" % (rev, m.group(1))) if m else None
+    return proc is not None and proc.returncode == 0
+
+
+def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
     target = os.path.join(home, OVERLAY)
     if os.path.lexists(target):
         _err("migrate refused: %s already exists (migrate only seeds a new overlay; edit the "
@@ -1107,7 +1124,9 @@ def cmd_migrate(home, rev, settings_file, base_rev):
                                            value + "^{commit}") is None):
             _err("migrate refused: unknown revision %r" % value)
             return 1
-    if settings_file:
+    if previous is not None:  # (settings, source) the landing reconstructed
+        prev, source = previous
+    elif settings_file:
         try:
             prev = parse(_read(settings_file))
         except OSError:
@@ -1135,12 +1154,25 @@ def cmd_migrate(home, rev, settings_file, base_rev):
         _err("migrate refused: the clean settings.json has an unexpected structure at %s" % exc)
         return 1
     extra = diff(prev, reference)
+    # A hook running a harness script that rev tracks was public there: missing from the clean form
+    # now means upstream unregistered it (P1's retired Stop gate, an exit-0 stub until P10 deletes
+    # it), so it is not personal and is not migrated.
+    for groups in extra.get("hooks", {}).values():
+        for g in groups:
+            g["hooks"] = [h for h in g["hooks"] if not _tracked_hook(home, rev, h)]
+        groups[:] = [g for g in groups if g["hooks"]]
+    extra["hooks"] = {event: groups for event, groups in extra.get("hooks", {}).items() if groups}
+    if not extra["hooks"]:
+        del extra["hooks"]
     env = extra.pop("env", {})
     ref_env = _d(reference.get("env"))
     for name, value in code_defaults(home, rev):
         if name not in env and name not in ref_env:
             env[name] = value
     env.setdefault("CLAUDE_HOME", home)
+    pushed = env.get("GIT_AUTO_PUSH") == "1"  # D1: push is opt-in, never carried into a new overlay
+    if pushed:
+        del env["GIT_AUTO_PUSH"]
     overlay = {"modules": modules, "env": env}
     overlay.update(extra)
     try:
@@ -1160,6 +1192,8 @@ def cmd_migrate(home, rev, settings_file, base_rev):
     print("  modules: %s" % ", ".join("%s=%s" % (n, "on" if on else "off")
                                       for n, on in modules.items()))
     print("  env: %d keys: %s" % (len(env), ", ".join(env)))
+    if pushed:
+        print("  not migrated: GIT_AUTO_PUSH (automatic push is opt-in; set it in %s)" % OVERLAY)
     for name, val in overlay.get("permissions", {}).items():
         print("  permissions.%s: %s" % (name, len(val) if isinstance(val, list) else "set"))
     print("  hooks: %d groups" % sum(len(g) for g in overlay.get("hooks", {}).values()))
@@ -1167,6 +1201,314 @@ def cmd_migrate(home, rev, settings_file, base_rev):
     print("  other top-level keys: %d" % len(others))
     print("next: run scripts/bootstrap (or render-settings render) to render settings.json")
     return 0
+
+
+# -------------------------------------------------------------------------------------- land
+
+LANDING_LOG = os.path.join("logs", "landing.log")  # append-only; no code reads it
+DOC_SYNC_LINE = re.compile(rb"^(\*Last updated: [^*]*\*|> Last updated: .*)$")  # doc-sync's dates
+SEED_KEYS = tuple(name for name, _, _ in CODE_DEFAULTS) + ("GRAPHIFY_BIN",)
+_HOME_OF = re.compile(r"""(?<![^\s"'])(/[^\s"']*?)/((?:hooks|scripts)/[^\s"';]+)""")
+
+
+def _say(msg):
+    print("%s land: %s" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), msg))
+
+
+def _z(home, *args):  # a git command's NUL-separated output, [] on failure
+    proc = _git(home, *args)
+    ok = proc is not None and proc.returncode == 0
+    return [p.decode("utf-8", "surrogateescape") for p in proc.stdout.split(b"\0") if p] if ok else []
+
+
+def _unmerged(home):
+    return sorted({entry.split("\t", 1)[1] for entry in _z(home, "ls-files", "-u", "-z")})
+
+
+def pre_pull_rev(home):
+    """R3's rev: the newest revision of the HEAD reflog (each entry's new value, then its old one:
+    after a pull, a reflog that gc had emptied holds rev only as an old value), else ORIG_HEAD,
+    whose .gitattributes does not declare the settings filter; None unless HEAD's (or a stopped
+    merge's MERGE_HEAD's) declares it, and None when the reflog starts with a clone of a revision
+    that declares it (D13: a fresh clone that checked out an older revision and came back)."""
+    path = _git_out(home, "rev-parse", "--git-path", "logs/HEAD")
+    log = [(e[0].split(" ")[:2], e[2]) for e in (ln.decode("utf-8", "replace").partition("\t")
+           for ln in reversed((path and _read(os.path.join(home, path)) or b"").splitlines()))]
+    revs = [r for pair, _ in log for r in reversed(pair)] + \
+        (_git_out(home, "rev-parse", "-q", "--verify", "ORIG_HEAD^{commit}") or "").split()
+    revs = [r for r in dict.fromkeys(revs) if r.strip("0")]  # a clone's old value is all zeros
+    tips = ["HEAD"] + (["MERGE_HEAD"] if _git_out(home, "rev-parse", "-q", "--verify",
+                                                   "MERGE_HEAD") else [])
+    found = _git_out(home, "grep", "-l", "-F", "filter=" + FILTER_NAME, *tips, *revs, "--",
+                     ".gitattributes") or ""
+    declaring = {line.split(":", 1)[0] for line in found.splitlines()}
+    if log and log[-1][0][-1:] and log[-1][0][-1] in declaring and log[-1][1].startswith("clone: "):
+        return None
+    return next((r for r in revs if r not in declaring), None) if declaring & set(tips) else None
+
+
+def pull_stash(home, rev, settings=True):
+    """The pull path's stash entry, by content (messages differ by pull path): the newest one whose
+    first parent is rev and whose settings.json differs from rev's (with settings=False any one at
+    rev: a pull that left settings.json alone, for the doc-sync exception); without rev (a landed
+    home), the newest one whose first parent is an earlier HEAD of the reflog."""
+    entries = [(e.split() + [""])[:2] for e in
+               (_git_out(home, "log", "-g", "--format=%H %P", "refs/stash") or "").splitlines()]
+    if rev is None:
+        seen = set((_git_out(home, "log", "-g", "--format=%H", "HEAD") or "").split())
+        seen.discard(_git_out(home, "rev-parse", "HEAD"))
+        return next((stash for stash, parent in entries if parent in seen), None)
+    before = blob(home, "%s:%s" % (rev, SETTINGS))
+    return next((stash for stash, parent in entries if parent == rev and (
+        not settings or blob(home, "%s:%s" % (stash, SETTINGS)) != before)), None)
+
+
+def previous_settings(home, rev, stash):
+    """R3: (settings, source) before the pull: the live file at pull time from the pull's stash
+    (S3); else rev's tracked file plus the working file's entries HEAD's clean form does not
+    explain (the CLI's writes, before or after the pull: S1, S2)."""
+    if stash:
+        return parse(blob(home, "%s:%s" % (stash, SETTINGS))), "the pull's stash"
+    prev, working = parse(blob(home, "%s:%s" % (rev, SETTINGS))), parse(_read(SETTINGS))
+    head = parse(blob(home, "HEAD:" + SETTINGS))
+    if None not in (prev, working, head):
+        try:
+            merge(prev, diff(working, head))
+        except ShapeError:
+            pass
+    return prev, "%s:%s plus the working file" % (rev[:12], SETTINGS)
+
+
+def repair_pop(home, stash, always=False):
+    """R2: undo what a conflicted stash pop left. An unmerged settings.json, and an unmerged
+    INDEX.md or CLAUDE.md the stash changed only in doc-sync's date lines, take HEAD's side
+    (removed where HEAD deleted it); then (once one was, or always on an upgraded home) every path
+    the pop staged is unstaged, its working content unchanged: index blob equal to the stash's, or
+    a path the stash changed that the pop merged (index equal to the working file); other
+    unmerged paths stay as they are. Returns (resolved, doc-sync, unstaged, unmerged left, the
+    paths of the first two kinds git refused to take: a lock)."""
+    undated = lambda data: [ln for ln in data.splitlines() if not DOC_SYNC_LINE.match(ln)]  # noqa
+    resolved, refused = [], []
+    for path in _unmerged(home):
+        if path != SETTINGS:
+            old, new = [blob(home, "%s%s:%s" % (stash, side, path)) if stash else None
+                        for side in ("^1", "")]
+            if os.path.basename(path) not in ("INDEX.md", "CLAUDE.md") or None in (old, new) \
+                    or old == new or undated(old) != undated(new):
+                continue
+        head = blob(home, "HEAD:" + path) is not None
+        proc = _git(home, "--literal-pathspecs", *(["checkout", "-q", "HEAD"] if head else
+                                                   ["rm", "-q"]), "--", path)
+        (resolved if proc is not None and proc.returncode == 0 else refused).append(path)
+    left, unstage = _unmerged(home), []
+    if stash and (resolved or always):
+        index = {e.split("\t", 1)[1]: e.split()[1] for e in _z(home, "ls-files", "-s", "-z")}
+        stashed = {e.split("\t", 1)[1]: e.split()[2] for e in _z(home, "ls-tree", "-r", "-z", stash)}
+        merged = set(_z(home, "diff", "--name-only", "-z", "--no-renames", stash + "^1", stash)) - \
+            set(_z(home, "diff", "--name-only", "-z", "--no-renames"))
+        unstage = [p for p in _z(home, "diff", "--cached", "--name-only", "-z", "--no-renames",
+                                 "HEAD") if p not in left and (index.get(p) == stashed.get(p) or
+                                                               p in merged)]
+    reset = ["git", "-C", home, "--literal-pathspecs", "reset", "-q", "HEAD",
+             "--pathspec-from-file=-", "--pathspec-file-nul"]  # no pathspec resets the whole index
+    if unstage and subprocess.run(reset, input=b"\0".join(os.fsencode(p) for p in unstage),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+        unstage = []  # a lock: nothing was unstaged
+    return len(resolved), sum(p != SETTINGS for p in resolved), len(unstage), len(left), refused
+
+
+def _words(value):
+    return [w for w in re.split(r"[|,\s]+", value or "") if w]
+
+
+def _paths(entries, homes):
+    """Absolute paths permission entries name (//path is the form for /path), at least two levels
+    deep (/tmp alone is not personal) and outside the harness home."""
+    found = [re.search(r"\((/[^:*\s)]*)", e) for e in entries if isinstance(e, str)]
+    paths = [re.sub(r"^//", "/", m.group(1)).rstrip("/") for m in found if m]
+    return [p for p in paths if p.count("/") >= 2 and not any(
+        p == h or p.startswith(h + "/") for h in homes)]
+
+
+def _markers(text):
+    """HARD_MARKERS, PARAM_MARKERS (arrays) and WS_MARKER of a check-public-core.sh text."""
+    found = []
+    for name in ("HARD_MARKERS", "PARAM_MARKERS", "WS_MARKER"):
+        m = re.search(r"^%s=\((.*?)^\)" % name, text, re.M | re.S) or \
+            re.search(r"^%s=(.*)$" % name, text, re.M)
+        try:
+            found += [w for w in shlex.split(m.group(1), comments=True) if "$" not in w] if m else []
+        except ValueError:
+            pass
+    return found
+
+
+def seed_literals(home, rev):
+    """R5: seed private-literals.txt (mode 0600) from values this machine holds, only when it is
+    absent or empty (blank lines only). {source: count}, or None when it is kept."""
+    data = _read(LITERALS) if os.path.isfile(LITERALS) else None
+    if os.path.lexists(LITERALS) and (data is None or data.strip()):
+        return None
+    overlay = load_overlay(home) or {}
+    env, perms = _d(overlay.get("env")), _d(overlay.get("permissions"))
+    values = []
+    for name in SEED_KEYS:
+        value = env.get(name) if isinstance(env.get(name), str) else ""
+        if name == "CLAUDE_HARD_BANNED_SCRIPTS":  # its plain-word alternatives, not ERE syntax
+            values += [w for w in value.split("|") if re.fullmatch(r"[\w.-]+", w)]
+        elif name == "CLAUDE_CHECKPOINT_EXTRA_TRAILER":  # the e-mail part
+            values += re.findall(r"<([^<>\s]+@[^<>\s]+)>", value)
+        elif name == "PASEO_DAEMON_MODEL":  # the account suffix; a model with no @ names none
+            values += value.rsplit("@", 1)[1:]
+        else:
+            values += _words(value)
+    email = _git_out(home, "config", "--local", "--get", "user.email") or \
+        _git_out(home, "config", "--global", "--get", "user.email")
+    homes = {home, os.path.realpath(home), env.get("CLAUDE_HOME") or home}
+    # The harness home rev's hook commands name for the scripts rev tracks (root's home in a
+    # /home/<user> layout, review F3): a path under it is the tracked tree's, not a personal tool.
+    prev, tracked = parse(blob(home, "%s:%s" % (rev, SETTINGS))) or {}, set(_z(
+        home, "ls-tree", "-r", "-z", "--name-only", rev))
+    homes |= {m.group(1) for g in _d(prev.get("hooks")).values() for grp in _list(g)
+              for h in _list(_d(grp).get("hooks"))
+              for m in _HOME_OF.finditer(str(_d(h).get("command", ""))) if m.group(2) in tracked}
+    sources = {"overlay-env": values, "permission-paths": _paths(
+        [e for v in perms.values() for e in _list(v)], homes), "git-e-mail": [email] if email else [],
+        "check-markers": _markers((blob(home, rev + ":scripts/check-public-core.sh") or b"")
+                                  .decode("utf-8", "replace"))}
+    clean = parse(blob(home, "HEAD:" + SETTINGS)) or {}
+    safety = (blob(home, "HEAD:" + SAFETY_HOOK) or b"").decode("utf-8", "replace")
+    shipped = {w for v in [v for v in _d(clean.get("env")).values() if isinstance(v, str)] +
+               [v for _, v in code_defaults(home, "HEAD")] for w in _words(v) + [v]}
+    shipped |= set(_words(_shell_default(safety, "CLAUDE_HARD_BANNED_SCRIPTS")))
+    shipped |= set(_paths([e for v in _d(clean.get("permissions")).values() for e in _list(v)], ()))
+    m = re.search(r"[:/]([^/:]+)/[^/:]+/?$", _git_out(home, "config", "--get",
+                                                     "remote.origin.url") or "")
+    owner = m.group(1).lower() if m else None  # in the project's public URL: never seeded
+    # A value HEAD's tracked files hold in 100 or more lines is the tree's own vocabulary (review
+    # LH-2): the list cannot keep it out, and it would refuse every snapshot adding one more line.
+    cands = "\n".join({v.strip() for f in sources.values() for v in f if len(v.strip()) >= 4})
+    grep = subprocess.run(["git", "-C", home, "grep", "-h", "-I", "-F", "-f", "-", "HEAD", "--"],
+                          input=cands.encode("utf-8", "surrogateescape"), stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL) if cands else None
+    lines = grep.stdout.decode("utf-8", "replace").splitlines() if grep else []
+    common = {v for v in cands.split("\n") if v and sum(v in ln for ln in lines) >= 100}
+    if common:
+        _say("not seeded, in 100 or more tracked lines at HEAD: %d value(s)" % len(common))
+    seeded, counts = [], {}
+    for source, found in sources.items():
+        keep = [v for v in dict.fromkeys(v.strip() for v in found) if len(v) >= 4
+                and v not in shipped | common and v.lower() != owner and v not in seeded]
+        seeded += keep
+        counts[source] = len(keep)
+    if seeded:
+        _write_atomic(os.path.join(home, LITERALS), "\n".join(seeded).encode() + b"\n", 0o600)
+    return counts
+
+
+def repaired(res):
+    """The notice parts for repair_pop's result. A path git refused to take (a lock) stays unmerged
+    and is tried again at the next Stop: named apart, a control or line-break character as "?"."""
+    return (["%d file(s) a pull left conflicted taken from upstream (%d doc-sync), %d staged "
+             "path(s) unstaged, the stash entry kept" % res[:3]] if res[0] or res[2] else []) + (
+        ["%s still conflicted: git refused its repair, tried again at the next turn end"
+         % ", ".join(re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", "?", p) for p in res[4])] if res[4] else []) + (
+        ["%d other conflicted path(s) left as they are" % (res[3] - len(res[4]))]
+        if res[3] > len(res[4]) else [])
+
+
+def from_head(home):
+    """Until a render wrote the record, settings.json is taken from HEAD (the clean form, which init
+    step 3 renders with the overlay), last in the step and by whichever run of the landing gets
+    here: one that a kill cut short after the migration as well. Entries the overlay does not hold
+    are dropped then: GIT_AUTO_PUSH "1" (D1) and what the CLI wrote after the migration (the overlay
+    that exists is never rewritten); the log and the notice name their key paths."""
+    working = parse(_read(SETTINGS))
+    if working == parse(blob(home, "HEAD:" + SETTINGS)):
+        return []
+    overlay = load_overlay(home) or {}
+    target, layers, problem = machine_form(home, overlay, working)
+    extras = working_extras(working, target, layers) if working and not problem else {}
+    pushed = _d(extras.get("env")).pop("GIT_AUTO_PUSH", None) == "1"
+    lost = describe(extras) + [k for k in CLI_OWNED if k in (working or {}) and
+                               working[k] != overlay.get(k)]
+    _git(home, "checkout", "-q", "HEAD", "--", SETTINGS)
+    _say("settings.json taken from HEAD for the render; dropped: %s" % (", ".join(lost) or "none"))
+    return (["GIT_AUTO_PUSH not migrated: automatic push is opt-in"] if pushed else []) + (
+        ["dropped from settings.json, as the overlay does not hold them: " + ", ".join(lost)]
+        if lost else [])
+
+
+def land(home, mode):
+    """(notice part or the step that failed, rc): the landing of an upgraded home, or with mode
+    "repair" a landed home whose later pull left a conflicted stash pop (rc 1: git refused it)."""
+    unmerged, notes = _unmerged(home), []
+    if mode == "repair":  # a notice once a path was taken or one git refused stays unmerged
+        stash = pull_stash(home, None)
+        # The live entries beyond the clean form that upstream's side lacks (review LH-7): named
+        # by key path once settings.json is taken from HEAD (the stash entry keeps them).
+        docs = [parse(blob(home, "%s:%s" % (r, SETTINGS))) for r in (stash, stash + "^1", "HEAD")] \
+            if stash and SETTINGS in unmerged else [None]
+        lost = describe(diff(diff(docs[0], docs[1]), docs[2])) if None not in docs else []
+        res = repair_pop(home, stash) if unmerged else (0, 0, 0, 0, [])
+        _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])
+        if lost and SETTINGS not in res[4]:
+            _say("settings.json taken from HEAD; dropped: %s" % ", ".join(lost))
+            notes.append("dropped from settings.json, as the overlay does not hold them: %s (in "
+                         "the stash entry)" % ", ".join(lost))
+        return "; ".join((repaired(res) if res[0] or res[4] else []) + notes), int(bool(res[4]))
+    rev = pre_pull_rev(home)
+    if rev is None:
+        _say("no revision from before the settings filter in the HEAD reflog or ORIG_HEAD")
+        return "revision detection", 1
+    # Only a conflicted pop keeps the pull's entry: without an unmerged path the working file wins.
+    stash, working = pull_stash(home, rev) if unmerged else None, parse(_read(SETTINGS))
+    changed = working != parse(blob(home, "HEAD:" + SETTINGS))
+    _say("state=%s rev=%s stash=%s unmerged=%d" % ("S3" if SETTINGS in unmerged else "S2" if
+         changed else "S1", rev[:12], "yes" if stash else "no", len(unmerged)))
+    migrated = not os.path.lexists(OVERLAY)
+    if migrated:
+        previous = previous_settings(home, rev, stash)
+        if cmd_migrate(home, rev, None, "HEAD", previous):
+            return "migration", 1
+        notes.append("overlay migrated from the settings before the pull" + (
+            " (GIT_AUTO_PUSH not migrated: automatic push is opt-in)"
+            if _d((previous[0] or {}).get("env")).get("GIT_AUTO_PUSH") == "1" else ""))
+    if not os.path.isfile(OVERLAY):
+        _say("%s is not a regular file" % OVERLAY)
+        return "overlay", 1
+    res = repair_pop(home, stash or pull_stash(home, rev, False), True) if unmerged else \
+        (0, 0, 0, 0, [])
+    _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])
+    notes += repaired(res)
+    counts = seed_literals(home, rev)
+    if counts is not None:
+        _say("seeded " + " ".join("%s=%d" % kv for kv in counts.items()))
+        notes.append("private-literals.txt seeded with %d value(s)" % sum(counts.values()))
+    if SETTINGS not in _unmerged(home) and not os.path.exists(record_path(home) or ""):
+        notes += [n for n in from_head(home) if not any(n in note for note in notes)]
+    return "; ".join(notes), 0
+
+
+def cmd_land(home, mode):
+    """render-settings land, run by scripts/install/land under its lock once no rebase or merge is
+    stopped. It logs counts, key names and revision ids (never a value) to logs/landing.log; stdout
+    is one line: the notice part, or the failed step (exit 1; with --repair also a refused path)."""
+    os.chdir(home)
+    if mode == "rev":
+        rev = pre_pull_rev(home)
+        print(rev or "")
+        return 0 if rev else 1
+    os.makedirs("logs", exist_ok=True)
+    with open(LANDING_LOG, "a", encoding="utf-8") as log, contextlib.redirect_stdout(log), \
+            contextlib.redirect_stderr(log):
+        try:
+            note, rc = land(home, mode)
+        except Exception as exc:  # never a traceback: its text may carry a value
+            _say("failed: %s" % type(exc).__name__)
+            note, rc = "settings", 1
+    print(note)
+    return rc
 
 
 # -------------------------------------------------------------------------------------- main
@@ -1187,6 +1529,9 @@ def main(argv=None):
     p_migrate.add_argument("--from", dest="rev", required=True, metavar="REV")
     p_migrate.add_argument("--settings-file", metavar="PATH")
     p_migrate.add_argument("--base", dest="base_rev", metavar="REV")
+    p_land = sub.add_parser("land", help="the settings half of the landing (P7b)")
+    p_land.add_argument("--rev", dest="mode", action="store_const", const="rev")
+    p_land.add_argument("--repair", dest="mode", action="store_const", const="repair")
     args = parser.parse_args(argv)
     home = harness_home()
     if args.command == "clean":
@@ -1197,6 +1542,12 @@ def main(argv=None):
         return cmd_render(home, args.force)
     if args.command == "check":
         return cmd_check_staged(home) if args.staged else cmd_check(home)
+    if args.command == "land":
+        try:
+            return cmd_land(home, args.mode)
+        except Exception as exc:  # never a traceback: its text may carry a value
+            _err("land: %s" % type(exc).__name__)
+            return 1
     return cmd_migrate(home, args.rev, args.settings_file, args.base_rev)
 
 
