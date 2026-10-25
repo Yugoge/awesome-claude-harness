@@ -1,19 +1,23 @@
 """The root conftest drops the inherited variables that point a run at the runner's own project or home.
 
-conftest.py removes CLAUDE_PROJECT_DIR, PASEO_CONFIG_DIR, CLAUDE_HOME, CODEX_HOME
-and CLAUDE_RESTART_ACCOUNTS_ROOT at import, before any test module is
+conftest.py removes CLAUDE_PROJECT_DIR, PASEO_CONFIG_DIR, CLAUDE_HOME, CODEX_HOME,
+CLAUDE_RESTART_ACCOUNTS_ROOT and CLAUDECODE at import, before any test module is
 collected, and removes its scratch root (harness-tests-*) when the session
 ends. Inherited, CLAUDE_PROJECT_DIR made tests/test_prompt_workflow_liveness_tz.py
 create 30 paths (.claude/dev-registry/ and docs/dev) under the runner's
 project, and PASEO_CONFIG_DIR made tests/test_paseo_usage_read.py run the live
-paseo adapter against the runner's config. A test that needs one of them sets
-it itself.
+paseo adapter against the runner's config. CLAUDECODE, which Claude Code sets in
+every tool process, made the hooks and libraries a run spawns read the harness
+home's settings.json once CLAUDE_HOME was gone (P7b R7): in a landed home,
+subagent_restart bound the live accounts root and the bash-safety guard the live
+hard-ban list. A test that needs one of them sets it itself.
 
 CI does not set these variables, so the first test alone would only fail on a
-developer machine. The second runs a child pytest that inherits all five, each
-pointed at a scratch directory, over the first test and those two modules, and
-checks that nothing is written into any of the five directories and that the
-child leaves no scratch root behind. So the check also runs in CI.
+developer machine. The second runs a child pytest that inherits all six (the
+five directories each pointed at a scratch directory, CLAUDECODE as "1") over
+the first test and those two modules, and checks that nothing is written into
+any of the five directories and that the child leaves no scratch root behind.
+So the check also runs in CI.
 """
 
 import os
@@ -25,6 +29,8 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 INHERITED = ("CLAUDE_PROJECT_DIR", "PASEO_CONFIG_DIR", "CLAUDE_HOME",
              "CODEX_HOME", "CLAUDE_RESTART_ACCOUNTS_ROOT")
+# Set by Claude Code in every hook and tool process; it names no directory.
+MARKERS = ("CLAUDECODE",)
 
 # The modules that wrote into, or read from, an inherited directory before the
 # conftest dropped the variables.
@@ -33,7 +39,7 @@ AFFECTED = ("tests/test_prompt_workflow_liveness_tz.py",
 
 # Taken when this module is collected: modules that bind a path at import
 # (hooks/lib/subagent_restart.py reads CLAUDE_RESTART_ACCOUNTS_ROOT) see this view.
-_AT_COLLECTION = {name: os.environ.get(name) for name in INHERITED}
+_AT_COLLECTION = {name: os.environ.get(name) for name in INHERITED + MARKERS}
 
 
 def _contents(root):
@@ -59,6 +65,7 @@ def test_a_run_that_inherits_the_variables_writes_nothing_into_them(tmp_path):
     child_tmp.mkdir()
     env = dict(os.environ)
     env.update({name: str(path) for name, path in inherited.items()})
+    env.update({name: "1" for name in MARKERS})
     env["TMPDIR"] = str(child_tmp)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
 
