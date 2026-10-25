@@ -3,7 +3,7 @@
 #
 # Usage: scripts/bootstrap [--yes] [--with <module>]... [--without <module>]...
 #                          [--migrate-from <rev> [--settings-file <path>]]
-#                          [--force] [--no-doctor]
+#                          [--force] [--no-doctor] [--steps <list>]
 #   --yes                   Do not ask: every optional module is off unless named
 #                           by --with.
 #   --with <module>         Turn an optional module on in a NEW overlay (repeatable).
@@ -19,6 +19,9 @@
 #                           explain (settings.json is first backed up to
 #                           settings.json.bak-<timestamp> when the render changes it).
 #   --no-doctor             Skip the final scripts/doctor run.
+#   --steps <list>          Run only these of steps 2-5 (comma-separated), as --yes, with no
+#                           venv, resolver check or doctor: the landing (scripts/install/land)
+#                           runs steps 3,4,5 this way on an upgraded home.
 #
 # Steps (<home> = this checkout, resolved from the script's own location):
 #   1. venv: reuse <home>/venv when its python imports pytest, jsonschema and yaml
@@ -66,6 +69,8 @@ WITH_LIST=""
 WITHOUT_LIST=""
 MIGRATE_FROM=""
 SETTINGS_FILE=""
+STEPS="1 2 3 4 5 6 7"
+_run() { _in_list "$1" "$STEPS"; }
 _need_module() {  # <flag> <value>
   if [ -z "$2" ]; then echo "bootstrap: $1 needs a module name (known: $KNOWN_MODULES)" >&2; exit 1; fi
   if ! _in_list "$2" "$KNOWN_MODULES"; then
@@ -81,6 +86,9 @@ while [ $# -gt 0 ]; do
     --settings-file) SETTINGS_FILE="${2:?--settings-file needs a path}"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --no-doctor) RUN_DOCTOR=0; shift ;;
+    --steps) STEPS="$(printf '%s' "${2:?--steps needs a list of steps 2-5}" | tr ',' ' ')"; ASSUME_YES=1
+      for _s in $STEPS; do case "$_s" in [2-5]) ;; *) echo "bootstrap: --steps takes 2-5" >&2; exit 1 ;; esac; done
+      shift 2 ;;
     -h|--help) awk 'NR == 1 { next } /^#/ { print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "bootstrap: unknown argument '$1' (see --help)" >&2; exit 1 ;;
   esac
@@ -148,6 +156,7 @@ if command -v git >/dev/null 2>&1; then
 fi
 
 # ── 1. venv ──────────────────────────────────────────────────────────────────
+if _run 1; then
 # A venv this run created is removed again if its dependency install fails, so
 # a retry starts clean. A venv that existed before this run is never removed.
 _CREATED_VENV=0
@@ -223,10 +232,13 @@ else
   _venv_ok || { echo "bootstrap: the new venv cannot import pytest, jsonschema and yaml." >&2; exit 1; }
 fi
 _VENV_READY=1
+fi
 
 # ── 2. Overlay (settings.machine.json) ───────────────────────────────────────
-# Human configuration: written only here and only when absent; never rewritten.
-if _exists "$OVERLAY"; then
+# The machine's configuration: written only when absent, never rewritten; by init, or once by
+# the landing (scripts/install/land) on a home upgraded from pre-P7 code.
+if ! _run 2; then :
+elif _exists "$OVERLAY"; then
   echo "bootstrap: settings.machine.json exists — left unchanged."
   if [ -n "$WITH_LIST$WITHOUT_LIST$MIGRATE_FROM" ]; then
     echo "  The existing overlay wins over --with/--without/--migrate-from. To change modules,"
@@ -286,6 +298,7 @@ PY
 fi
 
 # ── 3. Settings filter + render ──────────────────────────────────────────────
+if _run 3; then
 # Registered in the LOCAL config every run; a key is rewritten only when its
 # value differs, so a re-run leaves the config file untouched. Git runs filters
 # from the top of the work tree, so the relative script path follows the checkout.
@@ -324,8 +337,10 @@ if [ "$_rc" -ne 0 ]; then
   fi
   exit 1
 fi
+fi
 
 # ── 4. Files and directories, created only when absent ───────────────────────
+if _run 4; then
 if [ -d "$HOME_DIR/logs" ]; then echo "bootstrap: logs/ exists"
 else mkdir -p "$HOME_DIR/logs" || exit 1; echo "bootstrap: created logs/"; fi
 
@@ -388,8 +403,10 @@ PY
 then
   echo "bootstrap: could not create the protected-runtime file (see above)." >&2; exit 1
 fi
+fi
 
 # ── 5. pre-commit hook ───────────────────────────────────────────────────────
+if _run 5; then
 # Only into this repository's own hooks dir: under its git common dir (the default,
 # or the keystone dir) or a core.hooksPath from its local/worktree config. A global,
 # system or command-line core.hooksPath can serve every repository on the machine,
@@ -455,6 +472,10 @@ elif [ "$IS_GIT" -eq 1 ]; then
     echo "bootstrap: installed pre-commit hook ($TARGET)"
   fi
 fi
+
+fi
+[ "$STEPS" = "1 2 3 4 5 6 7" ] || { [ -z "${HOOK_HELP:-}" ] || printf '%s\n' "$HOOK_HELP" >&2
+  echo "bootstrap: steps $STEPS done"; [ -z "${HOOK_HELP:-}" ]; exit; }
 
 # ── 6. Shell hooks executable; both resolvers resolve THIS checkout ──────────
 for _f in "$HOME_DIR"/hooks/*.sh; do

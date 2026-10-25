@@ -17,16 +17,22 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
+# P7b: land P7 on a harness home upgraded from pre-P7 code (scripts/install/land always exits 0 and
+# prints at most one plain line). The Stop coordinator relays only a last stdout line, so notice()
+# prints it last on every exit-0 path, joined with a refused-snapshot notice.
+NOTICE="$(bash "$(dirname "${BASH_SOURCE[0]}")/../scripts/install/land" 2>/dev/null)" || NOTICE=""
+notice() { [ -z "$NOTICE" ] || printf '{"systemMessage": "%s"}\n' "$NOTICE"; }
+
 # Check if this is a git repository
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
   echo -e "${YELLOW}⚠️  Not a git repository. Skipping checkpoint.${NC}"
-  exit 0
+  notice; exit 0
 fi
 
 # Fast exit if nothing changed (keeps Stop hook chatter minimal)
 if [[ -z "$(git status --porcelain)" ]]; then
   echo -e "${GREEN}✅ No changes to checkpoint.${NC}"
-  exit 0
+  notice; exit 0
 fi
 
 # Source and delegate to the shared library
@@ -48,10 +54,10 @@ if write_checkpoint "" "stop hook: auto-commit.sh"; then
     echo -e "${GREEN}   Tip: $(git rev-parse --short "$TIP")${NC}"
   fi
 elif [ "$?" -eq 3 ]; then  # refused, nothing written: a one-line notice (systemMessage), never a Stop block
-  printf '{"systemMessage": "Checkpoint snapshot refused by %s: nothing written, see logs/checkpoint.log"}\n' "$checkpoint_refused_by"
+  NOTICE="Checkpoint snapshot refused by $checkpoint_refused_by: nothing written, see logs/checkpoint.log${NOTICE:+; $NOTICE}"
 else
   echo -e "${RED}❌ Checkpoint failed. See ~/.claude/logs/checkpoint.log${NC}"
   exit 1
 fi
 
-exit 0
+notice; exit 0
