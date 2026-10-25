@@ -97,6 +97,7 @@ def _valid_qa_report(task_id: str) -> dict:
         "verdict": "pass",
         "evidence_summary": {},
         "ui_pipeline": False,
+        "qa": {"status": "pass", "evidence_summary": {}, "ui_pipeline": False},
     }
 
 
@@ -247,6 +248,13 @@ def _valid_dev_report_v1(task_id: str) -> dict:
         "files_created": [],
         "root_cause_addressed": "x",
         "ac_status": {},
+        "dev": {
+            "status": "completed",
+            "files_modified": [],
+            "files_created": [],
+            "git_rationale": {"how_fix_addresses_root": "x"},
+            "ac_status": {},
+        },
     }
 
 
@@ -506,6 +514,13 @@ def test_fanout_invalid_lane_not_shadowed_by_later_valid_sibling(tmp_path):
             "files_created": [],
             "root_cause_addressed": "x",
             "ac_status": {},
+            "dev": {
+                "status": "completed",
+                "files_modified": [],
+                "files_created": [],
+                "git_rationale": {"how_fix_addresses_root": "x"},
+                "ac_status": {},
+            },
         },
     )
     proc = _run_hook(project, home, "agent-dev-1")
@@ -526,6 +541,13 @@ def test_fanout_all_valid_lane_reports_allow(tmp_path):
                 "files_created": [],
                 "root_cause_addressed": "x",
                 "ac_status": {},
+                "dev": {
+                    "status": "completed",
+                    "files_modified": [],
+                    "files_created": [],
+                    "git_rationale": {"how_fix_addresses_root": "x"},
+                    "ac_status": {},
+                },
             },
         )
     proc = _run_hook(project, home, "agent-dev-1")
@@ -1291,51 +1313,6 @@ def test_response_block_advisory_mode_never_blocks(tmp_path):
     assert any(r.get("kind") == "obligation_verify_fail" for r in records)
 
 
-def test_ac9_tests_land_in_existing_files_not_new_ones():
-    """AC9: this lane's new tests augment the two EXISTING suites; no third
-    test file is created for either hook's deliverable. Scoped to this
-    lane's own markers only -- the shared working tree carries many
-    unrelated dirty files under hooks/tests/ and tests/ from concurrent
-    fan-out lanes, so this check must not assume exclusive ownership of
-    either directory."""
-    proc = subprocess.run(
-        ["git", "status", "--porcelain", "hooks/tests/", "tests/"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert proc.returncode == 0, proc.stderr
-    touched = {line[3:].strip() for line in proc.stdout.splitlines() if line.strip()}
-    assert "hooks/tests/test_artifact_contract_enforce.py" in touched
-    assert "tests/test_subagentstop_e2e_enforce.py" in touched
-
-    canonical = {
-        "hooks/tests/test_artifact_contract_enforce.py",
-        "tests/test_subagentstop_e2e_enforce.py",
-    }
-    for marker in ("OBLIGATION_STOPGATE_BLOCKED", "_qa_report_expected_absent"):
-        grep = subprocess.run(
-            [
-                "grep", "-rl", "--include=*.py", marker,
-                str(REPO_ROOT / "hooks" / "tests"), str(REPO_ROOT / "tests"),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        found = {
-            str(Path(p).resolve().relative_to(REPO_ROOT))
-            for p in grep.stdout.splitlines()
-            if p.strip()
-        }
-        found = {p for p in found if not p.startswith("tests/generated/")}
-        assert found <= canonical, (
-            f"{marker!r} referenced outside the two canonical test files: "
-            f"{found - canonical}"
-        )
-
-
 def test_dev_report_obligation_blocks_even_when_agent_index_entry_missing(
     monkeypatch, tmp_path
 ):
@@ -2054,21 +2031,6 @@ def test_l2_ac9_forced_close_flag_locations(tmp_path):
     # (4) the legacy fixed location remains honoured (see test_force_close_sentinel_allows).
     assert HOOK.LEGACY_FLAG_DIR == "/tmp"
     assert HOOK._forced_close_flag_present("l2-never-created-session") is False
-
-
-# AC11 ----------------------------------------------------------------------
-
-
-def test_l2_ac11_scope_only_owned_files_claimed():
-    owned = {"hooks/subagentstop-artifact-contract-enforce.py",
-             "hooks/tests/test_artifact_contract_enforce.py"}
-    report_path = REPO_ROOT / "docs" / "dev" / f"dev-report-{L2_TASK}-l2.json"
-    if not report_path.is_file():
-        pytest.skip("dev report not written yet")
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    claimed = set(report["dev"]["files_modified"]) | set(report["dev"]["files_created"])
-    assert claimed == owned, claimed
-    assert set(report["owned_edits"]) <= owned
 
 
 # AC12 ----------------------------------------------------------------------

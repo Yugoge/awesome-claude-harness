@@ -8,7 +8,7 @@
 
 ## Measured: 22 of 22 are orphans
 
-Every `workflow-*.json` file at the repo root was checked by session id against the transcript directories of all three account directories under `/var/lib/claude-accounts/` (`orchestrade`, `yugetang`, `yugoge`). **Zero** have a matching transcript under any of the three; all 22 are orphans. Dates range from 2026-03-25 (oldest) to 2026-09-18 (newest); total size is 40106 bytes. (An earlier verbal estimate of "~104K" for this total does not match a direct byte count — recorded here as the measured figure, not the estimate.)
+Every `workflow-*.json` file at the repo root was checked by session id against the transcript directories of all three account directories under `<accounts-root>/` (`acct-a`, `acct-b`, `acct-c`). **Zero** have a matching transcript under any of the three; all 22 are orphans. Dates range from 2026-03-25 (oldest) to 2026-09-18 (newest); total size is 40106 bytes. (An earlier verbal estimate of "~104K" for this total does not match a direct byte count — recorded here as the measured figure, not the estimate.)
 
 Checking fewer than all three accounts is not a hypothetical risk: earlier the same evening, a transcript was declared absent after checking only one account, when it in fact existed — intact, 604 lines — under a different one. Any orphan judgment for this file category that does not check every account directory is unreliable by demonstrated precedent, not just in theory.
 

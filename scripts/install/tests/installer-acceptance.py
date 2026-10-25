@@ -386,6 +386,9 @@ def ac2(tmp: Path) -> None:
     check("AC2(c)", "core floor components exist on disk and are non-empty",
           all((iso / f).is_file() and (iso / f).stat().st_size > 0 for f in floor_files),
           str(floor_files))
+    # The installed set is measured before the smoke run below executes a hook:
+    # running it may add interpreter caches the installer never placed.
+    installed = actual_files(iso)
     smoke = PROFILE["block_decision_smoke"]
     payload = dict(smoke["stdin"], session_id="acceptance-smoke-unique")
     p = subprocess.run([smoke["interpreter"], str(iso / smoke["hook"])],
@@ -399,7 +402,8 @@ def ac2(tmp: Path) -> None:
     listed_inc = {x.split("  ")[0] for x in listed_inc}
     listed_exc = {ln.strip()[2:] for ln in plan_out.splitlines() if ln.strip().startswith("- ")}
     check("AC2(e)", "printed include listing == measured installed set",
-          listed_inc == actual_files(iso), f"printed-only={sorted(listed_inc - actual_files(iso))}")
+          listed_inc == installed,
+          f"printed-only={sorted(listed_inc - installed)} installed-only={sorted(installed - listed_inc)}")
     check("AC2(e)", "printed exclude listing == manifest excluded set",
           listed_exc == set(PROFILE["excluded"]), str(sorted(listed_exc ^ set(PROFILE["excluded"]))))
 
@@ -782,32 +786,38 @@ def ac7(tmp: Path) -> None:
 
 
 def ac8(tmp: Path) -> None:
-    print("AC8  README stops promoting the bare clone -- and the new command runs")
+    # The README documents two install paths: clone + init (the full harness) and
+    # this installer's core profile (guardrails only). Each code block is read
+    # together with the "###" heading it sits under.
+    print("AC8  README documents the installer path beside clone + init -- and its command runs")
     lines = README.read_text().splitlines()
     idx = next(i for i, ln in enumerate(lines) if ln.strip() == "## Install")
     nxt = next((i for i in range(idx + 1, len(lines))
                 if lines[i].startswith("## ") and lines[i].strip() != "## Install"), len(lines))
     section = lines[idx:nxt]
-    blocks, cur, inb = [], [], False
+    blocks, cur, inb, heading = [], [], False, ""
     for ln in section:
+        if not inb and ln.startswith("### "):
+            heading = ln
         if ln.startswith("```"):
             if inb:
-                blocks.append("\n".join(cur)); cur = []
+                blocks.append((heading, "\n".join(cur))); cur = []
             inb = not inb
             continue
         if inb:
             cur.append(ln)
-    install_blocks = [b for b in blocks if "install" in b or "clone" in b]
-    first = install_blocks[0] if install_blocks else ""
-    check("AC8(a)", "the first executable install block invokes the installer",
-          "scripts/install/install" in first, first[:200])
-    check("AC8(a)", "it no longer instructs cloning the repository onto the Claude config home",
-          not any("clone" in b and "~/.claude" in b for b in blocks),
-          str([b for b in blocks if "clone" in b])[:200])
-    body = "\n".join(section)
-    check("AC8(b)", "a retained clone sequence sits under a labeled from-source/contributor heading",
-          "### From source (contributors)" in body
-          and body.index("### From source (contributors)") < body.index("git clone"))
+    installer_blocks = [(h, b) for h, b in blocks
+                        if any(ln.strip().startswith("scripts/install/install")
+                               and "--dry-run" not in ln for ln in b.splitlines())]
+    labeled = [b for h, b in installer_blocks if "installer" in h.lower()]
+    first = labeled[0] if labeled else ""
+    check("AC8(a)", "the Install section carries an executable installer block",
+          bool(installer_blocks), str([b for _h, b in blocks])[:200])
+    check("AC8(a)", "an installer block sits under the installer's own labeled heading",
+          bool(first), str([h for h, _b in installer_blocks]))
+    clone_heads = [h for h, b in blocks if "git clone" in b]
+    check("AC8(b)", "the first clone sequence sits under a heading that labels it a clone path",
+          bool(clone_heads) and "clone" in clone_heads[0].lower(), str(clone_heads[:1]))
     faq = README.read_text()
     check("AC8(c)", "the FAQ no longer claims a clone over the Claude home is the only installation",
           'The only "installation" is `git clone ... ~/.claude' not in faq)
@@ -824,7 +834,7 @@ def ac8(tmp: Path) -> None:
     rc, out, err = run(["bash", "-c", cmd], cwd=SOURCE,
                        env={"CLAUDE_CONFIG_DIR": str(n2), "XDG_DATA_HOME": str(prefix)})
     iso = prefix / "claude-harness" / "harness"
-    check("AC8(d)", "the README's promoted command, run verbatim, exits 0",
+    check("AC8(d)", "the README's installer command, run verbatim, exits 0",
           rc == 0, f"cmd={cmd!r} rc={rc} err={err[-400:]}")
     check("AC8(d)", "it produces the AC1 isolated-root invariant",
           actual_files(iso) == installed_expected(prefix / "claude-harness"),
@@ -1628,6 +1638,43 @@ def ac16(tmp: Path) -> None:
               header[:60])
 
 
+def stage_healthy_host(tmp: Path) -> None:
+    """Make the host the preflight requires, inside tmp, and install from there.
+
+    The preflight runs scripts/doctor of the source, which requires what init sets
+    up: <home>/venv, a settings.json whose hook paths resolve under the harness
+    home, and the protected-runtime file. A plain checkout (CI's is read-only)
+    has none of them, so the harness installs from a copy under tmp with a venv
+    that runs this interpreter, CLAUDE_HOME naming the copy, and HOME and
+    CLAUDE_STATE_DIR under tmp. The copy is the checkout byte for byte (minus
+    .git, venv and caches), so the subject under test is unchanged.
+    """
+    global SOURCE, INSTALL, UNINSTALL, ENGINE, PREFLIGHT, MATRIX, README
+    src = tmp / "source"
+    shutil.copytree(SOURCE, src, symlinks=True, ignore=shutil.ignore_patterns(
+        ".git", "venv", "__pycache__", ".pytest_cache"))
+    venv_py = src / "venv" / "bin" / "python"
+    venv_py.parent.mkdir(parents=True)
+    venv_py.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    venv_py.chmod(0o755)
+    sys.path.insert(0, str(src / "hooks" / "lib"))
+    from runtime_guard.config import REQUIRED_KEYS
+    runtime = tmp / "home" / ".config" / "claude" / "protected-runtime.json"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text(json.dumps({"schema_version": 1,
+                                   **{k: [] for k in REQUIRED_KEYS}}) + "\n")
+    os.environ.update(HOME=str(tmp / "home"), CLAUDE_HOME=str(src),
+                      CLAUDE_STATE_DIR=str(tmp / "state"),
+                      CLAUDE_PROTECTED_RUNTIME_FILE=str(runtime))
+    SOURCE = src
+    INSTALL = src / "scripts" / "install" / "install"
+    UNINSTALL = src / "scripts" / "install" / "uninstall"
+    ENGINE = src / "scripts" / "install" / "installer.py"
+    PREFLIGHT = src / "scripts" / "install" / "preflight"
+    MATRIX = src / "docs" / "reference" / "install-compatibility-matrix.md"
+    README = src / "README.md"
+
+
 def main() -> int:
     global VERBOSE, ACTIVE_ENGINE
     ap = argparse.ArgumentParser()
@@ -1662,7 +1709,9 @@ def main() -> int:
 
     tmp = Path(tempfile.mkdtemp(prefix="installer-acceptance-"))
     try:
+        stage_healthy_host(tmp)
         if not args.engine:
+            ACTIVE_ENGINE = ENGINE
             ac1(tmp); ac2(tmp); ac3(tmp); ac4_ac5(tmp); ac6(tmp); ac7(tmp); ac8(tmp)
             ac15(tmp); ac16(tmp)
         for fixture in (ac9, ac10, ac11, ac12, ac13, ac14):

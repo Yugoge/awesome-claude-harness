@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "protected_cmds": [],
+  "protected_launch_paths": [],
+  "protected_services": [],
+  "protected_hotfiles": [],
+  "protected_statefiles": [],
+  "protected_endpoint_paths": [],
+  "protected_proc_idents": [],
+  "protected_global_bins": [],
+  "protected_build_workspaces": [],
+  "protected_build_paths": []
+}

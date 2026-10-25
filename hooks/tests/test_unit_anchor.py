@@ -82,30 +82,30 @@ def _exec(toks):
 
 
 def test_service_hit_direct():
-    toks = ["systemctl", "restart", "happy-daemon"]
-    assert anchor._anchor_service_hits_protected(toks, _exec(toks), ["happy-daemon"]) is True
+    toks = ["systemctl", "restart", "standin-unit-q7"]
+    assert anchor._anchor_service_hits_protected(toks, _exec(toks), ["standin-unit-q7"]) is True
 
 
 def test_service_hit_behind_wrapper():
-    toks = ["sudo", "systemctl", "stop", "happy-daemon"]
-    assert anchor._anchor_service_hits_protected(toks, _exec(toks), ["happy-daemon"]) is True
+    toks = ["sudo", "systemctl", "stop", "standin-unit-q7"]
+    assert anchor._anchor_service_hits_protected(toks, _exec(toks), ["standin-unit-q7"]) is True
 
 
 def test_service_hit_non_manager_head_is_false():
-    # `docker restart happy-daemon` — docker is not a service manager program.
-    toks = ["docker", "restart", "happy-daemon"]
-    assert anchor._anchor_service_hits_protected(toks, _exec(toks), ["happy-daemon"]) is False
+    # `docker restart standin-unit-q7` — docker is not a service manager program.
+    toks = ["docker", "restart", "standin-unit-q7"]
+    assert anchor._anchor_service_hits_protected(toks, _exec(toks), ["standin-unit-q7"]) is False
 
 
 def test_service_hit_unrelated_unit_is_false():
     # verb present, but the protected unit is not in the manager's own argv.
     toks = ["systemctl", "restart", "other-unit"]
-    assert anchor._anchor_service_hits_protected(toks, _exec(toks), ["happy-daemon"]) is False
+    assert anchor._anchor_service_hits_protected(toks, _exec(toks), ["standin-unit-q7"]) is False
 
 
 def test_service_hit_template_instance_form():
-    toks = ["systemctl", "restart", "happy-daemon@1.service"]
-    assert anchor._anchor_service_hits_protected(toks, _exec(toks), ["happy-daemon"]) is True
+    toks = ["systemctl", "restart", "standin-unit-q7@1.service"]
+    assert anchor._anchor_service_hits_protected(toks, _exec(toks), ["standin-unit-q7"]) is True
 
 
 # ── _anchor_nonprotected_workspace_selector ──────────────────────────────────

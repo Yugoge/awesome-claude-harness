@@ -1,7 +1,7 @@
 # Close/commit zero-failure mechanism — converged design (2026-09-28/29)
 
 Status: adversarially debated design, pre-implementation. Repository under design:
-/dev/shm/dev-workspace/dot-claude (working tree of 2026-09-28, uncommitted modifications
+/srv/harness (working tree of 2026-09-28, uncommitted modifications
 included — every file:line citation below refers to that tree and was verified there by the
 design driver). Companion inventory: docs/reference/close-commit-failure-inventory-20260927.md
 (199 close + 275 commit = 474 counted failure modes). Debate: iterated adversarial review with

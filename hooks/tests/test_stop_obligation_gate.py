@@ -56,13 +56,16 @@ def _advisory_log(home):
 # AC1: registration + validity (Must-Have item 1)
 # --------------------------------------------------------------------------
 
-def test_hook_registered_and_valid():
+def test_hook_registered_and_valid(tmp_path):
     """AC-L4-01: hook file exists, compiles, and settings.json's hooks.Stop
     array registers it in the existing no-matcher shape."""
     assert HOOK.is_file()
+    # py_compile writes its .pyc even under PYTHONDONTWRITEBYTECODE; redirect it
+    # out of the checkout's hooks/__pycache__/ (which may be read-only).
     compiled = subprocess.run(
         [sys.executable, "-m", "py_compile", str(HOOK)],
         capture_output=True, text=True,
+        env=dict(os.environ, PYTHONPYCACHEPREFIX=str(tmp_path)),
     )
     assert compiled.returncode == 0, compiled.stderr
 

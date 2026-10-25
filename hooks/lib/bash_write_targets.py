@@ -184,6 +184,64 @@ def _resolve_path(token: str) -> str:
     return token
 
 
+# TC-47: follow ONE shell-variable assignment to its sink, so `OUT=p; tee "$OUT"`
+# names p instead of the literal `$OUT` (which admitted the write in one guard
+# and denied it in another). Pure text, no process. Anything that could assign
+# the name another way, run the assignment conditionally or in a subshell, or
+# give it more than literal bytes plus the approved $HOME/$CLAUDE_PROJECT_DIR
+# keeps the unresolved literal (fail closed). Only the sink's own pipeline may
+# hold other commands: its other elements run in subshells.
+_SINK_VAR_RE = re.compile(r"\$(?:([A-Za-z_]\w*)|\{([A-Za-z_]\w*)\})")
+_PROJECTED_VARS = ("CLAUDE_PROJECT_DIR", "HOME")
+_PROJECTABLE_VALUE_RE = re.compile(r"~?[\w./@%+,:=-]+")
+_GROUPING_RE = re.compile(r"[(){}`]|&&|\|\|")
+_STATE_WORD_RE = re.compile(
+    r"(?<![\w.-])(?:if|then|else|elif|fi|do|done|while|until|for|case|esac|"
+    r"select|function|coproc|eval|source|\.|read|declare|typeset|export|local|"
+    r"readonly|unset|printf|mapfile|readarray|getopts|let|wait|trap|shopt|fc|"
+    r"alias)(?![\w.-])"
+)
+
+
+def _resolve_sink(token: str, raw: str, sink: int) -> str:
+    """Resolve a sink token, projecting a lone `$NAME` from its assignment."""
+    var = _SINK_VAR_RE.fullmatch(token)
+    name = var and (var.group(1) or var.group(2))
+    if not name or name in _PROJECTED_VARS or raw[sink:].lstrip()[:1] == "'":
+        return _resolve_path(token)
+    prefix = raw[:sink]
+    masked = _strip_quoted_regions(prefix)
+    cut = max(masked.rfind(";"), masked.rfind("\n")) + 1
+    scan = re.sub(r"\$\{(?:HOME|CLAUDE_PROJECT_DIR)\}", "", prefix[:cut]) + "\n"
+    hits = list(re.finditer(r"(?<!\w)%s(?!\w)" % name, prefix))
+    if (len(hits) != 1 or _GROUPING_RE.search(scan + prefix[cut:])
+            or _STATE_WORD_RE.search(scan)):
+        return token
+    start, eq = hits[0].span()
+    before = prefix[:start].rstrip()
+    statement_start = (
+        not before
+        or (before.endswith(";") and not before.endswith("\\;"))
+        or ("\n" in prefix[len(before):start] and before[-1] not in "|&\\")
+    )
+    quote = prefix[eq + 1:eq + 2]
+    if (masked[start] != prefix[start] or not statement_start
+            or prefix[eq:eq + 1] != "=" or quote.isspace()):
+        return token
+    value, end = _next_token_from_original(prefix, eq + 1)
+    if end > cut or prefix[end:].lstrip(" \t")[:1] not in (";", "\n"):
+        return token
+    bare = value
+    if quote != "'":
+        for v in _PROJECTED_VARS:
+            if ("$" + v) in value and not os.environ.get(v):
+                return token
+            bare = bare.replace("${%s}" % v, "").replace("$" + v, "")
+    if not _PROJECTABLE_VALUE_RE.fullmatch(bare) or (quote in "'\"" and "~" in bare):
+        return token
+    return value if quote == "'" else _resolve_path(value)
+
+
 # Regex for redirect targets. Matches '>' or '>>' followed by optional
 # whitespace and a token (path). Excludes '>&' (fd duplication like '2>&1')
 # and process substitution '>(...)'. The '(?<![<>])' lookbehind prevents
@@ -262,7 +320,7 @@ _REDIRECT_OP_RE = re.compile(r"(?<![<>&\'\"])(?:>>?)(?![&\(])")
 _TEE_OP_RE = re.compile(r"(?:^|[\s;|&])tee\b((?:\s+-[aAip]+)*)")
 
 
-def _extract_redirect_targets(command_no_heredoc: str) -> List[str]:
+def _extract_redirect_targets(command_no_heredoc: str, raw: str = "") -> List[str]:
     """F3/F4: scan masked text for operator positions; read path from ORIGINAL.
 
     Quoted CONTENT (e.g. `'need >=10/3 items'`) is neutralized in the masked
@@ -275,18 +333,18 @@ def _extract_redirect_targets(command_no_heredoc: str) -> List[str]:
         token = _read_path_token_from_original(command_no_heredoc, m.end()).strip()
         if not token or token.isdigit():
             continue
-        targets.append(_resolve_path(token))
+        targets.append(_resolve_sink(token, raw or command_no_heredoc, m.end()))
     return targets
 
 
-def _extract_tee_targets(command: str) -> List[str]:
+def _extract_tee_targets(command: str, raw: str = "") -> List[str]:
     """F3/F4: scan masked text for tee tokens; read path from ORIGINAL."""
     masked = _strip_quoted_regions(command)
     targets: List[str] = []
     for m in _TEE_OP_RE.finditer(masked):
         path = _read_path_token_from_original(command, m.end()).strip()
         if path:
-            targets.append(_resolve_path(path))
+            targets.append(_resolve_sink(path, raw or command, m.end()))
     return targets
 
 
@@ -754,12 +812,12 @@ def extract_bash_write_paths(command: str) -> List[str]:
     """
     if not isinstance(command, str) or not command.strip():
         return []
-    stripped = command_without_heredoc_bodies(command)
-    stripped = _strip_reason_payload(stripped)
+    raw = command_without_heredoc_bodies(command)
+    stripped = _strip_reason_payload(raw)
     stripped = _neutralize_command_word_prefixes(stripped)
     targets: List[str] = []
-    targets.extend(_extract_redirect_targets(stripped))
-    targets.extend(_extract_tee_targets(stripped))
+    targets.extend(_extract_redirect_targets(stripped, raw))
+    targets.extend(_extract_tee_targets(stripped, raw))
     targets.extend(_extract_cp_mv_targets(stripped))
     targets.extend(_extract_sed_i_targets(stripped))
     targets.extend(_extract_install_targets(stripped))

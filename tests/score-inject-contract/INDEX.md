@@ -7,7 +7,6 @@
 ## Tree
 ```
 score-inject-contract/
-├── `runtime-verify.sh` - Description: Runtime verifier for the 4-field score-injection echo contract.
 └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with
 ```
 

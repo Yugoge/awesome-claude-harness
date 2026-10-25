@@ -8,7 +8,7 @@ reboot. This copies:
   * every blob referenced by any event's pre_sha/post_sha
                            -> <dest>/objects.git  (bare repo, same blob ids)
 Default dest: $CLAUDE_CONFIG_DIR/attribution-seals (the account's persistent
-harness-state dir, /var/lib/claude-accounts/<acct>/claude on the root ext4
+harness-state dir, <accounts-root>/<acct>/claude on the root ext4
 disk) -- override with $ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
 destination unless --allow-volatile. See
 docs/reference/attribution-journal-phase0-facility.md #1 for the measured

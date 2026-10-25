@@ -135,7 +135,7 @@ class TestEvaluateCommitBlessedBridge(unittest.TestCase):
 
     def test_blessed_bridge_with_sentinel_allowed(self):
         # Isolate the "defer auto-bulk if a single-use commit grant is active"
-        # branch: ambient /tmp/claude-commit-grant-*.json files from an unrelated
+        # branch: ambient claude-commit-grant-*.json state files from an unrelated
         # /commit cycle would otherwise make _has_active_commit_grant() True and
         # turn this deterministic allow-path test flaky.
         with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True), \
@@ -288,7 +288,7 @@ class TestCommitGrantRedirectBinding(unittest.TestCase):
         import subprocess
         path.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
-        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=path, check=True)
+        subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=path, check=True)
         subprocess.run(["git", "config", "user.name", "t"], cwd=path, check=True)
         (path / "f.txt").write_text("x\n")
         subprocess.run(["git", "add", "."], cwd=path, check=True)
@@ -752,7 +752,7 @@ class TestAutoBulkDeferralBinding(unittest.TestCase):
     a grant belonging to an entirely different repository, blocked auto-bulk HERE
     for its whole TTL, and an artificially long expiry blocked it indefinitely.
     Observed in the wild while this fix was being written: a live grant bound to
-    /root deferred an auto-bulk commit in an unrelated checkout.
+    the home directory deferred an auto-bulk commit in an unrelated checkout.
 
     Every case below uses REAL repos so the binding is exercised against real git
     state rather than a mock, and the live-matching POSITIVE CONTROL runs first so

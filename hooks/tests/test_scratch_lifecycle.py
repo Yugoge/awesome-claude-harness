@@ -85,6 +85,7 @@ class SessionScratchInitTests(unittest.TestCase):
 
     def setUp(self):
         self.sandbox = Path(tempfile.mkdtemp(prefix="scratch-lifecycle-init-"))
+        self.addCleanup(shutil.rmtree, self.sandbox, ignore_errors=True)
 
     def test_registers_owner_with_documented_fields(self):
         result = _run_hook(
@@ -124,6 +125,7 @@ class SessionEndScratchSweepTests(unittest.TestCase):
 
     def setUp(self):
         self.sandbox = Path(tempfile.mkdtemp(prefix="scratch-lifecycle-sweep-"))
+        self.addCleanup(shutil.rmtree, self.sandbox, ignore_errors=True)
 
     def test_removes_own_dir_sibling_survives_byte_untouched(self):
         own = self.sandbox / "own-sid"
@@ -174,6 +176,7 @@ class TmpfilesAgeByTests(unittest.TestCase):
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="scratch-lifecycle-tmpfiles-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
 
     def _clean(self, *conf_paths):
         result = subprocess.run(
@@ -273,6 +276,7 @@ class CheckpointCoreTmpdirFallbackTests(unittest.TestCase):
 
     def test_fallback_resolves_under_sandbox_tmpdir_when_mktemp_missing(self):
         sandbox = Path(tempfile.mkdtemp(prefix="scratch-lifecycle-checkpoint-"))
+        self.addCleanup(shutil.rmtree, sandbox, ignore_errors=True)
         # Exercise just the fallback expression in isolation (mirrors line
         # 435 of checkpoint-core.sh) with a PATH that hides mktemp, so the
         # `||` branch is what actually runs.

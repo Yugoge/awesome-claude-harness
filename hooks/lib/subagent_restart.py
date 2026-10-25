@@ -107,8 +107,7 @@ TASK_NOTIFICATION_RE = re.compile(
 # The fixed resume message instructs every resumed agent to end with an explicit
 # RECOVERY_STATUS sentinel. That sentinel outranks ALL text-tier quota matching
 # when grading the response: an agent reporting ON a quota outage legitimately
-# quotes limit banners, and grading such a report by text inverts its meaning
-# (docs/reference/restart-detector-quota-text-match-false-positive-20260915.md §2).
+# quotes limit banners, and grading such a report by text inverts its meaning.
 RECOVERY_STATUS_RE = re.compile(r"RECOVERY_STATUS:\s*(completed|quota_interrupted)\b")
 
 
@@ -771,9 +770,8 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
         # child's own report whenever the child completed, so the textual
         # evidence above cannot distinguish "was quota-interrupted" from
         # "reported on a quota event": 39 of 217 candidates in the measured
-        # corpus were clean end_turn reports merely quoting limit banners
-        # (docs/reference/restart-detector-quota-text-match-false-positive-
-        # 20260915.md §4-5). A child that reached end_turn finished naturally
+        # corpus were clean end_turn reports merely quoting limit banners.
+        # A child that reached end_turn finished naturally
         # and must never be resumed; an unreadable child transcript (None)
         # keeps the candidate so a genuinely cut-off child is never dropped.
         if child["end_turn"] is True:

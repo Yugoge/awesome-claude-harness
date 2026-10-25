@@ -78,58 +78,41 @@ of git. The earlier generate-then-untrack plan (roadmap phase **P3**) is withdra
 
 ---
 
-## 3. Reference examples — private-lab residue already parameterized (env-override knobs)
+## 3. Reference examples — machine values behind env-override knobs
 
-`hooks/pretool-bash-safety.sh` is the canonical case of author-environment residue that
-was **parameterized last cycle** so the file can stay `public-core`: each author literal
-is now the *default* of a `CLAUDE_*` env var, so a public consumer overrides it without
-editing the hook. These defaults are the residue markers the checker treats as
-**allowed only in env-default (`:-`) or comment position** — a bare, un-parameterized
-reuse is a leak.
+`hooks/pretool-bash-safety.sh` is the canonical case of a machine-specific value kept out
+of a `public-core` file: each one is the *default* of a `CLAUDE_*` env var, so a consumer
+sets the variable instead of editing the hook. The tracked defaults are empty or generic;
+a machine's own values live in its environment or overlay, never in the tree.
 
-| Knob (env var) | Author default (residue) | Public consumer overrides via |
+| Knob (env var) | Tracked default | Consumer sets |
 |---|---|---|
-| dev container name (`CLAUDE_DEV_CONTAINERS`) | `happy-web-dev` | export `CLAUDE_DEV_CONTAINERS=…` |
+| dev container names (`CLAUDE_DEV_CONTAINERS`) | *(empty)* | export `CLAUDE_DEV_CONTAINERS=…` |
 | dev systemd units (`CLAUDE_DEV_SYSTEMD`) | *(empty)* | export `CLAUDE_DEV_SYSTEMD=…` |
-| daemon-restart grant helper (`CLAUDE_DAEMON_RESTART_GRANT_HELPER`) | `/root/bin/claude-allow-restart` | export `CLAUDE_DAEMON_RESTART_GRANT_HELPER=…` |
+| daemon-restart grant helper (`CLAUDE_DAEMON_RESTART_GRANT_HELPER`) | *(empty)* | export `CLAUDE_DAEMON_RESTART_GRANT_HELPER=…` |
 | grant sentinel dir (`CLAUDE_DAEMON_RESTART_GRANT_DIR`) | `$TMPDIR` | export `CLAUDE_DAEMON_RESTART_GRANT_DIR=…` |
-| protected daemon prefix (`CLAUDE_PROTECTED_DAEMON_PREFIX`) | `happy-daemon` | export `CLAUDE_PROTECTED_DAEMON_PREFIX=…` |
-| protected daemon targets (`CLAUDE_PROTECTED_DAEMON_TARGETS`) | `dev\|jade\|qijie` | export `CLAUDE_PROTECTED_DAEMON_TARGETS=…` |
+| protected daemon prefix (`CLAUDE_PROTECTED_DAEMON_PREFIX`) | *(empty)* | export `CLAUDE_PROTECTED_DAEMON_PREFIX=…` |
+| protected daemon targets (`CLAUDE_PROTECTED_DAEMON_TARGETS`) | *(empty)* | export `CLAUDE_PROTECTED_DAEMON_TARGETS=…` |
 
-**Protected daemon identity — now parameterized (was a deliberately-literal exception):**
-the local daemon **unit prefix** (`happy-daemon`) and its per-instance **targets**
-(`dev|jade|qijie`) used to be hardcoded in the daemon-restart-prohibition (Layer 1.A) and
-its wrapper/http/sentinel siblings, and were exempt from the residue scan. They are now the
-DEFAULTS of `CLAUDE_PROTECTED_DAEMON_PREFIX` / `CLAUDE_PROTECTED_DAEMON_TARGETS` (rows
-above), so a public consumer points the guard at their own daemon without editing the hook;
-with both unset, Layer 1.A behaves byte-for-byte as before. `check-public-core.sh` therefore
-treats `happy-daemon` as a **parameterized** residue marker (allowed only in `:-` default or
-comment position, exactly like `happy-web-dev`; a bare un-parameterized reuse in shippable
-code is flagged) rather than an un-scanned literal. Test fixtures that name the guarded unit
-(e.g. `hooks/tests/*`) are test data, not residue, so the param scan skips test trees.
-**Grant-channel caveat:** the target suffix also keys the external grant helper's sentinel
-protocol (`claude-allow-daemon-restart-<target>.flag`), so a consumer that retargets the
-prefix must also configure a matching grant helper (`CLAUDE_DAEMON_RESTART_GRANT_HELPER`) or
-the gate is protective but un-grantable.
+**Grant-channel caveat:** the daemon target suffix also keys the external grant helper's
+sentinel protocol (`claude-allow-daemon-restart-<target>.flag`), so a consumer that sets
+the prefix must also configure a matching grant helper (`CLAUDE_DAEMON_RESTART_GRANT_HELPER`)
+or the gate is protective but un-grantable.
 
-**Hard residue markers (must never appear in `public-core`, in any form):** the
-maintainer's git remote `git@github.com:Yugoge/…`, the rsync mirror `/root/.claude.bak`,
-and the sync cron `/root/sync-backup.sh` — all confined to `NESTED-REPO.md`
-(`private-lab`). If any surfaces in a `public-core` file, that is a hard leak.
-
-**Deferred, NOT gated this cycle:** the broad `/root/…` and tmpfs-workspace
-(`/dev/shm/dev-workspace/dot-claude`) path leaks that still pepper `public-core` prompts
-and scripts (roadmap §4.3 → phases **P1/P2**). The checker reports these as an
-**advisory count only** — it does not fail on them yet, because cleaning them is a
-separate, planned phase.
+**What the checker fails on (no published marker list):** the tracked rules are generic —
+an author home-directory path (the root user's home, a Linux or macOS user home) and an
+e-mail address outside the classes allowed by rule (§5, item 5) — plus the literals of the
+machine's untracked `private-literals.txt` (§2), which is where a machine's own names,
+remotes and paths are listed. These are hard failures in every tracked file, not an
+advisory count: a hit the allowlist does not cover fails the run.
 
 ---
 
 ## 4. Classification ledger
 
 Machine-readable region below (sentinel-delimited). `check-public-core.sh` parses it,
-verifies **every** git-tracked top-level path appears here, and scans the `public-core`
-set for the residue markers of §3. Path = first back-ticked token; class = second.
+verifies **every** git-tracked top-level path appears here; the residue rules of §5 run
+over every tracked file whatever its class. Path = first back-ticked token; class = second.
 
 <!-- BEGIN:public-core-manifest -->
 | Path | Class | Rationale (what the file actually is) |
@@ -166,7 +149,6 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
 | `tests/` | `shared/infra` | Test net (incl. generated AC skeletons + fixture strings) that supports the core; not itself the shippable harness. |
 | `PUBLIC-CORE.md` | `shared/infra` | This boundary manifest — governance/meta (self-classified for forward completeness once tracked). |
 | `release-membership.v1.json` | `shared/infra` | Shipping ledger: the EXPLICIT path set a release archive contains, plus per-path rationale. Governance/meta, beside this boundary ledger; consumed by the release workflow and by `scripts/verify-release-manifest.sh`. |
-| `NESTED-REPO.md` | `private-lab` | Documents the maintainer's private machine topology (the harness symlinked into tmpfs, the git remote, a backup mirror and a sync cron). |
 | `push.sh` | `private-lab` | Maintainer pre-push wrapper: `/root/.claude/push.sh` invocation, author git-workflow automation (identity now env-parameterized, purpose still maintainer-specific). |
 <!-- END:public-core-manifest -->
 
@@ -180,18 +162,24 @@ set for the residue markers of §3. Path = first back-ticked token; class = seco
    and fails loudly listing any path missing from the ledger above (catches a new file
    silently escaping classification).
 2. **Class validity** — every ledger class must be one of the three labels.
-3. **Residue scan** — expands the `public-core` set to files and flags the §3 markers:
-   hard markers on any occurrence; parameterized markers only when used
-   un-parameterized (not an env `:-` default, not a comment).
+3. **Scope** — the residue rules (items 4 and 5) read every tracked file, whatever its
+   ledger class (tests, CI and docs included); a file git filters (`settings.json`) is read
+   from its index blob, the content git stores.
 4. **Private literals** — fails on each literal of the local, untracked
    `private-literals.txt` (§2) found in a tracked file, reporting `file:line` and the
    literal's line number in the list, never the literal itself; prints `SKIP` when the list
-   is absent or empty. `--private-literals` runs only this rule, over the index (what would
-   be committed) — the pre-commit hook's mode. Archive mode (`--scan-root`) applies it to
-   the archive files when the list exists.
-5. **Author-home residue** — every author home-directory path (the root user's home, a
-   Linux user home, a macOS user home) in the `public-core` set must match an entry of
+   is absent or empty. `--private-literals` runs only this rule, over what the staged change
+   adds (added lines and added path names relative to `HEAD`; every staged line when there
+   is no `HEAD`) — the pre-commit hook's mode. Archive mode (`--scan-root`) applies it to
+   every archive file when the list exists.
+5. **Generic residue** — every author home-directory path (the root user's home, a Linux
+   user home, a macOS user home) and every e-mail address must match an entry of
    `policies/public-core-residue-allowlist.v1.json` whose class the source structure
-   supports; an operational code literal is never allowlistable.
+   supports; an operational code literal is never allowlistable. E-mail addresses allowed
+   by rule need no entry: reserved example and test domains (`example.com`/`.org`/`.net`,
+   `*.example`, `*.invalid`, `*.test`, `*.localhost`, `*.local`), no-reply addresses, the
+   `git@<host>:` SSH user form and systemd template unit names (`name@instance.service`).
+   A FAIL line names `file:line` and the occurrence's allowlist key, never the line.
+   Archive mode applies the same rules to the extracted release archive.
 
 Run it in CI alongside `scripts/verify-claims.sh`.

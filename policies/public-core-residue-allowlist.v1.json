@@ -3,8 +3,7 @@
   "description": "Seed exemption set for scripts/check-public-core.sh section 5 (generic author-path residue gate). Set-based, NOT an aggregate-count ratchet: the key is (path, fingerprint, ordinal), so deleting one allowlisted occurrence never creates capacity for an unrelated new one. Every entry's `class` is RE-DERIVED structurally by the gate from the live line; a hand-written label that the source structure does not support is rejected. Entries were seeded from a live full-ledger scan, never from a number quoted in a spec.",
   "self_exempt_paths": [
     "policies/public-core-residue-allowlist.v1.json",
-    "scripts/check-public-core.sh",
-    "scripts/detect-hardcoded-paths.sh"
+    "scripts/check-public-core.sh"
   ],
   "legitimate_classes": [
     "scanner_pattern_definition",
@@ -23,18 +22,11 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"**Optional-capability degradation.** Every **OPTIONAL** row above is *graceful*: an automa\""
     },
     {
-      "path": "PUBLIC-CORE.md",
-      "fingerprint": "3180eb30e4ea1244",
+      "path": "INDEX.md",
+      "fingerprint": "ef823c2748678c35",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
-      "rationale": "3. Reference examples — private-lab residue already paramete — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "PUBLIC-CORE.md",
-      "fingerprint": "536b8aa01a55a383",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "3. Reference examples — private-lab residue already paramete — prose/comment text; never read as a path at runtime."
+      "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
     },
     {
       "path": "PUBLIC-CORE.md",
@@ -52,31 +44,10 @@
     },
     {
       "path": "PUBLIC-CORE.md",
-      "fingerprint": "c933620940ffe1c4",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "3. Reference examples — private-lab residue already paramete — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "PUBLIC-CORE.md",
-      "fingerprint": "caa906bf8f247e11",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "3. Reference examples — private-lab residue already paramete — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "PUBLIC-CORE.md",
       "fingerprint": "cf2e7148c2cf0a02",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"\"public-core\": several `public-core` files still carry deferred `<author-path>` leaks (roadmap\""
-    },
-    {
-      "path": "PUBLIC-CORE.md",
-      "fingerprint": "d5eb97f86ee18db1",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "4. Classification ledger — prose/comment text; never read as a path at runtime."
     },
     {
       "path": "agents/qa.md",
@@ -101,10 +72,10 @@
     },
     {
       "path": "agents/style-inspector.md",
-      "fingerprint": "5dd0ced70e3e6a05",
+      "fingerprint": "79ce3ac9cb5a901f",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
-      "rationale": "Standard 2: No Hardcoded Values in Scripts — prose/comment text; never read as a path at runtime."
+      "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
     },
     {
       "path": "commands/dev.md",
@@ -223,7 +194,7 @@
       "fingerprint": "d657b5de21013dd1",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| `scripts/detect-hardcoded-paths.sh`, `scripts/spec-verify/spec_verify_parsers.py`, `scri\""
+      "rationale": "Prose/comment text documenting the residue policy (a table of scripts and the path shapes they carry); never read as a path at runtime."
     },
     {
       "path": "examples/guard-demo/README.md",
@@ -766,17 +737,10 @@
     },
     {
       "path": "hooks/session-promote-hook.sh",
-      "fingerprint": "4a0bc37fb6071600",
+      "fingerprint": "623f2626cd6b576b",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: a comment showing how a working-directory path maps to its project-dir slug."
-    },
-    {
-      "path": "hooks/session-promote-hook.sh",
-      "fingerprint": "8148fca1a08a7134",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# silently (the hook already always exits 0), NEVER the author literal <author-path>.\""
+      "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
     },
     {
       "path": "hooks/stop-spec-coverage-enforce.py",
@@ -793,32 +757,39 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# location), instead of the author literal <author-path>. The loud-fail guard is\""
     },
     {
-      "path": "hooks/tests/test_dual_runtime_lifecycle_e2e.py",
-      "fingerprint": "430c2baa8d402cb1",
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "03d71dfdd91fec3a",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def append_completion() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "02837e3d3bba5af6",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_kill_fused_redirect() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "0407656883511305",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_home_in_cwd_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "0407656883511305",
+      "fingerprint": "03d71dfdd91fec3a",
       "ordinal": 2,
       "class": "test_fixture",
-      "rationale": "def test_home_in_cwd_boundary_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "03d71dfdd91fec3a",
+      "ordinal": 3,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "03d71dfdd91fec3a",
+      "ordinal": 4,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "03d71dfdd91fec3a",
+      "ordinal": 5,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -829,17 +800,10 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "07adc457f910b246",
+      "fingerprint": "0966131c21821298",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_tilde_user_expansion_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "0914dc3b56be40ce",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_statefile_dir_glob_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -850,17 +814,24 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "10f6d5fda2308084",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_live_hook_sweep_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "14286bc780b53777",
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "def _live_hook_env() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "195c5bde559ecfc7",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "1c517a16e585de9a",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -885,17 +856,17 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "2ed7ff4185870350",
+      "fingerprint": "2b0ed83c5e1295de",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_container_dir_mutation_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "2f8b36daf6d56c64",
+      "fingerprint": "2b897ddfb7b04ab5",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_launch_cmdword() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -906,6 +877,13 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "351d334e5b2ca4a5",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "3eed97c155d77ebb",
       "ordinal": 1,
       "class": "test_fixture",
@@ -913,10 +891,10 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "42ae83cebc93fcb7",
+      "fingerprint": "42cde366bae44b30",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_read_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -934,13 +912,6 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "4a5b30991d216ec2",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_statefile_dir_glob_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "4b65c4ddc42ac14e",
       "ordinal": 1,
       "class": "test_fixture",
@@ -948,38 +919,31 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "4b823ee680c02aed",
+      "fingerprint": "5739f265d922d890",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def _statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "4b823ee680c02aed",
-      "ordinal": 2,
-      "class": "test_fixture",
-      "rationale": "def _statefile() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "57bfb7ad5a57103d",
+      "fingerprint": "5fe1352884b39ce2",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_home_expansion_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "57bfb7ad5a57103d",
-      "ordinal": 2,
-      "class": "test_fixture",
-      "rationale": "def test_chgrp_home_boundary_allows() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "5ac2dec4c03fb39e",
+      "fingerprint": "679b8e463f36ef2d",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_container_dir_mutation_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "6a491a4871578cb3",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -990,17 +954,52 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "6e7bede4100d0966",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_wrapped_pipeline_statefile_kill_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "6f65907feedb7fae",
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "def test_kill_statefile_pid() — fixture input data inside the test tree; not shipped harness behaviour."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "704f66ca6b2e1876",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "704f66ca6b2e1876",
+      "ordinal": 2,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "71fe8fcefcead7c7",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "721e584851b4469c",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "81888c32771d9e38",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "8257f887524a6b20",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -1011,6 +1010,13 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "8cd598aa69057f21",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
       "fingerprint": "8f3bbd7c40722093",
       "ordinal": 1,
       "class": "test_fixture",
@@ -1018,10 +1024,17 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "9869ac4e9a29035e",
+      "fingerprint": "9ac2aafeef564695",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_find_opts_before_path_sibling_family_blocks() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "hooks/tests/test_runtime_guard.py",
+      "fingerprint": "9ac2aafeef564695",
+      "ordinal": 2,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -1036,13 +1049,6 @@
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert rg.evaluate(\"find <author-path> -path /tmp/abs14b/.config/app/protected-runtime.json -delet\""
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "a00552b7c6f8263d",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_w4_kill_anchor() — fixture input data inside the test tree; not shipped harness behaviour."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -1067,17 +1073,17 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "badad5a1f0365724",
+      "fingerprint": "bee736fb88bd95af",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_find_destructive_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "bf2e14c89ed69d29",
+      "fingerprint": "c0100226174ce2e1",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_frontend_benign_tail_allows() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -1088,80 +1094,31 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "c63dee14cd095951",
+      "fingerprint": "cff58ff4682c32a8",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_cd_then_truncate_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "ceb21d6512ece42b",
+      "fingerprint": "d7817d398ebea4d2",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_read_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "d989e3bc6918eb9a",
+      "fingerprint": "ef327f0d11109b41",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_statefile_mutation() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "dd4c901548ad7cb2",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_statefile_mutation() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "e41c07047c8e873b",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_find_destructive_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "e4375ba1793f4075",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"<author-path>\"\""
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "e4375ba1793f4075",
+      "fingerprint": "ef327f0d11109b41",
       "ordinal": 2,
       "class": "test_fixture",
-      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"<author-path>\"\""
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "e4375ba1793f4075",
-      "ordinal": 3,
-      "class": "test_fixture",
-      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"<author-path>\"\""
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "e4375ba1793f4075",
-      "ordinal": 4,
-      "class": "test_fixture",
-      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"<author-path>\"\""
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "e4375ba1793f4075",
-      "ordinal": 5,
-      "class": "test_fixture",
-      "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"os.environ[\"HOME\"] = \"<author-path>\"\""
-    },
-    {
-      "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "eec5740ef22c2584",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "def test_kill_statefile_pid() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
@@ -1179,10 +1136,10 @@
     },
     {
       "path": "hooks/tests/test_runtime_guard.py",
-      "fingerprint": "fe214524e3dbab4c",
+      "fingerprint": "fe08d1e8d2c5a73d",
       "ordinal": 1,
       "class": "test_fixture",
-      "rationale": "def test_hook_allows_read_statefile() — fixture input data inside the test tree; not shipped harness behaviour."
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     },
     {
       "path": "hooks/tests/test_unit_find_cmds.py",
@@ -1290,6 +1247,13 @@
       "rationale": "Test-net fixture exercising the guard. tests/ is excluded from the release archive. Line: \"assert pathmatch._normalize_path(\"~\") == \"<author-path>\"\""
     },
     {
+      "path": "push.sh",
+      "fingerprint": "a08818f98712652c",
+      "ordinal": 1,
+      "class": "comment_or_narrative_doc",
+      "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
+    },
+    {
       "path": "scripts/INDEX.md",
       "fingerprint": "41ba4204049bec4f",
       "ordinal": 1,
@@ -1323,69 +1287,6 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "script preamble — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "4f1f7fbffe9acb3f",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"absolute bare directories, e.g. `(\"/\", \"<author-path>\", \"/home\", \"/etc\", \"/usr\", ...)`.\""
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "56d9b4f04bffdf75",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"# ROOT itself: `p = \"<author-path>/.claude\"` was caught while `EXACT_ROOT=\"<author-path>\"`,\""
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "5eeacfe82bd51dcc",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "param_line_ok() — the residue detector's own constant table; naming the pattern is its purpose."
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "5f4e88a9d98a3186",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"(`try: # ... route the audit-log default off <author-path>`), so such an occurrence was\""
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "61a9a6b2ee9320c4",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "8b146080b55453ce",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"r\"(?:<author-path>|/home/[a-z][a-z0-9_-]*|/Users/[A-Za-z][A-Za-z0-9_-]*)\"\""
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "a4c3f85f684c7bc4",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "ac08a7694f695afc",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "residue_audit() — the residue detector's own constant table; naming the pattern is its purpose."
-    },
-    {
-      "path": "scripts/check-public-core.sh",
-      "fingerprint": "c03c87d5a9d036b8",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "The detector's own constant table: the literal IS the pattern being gated on. Line: \"is_env = bool(re.search(r':-\\s*[\"\\']?(<author-path>|/home/|/Users/)', content))\""
     },
     {
       "path": "scripts/close-scoring-decide.py",
@@ -1430,20 +1331,6 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# 4-tier fallback: env -> pwd -> git toplevel -> <author-path> literal.\""
     },
     {
-      "path": "scripts/detect-hardcoded-paths.sh",
-      "fingerprint": "249cf96464ec1cc3",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "script preamble — the residue detector's own constant table; naming the pattern is its purpose."
-    },
-    {
-      "path": "scripts/detect-hardcoded-paths.sh",
-      "fingerprint": "90e23e9de52b5d4b",
-      "ordinal": 1,
-      "class": "scanner_pattern_definition",
-      "rationale": "script preamble — the residue detector's own constant table; naming the pattern is its purpose."
-    },
-    {
       "path": "scripts/resolve-close-report.sh",
       "fingerprint": "f4385ea41ec5e8c2",
       "ordinal": 1,
@@ -1470,6 +1357,237 @@
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
       "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
+    },
+    {
+      "path": "tests/fixtures/canary-tool-policy.v1.json",
+      "fingerprint": "566276e13356dd6c",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_codex_workflow_gate.py",
+      "fingerprint": "482b4a56dd60ca90",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_codex_workflow_gate.py",
+      "fingerprint": "75e5a76deac21ea0",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_codex_workflow_gate.py",
+      "fingerprint": "75e5a76deac21ea0",
+      "ordinal": 2,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_codex_workflow_gate.py",
+      "fingerprint": "ab200d1bfd9a28a7",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_codex_workflow_gate.py",
+      "fingerprint": "afc11b882dfdf2d1",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_codex_workflow_gate.py",
+      "fingerprint": "b423dc3789f32c34",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_codex_workflow_gate.py",
+      "fingerprint": "d3a6aca7ca80657c",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_codex_workflow_gate.py",
+      "fingerprint": "d42d5c1b08ac7a9b",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_landing.py",
+      "fingerprint": "698e2ca745682dcf",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_landing.py",
+      "fingerprint": "9b0e184356daff46",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_landing.py",
+      "fingerprint": "e84d83f2c59368ef",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "0dcb3952449405d2",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "30b430fa282f96c6",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "35df111921c38750",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "3919c941e27c3dfb",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "5465afc2ecf939f3",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "63c518e600837d76",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "7df8e51626c857c8",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "8655bbbf12e41dd2",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "913783693d87b979",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "9142ea165d862ad6",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "92d0afcfdfc2eaea",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "a67125d03573019f",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "c067c56a49a0b4cd",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "c398c226dbc62bca",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/test_public_core_residue_gate.py",
+      "fingerprint": "f4cc34833ce61dc2",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/verify-stop-spec-session-isolation.sh",
+      "fingerprint": "5518922a31202969",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/verify-stop-spec-session-isolation.sh",
+      "fingerprint": "5a12f9973bef1196",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/verify-stop-spec-session-isolation.sh",
+      "fingerprint": "6b597526c99b735d",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/verify-stop-spec-session-isolation.sh",
+      "fingerprint": "afddaf4d95d117f7",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/verify-stop-spec-session-isolation.sh",
+      "fingerprint": "b6b5ed1c2a58dd15",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
+    },
+    {
+      "path": "tests/verify-stop-spec-session-isolation.sh",
+      "fingerprint": "ca869b18f2c8aafe",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
     }
   ]
 }

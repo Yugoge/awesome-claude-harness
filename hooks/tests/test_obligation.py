@@ -645,12 +645,66 @@ def test_registry_dir_for_every_branch(tmp_path):
 # AC3 -- live_store positive control (read-only, dynamic discovery)
 # --------------------------------------------------------------------------
 
-def test_live_store_positive_control():
-    """>=1 REAL (session, agent) pair on this machine must resolve its
-    verbatim first-record dispatch prompt with a successful meta toolUseId
-    cross-check and the typed no_obligation_in_prompt outcome. Zero
-    discovered pairs is a test FAILURE, never a skip."""
+def _build_live_store(config_dir, project_dir):
+    """Write a session store under ``<config_dir>/projects`` in the persisted
+    shapes (see _build_fixture_store): parent session JSONL whose Agent
+    tool_use carries the prompt, and subagents/agent-*.jsonl with its
+    .meta.json. The dispatch prompts carry no obligation block."""
+    slug_dir = Path(config_dir) / "projects" / project_slug(project_dir)
+    for session_n, agent_n in ((1, 1), (1, 2), (2, 1)):
+        session_id = "sess-live-%04d" % session_n
+        agent_id = "liveagent%04d%04d" % (session_n, agent_n)
+        tool_use_id = "toolu_live_%04d_%04d" % (session_n, agent_n)
+        prompt = "FIRST ACTION: live-shape dispatch %s with no obligation block." % agent_id
+        subagents = slug_dir / session_id / "subagents"
+        subagents.mkdir(parents=True, exist_ok=True)
+        parent_record = {
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": tool_use_id,
+                "name": "Agent",
+                "input": {"prompt": prompt, "subagent_type": "dev"},
+            }]},
+        }
+        with open(slug_dir / f"{session_id}.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(parent_record) + "\n")
+        content = prompt if agent_n % 2 else [{"type": "text", "text": prompt}]
+        transcript = subagents / f"agent-{agent_id}.jsonl"
+        transcript.write_text(
+            json.dumps({"type": "user", "message": {"content": content}}) + "\n",
+            encoding="utf-8",
+        )
+        meta = {
+            "agentType": "dev",
+            "description": "live-shape",
+            "requestNonInteractive": True,
+            "requestShape": "prompt",
+            "spawnDepth": 1,
+            "toolUseId": tool_use_id,
+        }
+        transcript.with_name(f"agent-{agent_id}.meta.json").write_text(
+            json.dumps(meta), encoding="utf-8"
+        )
+
+
+def test_live_store_positive_control(tmp_path, monkeypatch):
+    """>=1 (session, agent) pair in the store under the configuration
+    directory must resolve its verbatim first-record dispatch prompt with a
+    successful meta toolUseId cross-check and the typed
+    no_obligation_in_prompt outcome. Zero discovered pairs is a test
+    FAILURE, never a skip. The store is synthetic, written under the
+    hermetic CLAUDE_CONFIG_DIR; the sibling-account root (read at import)
+    is pinned to an empty tmp_path so only that store is discovered."""
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    accounts_root = tmp_path / "accounts"
+    accounts_root.mkdir()
+    monkeypatch.setenv("CLAUDE_RESTART_ACCOUNTS_ROOT", str(accounts_root))
+    monkeypatch.setitem(account_project_roots.__globals__, "ACCOUNTS_ROOT", accounts_root)
+    _build_live_store(config_dir, REPO_ROOT)
     roots = account_project_roots()
+    assert roots == [config_dir / "projects"]
     assert roots, (
         "positive control violated: account_project_roots() returned no "
         "roots on this machine"
@@ -679,7 +733,7 @@ def test_live_store_positive_control():
                     agent_id = transcript.stem[len("agent-"):]
                     pairs.append((session_dir.name, agent_id))
     assert pairs, (
-        "positive control violated: zero real (session, agent) pairs "
+        "positive control violated: zero (session, agent) pairs "
         "discovered under %r across %d roots" % (slug, len(roots))
     )
     max_attempts = 25  # live store races live sessions; first pairs suffice
@@ -702,7 +756,7 @@ def test_live_store_positive_control():
         successes += 1
         break
     assert successes >= 1, (
-        "positive control violated: no live pair resolved with cross_check=ok "
+        "positive control violated: no store pair resolved with cross_check=ok "
         "within the first %d of %d discovered pairs; outcomes: %r"
         % (max_attempts, len(pairs), outcomes_seen)
     )

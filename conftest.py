@@ -6,12 +6,6 @@
 # OPT-IN-RUNNABLE behind a `generated` pytest marker, with the generated tree not
 # collected by the DEFAULT run.
 #
-# Default-run failure baseline: NOT recorded here. The set of inherited failing
-# node-ids is machine generated into tests/baselines/default-run-failures.json by
-# `python scripts/gen-test-baseline.py generate` (and compared at runtime with
-# `python scripts/gen-test-baseline.py check`, which fails only on node-ids absent
-# from the baseline). Never hand-edit counts or ids; regenerate.
-#
 # Mechanism (standard pytest, no hacks):
 #   * pytest_ignore_collect  — the default run never DESCENDS into tests/generated,
 #     so a parent-dir arg (`tests`) or bare `pytest` cannot pull it in (and cannot
@@ -39,11 +33,66 @@
 # All hooks are no-ops for anything outside tests/generated/, so hooks/tests and
 # the non-generated part of tests/ are completely unaffected.
 
+import os
 import pathlib
+import shutil
+import sys
+import tempfile
 
 import pytest
 
 _GENERATED_DIR = (pathlib.Path(__file__).parent / "tests" / "generated").resolve()
+
+# Hermetic environment. Set at import, before any test module is collected,
+# because several modules bind state paths when first imported (for example
+# hooks/lib/allowlist.py SENTINEL_GRANT_DIR). One session-wide state root, so
+# the in-process view and every hook a test spawns resolve the same grants and
+# consent flags, and none of them is the shared default /tmp namespace a live
+# session uses. HOME and CLAUDE_CONFIG_DIR start at a scratch home so nothing
+# reads or writes the real one; the per-test fixture below moves them again.
+_HERMETIC_ROOT = pathlib.Path(tempfile.mkdtemp(prefix="harness-tests-"))
+for _name in ("state", "home"):
+    (_HERMETIC_ROOT / _name).mkdir()
+os.environ["CLAUDE_STATE_DIR"] = str(_HERMETIC_ROOT / "state")
+os.environ["HOME"] = str(_HERMETIC_ROOT / "home")
+os.environ["CLAUDE_CONFIG_DIR"] = str(_HERMETIC_ROOT / "home" / ".claude")
+os.environ["CLAUDE_PYTHON_BIN"] = sys.executable
+# The empty-lists document init writes (scripts/bootstrap), tracked so a run
+# never depends on the runner's own protected-runtime file. Used from a copy
+# outside the checkout, where a real home keeps it: the runtime guard protects
+# its data file, and inside the project directory it would also match writes
+# the tests aim at other layers.
+_PROTECTED_RUNTIME = _HERMETIC_ROOT / "protected-runtime.json"
+shutil.copyfile(
+    pathlib.Path(__file__).parent / "hooks" / "tests" / "fixtures" / "protected-runtime.json",
+    _PROTECTED_RUNTIME,
+)
+os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = str(_PROTECTED_RUNTIME)
+# Variables that point a run at the runner's own project, home or optional
+# module. A test that needs one sets it itself; none is inherited. CLAUDECODE
+# marks a Claude Code process: with CLAUDE_HOME gone, hooks and libraries would
+# then read their settings from the harness home's settings.json (P7b R7).
+for _name in ("CLAUDE_PROJECT_DIR", "PASEO_CONFIG_DIR", "CLAUDE_HOME",
+              "CODEX_HOME", "CLAUDE_RESTART_ACCOUNTS_ROOT", "CLAUDECODE"):
+    os.environ.pop(_name, None)
+
+
+def pytest_unconfigure(config):
+    """Remove the session's scratch root, so a run leaves nothing in the temp dir."""
+    shutil.rmtree(_HERMETIC_ROOT, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_env(tmp_path_factory):
+    """Give each test its own empty HOME and restore the environment afterwards,
+    so a test that assigns os.environ directly cannot leak into later tests."""
+    saved = dict(os.environ)
+    home = tmp_path_factory.mktemp("home")
+    os.environ["HOME"] = str(home)
+    os.environ["CLAUDE_CONFIG_DIR"] = str(home / ".claude")
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 def pytest_addoption(parser):

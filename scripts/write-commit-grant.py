@@ -116,9 +116,11 @@ GRANT_TTL_MINUTES = 30
 # the tool_use_id of the commit's own tool event, audit R2-4), revocation CANNOT
 # reconstruct a pointer's name — this script never sees a tool_use_id. It instead
 # enumerates the namespace and matches each pointer's RECORDED grant paths
-# (original_path / locked_path) against the grant being revoked. Must stay
+# (original_path / locked_path) against the grant being revoked. The namespace is
+# under the hook runtime-state root (harness_state_dir(): CLAUDE_STATE_DIR, default
+# /tmp), resolved at import as the guard resolves its writer template. Must stay
 # glob-compatible with the guard's _COMMIT_GRANT_ACTIVE_TEMPLATE.
-COMMIT_GRANT_POINTER_GLOB = "/tmp/claude-commit-grant-active-*.json"
+COMMIT_GRANT_POINTER_GLOB = harness_state_dir() + "/claude-commit-grant-active-*.json"
 
 
 # Upper bound for any read out of the world-writable grant/pointer namespace.

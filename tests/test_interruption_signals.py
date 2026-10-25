@@ -1,7 +1,7 @@
 """Coverage for tiered interruption detection and the recall it restores.
 
 Every banner asserted here was measured in the real transcript corpus under
-``/var/lib/claude-accounts/*/claude/projects`` on 2026-09-30. The ``FUTURE_*``
+``<accounts-root>/*/claude/projects`` on 2026-09-30. The ``FUTURE_*``
 cases are deliberately invented: they exist to prove the grammar generalises over
 the scope word rather than enumerating it, which is the defect that made a whole
 ``/dev`` fan-out discover zero recoverable candidates.

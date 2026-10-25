@@ -88,11 +88,15 @@ CHECKPOINT_PII_BASENAME_PREFIXES="${CHECKPOINT_PII_BASENAME_PREFIXES:-.claude.js
 CHECKPOINT_PII_PATH_COMPONENTS="${CHECKPOINT_PII_PATH_COMPONENTS:-backups sessions}"
 
 # Fail-closed PII/credential content-signature pattern for the pre-push gate
-# (distinct from the fail-open oversized-blob gate above). Email/UUID/GitHub-
-# token/JWT are conventional shapes; sk-/AKIA copied verbatim from this
-# repo's own CI secret scan (tier_2_verified reference:
-# .github/workflows/baseline.yml:130).
-CHECKPOINT_PII_SIGNATURE_PATTERN="${CHECKPOINT_PII_SIGNATURE_PATTERN:-[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|sk-[A-Za-z0-9]{20}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+}"
+# (distinct from the fail-open oversized-blob gate above): the secret and identity
+# SHAPES the privacy engine does not own. Email/UUID/GitHub-token/JWT are
+# conventional shapes; sk-/AKIA copied from this repo's own CI secret scan
+# (.github/workflows/baseline.yml). The listed private literals are the engine's
+# (scripts/check-public-core.sh), which the gate runs over the same new blobs.
+# The default sits in its own single-quoted variable: written inline, the first "}"
+# of "{2,}" closed the ${...:-...} expansion and the e-mail and JWT shapes never matched.
+_checkpoint_pii_pattern='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|sk-[A-Za-z0-9]{20}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+'
+CHECKPOINT_PII_SIGNATURE_PATTERN="${CHECKPOINT_PII_SIGNATURE_PATTERN:-$_checkpoint_pii_pattern}"
 
 # Consecutive-failure alerting (2026-04-16): the 3rd back-to-back write_checkpoint failure prints
 # one stderr alert; any success resets the counter, and a refusal (rc 3) leaves it alone.
@@ -289,7 +293,7 @@ _checkpoint_push_gate_pii_signature() {
         return 0
     fi
 
-    local oid opath otype grep_rc
+    local oid opath otype grep_rc blobs="" idx report
     while read -r oid opath; do
         [ -z "$oid" ] && continue
         otype=$("${git_cmd[@]}" cat-file -t "$oid" 2>/dev/null)
@@ -298,6 +302,7 @@ _checkpoint_push_gate_pii_signature() {
             return 0
         fi
         [ "$otype" = "blob" ] || continue
+        blobs+="100644 ${oid}"$'\t'".checkpoint-push/${oid}/${opath:-blob}"$'\n'
         "${git_cmd[@]}" cat-file -p "$oid" 2>/dev/null | grep -qEa "$CHECKPOINT_PII_SIGNATURE_PATTERN"
         grep_rc=$?
         if [ "$grep_rc" -eq 0 ]; then
@@ -309,6 +314,25 @@ _checkpoint_push_gate_pii_signature() {
             return 0
         fi
     done <<< "$rev_list_out"
+
+    # The engine's private-literal rule over the same blobs, when the repo has a list: each
+    # blob sits in a temp index under a path HEAD never holds, so --private-literals reads
+    # every line as added and a blob snapshotted before its literal was listed is refused.
+    local h common
+    h="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P)"
+    common="$("${git_cmd[@]}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+    if [ -n "$blobs" ] && [ -s "${common%/*}/private-literals.txt" ]; then
+        idx="$(mktemp)" && rm -f "$idx" \
+            && printf '%s' "$blobs" | GIT_INDEX_FILE="$idx" "${git_cmd[@]}" update-index --index-info 2>/dev/null \
+            && report="$(cd "${work_dir:-.}" && GIT_INDEX_FILE="$idx" bash "$h/scripts/check-public-core.sh" --private-literals 2>&1)"
+        grep_rc=$?
+        rm -f "$idx"
+        if [ "$grep_rc" -ne 0 ]; then
+            _checkpoint_push_gate_pii_name="the private-literal rule (scripts/check-public-core.sh): ${report:-engine did not run}"
+            _checkpoint_push_gate_pii_name="${_checkpoint_push_gate_pii_name//$'\n'/ | }"
+            return 0
+        fi
+    fi
 
     return 1
 }

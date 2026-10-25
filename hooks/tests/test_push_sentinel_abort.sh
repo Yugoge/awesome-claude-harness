@@ -3,16 +3,18 @@
 # when the Chain-B sentinel is missing, expired (mtime > 60s), or FAIL-state.
 #
 # Strategy: mock the `git` binary via a temporary PATH shim that increments
-# an invocation counter for every `git push` subcommand. Construct three
-# fixtures (missing / expired / FAIL sentinel) and assert:
+# an invocation counter for every `git push` subcommand. Construct five
+# fixtures (missing / expired / FAIL sentinel, plus the CF-3 missing-field
+# and head-mismatch sentinels) and assert:
 #   (a) hooks/push.sh exits non-zero on each fixture
 #   (b) mocked-git push-invocation count is exactly zero on each fixture
+#   (c) push.sh's refusal names that fixture's own reason
 #
 # This proves the sentinel-binding + mock-invocation-count-zero invariants
 # from AC1 V5 of docs/dev/ticket-20260519-211515.md.
 #
 # Usage: bash hooks/tests/test_push_sentinel_abort.sh
-# Exit:  0 = all 3 fixtures pass; 1 = any fixture failed.
+# Exit:  0 = all 5 fixtures pass; 1 = any fixture failed.
 set -u
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -24,6 +26,14 @@ fi
 
 WORKDIR=$(mktemp -d -t push-sentinel-test-XXXXXX)
 trap 'rm -rf "$WORKDIR" 2>/dev/null' EXIT INT TERM
+
+# push.sh reads the sentinel under $(harness_state_dir). Pin the state root to
+# this run's scratch dir and write the fixtures through the same resolver, so
+# an inherited CLAUDE_STATE_DIR can neither move push.sh's read away from the
+# fixtures nor make this test write into the shared default /tmp root.
+# shellcheck source=../lib/harness_state_dir.sh
+. "${REPO_ROOT}/hooks/lib/harness_state_dir.sh"
+export CLAUDE_STATE_DIR="$WORKDIR/state"
 
 # ── Build a mock-git shim ────────────────────────────────────────────────
 MOCK_BIN="$WORKDIR/bin"
@@ -70,7 +80,8 @@ _write_sentinel() {
   branch_raw=$("$REAL_GIT" -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)
   local branch
   branch=$(python3 -c "print('${branch_raw}'.replace('/', '__'))")
-  local sdir="/tmp/agentic-commit/push-analyst/${repo_hash}"
+  local sdir
+  sdir="$(harness_state_dir)/agentic-commit/push-analyst/${repo_hash}"
   mkdir -p "$sdir"
   local spath="${sdir}/${branch}-chainB.validated.sentinel.json"
   if [ "$body_kind" = "missing_fields" ]; then
@@ -105,6 +116,18 @@ _assert_zero_push_invocations() {
   return 0
 }
 
+# Each fixture must be refused for its own reason; a refusal for another
+# reason (for example a sentinel looked up elsewhere) tests nothing.
+_assert_reason() {
+  local label="$1" out="$2" want="$3"
+  if grep -qF -- "$want" "$out"; then
+    echo "OK: $label — refused with '$want'"
+    return 0
+  fi
+  echo "FAIL: $label — expected refusal reason '$want', got: $(head -c 300 "$out")" >&2
+  return 1
+}
+
 FAILS=0
 
 # ── Fixture 1: missing sentinel ──
@@ -120,6 +143,7 @@ if [ "$status1" -eq 0 ]; then
   FAILS=$((FAILS+1))
 fi
 _assert_zero_push_invocations "fixture 1 (missing sentinel)" || FAILS=$((FAILS+1))
+_assert_reason "fixture 1 (missing sentinel)" "$WORKDIR/out1" "Chain-B sentinel missing" || FAILS=$((FAILS+1))
 
 # ── Fixture 2: expired sentinel (mtime backdated 120s) ──
 _reset_counter
@@ -133,6 +157,7 @@ if [ "$status2" -eq 0 ]; then
   FAILS=$((FAILS+1))
 fi
 _assert_zero_push_invocations "fixture 2 (expired sentinel)" || FAILS=$((FAILS+1))
+_assert_reason "fixture 2 (expired sentinel)" "$WORKDIR/out2" "Chain-B sentinel STALE" || FAILS=$((FAILS+1))
 rm -f "$SENT_PATH" 2>/dev/null
 
 # ── Fixture 3: FAIL sentinel ──
@@ -147,6 +172,7 @@ if [ "$status3" -eq 0 ]; then
   FAILS=$((FAILS+1))
 fi
 _assert_zero_push_invocations "fixture 3 (FAIL sentinel)" || FAILS=$((FAILS+1))
+_assert_reason "fixture 3 (FAIL sentinel)" "$WORKDIR/out3" "Chain-B sentinel reports FAIL" || FAILS=$((FAILS+1))
 rm -f "$SENT_PATH" 2>/dev/null
 
 # ── Fixture 4 (CF-3 regression): PASS sentinel with missing binding fields ──
@@ -161,6 +187,7 @@ if [ "$status4" -eq 0 ]; then
   FAILS=$((FAILS+1))
 fi
 _assert_zero_push_invocations "fixture 4 (missing binding fields)" || FAILS=$((FAILS+1))
+_assert_reason "fixture 4 (missing binding fields)" "$WORKDIR/out4" "missing required binding field" || FAILS=$((FAILS+1))
 rm -f "$SENT_PATH" 2>/dev/null
 
 # ── Fixture 5 (CF-3 regression): PASS sentinel with bound head mismatch ──
@@ -175,6 +202,7 @@ if [ "$status5" -eq 0 ]; then
   FAILS=$((FAILS+1))
 fi
 _assert_zero_push_invocations "fixture 5 (head mismatch)" || FAILS=$((FAILS+1))
+_assert_reason "fixture 5 (head mismatch)" "$WORKDIR/out5" "binding mismatch: head_mismatch" || FAILS=$((FAILS+1))
 rm -f "$SENT_PATH" 2>/dev/null
 
 if [ "$FAILS" -eq 0 ]; then

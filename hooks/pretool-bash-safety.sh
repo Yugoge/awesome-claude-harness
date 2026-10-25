@@ -1965,7 +1965,7 @@ fi
 #
 # Scope: this block decides the REMOVAL policy only. Every other rule in this
 # hook — /do, /allow, the bulk-writer form, git stash/checkout/reset/push/ref
-# rules, npm, kill, docker daemon/compose/happy-container protections — keeps
+# rules, npm, kill, docker daemon/compose/dev-container protections — keeps
 # its existing behavior and ordering.
 #
 # FAIL-CLOSED CONTRACT: the analyzer is a mandatory deployment artifact shipped
@@ -2087,8 +2087,8 @@ fi
 
 # ── Dangerous git operations (2026-04-19 incident prevention) ──────────────
 # On 2026-04-19 23:02:22, a dev subagent ran:
-#     git stash && cd packages/happy-app && git checkout 925f5960 -- .
-# The `-- .` wide-path checkout overwrote the entire happy-app directory with
+#     git stash && cd <app-package-dir> && git checkout <ref> -- .
+# The `-- .` wide-path checkout overwrote the entire package directory with
 # 3-27 baseline content, erasing 17 days of UI work. The stash was treated as
 # a throwaway buffer but then failed to pop cleanly, leaving the worktree in a
 # silently-regressed state. The subagent reported "something happened" as if
@@ -2171,8 +2171,8 @@ fi
 if echo "$COMMAND" | grep -qE 'git\s+checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])' || [ "$_PQ_CHECKOUT_WIDE" = "1" ]; then
   echo "BLOCKED: 'git checkout <ref> -- .' / '-- *' / '-- dir/' requires explicit user approval" >&2
   echo "Command: $COMMAND" >&2
-  echo "REASON: On 2026-04-19, a dev subagent ran 'git checkout 925f5960 -- .' inside" >&2
-  echo "packages/happy-app/, overwriting 17 days of UI development with 3-27 baseline." >&2
+  echo "REASON: On 2026-04-19, a dev subagent ran 'git checkout <ref> -- .' inside an" >&2
+  echo "application package, overwriting 17 days of UI development with an old baseline." >&2
   echo "Wide-path checkout from a commit is a blunt-force destructive operation." >&2
   echo "Allowed: 'git checkout <ref> -- path/to/specific-file.ts' (single file)." >&2
   echo "If you genuinely need a subtree restore, tell the user what you need and why." >&2

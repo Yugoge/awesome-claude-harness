@@ -32,9 +32,13 @@ outcome disagrees with the published one, the correct response is to fix the PUB
 match reality -- not to relax this assertion. A lane whose product is "verified, not asserted"
 may not make its own analysis unfalsifiable.
 
-Run: python3 -m pytest hooks/tests/test_blackbox_integration.py -q
+Run: ENFORCEMENT_RUN_MANIFEST=hooks/tests/.enforcement-run-manifest.json \
+     python3 -m pytest hooks/tests/test_blackbox_integration.py -q
 Side effect: writes the run manifest consumed by
-`scripts/check-enforcement-evidence.py --coverage`.
+`scripts/check-enforcement-evidence.py --coverage` to the path named by
+ENFORCEMENT_RUN_MANIFEST (relative paths resolve against the repository root).
+Without it the manifest goes to a per-session temp directory, so an ordinary
+suite run never writes into the checkout (which may be read-only).
 """
 
 from __future__ import annotations
@@ -51,7 +55,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS_PATH = ROOT / "hooks" / "tests" / "fixtures" / "adversarial_corpus.json"
-MANIFEST_PATH = ROOT / "hooks" / "tests" / ".enforcement-run-manifest.json"
+#: The path the CI evidence step publishes and the --coverage gate reads by default.
+CI_MANIFEST_PATH = ROOT / "hooks" / "tests" / ".enforcement-run-manifest.json"
+MANIFEST_ENV = "ENFORCEMENT_RUN_MANIFEST"
 CLASSIFIER = ROOT / "hooks" / "lib" / "git_command_classifier.py"
 BASH_SAFETY = ROOT / "hooks" / "pretool-bash-safety.sh"
 GIT_GUARD = ROOT / "hooks" / "pretool-git-privilege-guard.py"
@@ -184,17 +190,27 @@ def _record(case, observed, provenance):
     })
 
 
+def _manifest_path(tmp_path_factory) -> Path:
+    """ENFORCEMENT_RUN_MANIFEST when set (the CI evidence step), else a session temp file."""
+    named = os.environ.get(MANIFEST_ENV)
+    if named:
+        path = Path(named)
+        return path if path.is_absolute() else ROOT / path
+    return tmp_path_factory.mktemp("enforcement-evidence") / CI_MANIFEST_PATH.name
+
+
 @pytest.fixture(scope="session", autouse=True)
-def _manifest(request):
+def _manifest(request, tmp_path_factory):
     """Delete any stale manifest BEFORE the run, write the fresh one after.
 
     Deleting first is what makes the artifact evidence of execution rather than evidence of
     authorship: a fabricated-but-complete manifest left in the tree cannot survive the run.
     """
-    MANIFEST_PATH.unlink(missing_ok=True)
+    manifest_path = _manifest_path(tmp_path_factory)
+    manifest_path.unlink(missing_ok=True)
     yield
     collected = getattr(request.session, "testscollected", 0)
-    MANIFEST_PATH.write_text(json.dumps({
+    manifest_path.write_text(json.dumps({
         "schema": "enforcement-run-manifest/v1",
         "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
         "commit_sha": os.environ.get("GITHUB_SHA", _head_sha()),

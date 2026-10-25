@@ -56,7 +56,6 @@ dot-claude/
 │   └── `tickets.md` - Read-only Unfuddle-style lifecycle table of every ticket/spec/lane.
 ├── docs/
 │   ├── reference/
-│   │   ├── `abandoned-cycles-20260905.md` - Abandoned cycles — terminal determination
 │   │   ├── `attribution-journal-consumer-cutover-20261004.md` - Attribution-journal consumer cutover: APPLIED (task 20261004-001927)
 │   │   ├── `attribution-journal-cutover-flip-plan-20261003.md` - Attribution-journal cutover: FLIP PLAN (Phase D, plan only)
 │   │   ├── `attribution-journal-phase0-facility.md` - Write-time attribution journal — Phase 0 facility notes
@@ -70,13 +69,10 @@ dot-claude/
 │   │   ├── `commit-gate-bypass-via-background-exec-20261005.md` - Commit gate bypassed by background execution — 2026-10-05
 │   │   ├── `controller-error-taxonomy-20260924.md` - 控制器错误归纳（2026-09-24 夜 spec 台席会话）
 │   │   ├── `core-context-refactor-plan.md` - Core Context Refactor Plan (Plan-of-Record)
-│   │   ├── `dev-command-20261003-020648-takeover-record.md` - Takeover record — cycle `dev-command-20261003-020648` over interrupted `dev-command-20261002-170011`
 │   │   ├── `fswatch-quickref.md` - FSWatch Quick Reference Card
 │   │   ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 │   │   ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
 │   │   ├── `graphify-integration.md` - Graphify Knowledge Graph Integration
-│   │   ├── `harness-defects-20260906-controller.md` - 控制器实测缺陷记录 — 2026-09-06
-│   │   ├── `harness-fix-status-20260905.md` - Harness fix status — R1..R20 of `spec-20260904-harness-fixes.md`
 │   │   ├── `harness-gaps-found-20261005.md` - Harness gaps found during the 2026-10-05 tree-to-zero campaign
 │   │   ├── `harness-issues-backlog.md` - 待下次 spec 处理的 harness 问题清单（当前有 harness 修复在 worktree 跑，新问题只记录不并行修）
 │   │   ├── `infeasibility-without-execution-20261006.md` - An infeasibility judgment that was never executed is a hypothesis, not a finding
@@ -87,7 +83,6 @@ dot-claude/
 │   │   ├── `master-origin-reconciliation-gap-20261005.md` - No history-preserving reconciliation path exists between local master and diverged origin/master
 │   │   ├── `mat-doc10-writer-order.v2.json` - JSON config: schema, contract_id, spec_id, lane_id, published_by_task_id
 │   │   ├── `monolith-split-plan.md` - Monolith Split Plan (Plan-of-Record)
-│   │   ├── `MORNING-20260907.md` - 晨间交接 — 2026-09-07
 │   │   ├── `open-findings-from-read-only-cycles-20261005.md` - Open findings from read-only cycles — extracted 2026-10-05
 │   │   ├── `overnight-cycle-20260809-013317-shared-file-attribution-20260914.md` - Attribution of unattributed content in four shared files, cycle 20260809-013317
 │   │   ├── `overnight-reference.md` - Overnight reference (maintainer-facing)
@@ -97,20 +92,16 @@ dot-claude/
 │   │   ├── `paseo-daemon-caller-id-rollout-20261004.md` - `--caller-id` enforcement: immediate rollout, no deploy step, doc gap
 │   │   ├── `paseo-daemon-concurrent-staging-triple-repro-20260904-181435-20260914.md` - Triple, independent reproduction of the shared-file concurrent-staging defect
 │   │   ├── `paseo-daemon-shared-file-attribution-20260913.md` - Attribution of unattributed content in the three paseo-daemon shared files
-│   │   ├── `paseo-daemon-teachings-20260910.md` - paseo-daemon 控制器教训合并与运行契约（2026-09-10）
 │   │   ├── `positioning.md` - Positioning
 │   │   ├── `push-gate-reconciliation-decision.md` - Push-gate reconciliation — decision to keep
 │   │   ├── `qa-status-gate-gap-orchestrator-side-20261005.md` - The QA-verdict gate does not cover the orchestrator — still open 2026-10-05
-│   │   ├── `quarantine-record-dev-20260915-020044.md` - Quarantine record: phantom `/dev` cycle `dev-20260915-020044`
 │   │   ├── `recoverable-discard-register-20261005.md` - Recoverable-discard register — 2026-10-05 tree-to-zero campaign
 │   │   ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
-│   │   ├── `restart-detector-quota-text-match-false-positive-20260915.md` - `/restart` interruption detector: textual quota-proxy instead of structural liveness check
 │   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 │   │   ├── `slashcommand-quick-reference.md` - Slash Command Quick Reference
 │   │   ├── `subagentstop-payload-s0-measurement-20260929.md` - SubagentStop payload availability — S0 measurement (2026-09-29)
 │   │   ├── `test-suite-overhaul-plan.md` - Test Suite Overhaul Plan (Plan-of-Record)
 │   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
-│   │   ├── `tmpfs-persistent-backups-20261005.md` - Persistent-disk backups of the tmpfs-only checkout (2026-10-05)
 │   │   ├── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
 │   │   ├── `workflow-bookmark-orphans-20261005.md` - Root-level `workflow-*.json` bookmarks have no lifecycle management; 22/22 are orphans
 │   │   ├── `workspace-disposition-criteria-20261005.md` - Workspace disposition criteria, and the five verdicts that existed only in a transcript
@@ -146,14 +137,12 @@ dot-claude/
 │   ├── lib/
 │   │   ├── runtime_guard/
 │   │   ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
-│   │   ├── `agent_temp_targets.py` - This module is deliberately not an authorization hook and never emits
 │   │   ├── `allowlist.py` - Single source of truth for grant-read, grant-match, and grant-consume
 │   │   ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 │   │   ├── `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 │   │   ├── `bash_write_targets.py` - Provides two public functions used by tool-policy and overnight-hook-guard:
 │   │   ├── `capability_state.py` - verdict, and the INDEPENDENT (non-hook-dispatched) preactivation consumer
 │   │   ├── `checkpoint-core.sh` - checkpoint-core.sh - Shared library for automated snapshot commits
-│   │   ├── `checkpoint_resources.py` - The directory lock is the transaction boundary: primary-template validation,
 │   │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   │   ├── `close-verdict.py` - Shared CLOSE verdict classifier for commit/close tooling.
@@ -167,7 +156,6 @@ dot-claude/
 │   │   ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 │   │   ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 │   │   ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
-│   │   ├── `negative_evidence.py` - The scan root is never an authority source.  A parent-published immutable
 │   │   ├── `obligation.py` - Rollout step S2 of the converged zero-failure design
 │   │   ├── `overnight.py` - Single source of truth for "is a /dev-overnight session currently live?". A
 │   │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
@@ -182,12 +170,6 @@ dot-claude/
 │   ├── tests/
 │   │   ├── fixtures/
 │   │   ├── `_fixtures_obligation_terminal.py` - 20260930-132644-l4): hooks/tests/test_stop_obligation_gate.py and
-│   │   ├── `test_ac10_verify.sh` - Shell script
-│   │   ├── `test_ac1_verify.sh` - Shell script
-│   │   ├── `test_ac3_verify.sh` - Shell script
-│   │   ├── `test_ac5_verify.sh` - Shell script
-│   │   ├── `test_ac6_verify.sh` - Shell script
-│   │   ├── `test_ac9_verify.sh` - Shell script
 │   │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 │   │   ├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
 │   │   ├── `test_artifact_contract_enforce.py` - The hook is the producer-side port of /close's Artifact schema gate
@@ -219,16 +201,11 @@ dot-claude/
 │   │   ├── `test_e2e_enforce.py` - obligation fallback (ticket 20261001-161041-r06, M1)
 │   │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
-│   │   ├── `test_final_sweep.sh` - Final sweep — run inline AC checks and print PASS/FAIL summary.
 │   │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_CMD_RE (hooks/pretool-bash-safety.sh),
 │   │   ├── `test_git_prefix_enumeration.py` - THE DEFECT
 │   │   ├── `test_git_residual_override.py` - Background
 │   │   ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
 │   │   ├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
-│   │   ├── `test_laneb_agent_temp_targets.py` - Complete declared static temp-target mechanism matrix for LANE-B.
-│   │   ├── `test_laneb_checkpoint_resources.py` - LANE-B checkpoint transaction and CLI provider tests.
-│   │   ├── `test_laneb_integration_gate.py` - Adversarial tests for the closed Lane B H-B v3/fan-in verifier.
-│   │   ├── `test_laneb_pretool_composition.py` - LANE-B core seams for the later POL/BIND single-writer integration.
 │   │   ├── `test_laneb_session_resources.py` - LANE-B actor scratch, receipt, and owned-process broker tests.
 │   │   ├── `test_laneb_stop_coordinator.py` - LANE-B non-destructive receipt writers and serialized Stop coordinator.
 │   │   ├── `test_laneb_stop_overnight_timelock_scoping.py` - Blast-radius-map.json (dev-20260910-111227/blast-radius-map-20260808-035658-laneb)
@@ -261,6 +238,7 @@ dot-claude/
 │   │   ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
 │   │   ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
 │   │   ├── `test_unit_shell_lex.py` - Imports the shell_lex sibling module DIRECTLY (not via the _core facade's
+│   │   ├── `test_userprompt_bulk_commit_capability.py` - Tests for hooks/userprompt-bulk-commit-capability.py's /commit --bulk detector.
 │   │   ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 │   │   └── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
 │   ├── `audit-slashcommand.sh` - audit-slashcommand.sh
@@ -399,7 +377,6 @@ dot-claude/
 │   ├── `graphify-focused-subgraph.v1.json` - Task-scoped subgraph extracted from the global Graphify knowledge graph, focused on files in the BA blast-radius-map. Written to .claude/dev-registry/{task_id}/graphify/focused-subgraph.json by graphify-enrich.py.
 │   ├── `graphify-prequery.v1.json` - Step 1.5 output from graphify-query.py. Contains structural_context extracted from the global Graphify cache before BA analysis. Status field drives BA behaviour: ok/degraded proceed, unavailable/skipped silently bypass.
 │   ├── `graphify-run.v1.json` - Step 7.5 run manifest. Records the graphify subagent's execution: update run, focused subgraph extraction, and context patching status.
-│   ├── `negative-evidence.v1.json` - Authority-bound bounded negative evidence receipt
 │   ├── `obligation.v1.json` - Validates the JSON payload of the <obligation v="1"> block per docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2 (the XML wrapper itself is the S2 grammar library's concern, not this schema's). additionalProperties false at the top level: G1's job is shape-rejection of drifted blocks (design M5/M7/M28); cross-version tolerance is carried by the wrapper's v attribute (M29), not by an open v1 object. Path fields (artifacts[].path, expected_absent[]) are repo-relative and traversal-free (must not start with '/', must not contain '..'); G1 re-checks at dispatch — the schema encodes the invariant so a registered grammar exists (G1 check 2). The null-task_id gate's expressible half is encoded (profile outside {ad_hoc, commit-bulk, commit-qa} forces a string task_id); commit-qa's context-dependence (bulk-context null vs task-scoped string) is enforced by G1 later, not by this schema. lane-membership (lane ∈ lane_set) is the later G2 echo check, not expressible in Draft7.
 │   ├── `owned-edits-ledger.v1.json` - Machine-readable definition of the owned-edits ledger a dev-report must carry so that scripts/stage-owned-hunks.py can stage this cycle's owned hunks. DERIVED FROM THE CONSUMER'S CODE, not from agent prose; see x-consumer for the digest it is derived from and x-citation-policy for why nothing here cites a line number. Plus the snapshot-materialization rule in agents/changelog-analyst.md, locatable by searching for '2. Snapshot materialization (REQUIRED', which is the only place the report-level pre_edit_snapshots map is turned into the --snapshot file the consumer reads. Where prose and code disagree, the code governs; see x-prose-code-disagreements below.
 │   ├── `paseo-dossier.v1.json` - Structured sidecar validated by scripts/paseo-daemon-ledger.py dossier-validate. Fail-closed: a dossier missing any required F12 field, or carrying a malformed seven-field decision-journal record, must never become a committed generation. The dossier is an index and checkpoint ONLY — authoritative evidence remains the session transcript and hash-verified artifact files.
@@ -494,7 +471,6 @@ dot-claude/
 │   ├── `check-public-core.sh` - Description: Public/private boundary gate. Recomputes the top-level tracked-path set from
 │   ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 │   ├── `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
-│   ├── `check-todo-accounting.py` - Executable C10 accounting proof for the ordinary ``/dev`` checklist.
 │   ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 │   ├── `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
 │   ├── `close-commit-repair-orchestrate.py` - Consumes schemas/repair-map.v1.json; given a findings list, looks up each
@@ -507,12 +483,10 @@ dot-claude/
 │   ├── `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
 │   ├── `detect-dead-functions.sh` - Shell script
 │   ├── `detect-duplicate-content.sh` - Shell script
-│   ├── `detect-hardcoded-paths.sh` - Shell script
 │   ├── `detect-merge-conflicts.sh` - Shell script
 │   ├── `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 │   ├── `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
 │   ├── `detect-orphan-scripts.sh` - Description: Detect scripts not referenced by any command/agent/other script
-│   ├── `dev-fix.py` - This module is intentionally a backend, not a command orchestrator.  It classifies
 │   ├── `dev-lifecycle.py` - Derives, per on-disk task-id, a state using the TOTAL REDUCTION ORDER from
 │   ├── `discover-folders.sh` - Description: Dynamically discover project folders excluding system directories
 │   ├── `doctor` - doctor file
@@ -529,14 +503,12 @@ dot-claude/
 │   ├── `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 │   ├── `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
 │   ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
-│   ├── `laneb-integration-gate.py` - The program is deliberately non-authorizing unless it has consumed the complete,
 │   ├── `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 │   ├── `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
 │   ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 │   ├── `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
 │   ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
 │   ├── `mint-git-blessed-token.sh` - mint-git-blessed-token.sh — issuer of the keystone blessed token (M12).
-│   ├── `negative-evidence.py` - Create or verify authority-bound bounded negative-evidence receipts.
 │   ├── `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
 │   ├── `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
 │   ├── `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
@@ -569,7 +541,6 @@ dot-claude/
 │   ├── `session-index.py` - Subcommands (all take --git-root):
 │   ├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
 │   ├── `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
-│   ├── `spec-update-contract.py` - The command policy owns all writes.  This module deliberately has no mutation
 │   ├── `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 │   ├── `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
 │   ├── `test` - test file
@@ -612,25 +583,17 @@ dot-claude/
 │   ├── `overnight-spec.md` - Spec: <issue_description>
 │   └── `spec-template.md` - Spec: <issue_description>
 ├── tests/
-│   ├── baselines/
-│   │   └── `default-run-failures.json` - JSON config: environmental_unbaselined, failing_node_ids, generator, invocation, schema_version
 │   ├── fixtures/
 │   │   ├── late_repair_golden/
 │   │   ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
-│   │   ├── `dev-todo-canonical-before.v1.json` - JSON config: $schema, canonical_compact_sort_keys_sha256, item_count, schema_version, source_bytes
 │   │   ├── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
 │   │   └── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
 │   ├── generated/
-│   │   ├── 20260704-134650/
-│   │   ├── 20260704-225139/
 │   │   └── `manifest.json` - JSON config: schema_version, kind, tasks
 │   ├── instructions/
 │   │   ├── `execution-guide.md` - AI Test Execution Guide
 │   │   └── `validation-guide.md` - AI-Driven Validation Guide
-│   ├── reports/
-│   │   └── `edge-case-analysis.json` - JSON config: analysis_timestamp, repository, total_commits_analyzed, edge_cases_found, analysis_period
 │   ├── score-inject-contract/
-│   │   ├── `runtime-verify.sh` - Description: Runtime verifier for the 4-field score-injection echo contract.
 │   │   └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with
 │   ├── score-lifecycle-contract/
 │   │   └── `test-lifecycle-cas.sh` - Description: Verify CAS and append-only invariants for scripts/score-update.sh and
@@ -641,7 +604,6 @@ dot-claude/
 │   │   ├── `validate-debug-file-age.py` - Validator: validate-debug-file-age
 │   │   ├── `validate-file-naming.py` - Validator: validate-file-naming
 │   │   ├── `validate-optionality-language.py` - Validator: validate-optionality-language
-│   │   ├── `validate-posttool-ac-dev-20260524-205811.py` - QA verification for dev-20260524-205811: posttool-allowlist-consume.py AC tests
 │   │   ├── `validate-step-numbering.py` - Validator: validate-step-numbering
 │   │   ├── `validate-todowrite-requirement.py` - Validator: validate-todowrite-requirement
 │   │   ├── `validate-venv-usage.py` - Validator: validate-venv-usage
@@ -649,8 +611,6 @@ dot-claude/
 │   ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 │   ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
 │   ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
-│   ├── `integration-test.sh` - integration-test.sh - Integration tests for git tracking solution
-│   ├── `test-lock-detection.sh` - Test script to verify git lock file detection and handling
 │   ├── `test_ac_deviation_fanout_consumer.py` - records and the lifecycle presentation of ``pass_with_exceptions``
 │   ├── `test_ac_deviation_record_chain.py` - A dev report that legitimately records an acceptance-criteria deviation is
 │   ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
@@ -668,10 +628,9 @@ dot-claude/
 │   ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
 │   ├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
 │   ├── `test_completeness_span_accounting.py` - halves on one code path
+│   ├── `test_conftest_hermetic.py` - The root conftest drops the inherited variables that point a run at the runner's own project or home.
 │   ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
-│   ├── `test_dev_fix.py` - Contract, safety, CAS, consent, crash and recovery tests for Lane F.
 │   ├── `test_dev_todo_accounting.py` - Python script
-│   ├── `test_dev_todo_codex_native_parse.py` - The harness never imports or executes the canonical checklist; it ``ast.parse``s
 │   ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
 │   ├── `test_generate_repair_map.py` - Covers AC-L8-01..04 and AC-L8-13 (docs/dev/acceptance-criteria-20260930-132644-l8.json)
 │   ├── `test_git_auto_push_opt_in.py` - GIT_AUTO_PUSH opt-in: checkpoint, post-commit, combined LFS hook, fswatch and session-git-init push only if it is 1
@@ -682,8 +641,6 @@ dot-claude/
 │   ├── `test_interruption_signals.py` - Every banner asserted here was measured in the real transcript corpus under
 │   ├── `test_late_repair_driftfree_effective_state.py` - scripts/late-repair-controller.py's ``resolve_effective_report_state`` is the
 │   ├── `test_late_repair_route.py` - Covers AC-7..AC-11, AC-13, AC-14 (spec-20260907-115508-lawful-commit-channel.md,
-│   ├── `test_mat_doc10_writer_order_contract.py` - Published by task 20260819-124121-r03 (LANE-SU, spec 20260808-035658)
-│   ├── `test_negative_evidence.py` - Python script
 │   ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
 │   ├── `test_overnight_guard_in_place_git.py` - Defect (2026-08-09): `hooks/pretool-overnight-hook-guard.py` blocked EVERY git
 │   ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
@@ -712,8 +669,7 @@ dot-claude/
 │   ├── `test_tool_policy_note_fail_closed.py` - An exception inside the tool-policy refusal note never turns exit 2 into an allow
 │   ├── `test_write_qa_mode.py` - Root selection and zero-write failure tests for write-qa-mode.sh.
 │   ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
-│   ├── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
-│   └── `ws2_zero_literal_gate.py` - Scans the EXPLICITLY-defined load-bearing surfaces of a rendered fresh clone with
+│   └── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
 ├── tools/
 │   └── demo/
 │       ├── `audit.mjs` - mjs file
@@ -729,7 +685,6 @@ dot-claude/
 ├── `CLAUDE.md` - Global Claude Code Configuration
 ├── `conftest.py` - Root conftest — `generated` marker gate for tests/generated/.
 ├── `LICENSE` - LICENSE file
-├── `NESTED-REPO.md` - Nested Repo Sentinel
 ├── `NOTICE` - NOTICE file
 ├── `PUBLIC-CORE.md` - PUBLIC-CORE.md — public/private boundary manifest
 ├── `push.sh` - push.sh - Global pre-push checks: git identity + fetch/pull/status

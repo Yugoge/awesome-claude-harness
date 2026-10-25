@@ -2,15 +2,18 @@
 
 On an initialised home the claude-settings filter leaves the machine form in the
 working settings.json (an enabled module such as paseo adds hooks), so the
-wired-entry count, the lifecycle-event count and the ledger-row check read the
-index blob instead. Each case builds a temporary git repository holding this
-repository's verify-claims.sh, a three-entry settings.json staged in the index,
-README.md and ARCHITECTURE.md claiming those counts, and a stub
+enforcement-evidence step hands the index blob to
+scripts/check-enforcement-evidence.py --settings instead. Each case builds a
+temporary git repository holding this repository's verify-claims.sh, a
+three-entry settings.json staged in the index, and a stub
 scripts/check-enforcement-evidence.py that records the --settings content each
-mode is handed. The hero, corpus and helper-count steps have no fixture there
-and fail on their own lines; the cases assert only on the settings-derived
-lines. HOME points at a temporary directory, GIT_* variables are dropped, the
-system git config is ignored, and nothing runs in this repository.
+mode is handed. In --claims mode the stub derives the hook set with this
+repository's real settings_triples() and compares it with a ledger fixture (the
+clean settings' hook set), printing the real gate's messages. The hero and
+corpus steps have no fixture there and fail on their own lines; the cases assert
+only on the enforcement-evidence lines. HOME points at a temporary directory,
+GIT_* variables are dropped, the system git config is ignored, and nothing runs
+in this repository.
 """
 
 import json
@@ -26,6 +29,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "verify-claims.sh"
+GATE = REPO / "scripts" / "check-enforcement-evidence.py"
 
 CLEAN = {"hooks": {
     "PreToolUse": [{"matcher": "Bash", "hooks": [
@@ -37,14 +41,29 @@ CLEAN = {"hooks": {
 MACHINE = json.loads(json.dumps(CLEAN))
 MACHINE["hooks"]["UserPromptSubmit"] = [
     {"hooks": [{"type": "command", "command": "python3 hooks/userprompt-d.py"}]}]
-CLAIM = "The template has {n} wired hook command entries across {e} lifecycle events.\n"
-STUB_GATE = """import json, os, pathlib, sys
+STUB_GATE = """import importlib.util, os, pathlib, sys
 args = sys.argv[1:]
+mode = args[0].lstrip("-")
 text = open(args[args.index("--settings") + 1], encoding="utf8").read()
-pathlib.Path(os.environ["GATE_OUT"], args[0].lstrip("-")).write_text(text, encoding="utf8")
-json.loads(text)  # like the real gate, unparseable settings fail the mode
+handed = pathlib.Path(os.environ["GATE_OUT"], mode)
+handed.write_text(text, encoding="utf8")
+if mode == "claims":  # like the real gate, only --claims derives the hook set from settings
+    spec = importlib.util.spec_from_file_location("gate", os.environ["REAL_GATE"])
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    try:
+        derived = gate.settings_triples(str(handed))
+        ledger = gate.settings_triples(os.environ["LEDGER_FORM"])
+    except gate.Fail as exc:
+        print(f"  ERROR: {exc}")
+        sys.exit(2)
+    for item in sorted(derived - ledger):
+        print(f"  FAIL: wired in settings but absent from the ledger: {item}")
+    for item in sorted(ledger - derived):
+        print(f"  FAIL: present in the ledger but not wired in settings: {item}")
+    sys.exit(int(derived != ledger))
 """
-COUNT_FAIL = "FAIL: count-recompute: settings.json schema/parse error"
+CLAIMS_FAIL = "FAIL: enforcement-evidence --claims: see the FAIL lines above"
 
 
 def _exe(path: Path, body: str):
@@ -69,12 +88,12 @@ class Fixture:
                     if not k.startswith("GIT_") and k != "CLAUDE_CONFIG_DIR"}
         self.env.update(HOME=str(home), PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
                         PYTHONDONTWRITEBYTECODE="1", GIT_CONFIG_NOSYSTEM="1",
-                        GIT_CEILING_DIRECTORIES=str(tmp), GATE_OUT=str(self.gate))
+                        GIT_CEILING_DIRECTORIES=str(tmp), GATE_OUT=str(self.gate),
+                        REAL_GATE=str(GATE), LEDGER_FORM=str(tmp / "ledger-form.json"))
+        _write(tmp / "ledger-form.json", CLEAN)  # the hook set the ledger fixture publishes
         shutil.copy2(SCRIPT, self.root / "scripts" / "verify-claims.sh")
         (self.root / "scripts" / "check-enforcement-evidence.py").write_text(STUB_GATE,
                                                                               encoding="utf8")
-        for doc in ("README.md", "ARCHITECTURE.md"):
-            (self.root / doc).write_text(CLAIM.format(n=3, e=2), encoding="utf8")
         _write(self.root / "settings.json", CLEAN)
         self.git("init", "-q")
         self.git("add", "-A")
@@ -86,6 +105,7 @@ class Fixture:
     def stage(self, obj):
         _write(self.root / "settings.json", obj)
         self.git("add", "settings.json")
+        return (self.root / "settings.json").read_text(encoding="utf8")
 
     def verify(self):
         r = subprocess.run(["bash", "scripts/verify-claims.sh"], cwd=self.root, env=self.env,
@@ -105,39 +125,38 @@ def fx(tmp_path):
 def test_machine_form_in_the_working_file_is_not_what_is_verified(fx):
     _write(fx.root / "settings.json", MACHINE)  # unstaged, as the smudge filter leaves it
     out = fx.verify()
-    assert "PASS: recomputed from the index settings.json: wired_entries=3 lifecycle_events=2" in out
-    assert "PASS: doc claims in README.md + ARCHITECTURE.md match the recomputed counts" in out
-    assert "DRIFT" not in out
     assert json.loads(fx.handed("claims")) == CLEAN
+    assert json.loads(fx.handed("ledger")) == CLEAN
     assert "PASS: enforcement-evidence --claims" in out
+    assert "PASS: enforcement-evidence --ledger" in out
+    assert "FAIL: enforcement-evidence" not in out
 
 
 def test_a_drift_staged_in_the_index_is_caught(fx):
     fx.stage(MACHINE)
     _write(fx.root / "settings.json", CLEAN)  # the working file no longer shows it
     out = fx.verify()
-    assert "wired_entries=4 lifecycle_events=3" in out
-    assert "wired_entry_count DRIFT: found 3, expected 4" in out
-    assert "lifecycle_event_count DRIFT: found 2, expected 3" in out
-    assert "FAIL: doc-claim check" in out
     assert json.loads(fx.handed("claims")) == MACHINE
+    assert ("FAIL: wired in settings but absent from the ledger: "
+            "('UserPromptSubmit', '(universal)', 'userprompt-d.py')") in out
+    assert CLAIMS_FAIL in out
 
 
 @pytest.mark.parametrize("staged, reason", [
-    ("{ not json\n", "settings.json unreadable / invalid JSON"),
-    ({"permissions": {}}, "settings.json: 'hooks' is missing or not a non-empty object"),
-    ({"hooks": {"Stop": {}}}, "settings.json: hooks['Stop'] is not a list of matcher-entries"),
-    ({"hooks": {"Stop": [{"matcher": ""}]}},
-     "settings.json: a matcher-entry under 'Stop' has no 'hooks' array"),
-    ({"hooks": {"Stop": [{"hooks": []}]}}, "settings.json: computed 0 wired entries"),
+    ("{ not json\n", "cannot read/parse JSON"),
+    ({"permissions": {}}, "'hooks' missing or not a non-empty object"),
+    ({"hooks": {"Stop": {}}}, "hooks['Stop'] is not a list"),
+    ({"hooks": {"Stop": [{"matcher": ""}]}}, "computed 0 wired hooks"),
+    ({"hooks": {"Stop": [{"hooks": []}]}}, "computed 0 wired hooks"),
 ], ids=["invalid-json", "no-hooks", "event-not-list", "entry-without-hooks", "zero-entries"])
 def test_bad_index_content_fails_as_before_even_with_a_valid_working_file(fx, staged, reason):
-    fx.stage(staged)
+    text = fx.stage(staged)
     _write(fx.root / "settings.json", CLEAN)
     out = fx.verify()
+    assert fx.handed("claims") == text
     assert reason in out
-    assert COUNT_FAIL in out
-    assert "PASS: recomputed from the index settings.json" not in out
+    assert CLAIMS_FAIL in out
+    assert "PASS: enforcement-evidence --claims" not in out
 
 
 @pytest.mark.parametrize("case, reason", [
@@ -151,6 +170,7 @@ def test_no_tracked_settings_fails_and_names_why(fx, case, reason):
         shutil.rmtree(fx.root / ".git")
     out = fx.verify()
     assert reason in out
-    assert COUNT_FAIL in out
-    assert "FAIL: enforcement-evidence --claims" in out
+    assert fx.handed("claims") == ""
+    assert "cannot read/parse JSON" in out
+    assert CLAIMS_FAIL in out
     assert (fx.root / "settings.json").is_file()  # a working file alone is not the tracked form

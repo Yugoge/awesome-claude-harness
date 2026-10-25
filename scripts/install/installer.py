@@ -1800,9 +1800,9 @@ def print_plan(ctx: Ctx, plan: dict, dry_run: bool) -> None:
         print("\nConflicts (0)")
     excluded = ctx.profile.get("excluded", [])
     print()
-    print(f"Profile '{ctx.profile.get('profile')}' INCLUDES "
-          f"({len(ctx.profile['payload']['copied']) + len(ctx.profile['payload']['generated'])
-             + len(SELF_MANAGE_FILES)}):")
+    included = (len(ctx.profile['payload']['copied']) + len(ctx.profile['payload']['generated'])
+                + len(SELF_MANAGE_FILES))
+    print(f"Profile '{ctx.profile.get('profile')}' INCLUDES ({included}):")
     for item in ctx.profile["payload"]["copied"]:
         print(f"  + {item['dest']}")
     for gen in ctx.profile["payload"]["generated"]:
