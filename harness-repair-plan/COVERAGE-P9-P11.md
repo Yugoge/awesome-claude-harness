@@ -32,7 +32,7 @@ Experiments run for this check (scratch only, HOME and git config in scratch):
 
 | Prompt | Stated wave | Must be merged first (how checked) | Products checked, and the prompt that ships each | PLAN-v2 / HANDOVER | Match |
 |---|---|---|---|---|---|
-| P9 | 7, alone | P7b, P1, P8, P2, P3, P4, P5, P6 (merge titles in `git log --merges --format='%H %s%n%b'`) | hooks/lib/close_rating.py, hooks/posttool-close-rating.py (P4 row 7); templates/prompt-includes/continue-cycle.md (P3 row 8); hooks/stop-launch.py, hooks/stop-command-gate.py (P5 rows 7, 10); do-report.v1 without "blocked" (P5 row 21); agents/dev.md without the git derivation (P6 acceptance 11); `"CLAUDE_OBLIGATION_STOPGATE": "block"` (P2 row 17); tests/generated/INDEX.md absent (P8 row 3b); scripts/score-update.sh present (nobody before P9 deletes it: P4 DO NOT) | W7 after P6 and P8; HANDOVER "P9 after P6" | yes (stricter, transitively implied) |
+| P9 | 7, alone | P7b, P1, P8, P2, P3, P4, P5, P6 (merge titles in `git log --merges --format='%H %s%n%b'`) | hooks/lib/close_rating.py, hooks/posttool-close-rating.py (P4 row 7); hooks/stop-launch.py, hooks/stop-command-gate.py (P5 rows 7, 10); do-report.v1 without "blocked" (P5 row 21); agents/dev.md without the git derivation (P6 acceptance 11); `"CLAUDE_OBLIGATION_STOPGATE": "block"` (P2 row 17); tests/generated/INDEX.md absent (P8 row 3b); scripts/score-update.sh present (nobody before P9 deletes it: P4 DO NOT) | W7 after P6 and P8; HANDOVER "P9 after P6" | yes (stricter, transitively implied) |
 | P10 | 8, alone | P7b, P1, P8, P2-P6, P9 | stop-launch.py and its one registration (P5 rows 10, 12, acceptance 22); a `# STUB:` file incl. stop-completion-gate.py (P1 row 22); score-update.sh absent (P9 row 10); conftest.py without collect_ignore (P8); auto-commit.sh calls the landing (P7b R1; implementation: scripts/install/land) | W8 after P9 | yes |
 | P11 | 9, alone, last | every phase PR (P7b, P1, P8, P2-P6, P9, P10) and no open PR | landing trigger (P7b R1); engine reads private-literals.txt (P7, kept by P8: f8c18c2 check-public-core.sh :54-61); scripts/size-ratchet.py (P10 row 15) | W9, every PR merged, none open; owner go-ahead at execution (D16, D18) | yes |
 
@@ -52,7 +52,7 @@ a fix in section (d).
 | D1: delete the 255 remote refs | P11 A8 step 4 (script); the reviewer runs it after the go-ahead | ok |
 | D2: P9 prose pass; P10 dev-report.v1 projection (TC-35) | P9 rows 8-9, acceptance 10; P10 row 7, exp 8 | ok |
 | D3: P9 prose; CLAUDE.md Hook Discipline (UD-CM) | P9 row 16 (CLAUDE.md edited in the PR under D19) | ok |
-| D4: P10 stub deletion | P10 row 3 with the per-home retirement (R-a..R-i) | ok |
+| D4: P10 stub deletion | P10 row 3 (experiment 3, option (a): the six stubs stay tracked exit-0 files) with the overlay repair (R-e) | ok |
 | D5: CLAUDE.md:60 | P9 row 16 | ok |
 | D9a: scripts, injection, echo contracts, tests, OPTIONS_XML; H-Q10 | P9 rows 10-13, E1 | ok |
 | D12: history | P11 A2-A7 | ok |
@@ -95,7 +95,7 @@ a fix in section (d).
 | P2 | dev-overnight.md:1574 TIME CHECK (false claim) | nobody | fixed (P9 row 8, fix 4) |
 | P2 | update-overnight-state.sh `find_state_file` any-session fallback; hooks/install-auto-sync.sh `~/.claude` spellings | nobody (not dead code, not prose) | residual for the reviewer (section (g)) |
 | P3 | spec clause | P9 row 1 | ok |
-| P3 | Step 16/17 loops -> include | P9 row 7 | ok |
+| P3 | Step 16/17 loops -> one re-dispatch sentence, no include (D21) | P9 row 7 | ok |
 | P3 | sessionstart-artifact-census.py | P10 row 4 | ok |
 | P4 | D9a list (scripts, tests, dev.md scoring, echo contracts, style-inspector :339, OPTIONS_XML, dev-overnight :117/:142, score allows, residue entries, false comments, H-Q10) | P9 rows 10-13, E1 | ok |
 | P4 | close-route-select.py, write-enforce-flag `artifact-contract` | P10 exp 7 | ok |
@@ -105,7 +105,7 @@ a fix in section (d).
 | P5 | README :400, :479, :570, ARCHITECTURE :329 naming stubs as live hooks (P5 row 17) | P9 row 14 named only :536 and ARCHITECTURE :167 | fixed (fix 3) |
 | P6 | FIRST ACTION lines; changelog-analyst :253-256; candidate_tree :69-83; U-F3c | P9 rows 8, 9, E6 | ok |
 | P6 | attribution_aggregate_view; agent-index.json in product repos | P10 row 6; exp 9 | ok |
-| P7b | the landing (trigger, lock, notice, log, "landed" fast path) | extended by P9 (E1/E9, optional), P10 (R-a..R-i, exp 10), P11 (B1-B9); each keeps the earlier steps | ok |
+| P7b | the landing (trigger, lock, notice, log, "landed" fast path) | extended by P9 (E1/E9, optional), P10 (R-e, exp 10), P11 (B1-B9); each keeps the earlier steps | ok |
 | P7b | off-site backup out of scope | nobody | fixed (P11 out of scope, D18 rule; fix 13) |
 | P8 | unreachable code outside its list; overwrite-guard; gen-test-baseline.py; rest of .gitignore; ratchet | P10 rows 4, 6, 9, 15 | ok |
 | P8 | score shell tests; residue entries | P9 rows 10, 13 | ok |
@@ -124,7 +124,7 @@ twice):
 | agents/INDEX.md, agents/README.md | rows 8-9 edit the doc-sync lines that mirror agent descriptions | row 5 deleted them on an unverified premise | - | P10 now deletes them only if Claude Code loads a frontmatter-less agents/*.md (fix 9) |
 | .gitignore | row 13 (false comment), E1 keeps `/agent-scores.json*`, `logs/*` | row 9 minimisation | - | P10 could have deleted E1's lines as "no writer" (fix 8) |
 | INDEX.md, scripts/INDEX.md, scripts/README.md, tests/INDEX.md, TESTING.md | row 10 rows | row 18 rows | - | pull-safety rule now in both (fixes 6, 7) |
-| P7b's landing | E1/E9 at most one step | R-a..R-i, exp 10 | B1-B9 | P10, P11 told to keep earlier steps |
+| P7b's landing | E1/E9 at most one step | R-e, exp 10 | B1-B9 | P10, P11 told to keep earlier steps |
 | settings.json | row 3 (dead denies, missing/score allows) | row 17 (allows of deleted targets, old spellings), env | none | disjoint |
 | hooks/pretool-bash-safety.sh | consent readers | git rm block | none | disjoint |
 | hooks/prompt-workflow.py | rows 1, 4, 5 | read_command_spec | none (DO NOT) | disjoint functions |
@@ -166,12 +166,12 @@ reflog in the implementation).
 | 4 P4 rating questions (H-Q5, H-Q3) | D18 experiments in P4 | P4 |
 | 5 Arming timing | D18 experiment (P2 if settings reach running sessions, else P5) | P2, P5 |
 | 6 P6 general-purpose subagents | D18 experiment in P6 | P6 |
-| 7 How merged code arrives; homes stuck after a P7-only pull | D19: only when the owner types /pull, no automatic pull (fswatch's existing `safe_pull` covered by P9 E9 and P11 acceptance 5); the owner was told not to pull before P7b; stuck states: P7b R2 (S3 repaired, S4 reported); each later phase's own pull is kept from wedging by P9 E9 and P10 exp 10 (fixes 2, 6); P10 R-g and P11 B2 handle S4 | P7b, P9, P10, P11 |
+| 7 How merged code arrives; homes stuck after a P7-only pull | D19: only when the owner types /pull, no automatic pull (fswatch's existing `safe_pull` covered by P9 E9 and P11 acceptance 5); the owner was told not to pull before P7b; stuck states: P7b R2 (S3 repaired, S4 reported); each later phase's own pull is kept from wedging by P9 E9 and P10 exp 10 (fixes 2, 6); P11 B2 handles S4 (P10 changes nothing in S4) | P7b, P9, P10, P11 |
 | 8 P9-P11 human steps | P9: CLAUDE.md edited in the PR (row 16), H-Q10 by E1; P10: per-home retirement by the landing replaces "doctor on each home"; P11: stage 1 code + scratch script, rehearsals, hand-off; the reviewer runs the publish (including the 255-ref deletion) after the one go-ahead D16/D18 keep | P9, P10, P11 |
 | 9 Off-site backup | D18 rule from P11 acceptance 14 (fix 13); P7b and P10 out of scope | P11 |
 | 10 git-clean matrix file | D19: owner data, owner step refused; P8 records "not delivered" with the closing sentence; module keeps its pre-existing skip | P8 (P10 out of scope) |
 | 11 Defaults applied without asking | D18: final (no veto round) | P4, P5, P8 |
-| 12 Confirmations never given (D4b wording; /redev and two extra exits; the reading of "好的") | D18: no arbitration; implemented as planned (nine gated commands, two human exits), documented by P9 row 16 and row 14; "好的": the reviewing session implements and merges P7b itself | P2, P5, P9 |
+| 12 Confirmations never given (D4b wording (superseded by D20, 2026-10-23); /redev and two extra exits; the reading of "好的") | D18: no arbitration; implemented as planned (nine gated commands, two human exits), documented by P9 row 16 and row 14; "好的": the reviewing session implements and merges P7b itself | P2, P5, P9 |
 | PLAN-v2 section 14 open list (same four items) | as 7-10 | - |
 | STATE 8.15 who deletes the 255 refs | the reviewer, with P11's script, after the go-ahead | P11 |
 | STATE 8.16 docs branch | rewritten and kept (A8 step 4) | P11 |

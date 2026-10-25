@@ -2,7 +2,7 @@
 
 These decisions were made by the repository owner. They override PLAN-v1.md wherever the two disagree.
 PLAN-v1.md still gives the file:line scope for each phase. Where it says "honest_blocked", "untrack settings.json",
-"ask for curl/wget/docker" or "per-cycle commit", read the decision below instead.
+"ask for curl/wget/docker", "per-cycle commit" or "/redev <task>", read the decision below instead.
 
 ## Owner rulings of 2026-10-23 (latest; they override every decision below, PLAN-v1, PLAN-v2 and every prompt)
 
@@ -128,7 +128,8 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   is no include and no role table (D21).
 - **D8 The orchestrator never writes a producer's artifact.** Only the producer subagent writes its report.
   Which producer owns an artifact is read from the dispatch record that declared it, never from a table (D21).
-  [INFERRED mechanism; prove by D21's sandbox replay before use.]
+  [INFERRED mechanism; prove before use by P3's acceptance 8 replay (the declaring-dispatch reader) and, for the deny,
+  by the P5-a arm-* sandbox replay (TC-20 revised: 0 compliant writes denied, 0 V7a writes allowed).]
 
 ## Pipelines
 
@@ -193,7 +194,7 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   No home is re-cloned or rewritten in place: a pre-push guard keeps old history off the remote (P11).
   [INFERRED: no owner quote asks for the confirmation (D18's quoted words name no exception; it is the reviewer's rule
   for the one step that cannot be undone) or for a re-clone (X4, X5, X8). Prove the pre-push guard before use with
-  P11's acceptance 14 extended to /push of a new branch and a plain git push, on a pulled and an unpulled home.]
+  P11's acceptance 14 (a /push of a new branch and a plain git push, each on a pulled and an unpulled home).]
 
 ## Execution
 

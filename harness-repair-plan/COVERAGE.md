@@ -1,6 +1,6 @@
 # Coverage cross-check: prompts P7b, P1, P8, P2, P3, P4, P5, P6
 
-Inputs: prompts-all/{P7b,P1,P8,P2,P3,P4,P5,P6}.md (each ends with prompts/_common.md byte-for-byte: checked with cmp,
+Status 2026-10-23: this file yields to DECISIONS.md wherever the two disagree; read DECISIONS.md first, then the current prompts. Rows D3, D4b, D7, D8 and O17/O18, the P3 row of (b) (items 1, 5, 6) and the 'commands/redev.md, continue-cycle.md' row still name withdrawn designs (parking and the after-window question, the continuation include, `/redev <task-id>`, ROLE_BY_ARTIFACT, the question asked when a round changes nothing, the OPERATION_STALLED question); gap 7's D4b wording and /redev are settled by D20 and D22. Inputs: prompts-all/{P7b,P1,P8,P2,P3,P4,P5,P6}.md (each ends with prompts/_common.md byte-for-byte: checked with cmp,
 all 8 OK); harness-repair-plan/DECISIONS.md; PLAN-v2.md (docs branch 1efc298e: sections 0-13, section 13 with 13
 rows); recall/STATE.md (owner messages O1-O38); the session transcript after STATE.md (owner messages of 2026-10-17
 and 2026-10-18, called O39-O45 here). File:line claims about shared lines were re-read on a `git archive` of master
@@ -26,7 +26,7 @@ Legend: done = merged (P0 PR #2, P0b PR #3, P7 PR #4); later = deferred to P9/P1
 | D2 one dev terminal | P1 (enums, required_values, prose caps, G2), P3 (strict pass, aggregator, resolver), P4 (close/commit lose pass_with_exceptions), P5 (gate accepts chain_pass only), P6 (mismatch is a repair step) | P9 prose pass; P10 dev-report.v1 projection (TC-35) | wording rule "不要给我说失败" stated in P1, P3, P4, P5, P6; missing in P2 (fix 15) |
 | D3 in-turn questions | P1 (producer-question artifact; ba/dev cannot call AskUserQuestion, tool policy), P2 (deny + parking), P3 (include relays, asks when a round changes nothing), P4 (close/commit waits), P5 (merge/push/do aborts, block text) | P9 prose; CLAUDE.md Hook Discipline via UD-CM | |
 | D4 Stop gates | P1 (coordinator failure rule, stop-completion-gate stub), P2 (time-lock released only by a human /stop record), P4 (loop reset never blocks), P5 (unified gate, launcher, release-input denies, arm) | P10 stub deletion | PLAN adds /redev and two exits (a human-typed harness command, CLAUDE_COMMAND_GATE=off) that DECISIONS D4 does not name (C11) |
-| D4b overnight parking | P1 (prose), P2 (deny, "Parked questions", asked after end_time), P3 (include parks), P4 (loop print), P5 (dev-overnight predicate) | - | owner confirmation of the refined wording UNVERIFIED (STATE 8.18) |
+| D4b overnight parking: SUPERSEDED by D20 | P1 (prose), P2 (deny, "Parked questions", asked after end_time), P3 (include parks), P4 (loop print), P5 (dev-overnight predicate) | - | owner confirmation of the refined wording UNVERIFIED (STATE 8.18) |
 | D4c no error/interrupt code | P1, P2, P3, P5 (Q5 recorded as answered by O26) | - | |
 | D5 consent one turn | P1 row 25 (one clearer at UserPromptSubmit), P5 row 15 (`/do <task-id>`) | P9 CLAUDE.md:60 via UD-CM | |
 | D6 land once at the end | P2 (per-cycle commit removed, /close added, `--auto` route) | - | |
