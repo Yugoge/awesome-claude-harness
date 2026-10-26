@@ -18,12 +18,12 @@ two runtime traces, plus probes run for this map to settle the disagreements. Ru
 | covering the 56 ledger rows (split where one ledger row holds several files with different producers) | 82 |
 | found by the static extractor or the traces outside the ledger | 39 |
 | several producers | 38 |
-| several deciding consumers (each with its own rule) | 37 |
+| several deciding consumers (each with its own rule) | 35 |
 | consumer-side re-check or re-derivation | 29 |
-| written never read | 27 |
-| read never written | 20 |
+| written never read | 28 |
+| read never written | 21 |
 | hand-written table | 27 |
-| no violation found | 20 |
+| no violation found | 21 |
 | evidence: both code and trace / code only / trace only | 87 / 33 / 1 |
 
 Check positions named in the rows: producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 67.
@@ -179,9 +179,14 @@ reader, scripts/break-overnight-lock.py:35, a fixed /tmp), and gave A93 the resi
 (scripts/write-git-residual-override.py:39, read at pretool-git-privilege-guard.py:2237). A further code read put
 A93's keystone grants in `${TMPDIR:-/tmp}/claude-git-blessed` (scripts/mint-git-blessed-token.sh:39), not the state
 dir, and gave them their reader and check, the git keystone hook (hooks/git-keystone/reference-transaction:48-63),
-not the privilege guard. The counts in this README include all of these corrections; `build_map.py` printed 122
-rows, 40 outside the ledger, several producers 35, written never read 29, read never written 18, no violation found
-21, evidence 86 / 33 / 3 and G12 6.
+not the privilege guard. A verification read then corrected three more rows: A03 gains a read never written (/close's
+inspectors read dev-registry/dev-<TASK_ID>/, commands/close.md:553-561, which nothing writes after /dev-command or
+/do); A89's flags each have at most one deciding reader, not several (pretool-wrapper-userintent.py guards only /stop,
+:66-71; write-commit-grant.py:460-468 reads the commit flag; break-overnight-lock.py reads only A92's token), so the
+push and merge flags are written never read; A91's deciding readers all call hooks/lib/subagent_restart.py and take
+one conclusion. The counts in this README include all of these corrections; `build_map.py` printed 122 rows, 40
+outside the ledger, several producers 35, several deciding consumers 37, written never read 29, read never written
+18, evidence 86 / 33 / 3 and G12 6.
 
 ## Limits
 
