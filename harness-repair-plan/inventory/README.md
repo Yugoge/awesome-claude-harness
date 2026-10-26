@@ -22,7 +22,7 @@ disagreements. Run date 2026-10-24.
 | several deciding consumers (each with its own rule) | 35 |
 | consumer-side re-check or re-derivation | 29 |
 | written never read | 28 |
-| read never written | 23 |
+| read never written | 24 |
 | hand-written table | 26 |
 | no violation found | 21 |
 | evidence: both code and trace / code only / trace only | 87 / 33 / 1 |
@@ -209,9 +209,11 @@ deciding reader at the Agent dispatch (hooks/pretool-gitignore-preflight.py:669-
 its .lck and its -active- pointer are written under a fixed /tmp (scripts/write-commit-grant.py:266, the guard's
 :636), while the preflight (:655-656), the PostToolUse finalizer (posttool-allowlist-consume.py:55, :590) and the Stop
 sweep (stop-cleanup-allowlist.sh:93, :286, :304) look for them in the state dir, a read never written when
-CLAUDE_STATE_DIR is set. The counts in this README include all of these corrections; `build_map.py` printed 122 rows,
-40 outside the ledger, several producers 35, several deciding consumers 37, written never read 29, read never written
-18, hand-written table 27, evidence 86 / 33 / 3, G1 dispatch 13 and G12 6.
+CLAUDE_STATE_DIR is set. The same read found A62, the dispatch manifest, read never written as well: /commit writes it
+under the state dir (commands/commit.md:404-407) while the changelog-analyst's check reads it at a fixed /tmp
+(agents/changelog-analyst.md:206). The counts in this README include all of these corrections; `build_map.py` printed
+122 rows, 40 outside the ledger, several producers 35, several deciding consumers 37, written never read 29, read
+never written 18, hand-written table 27, evidence 86 / 33 / 3, G1 dispatch 13 and G12 6.
 
 ## Limits
 
