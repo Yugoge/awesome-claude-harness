@@ -194,10 +194,11 @@ its paths add the pointer `.claude/session-resources/by-claude-session/<sid>.jso
 (`$LANEB_SESSION_RESOURCE_TRUST_ROOT/<sha256 of the project root>/<sid>.json`, written by provision at :1193 and by
 finalize at :2298-2348), a second harness artifact this map does not list, also left to P1b's regenerated map. A later
 code read took the hand-written-table label off two command lists in hooks/prompt-workflow.py, :1925 (A89: commit,
-push, merge and stop get a user-intent flag) and :1929 (A01: dev, dev-command and redev reach the task-id mint): each
-is the only rule deciding its question and repeats no declaration (no dispatch record, schema or canonical todo step
-names either set: scripts/todo/ has no commit, push, merge or stop step, and the obligation schema's pipeline enum,
-which obligation.py:81-83 and pretool-obligation-gate.py:88-90 copy (A14), lists seven pipelines). A later
+push, merge and stop get a user-intent flag) and :1929 (A01: dev, dev-command and redev reach the task-id mint at
+:1462-1480; /do reaches that mint at :1320-1360 by its own branch, :1927-1928): each is the only rule deciding its
+question and repeats no declaration (no dispatch record, schema or canonical todo step names either set:
+scripts/todo/ has no commit, push, merge or stop step, and the obligation schema's pipeline enum, which
+obligation.py:81-83 and pretool-obligation-gate.py:88-90 copy (A14), lists seven pipelines). A later
 verification read found that the timelock's publish call reaches neither a read nor its write: the Stop coordinator,
 the timelock's only runner, starts every phase without the two trust keys (stop-workflow-coordinator.py:108-111,
 :147-155), so _trust_configuration raises first (session_resources.py:335-336), and terminal.json, which finalize
