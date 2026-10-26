@@ -245,9 +245,9 @@ Read/Write/Edit and every CLI-side transcript append is logged as a synthetic ev
 layer (`strace -f --seccomp-bpf` over openat, open, creat, rename/renameat/renameat2, unlink/unlinkat, mkdir/mkdirat,
 rmdir, link, symlink and truncate, the stat/access family recorded as probes, execve/clone/chdir to credit each child to
 the script that started it). Rule: no verdict of (1)-(4) depends on strace. The strace layer feeds only the D24 table,
-the hermetic write audit (X2) and the fault-coverage step's path set where the runner's own records do not show a file
-("Merge rule from P1c on"; X10's traced run), so the suite runs where strace is absent. Record each piece you added to
-P1b's runner and each scenario you added to its drivers.
+the hermetic write audit (X2) and the fault-coverage step's path and runtime sets where the runner's own records do
+not show a file ("Merge rule from P1c on"; X10's traced run), so the suite runs where strace is absent. Record each
+piece you added to P1b's runner and each scenario you added to its drivers.
 
 **X2. Hermetic fixture outside the namespace.** The kit runs hooks inside ns.sh with HOME=/root. A CI runner may not
 offer unprivileged mount namespaces, and the requirement is HOME, CLAUDE_CONFIG_DIR and CLAUDE_STATE_DIR in tmp_path.
@@ -276,7 +276,7 @@ is fixed in the fixture when a setting the fixture controls moves it (TMPDIR, a 
 at its writer (made to honour TMPDIR). A difference between the two tables is a fixture defect, fixed in the fixture.
 
 **X3. G2 armed (by P1b's E4, or here).** If your base's settings.json already sets `CLAUDE_OBLIGATION_STOPGATE` to
-`block` (P1b's E4 sets it in P1b's last commit, after its own false-block replay), run the replays below only and say
+`block` (P1b's E4 sets it in P1b's Rollback (7), after its own false-block replay), run the replays below only and say
 so in the PR: they must meet the rule below (0 G2 blocks on compliant stops; a false block is fixed at its producer
 side and re-run), and you change no settings (row 9 and Rollback step 7 then add nothing). At d625284, F1, F1q and F2
 do not return to their producer under the shipped settings; arming G2 alone fixes all three (pilot: f1-armed,
@@ -452,8 +452,8 @@ table) runs on the PR head before merge (started by every pull_request event of 
 reopened and `ready_for_review`; a newer push cancels the PR's older run) and on baseline.yml's weekly schedule on
 master. Either way the full set must be green on the PR head before the reviewer merges (each head gets that run from
 its own pull_request event, with nobody starting it; the PR changes no repository setting), and no scenario is dropped
-from both sets. P1b's D24 check (its own step or job, P1b's E2) keeps the schedule P1b's E2 chose (per PR, never
-nightly-only) and is outside this split; the traced run above is this suite's own (X1).
+from both sets. P1b's D24 check (its own job, P1b's E2 and P1b's row 19) keeps the schedule P1b's E2 chose (per PR,
+never nightly-only) and is outside this split; the traced run above is this suite's own (X1).
 
 ## Scope (re-verify every location on current origin/master)
 
@@ -480,7 +480,7 @@ change code or prose only for what P1b's PR left. What P1b's PR did is neither y
 | 3 | tests/replay/test_faults.py (new) | — | Requirement (2): the 21 faults of "The suite", both settings modes. |
 | 4 | tests/replay/test_no_dead_end.py (new) | — | Requirement (3) per X6: the site enumerator, the per-site replays and classes, the AskUserQuestion-answer and forged-ESCALATION_ACK replays. |
 | 5 | tests/replay/test_regressions.py (new) | — | Requirement (4): R-P1, R-E1, R-N1 and R-V1 of "The suite", each with its "before" reproduction recorded in the PR. |
-| 6 | .github/workflows/baseline.yml (P8's) or one new workflow it calls; tests/TESTING.md | the jobs; one short section | The suite as CI jobs, triggered and sharded per X10, reachable from release.yml's workflow_call so a tag cannot publish around it; its full set must be green on the PR head before the reviewer merges (X10; the PR changes no repository setting, and baseline.yml's comment (:181-182 at d625284, :203-204 on master 2acc29b) that calls the `baseline` job "already-required" so it "gates merges" loses both claims). The `baseline` job's own pytest step (baseline.yml:107 at d625284, :112 on master 2acc29b; hooks/tests and tests on python 3.10-3.12) leaves tests/replay/ to the suite's jobs, which run all of it (not a skip). The fault-coverage step ("Merge rule from P1c on"), its code under tests/replay/ with the rest of the suite: a CI-only script under scripts/ lies on no replay's path, so the step would fail on your own diff (acceptance 8). The network guard of X2 in every job. TESTING.md gets one short section: how to run the suite locally and the merge rule, nothing more (D21: no manual). |
+| 6 | .github/workflows/baseline.yml (P8's) or one new workflow it calls; tests/TESTING.md | the jobs; one short section | The suite as CI jobs, triggered and sharded per X10, reachable from release.yml's workflow_call so a tag cannot publish around it; its full set must be green on the PR head before the reviewer merges (X10; the PR changes no repository setting, and baseline.yml's comment (:181-182 at d625284, :203-204 on master 2acc29b) that calls the `baseline` job "already-required" so it "gates merges" loses both claims). The `baseline` job's own pytest step (baseline.yml:107 at d625284, :112 on master 2acc29b; hooks/tests and tests on python 3.10-3.12) leaves tests/replay/ to the suite's jobs, which run all of it (not a skip). The fault-coverage step ("Merge rule from P1c on"), its code under tests/replay/ with the rest of the suite. The network guard of X2 in every job. TESTING.md gets one short section: how to run the suite locally and the merge rule, nothing more (D21: no manual). |
 | 7 | hooks/subagentstop-artifact-contract-enforce.py (G2) | `ACK_PREFIX` :304 and the ack helpers :319-329; `_load_progress_helper` :351; `_mint_record` :614 (escalations/ :631); `_latest_unadmitted` :637 (escalation-admissions :639, written at :797-798); `_write_side_records` :659 (deferred-checks :691); `_clear_progress` :704; `_gate_decide` :747 (the no-progress hand-off :778-829) | F2g; corrections 2.27 and 2.30; C5; D24. P1b's row 3 delivers this: verify it on your base, add F2g's replay, and change code only for what P1b's PR left. A failing obligation stop is a plain exit 2 that names each failing artifact and check to the stopping producer, in every round. Delete what your base still has of the no-progress hand-off, the `ESCALATION_ACK` admission and its four record stores (escalations/, escalation-admissions/, progress/, deferred-checks/; ledger L25: written, read only by this hook). Before deleting a store, show by grep and the suite's trace that nothing else reads it; a store another reader uses stays and goes into the D24 table. Records left on live homes are ignored (acceptance 11). `GATE_FAULT` (a crashed gate decision, :1158-1163) never admits the stop, and X6 classes its site like any other: G where the stopping producer's repair clears it, U (deleted under D17) where nothing on your base reaches it. Its tests change with it (row 21). |
 | 8 | same | the legacy correlation path :1218-1230 (`_find_correlated_reports`, `_dispatch_task_id`, `_own_reports`) | F7b. When the dispatch prompt carries no obligation block, judge only the reports the stopping agent wrote itself, read from its own transcript's Write and Edit tool uses (agent_transcript_path), never a sibling's or an earlier attempt's. A report it did not write is not its to fix (C5, CC8); it stays for its own producer's stop. |
 | 9 | settings.json | env | X3, only if your base's settings.json does not already set it (P1b's E4 sets it): `"CLAUDE_OBLIGATION_STOPGATE": "block"`, in the last commit together with the fault replays whose return depends on it (Rollback, step 7). Nothing else in settings.json. |
@@ -488,7 +488,7 @@ change code or prose only for what P1b's PR left. What P1b's PR did is neither y
 | 11 | scripts/aggregate-dev-report.py | `_write_blocked_aggregate` :2023-2082 and its callers (:2223 in `_reaggregate_with_shrunk_from_or_block`, :3780, :3830, :3848); `canonical_status = "blocked"` :1591; the shard validation that accepts `needs_review` (a third vocabulary, ledger L21) | F2, F2g. On a shard failure the script writes no canonical report, removes the canonical it wrote earlier for that task (its own output), and exits non-zero naming each failing shard's path and every error. A schema-invalid canonical can then never exist; the existing aggregate check at the next QA dispatch sees the canonical absent and the canonical's one producer, as P1b's E5 chose, writes it once the lane is repaired. The shard check accepts only dev-report.v2's own status set. |
 | 12 | scripts/resolve-dev-artifact-chain.py; commands/dev.md :1338-1344 (and dev-command.md's copy, if it has one) | the fan-out optional-parent branch ("any present optional parent artifact must validate") | F3b; D24 (read-never-written loses its reading branch). P1b's row 7 delivers this: verify it on your base, add F3b's replay, and change code or prose only for what P1b's PR left. In a fan-out cycle no dispatch declares the unsuffixed parent ticket, context or qa-report, and dev.md forbids inventing them, so the resolver no longer reads them; the prose sentence follows. Singular cycles are unchanged. P3 turns the resolver into the disposition and keeps this. |
 | 13 | hooks/posttool-overnight-file-check.py; commands/dev-overnight.md | the block text :333-367 ("Re-run the subagent or escalate"); contract entries :835-838 (`schema_name: "dev-report.v1"` :837, `"qa-report.v1"` :838); the append-only rule :852 | F3a and its QA half (:838 against the obligation's v2 at :1390); corrections 2.21 and 2.85, which P1b's rows 6 and 13 (E13) deliver (the schema read from the obligation, the v1 names gone): verify them on your base, add the F3a and F3q replays, and change code only for what P1b's PR left (X5 decides how). For a dispatch that carries an obligation, the check reads the schema from that dispatch's obligation; the contract entry for such a dispatch carries step, role, pipeline and path only. One declaration, so this check can no longer disagree with G2. The message names the artifact and the failing check and offers no "escalate". |
-| 14 | scripts/lib/session_index.py; scripts/session-index.py; agents/changelog-analyst.md :660-675 | `sync_failed` raised at :255-256 (`update-index --add --cacheinfo` :252-253); `update-index --force-remove` :248-249, its exit code unchecked (:257 lists the path as synced); the analyst's sync step | F4c, X7's option. X7's wait covers both update-index calls, and no path is reported synced unless update-index wrote it (the deletion branch returns its failure as the `--cacheinfo` branch does). The analyst's prose does not change, and the row adds no check (C2). |
+| 14 | scripts/lib/session_index.py; scripts/session-index.py; agents/changelog-analyst.md :660-675 | `sync_failed` raised at :255-256 (`update-index --add --cacheinfo` :252-253); `update-index --force-remove` :248-249, its exit code unchecked (:257 lists the path as synced); the analyst's sync step | F4c, X7's option. X7's wait covers both update-index calls, and no path is reported synced unless update-index wrote it (the deletion branch returns its failure as the `--cacheinfo` branch does). This row changes no prose of the analyst (row 18 changes its :669 sync path and its `rm -f` steps) and adds no check (C2). |
 | 15 | commands/restart.md | :70, :118, :131 (`$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py …`) | F5, F6. Spell each command in the form bash-safety resolves by design (the bashprobe showed `~/.claude/...` passing), per X4 (a). The hook keeps refusing a dynamic command head. |
 | 16 | hooks/pretool-todo-validate.py; hooks/posttool-subagent-track.py | Gate 4 `check_subagent_completion_guard` :251-270 | F5 (and F5f). A subagent step is also satisfied by an Agent tool_use of that role in the span whose agent was resumed by the recovery path and whose resume finalized (the recovery's own journal record, which CLAUDE.md says is journaled through SubagentStop). Read it from the transcript and that record; no replacement call is demanded, which restart.md and Lesson 16 forbid. The message names the step, the role and, where the obligation declares one, the artifact. |
 | 17 | per X8 | — | F6o, X8's wake: scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/pretool-block-background-tasks.py (the widened exception), commands/dev-overnight.md (one line). |
@@ -619,11 +619,13 @@ single-lane dev cut after its Edit, the human's /restart); F5f (both lanes cut; 
 limit mid-subagent in an interactive session, the human's /restart); F6o (a usage limit inside /dev-overnight, no
 human: X8); F7 (a lane dispatched from the pre-P1 template, its obligation unparseable, its report needs_review, the
 sibling compliant); F7b (the same with no obligation block). The F8 faults are CC4's case, an unfinished cycle met by
-the /close or /commit the human types (P1b's acceptance 7 replays the same four): F8 (after a 2-lane /dev reached its
-terminal, one lane's QA report removed, then the human's /close); F8q (a 2-lane /dev cut, as in F5, after one lane's
-QA stop and before the other lane's QA dispatch, then the human's /close instead of /restart); F8p (after /dev's
-terminal, a product file one lane's dev wrote broken so that /close's close-QA round names it); F8c (after a landed
-/close, one lane's dev report removed, then the human's /commit). Assert per fault:
+the /close or /commit the human types, in F8, F8p and F8c in a later session than the /dev's (P1b's acceptance 7
+replays the same four, those three in a later session too, and adds a close-QA finding that cites no artifact and, if
+P1b's E5 keeps (b), a removed canonical aggregate under /commit): F8 (after a 2-lane /dev reached its terminal, one
+lane's QA report removed, then the human's /close); F8q (a 2-lane /dev cut, as in F5, after one lane's QA stop and
+before the other lane's QA dispatch, then the human's /close instead of /restart); F8p (after /dev's terminal, a
+product file one lane's dev wrote broken so that /close's close-QA round names it); F8c (after a landed /close, one
+lane's dev report removed, then the human's /commit). Assert per fault:
 - every block's text contains the artifact's path (the one its dispatch declares; in F7 and F7b, whose dispatches
   carry no obligation that parses, the report the stopping agent wrote) and the failing check (code and message);
 - the actor that receives the block is the expected producer, and the trace shows the repair written by that same
@@ -685,23 +687,37 @@ pass, human events.
   on its path from its start to its end (with X10 (b)'s saved-state starts, the compliant run up to the injection step
   counts as part of it): hook files run, scripts the hooks or the replay's own commands start (a driven agent's Bash
   command, or a regression replay's direct call such as R-N1's runs of hooks/pull.sh and of hooks/git-fswatch.sh's
-  `safe_pull`), the modules these import or source, schemas they load, command and agent templates the drivers
-  extracted; and the settings.json keys it used (each hooks entry whose command it ran, each other key a file on that
-  path reads by name, such as an env variable). It fails when a file the PR adds or modifies under hooks/, scripts/ or
-  schemas/ outside their test directories (hooks/tests/ and scripts/install/tests/, the ones acceptance 15 leaves out;
-  no replay runs a test, so the step prints a changed file there as a fact), or a settings.json key it adds or modifies
-  (compared key by key, not as a file), lies on no such replay's path, and prints them. A changed key that registers no
-  hook and that no file under hooks/ or scripts/ reads by name is printed as CLI-only and does not fail the step. A
-  commands/ or agents/ file the PR adds or modifies that opens with YAML frontmatter on the base or on the head (a
-  command or agent definition) and that a replayed pipeline reaches must be read by a replay of (1), (2) or (4): a
-  driver extracts a template from it or a scenario injects its body as a slash command's isMeta body (row 1); otherwise
-  the step fails and prints it, and the PR adds the scenario that reads it. A replayed pipeline reaches each command
-  whose body a replay injects and each agent such a body names by its agents/ path, as a dispatch's subagent_type, as an
-  obligation's role or in a code span holding only its name (dev.md:267's specialists), read from those bodies at test
-  time, never from a list, so an agent dispatched only on a branch the drivers skip (test-writer, a specialist) counts.
-  The step prints every other changed file there as a fact: a definition no replayed pipeline reaches, or a file with no
-  frontmatter on either side (doc-sync's INDEX.md and README.md), which defines no command or agent. The step asks for
-  and reads no PR-body reason. Deletions are exempt.
+  `safe_pull`), the modules these import or source, the files its processes open (a schema, a policy, a data file),
+  command and agent templates the drivers extracted; and the settings.json keys it used (each hooks entry whose command
+  it ran, each other key a file on that path reads by name, such as an env variable). It sorts each file the PR adds or
+  modifies outside settings.json, commands/ and agents/ (their rules follow), read at test time from the files and the
+  suite's traced run, never from a list. A file under a directory named tests is a test (tests/, and hooks/tests/ and
+  scripts/install/tests/, the two acceptance 15 leaves out). Any other file that a replayed process can run or read is
+  in the runtime set: a file a hooks entry of settings.json runs; a script (a `.py` or `.sh` file, or one whose first
+  line starts with `#!`) that a command or agent definition a replayed pipeline reaches (below) names by its path; a
+  module a file of the set imports, and a file one sources or runs by a path or module name naming it (Python from its
+  imports and subprocess calls, shell from its commands; comments and messages aside); and a file that a replay of (1),
+  (2) or (4) runs, imports, sources or opens in any process it starts (a git command's reads of its own working tree
+  aside). A change that leaves a file's code as it was is comment-only (Python: the same syntax tree once docstrings are
+  dropped; shell: the same lines once blank lines and comment lines after the first are dropped). The step fails when a
+  file of the runtime set that the PR adds or changes beyond its comments, or a settings.json key the PR adds or
+  modifies (compared key by key, not as a file), lies on no such replay's path, and prints them. A changed key that
+  registers no hook and that no file of the runtime set reads by name is printed as a fact (CLI-only, such as a
+  permission entry) and does not fail the step. It prints as a fact each comment-only change to a file of the runtime
+  set and, with its class, each changed file outside that set: a test; CI-only (a file of .github/, or a script a `run:`
+  step there runs, such as P10's size ratchet); or used by no replayed process (an INDEX.md or README.md,
+  hooks/QUICKSTART.md, hooks/git-fswatch@.service, code no hook entry or replayed definition reaches, or bash-safety's
+  degraded-analyzer .ere file while no replay takes that branch). A commands/ or agents/ file the PR adds or modifies
+  that opens with YAML frontmatter on the base or on the head (a command or agent definition) and that a replayed
+  pipeline reaches must be read by a replay of (1), (2) or (4): a driver extracts a template from it or a scenario
+  injects its body as a slash command's isMeta body (row 1); otherwise the step fails and prints it, and the PR adds the
+  scenario that reads it. A replayed pipeline reaches each command whose body a replay injects and each agent such a
+  body names by its agents/ path, as a dispatch's subagent_type, as an obligation's role or in a code span holding only
+  its name (dev.md:267's specialists), read from those bodies at test time, never from a list, so an agent dispatched
+  only on a branch the drivers skip (test-writer, a specialist) counts. The step prints every other changed file there
+  as a fact: a definition no replayed pipeline reaches, or a file with no frontmatter on either side (doc-sync's
+  INDEX.md and README.md), which defines no command or agent. The step asks for and reads no PR-body reason. Deletions
+  are exempt.
 - A phase that changes a pipeline's shape updates that pipeline's scenarios in the same commit (TC-54) and keeps every
   assertion of (1)-(4).
 
@@ -727,7 +743,8 @@ pass, human events.
 - The disposition function and the gap format (P3), beyond row 12's removed branch; no owner or fix field is added
   anywhere.
 - /close and /commit beyond rows 14 and 18 and the routing loops "Delivered by P1b" names (P4; P1b's rows 6, 7, 8, 10
-  and 11 removed their re-checks); the unified Stop gate and the D8 derived deny (P5).
+  and 11 removed their re-checks); the unified Stop gate (P5); the D8 derived deny, which P1b's E3 ships for every
+  caller (P5 row 1 adds only a caller P1b's PR left out).
 - D24 consolidation of artifacts rows 7-20 do not touch (P1b did it before you; P2-P10 keep it). P1b's D24 check stays
   green on your branch with no exception, and no change of yours gives an artifact a second producer or a second
   deciding rule. Where the suite shows, on your base, two producers or two deciding consumers of one artifact that
@@ -798,11 +815,12 @@ worktree); the suite itself through pytest in your checkout. Never against your 
    the network guard's count of attempts: 0; `git status --porcelain` in your checkout empty after the suite; no path
    under your container's `~/.claude` or HOME in the write list of the suite's traced run (X1), not a before/after
    listing (your session's own CLI keeps writing its transcripts under `~/.claude/projects/` meanwhile).
-8. **Fault coverage.** The CI step of "Merge rule from P1c on" run on your own diff: every hooks/, scripts/ and schemas/
-   file outside their test directories and every settings.json key you changed lies on a fault or regression replay's
-   path (hooks/git-fswatch.sh through R-N1, scripts/session-index.py through F4c's sync command; row 9's key, if you set
-   it, through G2 on F1, F1q and F2), and every commands/ or agents/ definition you changed that a replayed pipeline
-   reaches is read by a replay; the output pasted.
+8. **Fault coverage.** The CI step of "Merge rule from P1c on" run on your own diff: every file you changed beyond its
+   comments that is in the step's runtime set, and every settings.json key you changed, lies on a fault or regression
+   replay's path (hooks/git-fswatch.sh through R-N1, scripts/session-index.py through F4c's sync command; row 9's key,
+   if you set it, through G2 on F1, F1q and F2), every commands/ or agents/ definition you changed that a replayed
+   pipeline reaches is read by a replay, and the step prints every other file you changed with its class (tests/replay/
+   and tests/TESTING.md as tests, baseline.yml as CI-only); the output pasted.
 9. **Run time.** X10: every scenario's wall time on the CI runner, the totals, `nproc`, the shard wall time, (a) and (b)'s
    results and the split taken.
 10. **Unit tests for the fixes.** A unit test per changed hook or script behaviour of rows 7, 8, 10, 11, 12, 13, 14, 16,
@@ -835,8 +853,10 @@ worktree); the suite itself through pytest in your checkout. Never against your 
 16. **Personal values.** `scripts/check-public-core.sh` passes on your branch, and `git diff origin/master` adds no
     e-mail address, account name, private project name or personal home path (fixtures use placeholders such as
     `20990101-000001` and `demo@example.invalid`).
-17. **Full suite.** `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider` -> 0 failed, P1b's D24 check
-    included, at every commit of the PR (TC-54); CI green.
+17. **Full suite.** In acceptance 2's 3.12 venv (`python3 -m pip install --require-hashes -r requirements/py312.txt`
+    in it; your container's default `python3` may be another version, with no lockfile and no pytest),
+    `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider` -> 0 failed, P1b's D24 check included, at
+    every commit of the PR (TC-54); CI green.
 
 ## Rules added / retired (expected)
 
