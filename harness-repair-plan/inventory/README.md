@@ -22,9 +22,9 @@ disagreements. Run date 2026-10-24.
 | several deciding consumers (each with its own rule) | 34 |
 | consumer-side re-check or re-derivation | 29 |
 | written never read | 28 |
-| read never written | 21 |
+| read never written | 22 |
 | hand-written table | 26 |
-| no violation found | 22 |
+| no violation found | 21 |
 | evidence: both code and trace / code only / trace only | 87 / 33 / 1 |
 
 Check positions named in the rows: producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 67.
@@ -185,8 +185,8 @@ inspectors read dev-registry/dev-<TASK_ID>/, commands/close.md:553-561, which no
 /do); A89's flags each have at most one deciding reader, not several (pretool-wrapper-userintent.py guards only /stop,
 :66-71; write-commit-grant.py:460-473 reads the commit flag; break-overnight-lock.py reads only A92's token), so the
 push and merge flags are written never read; A91's deciding readers all call hooks/lib/subagent_restart.py and take
-one conclusion. A further verification read corrected A103 the same way: stop-overnight-timelock.py only publishes
-the terminal receipt and ignores the result (:217-235), and the deciding readers left, pretool-tool-policy.py, the
+one conclusion. A further verification read corrected A103 the same way: stop-overnight-timelock.py only tries to
+publish terminal.json and ignores the result (:217-235), and the deciding readers left, pretool-tool-policy.py, the
 Stop coordinator and scripts/session-resources.py, all decide through hooks/lib/session_resources.py. A103's producers
 are that library's writes inside the project (session_resources.py:1127, :1149, :1168-1170, :1433, :1575, :2265), and
 its paths add the pointer `.claude/session-resources/by-claude-session/<sid>.json` that every decider reads (:1286,
@@ -197,10 +197,13 @@ code read took the hand-written-table label off two command lists in hooks/promp
 push, merge and stop get a user-intent flag) and :1929 (A01: dev, dev-command and redev reach the task-id mint): each
 is the only rule deciding its question and repeats no declaration (no dispatch record, schema or canonical todo step
 names either set: scripts/todo/ has no commit, push, merge or stop step, and the obligation schema's pipeline enum,
-which obligation.py:81-83 and pretool-obligation-gate.py:88-90 copy (A14), lists seven pipelines). The counts in this
-README include all of these corrections; `build_map.py` printed 122 rows, 40 outside the ledger, several producers 35,
-several deciding consumers 37, written never read 29, read never written 18, hand-written table 27, no violation found
-21, evidence 86 / 33 / 3 and G12 6.
+which obligation.py:81-83 and pretool-obligation-gate.py:88-90 copy (A14), lists seven pipelines). A later
+verification read found that the timelock's publish call reaches neither a read nor its write: the Stop coordinator,
+the timelock's only runner, starts every phase without the two trust keys (stop-workflow-coordinator.py:108-111,
+:147-155), so _trust_configuration raises first (session_resources.py:335-336), and terminal.json, which finalize
+reads, is read never written (A103). The counts in this README include all of these corrections; `build_map.py`
+printed 122 rows, 40 outside the ledger, several producers 35, several deciding consumers 37, written never read 29,
+read never written 18, hand-written table 27, evidence 86 / 33 / 3 and G12 6.
 
 ## Limits
 
