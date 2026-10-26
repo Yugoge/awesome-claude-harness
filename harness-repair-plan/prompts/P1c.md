@@ -418,7 +418,9 @@ the session as it is today. F6o's driver models the firing on the captured recor
 CLI behaviour ("Out of scope"). While those facts stay UNVERIFIED, the PR records them as UNVERIFIED for P5; if the
 documentation or a capture shows that a scheduled prompt cannot fire there, the PR quotes it under "Decided by
 experiment" (X8) as a CLI limit for P5, never as D20 met. No branch of this rule asks the owner or adds a wait for him
-(D20); only a cut the CLI never wakes still waits for his /restart, as today. Never parse an API-error record (D4c).
+(D20); only a cut the CLI never wakes still waits for his /restart, as today, and so does a cut in a session launched
+before your merge, whose todo list has no wake step (row 17), until that session ends; the PR reports both, never
+as D20 met. Never parse an API-error record (D4c).
 
 **X9. N1 on a landed home.** The record is P7b's merged PR #7: commits 8ab874b and 98d153a, scripts/install/land's
 "Review N1" block, the tests in tests/test_landing.py whose docstrings begin "Review N1"
@@ -500,7 +502,7 @@ deletion nor your retired rule ("Rules added / retired", "Net code cap").
 | 14 | scripts/lib/session_index.py; scripts/session-index.py; agents/changelog-analyst.md :660-675 | `sync_failed` raised at :255-256 (`update-index --add --cacheinfo` :252-253); `update-index --force-remove` :248-249, its exit code unchecked (:257 lists the path as synced); the analyst's sync step | F4c, X7's option. X7's wait covers both update-index calls, and no path is reported synced unless update-index wrote it (the deletion branch returns its failure as the `--cacheinfo` branch does). This row changes no prose of the analyst (row 18 changes its :651, :665 and :669 session-index paths and its `rm -f` steps) and adds no check (C2). |
 | 15 | commands/restart.md | :70, :118, :131 (`$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py …`) | F5, F6. Spell each command in the form bash-safety resolves by design (the bashprobe showed `~/.claude/...` passing), per X4 (a). The hook keeps refusing a dynamic command head. |
 | 16 | hooks/pretool-todo-validate.py; hooks/posttool-subagent-track.py | Gate 4 `check_subagent_completion_guard` :251-270 | F5 (and F5f). A subagent step is also satisfied by an Agent tool_use of that role in the span whose agent was resumed by the recovery path and whose resume finalized (the recovery's own journal record, which CLAUDE.md says is journaled through SubagentStop). Read it from the transcript and that record; no replacement call is demanded, which restart.md and Lesson 16 forbid. The message names the step, the role and, where the obligation declares one, the artifact. |
-| 17 | per X8 | — | F6o, X8's wake: scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/pretool-block-background-tasks.py (the widened exception), commands/dev-overnight.md (one line). Every step of your base's list keeps its label, content and activeForm, and the wake rule, Gate 4 and what records a step's subagent call pair each todo with the canonical step of the same content, never of the same index (at d625284 Gate 4 and hooks/posttool-subagent-track.py read the list by index, pretool-todo-validate.py:227-240, posttool-subagent-track.py:480-525): an overnight session running at your merge keeps the todo list it wrote from your base's list, without the wake step, and resets it every cycle, so that list meets neither the wake rule nor another step's check (acceptance 11). |
+| 17 | per X8 | — | F6o, X8's wake: scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/pretool-block-background-tasks.py (the widened exception), commands/dev-overnight.md (one line). Every step of your base's list keeps its label, content and activeForm, and one rule binds every hook that compares a session's todo list with the canonical list, by length, index or label: it compares the whole list (its length, and each step's content and activeForm) only for a session's first list or a change of that list's length, as pretool-todo-validate.py:298-300 does at d625284, and otherwise pairs each todo with the canonical step of the same content, never of the same index; the wake rule, Gate 4 and what records a step's subagent call find their step that way. At d625284 these break it: Gate 4 and hooks/posttool-subagent-track.py pair by index (pretool-todo-validate.py:227-240, posttool-subagent-track.py:480-525); hooks/posttool-todo-count.py exits 2 after every TodoWrite shorter than the canonical list (:95-103, :60), which locks every other tool (pretool-workflow-gate.py:1179-1192), and hooks/posttool-todo-tracker.py withholds its todo-file write on such a list (:104-122); the Codex runtime's plan check compares length and content index by index on every update (pretool-workflow-gate.py:287-306). A step read by its label (pretool-subagent-enforce.py:69-83) needs only the kept labels. An overnight session running at your merge keeps the todo list it wrote from your base's list, without the wake step and so one step shorter, and resets it every cycle, so that list meets neither the wake rule nor any of these checks (acceptance 11). |
 | 18 | the literal-prose conflicts (X4) | see the list under the table | Each fixed on the side X4 picks, with the replay that met it. |
 | 19 | the /dev-overnight compliant cycle (X5) | see the list under the table | The smallest part of the owning row that lets the compliant overnight scenario run from launch to a Stop after end_time with 0 blocks. |
 | 20 | hooks/pull.sh; hooks/git-fswatch.sh `has_changes`, `safe_pull`; scripts/install/land's "Review N1" block (only if it must be made callable) | pull.sh `HAS_CHANGES` :17-21; fswatch `has_changes` :160, `safe_pull` :174 (fetch :180, stash push :200, `pull --rebase` :210) | X9. N1's window (only if X9 (ii) refuses): on a landed harness home the landing's existing settings.json re-record runs before the stash decision; no second implementation, no new state. Fact 1: each `safe_pull` step is decided by its git command's own exit status, not `tee`'s. |
@@ -844,22 +846,24 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
     lock; Gate 4 after a recovery resume; the config guard's narrow case and its unchanged refusals) -> passed.
 11. **Live landing** (D15; the owner cannot stop his sessions). As a session started before your merge: your base's
     settings.json with your hook files. A compliant /dev Stop in the toy repository and one in the harness home: every
-    Stop hook exits 0. Two in-flight cycles, each begun before your merge lands (on your base's hook and script
-    files up to its first TodoWrite, so its todo list is written from your base's scripts/todo/) and run on
-    with yours: (a) a /dev cycle dispatched from your base's templates, with escalation records from an earlier
-    no-progress round still on disk (P1b's row 3 removed their writer, so make them first: run d625284's G2 with
-    `CLAUDE_OBLIGATION_STOPGATE=block` through such a round of that cycle in the toy repository, which writes them
-    under the cycle's `.claude/dev-registry/` directory): no hook exits 2 on a compliant stop, and the old records are
-    ignored; (b) a /dev-overnight cycle launched from your base's templates, run on through its loop's next todo reset
-    to its Stop after end_time (row 17 puts a new first step in /dev-overnight's canonical list, and Gate 4 reads that
-    list by index, hooks/pretool-todo-validate.py:227-240 at d625284). Both follow your base's command and agent text,
-    so drive them with your base's drivers (P1b's, from a scratch clone of your base; your branch keeps no `DEVIATION:`,
-    acceptance 3), whose `DEVIATION:` steps pass each kept base block that text still meets (a block you fix on the
-    prose side under X4 (a) still meets the unchanged hook there): on every replayed event of both, no hook exits 2 or
-    prints a block or deny decision that the same replay with your base's hook and script files does not show at the
-    same hook, step and refusal text; each block met is listed in the PR with its hook text, and none is new (Goal 4).
-    The same cycles with `CLAUDE_OBLIGATION_STOPGATE=block` (X3): 0 G2 blocks on their compliant stops. Repeat with your
-    branch's settings.json.
+    Stop hook exits 0. Two in-flight cycles, each begun before your merge lands (on your base's hook and script files up
+    to and including its first TodoWrite and that call's PreToolUse and PostToolUse hooks, so its todo list is written
+    from your base's scripts/todo/) and run on with yours from its next event: (a) a /dev cycle dispatched from your
+    base's templates, with escalation records from an earlier no-progress round still on disk (P1b's row 3 removed their
+    writer, so make them first: run d625284's G2 with `CLAUDE_OBLIGATION_STOPGATE=block` through such a round of that
+    cycle in the toy repository, which writes them under the cycle's `.claude/dev-registry/` directory): no hook exits 2
+    on a compliant stop, and the old records are ignored; (b) a /dev-overnight cycle launched from your base's
+    templates, run on through its loop's next todo reset to its Stop after end_time (row 17 puts a new first step in
+    /dev-overnight's canonical list, which at d625284 Gate 4 reads by index and the todo-count check counts on every
+    TodoWrite, hooks/pretool-todo-validate.py:227-240 and hooks/posttool-todo-count.py:95-103). Both follow your base's
+    command and agent text, so drive them with your base's drivers (P1b's, from a scratch clone of your base; your
+    branch keeps no `DEVIATION:`, acceptance 3), whose `DEVIATION:` steps pass each kept base block that text still
+    meets (a block you fix on the prose side under X4 (a) still meets the unchanged hook there): on every replayed event
+    of both, no hook exits 2 or prints a block or deny decision that the same replay with your base's hook and script
+    files does not show at the same hook, step (the todo of the same content) and refusal text, or at the same hook and
+    step where one of your rows rewrites that hook's message (as row 16 rewrites Gate 4's); each block met is listed in
+    the PR with its hook text, and none is new (Goal 4). The same cycles with `CLAUDE_OBLIGATION_STOPGATE=block` (X3):
+    0 G2 blocks on their compliant stops. Repeat with your branch's settings.json.
 12. **D24 table** for every artifact rows 7-20 or X2 touch: the escalation stores (L25), the canonical aggregate (L18),
     the lane reports and the e2e correlation (L17, L22), the cycle contract (L46), the git index the sync updates, the
     recovery journal (row 16), the product command files (row 18), settings.json (row 20, if taken), each state file
@@ -1008,7 +1012,9 @@ PR what each revert restores. The reviewer reverts; the owner runs nothing.
 - Do not add a check, scan, filter or re-validation to /close, /commit, the changelog-analyst or any other consumer (C2).
 - Do not ask the owner anything, write a REQUEST for him, give him a step on his machine, park anything, or make any
   path inside /dev-overnight wait for him (D18-D20). X8 ships the wake on every branch; where the CLI cannot fire it, a
-  usage-limit cut there still waits for his /restart as it does today, a CLI limit the PR reports (X8), never as met.
+  usage-limit cut there still waits for his /restart as it does today, a CLI limit the PR reports (X8), never as met;
+  so does a cut in a session launched before your merge, whose todo list has no wake step (row 17), until that
+  session ends; the PR reports it too (X8), never as met.
 - Do not put a filename-to-role table in code, prose or test data (D21); expected producers come from the declaring
   dispatch record.
 - Do not skip, xfail, quarantine or retry-until-green a scenario; no expected-failure list, no timing-dependent assertion,
