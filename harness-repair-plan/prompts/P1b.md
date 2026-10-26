@@ -835,7 +835,7 @@ copy, as P1 "Sandbox and arming" shows.
    deletes the only writer of the `qa.json` its FIRST ACTION line reads, and that line's registration
    (pretool-cp-checkin.py `_handle_dev_sentinel` :490-503) takes the path alone, so the line stays until P6 takes the
    role from the CLI (P6.md:413-416); the check reads that path as the pattern row 1's mint writes,
-   `.claude/dev-registry/dev-<ts>/qa.json`, when row 19 rule 1 replaces a minted id's timestamp (technical choice).
+   `.claude/dev-registry/dev-<ts>/qa.json`, since row 19 rule 1 replaces only a minted id's timestamp.
    The runner, like the kit's `tool()` (tools/baseline.py:92-110), runs a call's PreToolUse before it performs the call,
    and records a call that fails as an error tool_result and goes on, where the kit's `do_read` (:117-122) raises: in
    /close after /do the inspectors' FIRST ACTION Reads (close.md:553-561) fail in both kits, close QA's on your branch.
