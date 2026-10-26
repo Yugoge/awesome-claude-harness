@@ -183,7 +183,7 @@ dir, and gave them their reader and check, the git keystone hook (hooks/git-keys
 not the privilege guard. A verification read then corrected three more rows: A03 gains a read never written (/close's
 inspectors read dev-registry/dev-<TASK_ID>/, commands/close.md:553-561, which nothing writes after /dev-command or
 /do); A89's flags each have at most one deciding reader, not several (pretool-wrapper-userintent.py guards only /stop,
-:66-71; write-commit-grant.py:460-468 reads the commit flag; break-overnight-lock.py reads only A92's token), so the
+:66-71; write-commit-grant.py:460-473 reads the commit flag; break-overnight-lock.py reads only A92's token), so the
 push and merge flags are written never read; A91's deciding readers all call hooks/lib/subagent_restart.py and take
 one conclusion. A further verification read corrected A103 the same way: stop-overnight-timelock.py only publishes
 the terminal receipt and ignores the result (:217-235), and the two deciding readers left, pretool-tool-policy.py and
