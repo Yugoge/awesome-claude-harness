@@ -48,10 +48,14 @@ a second one. If a name or form differs from this description, use what is merge
 - P1b: its trace runner (the committed module that replays a pipeline in T1 order and records which actor wrote, read,
   probed or deleted which path), its ten compliant pipeline drivers (P1b acceptance 4; you extend them, never a second
   set), its D24 table format, its experiment that chose runtime tracing or static derivation (X1 below), its "Out of
-  scope, found" items that name a process defect, and its "Hand-off to P1c" list: each base block its compliant drivers
-  still meet, with the hook text and the driver's `DEVIATION:` step that passes it. Rows 18 and 19 remove each block,
-  and the commit that removes it drops its DEVIATION (X4). The same list names the dead ends P1b met on its base (its
-  acceptance 14): each one your base still shows is fixed at its producer with the replay that meets it (Goal 2).
+  scope, found" items that name a process defect, and its "Hand-off to P1c" list: each kept base block (one its
+  compliant drivers still meet on its branch's own text), with the hook text and the driver's `DEVIATION:` step that
+  passes it, and apart from them each deviation that fires only on its base's text (for a block its rows or experiments
+  removed). Rows 18 and 19 remove each kept block, and the commit that removes it drops its DEVIATION (X4); a deviation
+  of the second list goes with no fix ("Rows 18 and 19, P1b's kept base blocks"). The same list names the dead ends P1b
+  met on its base (its acceptance 14): each one your base still shows is fixed at its producer with the replay that
+  meets it (Goal 2). Its "Live landing" lists each harness script its base's text calls that it emptied to an exit-0
+  stub with a `# STUB:` line (its acceptance 17): leave it; it stays until P10, as D15 keeps a hook stub.
 - P1: hooks/lib/obligation.py (parse_obligation, resolve_own_obligation, find_unresolved_dispatch_obligations,
   canonical_task_id, registry_dir_for); hooks/lib/stop_contract.py and hooks/lib/command_span.py (is_human_prompt,
   active_command, active_span); the producer-question artifact; the Stop coordinator's relay; P1's PR section
@@ -294,7 +298,10 @@ which acceptance 11 covers. G1 and G3 stay advisory (P2); G4 stays advisory (P5 
 **X4. Literal-prose conflicts: which side changes.** The compliant drivers follow the command and agent prose
 literally: every fenced command block as written with its placeholders filled, every template as written, the
 canonical TodoWrite list, `run_in_background: false`, the FIRST ACTION reads, and the stated default wherever the prose
-offers a choice. A block met that way is a process defect. For each (row 18 lists those the pilot met):
+offers a choice. A block met that way is a process defect, P1b's kept base blocks among them. P1b's drivers depart from
+the text only in driver code: by `DEVIATION:` steps past its kept base blocks and the blocks only its base's text meets,
+none left at your merge (acceptance 3), and by the respellings a replay of its base's text runs (its acceptance 4 and
+row 7). For each (row 18 lists those the pilot met):
 - (a) if the refusal enforces a rule written in CLAUDE.md, DECISIONS.md, the 2026-09-28 design doc or a security
   hook's stated policy (the removal policy, git privilege, config protection, the overnight boundary), keep the hook and
   change the prose to a form the hook accepts by its own design (a path form it resolves, a step dropped because a
@@ -467,13 +474,13 @@ every reader of the cycle number calls P2's `cycle_index(state)`), and in row 18
 E8), close.md :337 and :507 (its rows 6 and 8), commit.md :334 (its row 7), merge.md:165 (its row 12, E11), push.md
 Step 1's token scan (its row 11), the resolver calls at dev.md:1322 and dev-command.md:889, the repository-relative
 harness-script calls of close.md :66-68, :345, :776 and :950 (and :141-143 if P1b's replays ran /close --late-repair)
-and commit.md :313, :320 and :965, and the agent calls changelog-analyst.md :185 and :399 and qa.md :1137-1138 (its row
-7 respells them to the harness's copy) and, for /dev-command, the spec auto-detect (its E9 and E14) and the Step 16
-completion template (its row 7 takes the completion report out of the resolver's required chain); outside the table, the
-routing loops of /close and /commit, which dispatch again each gap's declaring dispatch through its E3 reader (its row
-10; the F8 faults replay them). For each, read P1b's merged PR, verify on your base what it delivered, add the replay,
-and change code or prose only for what P1b's PR left. What P1b's PR did is neither your deletion nor your retired rule
-("Rules added / retired", "Net code cap").
+and commit.md :313, :320 and :965, and the agent calls changelog-analyst.md :185, :399 and :729 and qa.md :1137-1138
+(its row 7 respells them to the harness's copy) and, for /dev-command, the spec auto-detect (its E9 and E14) and the
+Step 16 completion template (its row 7 takes the completion report out of the resolver's required chain); outside the
+table, the routing loops of /close and /commit, which dispatch again each gap's declaring dispatch through its E3 reader
+(its row 10; the F8 faults replay them). For each, read P1b's merged PR, verify on your base what it delivered, add the
+replay, and change code or prose only for what P1b's PR left. What P1b's PR did is neither your deletion nor your
+retired rule ("Rules added / retired", "Net code cap").
 
 | # | File | Location (d625284) | Change |
 |---|---|---|---|
@@ -499,13 +506,15 @@ and change code or prose only for what P1b's PR left. What P1b's PR did is neith
 | 20 | hooks/pull.sh; hooks/git-fswatch.sh `has_changes`, `safe_pull`; scripts/install/land's "Review N1" block (only if it must be made callable) | pull.sh `HAS_CHANGES` :17-21; fswatch `has_changes` :160, `safe_pull` :174 (fetch :180, stash push :200, `pull --rebase` :210) | X9. N1's window (only if X9 (ii) refuses): on a landed harness home the landing's existing settings.json re-record runs before the stash decision; no second implementation, no new state. Fact 1: each `safe_pull` step is decided by its git command's own exit status, not `tee`'s. |
 | 21 | tests that pin what rows 7-20 change; docs lines a CI check names | hooks/tests and tests (grep each changed file's name) | TC-54: a pin a decided change makes false changes in the same commit to assert the new behaviour (the ESCALATION_ACK tests, the aggregate's blocked-canonical tests, the e2e correlation tests, Gate 4's tests). A test that exercises only deleted code goes with it, named in the PR (D17). If scripts/verify-claims.sh or `scripts/check-enforcement-evidence.py --ledger/--claims` names a line your change makes false, fix that line and nothing more (P9 does the prose pass). |
 
-**Rows 18 and 19, P1b's kept base blocks.** P1b's PR lists under "Hand-off to P1c" each block its compliant drivers
-met on its base and passed with a `DEVIATION:` step in the driver source (its acceptances 4, 9 and 17). Each is a row 18
-item (X4 picks the side) or, where it stops the /dev-overnight cycle, a row 19 item, whether or not the lists below
-name it. Re-verify it on your base and remove it with the replay that met it; the same commit drops its `DEVIATION:`
-step, so that replay follows the command text literally and meets no block. A listed block your base no longer shows
-needs only its replay, and its DEVIATION goes too. No driver keeps a DEVIATION at your merge, and no check exception,
-skip or expected block takes its place (acceptance 3).
+**Rows 18 and 19, P1b's kept base blocks.** P1b's PR lists under "Hand-off to P1c" each kept base block (its acceptances
+4, 9 and 17): a block its compliant drivers meet on its branch's own text at the hook, step and refusal text its base
+kit records, on a line none of its rows or experiments changed, and pass with a `DEVIATION:` step in the driver source.
+Each is a row 18 item (X4 picks the side) or, where it stops the /dev-overnight cycle, a row 19 item, whether or not the
+lists below name it. Re-verify it on your base and remove it with the replay that met it; the same commit drops its
+`DEVIATION:` step, so that replay follows the command text literally and meets no block. A listed block your base no
+longer shows needs only its replay, and its DEVIATION goes too; so does each deviation P1b lists apart as firing only on
+its base's text: one of its rows or experiments removed that block, so it goes with no fix. No driver keeps a DEVIATION
+at your merge, and no check exception, skip or expected block takes its place (acceptance 3).
 
 **Row 18, the literal-prose conflicts the pilot met** (re-verify each on your base; P1b or P8 may have fixed some):
 - commands/dev.md :757-759 tells the orchestrator not to dispatch graphify when its sentinel is absent, but
@@ -794,9 +803,9 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
 3. **Requirement (1).**
    `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/replay/test_pipelines.py` -> passed; the
    scenario table with 0 blocks, 0 errors and every terminal reached in both modes. On your base before your changes:
-   the refusals rows 18 and 19 fix, each with its hook text, those of P1b's "Hand-off to P1c" your base still shows
-   among them. On your branch head: `git grep -n 'DEVIATION:'` prints nothing (no driver passes a block), and P1b's
-   D24 check passes with no exception (acceptance 2).
+   the refusals rows 18 and 19 fix, each with its hook text, those of P1b's "Hand-off to P1c" (both its lists) your base
+   still shows among them. On your branch head: `git grep -n 'DEVIATION:'` prints nothing (no driver passes a block or
+   keeps a deviation for one your base no longer shows), and P1b's D24 check passes with no exception (acceptance 2).
 4. **Requirement (2).** The same for tests/replay/test_faults.py, and the fault table: for every block and every gap an
    F8 fault routes, artifact named, check named, receiving actor = expected producer, the first compliant repair round
    passes (F2g: after its forged round), 0 human events, except the one /restart the human types in F5, F5f and F6
