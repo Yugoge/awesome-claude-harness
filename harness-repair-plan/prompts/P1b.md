@@ -977,18 +977,28 @@ copy, as P1 "Sandbox and arming" shows.
     `--env` sets it): `LANEB_SESSION_RESOURCE_TRUST_KEY`, 64 lowercase hex digits not all zero, and
     `LANEB_SESSION_RESOURCE_TRUST_ROOT`, an absolute directory outside the project made with mode 0700, as
     hooks/tests/test_laneb_stop_coordinator.py:38-45 does. Bind a resource session to an overnight session with
-    `scripts/session-resources.py provision` and give that session its overnight state, as the same file's time-lock
-    test does (:244-269, the `dev-overnight` binding of :48-65), the binding's generation the one the receipt carries
-    (the cycle plus one, session_resources.py:1478, :1488). Replay the session's Stop through the registered hooks with
-    end_time in the future, then with it past and the closeout fields present. Expected on your branch: in the future,
-    the time-lock's block, as in the base kit, with no terminal.json and the scratch intact; past, the coordinator exits
-    0 with `finalizer_called` true and status `pass`, the scratch is gone, terminal.json was written once, by row 15's
-    one call, and read by finalize, and no phase but the time-lock received a key. The base kit's same replay past
-    end_time blocks (at d625284 `resource_finalizer_contract_error`, exit 2, with no terminal.json: no agent action
-    writes it, and /stop's helper writes only the state and the todo file, scripts/break-overnight-lock.py:127-129):
-    list it with acceptance 14's base dead ends under "Hand-off to P1c". The check's traced replay (row 19) includes
-    this replay, so the receipt's writer and readers come from its trace (E1), not from the static half's call at
-    stop-overnight-timelock.py:224.
+    `python3 ~/.claude/scripts/session-resources.py --project-dir /root/toyproj provision --binding-json '<binding>'`
+    (the kit's toyproj, also the Stop payload's `cwd`; both keys in this call's environment too) and give that session
+    its overnight state, as that test file's time-lock test does
+    (`test_timelock_uses_exact_state_and_publishes_without_finalizing`, :244-269, :154-179 on master 2acc29b; the
+    `dev-overnight` binding of :48-65), the binding's generation the one the receipt carries (the cycle plus one,
+    session_resources.py:1478, :1488). Replay the session's Stop through the registered hooks with end_time in the
+    future, then twice with it past and the closeout fields present. Expected on your branch: in the future, the
+    time-lock's block, as in the base kit, with no terminal.json and the scratch intact; at the first past Stop, the
+    coordinator exits 0 with `finalizer_called` true and status `pass`, the scratch is gone, terminal.json was written
+    once, by row 15's one call, and read by finalize, and no phase but the time-lock received a key (no other phase's
+    execve lists either key in its environment in a `strace -f -v -s 64` trace of this replay, strace installed as in
+    E2; `-v` prints an execve's environment, not only its count of variables); at the second, the coordinator exits 0
+    again, terminal.json is not written again, and finalize reads finalized.json (session_resources.py:2102-2108),
+    which the first wrote (:2265), and returns `idempotent` true. The base kit's same replay blocks at both past Stops
+    (at d625284 `resource_finalizer_contract_error`, exit 2, with no terminal.json: no agent action writes it, and
+    /stop's helper writes only the state and the todo file, scripts/break-overnight-lock.py:127-129): list it with
+    acceptance 14's base dead ends under "Hand-off to P1c". The check's traced replay (row 19) includes this replay's
+    provision call and Stops (not the trust root, state and summary file the replay writes itself: fixtures, not harness
+    writes), so the receipt's writer and readers come from its trace (E1), not from the static half's call at
+    stop-overnight-timelock.py:224, and so does finalized.json's reader, the second past Stop's finalize, a read in a
+    later run as with row 13's delivery marker: E1 adds no static reader (provision's, :1109) for a path a replay
+    exercises.
 
 ## Rules added / retired (expected)
 
