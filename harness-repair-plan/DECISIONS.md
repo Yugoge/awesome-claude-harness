@@ -132,10 +132,10 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
 - **D8 The orchestrator never writes a producer's artifact.** Only the producer subagent writes its report.
   Which producer owns an artifact is read from the dispatch record that declared it, never from a table (D21).
   [INFERRED mechanism; prove before use by P1b's E3 replay (P1b acceptance 7, the declaring-dispatch reader; P3's
-  acceptance 8 reruns it over P3's gaps) and, for the deny, by P1b's E3 replay of the derived write permission and the
-  P5-a arm-* sandbox replay that verifies it for every caller (P1b ships it for every caller; P5 row 1 adds only a
-  caller P1b's PR left out) (TC-20 revised: 0 compliant writes denied, 0 V7a writes
-  allowed).]
+  acceptance 8 reruns it over P3's gaps) and, for the deny, by P1b's E3 replay of the derived write permission, after
+  which P1b ships the deny enforcing for every caller; a caller P1b's PR leaves to P5 row 1 is proved before its deny
+  is enforced by the P5-a arm-* sandbox replay, which re-runs the rest on P5's base (TC-20 revised: 0 compliant writes
+  denied, 0 V7a writes allowed).]
 
 ## Pipelines
 
