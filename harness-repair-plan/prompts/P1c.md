@@ -28,12 +28,13 @@ sessions keep running with the hook list they loaded (D15), so every hook change
 **Before you start.**
 - `git fetch origin master`, then `git merge-base --is-ancestor d625284db59399568c50424ea3162175d982ae04 origin/master`
   must succeed.
-- `git log --merges --format='%H %s%n%b' d625284..origin/master` must show the merges of the pull requests titled
-  `P1b: …`, `P8: …` and `P7b: …`. git log prints no title, so read each merge's pull request number in its subject
-  (on 2acc29b: `Merge pull request #7: P7b, a live home lands P7 by itself` and
-  `Merge pull request #6: P8, private tree, one privacy engine, green hermetic CI`), then
-  `gh api 'repos/{owner}/{repo}/pulls/<number>' --jq '.title, .merged, .merge_commit_sha'` must print that title,
-  `true` and the same merge hash (REST: in a Claude Code session `gh pr view` answers HTTP 403, GraphQL being refused).
+- `git log --merges --first-parent --format='%h %s%n%b' d625284..origin/master` must list the merges of the pull
+  requests titled `P1b: …`, `P8: …` and `P7b: …`. git log prints the merge commit's message, not the pull request's
+  title. P8's and P7b's subjects are `Merge pull request #6: P8, private tree, one privacy engine, green hermetic CI`
+  (2acc29b) and `Merge pull request #7: P7b, a live home lands P7 by itself` (301d696). P1b's merge is one more, in
+  either form master's merges take: the subject `Merge pull request #<n>: P1b, …`, or the subject
+  `Merge pull request #<n> from <owner>/<branch>` with the body's first line `P1b: …` (the pull request's title; so
+  d625284 records P1's merge). 2acc29b has no such merge, so this check fails until P1b is merged.
   P8's product: `git show origin/master:conftest.py | grep -c CLAUDE_STATE_DIR` prints at least 1 (its hermetic root).
 - If a check fails, stop and tell the reviewer in your session output (do not ask the owner) that P1c starts only after
   P1b, P8 and P7b are merged. Do not start from an older base.
@@ -49,7 +50,8 @@ a second one. If a name or form differs from this description, use what is merge
   set), its D24 table format, its experiment that chose runtime tracing or static derivation (X1 below), its "Out of
   scope, found" items that name a process defect, and its "Hand-off to P1c" list: each base block its compliant drivers
   still meet, with the hook text and the driver's `DEVIATION:` step that passes it. Rows 18 and 19 remove each block,
-  and the commit that removes it drops its DEVIATION (X4).
+  and the commit that removes it drops its DEVIATION (X4). The same list names the dead ends P1b met on its base (its
+  acceptance 14): each one your base still shows is fixed at its producer with the replay that meets it (Goal 2).
 - P1: hooks/lib/obligation.py (parse_obligation, resolve_own_obligation, find_unresolved_dispatch_obligations,
   canonical_task_id, registry_dir_for); hooks/lib/stop_contract.py and hooks/lib/command_span.py (is_human_prompt,
   active_command, active_span); the producer-question artifact; the Stop coordinator's relay; P1's PR section
@@ -166,9 +168,9 @@ extracted planning documents.
   - **CC8** (teachings:108, <=2026-09-10, batch 6): "永远不允许force，永远一致的规则就是agent哪里犯错了自己就补哪里" ("never
     force; the one rule is that an agent fixes its own mistake where it made it"). Requirement (2)'s "back to its own
     producer" is this rule.
-  - **DT2** (O17/O18; plan:prompts/P3.md:144-146): "QA判定为 fail的话dev就永远不能complete report，这算什么诚实？这只是过程而已。
-    dev走完只会有一个结果：彻底开发完成，不存在任何gap" ("a QA fail is only a step in the process; dev ends with one result:
-    fully developed, no gap").
+  - **DT2** (O17/O18; plan:prompts/P3.md:144-146):
+    "QA判定为 fail的话dev就永远不能complete report，这算什么诚实？这只是过程而已。dev走完只会有一个结果：彻底开发完成，不存在任何gap"
+    ("a QA fail is only a step in the process; dev ends with one result: fully developed, no gap").
   - **DT3** (O17; plan:prompts/P9.md:161, plan:COVERAGE.md:26): "不要给我说失败" ("don't talk to me about failure").
   - **DT4** (teachings:103, batch 2): "诚实终态永远不允许" ("an honest terminal state is never allowed"). It conflicts with
     CLAUDE.md:98 at d625284 (Hook Discipline #5, "Ordinary /dev recovery has an honest terminal branch"). P9 rewrites #5
@@ -187,15 +189,16 @@ extracted planning documents.
   retains a route to completion". Requirement (3) is C5's last clause made testable.
 - **D18, D19** No owner question, no owner machine step (above).
 - **D20** /dev-overnight is unattended: it never asks, never parks, never asks after the window. A decision is made by
-  experiment when one can be run, otherwise by the question's preset default, and recorded in the summary's
-  "Decisions made without the owner". For you: no fix may wait for the owner inside /dev-overnight, and F6's overnight
-  case must resume with zero human action if the CLI allows it at all (X8). The AskUserQuestion deny and the summary
-  section are P2's.
+  experiment when one can be run, otherwise by the question's preset default (DECISIONS.md marks that rule INFERRED, no
+  owner words), and recorded in the summary's "Decisions made without the owner". For you: no fix may wait for the
+  owner inside /dev-overnight, and F6's overnight case must resume with zero human action if the CLI allows it at all
+  (X8). The AskUserQuestion deny and the summary section are P2's.
 - **D21** No filename-to-role table, in code, prose or test data, and no long manual for agents. A gap reports facts
   only (file, failing check, lane). Who fixes is read from the obligation of the dispatch record that declared the
   artifact (`role` and `artifacts[].path`; obligation.py resolve_own_obligation and find_unresolved_dispatch_obligations;
-  for an artifact no dispatch declared, the command's canonical todo step in scripts/todo/<command>.py). The suite
-  derives every expected producer this way.
+  for an artifact no dispatch declared, the command's canonical todo step in scripts/todo/<command>.py; DECISIONS.md
+  marks that mechanism INFERRED, and P1b's E3 reader implements it). The suite derives every expected producer
+  this way.
 - **D22** /redev is /dev that saves context: a fresh task id every time, gated exactly as /dev, not a continuation. The
   suite replays it as such and asserts the fresh id.
 - **D23** Outside overnight, asking with AskUserQuestion inside the turn is the pause; the question is specific;
@@ -241,9 +244,10 @@ runhook.py) and the pilot design: hook commands run exactly as settings.json reg
 Read/Write/Edit and every CLI-side transcript append is logged as a synthetic event with its actor; an optional strace
 layer (`strace -f --seccomp-bpf` over openat, open, creat, rename/renameat/renameat2, unlink/unlinkat, mkdir/mkdirat,
 rmdir, link, symlink and truncate, the stat/access family recorded as probes, execve/clone/chdir to credit each child to
-the script that started it). Rule: no verdict of (1)-(4) depends on strace. The strace layer feeds only the D24 table
-and the hermetic write audit (X2), so the suite runs where strace is absent. Record each piece you added to P1b's runner
-and each scenario you added to its drivers.
+the script that started it). Rule: no verdict of (1)-(4) depends on strace. The strace layer feeds only the D24 table,
+the hermetic write audit (X2) and the fault-coverage step's path set where the runner's own records do not show a file
+("Merge rule from P1c on"; X10's traced run), so the suite runs where strace is absent. Record each piece you added to
+P1b's runner and each scenario you added to its drivers.
 
 **X2. Hermetic fixture outside the namespace.** The kit runs hooks inside ns.sh with HOME=/root. A CI runner may not
 offer unprivileged mount namespaces, and the requirement is HOME, CLAUDE_CONFIG_DIR and CLAUDE_STATE_DIR in tmp_path.
@@ -372,8 +376,10 @@ leaves `git status` showing the commit as reverted; otherwise (B), held to the s
 with /proc and each stale case still waiting after 40 s (the lock in place, its interval line printed, no path reported
 synced), then completing once the test removes the lock; no case may then leave `git status` showing the commit as
 reverted. F4s, like the rest of the replay, runs with /proc. No option asks the owner or the orchestrator, inside or
-outside /dev-overnight (D3, D25 (2)). Check in the replay that a /dev-overnight session works in its worktree's own
-index, which a lock on the main index does not touch. The bash-safety refusal of `rm` stays.
+outside /dev-overnight (D3, D25 (2)). Row 14's unit test (acceptance 10) also runs the sync in a linked worktree, as
+/dev-overnight's `--worktree` launch makes, while a live process holds the main repository's index.lock: the sync
+updates the worktree's own index and returns with that lock still held, no wait line printed and nothing removed. The
+bash-safety refusal of `rm` stays.
 
 **X8. Autonomous resume after a usage limit inside /dev-overnight (F6o; D20, T0, SG6).** Today only the human's /restart
 resumes (human-only: `disable-model-invocation: true` and the `Skill(restart:*)` deny), so an unattended session waits
@@ -404,8 +410,8 @@ wake's side and run again, so no branch of this rule ships without the wake or w
 the session as it is today. F6o's driver models the firing on the captured record shape, listed with the other modeled
 CLI behaviour ("Out of scope"). While those facts stay UNVERIFIED, the PR records them as UNVERIFIED for P5; if the
 documentation or a capture shows that a scheduled prompt cannot fire there, the PR quotes it under "Decided by
-experiment" (X8) as a CLI limit for P5, never as D20 met. No branch of this rule waits for the owner or asks him (D20).
-Never parse an API-error record (D4c).
+experiment" (X8) as a CLI limit for P5, never as D20 met. No branch of this rule asks the owner or adds a wait for him
+(D20); only a cut the CLI never wakes still waits for his /restart, as today. Never parse an API-error record (D4c).
 
 **X9. N1 on a landed home.** The record is P7b's merged PR #7: commits 8ab874b and 98d153a, scripts/install/land's
 "Review N1" block, the tests in tests/test_landing.py whose docstrings begin "Review N1"
@@ -436,7 +442,9 @@ with saved-state starts. UNVERIFIED on a CI runner. Experiments:
 - (a) run the hooks of one event in parallel, as the CLI does, against sequential: if the verdict tables of the 16
   compliant scenarios are identical, run them in parallel;
 - (b) saved-state starts: if F1, F2, F3b and F7 give the same verdicts as full replays, use them for every fault;
-- (c) measure every scenario on the CI runner (ubuntu-latest; record `nproc`).
+- (c) measure every scenario on the CI runner (ubuntu-latest; record `nproc`) in your pull request's runs: a push to
+  your branch alone starts no baseline run (baseline.yml's push trigger names master and main only), so open it early
+  as a draft; it is still your one pull request.
 Rule: if the whole suite in both modes, untraced, sharded over at most 20 matrix jobs, finishes within 20 minutes wall
 including setup, every pull_request push runs all of it. Otherwise split: every push runs (1) and (4) in both modes, (2)
 in the PR's own settings mode, and (3); the full set ((2) in the armed copy too, and the traced run that feeds the D24
@@ -454,7 +462,8 @@ before you edit it. New code runs on Python 3.10, the CI floor.
 
 **Delivered by P1b.** P1b merged before you, and its rows target several sites below: row 7 (its row 3), row 10's
 obligation-bearing case (its row 3), row 12's fan-out optional-parent read (its row 7), row 13's schema source and the
-contract's v1 names (its rows 6 and 13, E13), row 19's launcher seed (its E13), and in row 18 the do.md template (its
+contract's v1 names (its rows 6 and 13, E13), row 19's launcher seed and cycle-id disagreement (its E13: no seed, and
+every reader of the cycle number calls P2's `cycle_index(state)`), and in row 18 the do.md template (its
 E8), close.md :337 and :507 (its rows 6 and 8), commit.md :334 (its row 7), merge.md:165 (its row 12, E11), push.md
 Step 1's token scan (its row 11), the resolver calls at dev.md:1322 and dev-command.md:889 (its row 7 respells them
 to the harness's copy) and, for /dev-command, the spec auto-detect (its E9 and E14) and the Step 16 completion
@@ -471,7 +480,7 @@ change code or prose only for what P1b's PR left. What P1b's PR did is neither y
 | 3 | tests/replay/test_faults.py (new) | — | Requirement (2): the 21 faults of "The suite", both settings modes. |
 | 4 | tests/replay/test_no_dead_end.py (new) | — | Requirement (3) per X6: the site enumerator, the per-site replays and classes, the AskUserQuestion-answer and forged-ESCALATION_ACK replays. |
 | 5 | tests/replay/test_regressions.py (new) | — | Requirement (4): R-P1, R-E1, R-N1 and R-V1 of "The suite", each with its "before" reproduction recorded in the PR. |
-| 6 | .github/workflows/baseline.yml (P8's) or one new workflow it calls; tests/TESTING.md | the jobs; one short section | The suite as CI jobs, triggered and sharded per X10, reachable from release.yml's workflow_call so a tag cannot publish around it; its full set must be green on the PR head before the reviewer merges (X10; the PR changes no repository setting, and baseline.yml's comment (:181-182 at d625284, :203-204 on master 2acc29b) that calls the `baseline` job "already-required" so it "gates merges" loses both claims). The `baseline` job's own pytest step (baseline.yml:107, hooks/tests and tests on python 3.10-3.12) leaves tests/replay/ to the suite's jobs, which run all of it (not a skip). The fault-coverage step ("Merge rule from P1c on"). The network guard of X2 in every job. TESTING.md gets one short section: how to run the suite locally and the merge rule, nothing more (D21: no manual). |
+| 6 | .github/workflows/baseline.yml (P8's) or one new workflow it calls; tests/TESTING.md | the jobs; one short section | The suite as CI jobs, triggered and sharded per X10, reachable from release.yml's workflow_call so a tag cannot publish around it; its full set must be green on the PR head before the reviewer merges (X10; the PR changes no repository setting, and baseline.yml's comment (:181-182 at d625284, :203-204 on master 2acc29b) that calls the `baseline` job "already-required" so it "gates merges" loses both claims). The `baseline` job's own pytest step (baseline.yml:107 at d625284, :112 on master 2acc29b; hooks/tests and tests on python 3.10-3.12) leaves tests/replay/ to the suite's jobs, which run all of it (not a skip). The fault-coverage step ("Merge rule from P1c on"), its code under tests/replay/ with the rest of the suite: a CI-only script under scripts/ lies on no replay's path, so the step would fail on your own diff (acceptance 8). The network guard of X2 in every job. TESTING.md gets one short section: how to run the suite locally and the merge rule, nothing more (D21: no manual). |
 | 7 | hooks/subagentstop-artifact-contract-enforce.py (G2) | `ACK_PREFIX` :304 and the ack helpers :319-329; `_load_progress_helper` :351; `_mint_record` :614 (escalations/ :631); `_latest_unadmitted` :637 (escalation-admissions :639, written at :797-798); `_write_side_records` :659 (deferred-checks :691); `_clear_progress` :704; `_gate_decide` :747 (the no-progress hand-off :778-829) | F2g; corrections 2.27 and 2.30; C5; D24. P1b's row 3 delivers this: verify it on your base, add F2g's replay, and change code only for what P1b's PR left. A failing obligation stop is a plain exit 2 that names each failing artifact and check to the stopping producer, in every round. Delete what your base still has of the no-progress hand-off, the `ESCALATION_ACK` admission and its four record stores (escalations/, escalation-admissions/, progress/, deferred-checks/; ledger L25: written, read only by this hook). Before deleting a store, show by grep and the suite's trace that nothing else reads it; a store another reader uses stays and goes into the D24 table. Records left on live homes are ignored (acceptance 11). `GATE_FAULT` (a crashed gate decision, :1158-1163) never admits the stop, and X6 classes its site like any other: G where the stopping producer's repair clears it, U (deleted under D17) where nothing on your base reaches it. Its tests change with it (row 21). |
 | 8 | same | the legacy correlation path :1218-1230 (`_find_correlated_reports`, `_dispatch_task_id`, `_own_reports`) | F7b. When the dispatch prompt carries no obligation block, judge only the reports the stopping agent wrote itself, read from its own transcript's Write and Edit tool uses (agent_transcript_path), never a sibling's or an earlier attempt's. A report it did not write is not its to fix (C5, CC8); it stays for its own producer's stop. |
 | 9 | settings.json | env | X3, only if your base's settings.json does not already set it (P1b's E4 sets it): `"CLAUDE_OBLIGATION_STOPGATE": "block"`, in the last commit together with the fault replays whose return depends on it (Rollback, step 7). Nothing else in settings.json. |
@@ -543,11 +552,13 @@ skip or expected block takes its place (acceptance 3).
   (build-pipelines-from-triage.py, graphify-query and graphify-enrich, aggregate- and apply-permissions,
   scripts/commit.sh).
 - `OVERNIGHT WRITE-BOUNDARY FAIL-CLOSED` (pretool-overnight-hook-guard.py:2265) where bubblewrap is absent: P2's bwrap
-  decision. CI may install bubblewrap in the job's setup step (network there is allowed; the tests stay network-free);
-  say what you did.
+  decision. CI may install bubblewrap in the job's setup step (network there is allowed; the tests stay network-free).
+  Your container runs the suite too (acceptance 3, 4 and 17): install bubblewrap there if it allows that, otherwise
+  give the replay a stand-in, as P2's prompt allows ("the way P8 does for its bwrap argv tests"); say which, for both.
 - E1 (row 13); the e2e QA stop under the overnight session id (row 10).
 - stop-overnight-timelock.py's `CLOSEOUT GATE` (:125) and the cycle-id disagreement (the file check says cycle 0, the
-  contract and closeout say 1): P2 row 12's one cycle index.
+  contract and closeout say 1): P2 row 12's one cycle index, which P1b's E13 delivers early (every reader of the cycle
+  number calls `cycle_index(state)`): verify it on your base and replay it.
 - Launch prerequisites the fixture meets as a real home does: a clone (origin/HEAD set) and the default launch mode,
   never in place on a protected branch (the launcher refuses that by design).
 The compliant overnight scenario carries no producer question; P2 adds the D20 decide-and-record replay as its fault
@@ -601,9 +612,10 @@ events, hook runs, blocks, errors, terminal.
 sibling wrote its own); F2 (dev.status "done", files_modified absent); F2j (truncated JSON); F2g (the dev writes the same
 invalid report again and ends with a forged `ESCALATION_ACK` line, then repairs); F3a (E1 for dev, hook level and inside
 the overnight scenario); F3q (E1's QA half, not run in the pilot); F3b (a stale v1 qa-report planted beside the lane
-reports); F4 (index.lock held through a /dev cycle's checkpoints and Stop); F4c (index.lock held by a live process during
-/commit's commit and sync, run with a commit that modifies a path and with one that only deletes one); F4s (a stale
-index.lock at /commit); F5 (a single-lane dev cut after its Edit, the human's /restart); F5f (both lanes cut; not run
+reports); F4 (index.lock held through a /dev cycle's checkpoints and Stop); F4c (index.lock held by a live process from
+before /commit's commit until 20 s after its sync starts, when that process removes it, as X7's live holder does; run
+with a commit that modifies a path and with one that only deletes one); F4s (a stale index.lock at /commit); F5 (a
+single-lane dev cut after its Edit, the human's /restart); F5f (both lanes cut; not run
 in the pilot); F6 (a usage limit mid-subagent in an interactive session, the human's /restart); F6o (a usage limit
 inside /dev-overnight, no human: X8); F7 (a lane dispatched from the pre-P1 template, its obligation unparseable, its
 report needs_review, the sibling compliant); F7b (the same with no obligation block). The F8 faults are CC4's case, an
@@ -678,12 +690,16 @@ pass, human events.
   path reads by name, such as an env variable). It fails when a file the PR adds or modifies under hooks/, scripts/ or
   schemas/, or a settings.json key it adds or modifies (compared key by key, not as a file), lies on no such replay's
   path, and prints them. A changed key that registers no hook and that no file under hooks/ or scripts/ reads by name
-  is printed as CLI-only and does not fail the step. A commands/ or agents/ file the PR adds, and one it modifies that
-  opens with YAML frontmatter on the base or on the head (every command and agent definition does), must be read by a
-  replay of (1), (2) or (4): a driver extracts a template from it or a scenario injects its body as a slash command's
-  isMeta body (row 1); otherwise the step fails and prints it, and the PR adds the scenario that reads it. A modified
-  file there with no frontmatter on either side (doc-sync's INDEX.md and README.md) defines no command or agent, and
-  the step prints it as such. The step asks for and reads no PR-body reason. Deletions are exempt.
+  is printed as CLI-only and does not fail the step. A commands/ or agents/ file the PR adds or modifies that opens with
+  YAML frontmatter on the base or on the head (a command or agent definition) and that a replayed pipeline reaches must
+  be read by a replay of (1), (2) or (4): a driver extracts a template from it or a scenario injects its body as a slash
+  command's isMeta body (row 1); otherwise the step fails and prints it, and the PR adds the scenario that reads it. A
+  replayed pipeline reaches each command whose body a replay injects and each agent such a body names by its agents/
+  path, as a dispatch's subagent_type, as an obligation's role or in a code span holding only its name (dev.md:267's
+  specialists), read from those bodies at test time, never from a list, so an agent dispatched only on a branch the
+  drivers skip (test-writer, a specialist) counts. The step prints every other changed file there as a fact: a
+  definition no replayed pipeline reaches, or a file with no frontmatter on either side (doc-sync's INDEX.md and
+  README.md), which defines no command or agent. The step asks for and reads no PR-body reason. Deletions are exempt.
 - A phase that changes a pipeline's shape updates that pipeline's scenarios in the same commit (TC-54) and keeps every
   assertion of (1)-(4).
 
@@ -721,12 +737,12 @@ pass, human events.
   :1254-1260 opens the `-F` argument as raw command text (shell quotes and the `;` of the bulk loop's `if ! …; then`
   attached, or an unexpanded `${MSGFILE}`), gets ENOENT and checks an empty message, so the bulk-commit subject check
   never sees the changelog-analyst's message (P1b's Correction 5 fixes it; list it only if your base still shows it);
-  the /close inspectors' FIRST ACTION reads `dev-registry/dev-<ts>/<inspector>.json`,
-  which nothing writes after a /dev-command cycle, whose registry is `dev-command-<ts>` (trace B; after /dev,
-  prompt-workflow writes them, trace A) (list it only if your base still shows it; P6's FIRST ACTION lines);
-  `dev-command-<ts>/graphify.json`, which the /dev-command graphify dispatch's FIRST ACTION reads, is written only when
-  a graphify binary resolves (prompt-workflow.py:1531-1547, the same rule as /dev), so without one the read finds
-  nothing while Gate 4 still demands the graphify step (row 18, first bullet).
+  the /close inspectors' FIRST ACTION reads `dev-registry/dev-<ts>/<inspector>.json`, which nothing writes after a
+  /dev-command cycle, whose registry is `dev-command-<ts>` (trace B; after /dev, prompt-workflow writes them, trace A)
+  (list it only if your base still shows it; P6's FIRST ACTION lines); `dev-command-<ts>/graphify.json`, which the
+  /dev-command graphify dispatch's FIRST ACTION reads, is written only when a graphify binary resolves
+  (prompt-workflow.py:1531-1547, the same rule as /dev), so without one the read finds nothing while Gate 4 still
+  demands the graphify step (row 18, first bullet).
 - The real CLI's behaviour, which the drivers model (UNVERIFIED in the pilot: tool_result and PostToolUse or
   PostToolUseFailure for interrupted and quota-killed Agent calls, SubagentStop for a quota-killed child, a cap on
   repeated stop blocks, whether the CLI's Bash env carries CLAUDE_PROJECT_DIR). List each as modeled, with its source.
@@ -739,8 +755,18 @@ of that tree through `"$T/ns.sh"` with the same SB; a tree is a scratch clone wi
 worktree); the suite itself through pytest in your checkout. Never against your container's `~/.claude` or HOME.
 
 1. **Base.** The "Before you start" checks, with their output.
-2. **CI baseline.** The steps of .github/workflows/baseline.yml on python 3.12 on your base and on your branch: green on
-   both, P1b's D24 check included (no exception, no allowlist), and the new suite job(s) included on your branch.
+2. **CI baseline.** Green means both of these. (a) CI: the pull_request run on your PR's head is green in every job,
+   on GitHub's runners (a non-root user, full history), P1b's D24 check included (no exception, no allowlist) and the
+   new suite job(s) included. (b) Locally, on your base and on your branch: every `run:` step of
+   .github/workflows/baseline.yml exits 0 on python 3.12 (`python3` from a 3.12 venv in place of setup-python; your
+   container's own python3.12 may refuse pip as externally managed), P1b's D24 check included, and the suite job(s)
+   on your branch. Where your container runs as root, one step is skipped there: "Clean-install smoke" (:83-109 at
+   2acc29b) exits 1 under uid 0 by design (:94-97), and an unprivileged user cannot reach PyPI through your session's
+   proxy, whose certificate only root can read; its verdict is (a)'s. Run (b) with full history: if
+   `git rev-parse --is-shallow-repository` prints `true`, first `git fetch --unshallow origin`, because "Verify headline
+   claims" runs verify-claims.sh's provenance audit in --strict, which fails on a commit source the clone lacks
+   (62957b3, cited by .github/assets/demo-trace.json at 2acc29b; hence the workflow's fetch-depth 0, :45-49). If that
+   fetch fails, that step's verdict is (a)'s too; say so.
 3. **Requirement (1).**
    `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/replay/test_pipelines.py` -> passed; the
    scenario table with 0 blocks, 0 errors and every terminal reached in both modes. On your base before your changes:
@@ -759,7 +785,8 @@ worktree); the suite itself through pytest in your checkout. Never against your 
 5. **Requirement (3).** tests/replay/test_no_dead_end.py -> passed; the site counts per hook and per class; recall 100%
    on the observed blocks; every G site's clearing replay exits 0; no (1) scenario reaches a D site; the H sites
    listed; every U site deleted with its reachability proof; the AskUserQuestion-answer and forged-ESCALATION_ACK
-   replays release nothing.
+   replays release nothing. On your base before your changes: the same test's output, each dead end it finds listed
+   (X6: a class G state no allowed action clears, or a site that fits no class); C3 counts them as "before".
 6. **Requirement (4).** tests/replay/test_regressions.py -> passed; each "before" reproduction pasted (R-P1 on the tree
    before P1's merge and on your base before row 8; R-E1 on the first parent of P1b's merge commit, or on your base
    before row 13 if your base still declares v1; R-N1 on 1d10ae0, and its (ii) and failing steps on your base before
@@ -772,20 +799,23 @@ worktree); the suite itself through pytest in your checkout. Never against your 
 8. **Fault coverage.** The CI step of "Merge rule from P1c on" run on your own diff: every hooks/, scripts/ and schemas/
    file and every settings.json key you changed lies on a fault or regression replay's path (hooks/git-fswatch.sh
    through R-N1, scripts/session-index.py through F4c's sync command; row 9's key, if you set it, through G2 on F1, F1q
-   and F2), and every commands/ or agents/ definition you changed is read by a replay; the output pasted.
+   and F2), and every commands/ or agents/ definition you changed that a replayed pipeline reaches is read by a
+   replay; the output pasted.
 9. **Run time.** X10: every scenario's wall time on the CI runner, the totals, `nproc`, the shard wall time, (a) and (b)'s
    results and the split taken.
 10. **Unit tests for the fixes.** A unit test per changed hook or script behaviour of rows 7, 8, 10, 11, 12, 13, 14, 16,
-    17, 18 and 20 (for example: a failing obligation stop blocks in every round and an `ESCALATION_ACK` line admits
-    nothing; the e2e gate judges the declared path with a stale unsuffixed file present; the aggregate writes no
+    17, 18, 19 and 20 (for example: a failing obligation stop blocks in every round and an `ESCALATION_ACK` line
+    admits nothing; the e2e gate judges the declared path with a stale unsuffixed file present; the aggregate writes no
     canonical on a shard failure; the file check reads the obligation's schema; the sync with a live, a stale and no
     lock; Gate 4 after a recovery resume; the config guard's narrow case and its unchanged refusals) -> passed.
 11. **Live landing** (D15; the owner cannot stop his sessions). As a session started before your merge: your base's
     settings.json with your hook files. A compliant /dev Stop in the toy repository and one in the harness home: every
     Stop hook exits 0. An in-flight /dev cycle dispatched from your base's templates, with escalation records from an
-    earlier no-progress round still on disk: no hook exits 2 on a compliant stop, and the old records are ignored. The
-    same cycle with `CLAUDE_OBLIGATION_STOPGATE=block` (X3): 0 G2 blocks on its compliant stops. Repeat with your
-    branch's settings.json.
+    earlier no-progress round still on disk (P1b's row 3 removed their writer, so make them first: run d625284's G2
+    with `CLAUDE_OBLIGATION_STOPGATE=block` through such a round of that cycle in the toy repository, which writes them
+    under the cycle's `.claude/dev-registry/` directory): no hook exits 2 on a compliant stop, and the old records are
+    ignored. The same cycle with `CLAUDE_OBLIGATION_STOPGATE=block` (X3): 0 G2 blocks on its compliant stops. Repeat
+    with your branch's settings.json.
 12. **D24 table** for every artifact rows 7-20 or X2 touch: the escalation stores (L25), the canonical aggregate (L18),
     the lane reports and the e2e correlation (L17, L22), the cycle contract (L46), the git index the sync updates, the
     recovery journal (row 16), the product command files (row 18), settings.json (row 20, if taken), each state file
@@ -879,9 +909,9 @@ PR what each revert restores. The reviewer reverts; the owner runs nothing.
 - Where the shared text below (from "## Context (read once)" on) differs, this bullet and the next govern. CI: the
   "CI" section dates from a red master; P8, merged before you start, made baseline CI green (the floor the suite runs
   on, above). Its allowance for pre-existing failures and the "Pull request" section's "keep CI no worse than master"
-  therefore mean green: the baseline steps green on your base and on your branch (acceptance 2) and CI green on the PR
-  (acceptance 17). Planning documents: if you cannot fetch or read them, stop and tell the reviewer in your session
-  output, never the owner (D18, D19).
+  therefore mean green: the baseline steps green on your base and on your branch, as acceptance 2 measures them, and
+  CI green on the PR (acceptance 17). Planning documents: if you cannot fetch or read them, stop and tell the reviewer
+  in your session output, never the owner (D18, D19).
 - Commits: subject `P1c: <what changed>`, or `P1c (<item ids>): <what changed>` for a commit that answers review
   items; a body that says why and what you ran; last, exactly the attribution trailer lines your session's own
   attribution instructions give for commits (today `Co-Authored-By` and `Claude-Session`), unchanged, none added or
