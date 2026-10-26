@@ -214,7 +214,10 @@ under the state dir (commands/commit.md:404-407) while the changelog-analyst's c
 (agents/changelog-analyst.md:206). The same read also corrected A70, the commit-event journal: it lives under the
 state dir (hooks/lib/commit_journal.py:109) and is read by the changelog-analyst's push-gate reconciliation through
 the module's query (agents/changelog-analyst.md:1644-1646), not by scripts/step7-spec-update.py, which imports nothing
-from it and only accepts the resulting status (:161-170). The counts in this README include all of these corrections;
+from it and only accepts the resulting status (:161-170). The same read also put A94's `-all` daemon-restart flag
+under CLAUDE_DAEMON_RESTART_GRANT_DIR, else CLAUDE_TMPDIR, TMPDIR or /tmp (hooks/pretool-bash-safety.sh:9, :17), and
+A124's orchestrator.sh outputs under a fixed /tmp (scripts/orchestrator.sh:25-27, :243-244, :287, :352, :381, :429),
+not the state dir; no writer or reader of either changes. The counts in this README include all of these corrections;
 `build_map.py` printed 122 rows, 40 outside the ledger, several producers 35, several deciding consumers 37, written
 never read 29, read never written 18, hand-written table 27, evidence 86 / 33 / 3, G1 dispatch 13 and G12 6.
 
