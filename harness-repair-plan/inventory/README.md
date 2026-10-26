@@ -186,11 +186,11 @@ inspectors read dev-registry/dev-<TASK_ID>/, commands/close.md:553-561, which no
 :66-71; write-commit-grant.py:460-473 reads the commit flag; break-overnight-lock.py reads only A92's token), so the
 push and merge flags are written never read; A91's deciding readers all call hooks/lib/subagent_restart.py and take
 one conclusion. A further verification read corrected A103 the same way: stop-overnight-timelock.py only publishes
-the terminal receipt and ignores the result (:217-235), and the two deciding readers left, pretool-tool-policy.py and
-the Stop coordinator, both decide through hooks/lib/session_resources.py. A103's producers are that library's writes
-inside the project (session_resources.py:1127, :1149, :1168-1170, :1433, :1575, :2265), and its paths add the pointer
-`.claude/session-resources/by-claude-session/<sid>.json` that both deciders read (:1286); the row's earlier cites
-(:297-301, :485-513) write the session-resource trust registry outside the project
+the terminal receipt and ignores the result (:217-235), and the deciding readers left, pretool-tool-policy.py, the
+Stop coordinator and scripts/session-resources.py, all decide through hooks/lib/session_resources.py. A103's producers
+are that library's writes inside the project (session_resources.py:1127, :1149, :1168-1170, :1433, :1575, :2265), and
+its paths add the pointer `.claude/session-resources/by-claude-session/<sid>.json` that every decider reads (:1286,
+:1782); the row's earlier cites (:297-301, :485-513) write the session-resource trust registry outside the project
 (`$LANEB_SESSION_RESOURCE_TRUST_ROOT/<sha256 of the project root>/<sid>.json`, written by provision at :1193 and by
 finalize at :2298-2348), a second harness artifact this map does not list, also left to P1b's regenerated map. A later
 code read took the hand-written-table label off two command lists in hooks/prompt-workflow.py, :1925 (A89: commit,
