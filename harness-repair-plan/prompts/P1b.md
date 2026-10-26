@@ -911,12 +911,20 @@ copy, as P1 "Sandbox and arming" shows.
    and `git grep -nE "[\"']/tmp/?[\"']" -- hooks scripts ':!hooks/tests' ':!scripts/install/tests'` list only the
    state-dir helper's default (hooks/lib/harness_state_dir.py, harness_state_dir.sh) and the import fallbacks that copy
    it, comments and prose that only describe a path, and uses that are not hook state (scratch roots, the installer's
-   cleanup rules, path checks); the PR gives each remaining line's category. Every state file's writer and reader, in
-   code and in command and agent prose, resolve it under `harness_state_dir()`. At d625284 the two print 133 and 23
+   cleanup rules, path checks); the PR gives each remaining line's category. Every hook state file's writer and reader,
+   in code and in command and agent prose, resolve it under `harness_state_dir()`. At d625284 the two print 133 and 23
    lines, among them pretool-git-privilege-guard.py:274, :328 and :2093, pretool-bash-safety.sh:1722,
    scripts/execute-push.py:35, scripts/break-overnight-lock.py:35 (the /stop helper-auth read; its writer
    pretool-wrapper-userintent.py:74 uses the state dir), commands/do.md:57-58, commands/commit.md:666,
-   agents/changelog-analyst.md:1221 and :1247, and agents/push-analyst.md:155.
+   agents/changelog-analyst.md:1221 and :1247, and agents/push-analyst.md:155. Three file families neither prints at
+   d625284 are not hook state and keep their directories; the PR names each with that category: the per-target
+   daemon-restart flags row 14 keeps, which the operator's helper outside the repository writes in the directory
+   PUBLIC-CORE.md:94 documents for it (CLAUDE_DAEMON_RESTART_GRANT_DIR, default $TMPDIR) and pretool-bash-safety.sh
+   reads through the same variable, else CLAUDE_TMPDIR, TMPDIR or /tmp (:9, :17), so moving that reader would part it
+   from its writer; the git keystone grants, whose minter (scripts/mint-git-blessed-token.sh:39, :50) exports their
+   directory with the token to the hook that reads them (hooks/git-keystone/reference-transaction:51), so both sides
+   share it with or without CLAUDE_STATE_DIR; and, if row 18 leaves them, /clean's orchestrator.sh outputs, that
+   script's scratch under a fixed /tmp (scripts/orchestrator.sh:25-27, :243-244, :287, :352, :381, :429).
 10. **Dead artifacts gone.** For each written-never-read artifact your rows delete: no writer left (`git grep` of its
     name over hooks scripts commands agents prints only its removal's test, if any) and the acceptance-4 replays create
     no such file. For each read-never-written path: no reading branch left. Name each in the PR with its reachability
