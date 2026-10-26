@@ -4,7 +4,7 @@ These decisions were made by the repository owner. They override PLAN-v1.md wher
 PLAN-v1.md still gives the file:line scope for each phase. Where it says "honest_blocked", "untrack settings.json",
 "ask for curl/wget/docker", "per-cycle commit" or "/redev <task>", read the decision below instead.
 
-## Owner rulings of 2026-10-23 (latest; they override every decision below, PLAN-v1, PLAN-v2 and every prompt)
+## Owner rulings of 2026-10-23 (they override every decision below except D25, PLAN-v1, PLAN-v2 and every prompt)
 
 Source: the owner's message of 2026-10-23T11:59:26Z answering the reviewer's P2-P11 summary line by line (reviewer
 session transcript, record 1921, answering record 1895). Quoted verbatim; "…" marks elided words; English in brackets.
@@ -65,7 +65,7 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   (prompts/P1b.md, added 2026-10-24) owns this requirement: the full inventory and a CI check that derives writers and
   readers from code or a runtime trace at test time, never from a committed list; later phases keep that check green.
 
-## Owner ruling of 2026-10-24
+## Owner ruling of 2026-10-24 (latest; like D20-D24 it overrides every other decision, PLAN-v1, PLAN-v2 and every prompt)
 
 - **D25 Never fail.** "还有一件我关心的！就是永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！"
   [One more thing I care about! It must never fail! No development run may ever hit an error in the process! And if an
@@ -203,9 +203,14 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
 - Phase numbering follows PLAN-v2.md: P0-P11 (P5 = the unified Stop gate, P6 = producer input and
   identity, P7 = portable product, P8 = private tree and CI, P9 = prose pass, P10 = clean tree,
   P11 = remote refs and history cleanup). Wave 1 = P0 + P7. The later waves are in PLAN-v2.md.
+- Inserted phases: P7b (2026-10-18, zero-touch landing), P1b (2026-10-24, D24 applied to every artifact) and P1c
+  (2026-10-24, D25's replay suite). After wave 2 the order is P1b, then P1c, then P2 + P3 (PLAN-v2.md sections 14
+  and 15).
 - The policy choices listed as OPEN in PLAN-v2.md's decision ledger are no longer asked: they are decided by
   experiment under D18 when their phase reaches them.
 - Every phase PR carries the D24 artifact table, measured, before review.
+- From P1c on, the reviewing session merges a phase PR only when the P1c replay suite (its full set) is green on the
+  PR head and the PR adds the fault replay for each process class it changes (D25; P1c's fault-coverage CI step).
 
 ## Owner delegation (2026-10-18 / 2026-10-19)
 

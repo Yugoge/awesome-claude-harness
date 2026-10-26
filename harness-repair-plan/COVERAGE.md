@@ -1,6 +1,6 @@
 # Coverage cross-check: prompts P7b, P1, P8, P2, P3, P4, P5, P6
 
-Status 2026-10-23: this file yields to DECISIONS.md wherever the two disagree; read DECISIONS.md first, then the current prompts. Rows D3, D4b, D7, D8 and O17/O18, the P3 row of (b) (items 1, 5, 6) and the 'commands/redev.md, continue-cycle.md' row still name withdrawn designs (parking and the after-window question, the continuation include, `/redev <task-id>`, ROLE_BY_ARTIFACT, the question asked when a round changes nothing, the OPERATION_STALLED question); gap 7's D4b wording and /redev are settled by D20 and D22. Inputs: prompts-all/{P7b,P1,P8,P2,P3,P4,P5,P6}.md (each ends with prompts/_common.md byte-for-byte: checked with cmp,
+Status 2026-10-23: this file yields to DECISIONS.md wherever the two disagree; read DECISIONS.md first, then the current prompts. Rows D3, D4b, D7 and D8, the P3 row of (b) (items 1, 5, 6) and the 'commands/redev.md, continue-cycle.md' row still name withdrawn designs (parking and the after-window question, the continuation include, `/redev <task-id>`, ROLE_BY_ARTIFACT, the question asked when a round changes nothing); gap 7's D4b wording and /redev are settled by D20 and D22. Inputs: prompts-all/{P7b,P1,P8,P2,P3,P4,P5,P6}.md (each ends with prompts/_common.md byte-for-byte: checked with cmp,
 all 8 OK); harness-repair-plan/DECISIONS.md; PLAN-v2.md (docs branch 1efc298e: sections 0-13, section 13 with 13
 rows); recall/STATE.md (owner messages O1-O38); the session transcript after STATE.md (owner messages of 2026-10-17
 and 2026-10-18, called O39-O45 here). File:line claims about shared lines were re-read on a `git archive` of master
@@ -44,6 +44,8 @@ Legend: done = merged (P0 PR #2, P0b PR #3, P7 PR #4); later = deferred to P9/P1
 | D15 published, no retirement, stubs | every prompt (live landing, stubs with `# STUB:`) | P10 stub deletion | D15 says "stub for one phase"; PLAN TC-37 keeps stubs until P10 |
 | D16 history at the end | every prompt: no rewrite | P11 | |
 | D17 dead code deleted | P8 (candidate list), P3 and P5 (code their change orphans), P4/P6 ("Now unreferenced") | P10 (rest of I5/I6, unregistered hook files) | |
+| D24 one producer, at least one consumer per artifact (2026-10-23) | P1b (every artifact: map, deletions, declaring-dispatch reader, CI check); every later PR carries the D24 table | P10 file-level D17 only (the artifact-level goal is P1b's CI check) | added 2026-10-24; this table has no D18-D23 rows (read them in DECISIONS.md, as the status line at the top says) |
+| D25 never fail (2026-10-24) | P1c (replay suite, producer-side fixes, merge rule); P2-P11 (acceptance: suite green on the PR head, fault replay per changed process class) | - | P9 rewrites CLAUDE.md Hook Discipline #5 (C12) |
 
 ### Owner statements that ask for behaviour (STATE section 2, plus O44/O45)
 
@@ -52,13 +54,13 @@ Legend: done = merged (P0 PR #2, P0b PR #3, P7 PR #4); later = deferred to P9/P1
 | O2 clean the repo, harness runs "不多不少"; prompt bloat, /clean useless | P0 done (no re-injection); P4 (close/commit shrink); P8 (junk with privacy residue) | P9 (prose pass, -25 KB scoring prose), P10 (clean tree, size ratchet, recoverable removal) |
 | O3 published product; retire nothing; keep live editing | every prompt (D15, live landing) | - |
 | O3/O4 changelog-analyst cleanliness -> root cause is dev's files_created | P6 (A3.a); P4 leaves the analyst's rules | - |
-| O4/O6 three axes; one producer and one consumer per artifact | P3, P5 (quoted); P8 goal 4; P4 row 8 (flag writers lose their reader) | P9 (one producer per fact) |
+| O4/O6 three axes; one producer and one consumer per artifact | P1b (every artifact, CI check); P3, P5 (quoted); P8 goal 4; P4 row 8 (flag writers lose their reader) | P9 (facts that are not runtime artifacts: git option table, includes) |
 | O5/O7 runtime proof; disobedient agents forced | armed replays with V2b-V5 in P1, P2, P3, P5; P6 identity from CLI; principle 8 everywhere | - |
 | O8 /do needs /close before /commit; overnight close+commit+merge | P4 (Q7, Q-D7b: /commit runs close Steps 1-2); P2 (route); P5 (predicates) | - |
 | O9 overnight closes only after the session | P2 | - |
-| O10/O12 producer-side only, consumers trust one conclusion | every prompt; P4 removes consumer checks | - |
+| O10/O12 producer-side only, consumers trust one conclusion | every prompt; P1b removes consumer-side re-checks and second deciding consumers of every artifact; P4 removes what P1b left in /close and /commit | - |
 | O11/O12 generic repo, no hardcoded accounts | done (P7); P8 synthetic fixtures; P7b never prints values | P11 |
-| O17/O18 no "failure" framing; dev ends complete; user may join mid-way | P1, P3 (include step 6), P4 (OPERATION_STALLED question) | P9 |
+| O17/O18 no "failure" framing; dev ends complete; user may join mid-way | P1, P1c (no dead end; every fault returns to its producer), P3 (QA and BA-QA fails loop back to their producer; the disposition has no cap; only a producer's own solid question is asked, D23), P4 (/close and /commit re-dispatch each gap's declaring dispatch; OPERATION_STALLED asks nothing) | P9 (Hook Discipline #5, C12) |
 | O19 QA must-pass removed; dev no-stop gate; /do one turn; overnight `/commit --auto`; close/commit complete dev; no producer writes by orchestrator | P1, P5, P2, P3/P4, P5-a | P11 (255 refs) |
 | O20 eight Stop gates; native rating; scoring section | P5; P4; PLAN section 8 | P9 |
 | O21 settings tracked/sanitized; local support kept; best permissions; history cleaned; one prompt/branch/PR per phase | done (P7); P7b (local support through seeding); _common branch rules | P11 |
@@ -67,7 +69,8 @@ Legend: done = merged (P0 PR #2, P0b PR #3, P7 PR #4); later = deferred to P9/P1
 | O28 prompt names the branch | _common (repair/<phase-id>) | - |
 | O35 delete dead code now | P8, P3, P5 | P10 |
 | O44 no owner step, sessions cannot stop | P7b (whole phase); "No owner step" + live-landing acceptance in P1 (18), P8 (16), P2 (15), P3 (16), P4 (19), P5 (21), P6 (17) | P9 (UD-CM, H-Q10), P10 (doctor on each home), P11 (human-run steps): conflict, see gaps |
-| O45 waves and parallelism | P7b + P1 + P8, P2 + P3, P4, P5, P6 as the prompts state (section d) | P9 -> P10 -> P11 |
+| O45 waves and parallelism | P7b + P1 + P8, then P1b, then P1c (2026-10-24), then P2 + P3, P4, P5, P6 as the prompts state (section d) | P9 -> P10 -> P11 |
+| 2026-10-24 never fail (D25): measured by the CI replay suite (1)-(4); every later phase merges with it green and adds the fault replay for the flows it changes (P1c's merge rule) | P1c; P2-P11 acceptance (this sync) | - |
 
 ## (b) PLAN-v2 rows P1-P6 and section 13 -> exactly one prompt
 
@@ -130,6 +133,7 @@ lines edited by P1 and deleted by P8: both prompts state the rule (P8's deletion
 | C9 | P7b.md:126-132 vs D1 | Default "harness home only" keeps installed legacy push hooks active in the owner's other repositories; P0's REQUEST covered them by a human step that O44 removed; the question text does not tell the owner this | fix 8; owner decides |
 | C10 | P5.md:57-61, P4.md:56-59 vs P2.md:752-756 | P4 and P5 read P2's locator, window_open, timelock_released and fallback rule "from P2's PR", but P2's PR body has no hand-off heading (P1 and P3 and P5 have one) | fix 9 |
 | C11 | DECISIONS D4 vs PLAN S1/P5 | D4 names eight commands and two human exits; PLAN and P5 gate nine (adds /redev) and add two exits (a human-typed harness command, CLAUDE_COMMAND_GATE=off); never confirmed by the owner (STATE 3.1) | owner gap (low); no prompt change |
+| C12 | CLAUDE.md:98 at d625284 (Hook Discipline #5) vs register DT4, D25 | #5 lets ordinary /dev recovery record a lane or cycle as blocked/incomplete and "terminate honestly"; the owner: "诚实终态永远不允许" (teachings:103); P1c requirement (3), no dead end | P9 rewrites #5 under D20 and D23 (P9 D2 bullet, row 16, acceptance 16); Lesson 16 (:43) stays consistent; P1b and P1c do not edit CLAUDE.md |
 
 ### Wave 2 overlaps (P7b, P1, P8), verified at f8c18c2
 
@@ -177,16 +181,20 @@ acceptance tests; if P3 merges first, P2's armed replay includes P3's promoted c
 | P7b | 2a, beside P1/P8, merge first | P0, P0b, P7 (merge-base f8c18c2; settings.machine.example.json) | absent | new phase from O44; PLAN sections 4, 5, 6, 13 not updated (fix 13) |
 | P1 | 2 with P8 | P0, P0b, P7 (+ GIT_AUTO_PUSH "0") | W2, P0+P7 | yes |
 | P8 | 2 with P1 | P0, P7 | W2, P0+P7 | yes |
-| P2 | 3 with P3, merges first | P1, P8 (merge titles, P1 files, stop-completion-gate gone) | W3, P1+P8 | yes |
-| P3 | 3 with P2, merges second | P1, P8 (+ ba-qa schema, canonical_task_id, STUB) | W3 | yes |
+| P1b | 2b alone (2026-10-24) | P1, P8, P7b (merge titles; P7b's land script; P8's deletions; green CI) | section 15 after this sync | yes |
+| P1c | 2c alone (2026-10-24) | P1b, P8, P7b (merge titles; P8's hermetic conftest) | section 15 after this sync | yes |
+| P2 | 3 with P3, merges first | P1, P8, P7b, P1b, P1c (merge titles, P1 files, stop-completion-gate gone, P1c's suite) | W3, P1+P8+P7b+P1b+P1c | yes after this sync |
+| P3 | 3 with P2, merges second | P1, P8, P7b, P1b, P1c (+ ba-qa schema, canonical_task_id, STUB, P1c's suite) | W3 | yes after this sync |
 | P4 | 4 alone | P1, P8, P2, P3 (+ STOPGATE block) | W4, P2+P3 | yes |
 | P5 | 5 alone | P1, P8, P2, P3, P4 | W5, P4 | yes |
 | P6 | 6 alone | P1-P5 (+ do-report without "blocked") | W6, P5 | yes |
-| P9, P10, P11 | not written | P9: P6+P8; P10: P9; P11: every PR merged | W7-W9 | P6 states P9 waits for it |
+| P9, P10, P11 | written 2026-10-19 (COVERAGE-P9-P11.md) | P9: P6+P8; P10: P9; P11: every PR merged; each also lists P1b and P1c after this sync | W7-W9 | P6 states P9 waits for it |
 
-Merge order inside waves matches PLAN (wave 2 either order, P8 preferred; wave 3 P2 first). P7b is a dependency of no
-prompt, yet P5 row 6 edits the hard-ban block holding P7b's :1816 helper call and row 16 builds on the auto-commit
-notice P7b extends (fix 12, recommended). The waves told to the owner on 2026-10-18 equal the prompts' waves.
+Merge order inside waves matches PLAN (wave 2 either order, P8 preferred; wave 3 P2 first). When this table was
+written, P7b was a dependency of no prompt, yet P5 row 6 edits the hard-ban block holding P7b's :1816 helper call and
+row 16 builds on the auto-commit notice P7b extends (fix 12, recommended). Since then P2-P6 and P9-P11 start only after
+P7b is merged (their "Before you start"; the P4-P6 and P9-P11 cells above do not list it), and P1b and P1c need it too
+(rows above, 2026-10-24). The waves told to the owner on 2026-10-18 equal the prompts' waves.
 
 ## Fixes
 
@@ -284,3 +292,38 @@ notice P7b extends (fix 12, recommended). The waves told to the owner on 2026-10
 7. Confirmations never given explicitly: D4b's refined wording (STATE 8.18); D4's extra exits and /redev (C11); the
    reading of "好的" (O45) as consent for the reviewing session to implement and merge P7b itself, while the P7b prompt
    is written for a separate session that never merges its own PR.
+
+## (e) Addendum 2026-10-24: P1b and P1c
+
+Inputs: prompts/P1b.md and prompts/P1c.md (each ends with prompts/_common.md byte for byte), inventory/ (the d625284
+map), audit/2026-10-23/, reviews/P1b-plan-sync.md.
+
+| Owner requirement | Delivered by | Test |
+|---|---|---|
+| D24: one producer, at least one consumer, consumers trust one conclusion | P1b Goals 1-4, scope rows 0-18, E1-E14 | P1b acceptance 3, 6, 10-13 |
+| D24: proved every time, no hand list | P1b Goal 5, row 19 (CI check, trace runner, ten compliant drivers) | P1b acceptance 2, 3 |
+| D25 (1) ten pipelines compliant, 0 blocks, 0 hook errors | P1c Goal 1, row 2, "The suite" (1): 16 scenarios in 2 settings modes | P1c acceptance 3 |
+| D25 (2) faults return to their producer, next round passes, zero human action | P1c rows 3 and 7-17; F1, F1q (missing), F2, F2j, F2g (malformed), F3a, F3q, F3b (old version, E1), F4, F4c, F4s (index.lock), F5, F5f (interrupted), F6, F6o (usage limit, X8), F7, F7b (fan-out lane), each in 2 modes | P1c acceptance 4 (the human /restart of F5, F5f and F6 aside: D22, register RD4) |
+| D25 (3) no dead end apart from /stop | P1c X6, row 4 (block sites enumerated at test time; classes G, D, H, U) | P1c acceptance 5 |
+| D25 (4) a regression replay per fixed defect | P1c row 5: R-P1, R-E1, R-N1 (X9, row 20), R-V1 (X7, row 14) | P1c acceptance 6 |
+| D25 merge rule | P1c "Merge rule from P1c on", row 6 (fault-coverage step); P2-P11 acceptance items (this sync) | P1c acceptance 8; each later PR |
+| Earlier words CC4, CC8, DT2, DT3, DT4, HC2 | P1c "Owner decisions" (quoted with sources); DT4 against CLAUDE.md #5: P9 (C12) | P9 acceptance 16 |
+
+What moved from later phases into P1b and P1c: PLAN-v2 section 15; each later prompt's "P1b and P1c" block names its
+share.
+
+Found while syncing:
+- N1, V1-1 and NV-1 are recorded, with their before and after evidence, in reviews/P7b-PR-record.md (rows N1 :220,
+  V1-1 :242, NV-1 :253; added in 4a9256a, after dac09ec9). P1c's X9 and R-V1 predate that record: they say no record
+  exists and reproduce the defects from descriptions, and X9's "before" (a `UU settings.json` stash pop at f8c18c2,
+  P7b.md facts 2 and 9) differs from the record's N1 before (d625284 after P7's manual init: after a CLI `model`
+  write, /pull exits 1 with "cannot pull with rebase: You have unstaged changes"). The record leaves N1's remaining
+  window (a /pull before the next Stop, :1334-1342) and safe_pull's tee without pipefail (Fact 1, :1300-1304) to the
+  reviewer; no phase owns them yet.
+- docs/reference/paseo-daemon-teachings-20260910.md, the source of CC8, DT4 and HC2, is deleted on P8's branch; P1c reads
+  it with `git show d625284:`.
+- audit/2026-10-23/report-zh.md section 4 item 5 suggests giving the 13 artifacts with no owning phase to P9 or P10; P1b's
+  rows own them now. report-zh.md is a dated audit record and is not edited.
+- P1b and P1c both name the obligation-sourced overnight schema (P1b rows 6 and 13 through E13; P1c row 13) and G2's
+  plain exit 2 (P1b row 3; P1c row 7). P1b lands first; P1c re-verifies on its base and adds only the replay ("A defect
+  P1b or P8 already closed needs only its replay", P1c "Before you start").

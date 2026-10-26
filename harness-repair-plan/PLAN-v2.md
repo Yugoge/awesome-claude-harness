@@ -93,6 +93,7 @@ Each line names its source.
 
 - **Producer-side only (design doc C2).** Every fix lands on the single producer of its artifact: a hook, the launcher, the UserPromptSubmit hook, a producer prompt, the resolver, the renderer or CI. One function computes the disposition for every stage. /close, /commit and the Stop gate consume it and never re-validate, re-derive or add a check. When the disposition is incomplete, they dispatch again, under the same task id, the dispatch that declared each missing or invalid artifact. No table maps file names to roles (D21). /close and /commit only shrink.
 - **One producer per artifact; consumers trust one conclusion (D24).** Each phase states, for every artifact it touches, its producers and its deciding consumers before and after, measured by grep and a sandbox write trace. An artifact without a reader, or without a writer, is deleted.
+- **Never fail (owner, 2026-10-24; D25).** "还有一件我关心的！就是永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！" A compliant run of any of the ten pipelines (/spec /dev /redev /dev-command /dev-overnight /do /close /commit /merge /push) meets no gate block and no hook error. A fault is stopped at an allowed position (the producer's stop, G1 at dispatch, G3 at collection), its block names the artifact and the failing check, it goes back to that artifact's own producer (read from the dispatch record that declared it, D21), and that producer's next round passes with no human action. Apart from the human /stop there is no state in which an agent cannot satisfy a gate. P1c proves this with a CI replay suite on P1b's trace runner; from P1c on every phase merges only with the suite green and adds the fault replay for each process class it changes (section 15).
 - **One terminal (D2).** A dev cycle ends only complete: code confirms every lane's BA-QA verdict and QA status are "pass". QA fail or warning, BA needs_clarification and BA-QA fail are process steps that loop back to their producer. Schemas own the legal values; templates carry no required_values.
 - **No agent-controlled early exit (D3, D4, S1).** A gated command cannot stop until code confirms its todo list and its artifacts. There is no retry bound, stop_hook_active release, counter, text pause line or self-release token. An agent pauses by asking the owner with AskUserQuestion inside the turn (D23); no Stop occurs and no gate is released. A question must be a real, specific decision the agent cannot make from the request, the code or a sensible default.
 - **Waiting happens inside the turn (D23).** A gated command that needs the owner's decision asks with AskUserQuestion and waits for the answer inside the turn. It never loops on blocked Stops on purpose, except inside the overnight window, where the time-lock blocks every Stop by design. There nobody is asked (D20), the PM step plans further work, and /stop is the human control.
@@ -129,14 +130,23 @@ Human-only actions. Each is a REQUEST or decision in its phase, with the exact c
 | P7 | Portable, sanitized product: one tracked settings source, filter, init, optional paseo | 1 | none (P0 merges first; P7 merges master) | M-L | <= 0 excluding scripts/bootstrap and scripts/install/ (report both) |
 | P1 | Correct producer gates, terminal grammar and Stop plumbing (still advisory) | 2 | P0, P7 | M-L | <= -250 |
 | P8 | Private tree, one privacy engine, hermetic green CI | 2 | P0, P7 | L | < 0 |
-| P2 | Run in any repo; overnight starts and ends; unattended overnight (D20); D6 landing route; arm G1-G3 | 3 | P1, P8 | L | <= +210 |
-| P3 | One disposition for every stage; facts-only gaps | 3 | P1, P8 | L | <= -50 |
+| P1b | One producer and at least one consumer per artifact (D24): consumer-side re-checks, second producers, written-never-read and read-never-written artifacts and filename-to-role tables removed; a CI check derives the artifact graph at test time; trace runner and ten compliant pipeline drivers | 2b | P1, P8, P7b | XL | <= -1200 |
+| P1c | Never fail (D25): CI replay suite (ten compliant pipelines, fault injection, no dead end, regression replays) and the producer-side fixes it needs; merge rule for every later phase | 2c | P1b (so P1, P8, P7b) | XL | <= 0 |
+| P2 | Run in any repo; overnight starts and ends; unattended overnight (D20); D6 landing route; arm G1-G3 | 3 | P1, P8, P7b, P1b, P1c | L | <= +210 |
+| P3 | One disposition for every stage; facts-only gaps | 3 | P1, P8, P7b, P1b, P1c | L | <= -50 |
 | P4 | /close and /commit complete the cycle (D7); native rating (D9); overnight loop reset never blocks | 4 | P2, P3 | M-L | <= -150 |
 | P5 | One Stop gate (D4, S1); no agent-writable release input; D8 deny; /do file check; arm | 5 | P4 | L | <= -700 |
 | P6 | Producer input and identity measured; harness syntax predicate | 6 | P5 | M | <= +100 |
 | P9 | One producer per fact; one prose pass; scoring retirement | 7 | P6, P8 | L | <= -900 |
 | P10 | Clean tree, size ratchet, stubs kept tracked (D19) | 8 | P9 | L | <= -40000 |
 | P11 | History rewrite, remote ref deletion, GitHub purge, pre-push guard (last) | 9 | every phase PR | S (reviewer) | 0 |
+
+P7b (wave 2) is described in section 14; P1b and P1c (waves 2b and 2c) in section 15. P2-P11 also require P1b and P1c
+merged. P1b takes over per-artifact work this table's caps assumed for P2, P3, P4, P5, P9 and P10 (prompts/P1b.md,
+"Corrections to PLAN-v2", item 2), and P1c some fixes planned for P2, P3, P4, P5, P9 and P10 (prompts/P1c.md, X5 and
+"Hand-offs for the sync list"). Before each of those phases starts, the reviewer writes into its prompt an adjusted cap:
+the cap above plus the lines P1b and P1c already deleted from that phase's planned rows (from their PRs: P1b's
+"Corrections to PLAN-v2", P1c's "Delivered for later phases"), never above 0 for a phase planned net-negative.
 
 ## 6. Waves
 
@@ -159,8 +169,13 @@ wave, the second PR to merge first merges master into its branch and re-runs its
 - One file is heavy in both, accepted as an exception because the hunks are disjoint: hooks/tests/test_laneb_stop_coordinator.py. P8 deletes the broker tests (:121-210, :368-407, about 130 lines). P1 adds fallback and stderr-relay cases and rewrites the `_phases` helper (:102-119) and test_non_success_phase_changes_zero_resource_bytes (:256-276), whose auto_commit-fail and cleanup-timeout outcomes now allow instead of exit 2. Expect textual conflicts near test_artifact_contract_enforce.py:1269-1332 and around the deleted ranges of test_laneb_stop_coordinator.py.
 - Merge order: either. P8 first gives P1 a green CI baseline.
 
+**Wave 2b: P1b (alone; 2026-10-24).** Must be merged first: P1, P8 (hermetic conftest, green CI, one privacy engine, its D17 deletions) and P7b (the landing; its overlay, marker, log, seeded list and pre-commit hook enter P1b's map). P1b applies D24 to every harness artifact: one producer, at least one consumer and one deciding rule each; checks only at the producer's stop, G1 and G3; no filename-to-role table (D21); a CI check that derives the artifact graph at test time; the trace runner and the ten compliant pipeline drivers it hands to P1c. It edits most hooks, scripts and command files, so no phase shares its wave.
+
+**Wave 2c: P1c (alone; 2026-10-24).** Must be merged first: P1b, P8 and P7b. P1c builds D25's replay suite on P1b's runner (tests/replay/: the ten pipelines in shipped and armed settings; 17 faults; the no-dead-end enumeration of every block site; regression replays of P1's fan-out wedge, E1, N1 and V1-1/NV-1) and fixes at the producer side every dead end and unreturned block the suite finds. It may arm CLAUDE_OBLIGATION_STOPGATE (its X3). From its merge on, every phase PR merges only with the suite green on its head and adds the fault replay for each process class it changes (P1c's fault-coverage CI step).
+
 **Wave 3: P2 + P3.**
 - Must be merged first: P1 (canonical_task_id, registry_dir_for, command_span, stop_contract, the producer-question artifact, the coordinator fallback) and P8 (the pretool-overnight-hook-guard.py fail-open fix that P2 extends with the TC-45 branch; the aggregate-dev-report.py main exit change that P3 rewrites around, :697-788 and :1508-1560).
+- Must also be merged first (2026-10-24): P7b, P1b and P1c (waves 2, 2b, 2c). P1b and P1c deliver parts of both phases' planned rows (section 15); each phase verifies them on its base and does not redo them.
 - P3 can run here only because its overnight loop row moved to P4.
 - Overlap checked: hooks/prompt-workflow.py (P2: PROJECT_DIR :62-97, run_todo_script :330-351, root prints in main :2001; P3: replay window :1788 only, no /redev binding, D22; distinct functions, neither heavy); hooks/posttool-overnight-loop.py (P2 only, after the move); hooks/subagentstop-artifact-contract-enforce.py (P3 only); hooks/lib/obligation.py (P3 only); scripts/dev-lifecycle.py (P2 drops the project-first candidate at :111; P3 calls it, no edit); commands/*.md (P2 heavy on dev.md, dev-command.md, dev-overnight.md, close.md, commit.md and agents; P3 none: redev.md is unchanged and there is no include, D21, D22); settings.json (P2 only); hooks/lib/stop_contract.py and the coordinator's timelock fallback (P2 only, a few lines).
 - Merge order: P2 first (its last commit arms G1-G3). P3 then merges master, runs its armed replay with G1-G3 armed, and ships its new G2/G3 checks (S7 generalisation, freshness, lane echo) warning-first under TC-40. If P3 merges first instead, P2 merges master and its armed replay must include P3's checks.
@@ -175,7 +190,7 @@ wave, the second PR to merge first merges master into its branch and re-runs its
 
 **Wave 8: P10.** Must be merged first: P9 (update-only doc-sync, deduplicated prose). Deletions overlap P9's files (commands/, agents/, docs/reference/, .gitignore), so the two cannot share a wave.
 
-**Wave 9: P11 (last).** Must be merged first: every phase PR, with no phase PR open (open PRs pin pre-rewrite commits). Needs the owner's go-ahead at execution time: the one AskUserQuestion confirmation of section P11.
+**Wave 9: P11 (last).** Must be merged first: every phase PR (P7b, P1b and P1c included; the P1c replay suite green on master), with no phase PR open (open PRs pin pre-rewrite commits). Needs the owner's go-ahead at execution time: the one AskUserQuestion confirmation of section P11.
 
 Mapping to DECISIONS.md's earlier wave list (old numbering): old P6 = P7 (wave 1, unchanged); old P1 = P1; old P2 + P3 = P2 + P3 (wave 3); old P5 (producer input) = P6, now after the unified gate P5; old P7 (private + CI) = P8, moved forward to wave 2; old P8, P9 = P9, P10; history cleanup = P11.
 
@@ -337,7 +352,9 @@ Rollback: revert. The revert restores the settings entry and the gate file.
 
 ## P2 Run in any repo; overnight starts and ends; unattended overnight (D20); D6 landing route; arm G1-G3
 
-Wave 3, with P3. Needs P1 and P8 merged. Merges before P3 (section 6).
+Wave 3, with P3. Needs P1, P8, P7b, P1b and P1c merged. Merges before P3 (section 6).
+
+**After P1b and P1c (2026-10-24).** P1b's artifact map governs every row below that adds or keeps a check on an artifact: the check sits at that artifact's producer stop, at G1 or at G3, and the artifact keeps one producer and one deciding consumer; a row that would add a second producer, a second deciding consumer or a consumer-side re-check is dropped. Delivered before P2 (verified on the base, not redone; where a P1b experiment took the other outcome, its PR rules): the canonical aggregate's one producer (P1b E5) and the aggregate-pending writer's removal; closeout's harness-report.json writer; the /tmp continuation sentinel; the cycle contract's one writer and one path, no launcher seed, no in-place mutation, and the schema of obligation-bearing entries read from the dispatch obligation (P1b E13, P1c rows 13 and 19; TC-35 as corrected); G2's failing stop as a plain exit 2 with no ESCALATION_ACK admission (corrections 2.27; P1b row 3, P1c row 7). If P1c's X3 already set CLAUDE_OBLIGATION_STOPGATE to block, the arming commit adds CLAUDE_OBLIGATION_GATE and _BARRIER only. P1b's E4 list (the faults the deleted consumer-side checks used to stop, with the gate that stops each once armed) is an input of P2's armed replay.
 
 **Goal.**
 - Pipelines find harness scripts in the harness and project files in the project, in any product repo, with CLAUDE_PROJECT_DIR unset. Prompts use the one harness-home channel P7 shipped (TC-44).
@@ -349,7 +366,7 @@ Wave 3, with P3. Needs P1 and P8 merged. Merges before P3 (section 6).
 - The rendered cycle contract declares no schema for an obligation-bearing dispatch (its obligation does, D24) and no retry bound.
 - No per-cycle commit. Landing is /close --auto, /commit --auto, /merge (isolated modes only), /push (D6).
 - The last commit arms G1-G3.
-- Arm CLAUDE_OBLIGATION_STOPGATE only once G2's failing-stop path is a plain exit 2 that names the failing artifacts to their producer (C5): no escalations/, escalation-admissions/, progress/ or deferred-checks/ file and no ESCALATION_ACK admission (D4, design ruling 3). Either P2 takes that G2 hunk (hooks/subagentstop-artifact-contract-enforce.py failing-stop path :747-830, ESCALATION_ACK admission :793-804) before its arming commit, or the STOPGATE switch moves to after P3's change (P2 prompt, Goal 7).
+- Arm CLAUDE_OBLIGATION_STOPGATE only once G2's failing-stop path is a plain exit 2 that names the failing artifacts to their producer (C5): no escalations/, escalation-admissions/, progress/ or deferred-checks/ file and no ESCALATION_ACK admission (D4, design ruling 3). P1b row 3 and P1c row 7 deliver that path before P2 ("After P1b and P1c" above), so P2 verifies it on its base and takes no G2 hunk, and STOPGATE is not moved to after P3.
 
 **Why this order.** These breakages fire with the gates unarmed: the dev.md Step-17 resolver exits 2 in product repos; close.md Step 0 fails; overnight Step 2 deadlocks; UTC+8 has no time-lock. Arming first would turn path failures into G2/G3 blocks. The P5 gate compares the checklist with the harness todo script, so the todo-root fix comes first. The time-lock moves into a library so that P5 imports it.
 
@@ -386,6 +403,7 @@ Wave 3, with P3. Needs P1 and P8 merged. Merges before P3 (section 6).
 - Armed replay with G1-G3 set to block, under T1, in the P1 sandboxes plus arm-overnight, each in a scratch product repo: compliant /dev, /dev-command, /do, /close and /commit complete with 0 false blocks; 1- and 2-pipeline overnight cycles complete and end after end_time; a pipeline that meets two stand-in genuine decisions (one experiment-settled, one not) and one spec-declared user gate has each decided without the owner, all three recorded in "Decisions made without the owner", the user gate first; both families reach a QA pass, and the transcript holds 0 AskUserQuestion tool_use records; a forged ESCALATION_ACK line releases nothing; V2b, V2e, V3, V4 and V5 are still stopped.
 - `grep -c CLAUDE_OBLIGATION_ settings.json` -> 3.
 - `git diff --numstat -- hooks scripts schemas` -> net code lines <= +210.
+- The P1c replay suite stays green on this PR's head, and this PR adds the fault replay for each process class it changes (P1c's fault-coverage step passes): at least the D20 unattended-decision replay, the time-lock, the AskUserQuestion deny, the cycle contract and the armed settings.
 
 **Effort.** L (prose about 1.5 days; overnight producer and lib about 2 days; arming commit S)
 
@@ -400,7 +418,9 @@ Rollback is the reviewer's revert (D19); the prose, overnight and arming commits
 
 ## P3 One disposition function for every stage, reporting facts only
 
-Wave 3, with P2. Needs P1 and P8 merged. Merges after P2 (section 6).
+Wave 3, with P2. Needs P1, P8, P7b, P1b and P1c merged. Merges after P2 (section 6).
+
+**After P1b and P1c (2026-10-24).** P1b's artifact map governs every row below that adds or keeps a check on an artifact (as in P2). Delivered before P3 (verified on the base, not redone: a row below that still builds one of these items, such as the G2 store removal in the progress_measure row or the blocked canonical in the aggregate row, verifies it and changes only what P1b's or P1c's PR left; where a P1b experiment took the other outcome, its PR rules): the declaring-dispatch reader in hooks/lib/obligation.py (P1b E3; the row corrections 2.33 writes is consumed, not built); the G2 escalation stores, their admission and the arbitration path (P1b row 3, P1c row 7; ESCALATION_ACK releases nothing, corrections 2.30); journal-view and G2's deferred-checks write; the completion report leaving the resolver's required chain; consumers importing obligation.TERMINAL_VOCABULARY, the replay window's private set included; BA's write permission on ba-qa-report; the aggregate's blocked canonical and its third status vocabulary (P1c row 11); the resolver's fan-out optional-parent read (P1c row 12). The disposition is the one chain function P1b left (P1b row 7): every consumer calls it and nothing re-derives part of it; the lane roster is checked at G3 (P1b row 6).
 
 **Goal.**
 - One function, resolve-dev-artifact-chain.py --disposition --stage dev|close|commit, computes chain_pass or incomplete. Strict pass is the only success (D2): every lane's BA-QA verdict is "pass" and qa.status is "pass".
@@ -409,7 +429,7 @@ Wave 3, with P2. Needs P1 and P8 merged. Merges after P2 (section 6).
 - No continuation include and no /redev binding (D21, D22).
 - The S7 collection gates are generalised, G2 checks freshness and the lane_set echo, and the replay bug is fixed.
 
-**Why this order.** P4 (/close, /commit, the overnight loop) and P5 (the gate) consume this disposition. P3's declaring-dispatch reader must exist before /close and /commit use it, and consumer cut-over follows producer correctness (M34). Extending the disposition to the close and commit stages here means P5 has nothing to re-derive.
+**Why this order.** P4 (/close, /commit, the overnight loop) and P5 (the gate) consume this disposition. P3's stages must exist before /close and /commit use them (the declaring-dispatch reader they also read is P1b's, E3), and consumer cut-over follows producer correctness (M34). Extending the disposition to the close and commit stages here means P5 has nothing to re-derive.
 
 **Problems.** A2.S7, A2.S8, A2.S9, G-F16, G-F4, K-ONEDISP, K-ESC, K-D2a
 
@@ -439,6 +459,7 @@ Wave 3, with P2. Needs P1 and P8 merged. Merges after P2 (section 6).
 - Armed replay with G1-G3: compliant runs pass. With one qa-report deleted, dispatching again the QA dispatch the reader returns re-dispatches qa with the same task_id, and the disposition becomes chain_pass.
 - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_resolve_dev_artifact_chain.py tests/test_aggregate_dev_report.py hooks/tests/test_artifact_contract_enforce.py` -> 0 failed.
 - `git diff --numstat -- hooks scripts schemas` -> net code lines <= -50.
+- The P1c replay suite stays green on this PR's head, and this PR adds the fault replay for each process class it changes (P1c's fault-coverage step passes): at least one per disposition stage (dev, close, commit), each gap naming the artifact and the failing check and cleared by the next round of its declaring dispatch.
 
 **Effort.** L (about 3 days)
 
@@ -450,6 +471,8 @@ Rollback: revert. The resolver, aggregator, progress_measure, reader and S7 comm
 
 Wave 4. Needs P2 and P3 merged.
 
+**After P1b and P1c (2026-10-24).** P1b's artifact map governs every row below that adds or keeps a check on an artifact (as in P2). Delivered before P4: the class-b/c re-checks of /close and /commit (the aggregator re-runs at /close Step 0 and /commit row 1, /close's schema gate and Step 0 verdict layer, /commit Step 3's accepted-line list, Step 5's second resolver run, the commit-QA cross-check and the status re-parse), both routing tables and their "no code table" claims, the close-force flag readers, /close's QA re-arming of the enforce flags, the overnight loop's terminal lanes (the deletion half of TC-13), the advisory jsonl sinks (P1b E12; the D1.e row), one channel per verdict (P1b E11), and the D24 table for L17, L18, L22, L23, L28, L31, L32, L40, L41, L42 and L53. P1c fixed the close.md and commit.md steps its row 18 lists (the commands a hook refused and the repo-relative script paths). The rows below keep what is left: one disposition call per consumer, dispatching again each gap's declaring dispatch (D7, D21), the waits as in-turn questions (D23), the native rating and the reset's print rule.
+
 **Goal.**
 - close.md calls --disposition --stage dev once, and commit.md calls --stage close once. When the result is incomplete, both dispatch again, under the same task id, the dispatch that declared each gap's artifact (D7, D21), then do their own job.
 - Close-QA findings go to the subagent the attribution journal records as the file's writer, dev when none is recorded [INFERRED; decided by the P4 sandbox replay named in the close.md row].
@@ -457,7 +480,7 @@ Wave 4. Needs P2 and P3 merged.
 - /close asks the rating once per landed task with AskUserQuestion, and a new PostToolUse hook records it. The orchestrator records nothing. /close --auto is typed by the human (D6a), so it asks once per landed parent (H-Q5 default); only headless sessions never ask.
 - The overnight loop reset never blocks; it prints the carried families' gaps only if a replay shows the orchestrator needs them (TC-13, moved here from P3).
 - Legacy checks, enforce-flag writers, advisory sinks and arbitration prose are retired (S10-S12).
-- D24 table for every artifact /close and /commit read or write (L17, L18, L22, L23, L28, L31, L32, L40, L41, L42, L53), before and after, measured.
+- D24 table for the artifacts this phase's rows still change, before and after, measured. P1b delivered the table for L17, L18, L22, L23, L28, L31, L32, L40, L41, L42 and L53; a row below that changes one of them starts from P1b's after.
 
 **Why this order.** It needs P3's stages and the declaring-dispatch reader, and P2's overnight locator for the loop. It must precede P5, whose /close and /commit predicates use the close and commit stages and the rating-asked fact, and whose time-lock moves into an unbounded gate only after the loop livelock is gone.
 
@@ -495,6 +518,7 @@ Wave 4. Needs P2 and P3 merged.
 - Adversarial drivers (adv3-spec-dev-close-commit-push, adv3-do-close-commit-push): every producer dispatch from /close and /commit carries the original task id.
 - CI green with test_close_rating.py collected; `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider` on the listed tests -> 0 failed.
 - `git diff --numstat -- hooks scripts schemas` -> net code lines <= -150.
+- The P1c replay suite stays green on this PR's head, and this PR adds the fault replay for each process class it changes (P1c's fault-coverage step passes): at least /close and /commit completing an incomplete cycle by dispatching again the declaring dispatch, the rating question, and the overnight reset that never blocks.
 
 **Effort.** L (about 3.5 days)
 
@@ -508,6 +532,8 @@ Rollback: revert this phase alone. Unregistering the hook stops recording rating
 ## P5 One Stop gate for every command (D4, S1); no agent-writable release input (D4, D8); arm
 
 Wave 5. Needs P4 merged.
+
+**After P1b and P1c (2026-10-24).** P1b's artifact map governs every row below that adds or keeps a check on an artifact (as in P2); the gate's predicates call the one chain function and read git, and decide nothing a producer-side gate already decided. Delivered before P5: G4's re-validation (stop-obligation-gate.py is already an exit-0 stub; what is left of find_unresolved_dispatch_obligations is what the declaring-dispatch reader needs), the todo-file writers and bookmark mutations (P1b E7; command_span calls() and last_todos() exist if E7 shipped them), the separate do.status deciders and the do-report's one writer (P1b E8), merge.md's validate-and-unlink (P1b E11), and the D8 write permission derived from the session's dispatch records (P1b E3, TC-20 as corrected): P5-a verifies that mechanism on its base instead of rebuilding it (it arms it only where P1b's PR left it unenforced; where E3 took the other outcome, P1b's PR rules), adds to it only the release-input denies, and builds no table. P1b row 3 and P1c row 7 removed the G2 escalation stores, so the conditional escalation-record deny below normally has nothing left to deny and is not added. Gate 4 accepts a recovery resume (P1c row 16); the todo fold keeps that rule. Every block site P5 adds must fit a class of P1c's no-dead-end check (its X6): a gap block is cleared by the actor's next compliant step (G), a deny names the forbidden operation (D), and only the gate's and the launcher's instrument-failure block waits for the human /stop (H, like the time-lock's). A site that fits no class fails that check, so P5 fixes it at its producer before it merges; the /do span's missing-sidecar gap below, which no agent step clears, is checked against these classes.
 
 **Goal.**
 - hooks/stop-command-gate.py, run as the coordinator's completion phase, is the only Stop gate. The registered Stop command is an import-free launcher, hooks/stop-launch.py, that runs the coordinator.
@@ -586,6 +612,7 @@ Wave 5. Needs P4 merged.
 - `grep -c 'stop-completion-gate\|stop-obligation-gate\|stop-do-report-gate\|posttool-todo-sequence\|posttool-todo-count' settings.json` -> 0. The Stop group has exactly 1 entry, hooks/stop-launch.py, with timeout 300. `grep -c CLAUDE_COMMAND_GATE settings.json` -> 0.
 - `git grep -n AWAITING_INPUT -- commands/merge.md commands/push.md commands/do.md hooks` -> 0 (stubs excepted).
 - `git diff --numstat -- hooks scripts schemas` -> net code lines <= -700.
+- The P1c replay suite stays green on this PR's head, and this PR adds the fault replay for each process class it changes (P1c's fault-coverage step passes): at least a gap block per gated command cleared by the next compliant step, the instrument-failure block released by /stop, the D8 deny of a foreign write, and the /do file-list check.
 
 **Effort.** L (about 5 days)
 
@@ -606,6 +633,8 @@ Rollback: start new sessions with CLAUDE_COMMAND_GATE=off (shell env, or the ove
 ## P6 Producer input and identity are measured; harness syntax predicate
 
 Wave 6. Needs P5 merged.
+
+**After P1b and P1c (2026-10-24).** P1b's artifact map governs every row below (as in P2). P1b's E6 chose the one producer of "which files this dev wrote" and of the baseline, and removed the other producer and every rule that compared the two: A3.a builds on E6's outcome. Its written set stays the transcript reader's (TC-46), the record E6 measured both producers against; G2 at dev's stop is the one deciding consumer; A3.a adds no second producer and no second comparison, and if E6 left the dev report without a self-reported file list, its declared-versus-written check shrinks to what E6 left and the PR says so. All agent-index consumers already take agent_resolver's one conclusion (P1b correction 3), so A4.a changes only that conclusion's sources (the role order, the cycle taken from the agent's own obligation, and pretool-cp-checkin's index write, which stops when agent_type is present) and adds no consumer-side decision. The D8 deny is P1b E3's mechanism as P5-a left it.
 
 **Goal.**
 - The dev producer lists exactly the files it wrote, and G2 checks that list against the write set derived from the CLI-written transcript (A3.a, TC-46). The /do half (A3.c) shipped in P5-b.
@@ -635,6 +664,7 @@ Wave 6. Needs P5 merged.
 - The five-sandbox armed replay passes between each warning and promotion commit.
 - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider hooks/tests/test_agent_resolver.py hooks/tests/test_artifact_contract_enforce.py hooks/tests/test_stop_command_gate.py tests/test_bash_write_targets_verb_narrowing.py` -> 0 failed.
 - `git diff --numstat -- hooks scripts schemas` -> net code lines <= +100.
+- The P1c replay suite stays green on this PR's head, and this PR adds the fault replay for each process class it changes (P1c's fault-coverage step passes): at least a dev report that lists a file it did not write or omits one it wrote, a syntax-broken harness hook (F3.a), and a grant claimed by the wrong role, each returned to its own producer.
 
 **Effort.** M (about 2.5 days)
 
@@ -751,8 +781,10 @@ Wave 2, with P1. Needs P0 and P7 merged.
 
 Wave 7. Needs P6 and P8 merged.
 
+**After P1b and P1c (2026-10-24).** Runtime artifacts moved to P1b (D24): the spec_path producer (P1b row 8, E14: the explicit --spec, else the session's last Write or Edit to docs/dev/specs/*.md), doc-sync's creation in product directories (P1b E9, if it deleted creation), one has_do_consent reader (P1b row 9), the roster computed from the stems of agents/*.md (P1b row 18), the orchestrator's context patches and QA-content writes (E10, E14), and the one-writer proofs for L01, L24, L42, L44 and L51. For those rows P9 re-runs its acceptance tests against P1b's result, fixes only what fails, and does the prose pass. Facts that are not runtime artifacts stay P9's: the git option table and normaliser, the shared prompt blocks, and the prose pass itself.
+
 **Goal.**
-- Each fact gets one producer: spec_path, doc-sync output, the consent check, the roster, the git option table, and the shared prompt blocks (includes).
+- Each fact gets one producer. Runtime artifacts (spec_path, doc-sync output, the consent check, the roster) got theirs in P1b and are verified here; the git option table and the shared prompt blocks (includes) get theirs here.
 - Prose in README, ARCHITECTURE, commands, agents and docstrings matches the hooks in one pass: D2's single terminal; D3/D23 (in-turn AskUserQuestion is the pause; a question never releases a gate); D4's gate and its human exits; D5's one-turn consent; D7 (/close and /commit dispatch the cycle's subagents until it completes); D20 (overnight asks nobody); D22 (/redev is /dev).
 - Scoring shrinks to the owner's rating log (D9a), and the score shell tests leave with their scripts (moved here from P8).
 - CLAUDE.md lines named by P9 row 16 are edited in P9's PR (D19); the reviewer merges it.
@@ -778,7 +810,7 @@ Wave 7. Needs P6 and P8 merged.
 | hooks/pretool-orchestrator-prompt-purity.py; commands/dev-overnight.md | prompt-purity :20, :133-147, :163-171, :192-194, :277-284, :287-302; dev-overnight.md Clause C :117 ("<options>" clause), Rule 8 :142 | H-S12: delete the OPTIONS_XML category and its redaction. dev-overnight.md says AskUserQuestion is denied in the /dev-overnight session until the next human-typed prompt [INFERRED scope from D20; decided by the P2 TC-45 deny replay] and drops the false claim that prompt-purity "rejects". |
 | settings.json; policies/public-core-residue-allowlist.v1.json; .gitignore; hooks/doc_sync/regen_readme.py; hooks/doc_sync/tree.py; tests/generated/INDEX.md; scripts/README.md; scripts/INDEX.md; INDEX.md | settings.json:51-52; allowlist :1566-1594; .gitignore:47; regen_readme.py:50-53; tree.py:26-29; generated INDEX :172, :195, :198, :220 | D9a: delete the score allows and the five allowlist entries. Remove the false "tracked in git" comments (H-S10) and the stale index rows. |
 | README.md; ARCHITECTURE.md; hook docstrings (pretool-quality-gate.py, pretool-bulk-commit-detector.py, hooks/lib/allowlist.py, pretool-orchestrator-gate.py, ...) | README :243, :247, :250, :326, :564-598; ARCHITECTURE :118-121, :144-191, :166, :301 | D4.b, D4.e, D3.i: the enforcement rows match the code; document the single Stop gate, its launcher and its human exits (S1), its crash behaviour (/stop releases), one-turn /do consent, /redev = /dev (D22), unattended overnight (D20), the producer-question artifact, and that /do never lands a commit or a push: /close, /commit and /push do (owner: "你不知道do也要close才能commit？"; "永远不允许force和git commit，commit永远走commit command"). |
-| CLAUDE.md (owner-owned; applied only under UD-CM) | :4, :30, :49, :57-62 (:60), :86, :95, :98, :102, :117, :125, Hook Discipline #1-#5 | The edit, made in P9's PR (P9 row 16): :60 "this session" -> "this turn" (D5); Hook Discipline #1/#3: inside a gated command the PAUSE is one in-turn AskUserQuestion naming the rejected operation and the exact command; the human may press Esc and /allow it (S1); #5 rewritten: one terminal (complete), a producer question is relayed in-turn, the cycle stays incomplete and the same role resumes after the answer (D2, D3); :102 the coordinator phase; one line on the unified Stop gate and its human exits (S1). P9 applies it in its PR (D19). |
+| CLAUDE.md (owner-owned; applied only under UD-CM) | :4, :30, :49, :57-62 (:60), :86, :95, :98, :102, :117, :125, Hook Discipline #1-#5 | The edit, made in P9's PR (P9 row 16): :60 "this session" -> "this turn" (D5); Hook Discipline #1/#3: inside a gated command the PAUSE is one in-turn AskUserQuestion naming the rejected operation and the exact command; the human may press Esc and /allow it (S1); #5 rewritten under D20 and D23, because "Ordinary `/dev` recovery has an honest terminal branch" (CLAUDE.md:98 at d625284) conflicts with the owner's "诚实终态永远不允许" (register DT4, teachings:103) and with D25: no honest, blocked or incomplete terminal; one terminal (complete); outside /dev-overnight a needed owner decision is one specific in-turn AskUserQuestion (the pause), which releases no gate, and the same role resumes after the answer; inside /dev-overnight nobody is asked and the decision is made by experiment, else by the question's preset default, and recorded in "Decisions made without the owner"; Lesson 16's reference to #4/#5 (:43) stays consistent (D2, D3, D20, D23, D25); :102 the coordinator phase; one line on the unified Stop gate and its human exits (S1). P9 applies it in its PR (D19). |
 
 **Acceptance tests**
 - Spec hand-off: /spec writes docs/dev/specs/foo.md, then /dev -> "Spec: <abs>/docs/dev/specs/foo.md". No spec write -> "Spec: none".
@@ -791,6 +823,7 @@ Wave 7. Needs P6 and P8 merged.
 - Every non-CONTROL commands/*.md stem still has a Skill(<stem>:*) deny in settings.json.
 - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider` -> 0 failed; CI green.
 - `git diff --numstat -- hooks scripts schemas` -> net code lines <= -900.
+- The P1c replay suite stays green on this PR's head, and this PR adds the fault replay for each process class it changes (P1c's fault-coverage step passes); prose-only changes need none, and every command or agent template a driver extracts keeps its scenarios green.
 
 **Effort.** L (about 4 days)
 
@@ -808,7 +841,7 @@ Wave 8. Needs P9 merged.
 - CI enforces a size budget that only goes down.
 - BA can propose a rule's retirement.
 - The stubs stay tracked exit-0 files; render-settings check reports any rendered settings entry naming a stub; the migration stops carrying stubs (P10 prompt R-e) (D19). The unread dev-report.v1 projection is deleted (TC-35, TC-37).
-- Artifact-level D17 (D24): every artifact the harness writes has a reader and every artifact it reads has a writer, proven by an experiment-9 trace over all ten pipeline commands; ledger DEAD rows first.
+- Artifact-level D24 (every artifact written has a reader, every artifact read has a writer, one producer and one deciding rule each) is P1b's CI check, which stays green; P10 keeps file-level D17 and adds no second artifact inventory.
 
 **Why this order.** The last code phase. Deletions need green CI (P8), update-only doc-sync and deduplicated prose (P9). The stubs stay tracked exit-0 files; render-settings check reports any rendered settings entry naming a stub; the migration stops carrying stubs (P10 prompt R-e) (D19). The size budget is measured after this cleanup.
 
@@ -822,7 +855,7 @@ Wave 8. Needs P9 merged.
 | scripts/todo/{code-review,...}.py, skills/.archive/frontend-design/, hooks/git-hooks/{INDEX.md,README.md} where stale, and the rest of the I3/I4/I8/E1.3/I1 list | whole files | E1.a, D1.a, D15: delete only files with no user-facing entry point and no doc telling a user to run them. Installers are run by users, not registered, so "not registered" never proves a file dead. post-commit-auto-push, install-protection-all.sh and install-auto-sync.sh are kept (D1 opt-in paths, off by default since P0), as are hooks/install.sh and hooks/install-git-hooks.sh. |
 | hooks/stop-completion-gate.py; hooks/stop-overnight-timelock.py; hooks/stop-obligation-gate.py; hooks/stop-do-report-gate.py; hooks/posttool-todo-sequence.py; hooks/posttool-todo-count.py; hooks/tests/test_stop_obligation_gate.py; hooks/tests/test_stop_do_report_gate.py; hooks/tests/test_laneb_stop_overnight_timelock_scoping.py | whole files (stubs since P1 or P5) | Commit 2, TC-37: the stubs stay tracked exit-0 files; render-settings check reports any rendered settings entry naming a stub; the migration stops carrying stubs (P10 prompt R-e) (D19). The release note names them. |
 | schemas/dev-report.v1.json; hooks/lib/contract_runtime.py; schemas/registry.json; scripts/laneb-integration-gate.py | v1 schema; projection :243-260, :355, :692; registry :5; laneb :799 | TC-35: when `git grep -n 'dev-report.v1'` finds no reader outside these files, delete the v1 projection and schema; otherwise keep the shrunk v1. |
-| the I5/I6 list: every item still unreachable after P8 (D17) | whole files, with the tests that exercise only them; KEEP list unchanged (hooks/lib/session_resources.py, scripts/commit.sh, feature-tied hooks, repair-venv per TC-53) | D1.b, D17: each deletion carries its reachability proof (no reference from settings.json hook registrations, commands, agents, skills, or a script one of those runs); anything a live entry point reaches is kept (D15). scripts/lifecycle-baseline-import.sh is already gone (D9a, P9). |
+| the I5/I6 list: every item still unreachable after P8 and not already deleted by P1b or P1c (D17; their PRs list each deletion with its reachability proof) | whole files, with the tests that exercise only them; KEEP list unchanged (hooks/lib/session_resources.py, scripts/commit.sh, feature-tied hooks, repair-venv per TC-53) | D1.b, D17: each deletion carries its reachability proof (no reference from settings.json hook registrations, commands, agents, skills, or a script one of those runs); anything a live entry point reaches is kept (D15). scripts/lifecycle-baseline-import.sh is already gone (D9a, P9). |
 | scripts/graphify-enrich.py; hooks/session-gitignore-propagate.sh; hooks/sessionend-scratch-sweep.sh; scripts/seal-attribution-journal.py; .gitignore | graphify-enrich :665; propagate :21-22, :29-32; sweep :1-18; seal :64-71 | E1.b, E2.b, E2.c: runtime patterns go to .git/info/exclude (U-E2a), and .gitignore becomes minimal. The graphify-prequery schema is validated at its producer (TC-55). |
 | the remaining docs/reference history records and their citing comments | as listed in PLAN-v1 P9 | E4.a: delete them, or inline the rationale as docstrings. The binding design doc stays. |
 | agents/ba.md; docs/reference/harness-issues-backlog.md; hooks/lib/bash_execution_boundary.py; hooks/pretool-bash-safety.sh; agents/cleaner.md; commands/clean.md; scripts/size-ratchet.py (new); policies/size-budget.v1.json (new); .github/workflows/baseline.yml | as listed in PLAN-v1 P9 | E4.b, F4.c, F1.a, F1.c, F2.a, F4.b (TC-56, TC-57, U-F1a, U-F2a). |
@@ -836,6 +869,7 @@ Wave 8. Needs P9 merged.
 - Subagent `git rm <clean file>` -> allowed; `git rm -f`, `-rf` and `--force` -> denied; `rm untracked.txt` -> denied.
 - `python3 scripts/size-ratchet.py --check` -> exit 0; growth beyond the budget -> exit 1.
 - `git diff --numstat -- hooks scripts schemas` -> net code lines <= -40000.
+- The P1c replay suite stays green on this PR's head, and this PR adds the fault replay for each process class it changes (P1c's fault-coverage step passes): at least the stub registrations (a rendered settings entry naming a stub: render-settings check reports it and the migration no longer carries it, while the stubs stay tracked exit-0 files) and the recoverable removal.
 
 **Effort.** L (about 3 days; three commits)
 
@@ -843,7 +877,7 @@ Wave 8. Needs P9 merged.
 
 ## P11 History rewrite, remote ref deletion, GitHub purge, pre-push guard (S7, D16, D1; last)
 
-Wave 9. Needs every phase PR merged and no phase PR open. Destructive: runs only with the owner's explicit go-ahead
+Wave 9. Needs every phase PR merged (P7b, P1b and P1c included) and no phase PR open. Destructive: runs only with the owner's explicit go-ahead
 at execution time. The phase prepares one scratch script. The basis is the owner's go-ahead on record (D16,
 2026-10-13): "删除，告诉我怎么做", then "删除 git 历史里的邮箱和账号名：好"; for the refs "可以删，但是低priority" (quoted in
 prompts/P11.md, the D16 and D1 bullets). Right before the irreversible publish (step 6: the remote ref deletion, then step 7: the force-push of the history rewritten in the step-4 mirror), the
@@ -878,6 +912,7 @@ Steps (the reviewer's run of the script):
 - A fresh clone: identities are public only; `git cat-file --batch-all-objects --batch | grep -c -F -f <list>` -> 0.
 - In the sandbox, on a pulled and an unpulled home (P11 acceptance 3-6, 14): after any pull and any later push, the sandbox origin holds 0 objects with a stand-in literal; a push carrying a listed literal (a /push of a new branch, a plain `git push` of it, the opt-in checkpoint push) is refused by the pre-push guard, naming the object (the goal above).
 - The P0 acceptance test still passes: a dirty Stop with GIT_AUTO_PUSH unset creates no remote ref.
+- The P1c replay suite stays green on this PR's head, and this PR adds the fault replay for each process class it changes (P1c's fault-coverage step passes): the landing's new step, the pre-push guard install, on a pulled and an unpulled home, also under a held index.lock, and the guard's refusal of a push that carries a listed literal (the goal above); R-N1 and R-V1 stay green.
 
 **Effort.** S (the reviewer's script run, about two hours, plus the support request)
 
@@ -1136,6 +1171,9 @@ its technical-choices table. Choices that touch owner-visible semantics are deci
 | Text-pause exits (`AWAITING_INPUT`) in commands, agents and hooks | 10 main-agent sites (close.md :239, :280, :590, :903; commit.md :44, :75, :133, :443, :709, :848) plus stop-completion-gate | 0 after P9 (P4 close/commit, P5 merge/push/do, P9 grep) |
 | Predicates that can never be satisfied by a legitimate flow | 6 in the prototype: /commit --dry-run; /merge --no-commit; edits after a commit in the same span; /redev of a finished task; a re-close without close-QA; a missing /do sidecar. The old closeout also could never pass after D6. | 0 (TC-4, TC-24, TC-25, TC-27, TC-36); a missing /do sidecar is cleared by a human "/do <task-id>" (TC-26; only if TC-18 is kept by P5's replay), and any residual is released by /stop |
 | Compliant pipelines that complete with G1-G3 and the command gate armed, under T1 | 1 of 6 | 6 of 6 (G1-G3 after P2; the command gate after P5) |
+| Compliant replays of the ten pipelines (shipped and armed settings) with a gate block or a hook error | trace B: 9 refusals on the compliant replay and a dead-end first overnight cycle; trace A and the 2-lane /dev: 0 (P1c pilot, d625284) | 0 in CI on every PR from P1c on |
+| Injected faults not returned to the artifact's own producer, needing a human action, or ending in a dead end | F1, F1q, F2, F2j, F2g, F3a, F3b, F4c, F5, F6, F7b (shipped settings, F2g armed; P1c pilot, d625284) | 0 from P1c on (outside /dev-overnight, the human /restart that resumes F5, F5f and F6 aside: D22, register RD4; inside it none: F6o, P1c X8, D20), held by the merge rule |
+| Artifacts with more than one producer / more than one deciding consumer / written never read / read never written | 35 / 37 / 29 / 18 of 122 (d625284 map, inventory/README.md) | 0 after P1b, held by its CI check |
 | Gate switches set to block in the shipped config | 0 of 3 G-switches; no command gate | 3 of 3 after P2, plus the command gate blocking by default after P5-d (unset = block; no advisory branch). CLAUDE_OBLIGATION_TERMINAL has 0 readers after P4. |
 | Disobedient-producer cases (V1-V5, V7a, V9, V10) stopped | Only V3, V4 and V5-identity, each escapable through ESCALATION_ACK. V7a and V9 pass. | All of them (V6 is out by design). ACK no longer escapes the cycle (the same role is re-dispatched with no cap), V7a is denied to every non-owner caller (P5), V9 is blocked until QA passes. |
 | Incomplete cycles that /close or /commit complete themselves (D7) | 0 | Every one, by dispatching again each gap's declaring dispatch under the same task id (D7, D21) |
@@ -1158,7 +1196,7 @@ its technical-choices table. Choices that touch owner-visible semantics are deci
 | Personal values in published git history | present in authors, committers, messages and blobs | 0 after P11 (S7) |
 | CI health | 0 tests run (collection abort); red since 2026-07-26 | collection fixed in P0; all steps green on push and weekly after P8, and kept green by every later phase |
 | Prompt bytes re-sent per command by prompt-workflow | /close 119,653 B; /dev 108,226 B | 0 after P0 (except the overnight continuation) |
-| Net code lines (hooks/, scripts/, schemas/, tests excluded) per phase | no budget | P0 <= 0; P1 <= -250; P2 <= +210; P3 <= -50; P4 <= -150; P5 <= -700; P6 <= +100; P7 <= 0 excluding bootstrap and install; P8 < 0; P9 <= -900; P10 <= -40000; P11 0 |
+| Net code lines (hooks/, scripts/, schemas/, tests excluded) per phase | no budget | P0 <= 0; P1 <= -250; P1b <= -1200; P1c <= 0; P2 <= +210; P3 <= -50; P4 <= -150; P5 <= -700; P6 <= +100; P7 <= 0 excluding bootstrap and install; P8 < 0; P9 <= -900; P10 <= -40000; P11 0 |
 | Enforcement rules added versus retired, per phase | rules only accumulate | retired >= added in every phase, listed in each PR with each D10 choice/why/revert and its regression test |
 | Tracked files and pure-junk lines | 893 files; about 57,950 junk lines | about 690 files and 0 pure junk after P10 |
 | Size budget | none | a 6-metric ratchet in CI, read from the merge base, that only goes down (P10) |
@@ -1247,6 +1285,7 @@ on his machines and cannot stop his sessions. This overrides every text in this 
   home, doctor --strict) and "Write the overlay and the private-literal list (only init, run by the human)" are
   replaced by P7b's landing. No phase prompt gives the owner a machine step.
 - Sections 5 and 6: P2-P6 also require P7b merged. Waves: P7b + P1 + P8; P2 + P3; P4; P5; P6; P9; P10; P11.
+  (Superseded by section 15: P1b and P1c run between wave 2 and wave 3.)
 - Section 7: "Arming timing" is asked once (P2 if Claude Code pushes new settings to running sessions, else P5) [superseded 2026-10-23: RESOLVED by D19, nobody is asked; section 7]; Q5 is
   answered by O26.
 - Section 13: the P8 row on `render-settings migrate` moved to P7b. P0b residuals are added: P9, commands/checkpoint.md
@@ -1258,3 +1297,56 @@ on his machines and cannot stop his sessions. This overrides every text in this 
 
 Prompts for P7b, P1-P6 and P8 are in prompts/ (written from the full conversation record, each independently verified
 against master f8c18c27, cross-checked in COVERAGE.md). HANDOVER.md is the owner's table of when to open each.
+
+## 15. Revision 2026-10-24: P1b, P1c and the never-fail rule
+
+The owner, 2026-10-24: "还有一件我关心的！就是永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！"
+("One more thing I care about! It must never fail! No development run may ever hit an error in the process! And if an
+error does occur it can be repaired immediately!") DECISIONS.md records it as D25, with the earlier words that agree
+(audit/2026-10-23/register.md rows CC4, CC8, DT3, DT4 and HC2; prompts/P1c.md also quotes DT2). D25 is measured by a
+replay suite in CI that every later phase keeps green, built on P1b's trace runner; P1c owns the suite, and from P1c on
+every phase merges only with it green and adds the fault replay for each process class it changes (D25; P1c's merge
+rule, below).
+
+- New phase **P1b** (wave 2b, alone; needs P1, P8 and P7b; net code <= -1200; prompts/P1b.md; planning evidence in
+  inventory/): D24 applied to every harness artifact. Re-checks and re-derivations at consumers go (/close, /commit,
+  scripts consumers run, other hooks, prose steps); checks stay only at the producer's stop, G1 and G3; every second
+  producer and second deciding consumer goes; a written-never-read artifact is deleted at its producer and a
+  read-never-written one loses its reading branch; filename-to-role tables give way to the declaring-dispatch reader
+  (D21). A CI check derives the artifact graph at test time, with no exception list. P1b ships the trace runner and the
+  ten compliant drivers P1c builds on.
+- P1b takes over these rows (prompts/P1b.md, "Corrections to PLAN-v2", item 2): from P2, the canonical aggregate's
+  producer, closeout's harness-report writer, the cycle contract's single writer, path, no seed and obligation-sourced
+  schema (TC-35 as corrected), the aggregate-pending and continuation-sentinel writers; from P3, the declaring-dispatch
+  reader, the escalation stores and the arbitration path, journal-view, the completion report leaving the required
+  chain, the TERMINAL_VOCABULARY imports, BA's ba-qa-report permission; from P4, the class-b/c re-checks, both routing
+  tables, the close-force readers and the D24 table for L17, L18, L22, L23, L28, L31, L32, L40, L41, L42 and L53; from
+  P5, G4's re-validation, the todo-file writers, the do.status deciders, merge.md's validate-and-unlink and the write
+  permission derived from dispatch records (TC-20 as corrected; P1b's E3); from P9, the spec_path producer, doc-sync
+  update-only (if P1b's E9 deletes creation), the one /do consent reader, the roster from agents/*.md stems and the
+  one-writer proofs for L01, L24, L42, L44 and L51; from P10, the artifact-level goal of corrections.md 2.61, replaced
+  by the CI check (P10 keeps file-level D17).
+- New phase **P1c** (wave 2c, alone; needs P1b, P8 and P7b; net code <= 0; prompts/P1c.md): D25's suite under
+  tests/replay/. (1) The ten pipelines run compliantly in shipped and armed settings with 0 gate blocks and 0 hook
+  errors. (2) Faults (a missing, malformed or old-version artifact including E1's v1/v2 conflict, a held git
+  index.lock, an interrupted session, a usage limit and resume, a fan-out lane leaving an old report) are each blocked
+  with the artifact and the failing check named, returned to the producer of the declaring dispatch, and pass on the
+  next round with zero human action. (3) No dead end, proven by enumerating every block site at test time and
+  replaying each (P1c X6). (4) Regression replays of P1's fan-out wedge, E1, N1 and V1-1/NV-1 (recorded as review
+  rows N1, V1-1 and NV-1 in reviews/P7b-PR-record.md). P1c fixes at the producer side every dead end and unreturned
+  block the suite finds (G2's no-progress hand-off and ESCALATION_ACK admission, the e2e gate's newest-file
+  correlation, the aggregate's blocked canonical, E1, the shared-index sync under a held lock, /restart's refused
+  commands, Gate 4 after a recovery resume, the literal-prose conflicts, the overnight first cycle).
+- **Merge rule from P1c on.** Every phase PR after P1c (P2-P6 and P9-P11, and any later PR that reopens P7, P7b or P8)
+  merges only when the suite's full set is green on its head and it adds the fault replay for each process class it
+  changes; P1c's fault-coverage CI step derives the class from the suite's traces. Each of P2-P6 and P9-P11 carries
+  this as an acceptance test (P7 is merged, and P8 and P7b merge before the suite exists).
+- **Waves.** P0 + P7; P1 + P8 + P7b; P1b; P1c; P2 + P3; P4; P5; P6; P9; P10; P11.
+- **Caps.** See the note under section 5.
+- **CLAUDE.md.** Hook Discipline #5 ("Ordinary /dev recovery has an honest terminal branch", master CLAUDE.md:98 at
+  d625284) conflicts with the owner's "诚实终态永远不允许" (DT4) and with D25's requirement (3). P9 rewrites it under D20 and
+  D23 (the CLAUDE.md row of P9). P1b and P1c do not edit CLAUDE.md.
+- **Corrections P1b records in its PR:** the audit ledger's counts are superseded by the d625284 map (inventory/README.md;
+  L04's MC label withdrawn); the hook-state path rule (in four places hook state is written under harness_state_dir()
+  and read at a fixed /tmp path, or the reverse); the privilege guard's quoted `-F` read; G4 left as an exit-0 stub for
+  P5; P2 keeps arming G1-G3, with P1b's E4 shipped-mode list as its input (G1 and G3 only, if P1c armed G2).
