@@ -465,12 +465,14 @@ obligation-bearing case (its row 3), row 12's fan-out optional-parent read (its 
 contract's v1 names (its rows 6 and 13, E13), row 19's launcher seed and cycle-id disagreement (its E13: no seed, and
 every reader of the cycle number calls P2's `cycle_index(state)`), and in row 18 the do.md template (its
 E8), close.md :337 and :507 (its rows 6 and 8), commit.md :334 (its row 7), merge.md:165 (its row 12, E11), push.md
-Step 1's token scan (its row 11), the resolver calls at dev.md:1322 and dev-command.md:889 (its row 7 respells them
-to the harness's copy) and, for /dev-command, the spec auto-detect (its E9 and E14) and the Step 16 completion
-template (its row 7 takes the completion report out of the resolver's required chain); outside the table, the routing
-loops of /close and /commit, which dispatch again each gap's declaring dispatch through its E3 reader (its row 10; the
-F8 faults replay them). For each, read P1b's merged PR, verify on your base what it delivered, add the replay, and
-change code or prose only for what P1b's PR left. What P1b's PR did is neither your deletion nor your retired rule
+Step 1's token scan (its row 11), the resolver calls at dev.md:1322 and dev-command.md:889, the repository-relative
+harness-script calls of close.md :66-68, :345, :776 and :950 (and :141-143 if P1b's replays ran /close --late-repair)
+and commit.md :313, :320 and :965, and the agent calls changelog-analyst.md :185 and :399 and qa.md :1137-1138 (its row
+7 respells them to the harness's copy) and, for /dev-command, the spec auto-detect (its E9 and E14) and the Step 16
+completion template (its row 7 takes the completion report out of the resolver's required chain); outside the table, the
+routing loops of /close and /commit, which dispatch again each gap's declaring dispatch through its E3 reader (its row
+10; the F8 faults replay them). For each, read P1b's merged PR, verify on your base what it delivered, add the replay,
+and change code or prose only for what P1b's PR left. What P1b's PR did is neither your deletion nor your retired rule
 ("Rules added / retired", "Net code cap").
 
 | # | File | Location (d625284) | Change |
@@ -488,7 +490,7 @@ change code or prose only for what P1b's PR left. What P1b's PR did is neither y
 | 11 | scripts/aggregate-dev-report.py | `_write_blocked_aggregate` :2023-2082 and its callers (:2223 in `_reaggregate_with_shrunk_from_or_block`, :3780, :3830, :3848); `canonical_status = "blocked"` :1591; the shard validation that accepts `needs_review` (a third vocabulary, ledger L21) | F2, F2g. On a shard failure the script writes no canonical report, removes the canonical it wrote earlier for that task (its own output), and exits non-zero naming each failing shard's path and every error. A schema-invalid canonical can then never exist; the existing aggregate check at the next QA dispatch sees the canonical absent and the canonical's one producer, as P1b's E5 chose, writes it once the lane is repaired. The shard check accepts only dev-report.v2's own status set. |
 | 12 | scripts/resolve-dev-artifact-chain.py; commands/dev.md :1338-1344 (and dev-command.md's copy, if it has one) | the fan-out optional-parent branch ("any present optional parent artifact must validate") | F3b; D24 (read-never-written loses its reading branch). P1b's row 7 delivers this: verify it on your base, add F3b's replay, and change code or prose only for what P1b's PR left. In a fan-out cycle no dispatch declares the unsuffixed parent ticket, context or qa-report, and dev.md forbids inventing them, so the resolver no longer reads them; the prose sentence follows. Singular cycles are unchanged. P3 turns the resolver into the disposition and keeps this. |
 | 13 | hooks/posttool-overnight-file-check.py; commands/dev-overnight.md | the block text :333-367 ("Re-run the subagent or escalate"); contract entries :835-838 (`schema_name: "dev-report.v1"` :837, `"qa-report.v1"` :838); the append-only rule :852 | F3a and its QA half (:838 against the obligation's v2 at :1390); corrections 2.21 and 2.85, which P1b's rows 6 and 13 (E13) deliver (the schema read from the obligation, the v1 names gone): verify them on your base, add the F3a and F3q replays, and change code only for what P1b's PR left (X5 decides how). For a dispatch that carries an obligation, the check reads the schema from that dispatch's obligation; the contract entry for such a dispatch carries step, role, pipeline and path only. One declaration, so this check can no longer disagree with G2. The message names the artifact and the failing check and offers no "escalate". |
-| 14 | scripts/lib/session_index.py; scripts/session-index.py; agents/changelog-analyst.md :660-675 | `sync_failed` raised at :255-256 (`update-index --add --cacheinfo` :252-253); `update-index --force-remove` :248-249, its exit code unchecked (:257 lists the path as synced); the analyst's sync step | F4c, X7's option. X7's wait covers both update-index calls, and no path is reported synced unless update-index wrote it (the deletion branch returns its failure as the `--cacheinfo` branch does). This row changes no prose of the analyst (row 18 changes its :669 sync path and its `rm -f` steps) and adds no check (C2). |
+| 14 | scripts/lib/session_index.py; scripts/session-index.py; agents/changelog-analyst.md :660-675 | `sync_failed` raised at :255-256 (`update-index --add --cacheinfo` :252-253); `update-index --force-remove` :248-249, its exit code unchecked (:257 lists the path as synced); the analyst's sync step | F4c, X7's option. X7's wait covers both update-index calls, and no path is reported synced unless update-index wrote it (the deletion branch returns its failure as the `--cacheinfo` branch does). This row changes no prose of the analyst (row 18 changes its :651, :665 and :669 session-index paths and its `rm -f` steps) and adds no check (C2). |
 | 15 | commands/restart.md | :70, :118, :131 (`$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py …`) | F5, F6. Spell each command in the form bash-safety resolves by design (the bashprobe showed `~/.claude/...` passing), per X4 (a). The hook keeps refusing a dynamic command head. |
 | 16 | hooks/pretool-todo-validate.py; hooks/posttool-subagent-track.py | Gate 4 `check_subagent_completion_guard` :251-270 | F5 (and F5f). A subagent step is also satisfied by an Agent tool_use of that role in the span whose agent was resumed by the recovery path and whose resume finalized (the recovery's own journal record, which CLAUDE.md says is journaled through SubagentStop). Read it from the transcript and that record; no replacement call is demanded, which restart.md and Lesson 16 forbid. The message names the step, the role and, where the obligation declares one, the artifact. |
 | 17 | per X8 | — | F6o, X8's wake: scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/pretool-block-background-tasks.py (the widened exception), commands/dev-overnight.md (one line). |
@@ -498,7 +500,7 @@ change code or prose only for what P1b's PR left. What P1b's PR did is neither y
 | 21 | tests that pin what rows 7-20 change; docs lines a CI check names | hooks/tests and tests (grep each changed file's name) | TC-54: a pin a decided change makes false changes in the same commit to assert the new behaviour (the ESCALATION_ACK tests, the aggregate's blocked-canonical tests, the e2e correlation tests, Gate 4's tests). A test that exercises only deleted code goes with it, named in the PR (D17). If scripts/verify-claims.sh or `scripts/check-enforcement-evidence.py --ledger/--claims` names a line your change makes false, fix that line and nothing more (P9 does the prose pass). |
 
 **Rows 18 and 19, P1b's kept base blocks.** P1b's PR lists under "Hand-off to P1c" each block its compliant drivers
-met on its base and passed with a `DEVIATION:` step in the driver source (its acceptances 4 and 17). Each is a row 18
+met on its base and passed with a `DEVIATION:` step in the driver source (its acceptances 4, 9 and 17). Each is a row 18
 item (X4 picks the side) or, where it stops the /dev-overnight cycle, a row 19 item, whether or not the lists below
 name it. Re-verify it on your base and remove it with the replay that met it; the same commit drops its `DEVIATION:`
 step, so that replay follows the command text literally and meets no block. A listed block your base no longer shows
@@ -538,7 +540,10 @@ skip or expected block takes its place (acceptance 3).
 - Repo-relative script paths a product repo does not have (X5, P2's channel): dev.md:1322 and dev-command.md:889
   (`python3 scripts/resolve-dev-artifact-chain.py`), commit.md :313 (`source venv/bin/activate && python3
   scripts/late-repair-controller.py`) and :334, close.md Step 0 (:337, `scripts/aggregate-dev-report.py`),
-  changelog-analyst.md:669 (`${CLAUDE_PROJECT_DIR}/.claude/scripts/session-index.py`).
+  changelog-analyst.md :651, :665 and :669 (`${CLAUDE_PROJECT_DIR}/.claude/scripts/session-index.py`), respelled
+  together: :651's init writes the base file that sync-shared reads (scripts/lib/session_index.py:136, :222), and its
+  `eval` guard does not fire on the missing script (landscape/B-breakages.md:42, P5), so on P1b's merge the private
+  index is silently off (P1b's row 7 leaves the three).
 
 **Row 19, what blocks the compliant /dev-overnight cycle today** (trace B; re-verify):
 - scripts/create-overnight-state.sh :1026-1056 writes `cycle-1/cycle-contract.json` with `required_calls: []` (:1051);
@@ -620,12 +625,12 @@ limit mid-subagent in an interactive session, the human's /restart); F6o (a usag
 human: X8); F7 (a lane dispatched from the pre-P1 template, its obligation unparseable, its report needs_review, the
 sibling compliant); F7b (the same with no obligation block). The F8 faults are CC4's case, an unfinished cycle met by
 the /close or /commit the human types, in F8, F8p and F8c in a later session than the /dev's (P1b's acceptance 7
-replays the same four, those three in a later session too, and adds a close-QA finding that cites no artifact and, if
-P1b's E5 keeps (b), a removed canonical aggregate under /commit): F8 (after a 2-lane /dev reached its terminal, one
-lane's QA report removed, then the human's /close); F8q (a 2-lane /dev cut, as in F5, after one lane's QA stop and
-before the other lane's QA dispatch, then the human's /close instead of /restart); F8p (after /dev's terminal, a
-product file one lane's dev wrote broken so that /close's close-QA round names it); F8c (after a landed /close, one
-lane's dev report removed, then the human's /commit). Assert per fault:
+replays the same four, those three in a later session too, and adds a close-QA finding that cites no artifact, a /close
+of a /do task whose do-report is not `completed` and a removed canonical aggregate under /commit): F8 (after a 2-lane
+/dev reached its terminal, one lane's QA report removed, then the human's /close); F8q (a 2-lane /dev cut, as in F5,
+after one lane's QA stop and before the other lane's QA dispatch, then the human's /close instead of /restart); F8p
+(after /dev's terminal, a product file one lane's dev wrote broken so that /close's close-QA round names it); F8c (after
+a landed /close, one lane's dev report removed, then the human's /commit). Assert per fault:
 - every block's text contains the artifact's path (the one its dispatch declares; in F7 and F7b, whose dispatches
   carry no obligation that parses, the report the stopping agent wrote) and the failing check (code and message);
 - the actor that receives the block is the expected producer, and the trace shows the repair written by that same
@@ -703,21 +708,20 @@ pass, human events.
   file of the runtime set that the PR adds or changes beyond its comments, or a settings.json key the PR adds or
   modifies (compared key by key, not as a file), lies on no such replay's path, and prints them. A changed key that
   registers no hook and that no file of the runtime set reads by name is printed as a fact (CLI-only) and does not
-  fail the step. It prints as a fact each comment-only change to a file of the runtime
-  set and, with its class, each changed file outside that set: a test; CI-only (a file of .github/, or a script a `run:`
-  step there runs, such as P10's size ratchet); or used by no replayed process (an INDEX.md or README.md,
-  hooks/QUICKSTART.md, hooks/git-fswatch@.service, code no hook entry or replayed definition reaches, or bash-safety's
-  degraded-analyzer .ere file while no replay takes that branch). A commands/ or agents/ file the PR adds or modifies
-  that opens with YAML frontmatter on the base or on the head (a command or agent definition) and that a replayed
-  pipeline reaches must be read by a replay of (1), (2) or (4): a driver extracts a template from it or a scenario
-  injects its body as a slash command's isMeta body (row 1); otherwise the step fails and prints it, and the PR adds the
-  scenario that reads it. A replayed pipeline reaches each command whose body a replay injects and each agent such a
-  body names by its agents/ path, as a dispatch's subagent_type, as an obligation's role or in a code span holding only
-  its name (dev.md:267's specialists), read from those bodies at test time, never from a list, so an agent dispatched
-  only on a branch the drivers skip (test-writer, a specialist) counts. The step prints every other changed file there
-  as a fact: a definition no replayed pipeline reaches, or a file with no frontmatter on either side (doc-sync's
-  INDEX.md and README.md), which defines no command or agent. The step asks for and reads no PR-body reason. Deletions
-  are exempt.
+  fail the step. It prints as a fact each comment-only change to a file of the runtime set and, with its class, each
+  changed file outside that set: a test; CI-only (a file of .github/, or a script a `run:` step there runs, such as
+  P10's size ratchet); or used by no replayed process (an INDEX.md or README.md, hooks/QUICKSTART.md,
+  hooks/git-fswatch@.service, code no hook entry or replayed definition reaches, or bash-safety's degraded-analyzer .ere
+  file while no replay takes that branch). A commands/ or agents/ file the PR adds or modifies that opens with YAML
+  frontmatter on the base or on the head (a command or agent definition) and that a replayed pipeline reaches must be
+  read by a replay of (1), (2) or (4): a driver extracts a template from it or a scenario injects its body as a slash
+  command's isMeta body (row 1); otherwise the step fails and prints it, and the PR adds the scenario that reads it. A
+  replayed pipeline reaches each command whose body a replay injects and each agent such a body names by its agents/
+  path, as a dispatch's subagent_type, as an obligation's role or in a code span holding only its name (dev.md:267's
+  specialists), read from those bodies at test time, never from a list, so an agent dispatched only on a branch the
+  drivers skip (test-writer, a specialist) counts. The step prints every other changed file there as a fact: a
+  definition no replayed pipeline reaches, or a file with no frontmatter on either side (doc-sync's INDEX.md and
+  README.md), which defines no command or agent. The step asks for and reads no PR-body reason. Deletions are exempt.
 - A phase that changes a pipeline's shape updates that pipeline's scenarios in the same commit (TC-54) and keeps every
   assertion of (1)-(4).
 
