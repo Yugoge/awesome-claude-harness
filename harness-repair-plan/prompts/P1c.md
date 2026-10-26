@@ -218,7 +218,7 @@ extracted planning documents.
   not stop").
 - **D2** dev has one terminal, completed; QA fail and BA needs_clarification are process steps, not terminals.
   **D8** only the producer writes its artifact: the orchestrator never repairs a producer's file, and a QA never edits
-  a file it did not write.
+  another producer's file.
 - **Producer-side.** Every fix lands on a producer: the producer's own stop (G2), the dispatch (G1) or collection (G3)
   point, a launcher, the script that writes the artifact, a producer prompt, or CI. Nothing is added to /close, /commit
   or the changelog-analyst as a check (C2); the two places rows 14 and 18 touch there change how a producer operation
@@ -230,7 +230,8 @@ decided by an experiment you run, recorded in the technical-choices table.
 
 ### Decided by experiment (D18; nobody is asked)
 
-Each experiment runs in the sandbox kit or in the suite's own hermetic fixture, never against your container's real
+Each experiment runs in the sandbox kit or in the suite's own hermetic fixture; X3's settings-env probe and X4's
+sub-measure ask about a live CLI session and run in your own session. None runs against your container's real
 `~/.claude` or HOME. Fix the rule before you run; put the setup, the raw counts or exit codes and the option taken into
 the PR's technical-choices table; follow the result. ("E1" in this prompt is the v1/v2 contract conflict of the
 ledger's section 3, so the experiments here are X1-X10.)
@@ -687,18 +688,20 @@ pass, human events.
   `safe_pull`), the modules these import or source, schemas they load, command and agent templates the drivers
   extracted; and the settings.json keys it used (each hooks entry whose command it ran, each other key a file on that
   path reads by name, such as an env variable). It fails when a file the PR adds or modifies under hooks/, scripts/ or
-  schemas/, or a settings.json key it adds or modifies (compared key by key, not as a file), lies on no such replay's
-  path, and prints them. A changed key that registers no hook and that no file under hooks/ or scripts/ reads by name
-  is printed as CLI-only and does not fail the step. A commands/ or agents/ file the PR adds or modifies that opens with
-  YAML frontmatter on the base or on the head (a command or agent definition) and that a replayed pipeline reaches must
-  be read by a replay of (1), (2) or (4): a driver extracts a template from it or a scenario injects its body as a slash
-  command's isMeta body (row 1); otherwise the step fails and prints it, and the PR adds the scenario that reads it. A
-  replayed pipeline reaches each command whose body a replay injects and each agent such a body names by its agents/
-  path, as a dispatch's subagent_type, as an obligation's role or in a code span holding only its name (dev.md:267's
-  specialists), read from those bodies at test time, never from a list, so an agent dispatched only on a branch the
-  drivers skip (test-writer, a specialist) counts. The step prints every other changed file there as a fact: a
-  definition no replayed pipeline reaches, or a file with no frontmatter on either side (doc-sync's INDEX.md and
-  README.md), which defines no command or agent. The step asks for and reads no PR-body reason. Deletions are exempt.
+  schemas/ outside their test directories (hooks/tests/ and scripts/install/tests/, the ones acceptance 15 leaves out;
+  no replay runs a test, so the step prints a changed file there as a fact), or a settings.json key it adds or modifies
+  (compared key by key, not as a file), lies on no such replay's path, and prints them. A changed key that registers no
+  hook and that no file under hooks/ or scripts/ reads by name is printed as CLI-only and does not fail the step. A
+  commands/ or agents/ file the PR adds or modifies that opens with YAML frontmatter on the base or on the head (a
+  command or agent definition) and that a replayed pipeline reaches must be read by a replay of (1), (2) or (4): a
+  driver extracts a template from it or a scenario injects its body as a slash command's isMeta body (row 1); otherwise
+  the step fails and prints it, and the PR adds the scenario that reads it. A replayed pipeline reaches each command
+  whose body a replay injects and each agent such a body names by its agents/ path, as a dispatch's subagent_type, as an
+  obligation's role or in a code span holding only its name (dev.md:267's specialists), read from those bodies at test
+  time, never from a list, so an agent dispatched only on a branch the drivers skip (test-writer, a specialist) counts.
+  The step prints every other changed file there as a fact: a definition no replayed pipeline reaches, or a file with no
+  frontmatter on either side (doc-sync's INDEX.md and README.md), which defines no command or agent. The step asks for
+  and reads no PR-body reason. Deletions are exempt.
 - A phase that changes a pipeline's shape updates that pipeline's scenarios in the same commit (TC-54) and keeps every
   assertion of (1)-(4).
 
@@ -796,10 +799,10 @@ worktree); the suite itself through pytest in your checkout. Never against your 
    under your container's `~/.claude` or HOME in the write list of the suite's traced run (X1), not a before/after
    listing (your session's own CLI keeps writing its transcripts under `~/.claude/projects/` meanwhile).
 8. **Fault coverage.** The CI step of "Merge rule from P1c on" run on your own diff: every hooks/, scripts/ and schemas/
-   file and every settings.json key you changed lies on a fault or regression replay's path (hooks/git-fswatch.sh
-   through R-N1, scripts/session-index.py through F4c's sync command; row 9's key, if you set it, through G2 on F1, F1q
-   and F2), and every commands/ or agents/ definition you changed that a replayed pipeline reaches is read by a
-   replay; the output pasted.
+   file outside their test directories and every settings.json key you changed lies on a fault or regression replay's
+   path (hooks/git-fswatch.sh through R-N1, scripts/session-index.py through F4c's sync command; row 9's key, if you set
+   it, through G2 on F1, F1q and F2), and every commands/ or agents/ definition you changed that a replayed pipeline
+   reaches is read by a replay; the output pasted.
 9. **Run time.** X10: every scenario's wall time on the CI runner, the totals, `nproc`, the shard wall time, (a) and (b)'s
    results and the split taken.
 10. **Unit tests for the fixes.** A unit test per changed hook or script behaviour of rows 7, 8, 10, 11, 12, 13, 14, 16,
