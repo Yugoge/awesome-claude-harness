@@ -53,9 +53,9 @@ a second one. If a name or form differs from this description, use what is merge
   passes it, and apart from them each deviation that fires only on its base's text (for a block its rows or experiments
   removed). Rows 18 and 19 remove each kept block, and the commit that removes it drops its DEVIATION (X4); a deviation
   of the second list goes with no fix ("Rows 18 and 19, P1b's kept base blocks"). The same list names the dead ends P1b
-  met on its base (its acceptance 14): each one your base still shows is fixed at its producer with the replay that
-  meets it (Goal 2). Its "Live landing" lists each harness script its base's text calls that it emptied to an exit-0
-  stub with a `# STUB:` line (its acceptance 17): leave it; it stays until P10, as D15 keeps a hook stub.
+  met on its base (its acceptances 14 and 21): each one your base still shows is fixed at its producer with the replay
+  that meets it (Goal 2). Its "Live landing" lists each harness script its base's text calls that it emptied to an
+  exit-0 stub with a `# STUB:` line (its acceptance 17): leave it; it stays until P10, as D15 keeps a hook stub.
 - P1: hooks/lib/obligation.py (parse_obligation, resolve_own_obligation, find_unresolved_dispatch_obligations,
   canonical_task_id, registry_dir_for); hooks/lib/stop_contract.py and hooks/lib/command_span.py (is_human_prompt,
   active_command, active_span); the producer-question artifact; the Stop coordinator's relay; P1's PR section
