@@ -428,17 +428,22 @@ in this session (quote it with the date read); do not substitute memory. The cha
   by that text, and every prompt that starts with `/restart`, typed or scheduled, still gets the capability as at
   d625284, which the PR records under X8 as a fact. That hook stays the capability's one producer and the one reader in
   subagent_restart.py its one deciding rule (P1b row 14); no second issuer or deciding rule is added. A wake that fires
-  while nothing is interrupted finds 0 candidates and the loop simply continues. The session's end, the overnight
-  terminal (Terminal), deletes the schedule: the last step of Step 21's session-ending branch ("If time expired (session
-  ending)"), after the summary is written, is a CronDelete of the id the wake's CronCreate returned, and the time-lock
-  (hooks/stop-overnight-timelock.py), once its closeout check (:138-150) passes, refuses the Stop after end_time while
-  the /dev-overnight span holds a CronCreate of the wake's text whose id no later CronDelete names, naming that id (X6
-  class G: the orchestrator's own CronDelete clears it); a span with no such call, as in a session launched before your
-  merge, meets nothing new. The suite's overnight drivers model the schedule as F6o's does (below), a CronDelete of the
-  job's id ending it, and after the terminal advance their modeled clock by two of the wake's intervals: no wake fires
-  there (Terminal). The widened exception is row 17's own decision under D20 and SG6, not an X4 case: every other
-  message and id stays refused, and the lines that name the typed /restart as the only exception go to P9 ("Hand-offs
-  for the sync list").
+  while nothing is interrupted finds 0 candidates and the loop simply continues. The schedule is deleted where its span
+  ends: at the session's end, the overnight terminal (Terminal), the last step of Step 21's session-ending branch ("If
+  time expired (session ending)"), after the summary is written, is a CronDelete of the id the wake's CronCreate
+  returned, and after the owner's /stop the last step of commands/stop.md is the same CronDelete where the session
+  scheduled the wake. The time-lock (hooks/stop-overnight-timelock.py), once its closeout check (:138-150) passes,
+  refuses the Stop after end_time while the session's transcript holds a CronCreate of the wake's text whose id no later
+  CronDelete names, naming that id (X6 class G: the orchestrator's own CronDelete clears it), even after /stop or
+  another typed command opened a later span; a transcript with no such call, as in a session launched before your merge,
+  meets nothing new. /stop backdates end_time (scripts/break-overnight-lock.py `_backdate` :81), so each Stop after it
+  is such a Stop (the closeout block your base's /stop then meets, B2.b, is P2 row 9's). The suite's overnight drivers
+  model the schedule as F6o's does (below), a CronDelete of the job's id ending it, and after the terminal advance their
+  modeled clock by two of the wake's intervals: no wake fires there (Terminal); X8's /stop replay (the overnight
+  scenario with the owner's /stop typed inside the window) does the same after the first Stop rc 0 that follows the
+  /stop. The widened exception is row 17's own decision under D20 and SG6, not an X4 case: every other message and id
+  stays refused, and the lines that name the typed /restart as the only exception go to P9 ("Hand-offs for the sync
+  list").
 Rule: ship the wake if the documented or captured record shape drives both F6o replays (a cut before end_time, and one
 after it before the summary is written) to the overnight terminal with 0 blocks, and the widened exception refuses any
 other message or id and issues no capability for a wake that fires after the owner's /stop (three replays); a replay
@@ -532,7 +537,7 @@ What P1b's PR did is neither your deletion nor your retired rule ("Rules added /
 | 14 | scripts/lib/session_index.py; scripts/session-index.py; agents/changelog-analyst.md :660-675 | `sync_failed` raised at :255-256 (`update-index --add --cacheinfo` :252-253); `update-index --force-remove` :248-249, its exit code unchecked (:257 lists the path as synced); the analyst's sync step | F4c, X7's option. X7's wait covers both update-index calls, and no path is reported synced unless update-index wrote it (the deletion branch returns its failure as the `--cacheinfo` branch does). This row changes no prose of the analyst (row 18 changes its :651, :665 and :669 session-index paths and its `rm -f` steps) and adds no check (C2). |
 | 15 | commands/restart.md | :70, :118, :131 (`$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py …`) | F5, F6. Spell each command in the form bash-safety resolves by design (the bashprobe showed `~/.claude/...` passing), per X4 (a). The hook keeps refusing a dynamic command head. |
 | 16 | hooks/pretool-todo-validate.py; hooks/posttool-subagent-track.py | Gate 4 `check_subagent_completion_guard` :251-270 | F5 (and F5f). A subagent step is also satisfied by an Agent tool_use of that role in the span whose agent was resumed by the recovery path and whose resume finalized (the recovery's own journal record, which CLAUDE.md says is journaled through SubagentStop). Read it from the transcript and that record; no replacement call is demanded, which restart.md and Lesson 16 forbid. The message names the step, the role and, where the obligation declares one, the artifact. |
-| 17 | per X8 | — | F6o, X8's wake: scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/userprompt-restart-authorize.py (the widened exception: the /restart capability's one producer issues it for the wake only inside the wake's span, never after the owner's /stop; the one reader in hooks/lib/subagent_restart.py stays its one deciding rule, X8), hooks/stop-overnight-timelock.py (its Stop after end_time requires the wake deleted, X8), commands/dev-overnight.md (two lines: the wake step, and the wake's deletion as the last step of Step 21's session-ending branch). Every step of your base's list keeps its label, content and activeForm, and one rule binds every hook that compares a session's todo list with the canonical list, by length, index or label: it compares the whole list (its length, and each step's content and activeForm) only for a command's first list (the first TodoWrite of its span) or a change of that list's length, as pretool-todo-validate.py:298-300 does at d625284 (prompt-workflow.py starts each command's bookmark with no list, :1880-1897 and :1980-1994), and otherwise pairs each todo with the canonical step of the same content, never of the same index; the wake rule, Gate 4 and what records a step's subagent call find their step that way. At d625284 these break it: Gate 4 and hooks/posttool-subagent-track.py pair by index (pretool-todo-validate.py:227-240, posttool-subagent-track.py:480-525); hooks/posttool-todo-count.py exits 2 after every TodoWrite shorter than the canonical list (:95-103, :60), which locks every other tool (pretool-workflow-gate.py:1179-1192), and hooks/posttool-todo-tracker.py withholds its todo-file write on such a list (:104-122); the Codex runtime's plan check compares length and content index by index on every update (pretool-workflow-gate.py:287-306). A step read by its label (pretool-subagent-enforce.py:69-83) needs only the kept labels. An overnight session running at your merge keeps the todo list it wrote from your base's list, without the wake step and so one step shorter, and resets it every cycle, so that list meets neither the wake rule nor any of these checks (acceptance 11). |
+| 17 | per X8 | — | F6o, X8's wake: scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/userprompt-restart-authorize.py (the widened exception: the /restart capability's one producer issues it for the wake only inside the wake's span, never after the owner's /stop; the one reader in hooks/lib/subagent_restart.py stays its one deciding rule, X8), hooks/stop-overnight-timelock.py (its Stop after end_time, the one after the owner's /stop included, requires the wake deleted, X8), commands/dev-overnight.md (two lines: the wake step, and the wake's deletion as the last step of Step 21's session-ending branch), commands/stop.md (one line: the same deletion as its last step). Every step of your base's list keeps its label, content and activeForm, and one rule binds every hook that compares a session's todo list with the canonical list, by length, index or label: it compares the whole list (its length, and each step's content and activeForm) only for a command's first list (the first TodoWrite of its span) or a change of that list's length, as pretool-todo-validate.py:298-300 does at d625284 (prompt-workflow.py starts each command's bookmark with no list, :1880-1897 and :1980-1994), and otherwise pairs each todo with the canonical step of the same content, never of the same index; the wake rule, Gate 4 and what records a step's subagent call find their step that way. At d625284 these break it: Gate 4 and hooks/posttool-subagent-track.py pair by index (pretool-todo-validate.py:227-240, posttool-subagent-track.py:480-525); hooks/posttool-todo-count.py exits 2 after every TodoWrite shorter than the canonical list (:95-103, :60), which locks every other tool (pretool-workflow-gate.py:1179-1192), and hooks/posttool-todo-tracker.py withholds its todo-file write on such a list (:104-122); the Codex runtime's plan check compares length and content index by index on every update (pretool-workflow-gate.py:287-306). A step read by its label (pretool-subagent-enforce.py:69-83) needs only the kept labels. An overnight session running at your merge keeps the todo list it wrote from your base's list, without the wake step and so one step shorter, and resets it every cycle, so that list meets neither the wake rule nor any of these checks (acceptance 11). |
 | 18 | the literal-prose conflicts (X4) | see the list under the table | Each fixed on the side X4 picks, with the replay that met it. |
 | 19 | the /dev-overnight compliant cycle (X5) | see the list under the table | The smallest part of the owning row that lets the compliant overnight scenario run from launch to a Stop after end_time with 0 blocks. |
 | 20 | hooks/pull.sh; hooks/git-fswatch.sh `has_changes`, `safe_pull`; scripts/install/land's "Review N1" block (only if it must be made callable) | pull.sh `HAS_CHANGES` :17-21; fswatch `has_changes` :160, `safe_pull` :174 (fetch :180, stash push :200, `pull --rebase` :210) | X9. N1's window (only if X9 (ii) refuses): on a landed harness home the landing's existing settings.json re-record runs before the stash decision; no second implementation, no new state. Fact 1: each `safe_pull` step is decided by its git command's own exit status, not `tee`'s. |
@@ -836,12 +841,12 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
    If that fetch fails, that step's verdict is (a)'s too; say so.
 3. **Requirement (1).**
    `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/replay/test_pipelines.py` -> passed; the
-   scenario table with 0 blocks, 0 errors and every terminal reached in both modes; for /dev-overnight, and for F6o in
-   acceptance 4, 0 wakes fired while the driver's modeled clock runs two wake intervals past the terminal (X8). On your
-   base before your changes: the refusals rows 18 and 19 fix, each with its hook text, those of P1b's "Hand-off to P1c"
-   (both its lists) your base still shows among them. On your branch head: `git grep -n 'DEVIATION:'` prints nothing (no
-   driver passes a block or keeps a deviation for one your base no longer shows), and P1b's D24 check passes with no
-   exception (acceptance 2).
+   scenario table with 0 blocks, 0 errors and every terminal reached in both modes; for /dev-overnight, for F6o in
+   acceptance 4 and for X8's /stop replay, 0 wakes fired while the driver's modeled clock runs two wake intervals past
+   the terminal (in the /stop replay, past the first Stop rc 0 after the /stop; X8). On your base before your changes:
+   the refusals rows 18 and 19 fix, each with its hook text, those of P1b's "Hand-off to P1c" (both its lists) your base
+   still shows among them. On your branch head: `git grep -n 'DEVIATION:'` prints nothing (no driver passes a block or
+   keeps a deviation for one your base no longer shows), and P1b's D24 check passes with no exception (acceptance 2).
 4. **Requirement (2).** The same for tests/replay/test_faults.py, and the fault table: for every block and every gap an
    F8 fault routes, artifact named, check named, receiving actor = expected producer, the first compliant repair round
    passes (F2g: after its forged round), 0 human events, except the one /restart the human types in F5, F5f and F6
@@ -930,7 +935,7 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
 
 Added (at most 4):
 - the CI merge rule: the suite green on the PR head, and the fault-coverage step;
-- X8's wake step (scheduled at the launch, deleted at the session's end) and the widened SendMessage exception;
+- X8's wake step (scheduled at the launch, deleted where its span ends) and the widened SendMessage exception;
 - row 18's narrow config-guard allowance for a /dev-command dev (a relaxation, counted anyway);
 - `CLAUDE_OBLIGATION_STOPGATE=block` is a switch flip, not a new rule; list it only if row 9 sets it (X3).
 
