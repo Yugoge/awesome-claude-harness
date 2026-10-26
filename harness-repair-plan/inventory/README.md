@@ -19,7 +19,7 @@ disagreements. Run date 2026-10-24.
 | covering the 56 ledger rows (split where one ledger row holds several files with different producers) | 82 |
 | found by the static extractor or the traces outside the ledger | 39 |
 | several producers | 38 |
-| several deciding consumers (each with its own rule) | 36 |
+| several deciding consumers (each with its own rule) | 37 |
 | consumer-side re-check or re-derivation | 29 |
 | written never read | 28 |
 | read never written | 24 |
@@ -27,7 +27,7 @@ disagreements. Run date 2026-10-24.
 | no violation found | 21 |
 | evidence: both code and trace / code only / trace only | 87 / 33 / 1 |
 
-Check positions named in the rows: producer stop 30, G1 dispatch 14, G3 collection 18, elsewhere 67.
+Check positions named in the rows: producer stop 30, G1 dispatch 14, G3 collection 18, elsewhere 68.
 
 Rows per group (the groups become P1b's scope rows): G01 cycle identity and registry 8; G02 workflow bookmark, todo
 list, replay stores 5; G03 dispatch record and producer-gate outputs 5; G04 BA and context family 12; G05 test-writer
@@ -226,9 +226,17 @@ form through git; the coexistence installer merges its hook groups into the conf
 hooks/pretool-bash-safety.sh:355-368, the /allow deny preflight in hooks/userprompt-consent-allowlist.sh:437-615, the
 claude_home probes, bootstrap's env.TMPDIR step (scripts/bootstrap:341-353), the capability binding, the
 cleanliness-inspector's reference scripts and the installer. A105 therefore shows several deciding consumers too.
-The counts in this README include all of these corrections;
-`build_map.py` printed 122 rows, 40 outside the ledger, several producers 35, several deciding consumers 37, written
-never read 29, read never written 18, hand-written table 27, evidence 86 / 33 / 3, G1 dispatch 13 and G12 6.
+A later code read corrected A104, the project settings, the same way: /dev-command Step 14
+(commands/dev-command.md:678-707) edits the file as /dev Step 15 does; the static candidate
+scripts/create-overnight-state.sh:419 writes neither file itself but runs create-worktree.sh, which writes
+settings.local.json; and besides the CLI's permission engine, the files have deciding readers with their own rules: the
+/allow deny preflight (hooks/userprompt-consent-allowlist.sh:438-439, :597-623), the reference scripts the
+cleanliness-inspector and QA run (scripts/check-file-references.sh, scripts/detect-orphan-scripts.sh),
+scripts/apply-permissions.sh and the orchestrator's edit step, which stop on a file they cannot merge into, and, when
+the project is the harness home, the capability binding. A104 therefore shows several deciding consumers too, and its
+`check_elsewhere` names them. The counts in this README include all of these corrections;
+`build_map.py` printed 122 rows, 40 outside the ledger, several producers 35, written never read 29, read never
+written 18, hand-written table 27, evidence 86 / 33 / 3, G1 dispatch 13, elsewhere 67 and G12 6.
 
 ## Limits
 
