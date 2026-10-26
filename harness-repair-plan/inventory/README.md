@@ -211,9 +211,12 @@ its .lck and its -active- pointer are written under a fixed /tmp (scripts/write-
 sweep (stop-cleanup-allowlist.sh:93, :286, :304) look for them in the state dir, a read never written when
 CLAUDE_STATE_DIR is set. The same read found A62, the dispatch manifest, read never written as well: /commit writes it
 under the state dir (commands/commit.md:404-407) while the changelog-analyst's check reads it at a fixed /tmp
-(agents/changelog-analyst.md:206). The counts in this README include all of these corrections; `build_map.py` printed
-122 rows, 40 outside the ledger, several producers 35, several deciding consumers 37, written never read 29, read
-never written 18, hand-written table 27, evidence 86 / 33 / 3, G1 dispatch 13 and G12 6.
+(agents/changelog-analyst.md:206). The same read also corrected A70, the commit-event journal: it lives under the
+state dir (hooks/lib/commit_journal.py:109) and is read by the changelog-analyst's push-gate reconciliation through
+the module's query (agents/changelog-analyst.md:1644-1646), not by scripts/step7-spec-update.py, which imports nothing
+from it and only accepts the resulting status (:161-170). The counts in this README include all of these corrections;
+`build_map.py` printed 122 rows, 40 outside the ledger, several producers 35, several deciding consumers 37, written
+never read 29, read never written 18, hand-written table 27, evidence 86 / 33 / 3, G1 dispatch 13 and G12 6.
 
 ## Limits
 
