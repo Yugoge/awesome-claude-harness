@@ -227,7 +227,8 @@ extracted planning documents.
   point, a launcher, the script that writes the artifact, a producer prompt, or CI. Nothing is added to /close, /commit
   or the changelog-analyst as a check (C2); the two places rows 14 and 18 touch there change how a producer operation
   runs or remove a step a hook refuses, a change to any part of the routing loops P1b's PR left only makes them
-  dispatch a gap's producer again ("Delivered by P1b"), and the PR shows that each hunk adds no check.
+  dispatch a gap's producer again ("Delivered by P1b"), X3's deletions there only remove checks, and the PR shows that
+  each hunk adds no check.
 
 **OPEN owner decisions.** None. Ask the owner nothing, at any point. A product question this prompt does not answer is
 decided by an experiment you run, recorded in the technical-choices table.
@@ -290,10 +291,16 @@ commit. Experiment: with rows 7 and 8 applied, run every (1) scenario and the li
 settings env change reaches a running session. Rule: if every compliant scenario has 0 G2 blocks and the live-landing
 replay has no G2 block on a compliant in-flight cycle, add `"CLAUDE_OBLIGATION_STOPGATE": "block"` to settings.json env
 (the tracked clean form; `scripts/install/render-settings check --staged` stays green) in your last commit, and the PR
-tells P2 to arm only G1 and G3. A compliant scenario that G2 blocks is a false block: fix its producer side (the
-template, the agent prose, or G2) and re-run. No branch of this rule ships the suite with F1, F1q or F2 unreturned.
-Either env result is safe: a running session keeps advisory until it ends or picks up block at its next producer stop,
-which acceptance 11 covers. G1 and G3 stay advisory (P2); G4 stays advisory (P5 replaces it).
+tells P2 to arm only G1 and G3. That commit also deletes each copy your base kept because only armed G2 stops its faults
+(P1b's E4 and Rollback (7) delete them with the switch, since P1b's CI check reads the switch in settings.json and fails
+on each copy left once it is set), and the PR lists each with its faults; each deletion removes a check and adds none
+(C2). If it deletes one, G2 takes its switch at run time as P1b's E4 describes (through P7b's function, with and without
+CLAUDE_HOME), unless your base's G2 already does or your measurement shows a settings env change reaching a running
+session, so a session started before your merge meets armed G2 once those copies are gone (acceptance 11). A compliant
+scenario that G2 blocks is a false block: fix its producer side (the template, the agent prose, or G2) and re-run. No
+branch of this rule ships the suite with F1, F1q or F2 unreturned. Either env result is then safe: a running session
+picks up block at its next producer stop, or keeps advisory until it ends only where your arm deleted no copy;
+acceptance 11 covers both. G1 and G3 stay advisory (P2); G4 stays advisory (P5 replaces it).
 
 **X4. Literal-prose conflicts: which side changes.** The compliant drivers follow the command and agent prose
 literally: every fenced command block as written with its placeholders filled, every template as written, the
@@ -510,7 +517,7 @@ What P1b's PR did is neither your deletion nor your retired rule ("Rules added /
 | 6 | .github/workflows/baseline.yml (P8's) or one new workflow it calls; tests/TESTING.md | the jobs; one short section | The suite as CI jobs, triggered and sharded per X10, reachable from release.yml's workflow_call so a tag cannot publish around it; its full set must be green on the PR head before the reviewer merges (X10; the PR changes no repository setting, and baseline.yml's comment (:181-182 at d625284, :203-204 on master 2acc29b) that calls the `baseline` job "already-required" so it "gates merges" loses both claims). The `baseline` job's own pytest step (baseline.yml:107 at d625284, :112 on master 2acc29b; hooks/tests and tests on python 3.10-3.12) leaves tests/replay/ to the suite's jobs, which run all of it (not a skip). The fault-coverage step ("Merge rule from P1c on"), its code under tests/replay/ with the rest of the suite. The network guard of X2 in every job. TESTING.md gets one short section: how to run the suite locally and the merge rule, nothing more (D21: no manual). |
 | 7 | hooks/subagentstop-artifact-contract-enforce.py (G2) | `ACK_PREFIX` :304 and the ack helpers :319-329; `_load_progress_helper` :351; `_mint_record` :614 (escalations/ :631); `_latest_unadmitted` :637 (escalation-admissions :639, written at :797-798); `_write_side_records` :659 (deferred-checks :691); `_clear_progress` :704; `_gate_decide` :747 (the no-progress hand-off :778-829) | F2g; corrections 2.27 and 2.30; C5; D24. P1b's row 3 delivers this: verify it on your base, add F2g's replay, and change code only for what P1b's PR left. A failing obligation stop is a plain exit 2 that names each failing artifact and check to the stopping producer, in every round. Delete what your base still has of the no-progress hand-off, the `ESCALATION_ACK` admission and its four record stores (escalations/, escalation-admissions/, progress/, deferred-checks/; ledger L25: written, read only by this hook). Before deleting a store, show by grep and the suite's trace that nothing else reads it; a store another reader uses stays and goes into the D24 table. Records left on live homes are ignored (acceptance 11). `GATE_FAULT` (a crashed gate decision, :1158-1163) never admits the stop, and X6 classes its site like any other: G where the stopping producer's repair clears it, U (deleted under D17) where nothing on your base reaches it. Its tests change with it (row 21). |
 | 8 | same | the legacy correlation path :1218-1230 (`_find_correlated_reports`, `_dispatch_task_id`, `_own_reports`) | F7b. When the dispatch prompt carries no obligation block, judge only the reports the stopping agent wrote itself, read from its own transcript's Write and Edit tool uses (agent_transcript_path), never a sibling's or an earlier attempt's. A report it did not write is not its to fix (C5, CC8); it stays for its own producer's stop. |
-| 9 | settings.json | env | X3, only if your base's settings.json does not already set it (P1b's E4 sets it): `"CLAUDE_OBLIGATION_STOPGATE": "block"`, in the last commit together with the fault replays whose return depends on it (Rollback, step 7). Nothing else in settings.json. |
+| 9 | settings.json | env | X3, only if your base's settings.json does not already set it (P1b's E4 sets it): `"CLAUDE_OBLIGATION_STOPGATE": "block"`, in the last commit together with the fault replays whose return depends on it and X3's deletions of the copies whose faults only armed G2 stops (Rollback, step 7). Nothing else in settings.json. |
 | 10 | hooks/subagentstop-e2e-enforce.py | report resolution :120-137 (`session_ts_filename_match`, then the "last 5" scan) | F1q, F3b, the overnight what-if ("no qa-report-*.json … under session <sid>"). P1b's row 3 moves the obligation-bearing case: verify it on your base, add its replays, and change code only for what P1b's PR left; the case without an obligation is yours. For an obligation-bearing QA dispatch, judge exactly the qa-report path its obligation declares (resolve_own_obligation), whatever the session id format; without an obligation, only a report the stopping QA wrote itself (as row 8). The newest-filename and "last 5" correlation goes. The message names the exact path and the missing field. P1b's row 7 split the deciders on the qa-report by property (G2: existence and shape; this gate: the e2e status policy); keep that split and add no second decider. |
 | 11 | scripts/aggregate-dev-report.py | `_write_blocked_aggregate` :2023-2082 and its callers (:2223 in `_reaggregate_with_shrunk_from_or_block`, :3780, :3830, :3848); `canonical_status = "blocked"` :1591; the shard validation that accepts `needs_review` (a third vocabulary, ledger L21) | F2, F2g. On a shard failure the script writes no canonical report, removes the canonical it wrote earlier for that task (its own output), and exits non-zero naming each failing shard's path and every error. A schema-invalid canonical can then never exist; the existing aggregate check at the next QA dispatch sees the canonical absent and the canonical's one producer, as P1b's E5 chose, writes it once the lane is repaired. The shard check accepts only dev-report.v2's own status set. |
 | 12 | scripts/resolve-dev-artifact-chain.py; commands/dev.md :1338-1344 (and dev-command.md's copy, if it has one) | the fan-out optional-parent branch ("any present optional parent artifact must validate") | F3b; D24 (read-never-written loses its reading branch). P1b's row 7 delivers this: verify it on your base, add F3b's replay, and change code or prose only for what P1b's PR left. In a fan-out cycle no dispatch declares the unsuffixed parent ticket, context or qa-report, and dev.md forbids inventing them, so the resolver no longer reads them; the prose sentence follows. Singular cycles are unchanged. P3 turns the resolver into the disposition and keeps this. |
@@ -774,9 +781,9 @@ pass, human events.
   summary section and its removal of the parking prose P1 merged (D20).
 - The disposition function and the gap format (P3), beyond row 12's removed branch; no owner or fix field is added
   anywhere.
-- /close and /commit beyond rows 14 and 18 and the routing loops "Delivered by P1b" names (P4; P1b's rows 6, 7, 8, 10
-  and 11 removed their re-checks); the unified Stop gate (P5); the D8 derived deny, which P1b's E3 ships for every
-  caller (P5 row 1 adds only a caller P1b's PR left out).
+- /close and /commit beyond rows 14 and 18, X3's deletions and the routing loops "Delivered by P1b" names (P4; P1b's
+  rows 6, 7, 8, 10 and 11 removed their re-checks); the unified Stop gate (P5); the D8 derived deny, which P1b's E3
+  ships for every caller (P5 row 1 adds only a caller P1b's PR left out).
 - D24 consolidation of artifacts rows 7-20 do not touch (P1b did it before you; P2-P10 keep it). P1b's D24 check stays
   green on your branch with no exception, and no change of yours gives an artifact a second producer or a second
   deciding rule. Where the suite shows, on your base, two producers or two deciding consumers of one artifact that
@@ -880,7 +887,10 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
     files does not show at the same hook, step (the todo of the same content) and refusal text, or at the same hook and
     step where one of your rows rewrites that hook's message (as row 16 rewrites Gate 4's); each block met is listed in
     the PR with its hook text, and none is new (Goal 4). The same cycles with `CLAUDE_OBLIGATION_STOPGATE=block` (X3):
-    0 G2 blocks on their compliant stops. Repeat with your branch's settings.json.
+    0 G2 blocks on their compliant stops. If X3 deleted copies, the session started before your merge also replays each
+    fault they stopped, with and without CLAUDE_HOME in its env (with your branch's env instead if X3 measured a
+    settings env change reaching a running session): G2 blocks it at its producer's stop, naming the artifact and the
+    failing check, and the next round passes. Repeat with your branch's settings.json.
 12. **D24 table** for every artifact rows 7-20 or X2 touch: the escalation stores (L25), the canonical aggregate (L18),
     the lane reports and the e2e correlation (L17, L22), the cycle contract (L46), the git index the sync updates, the
     recovery journal (row 16), the /restart capability (row 17; issued for the wake only inside its span, X8), the
@@ -964,9 +974,10 @@ Commit order:
 6. the CI jobs, the fault-coverage step and TESTING.md;
 7. last, only if your base's settings.json does not already set it (X3; P1b's E4 sets it): settings.json's
    `CLAUDE_OBLIGATION_STOPGATE` together with the replays whose return to their producer depends on it (F1, F1q, F2,
-   F2j and F2g in the shipped mode; their armed replays get the switch from row 1's armed mode and go in step 3), so it
-   reverts as one unit. If your base sets it, those replays pass under the shipped settings and go with their fault
-   class in step 3.
+   F2j and F2g in the shipped mode; their armed replays get the switch from row 1's armed mode and go in step 3), X3's
+   deletions of the copies whose faults only armed G2 stops and G2's run-time switch read if X3 adds it, so it reverts
+   as one unit. If your base sets it, those replays pass under the shipped settings and go with their fault class in
+   step 3.
 Each commit keeps the suite green (TC-54) and reverts on its own; reverting a fix reverts its replay with it. Say in the
 PR what each revert restores. The reviewer reverts; the owner runs nothing.
 
@@ -1054,8 +1065,9 @@ PR what each revert restores. The reviewer reverts; the owner runs nothing.
   start a nested `claude`.
 - Do not commit captures from real sessions, sandbox output or personal values.
 - Do not parse an API-error or interrupt record anywhere (D4c).
-- Do not change resolver, aggregator or overnight-loop code beyond rows 11, 12, 13, 17 and 19 and X6's producer-side fix
-  of a dead-end site or deletion of a U site there (on lines a later phase owns, with that phase's mechanism, X5).
+- Do not change resolver, aggregator or overnight-loop code beyond rows 11, 12, 13, 17 and 19, X3's deletions and X6's
+  producer-side fix of a dead-end site or deletion of a U site there (on lines a later phase owns, with that phase's
+  mechanism, X5).
 
 ## Context (read once)
 
