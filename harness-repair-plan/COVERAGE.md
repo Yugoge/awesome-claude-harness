@@ -16,7 +16,7 @@ Owner messages after STATE.md (not in STATE.md section 2; STATE.md should gain t
 
 ## (a) Owner decisions and owner statements -> prompt
 
-Legend: done = merged (P0 PR #2, P0b PR #3, P7 PR #4); later = deferred to P9/P10/P11 (not written).
+Legend: done = merged (P0 PR #2, P0b PR #3, P7 PR #4); later = deferred to P9/P10/P11 (their prompts were written on 2026-10-19, after this table; see COVERAGE-P9-P11.md).
 
 ### Decisions
 
@@ -45,7 +45,7 @@ Legend: done = merged (P0 PR #2, P0b PR #3, P7 PR #4); later = deferred to P9/P1
 | D16 history at the end | every prompt: no rewrite | P11 | |
 | D17 dead code deleted | P8 (candidate list), P3 and P5 (code their change orphans), P4/P6 ("Now unreferenced") | P10 (rest of I5/I6, unregistered hook files) | |
 | D24 one producer, at least one consumer per artifact (2026-10-23) | P1b (every artifact: map, deletions, declaring-dispatch reader, CI check); every later PR carries the D24 table | P10 file-level D17 only (the artifact-level goal is P1b's CI check) | added 2026-10-24; this table has no D18-D23 rows (read them in DECISIONS.md, as the status line at the top says) |
-| D25 never fail (2026-10-24) | P1c (replay suite, producer-side fixes, merge rule); P2-P11 (acceptance: suite green on the PR head, fault replay per changed process class) | - | P9 rewrites CLAUDE.md Hook Discipline #5 (C12) |
+| D25 never fail (2026-10-24) | P1c (replay suite, producer-side fixes, merge rule); P2-P6 and P9-P11 (acceptance: suite green on the PR head, fault replay per changed process class; P7 is merged, P8 and P7b merge before the suite exists) | - | P9 rewrites CLAUDE.md Hook Discipline #5 (C12) |
 
 ### Owner statements that ask for behaviour (STATE section 2, plus O44/O45)
 
@@ -70,7 +70,7 @@ Legend: done = merged (P0 PR #2, P0b PR #3, P7 PR #4); later = deferred to P9/P1
 | O35 delete dead code now | P8, P3, P5 | P10 |
 | O44 no owner step, sessions cannot stop | P7b (whole phase); "No owner step" + live-landing acceptance in P1 (18), P8 (16), P2 (15), P3 (16), P4 (19), P5 (21), P6 (17) | P9 (UD-CM, H-Q10), P10 (doctor on each home), P11 (human-run steps): conflict, see gaps |
 | O45 waves and parallelism | P7b + P1 + P8, then P1b, then P1c (2026-10-24), then P2 + P3, P4, P5, P6 as the prompts state (section d) | P9 -> P10 -> P11 |
-| 2026-10-24 never fail (D25): measured by the CI replay suite (1)-(4); every later phase merges with it green and adds the fault replay for the flows it changes (P1c's merge rule) | P1c; P2-P11 acceptance (this sync) | - |
+| 2026-10-24 never fail (D25): measured by the CI replay suite (1)-(4); every later phase merges with it green and adds the fault replay for the flows it changes (P1c's merge rule) | P1c; P2-P6 and P9-P11 acceptance (this sync) | - |
 
 ## (b) PLAN-v2 rows P1-P6 and section 13 -> exactly one prompt
 
@@ -193,8 +193,10 @@ acceptance tests; if P3 merges first, P2's armed replay includes P3's promoted c
 Merge order inside waves matches PLAN (wave 2 either order, P8 preferred; wave 3 P2 first). When this table was
 written, P7b was a dependency of no prompt, yet P5 row 6 edits the hard-ban block holding P7b's :1816 helper call and
 row 16 builds on the auto-commit notice P7b extends (fix 12, recommended). Since then P2-P6 and P9-P11 start only after
-P7b is merged (their "Before you start"; the P4-P6 and P9-P11 cells above do not list it), and P1b and P1c need it too
-(rows above, 2026-10-24). The waves told to the owner on 2026-10-18 equal the prompts' waves.
+P7b, P1b and P1c are merged (their "Before you start"; the P4-P6 cells above list none of the three, the P9-P11 cell
+lists P1b and P1c but not P7b), and P1b and P1c need P7b too (rows above, 2026-10-24). The waves told to the owner on
+2026-10-18 equaled the prompts' waves of that date; P1b and P1c (waves 2b and 2c) were inserted on 2026-10-24 (row O45
+in (a)).
 
 ## Fixes
 
@@ -298,7 +300,7 @@ P7b is merged (their "Before you start"; the P4-P6 and P9-P11 cells above do not
 Inputs: prompts/P1b.md and prompts/P1c.md (each ends with prompts/_common.md byte for byte), inventory/ (the d625284
 map), audit/2026-10-23/, reviews/P1b-plan-sync.md.
 
-| Owner requirement | Delivered by | Test |
+| Requirement (DECISIONS.md D24, D25; only quoted words are the owner's) | Delivered by | Test |
 |---|---|---|
 | D24: one producer, at least one consumer, consumers trust one conclusion | P1b Goals 1-4, scope rows 0-18, E1-E14 | P1b acceptance 3, 6, 10-13 |
 | D24: proved every time, no hand list | P1b Goal 5, row 19 (CI check, trace runner, ten compliant drivers) | P1b acceptance 2, 3 |
@@ -306,11 +308,11 @@ map), audit/2026-10-23/, reviews/P1b-plan-sync.md.
 | D25 (2) faults return to their producer, next round passes, zero human action | P1c rows 3 and 7-17; F1, F1q (missing), F2, F2j, F2g (malformed), F3a, F3q, F3b (old version, E1), F4, F4c, F4s (index.lock), F5, F5f (interrupted), F6, F6o (usage limit, X8), F7, F7b (fan-out lane), each in 2 modes | P1c acceptance 4 (the human /restart of F5, F5f and F6 aside: D22, register RD4) |
 | D25 (3) no dead end apart from /stop | P1c X6, row 4 (block sites enumerated at test time; classes G, D, H, U) | P1c acceptance 5 |
 | D25 (4) a regression replay per fixed defect | P1c row 5: R-P1, R-E1, R-N1 (X9, row 20), R-V1 (X7, row 14) | P1c acceptance 6 |
-| D25 merge rule | P1c "Merge rule from P1c on", row 6 (fault-coverage step); P2-P11 acceptance items (this sync) | P1c acceptance 8; each later PR |
+| D25 merge rule | P1c "Merge rule from P1c on", row 6 (fault-coverage step); P2-P6 and P9-P11 acceptance items (this sync) | P1c acceptance 8; each later PR |
 | Earlier words CC4, CC8, DT2, DT3, DT4, HC2 | P1c "Owner decisions" (quoted with sources); DT4 against CLAUDE.md #5: P9 (C12) | P9 acceptance 16 |
 
-What moved from later phases into P1b and P1c: PLAN-v2 section 15; each later prompt's "P1b and P1c" block names its
-share.
+What moved from later phases into P1b and P1c: PLAN-v2 section 15; P2-P6 name their share in their "P1b and P1c"
+block, P9 in "Rows 1, 2, 4 and 5 after P1b" and P10 under "What earlier phases left to you".
 
 Found while syncing:
 - N1, V1-1 and NV-1 are recorded, with their before and after evidence, in reviews/P7b-PR-record.md (rows N1 :220,
