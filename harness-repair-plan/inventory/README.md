@@ -19,7 +19,7 @@ disagreements. Run date 2026-10-24.
 | covering the 56 ledger rows (split where one ledger row holds several files with different producers) | 82 |
 | found by the static extractor or the traces outside the ledger | 39 |
 | several producers | 38 |
-| several deciding consumers (each with its own rule) | 35 |
+| several deciding consumers (each with its own rule) | 36 |
 | consumer-side re-check or re-derivation | 29 |
 | written never read | 28 |
 | read never written | 24 |
@@ -217,7 +217,16 @@ the module's query (agents/changelog-analyst.md:1644-1646), not by scripts/step7
 from it and only accepts the resulting status (:161-170). The same read also put A94's `-all` daemon-restart flag
 under CLAUDE_DAEMON_RESTART_GRANT_DIR, else CLAUDE_TMPDIR, TMPDIR or /tmp (hooks/pretool-bash-safety.sh:9, :17), and
 A124's orchestrator.sh outputs under a fixed /tmp (scripts/orchestrator.sh:25-27, :243-244, :287, :352, :381, :429),
-not the state dir; no writer or reader of either changes. The counts in this README include all of these corrections;
+not the state dir; no writer or reader of either changes. A later code read corrected A105, the harness settings:
+scripts/bootstrap:272-280 writes the overlay rather than reading it; render-settings' render, clean, smudge and
+`check --staged` read the overlay and the record as `check` does, and smudge also writes settings.json's machine
+form through git; the coexistence installer merges its hook groups into the config home's settings.json
+(scripts/install/installer.py:1164, :1168); and besides render-settings, whose subcommands take one conclusion from
+`load_overlay` and `load_record`, the files have deciding readers with their own rules: the commit block in
+hooks/pretool-bash-safety.sh:355-368, the /allow deny preflight in hooks/userprompt-consent-allowlist.sh:437-615, the
+claude_home probes, bootstrap's env.TMPDIR step (scripts/bootstrap:341-353), the capability binding, the
+cleanliness-inspector's reference scripts and the installer. A105 therefore shows several deciding consumers too.
+The counts in this README include all of these corrections;
 `build_map.py` printed 122 rows, 40 outside the ledger, several producers 35, several deciding consumers 37, written
 never read 29, read never written 18, hand-written table 27, evidence 86 / 33 / 3, G1 dispatch 13 and G12 6.
 
