@@ -76,8 +76,11 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   (/spec /dev /redev /dev-command /dev-overnight /do /close /commit /merge /push) meets 0 gate blocks and 0 hook errors;
   (2) every injected fault (missing artifact, malformed artifact, stale-version report, git index.lock held, interrupted
   session, resume after a usage limit, one lane leaving an old report) is returned to its own producer, named by
-  artifact and failing check, and repaired at the next round with no human action; (3) no dead end: no state exists
-  that no agent action can clear, apart from the owner's own /stop; (4) every process failure fixed so far is a replay
+  artifact and failing check, and repaired at the next round with no human action beyond the owner's own commands
+  (his /restart of a session he interrupted or of one a usage limit cut outside /dev-overnight, D22; his /close or
+  /commit that meets an unfinished cycle, D7; inside /dev-overnight a usage-limit cut resumes with no human action,
+  D20; P1c Goal 1 (2) and acceptance 4); (3) no dead end: no state exists that no agent action can clear, apart from
+  the owner's own /stop; (4) every process failure fixed so far is a replay
   that stays green (P1's fan-out block, E1's v1/v2 contract conflict, N1's stuck /pull, V1-1/NV-1's silent refused
   repair). Phase P1c (prompts/P1c.md) owns the suite; each later phase adds the fault replays for the flows it changes.
   master's CLAUDE.md Hook Discipline #5 ("honest terminal branch") contradicts this and "诚实终态永远不允许"; P9 rewrites
@@ -130,7 +133,8 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   Which producer owns an artifact is read from the dispatch record that declared it, never from a table (D21).
   [INFERRED mechanism; prove before use by P1b's E3 replay (P1b acceptance 7, the declaring-dispatch reader; P3's
   acceptance 8 reruns it over P3's gaps) and, for the deny, by P1b's E3 replay of the derived write permission and the
-  P5-a arm-* sandbox replay that extends it to every caller (TC-20 revised: 0 compliant writes denied, 0 V7a writes
+  P5-a arm-* sandbox replay that verifies it for every caller (P1b ships it for every caller; P5 row 1 adds only a
+  caller P1b's PR left out) (TC-20 revised: 0 compliant writes denied, 0 V7a writes
   allowed).]
 
 ## Pipelines
