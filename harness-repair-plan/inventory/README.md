@@ -23,7 +23,7 @@ disagreements. Run date 2026-10-24.
 | consumer-side re-check or re-derivation | 29 |
 | written never read | 28 |
 | read never written | 21 |
-| hand-written table | 27 |
+| hand-written table | 26 |
 | no violation found | 22 |
 | evidence: both code and trace / code only / trace only | 87 / 33 / 1 |
 
@@ -192,10 +192,15 @@ inside the project (session_resources.py:1127, :1149, :1168-1170, :1433, :1575, 
 `.claude/session-resources/by-claude-session/<sid>.json` that both deciders read (:1286); the row's earlier cites
 (:297-301, :485-513) write the session-resource trust registry outside the project
 (`$LANEB_SESSION_RESOURCE_TRUST_ROOT/<sha256 of the project root>/<sid>.json`, written by provision at :1193 and by
-finalize at :2298-2348), a second harness artifact this map does not list, also left to P1b's regenerated map. The
-counts in this README include all of these corrections; `build_map.py` printed 122 rows, 40 outside the ledger,
-several producers 35, several deciding consumers 37, written never read 29, read never written 18, no violation
-found 21, evidence 86 / 33 / 3 and G12 6.
+finalize at :2298-2348), a second harness artifact this map does not list, also left to P1b's regenerated map. A later
+code read took the hand-written-table label off two command lists in hooks/prompt-workflow.py, :1925 (A89: commit,
+push, merge and stop get a user-intent flag) and :1929 (A01: dev, dev-command and redev reach the task-id mint): each
+is the only rule deciding its question and repeats no declaration (no dispatch record, schema or canonical todo step
+names either set: scripts/todo/ has no commit, push, merge or stop step, and the obligation schema's pipeline enum,
+which obligation.py:81-83 and pretool-obligation-gate.py:88-90 copy (A14), lists seven pipelines). The counts in this
+README include all of these corrections; `build_map.py` printed 122 rows, 40 outside the ledger, several producers 35,
+several deciding consumers 37, written never read 29, read never written 18, hand-written table 27, no violation found
+21, evidence 86 / 33 / 3 and G12 6.
 
 ## Limits
 
