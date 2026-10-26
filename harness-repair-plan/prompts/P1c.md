@@ -828,12 +828,12 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
    .github/workflows/baseline.yml exits 0 on python 3.12 (`python3` from a 3.12 venv in place of setup-python; your
    container's own python3.12 may refuse pip as externally managed), P1b's D24 check included, and the suite job(s)
    on your branch. Where your container runs as root, one step is skipped there: "Clean-install smoke" (:83-109 at
-   2acc29b) exits 1 under uid 0 by design (:94-97), and an unprivileged user cannot reach PyPI through your session's
-   proxy, whose certificate only root can read; its verdict is (a)'s. Run (b) with full history: if
+   2acc29b) exits 1 under uid 0 by design (:94-97 at 2acc29b), and an unprivileged user cannot reach PyPI through your
+   session's proxy, whose certificate only root can read; its verdict is (a)'s. Run (b) with full history: if
    `git rev-parse --is-shallow-repository` prints `true`, first `git fetch --unshallow origin`, because "Verify headline
    claims" runs verify-claims.sh's provenance audit in --strict, which fails on a commit source the clone lacks
-   (62957b3, cited by .github/assets/demo-trace.json at 2acc29b; hence the workflow's fetch-depth 0, :45-49). If that
-   fetch fails, that step's verdict is (a)'s too; say so.
+   (62957b3, cited by .github/assets/demo-trace.json at 2acc29b; hence the workflow's fetch-depth 0, :45-49 at 2acc29b).
+   If that fetch fails, that step's verdict is (a)'s too; say so.
 3. **Requirement (1).**
    `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/replay/test_pipelines.py` -> passed; the
    scenario table with 0 blocks, 0 errors and every terminal reached in both modes; for /dev-overnight, and for F6o in
