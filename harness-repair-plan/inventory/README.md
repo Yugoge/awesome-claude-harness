@@ -17,13 +17,13 @@ two runtime traces, plus probes run for this map to settle the disagreements. Ru
 | artifacts (rows) | 121 |
 | covering the 56 ledger rows (split where one ledger row holds several files with different producers) | 82 |
 | found by the static extractor or the traces outside the ledger | 39 |
-| several producers | 37 |
+| several producers | 38 |
 | several deciding consumers (each with its own rule) | 37 |
 | consumer-side re-check or re-derivation | 29 |
 | written never read | 27 |
-| read never written | 19 |
+| read never written | 20 |
 | hand-written table | 27 |
-| no violation found | 21 |
+| no violation found | 20 |
 | evidence: both code and trace / code only / trace only | 87 / 33 / 1 |
 
 Check positions named in the rows: producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 66.
@@ -171,9 +171,14 @@ notice state is read back by its writer (hooks/doc_sync/notice.py:469-470, a cac
 names its temp note (commands/spec.md:473); A88 and A105 give P7b as merged (1071ad3); A40 adds the aggregator's two
 status sets (scripts/aggregate-dev-report.py:784, :2099), A47 the spec writers it missed, and A98 marks its two
 writers that settings.json does not register. A verification read then added a second writer to A68, the push-gate
-token: the cleaner under /clean (agents/cleaner.md:109-111). The counts in this README include all of these
-corrections; `build_map.py` printed 122 rows, 40 outside the ledger, several producers 35, written never read 29, read
-never written 18, evidence 86 / 33 / 3, elsewhere 67 and G12 6.
+token: the cleaner under /clean (agents/cleaner.md:109-111). A later code read added the writers of the overnight
+per-pipeline spec to A80 (the orchestrator's template copy and the section updates of BA, dev, QA and the PM retro,
+commands/dev-overnight.md:858-874, :1041, :1303, :1406-1407, :1613-1618), made A92, the /stop helper-auth token, a read
+never written when CLAUDE_STATE_DIR is set (its writer, hooks/pretool-wrapper-userintent.py:74, uses the state dir; its
+reader, scripts/break-overnight-lock.py:35, a fixed /tmp), and gave A93 the residual-override grants, which had no row
+(scripts/write-git-residual-override.py:39, read at pretool-git-privilege-guard.py:2237). The counts in this README
+include all of these corrections; `build_map.py` printed 122 rows, 40 outside the ledger, several producers 35, written
+never read 29, read never written 18, no violation found 21, evidence 86 / 33 / 3, elsewhere 67 and G12 6.
 
 ## Limits
 
