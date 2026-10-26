@@ -406,8 +406,9 @@ and no `origin`, CLI 2.1.303, off a harness host; the PR body's table predates i
 in this session (quote it with the date read); do not substitute memory. The change:
 - /dev-overnight's canonical todo list gains a first step "schedule the wake": one recurring scheduled prompt with a
   fixed text, the wake, whose span runs from the launch to the session's end, after end_time included, unless the
-  owner's /stop ends it first. pretool-todo-validate accepts that step's completion only after a CronCreate or
-  ScheduleWakeup call in the span (HC2: a gated step, not prose alone). When the prompt fires, prompt-workflow
+  owner's /stop ends it first. pretool-todo-validate accepts that step's completion only after a recurring CronCreate of
+  the wake's text in the span, the call whose id the deletions and the time-lock below name (HC2: a gated step, not
+  prose alone; COV-7 found ScheduleWakeup unavailable outside `/loop`). When the prompt fires, prompt-workflow
   recognises it by the non-human origin that stop_contract.is_human_prompt already excludes (`origin` or `turnOrigin`
   kind other than "human", stop_contract.py:45-49), if the scheduled prompt's record carries one (UNVERIFIED above) and
   a UserPromptSubmit hook can see it (below), else by its fixed text, inside an open /dev-overnight span only, and
