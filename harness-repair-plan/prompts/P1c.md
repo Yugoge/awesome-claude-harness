@@ -474,13 +474,13 @@ every reader of the cycle number calls P2's `cycle_index(state)`), and in row 18
 E8), close.md :337 and :507 (its rows 6 and 8), commit.md :334 (its row 7), merge.md:165 (its row 12, E11), push.md
 Step 1's token scan (its row 11), the resolver calls at dev.md:1322 and dev-command.md:889, the repository-relative
 harness-script calls of close.md :66-68, :345, :776 and :950 (and :141-143 if P1b's replays ran /close --late-repair)
-and commit.md :313, :320 and :965, and the agent calls changelog-analyst.md :185, :399 and :729 and qa.md :1137-1138
-(its row 7 respells them to the harness's copy) and, for /dev-command, the spec auto-detect (its E9 and E14) and the
-Step 16 completion template (its row 7 takes the completion report out of the resolver's required chain); outside the
-table, the routing loops of /close and /commit, which dispatch again each gap's declaring dispatch through its E3 reader
-(its row 10; the F8 faults replay them). For each, read P1b's merged PR, verify on your base what it delivered, add the
-replay, and change code or prose only for what P1b's PR left. What P1b's PR did is neither your deletion nor your
-retired rule ("Rules added / retired", "Net code cap").
+and commit.md :313, :320, :459, :486, :570, :821 and :965, and the agent calls changelog-analyst.md :185, :399 and :729
+and qa.md :1137-1138 (its row 7 respells them to the harness's copy) and, for /dev-command, the spec auto-detect (its E9
+and E14) and the Step 16 completion template (its row 7 takes the completion report out of the resolver's required
+chain); outside the table, the routing loops of /close and /commit, which dispatch again each gap's declaring dispatch
+through its E3 reader (its row 10; the F8 faults replay them). For each, read P1b's merged PR, verify on your base what
+it delivered, add the replay, and change code or prose only for what P1b's PR left. What P1b's PR did is neither your
+deletion nor your retired rule ("Rules added / retired", "Net code cap").
 
 | # | File | Location (d625284) | Change |
 |---|---|---|---|
@@ -500,7 +500,7 @@ retired rule ("Rules added / retired", "Net code cap").
 | 14 | scripts/lib/session_index.py; scripts/session-index.py; agents/changelog-analyst.md :660-675 | `sync_failed` raised at :255-256 (`update-index --add --cacheinfo` :252-253); `update-index --force-remove` :248-249, its exit code unchecked (:257 lists the path as synced); the analyst's sync step | F4c, X7's option. X7's wait covers both update-index calls, and no path is reported synced unless update-index wrote it (the deletion branch returns its failure as the `--cacheinfo` branch does). This row changes no prose of the analyst (row 18 changes its :651, :665 and :669 session-index paths and its `rm -f` steps) and adds no check (C2). |
 | 15 | commands/restart.md | :70, :118, :131 (`$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py …`) | F5, F6. Spell each command in the form bash-safety resolves by design (the bashprobe showed `~/.claude/...` passing), per X4 (a). The hook keeps refusing a dynamic command head. |
 | 16 | hooks/pretool-todo-validate.py; hooks/posttool-subagent-track.py | Gate 4 `check_subagent_completion_guard` :251-270 | F5 (and F5f). A subagent step is also satisfied by an Agent tool_use of that role in the span whose agent was resumed by the recovery path and whose resume finalized (the recovery's own journal record, which CLAUDE.md says is journaled through SubagentStop). Read it from the transcript and that record; no replacement call is demanded, which restart.md and Lesson 16 forbid. The message names the step, the role and, where the obligation declares one, the artifact. |
-| 17 | per X8 | — | F6o, X8's wake: scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/pretool-block-background-tasks.py (the widened exception), commands/dev-overnight.md (one line). |
+| 17 | per X8 | — | F6o, X8's wake: scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/pretool-block-background-tasks.py (the widened exception), commands/dev-overnight.md (one line). Every step of your base's list keeps its label, content and activeForm, and the wake rule, Gate 4 and what records a step's subagent call pair each todo with the canonical step of the same content, never of the same index (at d625284 Gate 4 and hooks/posttool-subagent-track.py read the list by index, pretool-todo-validate.py:227-240, posttool-subagent-track.py:480-525): an overnight session running at your merge keeps the todo list it wrote from your base's list, without the wake step, and resets it every cycle, so that list meets neither the wake rule nor another step's check (acceptance 11). |
 | 18 | the literal-prose conflicts (X4) | see the list under the table | Each fixed on the side X4 picks, with the replay that met it. |
 | 19 | the /dev-overnight compliant cycle (X5) | see the list under the table | The smallest part of the owning row that lets the compliant overnight scenario run from launch to a Stop after end_time with 0 blocks. |
 | 20 | hooks/pull.sh; hooks/git-fswatch.sh `has_changes`, `safe_pull`; scripts/install/land's "Review N1" block (only if it must be made callable) | pull.sh `HAS_CHANGES` :17-21; fswatch `has_changes` :160, `safe_pull` :174 (fetch :180, stash push :200, `pull --rebase` :210) | X9. N1's window (only if X9 (ii) refuses): on a landed harness home the landing's existing settings.json re-record runs before the stash decision; no second implementation, no new state. Fact 1: each `safe_pull` step is decided by its git command's own exit status, not `tee`'s. |
@@ -844,12 +844,22 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
     lock; Gate 4 after a recovery resume; the config guard's narrow case and its unchanged refusals) -> passed.
 11. **Live landing** (D15; the owner cannot stop his sessions). As a session started before your merge: your base's
     settings.json with your hook files. A compliant /dev Stop in the toy repository and one in the harness home: every
-    Stop hook exits 0. An in-flight /dev cycle dispatched from your base's templates, with escalation records from an
-    earlier no-progress round still on disk (P1b's row 3 removed their writer, so make them first: run d625284's G2
-    with `CLAUDE_OBLIGATION_STOPGATE=block` through such a round of that cycle in the toy repository, which writes them
+    Stop hook exits 0. Two in-flight cycles, each begun before your merge lands (on your base's hook and script
+    files up to its first TodoWrite, so its todo list is written from your base's scripts/todo/) and run on
+    with yours: (a) a /dev cycle dispatched from your base's templates, with escalation records from an earlier
+    no-progress round still on disk (P1b's row 3 removed their writer, so make them first: run d625284's G2 with
+    `CLAUDE_OBLIGATION_STOPGATE=block` through such a round of that cycle in the toy repository, which writes them
     under the cycle's `.claude/dev-registry/` directory): no hook exits 2 on a compliant stop, and the old records are
-    ignored. The same cycle with `CLAUDE_OBLIGATION_STOPGATE=block` (X3): 0 G2 blocks on its compliant stops. Repeat
-    with your branch's settings.json.
+    ignored; (b) a /dev-overnight cycle launched from your base's templates, run on through its loop's next todo reset
+    to its Stop after end_time (row 17 puts a new first step in /dev-overnight's canonical list, and Gate 4 reads that
+    list by index, hooks/pretool-todo-validate.py:227-240 at d625284). Both follow your base's command and agent text,
+    so drive them with your base's drivers (P1b's, from a scratch clone of your base; your branch keeps no `DEVIATION:`,
+    acceptance 3), whose `DEVIATION:` steps pass each kept base block that text still meets (a block you fix on the
+    prose side under X4 (a) still meets the unchanged hook there): on every replayed event of both, no hook exits 2 or
+    prints a block or deny decision that the same replay with your base's hook and script files does not show at the
+    same hook, step and refusal text; each block met is listed in the PR with its hook text, and none is new (Goal 4).
+    The same cycles with `CLAUDE_OBLIGATION_STOPGATE=block` (X3): 0 G2 blocks on their compliant stops. Repeat with your
+    branch's settings.json.
 12. **D24 table** for every artifact rows 7-20 or X2 touch: the escalation stores (L25), the canonical aggregate (L18),
     the lane reports and the e2e correlation (L17, L22), the cycle contract (L46), the git index the sync updates, the
     recovery journal (row 16), the product command files (row 18), settings.json (row 20, if taken), each state file
