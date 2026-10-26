@@ -572,7 +572,7 @@ replay.
   text, or a network attempt caught by X2's guard.
 - *Expected producer* of an artifact: the agent whose Agent tool_use carried the obligation that declares that path
   (role, lane and agent id via the `.meta.json` toolUseId); for an artifact no dispatch declares, the actor that the
-  command's canonical todo step (scripts/todo/<command>.py) names. Derived from the replay's own transcript, never
+  command's canonical todo step (scripts/todo/<command>.py) names. Derived from the replay's own transcripts, never
   from a table (D21). At d625284 scripts/todo/ has no commit.py, merge.py or push.py and the /merge and /push dispatches
   carry no obligation; P1b's E3 fallback declares those analysts' artifacts in their dispatch templates. An artifact
   your base still leaves with neither source is a scope row: declare it at its producer's dispatch, never in a table.
@@ -702,8 +702,8 @@ pass, human events.
   dropped; shell: the same lines once blank lines and comment lines after the first are dropped). The step fails when a
   file of the runtime set that the PR adds or changes beyond its comments, or a settings.json key the PR adds or
   modifies (compared key by key, not as a file), lies on no such replay's path, and prints them. A changed key that
-  registers no hook and that no file of the runtime set reads by name is printed as a fact (CLI-only, such as a
-  permission entry) and does not fail the step. It prints as a fact each comment-only change to a file of the runtime
+  registers no hook and that no file of the runtime set reads by name is printed as a fact (CLI-only) and does not
+  fail the step. It prints as a fact each comment-only change to a file of the runtime
   set and, with its class, each changed file outside that set: a test; CI-only (a file of .github/, or a script a `run:`
   step there runs, such as P10's size ratchet); or used by no replayed process (an INDEX.md or README.md,
   hooks/QUICKSTART.md, hooks/git-fswatch@.service, code no hook entry or replayed definition reaches, or bash-safety's
@@ -771,7 +771,8 @@ pass, human events.
 Setup: the planning kit for "before" comparisons (`T="$SCRATCH/plan/harness-repair-plan/tools"`; a sandbox per tree,
 each in its own empty directory: `export SB="$SCRATCH/sb-<name>"`, then `"$T/sb-setup.sh" <tree>`, and every hook run
 of that tree through `"$T/ns.sh"` with the same SB; a tree is a scratch clone with a detached checkout, never a
-worktree); the suite itself through pytest in your checkout. Never against your container's `~/.claude` or HOME.
+worktree); the suite itself through pytest in your checkout, with the `python3` of acceptance 2's 3.12 venv
+(acceptance 17's lockfile install). Never against your container's `~/.claude` or HOME.
 
 1. **Base.** The "Before you start" checks, with their output.
 2. **CI baseline.** Green means both of these. (a) CI: the pull_request run on your PR's head is green in every job,
@@ -897,10 +898,10 @@ Effort: XL (about 6 days: the suite about 3, the fixes about 3). No owner time.
 
 X1-X10 and their options; the added scenarios' layout and how chained scenarios save and load state; the
 normalisation that makes verdict tables comparable (ids, timestamps, paths); how block sites are enumerated and
-covered, and the class of each; the expected-producer derivation; the shard split; the fault-coverage path set; the
-lock-poll interval and the stale-lock test (X7); the wake text and schedule (X8); each prose respelling and each
-hook fix of row 18; anything else you decide. Follow the producer-side design doc, take the option with less code and
-fewer rules, and back each with a test or a replay.
+covered, and the class of each; the expected-producer derivation; the shard split; the fault-coverage step's path and
+runtime sets and its comment-only test; the lock-poll interval and the stale-lock test (X7); the wake text and schedule
+(X8); each prose respelling and each hook fix of row 18; anything else you decide. Follow the producer-side design
+doc, take the option with less code and fewer rules, and back each with a test or a replay.
 
 ## Rollback
 
