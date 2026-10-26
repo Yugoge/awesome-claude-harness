@@ -43,7 +43,9 @@ sessions keep running with the hook list they loaded (D15), so every hook change
 a second one. If a name or form differs from this description, use what is merged and say so in the PR.
 - P1b: its trace runner (the committed module that replays a pipeline in T1 order and records which actor wrote, read,
   probed or deleted which path), its D24 table format, its experiment that chose runtime tracing or static derivation
-  (X1 below), and its "Out of scope, found" items that name a process defect.
+  (X1 below), its "Out of scope, found" items that name a process defect, and its "Hand-off to P1c" list: each base
+  block its compliant drivers still meet, with the hook text and the driver's `DEVIATION:` step that passes it. Rows 18
+  and 19 remove each block, and the commit that removes it drops its DEVIATION (X4).
 - P1: hooks/lib/obligation.py (parse_obligation, resolve_own_obligation, find_unresolved_dispatch_obligations,
   canonical_task_id, registry_dir_for); hooks/lib/stop_contract.py and hooks/lib/command_span.py (is_human_prompt,
   active_command, active_span); the producer-question artifact; the Stop coordinator's relay; P1's PR section
@@ -207,7 +209,8 @@ section 0; they rank below quoted owner words and D20-D24. Register rows are aud
 - **Producer-side.** Every fix lands on a producer: the producer's own stop (G2), the dispatch (G1) or collection (G3)
   point, a launcher, the script that writes the artifact, a producer prompt, or CI. Nothing is added to /close, /commit
   or the changelog-analyst as a check (C2); the two places rows 14 and 18 touch there change how a producer operation
-  runs or remove a step a hook refuses, and the PR shows that each hunk adds no check.
+  runs or remove a step a hook refuses, a change to any part of the routing loops P1b's PR left only makes them
+  dispatch a gap's producer again ("Delivered by P1b"), and the PR shows that each hunk adds no check.
 
 **OPEN owner decisions.** None. Ask the owner nothing, at any point. A product question this prompt does not answer is
 decided by an experiment you run, recorded in the technical-choices table.
@@ -241,22 +244,26 @@ http_proxy, https_proxy, HTTP_PROXY, HTTPS_PROXY and ALL_PROXY pointed at a clos
 fails fast and counts as a hook error. Experiment: replay the compliant /dev 2-lane scenario once in the kit's namespace
 and once in the fixture. Rule: take the fixture if both give the same table (per hook event: hook, exit code, block
 text with ids, timestamps and paths normalized) and the fixture run, traced, writes outside tmp_path only paths that
-carry the scenario's own session id (the fixed `/tmp` paths some hooks still use: ledger L29, L42, L43). The fixture
-removes those at teardown and the PR lists them for P1b's D24 table. Any other difference is a fixture defect, fixed in
+carry the scenario's own session id (at d625284 the fixed `/tmp` paths of ledger L29, L42 and L43, which P1b's path
+rule moves under the state dir). The fixture removes those at teardown, and the PR lists each one your base still
+writes, with its writer's file:line, under "Out of scope, found". Any other difference is a fixture defect, fixed in
 the fixture.
 
-**X3. G2 armed in P1c.** F1, F1q and F2 do not return to their producer under the shipped settings; arming G2 alone
-fixes all three (pilot: f1-armed, f1q2-armed and f2-armed each blocked once at the producer's stop and passed round 2).
-P2 arms G1-G3 in its last commit. Experiment: with rows 7 and 8 applied, run every (1) scenario and the live-landing
-replay of acceptance 11 with `CLAUDE_OBLIGATION_STOPGATE=block`; also measure, as P2's prompt describes under "Arming
-timing" step (1), whether a settings env change reaches a running session. Rule: if every compliant scenario has 0 G2
-blocks and the live-landing replay has no G2 block on a compliant in-flight cycle, add
-`"CLAUDE_OBLIGATION_STOPGATE": "block"` to settings.json env (the tracked clean form; `scripts/install/render-settings
-check --staged` stays green) in your last commit, and the PR tells P2 to arm only G1 and G3. A compliant scenario that G2
-blocks is a false block: fix its producer side (the template, the agent prose, or G2) and re-run. No branch of this rule
-ships the suite with F1, F1q or F2 unreturned. Either env result is safe: a running session keeps advisory until it ends
-or picks up block at its next producer stop, which acceptance 11 covers. G1 and G3 stay advisory (P2); G4 stays
-advisory (P5 replaces it).
+**X3. G2 armed (by P1b's E4, or here).** If your base's settings.json already sets `CLAUDE_OBLIGATION_STOPGATE` to
+`block` (P1b's E4 sets it in P1b's last commit, after its own false-block replay), run the replays below only and say
+so in the PR: they must meet the rule below (0 G2 blocks on compliant stops; a false block is fixed at its producer
+side and re-run), and you change no settings (row 9 and Rollback step 7 then add nothing). At d625284, F1, F1q and F2
+do not return to their producer under the shipped settings; arming G2 alone fixes all three (pilot: f1-armed,
+f1q2-armed and f2-armed each blocked once at the producer's stop and passed round 2). P2 arms G1 and G3 in its last
+commit. Experiment: with rows 7 and 8 applied, run every (1) scenario and the live-landing replay of acceptance 11 with
+`CLAUDE_OBLIGATION_STOPGATE=block`; also measure, as P2's prompt describes under "Arming timing" step (1), whether a
+settings env change reaches a running session. Rule: if every compliant scenario has 0 G2 blocks and the live-landing
+replay has no G2 block on a compliant in-flight cycle, add `"CLAUDE_OBLIGATION_STOPGATE": "block"` to settings.json env
+(the tracked clean form; `scripts/install/render-settings check --staged` stays green) in your last commit, and the PR
+tells P2 to arm only G1 and G3. A compliant scenario that G2 blocks is a false block: fix its producer side (the
+template, the agent prose, or G2) and re-run. No branch of this rule ships the suite with F1, F1q or F2 unreturned.
+Either env result is safe: a running session keeps advisory until it ends or picks up block at its next producer stop,
+which acceptance 11 covers. G1 and G3 stay advisory (P2); G4 stays advisory (P5 replaces it).
 
 **X4. Literal-prose conflicts: which side changes.** The compliant drivers follow the command and agent prose
 literally: every fenced command block as written with its placeholders filled, every template as written, the
@@ -314,21 +321,25 @@ pretool-git-privilege-guard.py 47, pretool-overnight-hook-guard.py 42); expect f
 on the pattern: a verifier's re-counts with other line patterns gave 136 to 442 lines in 31 to 44 files, so only the
 enumerator's own site list counts.
 
-**X7. A git lock held under a repair (V1-1/NV-1, F4c).** `session-index.py sync-shared` exits 3 when index.lock is held
-(scripts/lib/session_index.py :235 and :256 raise `sync_failed`); nothing retries or tells the agent, and `rm
-.git/index.lock` is refused by bash-safety. Options:
+**X7. A git lock held under a repair (F4c).** `session-index.py sync-shared` exits 3 when index.lock is held
+(scripts/lib/session_index.py :255-256 raise `sync_failed` when `update-index --add --cacheinfo` (:252-253) cannot take
+the lock; the deletion branch's `update-index --force-remove` (:248-249) ignores its exit code and :257 lists the path
+as synced, so a commit whose only changes are deletions exits 0 with a false "synced" report; :231-235 is `diff-tree`,
+which takes no lock); nothing retries or tells the agent, and `rm .git/index.lock` is refused by bash-safety. Options:
 - (A) the sync itself (the producer of the shared-index update) waits while a live process holds the lock, printing
   the holder (pid and command where the platform shows them) at a fixed interval; when no process holds the lock (no
   open file descriptor on it, read from /proc) and the lock is older than the sync's own start, it removes the lock
   with one unlink, says so on stdout, and continues;
-- (B) it waits only and never removes; a stale lock is reported in the analyst's response block, and the orchestrator
-  asks in-turn (D23).
+- (B) as (A), but a lock with no open descriptor is removed only when, in addition, no git process has this repository
+  as its working directory (also read from /proc).
 Experiment, in the fixture: a live holder (a background process keeping index.lock open for 20 s), a stale lock (the
-file with no holder), and no lock; then the same three with /proc unavailable to the helper (removal never happens
-there). Rule: take (A) if the live case shows 0 removals and a completed sync after release, the stale case completes
-with exactly one removal, and no case leaves `git status` showing the commit as reverted; otherwise (B). Check in the
-replay that a /dev-overnight session works in its worktree's own index, which a lock on the main index does not touch.
-The bash-safety refusal of `rm` stays.
+file with no holder), and no lock, each run once with a commit that modifies a path and once with a commit whose only
+change is a deleted path; then the same six with /proc unavailable to the helper (removal never happens there). Rule:
+take (A) if, with /proc, the live cases show 0 removals and a completed sync after release, the stale cases complete
+with exactly one removal each, and no case leaves `git status` showing the commit as reverted; otherwise (B), held to
+the same conditions before merge. No option asks the owner or the orchestrator, inside or outside /dev-overnight (D3,
+D25 (2)). Check in the replay that a /dev-overnight session works in its worktree's own index, which a lock on the main
+index does not touch. The bash-safety refusal of `rm` stays.
 
 **X8. Autonomous resume after a usage limit inside /dev-overnight (F6o; D20, T0, SG6).** Today only the human's /restart
 resumes (human-only: `disable-model-invocation: true` and the `Skill(restart:*)` deny), so an unattended session waits
@@ -354,29 +365,32 @@ Rule: take (A) if the documented or captured record shape drives the replay to a
 blocks, and the widened exception refuses any other message or id (two replays). Take (B) only if the documentation or
 the capture shows that a scheduled prompt cannot fire there. Never parse an API-error record (D4c).
 
-**X9. N1 on a landed home.** No record of this defect exists in the repository or the planning branch: `git grep -nE
-'\bN1\b' d625284` finds only unrelated uses (the Nielsen "N1-N5" heuristics in agents/ui-specialist.md:219 and the
-skills/ui-* files, the label `AC3(N1)` in scripts/install/tests/installer-acceptance.py:438-445, a test string in
-tests/test_stage_owned_hunks_boundary.py:1253), and the same grep over `harness-repair-plan/` at the planning branch head
-dac09ec9 finds nothing. Reproduce it from its description: the CLI writes settings.json, then /pull wedges on its
-stash, `pull --rebase`, pop path. Before, in a scratch clone at f8c18c276e92e07c14487e9908490aa4bdefbc3a (P7 merged, P7b
-not) with HOME and GIT_CONFIG_GLOBAL in scratch and a local bare origin: write a changed `model` value and one added
-permission allow into the live settings.json (keys the CLI writes; prompts/P7b.md fact 2), commit upstream a
-settings.json change next to those lines, run hooks/pull.sh -> expected `UU settings.json` with the stash kept; run it
-again -> expected exit 1 at its stash (P7b.md fact 9). After, on your base: (i) the same home -> one Stop (P7b's landing
-repairs the conflicted pop) -> a second /pull runs to its end with no unmerged path; (ii) a landed home where the CLI
-writes `model` and an allow entry and upstream edits adjacent settings.json lines -> /pull leaves no unmerged path, or
-the next Stop repairs it, and a second /pull runs to its end. Repeat (i) and (ii) through fswatch's `safe_pull`. Rule: if
-(i) and (ii) hold, N1 needs only its replay. If (ii) wedges, the pull paths (hooks/pull.sh and `safe_pull`, the
-producers of the stash and the pop) resolve a conflicted settings.json pop by calling the landing's existing repair step
-(no second implementation, no new state, the stash kept), and the replay must then pass (row 20).
+**X9. N1 on a landed home.** The record is P7b's merged PR #7: commits 8ab874b and 98d153a, scripts/install/land's
+"Review N1" block, the tests in tests/test_landing.py whose docstrings begin "Review N1"
+(`test_a_cli_write_of_its_own_key_does_not_stop_the_pulls_after_a_stop` runs both pulls), and, in the planning
+documents, reviews/P7b-PR-record.md (the N1 row; under "Out of scope, found", "Review N1's remaining window" and
+"Fact 1"). N1: on a landed home the CLI writes a key the clean form leaves out (`model`); settings.json's size changes
+and git trusts the stat without the filter, so `git diff --quiet` says clean and /pull does not stash,
+`git pull --rebase` refuses (`cannot pull with rebase: You have unstaged changes`), hooks/pull.sh exits 1 and
+`safe_pull` returns 0 without pulling, at every later Stop too. P7b fixed it from the next Stop on (the landed fast
+path re-records the stat). The record leaves two parts open: a pull after the write and before that Stop still meets
+the refusal once (the window), and `safe_pull` decides its fetch, stash push and pull by `tee`'s exit status, so it
+logs their failures as success (Fact 1). Before, on 1d10ae0 (the first parent of 8ab874b; the record shows the same
+on d625284 after P7's manual init), in a scratch clone with HOME and GIT_CONFIG_GLOBAL in scratch and a local bare
+origin one commit ahead: a landed home, a CLI `model` write, one Stop -> hooks/pull.sh exits 1, `safe_pull` returns 0,
+HEAD behind. After, on your base: (i) the same -> both pulls reach the upstream commit, the CLI's `model` kept,
+nothing stashed; (ii) the same write, then each pull before any Stop. Rule: if (i) and (ii) hold, N1 needs only its
+replay. If (ii) refuses, on a landed harness home hooks/pull.sh's `HAS_CHANGES` and fswatch's `has_changes` (the
+producers of the stash decision) first run the landing's existing re-record, made callable from them if it is not (no
+second implementation, no new state), and the replay must then pass (row 20). Either way `safe_pull` decides each step
+by that git command's own exit status, and a failing fetch, stash push or pull returns non-zero (row 20).
 
 **X10. CI run time and the split.** Pilot measurements (4 cores shared with other sessions, so noisy): a full 2-lane
 /dev fault replay 150-252 s wall untraced; trace A's six-pipeline session 637.6 s untraced (1034.9 s traced); trace B's
 seven pipelines 451.4 s untraced (632.6 s traced); the overnight what-if 159.5 s; strace adds x1.4-1.6. Estimate for this
-suite, untraced and sequential: (1) 16 scenarios about 2,100 s per settings mode; (2) 17 faults about 3,200 s per mode,
+suite, untraced and sequential: (1) 16 scenarios about 2,100 s per settings mode; (2) 21 faults about 4,000 s per mode,
 roughly half that if each fault starts from the compliant run's saved state at its injection step; (3) about 60-120 s
-(hook-level replays); (4) about 400 s beyond what (2) shares. Both modes: about 3.1 h, or about 2.2 h with saved-state
+(hook-level replays); (4) about 400 s beyond what (2) shares. Both modes: about 3.5 h, or about 2.4 h with saved-state
 starts. UNVERIFIED on a CI runner. Experiments:
 - (a) run the hooks of one event in parallel, as the CLI does, against sequential: if the verdict tables of the 16
   compliant scenarios are identical, run them in parallel;
@@ -387,36 +401,55 @@ including setup, every pull_request push runs all of it as a required check. Oth
 (4) in both modes, (2) in the PR's own settings mode, and (3); the full set ((2) in the armed copy too, and the traced
 run that feeds the D24 table) runs on the PR head before merge (workflow_dispatch by the reviewer, or the
 `ready_for_review` event) and on baseline.yml's weekly schedule on master. Either way the merge condition is the full
-set green on the PR head, and no scenario is dropped from both sets.
+set green on the PR head, and no scenario is dropped from both sets. P1b's D24 check (its own step or job, P1b's E2)
+keeps the schedule P1b's E2 chose (per PR, never nightly-only) and is outside this split; the traced run above is this
+suite's own (X1).
 
 ## Scope (re-verify every location on current origin/master)
 
 Locations are at d625284. Every file below may have been changed by P1b, P8 or P7b: find each site again on your base
 before you edit it. New code runs on Python 3.10, the CI floor.
 
+**Delivered by P1b.** P1b merged before you, and its rows target several sites below: row 7 (its row 3), row 10's
+obligation-bearing case (its row 3), row 13's schema source and the contract's v1 names (its rows 6 and 13, E13), row
+19's launcher seed (its E13), and in row 18 the do.md template (its E8), spec-update.md:115 (its row 17), close.md :337
+and :507 (its rows 6 and 8), commit.md :334 (its row 7), merge.md:165 (its row 12, E11) and the /dev-command spec
+auto-detect (its E9 and E14); outside the table, the routing loops of /close and /commit, which dispatch again each
+gap's declaring dispatch through its E3 reader (its row 10; the F8 faults replay them). For each, read P1b's merged PR,
+verify on your base what it delivered, add the replay, and change code or prose only for what P1b's PR left. What
+P1b's PR did is neither your deletion nor your retired rule ("Rules added / retired", "Net code cap").
+
 | # | File | Location (d625284) | Change |
 |---|---|---|---|
 | 1 | tests/replay/ (new): conftest.py, the runner glue, the scenario library | — | The fixture of X2 on top of P8's root conftest.py; the runner per X1. One scenario library builds every pipeline the way the CLI records it (P1's "Scenario drivers"): two queue-operation records at transcript start; a typed slash command as UserPromptSubmit, the `<command-name>` user record and the isMeta body; each dispatch as the Agent tool_use carrying its obligation with a UTC dispatched_at before PreToolUse, the subagent transcript and `.meta.json`, the subagent's own tool calls, SubagentStop with agent_transcript_path, last_assistant_message and stop_hook_active, then the tool_result and PostToolUse; a re-dispatch with the same obligation template and a fresh dispatched_at. Chained scenarios (/close, /commit, /merge, /push) start from the saved state of their predecessor. Settings modes: `shipped` (the checkout's settings.json) and `armed` (the same plus CLAUDE_OBLIGATION_GATE and CLAUDE_OBLIGATION_BARRIER = block, P2's target; CLAUDE_OBLIGATION_TERMINAL never). Drivers model a compliant agent per X4. This phase commits its scenario drivers as test code: the one exception to P1's "do not commit scenario drivers". |
 | 2 | tests/replay/test_pipelines.py (new) | — | Requirement (1), "The suite" below: 16 scenarios over the ten pipelines, both settings modes. |
-| 3 | tests/replay/test_faults.py (new) | — | Requirement (2): the 17 faults of "The suite", both settings modes. |
+| 3 | tests/replay/test_faults.py (new) | — | Requirement (2): the 21 faults of "The suite", both settings modes. |
 | 4 | tests/replay/test_no_dead_end.py (new) | — | Requirement (3) per X6: the site enumerator, the per-site replays and classes, the AskUserQuestion-answer and forged-ESCALATION_ACK replays. |
 | 5 | tests/replay/test_regressions.py (new) | — | Requirement (4): R-P1, R-E1, R-N1 and R-V1 of "The suite", each with its "before" reproduction recorded in the PR. |
 | 6 | .github/workflows/baseline.yml (P8's) or one new workflow it calls; tests/TESTING.md | the jobs; one short section | The suite as CI jobs, sharded per X10, required on pull_request; reachable from release.yml's workflow_call so a tag cannot publish around it. The fault-coverage step ("Merge rule from P1c on"). The network guard of X2 in every job. TESTING.md gets one short section: how to run the suite locally and the merge rule, nothing more (D21: no manual). |
-| 7 | hooks/subagentstop-artifact-contract-enforce.py (G2) | `ACK_PREFIX` :304 and the ack helpers :319-329; `_load_progress_helper` :351; `_mint_record` :614 (escalation-admissions :639); `_latest_unadmitted` :637; `_write_side_records` :659 (deferred-checks :691); `_clear_progress` :704; `_gate_decide` :747 (the no_progress branch :774-798) | F2g; corrections 2.27 and 2.30; C5; D24. A failing obligation stop is a plain exit 2 that names each failing artifact and check to the stopping producer, in every round. Delete the no-progress hand-off, the `ESCALATION_ACK` admission and its four record stores (escalations/, escalation-admissions/, progress/, deferred-checks/; ledger L25: written, read only by this hook). Before deleting a store, show by grep and the suite's trace that nothing else reads it; a store another reader uses stays and goes into the D24 table. Records left on live homes are ignored (acceptance 11). `GATE_FAULT` (a crashed gate decision stays blocked, :1158-1163) stays. Its tests change with it (row 21). |
+| 7 | hooks/subagentstop-artifact-contract-enforce.py (G2) | `ACK_PREFIX` :304 and the ack helpers :319-329; `_load_progress_helper` :351; `_mint_record` :614 (escalation-admissions :639); `_latest_unadmitted` :637; `_write_side_records` :659 (deferred-checks :691); `_clear_progress` :704; `_gate_decide` :747 (the no_progress branch :774-798) | F2g; corrections 2.27 and 2.30; C5; D24. P1b's row 3 delivers this: verify it on your base, add F2g's replay, and change code only for what P1b's PR left. A failing obligation stop is a plain exit 2 that names each failing artifact and check to the stopping producer, in every round. Delete what your base still has of the no-progress hand-off, the `ESCALATION_ACK` admission and its four record stores (escalations/, escalation-admissions/, progress/, deferred-checks/; ledger L25: written, read only by this hook). Before deleting a store, show by grep and the suite's trace that nothing else reads it; a store another reader uses stays and goes into the D24 table. Records left on live homes are ignored (acceptance 11). `GATE_FAULT` (a crashed gate decision stays blocked, :1158-1163) stays. Its tests change with it (row 21). |
 | 8 | same | the legacy correlation path :1218-1230 (`_find_correlated_reports`, `_dispatch_task_id`, `_own_reports`) | F7b. When the dispatch prompt carries no obligation block, judge only the reports the stopping agent wrote itself, read from its own transcript's Write and Edit tool uses (agent_transcript_path), never a sibling's or an earlier attempt's. A report it did not write is not its to fix (C5, CC8); it stays for its own producer's stop. |
-| 9 | settings.json | env | X3: `"CLAUDE_OBLIGATION_STOPGATE": "block"`, in the last commit together with the fault replays whose return depends on it (Rollback, step 7). Nothing else in settings.json. |
-| 10 | hooks/subagentstop-e2e-enforce.py | report resolution :120-137 (`session_ts_filename_match`, then the "last 5" scan) | F1q, F3b, the overnight what-if ("no qa-report-*.json … under session <sid>"). For an obligation-bearing QA dispatch, judge exactly the qa-report path its obligation declares (resolve_own_obligation), whatever the session id format; without an obligation, only a report the stopping QA wrote itself (as row 8). The newest-filename and "last 5" correlation goes. The message names the exact path and the missing field. Whether this gate should stay a second decider next to G2 on the same artifact is P1b's D24 question: list it, do not merge them here. |
+| 9 | settings.json | env | X3, only if your base's settings.json does not already set it (P1b's E4 sets it): `"CLAUDE_OBLIGATION_STOPGATE": "block"`, in the last commit together with the fault replays whose return depends on it (Rollback, step 7). Nothing else in settings.json. |
+| 10 | hooks/subagentstop-e2e-enforce.py | report resolution :120-137 (`session_ts_filename_match`, then the "last 5" scan) | F1q, F3b, the overnight what-if ("no qa-report-*.json … under session <sid>"). P1b's row 3 moves the obligation-bearing case: verify it on your base, add its replays, and change code only for what P1b's PR left; the case without an obligation is yours. For an obligation-bearing QA dispatch, judge exactly the qa-report path its obligation declares (resolve_own_obligation), whatever the session id format; without an obligation, only a report the stopping QA wrote itself (as row 8). The newest-filename and "last 5" correlation goes. The message names the exact path and the missing field. P1b's merged D24 check settled whether this gate is a second decider next to G2 on the same artifact: keep what P1b merged and add no second decider. |
 | 11 | scripts/aggregate-dev-report.py | `_write_blocked_aggregate` :2023-2101 and its callers; `canonical_status = "blocked"` :1591; the shard validation that accepts `needs_review` (a third vocabulary, ledger L21) | F2, F2g. On a shard failure the script writes no canonical report, removes the canonical it wrote earlier for that task (its own output), and exits non-zero naming each failing shard's path and every error. A schema-invalid canonical can then never exist; the existing aggregate check at the next QA dispatch sees the canonical absent and the orchestrator, the step's producer per scripts/todo/dev.py, re-runs the aggregate once the lane is repaired. The shard check accepts only dev-report.v2's own status set. |
 | 12 | scripts/resolve-dev-artifact-chain.py; commands/dev.md :1338-1344 (and dev-command.md's copy, if it has one) | the fan-out optional-parent branch ("any present optional parent artifact must validate") | F3b; D24 (read-never-written loses its reading branch). In a fan-out cycle no dispatch declares the unsuffixed parent ticket, context or qa-report, and dev.md forbids inventing them, so the resolver no longer reads them; the prose sentence follows. Singular cycles are unchanged. P3 turns the resolver into the disposition and keeps this. |
-| 13 | hooks/posttool-overnight-file-check.py; commands/dev-overnight.md | the block text :333-367 ("Re-run the subagent or escalate"); contract entries :835-838 (`schema_name: "dev-report.v1"` :837, `"qa-report.v1"` :838); the append-only rule :852 | F3a and its QA half (:838 against the obligation's v2 at :1390); corrections 2.21 and 2.85, delivered here (X5). For a dispatch that carries an obligation, the check reads the schema from that dispatch's obligation; the contract entry for such a dispatch carries step, role, pipeline and path only. One declaration, so this check can no longer disagree with G2. The message names the artifact and the failing check and offers no "escalate". |
-| 14 | scripts/lib/session_index.py; scripts/session-index.py; agents/changelog-analyst.md :660-675 | `sync_failed` raised at :235 and :256; the analyst's sync step | F4c, V1-1/NV-1, X7's option. The prose changes only if X7 picks (B) (the stale-lock line in the response block), and it adds no check (C2). |
+| 13 | hooks/posttool-overnight-file-check.py; commands/dev-overnight.md | the block text :333-367 ("Re-run the subagent or escalate"); contract entries :835-838 (`schema_name: "dev-report.v1"` :837, `"qa-report.v1"` :838); the append-only rule :852 | F3a and its QA half (:838 against the obligation's v2 at :1390); corrections 2.21 and 2.85, which P1b's rows 6 and 13 (E13) deliver (the schema read from the obligation, the v1 names gone): verify them on your base, add the F3a and F3q replays, and change code only for what P1b's PR left (X5 decides how). For a dispatch that carries an obligation, the check reads the schema from that dispatch's obligation; the contract entry for such a dispatch carries step, role, pipeline and path only. One declaration, so this check can no longer disagree with G2. The message names the artifact and the failing check and offers no "escalate". |
+| 14 | scripts/lib/session_index.py; scripts/session-index.py; agents/changelog-analyst.md :660-675 | `sync_failed` raised at :255-256 (`update-index --add --cacheinfo` :252-253); `update-index --force-remove` :248-249, its exit code unchecked (:257 lists the path as synced); the analyst's sync step | F4c, X7's option. X7's wait covers both update-index calls, and no path is reported synced unless update-index wrote it (the deletion branch returns its failure as the `--cacheinfo` branch does). The analyst's prose does not change, and the row adds no check (C2). |
 | 15 | commands/restart.md | :70, :118, :131 (`$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py …`) | F5, F6. Spell each command in the form bash-safety resolves by design (the bashprobe showed `~/.claude/...` passing), per X4 (a). The hook keeps refusing a dynamic command head. |
 | 16 | hooks/pretool-todo-validate.py; hooks/posttool-subagent-track.py | Gate 4 `check_subagent_completion_guard` :251-270 | F5 (and F5f). A subagent step is also satisfied by an Agent tool_use of that role in the span whose agent was resumed by the recovery path and whose resume finalized (the recovery's own journal record, which CLAUDE.md says is journaled through SubagentStop). Read it from the transcript and that record; no replacement call is demanded, which restart.md and Lesson 16 forbid. The message names the step, the role and, where the obligation declares one, the artifact. |
 | 17 | per X8 | — | F6o. Option (A): scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/pretool-block-background-tasks.py (the widened exception), commands/dev-overnight.md (one line). Option (B): no code; the PR records the CLI limit. |
 | 18 | the literal-prose conflicts (X4) | see the list under the table | Each fixed on the side X4 picks, with the replay that met it. |
 | 19 | the /dev-overnight compliant cycle (X5) | see the list under the table | The smallest part of the owning row that lets the compliant overnight scenario run from launch to a Stop after end_time with 0 blocks. |
-| 20 | hooks/pull.sh; hooks/git-fswatch.sh `safe_pull` (only if X9 (ii) wedges) | pull.sh stash :28, `pull --rebase` :120, pop :160 | N1: on a conflicted settings.json pop, call the landing's existing repair step; no new state; the stash kept. |
+| 20 | hooks/pull.sh; hooks/git-fswatch.sh `has_changes`, `safe_pull`; scripts/install/land's "Review N1" block (only if it must be made callable) | pull.sh `HAS_CHANGES` :17-21; fswatch `has_changes` :160, `safe_pull` :174 (fetch :180, stash push :200, `pull --rebase` :210) | X9. N1's window (only if X9 (ii) refuses): on a landed harness home the landing's existing settings.json re-record runs before the stash decision; no second implementation, no new state. Fact 1: each `safe_pull` step is decided by its git command's own exit status, not `tee`'s. |
 | 21 | tests that pin what rows 7-20 change; docs lines a CI check names | hooks/tests and tests (grep each changed file's name) | TC-54: a pin a decided change makes false changes in the same commit to assert the new behaviour (the ESCALATION_ACK tests, the aggregate's blocked-canonical tests, the e2e correlation tests, Gate 4's tests). A test that exercises only deleted code goes with it, named in the PR (D17). If scripts/verify-claims.sh or `scripts/check-enforcement-evidence.py --ledger/--claims` names a line your change makes false, fix that line and nothing more (P9 does the prose pass). |
+
+**Rows 18 and 19, P1b's kept base blocks.** P1b's PR lists under "Hand-off to P1c" each block its compliant drivers
+met on its base and passed with a `DEVIATION:` step in the driver source (its acceptances 4 and 17). Each is a row 18
+item (X4 picks the side) or, where it stops the /dev-overnight cycle, a row 19 item, whether or not the lists below
+name it. Re-verify it on your base and remove it with the replay that met it; the same commit drops its `DEVIATION:`
+step, so that replay follows the command text literally and meets no block. A listed block your base no longer shows
+needs only its replay, and its DEVIATION goes too. No driver keeps a DEVIATION at your merge, and no check exception,
+skip or expected block takes its place (acceptance 3).
 
 **Row 18, the literal-prose conflicts the pilot met** (re-verify each on your base; P1b or P8 may have fixed some):
 - commands/dev.md :757-759 tells the orchestrator not to dispatch graphify when its sentinel is absent, but
@@ -455,8 +488,8 @@ before you edit it. New code runs on Python 3.10, the CI floor.
 - scripts/create-overnight-state.sh :1026-1056 writes `cycle-1/cycle-contract.json` with `required_calls: []` (:1051);
   its presence switches hooks/pretool-subagent-enforce.py (load_contract :329; passthrough only without a contract,
   :330-332) into enforcement, so the Step 2 PM dispatch is refused (Case C), while the prose publishes the real contract
-  only at Step 4 and forbids editing it in place. Then the Stop is refused by the time-lock. P2 row 13 as corrections.md
-  2.21 words it.
+  only at Step 4 and forbids editing it in place. Then the Stop is refused by the time-lock. P1b's E13 removes the
+  seed in either outcome (corrections.md 2.21): verify it on your base and replay it.
 - dev-overnight.md's Step 1 block (:196 on) is refused by pretool-bash-safety.sh (`census_fatal:unbalanced:single_quote`,
   set off by apostrophes in its own comments) and by pretool-overnight-hook-guard.py (`OVERNIGHT MAIN-ROOT BLOCK`, :1708).
 - In place: `OVERNIGHT SUBPROCESS GIT BLOCK` (:1637) on every harness python3 script the overnight actor runs
@@ -487,7 +520,8 @@ replay.
   your base still leaves with neither source is a scope row: declare it at its producer's dispatch, never in a table.
 - *Next round*: for a SubagentStop block, the same agent's next stop (stop_hook_active true); for a block at dispatch
   (G1) or collection (G3), the re-dispatch of the declaring dispatch (same subagent_type, task_id, lane and obligation
-  template, a fresh dispatched_at); for a Bash denial, the next compliant command.
+  template, a fresh dispatched_at); for a Bash denial, the next compliant command; for a gap /close or /commit routes
+  (the F8 faults), the dispatch its routing loop sends for that gap.
 - *Human event*: a UserPromptSubmit, an AskUserQuestion answer, or a file action by neither an agent nor a hook.
 - *Terminal*: /spec, the spec written and the Stop rc 0; /dev, /redev, /dev-command, the completion step's resolver
   status pass and the Stop rc 0; /dev-overnight, the Stop after end_time rc 0 with the summary written; /do, the
@@ -505,26 +539,41 @@ with a `CLOSE_REPORT_APPEND_ERROR` round and a second round; /commit; /merge; /p
 scenario: 0 gate blocks, 0 hook errors, terminal reached. Print one table: scenario, mode, hook events, hook runs,
 blocks, errors, terminal.
 
-**(2) Faults: 17, each in both settings modes.** F1 (a dev lane writes no report); F1q (a QA lane writes none after its
+**(2) Faults: 21, each in both settings modes.** F1 (a dev lane writes no report); F1q (a QA lane writes none after its
 sibling wrote its own); F2 (dev.status "done", files_modified absent); F2j (truncated JSON); F2g (the dev writes the same
 invalid report again and ends with a forged `ESCALATION_ACK` line, then repairs); F3a (E1 for dev, hook level and inside
 the overnight scenario); F3q (E1's QA half, not run in the pilot); F3b (a stale v1 qa-report planted beside the lane
 reports); F4 (index.lock held through a /dev cycle's checkpoints and Stop); F4c (index.lock held by a live process during
-/commit's commit and sync); F4s (a stale index.lock at /commit); F5 (a single-lane dev cut after its Edit, the human's
-/restart); F5f (both lanes cut; not run in the pilot); F6 (a usage limit mid-subagent in an interactive session, the
-human's /restart); F6o (a usage limit inside /dev-overnight, no human: X8); F7 (a lane dispatched from the pre-P1
-template, its obligation unparseable, its report needs_review, the sibling compliant); F7b (the same with no obligation
-block). Assert per fault:
+/commit's commit and sync, run with a commit that modifies a path and with one that only deletes one); F4s (a stale
+index.lock at /commit); F5 (a single-lane dev cut after its Edit, the human's /restart); F5f (both lanes cut; not run
+in the pilot); F6 (a usage limit mid-subagent in an interactive session, the human's /restart); F6o (a usage limit
+inside /dev-overnight, no human: X8); F7 (a lane dispatched from the pre-P1 template, its obligation unparseable, its
+report needs_review, the sibling compliant); F7b (the same with no obligation block). The F8 faults are CC4's case, an
+unfinished cycle met by the /close or /commit the human types (P1b's acceptance 7 replays the same four): F8 (after a
+2-lane /dev reached its terminal, one lane's QA report removed, then the human's /close); F8q (a 2-lane /dev cut, as in
+F5, after one lane's QA stop and before the other lane's QA dispatch, then the human's /close instead of /restart); F8p
+(after /dev's terminal, a product file one lane's dev wrote broken so that /close's close-QA round names it); F8c (after
+a landed /close, one lane's dev report removed, then the human's /commit). Assert per fault:
 - every block's text contains the artifact's declared path and the failing check (code and message);
 - the actor that receives the block is the expected producer, and the trace shows the repair written by that same
-  agent (or, at G1 or G3, by the re-dispatch of the declaring dispatch);
+  agent (or, at G1 or G3, by the re-dispatch of the declaring dispatch; in the F8 faults, by the dispatch their bullet
+  below names);
 - the next round passes, and the pipeline reaches its terminal;
 - 0 human events between the injection and the terminal, except the one human /restart that is part of F5, F5f and F6
   (the injection there is the human's own interruption or the platform's limit in an interactive session, /restart is
   human-only by design, restart.md `disable-model-invocation: true` and the `Skill(restart:*)` deny, and the owner's rule
-  is to resume with it, register RD4; F6o, inside /dev-overnight, has no human event at all, X8);
+  is to resume with it, register RD4; F6o, inside /dev-overnight, has no human event at all, X8) and the /close or
+  /commit the human types in each F8 fault (CC4: the command the human types completes the cycle);
 - F4: 0 blocks and the checkpoint ref advances; F4c and F4s: `git status --porcelain` after /commit lists none of the
   committed paths; F2g: the forged line admits nothing;
+- the F8 faults (no hook block): the gap names the artifact's path and the failing check and carries no producer role
+  (D21); /close (F8c: /commit) finds it by its one call of the chain function (P1b's row 7; no check is added, C2), F8p
+  by its close-QA round; the routing loop dispatches again the dispatch P1b's E3 reader returns for that path (same
+  subagent_type, task_id, lane and obligation template, a fresh dispatched_at); in F8q, for the lane QA report no
+  dispatch declared, it makes a fresh dispatch of the role of the canonical todo step the reader returns, under the
+  same task id, and each step the cycle still lacks is run by its expected producer; in F8p it dispatches again the dev
+  dispatch that P1b's kept E6 producer records as the file's writer, and a fresh close-QA round follows; the close
+  report ends `CLOSE: YES` and F8c's commit lands (P1b's release notes, row 10 and acceptance 7; CC4, D7);
 - no hook error.
 Print one table: fault, mode, blocking hook, artifact named, check named, receiving actor = expected producer, rounds to
 pass, human events.
@@ -537,18 +586,22 @@ pass, human events.
   between) the compliant sibling's stop is blocked by the other lane's report; if that shape does not reproduce there,
   take the wedge as P1's PR and review describe it, reproduce that, and say so. On your base before row 8, F7b still
   wedges.
-- **R-E1**: F3a and F3q. Before: on your base before row 13, the template-following v2 report is blocked by the
-  collection check, and only the dual-shape report passes.
-- **R-N1**: X9's (i) and (ii), by hooks/pull.sh and by `safe_pull`. Before: on f8c18c2, `UU settings.json` and the second
-  pull exiting 1 at its stash.
-- **R-V1** (V1-1/NV-1): no record with these ids exists in the repository or the planning branch (`git grep -nE
-  '\b(V1-1|NV-1)\b'` finds nothing at d625284 or under `harness-repair-plan/` at dac09ec9), so reproduce from the
-  description "under a held git lock a repair is refused without telling the agent". Two repair paths meet a held
-  lock: /commit's shared-index sync (F4c: exit 3, silent, the commit shown as reverted) and P7b's landing on a busy
-  harness home (its wait). Assert after your change: the sync completes per X7 and the agent's tool
-  output names the lock and its holder while it waits; the landing's wait notice reaches the session through the
-  coordinator's systemMessage relay and the landing completes at the first Stop after the lock is released. Before:
-  F4c on your base before row 14; for the landing, whatever your base shows, recorded.
+- **R-E1**: F3a and F3q. Before: on the first parent of P1b's merge commit on master (P1b's rows 6 and 13, E13,
+  remove the v1 declaration), or on your base before row 13 if your base still has it, the template-following v2
+  report is blocked by the collection check, and only the dual-shape report passes.
+- **R-N1**: X9's (i) and (ii), by hooks/pull.sh and by `safe_pull`, and `safe_pull` with a failing fetch and a failing
+  pull (non-zero, Fact 1). Before: on 1d10ae0, pull.sh exiting 1 and `safe_pull` returning 0 with HEAD behind after the
+  Stop; (ii) and the failing steps also on your base before row 20.
+- **R-V1** (V1-1/NV-1): the records are commits 96bcb8f (V1-1) and 921b512 (NV-1), their tests in tests/test_landing.py
+  (`test_a_landed_settings_json_git_refused_to_repair_is_named_and_logged_apart`,
+  `test_a_doc_sync_file_git_refused_to_repair_is_named_and_logged_apart`) and the V1-1 and NV-1 rows of
+  reviews/P7b-PR-record.md: on a landed home whose pull left settings.json unmerged (NV-1: doc-sync's CLAUDE.md or
+  INDEX.md, alone or with settings.json), git's index.lock refused the landing's repair, the Stop gave no notice and
+  logs/landing.log said `result=repaired`. Assert, with index.lock held: the notice the Stop relays names each refused
+  path (`... still conflicted: git refused its repair, tried again at the next turn end`) and landing.log says
+  `result=repair-refused`; after release, the next Stop repairs every such path (`result=repaired`, nothing unmerged).
+  Before: V1-1 on 26a7ea7 (the first parent of 96bcb8f), NV-1 on 96bcb8f (the first parent of 921b512). F4c is a fault
+  of (2), not V1-1 (X7, row 14).
 
 ### Merge rule from P1c on
 
@@ -584,20 +637,24 @@ pass, human events.
   summary section and its removal of the parking prose P1 merged (D20).
 - The disposition function and the gap format (P3), beyond row 12's removed branch; no owner or fix field is added
   anywhere.
-- Removing the re-checks at /close and /commit (P4); the unified Stop gate and the D8 derived deny (P5).
-- D24 consolidation of artifacts rows 7-20 do not touch (P1b, then P2-P10). Where the suite shows several deciding
-  consumers of one artifact (e2e and G2 on the qa-report, the four producers of the canonical aggregate, ledger L18),
-  list them for P1b's table; do not merge them here.
+- /close and /commit beyond rows 14 and 18 and the routing loops "Delivered by P1b" names (P4; P1b's rows 6, 7, 8, 10
+  and 11 removed their re-checks); the unified Stop gate and the D8 derived deny (P5).
+- D24 consolidation of artifacts rows 7-20 do not touch (P1b did it before you; P2-P10 keep it). P1b's D24 check stays
+  green on your branch with no exception, and no change of yours gives an artifact a second producer or a second
+  deciding rule. Where the suite shows, on your base, two producers or two deciding consumers of one artifact that
+  P1b's check passes, list them under "Out of scope, found" with the trace events and the check's output for that
+  artifact; do not merge them here.
 - CLAUDE.md (P9; the Hook Discipline #5 conflict with DT4 is P9's), DECISIONS.md and the planning documents.
 - The prose pass (P9) and product-repo hygiene (P10), beyond what X4 or X5 needs for a compliant scenario.
 - Found by the pilot, not process blocks (list them under "Out of scope, found"): pretool-git-privilege-guard.py
   :1254-1260 opens the `-F` argument with its shell quotes still attached, gets ENOENT and checks an empty message, so the
-  bulk-commit subject check never sees a `git commit -F "$MSGFILE"` message (P5's commit-guard precision row); the /close
-  inspectors' FIRST ACTION reads `dev-registry/dev-<ts>/<inspector>.json`, which nothing writes after a /dev-command
-  cycle, whose registry is `dev-command-<ts>` (trace B; after /dev, prompt-workflow writes them, trace A) (P1b's D24
-  table, P6's FIRST ACTION lines); `dev-command-<ts>/graphify.json`, which the /dev-command graphify dispatch's FIRST
-  ACTION reads, is written only when a graphify binary resolves (prompt-workflow.py:1531-1547, the same rule as /dev),
-  so without one the read finds nothing while Gate 4 still demands the graphify step (row 18, first bullet).
+  bulk-commit subject check never sees a `git commit -F "$MSGFILE"` message (P1b's Correction 5 fixes it; list it only
+  if your base still shows it); the /close inspectors' FIRST ACTION reads `dev-registry/dev-<ts>/<inspector>.json`,
+  which nothing writes after a /dev-command cycle, whose registry is `dev-command-<ts>` (trace B; after /dev,
+  prompt-workflow writes them, trace A) (list it only if your base still shows it; P6's FIRST ACTION lines);
+  `dev-command-<ts>/graphify.json`, which the /dev-command graphify dispatch's FIRST ACTION reads, is written only when
+  a graphify binary resolves (prompt-workflow.py:1531-1547, the same rule as /dev), so without one the read finds
+  nothing while Gate 4 still demands the graphify step (row 18, first bullet).
 - The real CLI's behaviour, which the drivers model (UNVERIFIED in the pilot: tool_result and PostToolUse or
   PostToolUseFailure for interrupted and quota-killed Agent calls, SubagentStop for a quota-killed child, a cap on
   repeated stop blocks, whether the CLI's Bash env carries CLAUDE_PROJECT_DIR). List each as modeled, with its source.
@@ -610,14 +667,17 @@ your checkout. Never against your container's `~/.claude` or HOME.
 
 1. **Base.** The "Before you start" checks, with their output.
 2. **CI baseline.** The steps of .github/workflows/baseline.yml on python 3.12 on your base and on your branch: green on
-   both, the new suite job(s) included on your branch.
+   both, P1b's D24 check included (no exception, no allowlist), and the new suite job(s) included on your branch.
 3. **Requirement (1).**
    `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/replay/test_pipelines.py` -> passed; the
    scenario table with 0 blocks, 0 errors and every terminal reached in both modes. On your base before your changes:
-   the refusals rows 18 and 19 fix, each with its hook text.
-4. **Requirement (2).** The same for tests/replay/test_faults.py, and the fault table: for every block, artifact named,
-   check named, receiving actor = expected producer, the first compliant repair round passes (F2g: after its forged
-   round), 0 human events (except the /restart of F5, F5f and F6).
+   the refusals rows 18 and 19 fix, each with its hook text, those of P1b's "Hand-off to P1c" your base still shows
+   among them. On your branch head: `git grep -n 'DEVIATION:'` prints nothing (no driver passes a block), and P1b's
+   D24 check passes with no exception (acceptance 2).
+4. **Requirement (2).** The same for tests/replay/test_faults.py, and the fault table: for every block and every gap an
+   F8 fault routes, artifact named, check named, receiving actor = expected producer, the first compliant repair round
+   passes (F2g: after its forged round), 0 human events (except the /restart of F5, F5f and F6 and the /close or
+   /commit the human types in each F8 fault).
    On your base before your changes: the "before" table, compared with the pilot's table above (explain every
    difference).
 5. **Requirement (3).** tests/replay/test_no_dead_end.py -> passed; the site counts per hook and per class; recall 100%
@@ -625,8 +685,9 @@ your checkout. Never against your container's `~/.claude` or HOME.
    operation; the H sites listed; every U site deleted with its reachability proof; the AskUserQuestion-answer and
    forged-ESCALATION_ACK replays release nothing.
 6. **Requirement (4).** tests/replay/test_regressions.py -> passed; each "before" reproduction pasted (R-P1 on the tree
-   before P1's merge and on your base before row 8; R-E1 before row 13; R-N1 on f8c18c2; R-V1 before row 14, and the
-   landing's before).
+   before P1's merge and on your base before row 8; R-E1 on the first parent of P1b's merge commit, or on your base
+   before row 13 if your base still declares v1; R-N1 on 1d10ae0, and its (ii) and failing steps on your base before
+   row 20; R-V1 on 26a7ea7 and 96bcb8f).
 7. **Hermetic and network-free.** X2's comparison table; the write audit (writes outside tmp_path, all carrying the
    scenario's session id, all removed); the network guard's count of attempts: 0; `git status --porcelain` in your
    checkout empty after the suite; a listing digest of your container's `~/.claude` equal before and after.
@@ -650,17 +711,17 @@ your checkout. Never against your container's `~/.claude` or HOME.
     journal (row 16), the product command files (row 18), settings.json (row 20, if taken): producers before -> after,
     deciding consumers before -> after, proof (writer and reader grep plus the suite's trace).
 13. **C1-C5.** C1: the set of file-name patterns hooks and scripts create during the suite, base against branch, gains
-    nothing (the escalation stores disappear). C2: every hunk in commands/close.md, commands/commit.md and
-    agents/changelog-analyst.md, with why it adds no check. C3: dead ends and unreturned blocks before -> after, counted
-    from acceptance 4 and 5 (target 0 after). C4: the fault suite. C5: acceptance 4's receiving-actor column.
+    nothing. C2: every hunk in commands/close.md, commands/commit.md and agents/changelog-analyst.md, with why it adds
+    no check. C3: dead ends and unreturned blocks before -> after, counted from acceptance 4 and 5 (target 0 after). C4:
+    the fault suite. C5: acceptance 4's receiving-actor column.
 14. **Rules added / retired**, as actually done.
 15. **Net code.** `git diff --numstat origin/master -- hooks scripts schemas ':!hooks/tests'`: net lines (added minus
-    deleted) <= 0.
+    deleted) <= +150 ("Net code cap"), with the added and deleted lines per scope row.
 16. **Personal values.** `scripts/check-public-core.sh` passes on your branch, and `git diff origin/master` adds no
     e-mail address, account name, private project name or personal home path (fixtures use placeholders such as
     `20990101-000001` and `demo@example.invalid`).
-17. **Full suite.** `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider` -> 0 failed, at every commit of
-    the PR (TC-54); CI green.
+17. **Full suite.** `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider` -> 0 failed, P1b's D24 check
+    included, at every commit of the PR (TC-54); CI green.
 
 ## Rules added / retired (expected)
 
@@ -668,26 +729,32 @@ Added (at most 4):
 - the CI merge rule: the suite green on the PR head, and the fault-coverage step;
 - X8 (A)'s wake step and the widened SendMessage exception (only if X8 takes A);
 - row 18's narrow config-guard allowance for a /dev-command dev (a relaxation, counted anyway);
-- `CLAUDE_OBLIGATION_STOPGATE=block` is a switch flip, not a new rule; list it.
+- `CLAUDE_OBLIGATION_STOPGATE=block` is a switch flip, not a new rule; list it only if row 9 sets it (X3).
 
-Retired (at least 8):
-- G2's no-progress hand-off, the `ESCALATION_ACK` admission and its four record stores;
+Retired (at least 5, not counting what P1b retired; an item marked "P1b" counts only for what P1b's PR left on your
+base):
+- G2's no-progress hand-off, the `ESCALATION_ACK` admission and its four record stores (P1b row 3);
 - the aggregate's "blocked" canonical and its third status vocabulary;
-- the e2e gate's newest-filename and "last 5" correlation;
+- the e2e gate's newest-filename and "last 5" correlation (P1b row 3 for an obligation-bearing QA dispatch);
 - the session-wide legacy correlation for dispatches without an obligation;
 - the resolver's optional-parent read in fan-out cycles;
-- the overnight contract's second schema declaration for obligation-bearing dispatches, and the check's "or escalate";
+- the overnight contract's second schema declaration for obligation-bearing dispatches (P1b rows 6 and 13, E13), and the
+  check's "or escalate";
 - Gate 4's demand for a replacement Agent call after a recovery resume;
-- the launcher's empty cycle contract (if X5 takes it);
-- each prose step a hook refused (row 18), counted one by one.
+- the launcher's empty cycle contract (P1b E13);
+- each prose step a hook refused (row 18), counted one by one (P1b for the row 18 sites "Delivered by P1b" names).
 Report what you actually did.
 
 ## Net code cap
 
-Net lines in hooks/, scripts/ and schemas/ (tests excluded) must be <= 0 (C3: strictly fewer failure surfaces, measured
-by the suite, not by lines). The G2 hand-off and its record code (about :304-:831, of which `_gate_decide`'s plain block
-stays), `_write_blocked_aggregate` (about 80 lines) and the launcher's empty-contract block (about 35 lines) pay for the
-additions; expect about -150 (an estimate, UNVERIFIED). tests/replay/ is outside the cap; report its size.
+Net lines in hooks/, scripts/ and schemas/ (tests excluded), added minus deleted against your base, must be <= +150
+(C3: strictly fewer failure surfaces, measured by the suite in acceptance 13, not by lines). Lines P1b already deleted
+(its row 3: G2's hand-off and its records; its E13: the launcher's empty contract) are not in your diff and pay for
+nothing here; any part of them your base still holds (hooks/lib/progress_measure.py included, D17) is deleted under
+rows 7 and 19 and counts here. On your base, `_write_blocked_aggregate` (about 80 lines at d625284) and the correlation
+code rows 8 and 10 replace are what is left to pay for the additions (an estimate, UNVERIFIED). The PR gives the added
+and deleted lines per scope row. X7 and X8 are decided by their own rules, never by this cap. tests/replay/ is outside
+the cap; report its size.
 
 Effort: XL (about 6 days: the suite about 3, the fixes about 3). No owner time.
 
@@ -708,10 +775,12 @@ Commit order:
 3. one commit per fault class: rows 7, 8, 10, 11, 12, 13, 14, 15, 16 and 17, each with its unit tests and the fault
    replays that already pass under the shipped settings of that commit;
 4. tests/replay/test_no_dead_end.py and any site fix it needs;
-5. tests/replay/test_regressions.py (and row 20 if X9 takes it);
+5. tests/replay/test_regressions.py (and row 20: Fact 1, and N1's window if X9 takes it);
 6. the CI jobs, the fault-coverage step and TESTING.md;
-7. last: settings.json's `CLAUDE_OBLIGATION_STOPGATE` (X3) together with the replays whose return to their producer
-   depends on it (F1, F1q, F2, F2j and F2g in both modes), so it reverts as one unit.
+7. last, only if your base's settings.json does not already set it (X3; P1b's E4 sets it): settings.json's
+   `CLAUDE_OBLIGATION_STOPGATE` together with the replays whose return to their producer depends on it (F1, F1q, F2,
+   F2j and F2g in both modes), so it reverts as one unit. If your base sets it, those replays pass under the shipped
+   settings and go with their fault class in step 3.
 Each commit keeps the suite green (TC-54) and reverts on its own; reverting a fix reverts its replay with it. Say in the
 PR what each revert restores. The reviewer reverts; the owner runs nothing.
 
@@ -730,14 +799,22 @@ PR what each revert restores. The reviewer reverts; the owner runs nothing.
   - **Hand-offs for the sync list** (the reviewer copies them into the other prompts; you edit none of them):
     - for each of P2-P11, one acceptance line: "The P1c replay suite (its full set) is green on your PR head, and your
       PR adds the fault replay for each process your change touches (the fault-coverage step passes)";
-    - P2 arms only G1 and G3 if X3 armed G2; P2's corrections 2.21 and 2.85 (the cycle contract, E1) are delivered as
-      far as "Delivered for later phases" says;
-    - P3's 2.30 ("ESCALATION_ACK releases nothing") is delivered by row 7, and P5's escalation-record deny (corrections
-      2.45) has nothing left to deny;
+    - P2 arms only G1 and G3 if P1b (E4) or X3 armed G2; P2's corrections 2.21 and 2.85 (the cycle contract, E1) are
+      delivered as far as "Delivered for later phases" says;
+    - P3's 2.30 ("ESCALATION_ACK releases nothing") is delivered by P1b's row 3 and replayed here (row 7, F2g), and P5's
+      escalation-record deny (corrections 2.45) has nothing left to deny;
     - CLAUDE.md Hook Discipline #5 ("Ordinary /dev recovery has an honest terminal branch", CLAUDE.md:98 at d625284)
       conflicts with the owner's "诚实终态永远不允许" (DT4) and with requirement (3); P9 rewrites it under D20 and D23
       and keeps Lesson 16's reference to #4/#5 (CLAUDE.md:43) consistent;
   - **Release notes** (the list under "Goal") and **Out of scope, found**.
+- The PR body and each PR comment stay under GitHub's limit of 65,536 characters: measure each in UTF-8 bytes (never
+  fewer than its characters) before you post it, and keep it at or under 60,000. Every heading, those above and the
+  shared format's, stays in the body with its summary (the summary tables of (1)-(4) that "Merge rule from P1c on"
+  asks for, one line per experiment with the option taken, one pass line per acceptance test). What does not fit in
+  the body goes in PR comments, split as needed, never in the repository: the rest of acceptance 3-6's output (the
+  "before" tables and reproductions, the site counts per hook), the D24 table, X1-X10's setups and raw results and
+  every other pasted output, with trace events quoted and no trace file. Open the PR, post those comments, then edit
+  the body so each heading links its comments; a CI run's uploaded artifact may hold an extra copy, never the only one.
 - After opening the PR, subscribe to its activity and drive it until it is merged: answer and fix every review comment,
   keep CI green, and merge `origin/master` into your branch (a merge commit) whenever master moves. Never merge or approve
   the PR yourself; the reviewer merges.

@@ -21,12 +21,12 @@ disagreements. Run date 2026-10-24.
 | several deciding consumers (each with its own rule) | 37 |
 | consumer-side re-check or re-derivation | 29 |
 | written never read | 29 |
-| read never written | 18 |
+| read never written | 20 |
 | hand-written table | 27 |
-| no violation found | 21 |
-| evidence: both code and trace / code only / trace only | 86 / 33 / 3 |
+| no violation found | 20 |
+| evidence: both code and trace / code only / trace only | 85 / 34 / 3 |
 
-Check positions named in the rows: producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 67.
+Check positions named in the rows: producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 66.
 
 Rows per group (the groups become P1b's scope rows): G01 cycle identity and registry 8; G02 workflow bookmark, todo
 list, replay stores 5; G03 dispatch record and producer-gate outputs 5; G04 BA and context family 12; G05 test-writer
@@ -108,9 +108,9 @@ Other disagreements were settled by reading the cited line (code-line check), fo
 written by doc_sync/hook_ledger.py and read only by aggregate-dev-report.py (static saw nothing); journal-view's four
 trace readers open it only while listing docs/dev (the only literal is its writer, :460); the chain-B sentinel and the
 push-gate token are written under a fixed /tmp and read under harness_state_dir() (execute-push.py:35 against
-push.sh:106; commit.md:666 against push.sh:212); contract_runtime probes `~/docs/dev/overnight/...` and cycle-0
-contract candidates on every Agent call outside overnight (trace-b, posttool-subagent-track.py and
-pretool-subagent-enforce.py).
+push.sh:106; agents/changelog-analyst.md:1221 and :1247, dispatched by commit.md:666, against push.sh:212);
+contract_runtime probes `~/docs/dev/overnight/...` and cycle-0 contract candidates on every Agent call outside
+overnight (trace-b, posttool-subagent-track.py and pretool-subagent-enforce.py).
 
 ## Excluded (not artifacts)
 
@@ -133,7 +133,7 @@ pretool-subagent-enforce.py).
   rounds, /close --auto and /commit --auto, late repair, --codex, the graphify-available path (binary absent),
   /restart and quota resume, /allow, /stop, armed gates (escalation records, hand-off), CLAUDE_STATE_DIR set, parallel
   hook execution, and the CLI's own writes (todos, settings, transcripts are modelled).
-- 33 rows rest on code reading alone (`evidence` = code); they are the first places the regenerated map must trace.
+- 34 rows rest on code reading alone (`evidence` = code); they are the first places the regenerated map must trace.
 - Commands outside the ten pipelines (/clean, /pull, /test) appear only where their artifacts were found.
 
 ## How it was produced
@@ -172,6 +172,15 @@ self-repair logs stay written-never-read), A88 (the /allow writes are userprompt
 :711-754; pretool-bash-safety.sh:499 and hooks/lib/allowlist.py read the legacy flag), A94 (the `-all` daemon-restart
 flag is read at pretool-bash-safety.sh:613-620; per-target flags come from the operator's external helper) and A117
 (the agent bookmark is read at posttool-overnight-trace.py:394).
+
+A review of the map (reviews/P1b-P1c-review-findings.md, facts-F1 and facts-F3) then corrected four more rows from
+code reads at d625284, and the counts in this README include those corrections (`build_map.py` printed no violation
+found 21, read never written 18, evidence 86 / 33 / 3, elsewhere 67, and 33 code-only rows): A52 and A71 gain a read
+never written when CLAUDE_STATE_DIR is set (/do reads its task sidecar at /tmp; the push-analyst grant guard reads the
+state dir while the push-analyst writes /tmp); A73's read is `_find_grant` at pretool-git-privilege-guard.py:328, not
+the block message at :2093; A117 drops four paths that are written and the glob of the uncalled `_find_grant_any`
+(its `resolution` names each writer). One of the four, `~/.config/claude/protected-runtime.json` (written by
+scripts/bootstrap:362-386), has no row of its own in this map.
 
 ## Limits
 
