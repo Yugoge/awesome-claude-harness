@@ -739,8 +739,8 @@ pass, human events.
 ## Background (in the extracted planning documents, `harness-repair-plan/`, and in the repository)
 
 - `audit/2026-10-23/register.md` (rows CC4, CC6, CC8, DT2, DT3, DT4, HC2, RD4, SG6, T0-T5), `audit/2026-10-23/ledger.md`
-  (rows L13, L17, L18, L21, L22, L25, L29, L42, L43, L46; section 3, experiment E1), `audit/2026-10-23/corrections.md`
-  (1.1; 2.21, 2.25, 2.27, 2.30, 2.45, 2.85), `audit/2026-10-23/report-zh.md`.
+  (rows L07, L08, L13, L17, L18, L21, L22, L25, L29, L42, L43, L46; section 3, experiment E1),
+  `audit/2026-10-23/corrections.md` (1.1; 2.21, 2.25, 2.27, 2.30, 2.45, 2.85), `audit/2026-10-23/report-zh.md`.
 - `prompts/P1.md` ("Sandbox and arming", "Scenario drivers", acceptance 13 and 18: the armed replay and the live-landing
   test you build on); `prompts/P2.md` (rows 12 and 13, "The cycle contract", the bwrap and "Arming timing" decisions, the
   harness-home channel); `prompts/P7b.md` (facts 1-9, R2); `prompts/P3.md`, `prompts/P4.md`, `prompts/P9.md` (the rows X5

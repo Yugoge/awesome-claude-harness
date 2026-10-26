@@ -377,17 +377,17 @@ acceptances 4 (armed), 5 and 17 re-run on the PR's new head. Record whether a se
 session (P2's "Arming timing" step (1)); if it does not, or you cannot measure it, G2 takes its switch, when its process
 env lacks the key, from the harness home's settings.json env at run time, as hooks/lib/claude_home.py `settings_env`
 (:189 on master 2acc29b) reads P7b's keys, and also when that env has CLAUDE_HOME, which every session started since
-P7b's landing has (init and the landing's migrate put it in the overlay, scripts/bootstrap:288, render-settings :1172)
-and for which `settings_env` returns nothing (:193-195): take that read through P7b's function, not a second reader (for
-example an option whose default leaves its other callers as they are; technical choice; acceptance 17's fault replays
-with the base's settings.json, with and without CLAUDE_HOME, prove it), so a session started before your merge meets
-armed G2 once the copies are gone. A copy whose faults only G1 or G3 would stop stays and keeps returning them to their
-producer (row 10's loop at /close and /commit); the PR lists it with its gate, and P2's arming commit deletes it. While
-a copy's gate is advisory in the tracked settings.json, the copy is its faults' only stop, not a re-check (E1: the
-producer side does not yet check them); the CI check reads the switches there (row 19), so the commit that arms the gate
-must delete the copy. Fallback: for a family no replay can reach, move the deleted check's rule into the
-allowed-position gate unconditionally, cover it with a unit test on a recorded payload, and list it; its copy follows
-the shipped rule.
+P7b's landing has (init and the landing's migrate put it in the overlay, scripts/bootstrap:288 and render-settings :1172
+on master 2acc29b) and for which `settings_env` returns nothing (:193-195): take that read through P7b's function, not a
+second reader (for example an option whose default leaves its other callers as they are; technical choice; acceptance
+17's fault replays with the base's settings.json, with and without CLAUDE_HOME, prove it), so a session started before
+your merge meets armed G2 once the copies are gone. A copy whose faults only G1 or G3 would stop stays and keeps
+returning them to their producer (row 10's loop at /close and /commit); the PR lists it with its gate, and P2's arming
+commit deletes it. While a copy's gate is advisory in the tracked settings.json, the copy is its faults' only stop, not
+a re-check (E1: the producer side does not yet check them); the CI check reads the switches there (row 19), so the
+commit that arms the gate must delete the copy. Fallback: for a family no replay can reach, move the deleted check's
+rule into the allowed-position gate unconditionally, cover it with a unit test on a recorded payload, and list it; its
+copy follows the shipped rule.
 
 **E5. One producer for the canonical fan-out aggregate.** Producers at d625284: scripts/aggregate-dev-report.py run by
 the orchestrator at /dev Step 11 (commands/dev.md:885, the "MUST write" block :898-923), at /close Step 0
@@ -676,7 +676,7 @@ until the decision rule holds, never with a second writer of the file and never 
    skeleton; name the one that still names the first task after /do, Esc, a plain prompt and a second /do in your
    replay), not from a pending do-report; P5 row 21's enum (S9) has no `pending`, and its skeleton message (:1434-1437)
    exists only under (b). Row 9 deletes stop-do-report-gate.py's `blocked` rewrite of the agent's report (P5's retired
-   list, P5.md:839), which rewrites only `pending`; the gate's MAX_BLOCKS forced allow and its block stay P5's.
+   list, P5.md:841), which rewrites only `pending`; the gate's MAX_BLOCKS forced allow and its block stay P5's.
 
 ### What the planning trace replayed (trace coverage)
 
@@ -945,10 +945,11 @@ copy, as P1 "Sandbox and arming" shows.
     branch's settings.json, and repeat both with a copy of the settings file whose env gains `"CLAUDE_HOME":
     "/root/.claude"` (the kit's harness home): a session started since P7b's landing has that key from the overlay, one
     started before has not (E4). Where E4 gives G2 its run-time switch read, also replay, with the base's settings.json
-    with and without that key, the in-flight cycle's dev stopping with its report missing: G2 blocks that stop, naming
-    the report path and the failing check, and the dev's next round, with the report written, passes, since the harness
-    home's settings.json is your branch's, which Rollback's (7) arms; a G2 left advisory there fails this item (in a
-    running session it would leave unstopped the faults of the copies (7) deletes, E4).
+    with and without that key, the in-flight cycle's dev stopping with its report missing (a fault, outside the
+    compliant expectation above): G2 blocks that stop, naming the report path and the failing check, and the dev's next
+    round, with the report written, passes, since the harness home's settings.json is your branch's, which Rollback's
+    (7) arms; a G2 left advisory there fails this item (in a running session it would leave unstopped the faults of the
+    copies (7) deletes, E4).
 18. **Personal values.** `scripts/check-public-core.sh` passes on your branch, and `git diff origin/master` adds no
     e-mail address, account name, private project name or personal home path.
 19. **Full suite.** In acceptance 2's 3.12 venv (`python3 -m pip install --require-hashes -r requirements/py312.txt`
@@ -1000,7 +1001,7 @@ and back each with a test or a replay.
 
 Commit order: (1) the path rule and the guard's `-F` parsing (small, behaviour-correcting); (2) dead outputs and dead
 reading branches (rows 2, 3, 5, 6, 13, 14, 15, 17, 18: deletions only); (3) one producer per artifact (rows 1, 2, 4, 6,
-8, 9, 11, 13, 15, 16, with E5-E10, E13, E14); (4) one deciding consumer and the consumer-side deletions whose faults
+8, 9, 11, 13, 14, 15, 16, with E5-E10, E13, E14); (4) one deciding consumer and the consumer-side deletions whose faults
 that commit's settings still stop (rows 3, 4, 5, 6, 7, 8, 10, 11, 12; E4, E11); (5) the declaring-dispatch reader and
 the table deletions (E3, rows 10, 18); (6) the CI check, the runner and the drivers (row 19), which turn green only on
 top of (1)-(5); (7) last: `"CLAUDE_OBLIGATION_STOPGATE": "block"` in settings.json env together with the deletions of
