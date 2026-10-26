@@ -193,12 +193,11 @@ extracted planning documents.
   owner words), and recorded in the summary's "Decisions made without the owner". For you: no fix may wait for the
   owner inside /dev-overnight, and F6's overnight case must resume with zero human action if the CLI allows it at all
   (X8). The AskUserQuestion deny and the summary section are P2's.
-- **D21** No filename-to-role table, in code, prose or test data, and no long manual for agents. A gap reports facts
-  only (file, failing check, lane). Who fixes is read from the obligation of the dispatch record that declared the
-  artifact (`role` and `artifacts[].path`; obligation.py resolve_own_obligation and find_unresolved_dispatch_obligations;
-  for an artifact no dispatch declared, the command's canonical todo step in scripts/todo/<command>.py; DECISIONS.md
-  marks that mechanism INFERRED, and P1b's E3 reader implements it). The suite derives every expected producer
-  this way.
+- **D21** No filename-to-role table, in code, prose or test data, and no agent manual. A gap reports facts only (file,
+  failing check, lane). Who fixes is read from the obligation of the dispatch record that declared the artifact
+  (`role` and `artifacts[].path`; obligation.py resolve_own_obligation and find_unresolved_dispatch_obligations; for
+  an artifact no dispatch declared, the command's canonical todo step in scripts/todo/<command>.py; DECISIONS.md marks
+  that mechanism INFERRED, and P1b's E3 reader implements it). The suite derives every expected producer this way.
 - **D22** /redev is /dev that saves context: a fresh task id every time, gated exactly as /dev, not a continuation. The
   suite replays it as such and asserts the fresh id.
 - **D23** Outside overnight, asking with AskUserQuestion inside the turn is the pause; the question is specific;
@@ -217,7 +216,7 @@ extracted planning documents.
   (teachings:295): "恢复一个session被截断应该用restart command而不是写字" ("resume a cut session with the restart command, not
   with text"). T0 (2026-10-22): "今晚继续跑，我授权你做任何事情+开启任何新的周期，总之就是不能停" ("keep running tonight ... it must
   not stop").
-- **D2** dev has one terminal, completed; QA fail, BA needs_clarification and a hook rejection are process steps.
+- **D2** dev has one terminal, completed; QA fail and BA needs_clarification are process steps, not terminals.
   **D8** only the producer writes its artifact: the orchestrator never repairs a producer's file, and a QA never edits
   a file it did not write.
 - **Producer-side.** Every fix lands on a producer: the producer's own stop (G2), the dispatch (G1) or collection (G3)
@@ -530,11 +529,11 @@ skip or expected block takes its place (acceptance 3).
   posttool-doc-sync.py writes (X5: P9 row 2's exclusion of docs/dev/ from doc-sync); its Step 16 completion template
   (:802-882) fails resolve-dev-artifact-chain with IDENTITY_MISMATCH (identity `dev-<ts>`, expected `<ts>`) and
   MISSING_COMPLETION_REFERENCE (no reference to docs/dev/ticket-<ts>.md); and pretool-claude-config-guard.py (docstring
-  :1-40, patterns :60-66) refuses the dev's write of the product's `.claude/commands/<name>.md` unless a hand-made
-  sentinel `.claude/.hook-refactor-allow` exists, a human step on the path /dev-command exists for. Under X4 (b), the
-  narrowest fix lets only a dev subagent whose dispatch obligation lies in a human-typed /dev-command span
-  (command_span) write only `<project>/.claude/commands/*.md`, never hooks, settings or the harness home; prove with a
-  replay that every other refusal of that guard is unchanged.
+  :1-40; a Write or Edit at :143-149, a Bash command by the patterns :60-66) refuses the dev's write of the product's
+  `.claude/commands/<name>.md` unless a hand-made sentinel `.claude/.hook-refactor-allow` exists, a human step on the
+  path /dev-command exists for. Under X4 (b), the narrowest fix lets only a dev subagent whose dispatch obligation lies
+  in a human-typed /dev-command span (command_span) write only `<project>/.claude/commands/*.md`, never hooks, settings
+  or the harness home; prove with a replay that every other refusal of that guard is unchanged.
 - Repo-relative script paths a product repo does not have (X5, P2's channel): dev.md:1322 and dev-command.md:889
   (`python3 scripts/resolve-dev-artifact-chain.py`), commit.md :313 (`source venv/bin/activate && python3
   scripts/late-repair-controller.py`) and :334, close.md Step 0 (:337, `scripts/aggregate-dev-report.py`),
@@ -548,7 +547,7 @@ skip or expected block takes its place (acceptance 3).
   seed in either outcome (corrections.md 2.21): verify it on your base and replay it.
 - dev-overnight.md's Step 1 block (:196 on) is refused by pretool-bash-safety.sh (`census_fatal:unbalanced:single_quote`,
   set off by apostrophes in its own comments) and by pretool-overnight-hook-guard.py (`OVERNIGHT MAIN-ROOT BLOCK`, :1708).
-- In place: `OVERNIGHT SUBPROCESS GIT BLOCK` (:1637) on every harness python3 script the overnight actor runs
+- In place: `OVERNIGHT SUBPROCESS GIT BLOCK` (:1637) on every harness python3 or bash script the overnight actor runs
   (build-pipelines-from-triage.py, graphify-query and graphify-enrich, aggregate- and apply-permissions,
   scripts/commit.sh).
 - `OVERNIGHT WRITE-BOUNDARY FAIL-CLOSED` (pretool-overnight-hook-guard.py:2265) where bubblewrap is absent: P2's bwrap
@@ -615,15 +614,15 @@ the overnight scenario); F3q (E1's QA half, not run in the pilot); F3b (a stale 
 reports); F4 (index.lock held through a /dev cycle's checkpoints and Stop); F4c (index.lock held by a live process from
 before /commit's commit until 20 s after its sync starts, when that process removes it, as X7's live holder does; run
 with a commit that modifies a path and with one that only deletes one); F4s (a stale index.lock at /commit); F5 (a
-single-lane dev cut after its Edit, the human's /restart); F5f (both lanes cut; not run
-in the pilot); F6 (a usage limit mid-subagent in an interactive session, the human's /restart); F6o (a usage limit
-inside /dev-overnight, no human: X8); F7 (a lane dispatched from the pre-P1 template, its obligation unparseable, its
-report needs_review, the sibling compliant); F7b (the same with no obligation block). The F8 faults are CC4's case, an
-unfinished cycle met by the /close or /commit the human types (P1b's acceptance 7 replays the same four): F8 (after a
-2-lane /dev reached its terminal, one lane's QA report removed, then the human's /close); F8q (a 2-lane /dev cut, as in
-F5, after one lane's QA stop and before the other lane's QA dispatch, then the human's /close instead of /restart); F8p
-(after /dev's terminal, a product file one lane's dev wrote broken so that /close's close-QA round names it); F8c (after
-a landed /close, one lane's dev report removed, then the human's /commit). Assert per fault:
+single-lane dev cut after its Edit, the human's /restart); F5f (both lanes cut; not run in the pilot); F6 (a usage
+limit mid-subagent in an interactive session, the human's /restart); F6o (a usage limit inside /dev-overnight, no
+human: X8); F7 (a lane dispatched from the pre-P1 template, its obligation unparseable, its report needs_review, the
+sibling compliant); F7b (the same with no obligation block). The F8 faults are CC4's case, an unfinished cycle met by
+the /close or /commit the human types (P1b's acceptance 7 replays the same four): F8 (after a 2-lane /dev reached its
+terminal, one lane's QA report removed, then the human's /close); F8q (a 2-lane /dev cut, as in F5, after one lane's
+QA stop and before the other lane's QA dispatch, then the human's /close instead of /restart); F8p (after /dev's
+terminal, a product file one lane's dev wrote broken so that /close's close-QA round names it); F8c (after a landed
+/close, one lane's dev report removed, then the human's /commit). Assert per fault:
 - every block's text contains the artifact's path (the one its dispatch declares; in F7 and F7b, whose dispatches
   carry no obligation that parses, the report the stopping agent wrote) and the failing check (code and message);
 - the actor that receives the block is the expected producer, and the trace shows the repair written by that same
@@ -705,7 +704,7 @@ pass, human events.
 
 ## Background (in the extracted planning documents, `harness-repair-plan/`, and in the repository)
 
-- `audit/2026-10-23/register.md` (rows CC4, CC8, DT2, DT3, DT4, HC2, RD4, SG6, T0-T5), `audit/2026-10-23/ledger.md`
+- `audit/2026-10-23/register.md` (rows CC4, CC6, CC8, DT2, DT3, DT4, HC2, RD4, SG6, T0-T5), `audit/2026-10-23/ledger.md`
   (rows L13, L17, L18, L21, L22, L25, L29, L42, L43, L46; section 3, experiment E1), `audit/2026-10-23/corrections.md`
   (1.1; 2.21, 2.25, 2.27, 2.30, 2.45, 2.85), `audit/2026-10-23/report-zh.md`.
 - `prompts/P1.md` ("Sandbox and arming", "Scenario drivers", acceptance 13 and 18: the armed replay and the live-landing
