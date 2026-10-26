@@ -19,15 +19,15 @@ disagreements. Run date 2026-10-24.
 | covering the 56 ledger rows (split where one ledger row holds several files with different producers) | 82 |
 | found by the static extractor or the traces outside the ledger | 39 |
 | several producers | 38 |
-| several deciding consumers (each with its own rule) | 34 |
+| several deciding consumers (each with its own rule) | 35 |
 | consumer-side re-check or re-derivation | 29 |
 | written never read | 28 |
-| read never written | 22 |
+| read never written | 23 |
 | hand-written table | 26 |
 | no violation found | 21 |
 | evidence: both code and trace / code only / trace only | 87 / 33 / 1 |
 
-Check positions named in the rows: producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 67.
+Check positions named in the rows: producer stop 30, G1 dispatch 14, G3 collection 18, elsewhere 67.
 
 Rows per group (the groups become P1b's scope rows): G01 cycle identity and registry 8; G02 workflow bookmark, todo
 list, replay stores 5; G03 dispatch record and producer-gate outputs 5; G04 BA and context family 12; G05 test-writer
@@ -202,9 +202,16 @@ obligation.py:81-83 and pretool-obligation-gate.py:88-90 copy (A14), lists seven
 verification read found that the timelock's publish call reaches neither a read nor its write: the Stop coordinator,
 the timelock's only runner, starts every phase without the two trust keys (stop-workflow-coordinator.py:108-111,
 :147-155), so _trust_configuration raises first (session_resources.py:335-336), and terminal.json, which finalize
-reads, is read never written (A103). The counts in this README include all of these corrections; `build_map.py`
-printed 122 rows, 40 outside the ledger, several producers 35, several deciding consumers 37, written never read 29,
-read never written 18, hand-written table 27, evidence 86 / 33 / 3 and G12 6.
+reads, is read never written (A103). A later verification read corrected A63, the commit grant: the privilege guard
+reads it in `_collect_commit_grant_candidates` and `_has_active_commit_grant` (pretool-git-privilege-guard.py:388-420,
+:1387-1417), not in `_find_grant`, which reads only push grants (:2135); the gitignore preflight's E5 is a second
+deciding reader at the Agent dispatch (hooks/pretool-gitignore-preflight.py:669-698, called at :810); and the grant,
+its .lck and its -active- pointer are written under a fixed /tmp (scripts/write-commit-grant.py:266, the guard's
+:636), while the preflight (:655-656), the PostToolUse finalizer (posttool-allowlist-consume.py:55, :590) and the Stop
+sweep (stop-cleanup-allowlist.sh:93, :286, :304) look for them in the state dir, a read never written when
+CLAUDE_STATE_DIR is set. The counts in this README include all of these corrections; `build_map.py` printed 122 rows,
+40 outside the ledger, several producers 35, several deciding consumers 37, written never read 29, read never written
+18, hand-written table 27, evidence 86 / 33 / 3, G1 dispatch 13 and G12 6.
 
 ## Limits
 
