@@ -1029,6 +1029,12 @@ PR what each revert restores. The reviewer reverts; the owner runs nothing.
       lists;
     - P3's 2.30 ("ESCALATION_ACK releases nothing") is delivered by P1b's row 3 and replayed here (row 7, F2g), and P5's
       escalation-record deny (corrections 2.45) has nothing left to deny;
+    - P2's thinned time-lock (its row 9) and P5's Stop gate (P5 row 7), which takes over the time-lock's clause (P5 rows
+      9 and 11), keep X8's wake check: a Stop after end_time (once the closeout check passes, where one runs) or after
+      the owner's /stop, whatever the span, is refused while the session's transcript holds a CronCreate of the wake's
+      text whose id no later CronDelete names, naming that id (X6 class G: the orchestrator's own CronDelete clears it;
+      no compliant replay fails without the check, since the drivers delete the wake where the prose does), and their
+      stop.md rewrites (P2 row 14, P5 row 13) keep stop.md's last step, the wake's CronDelete;
     - CLAUDE.md Hook Discipline #5 ("Ordinary /dev recovery has an honest terminal branch", CLAUDE.md:98 at d625284)
       conflicts with the owner's "诚实终态永远不允许" (DT4) and with requirement (3); P9 rewrites it under D20 and D23
       and keeps Lesson 16's reference to #4/#5 (CLAUDE.md:43) consistent;
