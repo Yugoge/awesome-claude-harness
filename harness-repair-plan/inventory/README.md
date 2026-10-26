@@ -26,7 +26,7 @@ two runtime traces, plus probes run for this map to settle the disagreements. Ru
 | no violation found | 20 |
 | evidence: both code and trace / code only / trace only | 87 / 33 / 1 |
 
-Check positions named in the rows: producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 66.
+Check positions named in the rows: producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 67.
 
 Rows per group (the groups become P1b's scope rows): G01 cycle identity and registry 8; G02 workflow bookmark, todo
 list, replay stores 5; G03 dispatch record and producer-gate outputs 5; G04 BA and context family 12; G05 test-writer
@@ -176,9 +176,12 @@ per-pipeline spec to A80 (the orchestrator's template copy and the section updat
 commands/dev-overnight.md:858-874, :1041, :1303, :1406-1407, :1613-1618), made A92, the /stop helper-auth token, a read
 never written when CLAUDE_STATE_DIR is set (its writer, hooks/pretool-wrapper-userintent.py:74, uses the state dir; its
 reader, scripts/break-overnight-lock.py:35, a fixed /tmp), and gave A93 the residual-override grants, which had no row
-(scripts/write-git-residual-override.py:39, read at pretool-git-privilege-guard.py:2237). The counts in this README
-include all of these corrections; `build_map.py` printed 122 rows, 40 outside the ledger, several producers 35, written
-never read 29, read never written 18, no violation found 21, evidence 86 / 33 / 3, elsewhere 67 and G12 6.
+(scripts/write-git-residual-override.py:39, read at pretool-git-privilege-guard.py:2237). A further code read put
+A93's keystone grants in `${TMPDIR:-/tmp}/claude-git-blessed` (scripts/mint-git-blessed-token.sh:39), not the state
+dir, and gave them their reader and check, the git keystone hook (hooks/git-keystone/reference-transaction:48-63),
+not the privilege guard. The counts in this README include all of these corrections; `build_map.py` printed 122
+rows, 40 outside the ledger, several producers 35, written never read 29, read never written 18, no violation found
+21, evidence 86 / 33 / 3 and G12 6.
 
 ## Limits
 
