@@ -440,8 +440,10 @@ in this session (quote it with the date read); do not substitute memory. The cha
   meets nothing new. /stop backdates end_time (scripts/break-overnight-lock.py `_backdate` :81), so each Stop after it
   is such a Stop (the closeout block your base's /stop then meets, B2.b, is P2 row 9's). The suite's overnight drivers
   model the schedule as F6o's does (below), a CronDelete of the job's id ending it, and after the terminal advance their
-  modeled clock by two of the wake's intervals: no wake fires there (Terminal); X8's /stop replay (the overnight
-  scenario with the owner's /stop typed inside the window) does the same after the first Stop rc 0 that follows the
+  modeled clock by two of the wake's intervals: no wake fires there (Terminal). X8's /stop replay (the overnight
+  scenario with the owner's /stop typed inside the window), a replay of (1) in tests/replay/test_pipelines.py outside
+  its scenario table, does the same from stop.md's CronDelete on and drives no Stop after it: on your branch that Stop
+  meets the closeout block above, and row 17's unit tests (acceptance 10) cover the time-lock's wake refusal after
   /stop. The widened exception is row 17's own decision under D20 and SG6, not an X4 case: every other message and id
   stays refused, and the lines that name the typed /restart as the only exception go to P9 ("Hand-offs for the sync
   list").
@@ -844,10 +846,10 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
    `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/replay/test_pipelines.py` -> passed; the
    scenario table with 0 blocks, 0 errors and every terminal reached in both modes; for /dev-overnight, for F6o in
    acceptance 4 and for X8's /stop replay, 0 wakes fired while the driver's modeled clock runs two wake intervals past
-   the terminal (in the /stop replay, past the first Stop rc 0 after the /stop; X8). On your base before your changes:
-   the refusals rows 18 and 19 fix, each with its hook text, those of P1b's "Hand-off to P1c" (both its lists) your base
-   still shows among them. On your branch head: `git grep -n 'DEVIATION:'` prints nothing (no driver passes a block or
-   keeps a deviation for one your base no longer shows), and P1b's D24 check passes with no exception (acceptance 2).
+   the terminal (in the /stop replay, past stop.md's CronDelete; X8). On your base before your changes: the refusals
+   rows 18 and 19 fix, each with its hook text, those of P1b's "Hand-off to P1c" (both its lists) your base still shows
+   among them. On your branch head: `git grep -n 'DEVIATION:'` prints nothing (no driver passes a block or keeps a
+   deviation for one your base no longer shows), and P1b's D24 check passes with no exception (acceptance 2).
 4. **Requirement (2).** The same for tests/replay/test_faults.py, and the fault table: for every block and every gap an
    F8 fault routes, artifact named, check named, receiving actor = expected producer, the first compliant repair round
    passes (F2g: after its forged round), 0 human events, except the one /restart the human types in F5, F5f and F6
