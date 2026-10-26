@@ -4,7 +4,7 @@ These decisions were made by the repository owner. They override PLAN-v1.md wher
 PLAN-v1.md still gives the file:line scope for each phase. Where it says "honest_blocked", "untrack settings.json",
 "ask for curl/wget/docker", "per-cycle commit" or "/redev <task>", read the decision below instead.
 
-## Owner rulings of 2026-10-23 (they override every decision below except D25, PLAN-v1, PLAN-v2 and every prompt)
+## Owner rulings of 2026-10-23 (they override PLAN-v1, PLAN-v2, every prompt and every decision below except D25)
 
 Source: the owner's message of 2026-10-23T11:59:26Z answering the reviewer's P2-P11 summary line by line (reviewer
 session transcript, record 1921, answering record 1895). Quoted verbatim; "…" marks elided words; English in brackets.
@@ -65,7 +65,7 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   (prompts/P1b.md, added 2026-10-24) owns this requirement: the full inventory and a CI check that derives writers and
   readers from code or a runtime trace at test time, never from a committed list; later phases keep that check green.
 
-## Owner ruling of 2026-10-24 (latest; like D20-D24 it overrides every other decision, PLAN-v1, PLAN-v2 and every prompt)
+## Owner ruling of 2026-10-24 (latest; like D20-D24 it overrides every decision below, PLAN-v1, PLAN-v2 and every prompt; D25 and D20-D24 do not override one another)
 
 - **D25 Never fail.** "还有一件我关心的！就是永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！"
   [One more thing I care about! It must never fail! No development run may ever hit an error in the process! And if an
@@ -120,7 +120,7 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   interrupting the session, or a human-only /stop command. /redev is gated exactly as /dev (D22). PLAN-v2 S1's
   further exits (a typed harness command, CLAUDE_COMMAND_GATE=off) are planner proposals with no owner quote.
 - **D4b SUPERSEDED by D20 (owner, 2026-10-23).** Parking and the after-window question are withdrawn. The text that
-  stood here (2026-10-13) carried no owner quote (HANDOVER.md:70-71; COVERAGE.md:29).
+  stood here (2026-10-13) carried no owner quote (HANDOVER.md question 12; COVERAGE.md:29).
 - **D7 /close and /commit complete an incomplete dev.** The owner (O19):
   "dev永远都会完成，所以如果遇到close和commit自己派发相关的dev使用过的subagent补全。只要用户想dev一定dev完成，用户想close一定close完成". When
   /close or /commit finds an unfinished cycle, it dispatches again the subagents that cycle used (same subagent_type,
@@ -128,8 +128,10 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   is no include and no role table (D21).
 - **D8 The orchestrator never writes a producer's artifact.** Only the producer subagent writes its report.
   Which producer owns an artifact is read from the dispatch record that declared it, never from a table (D21).
-  [INFERRED mechanism; prove before use by P3's acceptance 8 replay (the declaring-dispatch reader) and, for the deny,
-  by the P5-a arm-* sandbox replay (TC-20 revised: 0 compliant writes denied, 0 V7a writes allowed).]
+  [INFERRED mechanism; prove before use by P1b's E3 replay (P1b acceptance 7, the declaring-dispatch reader; P3's
+  acceptance 8 reruns it over P3's gaps) and, for the deny, by P1b's E3 replay of the derived write permission and the
+  P5-a arm-* sandbox replay that extends it to every caller (TC-20 revised: 0 compliant writes denied, 0 V7a writes
+  allowed).]
 
 ## Pipelines
 
@@ -232,12 +234,12 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
 
 ## Planner text without an owner quote (status 2026-10-23)
 - PLAN-v2 S1's exits beyond interrupt and /stop (a typed harness command, CLAUDE_COMMAND_GATE=off): planner proposal
-  (COVERAGE.md:132, :284; HANDOVER.md:70-71).
+  (COVERAGE.md C11 and gap 7; HANDOVER.md question 12).
 - S2: superseded by D20. S9: planner default (landscape/G-stop-gates.md:283), kept as D2 applied by analogy.
 - TC-5's producer-question file format and its overnight role: planner and decision-critic design (PLAN-v2.md,
   'Decision 7 (producer waiver)'); the idea is backed by O19/D23, the parking role is withdrawn (D20).
 - D1's default-off auto-push: no owner quote for the default. The owner's backup answer of 2026-10-19,
-  "默认我都会打开，关闭的情况是特例", was resolved by the planner alone (HANDOVER.md:87-89). Unchanged here; no phase presents a privacy
+  "默认我都会打开，关闭的情况是特例", was resolved by the planner alone (HANDOVER.md "2026-10-19 更新", first bullet). Unchanged here; no phase presents a privacy
   measurement as an answer to it.
 - Codex default: the records conflict (commit 2e0303a, opt-in, 2026-05-04; paseo-daemon-teachings:245
   "每一个command都要加codex"). Unchanged here.
