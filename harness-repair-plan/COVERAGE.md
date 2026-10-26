@@ -60,7 +60,7 @@ Legend: done = merged (P0 PR #2, P0b PR #3, P7 PR #4); later = deferred to P9/P1
 | O9 overnight closes only after the session | P2 | - |
 | O10/O12 producer-side only, consumers trust one conclusion | every prompt; P1b removes consumer-side re-checks and second deciding consumers of every artifact; P4 removes what P1b left in /close and /commit | - |
 | O11/O12 generic repo, no hardcoded accounts | done (P7); P8 synthetic fixtures; P7b never prints values | P11 |
-| O17/O18 no "failure" framing; dev ends complete; user may join mid-way | P1, P1c (no dead end; every fault returns to its producer), P3 (QA and BA-QA fails loop back to their producer; the disposition has no cap; only a producer's own solid question is asked, D23), P4 (/close and /commit re-dispatch each gap's declaring dispatch; OPERATION_STALLED asks nothing) | P9 (Hook Discipline #5, C12) |
+| O17/O18 no "failure" framing; dev ends complete; user may join mid-way | P1, P1c (no dead end; every fault returns to its producer), P3 (QA and BA-QA fails loop back to their producer; the disposition has no cap; only a producer's own solid question is asked, D23), P1b row 10 and P4 (/close and /commit re-dispatch each gap's declaring dispatch; OPERATION_STALLED asks nothing) | P9 (Hook Discipline #5, C12) |
 | O19 QA must-pass removed; dev no-stop gate; /do one turn; overnight `/commit --auto`; close/commit complete dev; no producer writes by orchestrator | P1, P5, P2, P3/P4, P5-a | P11 (255 refs) |
 | O20 eight Stop gates; native rating; scoring section | P5; P4; PLAN section 8 | P9 |
 | O21 settings tracked/sanitized; local support kept; best permissions; history cleaned; one prompt/branch/PR per phase | done (P7); P7b (local support through seeding); _common branch rules | P11 |
@@ -305,9 +305,9 @@ map), audit/2026-10-23/, reviews/P1b-plan-sync.md.
 | D24: one producer, at least one consumer, consumers trust one conclusion | P1b Goals 1-4, scope rows 0-18, E1-E14 | P1b acceptance 3, 6, 10-13 |
 | D24: proved every time, no hand list | P1b Goal 5, row 19 (CI check, trace runner, ten compliant drivers) | P1b acceptance 2, 3 |
 | D25 (1) ten pipelines compliant, 0 blocks, 0 hook errors | P1c Goal 1, row 2, "The suite" (1): 16 scenarios in 2 settings modes | P1c acceptance 3 |
-| D25 (2) faults return to their producer, next round passes, zero human action | P1c rows 3 and 7-17; F1, F1q (missing), F2, F2j, F2g (malformed), F3a, F3q, F3b (old version, E1), F4, F4c, F4s (index.lock), F5, F5f (interrupted), F6, F6o (usage limit, X8), F7, F7b (fan-out lane), each in 2 modes | P1c acceptance 4 (the human /restart of F5, F5f and F6 aside: D22, register RD4) |
+| D25 (2) faults return to their producer, next round passes, zero human action | P1c rows 3 and 7-17; F1, F1q (missing), F2, F2j, F2g (malformed), F3a, F3q, F3b (old version, E1), F4, F4c, F4s (index.lock), F5, F5f (interrupted), F6, F6o (usage limit, X8), F7, F7b (fan-out lane), F8, F8q, F8p, F8c (an unfinished cycle met by the human's /close or /commit; P1b's routing loops, replayed): 21 faults, each in 2 modes | P1c acceptance 4 (aside: the human /restart of F5, F5f and F6, D22, register RD4; the human /close or /commit of each F8 fault, D7, register CC4) |
 | D25 (3) no dead end apart from /stop | P1c X6, row 4 (block sites enumerated at test time; classes G, D, H, U) | P1c acceptance 5 |
-| D25 (4) a regression replay per fixed defect | P1c row 5: R-P1, R-E1, R-N1 (X9, row 20), R-V1 (X7, row 14) | P1c acceptance 6 |
+| D25 (4) a regression replay per fixed defect | P1c row 5: R-P1, R-E1, R-N1 (X9, row 20), R-V1 (P7b's V1-1/NV-1 fix, commits 96bcb8f and 921b512, replayed with index.lock held) | P1c acceptance 6 |
 | D25 merge rule | P1c "Merge rule from P1c on", row 6 (fault-coverage step); P2-P6 and P9-P11 acceptance items (this sync) | P1c acceptance 8; each later PR |
 | Earlier words CC4, CC8, DT2, DT3, DT4, HC2 | P1c "Owner decisions" (quoted with sources); DT4 against CLAUDE.md #5: P9 (C12) | P9 acceptance 16 |
 
@@ -316,12 +316,10 @@ block, P9 in "Rows 1, 2, 4 and 5 after P1b" and P10 under "What earlier phases l
 
 Found while syncing:
 - N1, V1-1 and NV-1 are recorded, with their before and after evidence, in reviews/P7b-PR-record.md (rows N1 :220,
-  V1-1 :242, NV-1 :253; added in 4a9256a, after dac09ec9). P1c's X9 and R-V1 predate that record: they say no record
-  exists and reproduce the defects from descriptions, and X9's "before" (a `UU settings.json` stash pop at f8c18c2,
-  P7b.md facts 2 and 9) differs from the record's N1 before (d625284 after P7's manual init: after a CLI `model`
-  write, /pull exits 1 with "cannot pull with rebase: You have unstaged changes"). The record leaves N1's remaining
-  window (a /pull before the next Stop, :1334-1342) and safe_pull's tee without pipefail (Fact 1, :1300-1304) to the
-  reviewer; no phase owns them yet.
+  V1-1 :242, NV-1 :253; added in 4a9256a, after dac09ec9). P1c's X9 and R-V1 now reproduce them from that record
+  and P7b's commits (N1: 8ab874b and 98d153a, "before" on 1d10ae0; V1-1: 96bcb8f; NV-1: 921b512). P1c also takes what
+  the record left to the reviewer: N1's remaining window (a /pull before the next Stop, :1334-1342; X9 decides whether
+  row 20 fixes it) and safe_pull's tee without pipefail (Fact 1, :1300-1304; row 20).
 - docs/reference/paseo-daemon-teachings-20260910.md, the source of CC8, DT4 and HC2, is deleted on P8's branch; P1c reads
   it with `git show d625284:`.
 - audit/2026-10-23/report-zh.md section 4 item 5 suggests giving the 13 artifacts with no owning phase to P9 or P10; P1b's
