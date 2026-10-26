@@ -836,6 +836,9 @@ copy, as P1 "Sandbox and arming" shows.
    (pretool-cp-checkin.py `_handle_dev_sentinel` :490-503) takes the path alone, so the line stays until P6 takes the
    role from the CLI (P6.md:413-416); the check reads that path as the pattern row 1's mint writes,
    `.claude/dev-registry/dev-<ts>/qa.json`, when row 19 rule 1 replaces a minted id's timestamp (technical choice).
+   The runner, like the kit's `tool()` (tools/baseline.py:92-110), runs a call's PreToolUse before it performs the call,
+   and records a call that fails as an error tool_result and goes on, where the kit's `do_read` (:117-122) raises: in
+   /close after /do the inspectors' FIRST ACTION Reads (close.md:553-561) fail in both kits, close QA's on your branch.
 5. **Faults (E4).** For every artifact family whose consumer-side check you deleted: missing, schema-invalid and stale
    artifact, in shipped and armed settings, on your base and your branch. Armed on your branch: every fault stopped at
    its allowed position, the message naming the artifact and the failing check, returned to its own producer, passing
