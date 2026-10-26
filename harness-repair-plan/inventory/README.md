@@ -4,11 +4,12 @@
 it. P1b regenerates the map on the master of its own day, and P1b's CI check derives every relation at test time; it
 never compares against this file or any other committed list.**
 
-`artifact-map-d625284.tsv` lists every harness artifact found on d625284 but one (`protected-runtime.json`, see "How
-it was produced"), one row per artifact, with its producers, readers, deciding consumers, where it is checked, which
-D24 violations it shows, what P7b and P8 change, and how the row was proved. It reconciles five sources: the audit
-ledger (`audit/2026-10-23/ledger.md`), a corrected re-check of that ledger against the code, a static extractor, and
-two runtime traces, plus probes run for this map to settle the disagreements. Run date 2026-10-24.
+`artifact-map-d625284.tsv` lists every harness artifact found on d625284 but two (`protected-runtime.json` and the
+session-resource trust registry, see "How it was produced"), one row per artifact, with its producers, readers,
+deciding consumers, where it is checked, which D24 violations it shows, what P7b and P8 change, and how the row was
+proved. It reconciles five sources: the audit ledger (`audit/2026-10-23/ledger.md`), a corrected re-check of that
+ledger against the code, a static extractor, and two runtime traces, plus probes run for this map to settle the
+disagreements. Run date 2026-10-24.
 
 ## Counts
 
@@ -186,9 +187,15 @@ inspectors read dev-registry/dev-<TASK_ID>/, commands/close.md:553-561, which no
 push and merge flags are written never read; A91's deciding readers all call hooks/lib/subagent_restart.py and take
 one conclusion. A further verification read corrected A103 the same way: stop-overnight-timelock.py only publishes
 the terminal receipt and ignores the result (:217-235), and the two deciding readers left, pretool-tool-policy.py and
-the Stop coordinator, both decide through hooks/lib/session_resources.py. The counts in this README include all of
-these corrections; `build_map.py` printed 122 rows, 40 outside the ledger, several producers 35, several deciding
-consumers 37, written never read 29, read never written 18, no violation found 21, evidence 86 / 33 / 3 and G12 6.
+the Stop coordinator, both decide through hooks/lib/session_resources.py. A103's producers are that library's writes
+inside the project (session_resources.py:1127, :1149, :1168-1170, :1433, :1575, :2265), and its paths add the pointer
+`.claude/session-resources/by-claude-session/<sid>.json` that both deciders read (:1286); the row's earlier cites
+(:297-301, :485-513) write the session-resource trust registry outside the project
+(`$LANEB_SESSION_RESOURCE_TRUST_ROOT/<sha256 of the project root>/<sid>.json`, written by provision at :1193 and by
+finalize at :2298-2348), a second harness artifact this map does not list, also left to P1b's regenerated map. The
+counts in this README include all of these corrections; `build_map.py` printed 122 rows, 40 outside the ledger,
+several producers 35, several deciding consumers 37, written never read 29, read never written 18, no violation
+found 21, evidence 86 / 33 / 3 and G12 6.
 
 ## Limits
 
