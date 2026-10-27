@@ -302,11 +302,18 @@ A54). Cells that named a skip, a write, a hint, a read that does not happen, or 
 runs lose their entry (A10, A21, A39, A45, A60, A64, A78, A87). The same read completed the producers, readers,
 deciders, check cells or cite ranges of A01, A09, A14, A19, A22, A34, A35, A40, A43, A44, A45, A47, A50, A54, A57,
 A65, A76, A84, A91, A96, A98, A101, A102, A103, A107, A117, A120 and A121, among them four warn-only hooks that read
-the newest BA context by mtime (A19), and recorded P8's line shifts in A51, A62, A65, A69, A73 and A76. The counts in
-this README include all of these corrections; `build_map.py` printed 122 rows, 40 outside the ledger, several
-producers 35, several deciding consumers 37, consumer-side re-check 29, written never read 29, read never written 18,
-no violation found 21, evidence 86 / 33 / 3, producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 67 and
-G12 6.
+the newest BA context by mtime (A19), and recorded P8's line shifts in A51, A62, A65, A69, A73 and A76. A later code
+read then completed nine rows: A06's QA comparison is its Phase 6 (agents/qa.md:1150-1169; :1609 is the report field);
+in the actor's --verify-only run the initializer first asserts that A02's requirement document exists and matches
+(scripts/overnight-init.sh:163-165, through :447) and that A03's registry directory exists (:136, through :253);
+/dev-command runs A26's pre-query and routes on its status too (commands/dev-command.md:194); late-repair-controller.py
+verify-disclosure reads the singular context or ticket (A19, A22), dev report (A34) and QA report (A44) its run record
+names and refuses on a missing file, a missing block or a hash mismatch (:438-454), at /close --late-repair
+(commands/close.md:143) and, through resolve_effective_report_state (:496), at /commit; and A108's cleaner writes only
+INDEX.md, through the rule-inspector's index script (agents/cleaner.md:77, :91). The counts in this README include all
+of these corrections; `build_map.py` printed 122 rows, 40 outside the ledger, several producers 35, several deciding
+consumers 37, consumer-side re-check 29, written never read 29, read never written 18, no violation found 21, evidence
+86 / 33 / 3, producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 67 and G12 6.
 
 ## Limits
 
