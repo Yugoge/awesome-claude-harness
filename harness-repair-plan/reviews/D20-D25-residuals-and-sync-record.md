@@ -1,21 +1,39 @@
 # D20-D25 batch residuals and P1b plan sync: record
 
-Status 2026-10-26, branch `claude/vibrant-hopper-bazrn8`. The standing batch residuals were applied in commit 86b7cbc.
-The P1b plan-sync list was applied in the commit after it (the sync commit, c728380). This record is committed after
-them and changes no other file. It was written against 686b375, which adds two things on top of the sync commit: the
-fixes of verification round 1 (fa5659d) and a merge of the P1b/P1c session's commits, which rewrite prompts/P1b.md,
-prompts/P1c.md and inventory/. Parts 1 and 2 record what 86b7cbc and the sync commit applied; the later fixes belong to
-"Verification rounds". Residual items R1-R91 (reviews/D20-D25-batch-residuals.md, 91 items): 66 stand and were
-applied, 5 stand with no text change (R3, R39, R43, R44, R83), 9 are covered by another item (R2, R6, R11, R18, R38,
-R45, R65, R71, R81) and 11 are refuted (R1, R9, R12, R13, R25, R26, R28, R29, R31, R66, R72); 66 + 5 + 9 + 11 = 91.
-Sync edits V-1 ... P11-3 (reviews/P1b-plan-sync.md, 101 edits): 57 applied as written, 44 adapted, 0 not applied;
-57 + 44 = 101. D-1 counts as adapted: only its heading fix landed (Part 2).
+Status 2026-10-27, branch `claude/vibrant-hopper-bazrn8` at d347b2f. The standing batch residuals were applied in commit
+86b7cbc. The P1b plan-sync list was applied in the commit after it (the sync commit, c728380). Ten verification rounds
+followed: rounds 1-9 fixed what their independent verifiers found (fa5659d, f65290d, f732f26, 9380922, b335a0e, 7beb706,
+e428c5b, bb56fe5, 32fe0e0); round 10, the final confirmation round, fixed its findings in 5a4e0a3, and a further check
+of those edits found one more, fixed in d347b2f; merges of the P1b/P1c session's commits came in between. e712310 merges
+that session's commits up to facc385 onto round 9's fixes, and prompts/P1b.md, prompts/P1c.md and inventory/ are
+unchanged since, so every status this record takes on them at e712310 holds at d347b2f. This record changes no other
+file; its draft was committed in 32a6967. Parts 1 and 2 record what 86b7cbc and the sync commit applied, with the
+decisions and counts those commits made; the later fixes belong to "Verification rounds". Residual items R1-R91
+(reviews/D20-D25-batch-residuals.md, 91 items): 66 stand and were applied, 5 stand with no text change (R3, R39, R43,
+R44, R83), 9 are covered by another item (R2, R6, R11, R18, R38, R45, R65, R71, R81) and 11 are refuted (R1, R9, R12,
+R13, R25, R26, R28, R29, R31, R66, R72); 66 + 5 + 9 + 11 = 91. Sync edits V-1 ... P11-3 (reviews/P1b-plan-sync.md, 101
+edits): 57 applied as written, 44 adapted, 0 not applied; 57 + 44 = 101. D-1 counts as adapted: only its heading fix
+landed (Part 2).
 
-Line numbers: in Part 1 the item locations are the residual file's own numbers (the refuters found many of them 1 to
-23 lines off); in Part 2 they are at 86b7cbc unless a line says otherwise; in "For the P1b/P1c session" they are at
-the sync commit, the version of prompts/P1b.md and prompts/P1c.md the evaluators read (neither 86b7cbc nor the sync
-commit touched those files or inventory/), and each bullet says where the point stands at 686b375; in "Left for the
-reviewer" they are at 686b375.
+Some of what Parts 1 and 2 applied was later rewritten on purpose, keeping each item's point. At d347b2f, as at e712310,
+30 of the 132 residual replacements (manifest entries, numbered from 0) no longer stand verbatim: R4 #0, R15 #16-#17,
+R21 #26, R24 #29, R30 #33, #35, #38 and #40, R32 #41, R37 #49, R46 #56, R51 #61, R52 #63-#67, R56 #74 and #77, R58 #80,
+R61 #90, R62 #91, R68 #96-#98, R69 #99, R76 #106, R82 #111 and R89 #122. The sync itself changed four of them (#106,
+#111 and #122 as "Residual text the sync later changed" says, #77 by V-9), round 9 changed #99, and rounds 1-8 the rest;
+round 9's res-a and res-b verifiers re-read the other 29, round 10's res verifier all 30, and each still makes its
+item's point. Of the 101 sync edits, later rounds rewrote 24 the same way, and the sync verifiers trace each to the
+round entries that replaced it: V-1, V-11, V-13, V-15, V-17, V-29, V-31, D-1, H-10, K-1, K-4, K-6, K-8, K-12, P2-4,
+P3-5, P4-4, P4-5, P5-4, P6-4, P9-6, P9-7, P9-10 and P10-4.
+
+Line numbers: in Part 1 the item locations are the residual file's own numbers (the refuters found many of them 1 to 23
+lines off); in Part 2 they are at 86b7cbc unless a line says otherwise; in "Conflicts and choices" the bullets added for
+the verification rounds are at e712310 (the earlier bullets keep the numbers of the part they belong to); in
+"Verification rounds" a line number is at that round's baseline; in "For the P1b/P1c session" the sync evaluators' items
+first give the sync commit's numbers, the version of prompts/P1b.md and prompts/P1c.md the evaluators read (neither
+86b7cbc nor the sync commit touched those files or inventory/), and end with where the point stands at e712310, and the
+items the rounds sent are at e712310; in "Left for the reviewer" they are at e712310. 5a4e0a3 and d347b2f kept every
+line count, so all of these numbers also hold at d347b2f; where those two commits changed a cited line, the record says
+so.
 
 ## Method
 
@@ -33,7 +51,36 @@ reviewer" they are at 686b375.
   (APPLY, ADAPT or NOT-APPLIED), the exact operations, the new anchor, the decision ids, the acceptance number and the
   notes for P1b/P1c. The orchestrator changed one result (D-1, recorded below). The 114 operations were applied in the
   sync list's order, each on an anchor that occurred exactly once; none failed (the sync commit).
-- Agents interrupted by a usage limit were resumed on the same agents (Lesson 16), never replaced.
+- Verification, rounds 1-9: seven independent verifiers per round, none of whom had made an edit, each with a fixed
+  scope: res-a (R1-R45) and res-b (R46-R91, with the items they cover); sync-V (PLAN-v2.md), sync-dhk (DECISIONS.md,
+  HANDOVER.md, COVERAGE.md, COVERAGE-P9-P11.md) and sync-p (prompts P2-P6 and P9-P11), each with the sync edits and
+  every earlier round's fixes in its files; quotes (every line this work added or changed: rejected ideas, owner words
+  and owner credit, personal data and model names); structure (first lines and _common.md tails, untouched files,
+  decision ids, acceptance numbering, cross-references). Each wrote one result file: DEFECTS, each with file:line, the
+  problem and an exact fix (an OLD unique in its file, and the NEW). Round 10, the final confirmation round, ran four
+  verifiers (res, plan, prompts, quotes-structure) over the same ground, and one more verifier checked the edits that
+  fixed its findings.
+- One fixed baseline per round, named in its addendum to the verifier brief (round 1: the sync commit's head): every
+  reference this work makes into prompts/P1b.md, prompts/P1c.md and inventory/ had to hold there. The P1b/P1c session
+  kept committing; a commit of theirs newer than the baseline was reported under "AFTER <baseline>" and either recorded
+  for that session or, when it broke a reference of this work, fixed in the next round.
+- Counting rule (from round 3): a DEFECT is text this work added or changed that is wrong, or a reference this work made
+  that is broken at the baseline; older text this work did not add and does not contradict is NOT COUNTED, one line each
+  (those still open are under "Left for the reviewer"). From round 5 on, the reviewer session's findings
+  (reviews/D20-D25-reviewer-findings-on-A.md) were checked as claims. During the rounds the owner asked this work to
+  focus on the big picture (a request, not a ruling in DECISIONS.md), so round 10 raised the bar: a DEFECT only where
+  the text would make a phase executor do the wrong thing, fail or not find what it needs; anything less is MINOR. From
+  round 10 on, minor items are recorded for the reviewer, not fixed.
+- Applying: the same defect reported by several verifiers was merged into one fix, and each round's fixes went in as a
+  manifest of exact replacements (each OLD occurring once in its file) in one fix commit. From round 5 on, one
+  integration step did the merging and kept each NEW to its OLD's number of line breaks, so no file changed its line
+  count and P1b's and P1c's line citations into this work's files kept holding (checked before and after).
+- Refuters: a fix that reversed an earlier choice or changed a design went first to one independent refuter, whose
+  corrected fix replaced the verifier's when the defect held: round 5's two reversals (r5x-sidecar, r5x-arming) and
+  round 8's launcher change (r8x-launcher). All three held.
+- Agents interrupted by a usage limit were resumed on the same agent id with a message (Lesson 16): some sync
+  evaluators, round-1 verifiers, the first record drafter, round-4 verifiers, the round-6 integration agent and the
+  round-9 PLAN-v2 verifier. Where an interrupted dispatch had no agent id to resume, it was dispatched again.
 
 ## Part 1: residual items R1-R91
 
@@ -409,6 +456,45 @@ reviewer" they are at 686b375.
   edits R89's status line (O17/O18 and "the OPERATION_STALLED question" leave its list). P9-8 replaces row 16's #5
   sentence and keeps R76's "asked or relayed in-turn as row 14 documents it". P10-4 replaces R82's "(P2 rows 4 and 9)"
   attribution with P1b's and keeps L48. The sync anchor of D-1 (DECISIONS.md:5) had been rewritten by R91.
+- **D25's rank (round 1).** D25 and D20-D24 do not override one another (DECISIONS.md:7, :68, as the D-1 override set
+  the headings): the eight prompt headers and PLAN-v2's precedence lines rank D25 with D20-D24, neither above nor below
+  them.
+- **Push predicate (round 4).** The /push predicate also holds when HEAD "is an ancestor of" the typed remote's tip
+  (prompts/P5.md:433, PLAN-v2.md:563): that remote already has HEAD and push.sh pushes nothing, so a branch behind its
+  remote is no dead end (D25 (3)). This settles R30-A's strictly-behind case; round 1 had already moved the typed-remote
+  case to its producer (push.sh counts against the typed remote).
+- **The P10 and P11 tail sentence (round 5).** Changed on purpose to "The owner's rulings of 2026-10-23 and 2026-10-24
+  (DECISIONS.md D20-D25, which do not override one another) outrank every other decision and S#."
+  (prompts/P10.md:819-820, prompts/P11.md:795-796): "D20-D24 outrank every other decision" contradicted DECISIONS.md:7
+  and :68, and two verifiers found it independently. The sentence sits in P10's and P11's own tail variant, not in
+  _common.md's shared tail (which ends at "before editing."); P2-P6 and P9 still end byte for byte with
+  prompts/_common.md.
+- **No class H for a lost /do sidecar (round 5; refuter r5x-sidecar).** This reverses round 3's r3-structure-1. P1c X6's
+  class H is a closed list (P1c.md:360-363), and a lost sidecar is D25 (2)'s missing-artifact fault, so P5's do
+  predicate reads the hook's `[/do] task-id minted: <id>` transcript record (prompts/P5.md:400-401; TC-26 as corrected),
+  the sidecar stays only for the agent deny and TC-18, and a lost sidecar blocks nothing (P5.md:123-125). P5 still
+  extends class H to its gate's and launcher's instrument-failure block (P5.md:119-122), as P1c's class H holds the
+  time-lock's.
+- **G1 and G3 reach running sessions (rounds 5-6; refuter r5x-arming).** Unless P2's Arming-timing probe shows a
+  settings change reaching a running session, G1 and G3 take their switch at run time from the harness home's
+  settings.json when their process env lacks the key, as P1b E4 has G2 do since eef8a5c: through P7b's function, not a
+  second reader (prompts/P2.md:118). Round 6 placed that read: one hunk at each switch read (`_run_obligation_barrier`,
+  `main`), in files P3 otherwise owns, in a commit before P2's arming commit (P2.md:52, P3.md:50, PLAN-v2.md:180).
+- **No per-role prefix-row fallback (rounds 5-6).** A tool-policy allow prefix that names a file maps that file to a
+  role (D21; P1b E3 and row 19 rule 7), so P5 row 1, P3, P6 and TC-20 offer no prefix-row fallback (prompts/P5.md:111,
+  :341; PLAN-v2.md:1086).
+- **The Stop launcher (rounds 8-9; refuter r8x-launcher).** P5's launcher loads P1b row 18's transcript reader, with the
+  human-record rule, and lib/overnight.window_open by path, never a copy and with no drift test; P5 moves span_opener,
+  the human-record rule and timelock_released into the reader's module. Stated loss: a broken module the launcher loads
+  leaves the checks that need it not holding, as before P5-b (prompts/P5.md:351; PLAN-v2.md:44, :566, :1077; at :44 a
+  carve-out from S1, since D24 outranks S1).
+- **Verifier findings not applied.** Round 7: r7-sync-p-8 (P3.md:692's tool-policy ":129" to ":127"): :129 is right for
+  P3's refreshed base, where P8's 352e28c moved the ba-qa-report prefix down from :127, the line P1b row 4, P5 and
+  PLAN-v2 cite at d625284; r7-sync-V-7 ("(row 19 rule 7)" to E3): rule 7 also covers a tool-policy allow prefix that
+  names a derived artifact's file, so the citation is right. Round 9: r9-sync-V-3 (the tracked GATED/CONTROL JSON's
+  readers made one function): under P1b row 19 rule 1 a tracked file that no code writes is an input, not an artifact,
+  so rule 4's one-decider test does not reach those reads; the decisions they feed are on the transcripts, through the
+  reader's span_opener.
 
 ## Part 2: the P1b sync list
 
@@ -651,179 +737,468 @@ sentence as DECISIONS.md:70 records it and register rows quoted verbatim.
 
 ## Verification rounds
 
-To be filled in by the orchestrator.
+The method is under "Method"; the choices the rounds made are under "Conflicts and choices". Findings are the DEFECTS
+lines summed over the verifiers; "distinct" counts the same defect reported by several verifiers once. Each round's
+baseline is named in its addendum to the verifier brief.
+
+| round | baseline | defects by verifier (res-a, res-b, sync-V, sync-dhk, sync-p, quotes, structure) | total | outcome | edits | commit |
+|---|---|---|---|---|---|---|
+| 1 | c728380 | 6, 3, 9, 10, 7, 4, 3 | 42 | all applied | 73 | fa5659d |
+| 2 | 686b375 | 3, 2, 16, 5, 18, 3, 12 | 59 | all applied | 99 | f65290d |
+| 3 | 3f01eea | 1, 2, 8, 1, 4, 1, 1 | 18 | all applied | 27 | f732f26 |
+| 4 | 4ab7cf1 | 1, 1, 2, 0, 4, 0, 4 | 12 | 9 applied, 2 merged as duplicates, 1 moot | 18 | 9380922 |
+| 5 | ad5674b | 2, 3, 12, 2, 14, 2, 15 | 50 | merged by one integration step; two reversals checked by refuters (both held) | 91 | b335a0e |
+| 6 | 2b4ea19 | 3, 4, 3, 2, 6, 0, 2 | 20 (+1 after its baseline) | 13 distinct + 1 applied | 23 | 7beb706 |
+| 7 | 3ef1eca | 1, 2, 7, 3, 8, 1, 6 | 28 | 9 distinct applied, 2 rejected | 28 | e428c5b |
+| 8 | a085da8 | 0, 1, 2, 0, 1, 0, 0 | 4 | 4 distinct applied (one checked by a refuter, held) | 24 | bb56fe5 |
+| 9 | d16129f | 0, 2, 3, 0, 3, 0, 2 | 10 | 4 distinct applied, 1 rejected | 20 | 32fe0e0 |
+| 10 | e712310 | final confirmation round, higher bar; four verifiers (res, plan, prompts, quotes-structure): 0, 1, 2, 0 | 3 | 2 distinct applied; a check of those edits found 1 more, applied | 7 + 1 | 5a4e0a3, d347b2f |
+
+### Round 1
+
+Baseline c728380. 42 findings, all applied once duplicates were merged; 73 edits in fa5659d.
+- D25 ranked with D20-D24 in the eight prompt headers, PLAN-v2's precedence lines and DECISIONS.md's headings.
+- DECISIONS.md cites HANDOVER.md and COVERAGE.md lines by name (the sync's inserts had moved them).
+- PLAN-v2's older text follows what the sync made P1b and P1c own (reader credits, P4's advisory sinks, the G2-hunk
+  clause, TC-56 and TC-57, the launcher at :44 and :539, V-29's /restart exception); the residual texts name P1b's E3
+  and acceptance 7.
+- The push dead end for a typed remote that is not the upstream is fixed at its producer (push.sh counts against the
+  typed remote).
+
+Rejected: none. Then 686b375 merged the P1b/P1c session's 2e7d4c0..0cbfbd3 (6 commits, rewriting both prompts and
+inventory/).
+
+### Round 2
+
+Baseline 686b375; before the fixes, 32a6967 (this record's draft) and 3f01eea (that session's P1c fixes
+8ad26bc..1715fdd) came in, and the fixes align to P1b and P1c as merged at 3f01eea. 59 findings, all applied; 99 edits
+in f65290d.
+- PLAN-v2 and the prompts follow the revised P1b and P1c: P1b's E4 arms G2 (P1c's X3 only if P1b did not); P1c's
+  net-code cap <= +150; 21 faults, with the human /close or /commit of the F8 faults beside /restart; P1b corrections 4,
+  7 and 8; E8 without `pending`; row 10's routing loop; E6's candidates; X8's hand-off to P9.
+- D25 (2)'s "no human action" names the owner's own commands (DECISIONS.md, HANDOVER.md, COVERAGE.md).
+- P4 cites P1b's acceptance 7, not P3's acceptance 8, as the reader's proof; P4's wave paragraph, PLAN-v2's UD-CM row
+  and V-22's merge-rule sentence.
+
+Rejected: none.
+
+### Round 3
+
+Baseline 3f01eea (head f65290d). 18 findings, all applied; 27 edits in f732f26.
+- PLAN-v2:96's D25 bullet gets the owner's-own-commands exception; HANDOVER question 5's heading follows P2's arming.
+- R15's and R58's parentheticals follow P1b's rows; R46's names pull.sh's own success line.
+- PLAN-v2 follows through on G2's arming, P1c's merge rule, ESCALATION_ACK, row 18, E3, E6 and E8.
+- r3-structure-1 had P5 extend P1c's class H to the /do missing-sidecar gap (withdrawn in round 5).
+
+Rejected: none. Then 4ab7cf1 merged that session's 9f214f3 (P1c: the merge rule's coverage step leaves the test
+directories out; X3's and X4's probes; D8 wording).
+
+### Round 4
+
+Baseline 4ab7cf1. 12 findings: 9 applied, 2 merged as duplicates (r4-sync-p-1 = r4-res-b-1, r4-structure-3 =
+r4-sync-V-1) and 1 moot once r4-res-b-1 landed (r4-structure-2), as round4-notes.md records; 18 edits in 9380922.
+- The push predicate also holds when HEAD is an ancestor of the typed remote's tip ("Conflicts and choices").
+- P2's three take-the-hunk or merge-after-P3 sites follow round 3: no hunk, P2 first.
+- P3 quotes TC-40 as round 3 rewrote it; PLAN-v2 and P4 map rows to lines as P1c's "Delivered by P1b" does; P1c row 10
+  is credited for the QA latest-report guess; P2-P4's in-flight and legacy cases and P9's L18 item follow what P1b's and
+  P1c's PRs leave.
+
+Rejected: none (r4-structure-2 became moot). Then 92b4d9b and ad5674b merged 18 commits of the P1b/P1c and reviewer
+sessions, up to c6e3942, among them reviews/D20-D25-reviewer-findings-on-A.md (4cc52aa). The structure verifier had read
+nine claims A1-A9 from them early ("AFTER 4ab7cf1"); the claims and the reviewer findings went to round 5.
+
+### Round 5
+
+Baseline ad5674b; the fixes were applied on eef8a5c, a fast-forward to 5 commits of that session. 50 findings, merged by
+one integration step into 91 edits that keep every line count (b335a0e).
+- Two reversals, each held by a refuter ("Conflicts and choices"): the /do sidecar leaves class H, and G1 and G3 read
+  their switch at run time.
+- D20-D25 in the eight preambles, P9 and the P10 and P11 tail sentence; no per-role prefix-row fallback (D21).
+- HANDOVER's 会问你 cells, :7 and :37 follow D18; the overnight subagent's decision rule follows D20; D8's deny half; P4
+  fails the never-dispatched case instead of recording a /close or /commit dead end.
+- The A1-A9 claims that held: P1b row 7 keeps /commit's chain call, E14 keeps Step 8's selection, row 10's main-agent
+  route, E7's script stubs, P1b's arming commit, the content pairing of P1c row 17.
+
+Not applied: r5-structure-15, a line number in P1b.md (sent to that session). Then 2b4ea19 merged 787167e..e8e5817.
+
+### Round 6
+
+Baseline 2b4ea19; the fixes were applied on ec2681d, a fast-forward to P1c 88b240c, P1b 5922f1f and that session's merge
+of 2b4ea19. 20 findings and 1 after the baseline; 13 distinct and the 1 applied; 23 edits in 7beb706.
+- P3's do-report branch opens for a hook-minted /do task with no do-report (round 5's open item).
+- Round 5's switch-read hunks are named in P2's and P3's shared-file lists and PLAN-v2:180 and :357; P2's Arming-timing
+  step decides only P5's question.
+- P3's Out of scope drops TC-20's prefix-row fallback and P5 row 1 its "or keep it and say why"; P4's new routes get
+  acceptance replays; HANDOVER question 5's heading and COVERAGE.md's status line; PLAN-v2's dated TC-26 note bracketed
+  and :576's numbers back to 09ab15b.
+- After the baseline: P9:458-460 follows 88b240c (the wake's SendMessage widening is issued by
+  userprompt-restart-authorize.py).
+
+Rejected: none. Then 3ef1eca merged 49 commits of that session (db16126..fb8f42c), large revisions of P1b, P1c and
+inventory/.
+
+### Round 7
+
+Baseline 3ef1eca; the fixes were applied on d6409c2, a fast-forward to a12fb1d, 976adef, 59b483a, a9a9b98 and d6409c2
+(inventory round 13). 28 findings; 9 distinct applied, 2 rejected; 28 edits in e428c5b. All but three follow that
+session's commits since ec2681d:
+- A close-QA or commit-QA finding on a product file no dispatch of the task wrote goes back to that round's own QA
+  dispatch, with no default role (P4, PLAN-v2).
+- P1c X8's wake rule (a recurring CronCreate of the wake's text) and the time-lock's wake check (PLAN-v2:536, P2, P5);
+  P1b row 15's terminal receipt call kept (P2, P5); P1b row 13's one overnight-state decider and row 11's early
+  commit-landing exemption (P2, P3); X8's third case (P9, PLAN-v2).
+- Inventory counts 43 / 52 / 26 / 24 of 120; COVERAGE.md's status line and fix 3, HANDOVER:83.
+
+Rejected: r7-sync-p-8 and r7-sync-V-7 ("Conflicts and choices"). Then a085da8 merged 5b2b3d9 (P1b E9 and rows aligned
+with inventory round 13).
+
+### Round 8
+
+Baseline a085da8. 4 findings, 4 distinct, all applied; 24 edits in bb56fe5.
+- P1b row 18 (5b2b3d9) made one transcript reader: P2, P3, P5 and P6 read transcripts and agent meta through it, and
+  P5's launcher loads it by path instead of copying the human-record rule under a drift test (refuter r8x-launcher held;
+  its fix replaced the verifier's).
+- P4's acceptances replay the no-artifact close-QA route; PLAN-v2:357 lists the terminal receipt call.
+
+Rejected: none. Then d16129f merged abb33b2, 9e796b8, 5530a7e and 7284365 (inventory A108 and A120; P1c's faults
+paragraph and Rollback).
+
+### Round 9
+
+Baseline d16129f. 10 findings; 4 distinct applied, 1 rejected; 20 edits in 32fe0e0.
+- window_open calls stop_contract.timelock_released, so P5 moves timelock_released, with span_opener and the
+  human-record rule, into the reader's module and states the loss per broken module; P2 no longer allows a copy of the
+  window rule.
+- P4 replays a commit-QA REJECT whose finding cites no artifact or names only an undeclared product file.
+- PLAN-v2's and P5's "a crash in a gated span blocks" lines name TC-11's stated loss (D24 outranks S1).
+
+Rejected: r9-sync-V-3 ("Conflicts and choices"). Then e712310 merged that session's 0381276..facc385 (17 commits: P1b,
+P1c, inventory/ and their own record reviews/P1b-P1c-findings-record.md).
+
+### Round 10
+
+Baseline e712310 for everything, under the round 10 addendum's higher bar. Four verifiers: res 0, plan 1, prompts 2,
+quotes-structure 0 DEFECTs, 3 reported and 2 distinct, both caused by P1b commits merged in e712310; 7 edits in 5a4e0a3.
+- P1b row 8 and correction 9 move the /spec coverage rule to G2 at the spec subagent's stop and leave
+  stop-spec-coverage-enforce.py an exit-0 stub: P5 acceptance 13 and PLAN-v2:1158 and :1353 follow.
+- P1b row 6 moves the gitignore preflight's dev-report rule into G3, next to row 11's commit-landing admission: P3 row
+  13, P3.md:102 and acceptance 11, and PLAN-v2:423 add P3's three other profile exemptions to G3's admission.
+
+A further independent check of those 7 edits found 1 defect: P5 acceptance 13's new sentence could be read as exempting
+/spec from the time-lock (against acceptances 9, 10 and 12, D20); it now says "with no open overnight window" (1 edit,
+d347b2f). Rejected: none. No merge followed: P1b, P1c and inventory/ are unchanged since e712310. Verification ends
+here; every remaining item is MINOR, listed under "Left for the reviewer".
+
+### What the rounds checked
+
+Across the rounds, round 10 last at e712310, the verifiers checked that every standing R item and every sync edit landed
+as recorded, each NEW present at the head or traced to the later entry that replaced it on purpose; that no rejected
+idea came back; that every owner quote is verbatim in register.md or DECISIONS.md and no planner text is credited to the
+owner; that no personal data or model identifier was added; that every prompt keeps its first line, P2-P6 and P9 end
+byte for byte with prompts/_common.md and P10 and P11 keep their own tails but for round 5's sentence; and that
+cross-references, decision ids and acceptance numbers hold, including every reference into prompts/P1b.md,
+prompts/P1c.md and inventory/ at the round's baseline. The counts fell from 42 and 59 in rounds 1-2 to 4 and 10 in
+rounds 8-9 and 3 in round 10.
 
 ## For the P1b/P1c session
 
-Neither the residuals nor the sync changed prompts/P1b.md, prompts/P1c.md or inventory/. The items come from the sync
-evaluators' FOR-P1B-P1C fields; no refuter result asks for a change to these files. Line numbers are at the sync commit
-(c728380), the version the evaluators read. The P1b/P1c session's commits merged in 686b375 rewrote both prompts, so
-each bullet ends with where the point stands at 686b375.
+Neither the residuals, the sync nor any verification round changed prompts/P1b.md, prompts/P1c.md or inventory/. The
+first eighteen items come from the sync evaluators' FOR-P1B-P1C fields (no refuter result asks for a change to these
+files); line numbers in their first part are at the sync commit (c728380), the version the evaluators read. The P1b/P1c
+session's commits merged since (686b375 to e712310) rewrote both prompts, so each item ends with where the point stands
+at e712310, re-read there; nothing changed those files after e712310, so each status holds at d347b2f. The last four
+items are what the verification rounds sent to that session. That session's own record is
+reviews/P1b-P1c-findings-record.md (facc385).
 
-- prompts/P1b.md:13, :161-164 and prompts/P1c.md:138-143 call the ruling "the owner's rule of 2026-10-24", quote it
-  from 永远 without its opening, rank it with "one producer, one consumer" (P1b.md:163, P1c.md:138) and credit the suite
-  design and merge rule to the owner (P1c.md:141-143); DECISIONS.md D25 records neither the ranking nor the design as
-  the owner's words. Proposed: name it D25, quote DECISIONS.md D25 in full, drop the ranking, and credit the suite and
-  the merge rule to D25's recorded measure and P1c. Sources: V-1, V-31, D-1, H-10, K-6 (owner-R5, format-FH-6). At
-  686b375: settled (P1b.md:183-190, P1c.md:153-160).
+- prompts/P1b.md:13, :161-164 and prompts/P1c.md:138-143 call the ruling "the owner's rule of 2026-10-24", quote it from
+  永远 without its opening, rank it with "one producer, one consumer" (P1b.md:163, P1c.md:138) and credit the suite design
+  and merge rule to the owner (P1c.md:141-143); DECISIONS.md D25 records neither the ranking nor the design as the
+  owner's words. Proposed: name it D25, quote DECISIONS.md D25 in full, drop the ranking, and credit the suite and the
+  merge rule to D25's recorded measure and P1c. Sources: V-1, V-31, D-1, H-10, K-6 (owner-R5, format-FH-6). At e712310:
+  settled (P1b.md:201-208, P1c.md:162-169).
 - prompts/P1b.md:102 and prompts/P1c.md:134-136 rank planner text below "D20-D24". Proposed: D20-D25. Source: D-1. At
-  686b375: settled in P1c (:147-148); still open in P1b (now :123-124).
+  e712310: settled in both (P1b.md:141-142, P1c.md:156-157).
 - prompts/P1c.md:16-17, X9 (:357-372) and R-V1 (:544-547) say N1, V1-1 and NV-1 have no record, while
   reviews/P7b-PR-record.md records them (:220 N1, :242 V1-1, :253 NV-1). Proposed: cite that record; take R-N1's
   "before" from its N1 (after P7's manual init and a CLI `model` write, pull.sh rc=1 "cannot pull with rebase: You have
-  unstaged changes") and R-V1's from its V1-1/NV-1 scenarios (landedlock.sh, v11doc.sh); give an owner to N1's
-  remaining window (record :1334-1342) and to its Fact 1, safe_pull's tee without pipefail (:1300-1304). Sources: V-27,
-  V-31, H-10, K-12, P11-3 (plan-FIT-04). At 686b375: settled (P1c.md:417-421, :671 cite the record, N1's remaining
-  window and Fact 1).
+  unstaged changes") and R-V1's from its V1-1/NV-1 scenarios (landedlock.sh, v11doc.sh); give an owner to N1's remaining
+  window (record :1334-1342) and to its Fact 1, safe_pull's tee without pipefail (:1300-1304). Sources: V-27, V-31,
+  H-10, K-12, P11-3 (plan-FIT-04). At e712310: settled (X9, P1c.md:470-481, and R-V1, :738-744, cite the record; row 20,
+  :554, takes Fact 1 and, if X9 takes it, N1's window).
 - prompts/P1b.md E13 (:365): "one writer (the orchestrator at Step 4)" for the cycle contract contradicts TC-43
   (PLAN-v2.md:1074 at 86b7cbc) and P2's PM TRIAGE handler as the only writer (P2.md:386-388 at 86b7cbc); its decision
   rule (:369-371) has no /stop replay although P2 row 14 keeps break-overnight-lock.py's current_phase=completed write.
-  Proposed: name the PM TRIAGE handler and add the /stop case. Source: P2-4 (plan-FIT-03). At 686b375: the writer is
-  settled (P1b.md:487 names a PM TRIAGE handler).
+  Proposed: name the PM TRIAGE handler and add the /stop case. Source: P2-4 (plan-FIT-03). At e712310: settled (E13,
+  P1b.md:589-619: a PM TRIAGE handler is the contract's only writer, and the replay includes a human /stop inside cycle
+  1's window).
 - prompts/P1b.md:683 forbade P1b to arm any switch; if P1b were changed to arm G2 under E4 (plan-FIT-02), P2's "P1b and
-  P1c" block would have to read "if P1b or P1c already set". Source: P2-4. At 686b375: P1b arms G2 under E4
-  (P1b.md:89, :308, :581); the consequence for P2.md and PLAN-v2.md is under "Left for the reviewer".
+  P1c" block would have to read "if P1b or P1c already set". Source: P2-4. At e712310: settled (P1b arms G2 under E4,
+  P1b.md:98, :368, :705; P2.md and PLAN-v2.md say so since round 2, P2.md:113 and PLAN-v2.md:104, :174, :181).
 - prompts/P1b.md "Corrections to PLAN-v2" item 2 (:395) takes "the escalation stores and the arbitration path (Goal 3)"
   from P3, but no P1b scope row names progress_measure.py's arbitration and awaiting_input phases or
-  declare_awaiting_input (row 3 :459 names only G2's arbitration comment; P1c row 7 :405 only the progress/ store and its
-  G2 helpers), and P3 row 6 keeps them. Proposed: list them in row 3, or narrow item 2 to "the G2 escalation stores, their
-  admission and G2's arbitration comment". Source: P3-5. At 686b375: still open (item 2 is now P1b.md:539; P1b names no
-  progress_measure piece).
+  declare_awaiting_input (row 3 :459 names only G2's arbitration comment; P1c row 7 :405 only the progress/ store and
+  its G2 helpers), and P3 row 6 keeps them. Proposed: list them in row 3, or narrow item 2 to "the G2 escalation stores,
+  their admission and G2's arbitration comment". Source: P3-5. At e712310: still open (item 2 is P1b.md:661; row 3,
+  :758, names G2's escalation stores, their admission and the arbitration comment, and no progress_measure piece).
 - prompts/P1b.md E6 (:271-284): its candidates were the journal and dev's owned_edits/pre_edit_snapshots, while PLAN-v2
   TC-46 and P6 take the CLI transcript write set as the one source; it did not say whether `_wire_ledger_judgment`'s
   ENTANGLED check, the owned-edits ledger and dev's files_created/files_modified stay (P6 rows 5 and 6 keep them).
   Proposed: name the transcript reader as a candidate (or say A3.a's check is G2's check of dev's own report) and settle
-  the three. Sources: V-17, P6-4 (plan-FIT-05). At 686b375: settled (E6, P1b.md:364-387, lists the CLI's transcript
+  the three. Sources: V-17, P6-4 (plan-FIT-05). At e712310: settled (E6, P1b.md:438-461, takes the CLI's transcript
   record as candidate (c) and keeps the ENTANGLED check and dev's declared file lists).
 - prompts/P1b.md E3 (:220-242) did not say whether the derived write permission ships enforcing when it deletes the
   per-role prefixes, or which callers it denies; its Out of scope (:506) gave P5 "the D8 deny for paths no obligation
-  declares", which P5 row 1 does not plan. Sources: V-15, V-17, P5-4, P6-4 (plan-FIT-12). At 686b375: settled (E3,
-  P1b.md:260-307: enforcing, every caller, the main agent included).
+  declares", which P5 row 1 does not plan. Sources: V-15, V-17, P5-4, P6-4 (plan-FIT-12). At e712310: settled (E3,
+  P1b.md:341-345: enforcing, every caller, the main agent included; the main agent's half goes to P5 row 1 only under
+  acceptance 17's condition).
 - prompts/P1b.md E8 (:303-304) prefers (a), no skeleton, on a tie, while P5's TC-18 continuation and its rows 15 and 21
   read the pending do-report skeleton (PLAN-v2.md:548 at 86b7cbc). Proposed: E8's rule covers that case. Sources: V-15,
-  P5-4 (plan-FIT-13). At 686b375: addressed (E8, P1b.md:406-424, ties its outcome to P5 row 21 and to its correction 8).
+  P5-4 (plan-FIT-13). At e712310: addressed (E8, P1b.md:494-516, still prefers (a) on a tie and ties its outcome to P5
+  row 21 and to its correction 8).
 - prompts/P1b.md Goal 3 (:72-75) and acceptance 13 allow deciding checks only at the producer's stop, G1 and G3; P5's
   Stop gate was not named. Proposed: count the command's Stop gate as an allowed position. Source: P5-4 (owner-R10). At
-  686b375: settled (P1b.md:85).
+  e712310: settled (P1b.md:92-96).
 - prompts/P1b.md row 19 (:475) and acceptance 3 do not say how the CI check derives producers and deciding consumers for
   artifacts that are not files (the obligation record, the task-id rule, the terminal vocabulary, the resolver's stdout,
   the COMMIT response line, the changelog-status block; E1 counted 32 "row not a file" misses). Proposed: state the
   derivation and add a mutation such as a second parser of the changelog-status block. Sources: V-24, P10-4
-  (plan-FIT-15). At 686b375: addressed (P1b.md:703 adds a second parser of a declared response block as a mutation).
+  (plan-FIT-15). At e712310: addressed (P1b.md:846 adds a second parser of a declared response block as a mutation).
 - prompts/P1b.md:37: the "latest baseline CI run on origin/master is green" check names no command. Source: K-8 (review
-  note). At 686b375: still open (now P1b.md:39).
+  note). At e712310: settled (P1b.md:39-46 give the gh query and the REST call).
 - prompts/P1c.md X6 (:302-304): class H names only the time-lock block and its instrument-failure block, so P5's
   command-gate and launcher instrument-failure blocks (released by /stop) fit no class, and a lost hook-written input
   (the /do sidecar, PLAN-v2.md:548 at 86b7cbc) is not classed. Proposed: count them in H and class the lost input.
-  Source: V-15. At 686b375: still open (class H is now P1c.md:338-340).
-- prompts/P1c.md "Net code cap" (:687-690): the -150 estimate counted code P1b removes first. Proposed: count against the
-  master P1b leaves and re-derive. Source: V-5 (format-FH-2, plan-FIT-11). At 686b375: settled (P1c.md:863-868).
+  Source: V-15. At e712310: still open in P1c, covered in P5: class H (P1c.md:360-363) still names only the time-lock's
+  two blocks, and P5 extends it to its own instrument-failure block (prompts/P5.md:119-122); the lost sidecar needs no
+  class since round 5, as it blocks nothing ("Conflicts and choices").
+- prompts/P1c.md "Net code cap" (:687-690): the -150 estimate counted code P1b removes first. Proposed: count against
+  the master P1b leaves and re-derive. Source: V-5 (format-FH-2, plan-FIT-11). At e712310: settled (P1c.md:974-980, <=
+  +150).
 - prompts/P1c.md "Merge rule from P1c on" (:557-562): a fault replay's path left out settings.json (P5 changes the Stop
   group and adds `Skill(codex:*)`) and any CI-only script (P10's scripts/size-ratchet.py, run only by baseline.yml), so
   P5's and P10's never-fail acceptances would fail on their own diffs. Proposed: count the settings.json keys a replay
   uses, and let a file no hook or template reaches pass with the CI job that runs it, or an equivalent rule. Sources:
-  P5-5, P10-6 (plan-FIT-17). At 686b375: settled for settings.json (keys are compared one by one); still open for a
-  CI-only script under scripts/ (P1c.md:690-692 still fails such a file).
-- prompts/P1c.md X8 option (B) (:351-352) kept the human /restart for F6o against the fault acceptance (:525) and the
-  DO NOT list (:750-751, D20). Source: V-29. At 686b375: settled (X8, P1c.md:384 on, offers no option (B)).
+  P5-5, P10-6 (plan-FIT-17). At e712310: settled (P1c.md:749-780: keys compared one by one; a CI-only file, such as
+  P10's size ratchet, printed as a fact).
+- prompts/P1c.md X8 option (B) (:351-352) kept the human /restart for F6o against the fault acceptance (:525) and the DO
+  NOT list (:750-751, D20). Source: V-29. At e712310: settled (X8, P1c.md:406 on, offers no option (B)).
 - prompts/P1c.md X8 option (A) (:345-347) widens the SendMessage exception to the overnight session's own wake, which
   makes CLAUDE.md:62 at d625284 and Lesson 16 false, and P1c's "Hand-offs for the sync list" (:730-739) named only Hook
-  Discipline #5. Source: P9-8 (plan-FIT-18). At 686b375: settled (P1c.md:937-939 hand off CLAUDE.md:62 and Lesson 16).
+  Discipline #5. Source: P9-8 (plan-FIT-18). At e712310: settled (P1c.md:1059-1063 hand off CLAUDE.md:62 and Lesson 16).
 - prompts/P1c.md:8 stated the wave without the id 2c, and P1c.md:14-15 said P8 and P7b merge "before wave 3" while
-  "Before you start" (:33-36) required them before P1c (format-FH-10 (1)). Sources: V-6, K-8. At 686b375: settled
-  (P1c.md:8 "Wave 2c", :15 "merge before P1b").
+  "Before you start" (:33-36) required them before P1c (format-FH-10 (1)). Sources: V-6, K-8. At e712310: settled
+  (P1c.md:8 "Wave 2c", :14-15 "merge before P1b").
+- inventory/artifact-map-d625284.tsv row A51 cites "PLAN-v2:773 says 12"; PLAN-v2's "12 consent readers" row was :773
+  only at the planning commit 3ce5882, :771 at aaf072c and is :803 now. Proposed: cite it by name, as P1b row 9 does.
+  Raised by round 3's structure verifier and repeated through round 10. At e712310: still open (the TSV's line 50).
+- r5-structure-15: P1b.md cited P5.md:839 for the `blocked` rewrite in P5's retired list, which is P5.md:841. This work
+  left P1b.md alone. At e712310: settled by that session in 787167e (P1b.md:714 cites P5.md:841).
+- The settings_env/CLAUDE_HOME trap for G2, raised in round 5 (refuter r5x-arming): claude_home's `settings_env` returns
+  nothing on a landed home whose overlay sets CLAUDE_HOME, so a run-time switch read through it misses G2's key there.
+  At e712310: settled; P1b E4 at eef8a5c already took that case through P7b's function (now P1b.md:392-397), and round 5
+  worded P2's G1/G3 read to match.
+- Commits of that session newer than a round's baseline ("AFTER <baseline>"): the references they broke were fixed by
+  this work in rounds 5-7, and the later ones broke none. At d347b2f P1b's citations into this work's files still land
+  on their subjects (round 10's check re-read the ones its edits touched): P1b.md:286 (P4.md:697), :485 (P2.md:519),
+  :487 (P2.md:322), :655-656 (PLAN-v2.md:133-134, :172, :174, :1199, :1311, :1329), :714 (P5.md:841), :715-716
+  (PLAN-v2.md:1158; P5.md:265, :607, :753), :762 (P2.md:756) and :878 (P6.md:413-416); P1c's `plan:` citations are
+  pinned to 3ce5882. Nothing else the rounds listed for that session is open.
 
 ## Left for the reviewer
 
-Observations the sources report outside both lists that are still open at 686b375; line numbers are at 686b375.
-Observations that the verification-round commit fa5659d already fixed are not listed: D25 in PLAN-v2's precedence lines
-and in the prompts' D20-D24 bullets, the P5 and P10 wave paragraphs, the HANDOVER.md and COVERAGE.md citations in
+Observations the sources report outside both lists that are still open at d347b2f; line numbers are at e712310, re-read
+there, and hold at d347b2f (5a4e0a3 and d347b2f changed only PLAN-v2.md:423, :1158, :1353, prompts/P3.md:102, :299, :639
+and prompts/P5.md:753). Not listed because they are fixed: what round 1 (fa5659d) fixed (D25 in PLAN-v2's precedence
+lines and in the prompts' D20-D24 bullets, the P5 and P10 wave paragraphs, the HANDOVER.md and COVERAGE.md citations in
 DECISIONS.md, the P3 reader credits in PLAN-v2 and P4's advisory sinks, the G2-hunk clause of PLAN-v2's P3 row, the
 CLAUDE.md row's #1/#3, PLAN-v2's P3 arbitration grep, TC-56 and TC-57, the launcher wording at PLAN-v2.md:44 and :539,
-the push dead end for a typed remote that is not the upstream, COVERAGE.md's waves sentence and P9's L-attributions.
+the push dead end for a typed remote that is not the upstream, COVERAGE.md's waves sentence and P9's L-attributions),
+and what later rounds fixed from this list as it stood at 686b375: STOPGATE's arming credited to P1c's X3, P4's wave
+paragraph, PLAN-v2's UD-CM row, V-22's "prose-only changes need none" and DECISIONS.md D25 (2)'s "no human action"
+beside the owner's /restart (round 2); the G2 failing-stop either/or in P2, P3 and PLAN-v2 (rounds 3-4); the push
+predicate for HEAD strictly behind the tip (round 4); the P10 and P11 tail sentence, HANDOVER's 会问你 cells and the
+corrections 2.82 prefix-row fallback for P5 row 1 (rounds 5-6); COVERAGE.md gap 7 (COVERAGE.md:3, round 7); and
+PLAN-v2.md:1158 with P5's acceptance 13, which kept the /spec coverage phase's block after P1b correction 9 moved its
+rule (round 10, 5a4e0a3 and d347b2f). P1b now settles one more: its row 7 respells commit.md :459, :486, :570 and :821's
+`source venv/bin/activate` calls (P1b.md:762), which no P2 acceptance ran (R15-B).
 
-- STOPGATE's arming is still credited to P1c's X3 although P1b now arms G2 under E4 (P1b.md:89, :308, :581; P1c.md:486
-  arms it only where the base lacks it): prompts/P2.md:110 (Arming bullet, "if P1c's X3 already set"), PLAN-v2.md:104
-  ("G2 in P1c instead, if P1c's X3 arms it"), :174 (wave 2c, "It may arm CLAUDE_OBLIGATION_STOPGATE (its X3)"), :357
-  (P2 section, "If P1c's X3 already set ...") and :1353 ("if P1c armed G2"). P2-4's note asks for "if P1b or P1c already
-  set" in that case. (P2-4, plan-FIT-02)
-- The G2 failing-stop hunk texts keep the either/or that V-9 removed from PLAN-v2's P2 goal: prompts/P2.md:15 and Goal 7
-  (:153-154, "Either take that hunk before the arming commit, or, if you do not take the hunk, merge after P3"), P2 row
-  17 (:327), prompts/P3.md:48-51 and row 6 (:291, "P2 arms CLAUDE_OBLIGATION_STOPGATE only after this hunk"), and
-  PLAN-v2.md:180 (wave 3 overlap, hooks/subagentstop-artifact-contract-enforce.py "(P3 only)"). The P2 and P3 "P1b and
-  P1c" blocks override them by precedence but do not edit them. (V-9, P3-5, R58-B)
-- prompts/P10.md:820 and prompts/P11.md:796 still end "(DECISIONS.md D20-D24) outrank every other decision and S#"; the
-  other precedence lines now include D25. (V-1, R60-B)
-- prompts/P4.md:7-12 (wave paragraph) names waves 2 and 3 only, not P1b and P1c, while its "Before you start" line does.
-  (P4-1)
 - HANDOVER.md:1, :3 and :80 still say "8 个提示词". (H-1)
-- HANDOVER.md "会问你" cells :21 (P2 row, "问题 3（特殊情况下加问题 5）") and :24 (P5 row, "问题 5（P2 已问过就不再问）"): P2 now
-  decides bwrap and the arming time by D18 experiments, and COVERAGE-P9-P11.md:165-167 resolves HANDOVER questions 3-5 by
-  D18. (R87-A)
-- COVERAGE.md:294 (gap 7) still lists D4b's refined wording and /redev among the confirmations never given; HANDOVER.md
-  question 12 and COVERAGE-P9-P11.md:174 got dated notes (R88, R90), this line none. (R89-A)
-- COVERAGE-P9-P11.md:35-37 (P9, P10 and P11 dependency rows) do not list P1b and P1c. (R90-B, K-11)
+- COVERAGE-P9-P11.md:35-37 (P9, P10 and P11 dependency rows, a dated 2026-10-19 table) do not list P1b and P1c, and :35
+  still credits `"CLAUDE_OBLIGATION_STOPGATE": "block"` to "P2 row 17" (P1b's E4 arms it). (R90-B, K-11; reviewer item
+  25)
 - COVERAGE-P9-P11.md:63 ("O4/O6 one producer per fact | P9 rows 1-6") names no P1b. (K-2)
 - COVERAGE-P9-P11.md:76 ("B1-B9 (step 9 as in-place re-sync, D19)") is false now (P11 does no re-sync; B3, B6 and B7 are
   deleted), and "B1-B9" stands at :108 and :127. (R90-A)
-- prompts/P5.md:327 (row 2) says "P3 row 6 removes their writer"; after R17 the writers sit in P3 rows 6 and 7, and P1b
+- prompts/P5.md:342 (row 2) says "P3 row 6 removes their writer"; after R17 the writers sit in P3 rows 6 and 7, and P1b
   row 3 and P1c row 7 remove them first. Its check `git grep -n -e escalations/ -e escalation-admissions/ --
   hooks/subagentstop-artifact-contract-enforce.py` does not match the code's `cycle_dir / "escalations"` form. (R17-B,
   R67-B, P5-4)
 - PLAN-v2.md:51 and :364 state the TC-45 deny's lift "on any human-typed prompt" without the [INFERRED scope] tag that
-  R54 and R69 added elsewhere. (R69-A)
-- PLAN-v2.md:969 (UD-CM) gives Hook Discipline #1/#3 as an in-turn AskUserQuestion "inside gated commands" without P9
-  row 16's "other than /dev-overnight" (D20). (R36-A, R53)
+  R54 and R69 added elsewhere (:569 has it). (R69-A)
 - PLAN-v2.md:892 (P11 goal tag) and prompts/P11.md:74-75 still say "acceptance 14 extended to" / "extending acceptance
   14", while DECISIONS.md D16 names acceptance 14's cases directly. (R5)
 - PLAN-v2.md:1255 (section 13, P5 carry-over row) says "`/do <task-id>` re-grants it" without the TC-18 condition that
-  the P5 section and prompts/P5.md:540 carry. (R9)
+  :84, :350 and prompts/P5.md:556 carry. (R9)
 - PLAN-v2.md:392 (P2 scratch-repo run still lists close.md Step 0, the QA-arming block and commit.md Step 5; P2.md
   records its deviation) and :453 ("after the re-dispatched BA writes a newer ticket and context", which R22 reverted in
   P3.md) differ from the prompts after the residual edits. (R15, R22-B)
 - PLAN-v2.md:501 (P4 overnight-loop row) computes session_families() and runs the per-family disposition, and :1254
   (section 13, P4 row) lists "TC-13's `session_families()`", both unconditionally; P4.md makes the loop's print
   conditional. (R27)
-- PLAN-v2.md:101, :348, :1067, :1077 (TC-11 rationale) and :1215 (Decision 10) still say "import-free launcher", while P5
-  row 10 and R52 import lib/overnight.window_open by path unless a replay forces a copy. (R52, R68)
+- PLAN-v2.md:101, :348, :1067, :1077 (TC-11 rationale) and :1215 (Decision 10) still say "import-free launcher", while
+  since round 8 the launcher loads lib/overnight.window_open and P1b row 18's reader module by path (P5 row 10,
+  PLAN-v2.md:566). (R52, R68)
 - PLAN-v2.md:841 ("CI enforces a size budget that only goes down."), :846 ("The size budget is measured after this
   cleanup.") and :861 (policies/size-budget.v1.json (new)) assume the budget file that P10's experiment 12 may drop.
   (R42)
-- PLAN-v2.md:383 (P2 row) ends "(inside the window only /stop and off release, section 4)", and prompts/P5.md:225 says
+- PLAN-v2.md:383 (P2 row) ends "(inside the window only /stop and off release, section 4)", and prompts/P5.md:240 says
   "only /stop and off release it" inside the D20 bullet, without the planner-proposal tag PLAN-v2.md:112 gives the off
   exit. (R57)
-- PLAN-v2.md:826 (V-22, applied as written) says "prose-only changes need none", while prompts/P9.md:644-652
-  (acceptance 24, P9-10) follows P1c's merge rule for extracted command and agent files. (V-22, P9-10)
-- DECISIONS.md:79 (D25 (2), "repaired at the next round with no human action") stands beside P1c's acceptance that
-  allows the human /restart of F5, F5f and F6 (D22, RD4); fa5659d states that exception in PLAN-v2 and HANDOVER.md, not
-  in DECISIONS.md. (plan-FIT-10; V-29, K-12)
-- DECISIONS.md:90-91 (D15: a registered hook file "becomes an exit-0 stub for one phase") against D19 and TC-37, where
+- DECISIONS.md:93-94 (D15: a registered hook file "becomes an exit-0 stub for one phase") against D19 and TC-37, where
   the stubs stay tracked. (R10-A)
-- prompts/P10.md:298 (correction 1, "PLAN-v2.md:825") and :307 (correction 2, "PLAN-v2.md:1082") cite pre-batch PLAN-v2
-  lines; prompts/P11.md:684 and :687 cite PLAN-v2 "section 5 :141, section 11 :1158", rows that have moved. (R79-A,
-  R45-A, R84-B)
-- The push predicate "HEAD equals the tip of `refs/remotes/<remote>/<BRANCH>`" (prompts/P5.md:417) has no exit when
-  HEAD is strictly behind that tip: push.sh exits with nothing to push and the predicate stays unmet (the pre-batch P5
-  used "ancestor"). (R30-A)
-- The corrections 2.82 fallback for P5 row 1 (the prefix rows as they exist today) cannot meet 0 V7a writes, because the
-  main agent exits 0 in pretool-tool-policy.py; P5 row 1 only requires the counts to be recorded. (R29-A)
-- `\bblocked\b` in P9's acceptance 10 misses identifiers such as pipeline_blocked (expected tree agents/pm.md:659, :665;
-  commands/dev-overnight.md:813, :815) and blocked_app_unavailable (agents/qa.md:811, :826). (R38-A, R38-B)
-- P10 row 4's release-note residual covers python files only, while R-f also stood in for shell files (bash on a
-  missing file exits 127, a non-blocking hook error under D25(1)); whether a release-note residual meets D25(3) for a
-  running session whose personal overlay names a deleted python PreToolUse hook is a design question. (R43-B)
+- Pre-batch PLAN-v2 line numbers, already off at aaf072c: prompts/P10.md:291 ("PLAN-v2.md:947", U-E3b, now :984), :298
+  (":825", P10's TC-35 row, now :857), :299 (":729", the D17 candidates row, now :757) and :307 (":1082", TC-53, now
+  :1119); prompts/P11.md:499 ("PLAN-v2 :882", now :920), :684 ("section 5 :141", now :142; "section 11 :1158", now
+  :1199) and :687 (":1158"). (R79-A, R45-A, R84-B; round 3's structure verifier)
+- `\bblocked\b` in P9's acceptance 10 (prompts/P9.md:585) misses identifiers such as pipeline_blocked (expected tree
+  agents/pm.md:659, :665; commands/dev-overnight.md:813, :815) and blocked_app_unavailable (agents/qa.md:811, :826).
+  (R38-A, R38-B)
+- P10 row 4's release-note residual (prompts/P10.md:357, :539) covers python files only, while R-f also stood in for
+  shell files (bash on a missing file exits 127, a non-blocking hook error under D25(1)); whether a release-note
+  residual meets D25(3) for a running session whose personal overlay names a deleted python PreToolUse hook is a design
+  question. (R43-B)
 - After P6 deletes the dev-registry FIRST ACTION lines, the kept SECOND ACTION prose that places its line "immediately
   after the dev-registry FIRST ACTION" (expected tree commands/dev-command.md:183, commands/dev-overnight.md:353) points
   at a deleted line. (R35-B)
-- Expected tree commands/commit.md:459, :570 and :821 run `source venv/bin/activate` relative to the repo root; no P2
-  acceptance-4 grep matches it, and after R15 no acceptance runs it. (R15-B)
 - prompts/P8.md:494 still says P10 deletes such files "after doctor's per-home check (TC-37)" (P8 has run), and
   prompts/P7.md:267 keeps "Deleting hooks, stubs or dead installers" (P7's historical prompt). (R7-A, R8-B)
-- prompts/P1.md:512 lists redev.md as P3's work, while P3 leaves it unchanged. (R40-A)
-- Expected tree commands/redev.md:15 ("abort and ask the user to run `/dev` instead") is a text exit that only P9 row 8's
-  general rule covers; docs/reference/close-commit-zero-failure-mechanism-20260928.md:266 still names the withdrawn
+- prompts/P1.md:512 lists redev.md as P3's work, while P3 leaves it unchanged (R40-A); prompts/P1.md:307 still says
+  "P5's import-free launcher will copy its tuples under a drift test", stale since round 8 (round 9's res-b verifier).
+  P1 is a merged phase's prompt.
+- Expected tree commands/redev.md:15 ("abort and ask the user to run `/dev` instead") is a text exit that only P9 row
+  8's general rule covers; docs/reference/close-commit-zero-failure-mechanism-20260928.md:266 still names the withdrawn
   /redev resume route (register.md section 1.2 records it as superseded by D22). (R40-A, R40-B)
 - PLAN-v1.md:202 and :285, landscape/00-INDEX.md:146 and landscape/A-gates-terminal.md:370 still carry the withdrawn
   D-A2-2 /redev resume text; PLAN-v1 is frozen and DECISIONS.md:3 and the prompts override them. (R91-A, R91-B)
-- O19 is quoted with inner double quotes at prompts/P3.md:170 and prompts/P5.md:199, as register.md:111 has it, and with
+- O19 is quoted with inner double quotes at prompts/P3.md:172 and prompts/P5.md:214, as register.md:111 has it, and with
   single inner quotes at DECISIONS.md:51. (R60-A)
+
+NOT COUNTED items the round results list (rounds 3-9) that are still open at d347b2f, one line each. Each is older text
+this work did not add, overridden by the prompt's "P1b and P1c" block, PLAN-v2's "After P1b and P1c" paragraph or
+COVERAGE.md:3 unless the line says otherwise. Items the verifiers judged accurate as written, and items already listed
+above, are not repeated.
+
+- PLAN-v2.md:
+  - :54 credits "ESCALATION_ACK ... releases nothing" to P3; P1b row 3 delivers it.
+  - :106, :1144 and :1199 leave out P7b's net +60 lines (section 14, :1279).
+  - :135, :353 and :368 have P2 arm "G1-G3"; P2 arms G1 and G3, and G2 is armed by P1b's E4 (else P1c's X3).
+  - :272 and :1101 keep the TERMINAL_VOCABULARY/schema drift test that P1b rows 6 and 18 delete.
+  - :442 says "The G2 escalation-record stores are removed here"; the P3 paragraph at :423 makes that verify-only.
+  - :566 and :1077 size the launcher at "about 40 lines", P5 row 10 at "about 50 lines".
+  - :571's "after step i went in_progress" (P5 row) is governed by :536.
+  - :589 and :1070 grep for D4c only in command_span.py and stop_contract.py, not in the reader's module (round 8).
+  - :803 "the 12 consent readers"; P1b row 9 counts eleven hooks with thirteen read sites.
+  - :1042 and :1049 have P9 delete lifecycle-baseline-import.sh among "the four scripts"; P1b row 15 deletes it.
+  - :1092 cites prompt-workflow.py:1427 (PLAN-v2's base 54393f8); it is :1425 at f8c18c2 and d625284.
+  - :1144's list of new files leaves out the tracked GATED/CONTROL JSON of P5 row 10.
+  - Section 13 rows :1237, :1252-1254, :1256 and :1264 send P1b/P1c deliveries to P2-P5 (dated PR records; item 24).
+  - :1276, like the X8 quotes in prompts P2-P6, P7b and P9-P11, ends with "。", which register X8 does not have.
+- prompts/P2.md and P3.md:
+  - P2's title, :5, :15 and Goal 7 (:157), and P3.md:7 and :15-16 say P2 arms "G1-G3".
+  - P2.md:494 lists close.md :246-251 among the respelling sites; P1b row 1 deletes that block first.
+  - P2.md:186 (D24 bullet), row 4 and acceptance 5 make the lane hook the aggregate's only producer; E5 may take (b).
+  - P2 acceptance 19 (:872) lists artifacts P1b already removed (harness-report.json, continuation sentinel, ...).
+  - P2 row 14 (:332) leaves `_complete_todos` to P5; P1b row 2 (E7) deletes break-overnight-lock.py's todos write.
+  - P2.md:449 ("A contract the old prose already wrote ...") describes the cycle contract P1b E13 now delivers.
+  - P3.md:296-297 (row 11) cites ENFORCED_AGENT_TYPES :31, which P1b row 18 deletes (reviewer item 6).
+  - P3's retired list (:365-367) counts G2's escalation stores and the ESCALATION_ACK admission P1b row 3 retires.
+- prompts/P4.md:
+  - :524 (Out of scope) still calls the declaring-dispatch reader P3's work (P1b E3's).
+  - Row 9 (:304) keeps sinks whose writes P1b row 3 and E12 deleted; "Net code cap" (:766) credits them.
+  - Row 3 (:298) deletes "the 1b still-missing finding", which P1b row 10 deletes too.
+  - Row 4 (:299) and :211 keep two audit-line writes that inventory A98 lists as written and never read.
+  - :379-383 `append_rating` reads the score log beside P1b row 15's one reading function for it.
+- prompts/P5.md:
+  - Row 11 (:352): "use the name P3 merged" for the reader (the block names P1b's E3).
+  - Row 13 (:354) and the retired list (:845): "/stop's todo force-complete", which P1b row 2 (E7) deletes.
+  - Row 14 (:355): push.md Step 1's "no push-gate token" abort, a scan P1b row 11 removed.
+  - Retired list (:840): "stop-obligation-gate (G4's terminal re-check)", which P1b row 3 stubbed.
+  - S9 (:274) "[pending, completed]", :292 and acceptance 21 (:795) "a pending skeleton", row 15 (:356).
+- prompts/P6.md:
+  - :118 says journal-view "was deleted by P3 row 7" (P1b row 6).
+  - Row 9 (:356), :321-329, :428 and :636 keep /tmp/agentic-commit/ paths that P1b row 12 moves.
+  - Row 3 (:350) cites obligation.ROLES and ENFORCED_AGENT_TYPES, which P1b row 18 deletes (reviewer item 6).
+  - :66 "any G2 escalation records P3 left" (P1b row 3, P1c row 7 remove them).
+  - Row 1 (:348) cites `_metadata_by_tool_use` as :525-548; it ends at :549 (inventory A120).
+- prompts/P9.md:
+  - Row 8 (:476): overnight-status.sh "prints the state with no time computation"; P1b row 13 adds the window verdict.
+  - Row 5 (:473) and :425 locate CP_AGENTS readers that P1b rows 1 and 18 delete.
+  - Acceptance 11 (:598) holds only if P1b row 15's score-log reader does not name lifecycle.jsonl.
+- prompts/P10.md:
+  - Row 7 (:360) keeps the drift test P1b deletes; row 3 (:356) cites the timelock phase P5 deletes.
+  - Row 19 (:372): "the bulk-commit chain once P4 removes --bulk's entry", while P4 keeps /commit --bulk (D15).
+  - Row 6 (:359) lists scripts/session-resources.py as a D17 candidate; P1b row 15 runs it.
+- Start checks (reviewer item 17): the prompts' merge-title checks expect `P8: …`-style titles, while 2acc29b and
+  301d696 read "P8, …" and "P7b, …" (P1c.md:31-37 spells out both forms); P2.md:82, P3.md:82, P4.md:46, P5.md:59,
+  P6.md:49 and P10.md:48 "stop and tell the owner" when a check fails (P1c tells the reviewer).
+- HANDOVER.md:
+  - :11 "没合并它就停下来告诉你" (the prompts tell the reviewer).
+  - :16 and :18: the P7b and P8 rows' 会问你 cells still read 问题 1 and 问题 2, answered on 2026-10-19 (:37).
+  - :71 (question 11) still offers a veto ("你可以否决") that D18 replaced.
+  - :106 and :108 (the 2026-10-22 section): P8 under review and /pull unsafe; P8 and P7b have merged.
+- COVERAGE.md:
+  - C4 (:128) and fix 3 (:213-220): P4 deletes the three advisory sinks; P1b row 3 and E12 delete their writes first.
+  - :247 (fix 9): "the coordinator's timelock-fallback rule the launcher copies"; since round 8 it is never copied.
+  - :71 (O44): the live-landing acceptances listed name none of P1b's or P1c's.
+- Dated inputs (by design): COVERAGE.md sections (b)-(d) cite the prompts of 2026-10-18; COVERAGE-P9-P11.md those of
+  2026-10-19 (its :3-5 `cmp` claim and "D1-D19" included); audit/2026-10-23/ and P1c's `plan:` citations cite 3ce5882.
+
+MINOR items of round 10 (r10-res, r10-plan, r10-prompts, r10-quotes-structure and the check of round 10's edits), one
+line each: recorded for the reviewer, not fixed (round 10's bar, "Method"). Those 5a4e0a3 or d347b2f fixed, and those
+already listed above, are left out; most follow P1b commits merged in e712310.
+
+- PLAN-v2.md:
+  - :1176 counts "43 / 52 / 26 / 24 of 120"; inventory/README.md now gives 43 / 56 / 29 / 24 of 121 (A125).
+  - :357's "Delivered before P2" list does not name P1b row 13's deletion of closeout's pending-required-calls block.
+  - :446 and :458 still credit the four profile exemptions to gitignore-preflight; :423 now puts them in G3's admission.
+  - TC-41 (:1107) lists "/spec exempt"; P1b row 18 reads it from the declaration and row 8 gives /spec an obligation.
+  - :536 says P1c row 17 pairs each todo in the subagent-call recorder; P1b row 2 now deletes that pairing.
+- prompts/P2.md:
+  - Row 9 (:327) "drop it or keep it (D10)" and :585: P1b row 13 already deletes the pending-required-calls block.
+  - Row 14 (:332, `IMMUTABLE_FIELDS`): P1b E13 says nothing runs update-overnight-state.sh ("Already done" covers it).
+  - :42-68 ("Files you share with P3") omit hooks/pretool-gitignore-preflight.py; the second-to-merge rule covers it.
+- prompts/P3.md:
+  - Goal 5 (:148) still says the four profiles are exempt "by gitignore preflight"; row 13 now puts them in G3.
+  - :640: the sentence after acceptance 11's cases describes only the preflight's run, not G3's.
+  - :490 keeps scripts/close-commit-repair-orchestrate.py, which P1b E3 now deletes.
+- prompts/P4.md:
+  - :348-350: commit.md:249's "bulk capability absent" wait is gone at P4's base (P1b row 11).
+  - :334-337: the late-repair route re-runs verify-disclosure; P1b row 6 moves that rule into finalize.
+- prompts/P5.md:
+  - :115: row 20's step lookups in posttool-subagent-track; P1b row 2 removes that step pairing.
+  - :265 ("the coverage phase for /spec ... keep working") and :607 ("unchanged"): since P1b row 8 the phase is a stub.
+- prompts/P10.md:
+  - :57's list of P1b's stubs omits stop-spec-coverage-enforce.py; its general rule still finds it.
+  - Row 6 (:359) lists the repair-map scripts and schema P1b E3 deletes, and update-overnight-state.sh's options.
+
+- reviews/D20-D25-reviewer-findings-on-A.md (4cc52aa): the reviewer session's review of 86b7cbc and c728380, written at
+  c728380, 43 findings its refuters kept, grouped as items 1-26, checked as claims in rounds 5-9 (round 10 found none
+  reopened). At d347b2f:
+  - Fixed: 1-5, 7-11, 13, 14, 16, 18 and 20-23, and the parts of 6, 12, 24 and 25 not named below. Rounds 1-4 had fixed
+    many of them before the file arrived, often in other words; rounds 5-9 fixed 2 (P4's /close or /commit dead end), 3
+    (P4's and P3's pending do-report), 7 (the /do sidecar dead end), 8 (the D8 bracket's deny half, the start checks),
+    11 (the prefix-row fallback), 12 (HANDOVER's 会问你 cells, :7, :37), 13's P2 and P6 parts, 18 (preambles, P9, the P10
+    and P11 tails), 20 (the route in round 7, its replays in rounds 8-9), 21 and 22, and fixed 16 and 23 again after P1c
+    changed X8.
+  - Judged wrong: 15 (P1b E14 keeps /commit Step 8's selection and continuation, prompts/P4.md:86-87; the opposite
+    defect was fixed in round 5); 19 (the Stop gate is the main agent's own stop and carries no rule of its own, P1b
+    goal 3); 26 (the five prompt quotes are one contiguous verbatim run of DECISIONS.md:70 without its leading words, as
+    DECISIONS.md itself quotes at :51 and :74); and item 20's proposed "dev when none" route (P1b E3 and row 10 forbid a
+    default role).
+  - Open as older text (listed above): 6's P6 row 3 and P3.md:297; 12's HANDOVER.md:1, :3, :106 and :108; 17 (its
+    byte-identity note was judged not needed); 24's other section-13 rows; 25's optional COVERAGE-P9-P11.md:35-37.
+- 686b375 (the merge of the P1b/P1c session's 2e7d4c0..0cbfbd3) has git's default merge message without the attribution
+  lines this work's other commits carry; it was already pushed when noticed and was not amended (no history rewrite).
+- Commit trailers: every other commit of this work ends with the attribution lines the task requires; their
+  Co-Authored-By line names an AI model (rounds 6-9's quotes verifiers noted it). It is commit metadata, not a line in
+  harness-repair-plan/.
