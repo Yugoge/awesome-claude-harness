@@ -28,15 +28,17 @@ make the rest of the plan agree with prompts/P1b.md and prompts/P1c.md. New file
   ":109"). Every other anchor is untouched by corrections.md (checked by matching every quoted fragment of
   corrections.md against the anchors; corrections.md itself is not yet applied, so this is a text comparison, not a
   run).
-- **Decision id.** This file records the owner's rule of 2026-10-24 as **D25** (DECISIONS.md edit D-1).
-  prompts/P1b.md and P1c.md call it "the owner's rule of 2026-10-24"; both names mean the same ruling.
+- **Decision id.** The owner's rule of 2026-10-24 is **D25** (DECISIONS.md:68-87); prompts/P1b.md and P1c.md call
+  it D25.
 
 ## Sources
 
-- The owner, 2026-10-24, relayed verbatim in the request that commissioned P1b and P1c: "永远不能失败！每一次开发一定不会在
-  流程上出现任何错误！出现了错误也可以立刻被修复！" ("It must never fail! No development run may ever hit an error in the process!
-  And if an error does occur, it can be fixed at once!"), ranked with "one producer, one consumer". The same request
-  asks for a CI replay suite on the runtime trace with parts (1)-(4), and: "之后每个阶段合并的条件之一是这套测试保持全绿，
+- The owner, 2026-10-24, to the reviewing session (recorded verbatim in DECISIONS.md D25):
+  "还有一件我关心的！就是永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！"
+  ("One more thing I care about! It must never fail! No development run may ever hit an error in the process! And if
+  an error does occur it can be repaired immediately!"). The reviewing session's reply, which the owner forwarded (not
+  his words), asks for a CI replay suite on the runtime trace with parts (1)-(4), and:
+  "之后每个阶段合并的条件之一是这套测试保持全绿，
   并补上它改动那类流程的故障回放。同步清单里请给 P2–P11 每个阶段加上这一条验收。" It also asks for the sync-list entry on
   CLAUDE.md Hook Discipline #5 (below).
 - Earlier owner words (audit/2026-10-23/register.md): CC4, CC8, DT2, DT3, DT4, HC2, quoted with their sources in
@@ -54,7 +56,7 @@ from the owner's /stop). P9 rewrites it in line with D20 (overnight asks nobody;
 question's preset default, and records the decision) and D23 (outside overnight the pause is one specific in-turn
 AskUserQuestion that releases no gate), and keeps Lesson 16's reference to #4/#5 (CLAUDE.md:43) consistent. P1b and
 P1c do not edit CLAUDE.md. The edits that carry this entry: PLAN-v2 V-21, prompts/P9.md P9-7, P9-8 and P9-9,
-COVERAGE.md K-7, DECISIONS.md D-1 (last sentence), HANDOVER.md H-10.
+COVERAGE.md K-7, HANDOVER.md H-10; DECISIONS.md D25 already states it (:86-87).
 
 ## The acceptance item every phase P2-P11 gains
 
@@ -416,7 +418,7 @@ INSERT AFTER. No overlap (corrections.md 2.88 edits the overnight-questions row,
 ~~~new
 | Compliant replays of the ten pipelines (shipped and armed settings) with a gate block or a hook error | trace B: 9 refusals on the compliant replay and a dead-end first overnight cycle; trace A and the 2-lane /dev: 0 (P1c pilot, d625284) | 0 in CI on every PR from P1c on |
 | Injected faults not returned to the artifact's own producer, needing a human action, or ending in a dead end | F1, F1q, F2, F2j, F2g, F3a, F3b, F4c, F5, F6, F7b (shipped settings; P1c pilot, d625284) | 0 from P1c on (the human /restart of F5, F5f and F6 aside), held by the merge rule |
-| Artifacts with more than one producer / more than one deciding consumer / written never read / read never written | 35 / 37 / 29 / 18 of 122 (d625284 map, inventory/README.md) | 0 after P1b, held by its CI check |
+| Artifacts with more than one producer / more than one deciding consumer / written never read / read never written | 43 / 56 / 29 / 24 of 121 (d625284 map, inventory/README.md) | 0 after P1b, held by its CI check |
 ~~~
 
 #### V-30. Section 14, its wave list is superseded (:1246)
@@ -910,8 +912,9 @@ and P1c as the block says. corrections.md 3.1's Goal 7 / row 17 arming condition
 ~~~new
 **P1b and P1c (merged before you, 2026-10-24).** P1b applied D24 to every harness artifact (one producer, at least one
 consumer and one deciding rule each; checks only at the producer's stop, G1 and G3; no filename-to-role table) and added
-a CI check that derives the artifact graph at test time. P1c turned the owner's rule of 2026-10-24 (D25: "永远不能失败！
-每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！") into the CI replay suite under tests/replay/. For this phase:
+a CI check that derives the artifact graph at test time. P1c turned the owner's rule of 2026-10-24
+(D25: "还有一件我关心的！就是永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！")
+into the CI replay suite under tests/replay/. For this phase:
 - P1b's map governs every row below that adds or keeps a check on an artifact: the check sits at that artifact's
   producer stop, at dispatch (G1) or at collection (G3), and the artifact keeps one producer and one deciding consumer.
   A row that would add a second producer, a second deciding consumer or a consumer-side re-check is dropped and listed
@@ -1014,8 +1017,9 @@ built, P1b's result wins and the row consumes it.
 ~~~new
 **P1b and P1c (merged before you, 2026-10-24).** P1b applied D24 to every harness artifact (one producer, at least one
 consumer and one deciding rule each; checks only at the producer's stop, G1 and G3; no filename-to-role table) and added
-a CI check that derives the artifact graph at test time. P1c turned the owner's rule of 2026-10-24 (D25: "永远不能失败！
-每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！") into the CI replay suite under tests/replay/. For this phase:
+a CI check that derives the artifact graph at test time. P1c turned the owner's rule of 2026-10-24
+(D25: "还有一件我关心的！就是永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！")
+into the CI replay suite under tests/replay/. For this phase:
 - P1b's map governs every row below that adds or keeps a check on an artifact: the check sits at that artifact's
   producer stop, at dispatch (G1) or at collection (G3), and the artifact keeps one producer and one deciding consumer.
   A row that would add a second producer, a second deciding consumer or a consumer-side re-check is dropped and listed
@@ -1104,7 +1108,8 @@ the disposition; no successor table) agree with P1b rows 1 and 10.
 ~~~new
 **P1b and P1c (merged before you, 2026-10-24).** P1b applied D24 to every harness artifact and added a CI check that
 derives the artifact graph at test time; P1c's CI replay suite (tests/replay/) enforces the owner's rule of 2026-10-24
-(D25: "永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！"). For this phase:
+(D25: "还有一件我关心的！就是永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！").
+For this phase:
 - P1b's map governs every row below that adds or keeps a check on an artifact (one producer, one deciding consumer,
   checks only at the producer's stop, G1 and G3); a row that would add a second decider or a consumer-side re-check is
   dropped and listed under "Corrections to PLAN-v2". P1b's CI check stays green.
@@ -1192,7 +1197,8 @@ merge.md's validate-and-unlink L44) is delivered by P1b rows 2, 9, 12 and E7, E8
 ~~~new
 **P1b and P1c (merged before you, 2026-10-24).** P1b applied D24 to every harness artifact and added a CI check that
 derives the artifact graph at test time; P1c's CI replay suite (tests/replay/) enforces the owner's rule of 2026-10-24
-(D25: "永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！"). For this phase:
+(D25: "还有一件我关心的！就是永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！").
+For this phase:
 - P1b's map governs every row below that adds or keeps a check on an artifact: the gate's predicates call the one chain
   function and read git, and decide nothing a producer-side gate already decided. P1b's CI check stays green.
 - Already done (verify each on your base and do not redo it; where a P1b experiment took the other outcome, follow
@@ -1281,7 +1287,8 @@ and P6's PR records what E6 left.
 ~~~new
 **P1b and P1c (merged before you, 2026-10-24).** P1b applied D24 to every harness artifact and added a CI check that
 derives the artifact graph at test time; P1c's CI replay suite (tests/replay/) enforces the owner's rule of 2026-10-24
-(D25: "永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！"). For this phase:
+(D25: "还有一件我关心的！就是永远不能失败！每一次开发一定不会在流程上出现任何错误！出现了错误也可以立刻被修复！").
+For this phase:
 - P1b's map governs every row below that adds or keeps a check on an artifact (one producer, one deciding consumer,
   checks only at the producer's stop, G1 and G3). P1b's CI check stays green.
 - P1b's E6 already chose the one producer of "which files this dev wrote" and of the baseline, and removed the other
