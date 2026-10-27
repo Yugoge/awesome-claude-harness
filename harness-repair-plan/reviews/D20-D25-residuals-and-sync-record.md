@@ -732,8 +732,8 @@ block, and P11 cites its number in "Before you start" (P11-2). The batch's own a
 V-31 and D-1 texts) is in neither register.md nor DECISIONS.md, so no applied edit presents it as the owner's words; the
 rule it states is kept as P1c's merge rule (DECISIONS.md Execution bullet from D-3, PLAN-v2 section 15, each prompt's
 never-fail acceptance). The "ranked with D24" wording ("as important as D24", "ranks with D24", "同等重要") was dropped
-for the same reason (V-1, V-31, H-10, K-6 and D-1's heading). Owner words that the edits do quote are D25's full
-sentence as DECISIONS.md:70 records it and register rows quoted verbatim.
+for the same reason (V-1, V-31, H-10, K-6 and D-1's heading). Owner words that the edits do quote are verbatim runs of D25's
+sentence as DECISIONS.md:70 records it (in full in V-1, V-31 and H-10; without its leading words in P2-4 to P6-4, reviewer item 26) and register rows quoted verbatim.
 
 ## Verification rounds
 
