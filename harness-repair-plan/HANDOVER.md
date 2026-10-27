@@ -80,7 +80,7 @@ prompts/_common.md（已逐字节核对）。用法：每个提示词交给一�
 - 开会话之前，把这 8 个提示词放进规划分支的 `harness-repair-plan/prompts/`。几个提示词引用了彼此（例如 P7b 读 P8.md）。
 - 更新规划分支上的 PLAN-v2.md（这次没改，仓库对这一步只读）：第 4 节把 P0、P7 的人工步骤、"写覆盖文件和私有词表"、
   "没有 /dev 周期在跑时告诉审阅者"几行换成"P7b 自动落地，你不用做任何步骤"；第 5、6 节加上 P7b（第 2 波，依赖 P0 和
-  P7，bootstrap/install 之外最多净增 60 行，之内目标 250 行）；第 7 节把"上锁时机"改成"在 P2/P5 重新问"，Q5 改成
+  P7，bootstrap/install 之外最多净增 60 行，之内目标 250 行）；第 7 节把"上锁时机"改成"在 P2/P5 重新问"（后来不再问你：PLAN-v2 第 7 节记为 RESOLVED（D19），由 P2、P5 做实验决定，D18；见上面问题 5），Q5 改成
   "已由 O26 回答"；第 13 节把"render-settings migrate"那行移到 P7b，补上 P0b 的遗留项（P9：commands/checkpoint.md
   的说明文字；P10：没人用的 read_command_spec、B4、B5、L1–L3），每次合并后再把各 PR 里"范围外发现"和"不再被引用"的
   条目抄进去。P7b.md 已经说了第 4 节由审阅者更新。
