@@ -1001,8 +1001,11 @@ Commit order:
    as one unit. If your base sets it, those replays pass under the shipped settings and go with their fault class in
    step 3. A commit after step 7 (a review fix, a merge of origin/master) keeps the switch, X3's deletions and X3's
    rule, and acceptances 3, 4 and 11 are re-run on the PR's head after it.
-Each commit keeps the suite green (TC-54) and reverts on its own; reverting a fix reverts its replay with it. Say in the
-PR what each revert restores. The reviewer reverts; the owner runs nothing.
+Each commit keeps the suite green (TC-54); reverting a fix reverts its replay with it. A commit that no later commit's
+replays or CI jobs need reverts on its own; a revert of any other (such as step 1's fixture and runner, a step-2 unblock
+that later fault replays run through, or a fix a later commit's replay also needs, as F5's needs rows 15 and 16) also
+reverts, last first, each later commit that fails without it or without one of those. Say in the PR what each revert
+restores. The reviewer reverts; the owner runs nothing.
 
 ## Branch and pull request
 
