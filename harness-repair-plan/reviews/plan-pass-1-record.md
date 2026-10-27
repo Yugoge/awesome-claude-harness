@@ -265,7 +265,7 @@ Line numbers in the last column are at this pass's HEAD.
 | NC-41b | Now, applied | row 3's timelock phase: P5 deletes it | P10.md:357 (row 3): "P5 deletes that phase, so take the references from your base" |
 | NC-42 | Now, applied | P4 keeps /commit --bulk (D15) | P10.md:373 (row 19): the bulk-commit chain (L39) stays live |
 | NC-43 | After P1b | P1b row 15 | handed on |
-| NC-44 | Now, applied | merge-title format in the start checks | P2.md:74, P3.md:71, P4.md:35-36, P5.md:44-45, P6.md:35-36, P9.md:50-51, P10.md:39-41 (one line added), P11.md:46-47: both forms master's merges take |
+| NC-44 | Now, applied | merge-title format in the start checks | P2.md:74, P3.md:71, P4.md:35-36, P5.md:44-45, P6.md:35-36, P9.md:50-51, P10.md:39-41 (one line added), P11.md:45-47: both forms master's merges take |
 | NC-45 | Now, applied | "tell the owner" -> the reviewer | same edits as F-P2-04, F-P3-01, F-P4-02, F-P5-02, F-P6-01, F-P10-01 |
 | NC-46 | Now, applied | the prompts tell the reviewer | HANDOVER.md:11 |
 | NC-47 | Now, applied | questions answered on 2026-10-19 | HANDOVER.md:16 and :18 |
@@ -2333,8 +2333,22 @@ Every `file:line` reference to a plan file in P1b.md and P1c.md was read at 3b5c
 
 ## Verification round
 
-Running: five verifiers that did not make the edits check the Now items of each source, the rejected ideas, the owner
-quotes, and the prompts' first lines, tails and scope. Their findings and the fixes follow in the next commit.
+One round, by five subagents that did not make the edits, one check each, all read-only. Severities: high (an item
+lost or applied wrongly, an After-P1b item applied, a rejected idea or false statement introduced, a quote altered),
+medium (a wording that changes meaning, an edit wider than needed, a wrong location or count in this record), low
+(cosmetic or pre-existing).
+
+| Check | Result | High | Medium | Low |
+|---|---|---|---|---|
+| 1. Source 1 items | 31 applied as recorded (the four one-line D25 items equal the record's new text with its one line break read as a space); the 3 not applied untouched; none of the 85 After-P1b items applied (82 old texts at the rows' lines; the old texts of PV-21, PV-20 and L-P5-04 were already gone at 3b5c825); counts match | 0 | 0 | 3 |
+| 2. Source 2 Now rows | the 30 applied defects fixed, no false statement, no edit wider than its defect; the 8 not applied untouched, reasons hold; table rows one line, changed wrapped lines at most 120 characters | 0 | 1 | 4 |
+| 3. Rejected ideas | none comes back; no added text contradicts D18-D25 | 0 | 0 | 3 |
+| 4. Owner quotes | 23 Chinese quotes (D25 11, X8 9, O19, O22, X17) exact against register.md or DECISIONS.md:70; no one else's words presented as the owner's | 0 | 0 | 1 |
+| 5. Structure and scope | only the allowed files changed; P1c.md only in its tail; tails as stated above; first lines unchanged; every line-count change explained | 0 | 0 | 2 |
+
+Fixed (medium, check 2): the NC-44 row named P11.md:46-47, but the re-wrap starts at :45; the row now says :45-47.
+The NC-44 locations in the other seven prompts were re-read against the diff and hold. No check found a high-severity
+defect, so there is no second round. The low findings are listed below.
 
 ## Found, not fixed
 
@@ -2352,3 +2366,36 @@ quotes, and the prompts' first lines, tails and scope. Their findings and the fi
   D10 (register X12) and NC-48 removed HANDOVER's veto offer. D10's text is an owner decision record; left as is.
 - **PLAN-v2.md:1092 (PV-13, NC-11).** The cite :1427 is right at PLAN-v2's stated base 09ab15b (README.md:9) and
   :1425 at f8c18c2 and d625284; the second pass follows P1b's correction 8 as merged.
+- **Low, check 1 (this record).** The bullet PV-20 targets gained P1b's correction 9 in 5a4e0a3, not d347b2f (the
+  Summary and the PV-20 row say d347b2f). Only 5a4e0a3 changed PLAN-v2.md:1158 (the PV-21 row says "5a4e0a3/d347b2f").
+  L-P5-04's old text was removed by 5a4e0a3, and d347b2f reworded that line again (its row names d347b2f). The F-P10-01
+  row gives the base lines first and the HEAD lines (:49-50) in parentheses. None of this changes an item's set.
+- **Low, check 2.** R2-15's source bullet did not list every stale PLAN-v2 citation in P10 and P11, and the others
+  remain (the verifier's mapping, not re-checked here): P11.md:160 and :469-470 (:930 -> :967, :950 -> :987),
+  P11.md:466-470 (:845-887 -> :878-925, :123 -> :122, :141 -> :142, :1155 and :1158 -> :1196 and :1199, :180 -> :193,
+  :1110 -> :1148) and P10.md:309 (:942 -> :979). P11.md:469 ("section 5 (:141) ... section 11 (:1155, :1158)") now
+  differs from the corrected :684.
+- **Low, check 2.** The R2-24 row maps the review's item 12 only to R2-01; item 12 also covers HANDOVER.md:106 and :108
+  (NC-49, fixed).
+- **Low, check 2.** The design doc's :265-266, which P9 row 8 now names, still says /close "names the resume route",
+  while D7 has /close dispatch the cycle's subagents again until it completes; P9's edit of :266 should not carry that
+  over.
+- **Low, check 2.** Outside NC-44's scope: HANDOVER.md:11 still names merges "titled `P1: …`、`P7b: …`", and
+  COVERAGE-P9-P11.md:41-42 says the merge-title check reads the body (a dated input, NC-53).
+- **Low, check 3 (pre-existing).** PLAN-v2.md:51 and :364 (and :50, :363, :384, :396, :569, :810, :1111, :1134, P2.md
+  :146-148, :394, :794, :935) lift the TC-45 deny on any human-typed prompt; read literally inside the window, a
+  /dev-overnight session could then ask the owner, against D20's "never asks the owner ... inside the time-lock
+  window". This pass only added the INFERRED tag :569 already had; the rule is P2's to decide by its replay.
+- **Low, check 3.** COVERAGE.md:282-284's new wording sits under the unchanged heading "## Gaps the owner must decide";
+  COVERAGE.md:3 says the file yields to DECISIONS.md. COVERAGE.md:210 (unchanged) still says "ask the owner P5's
+  'Arming' question".
+- **Low, check 3.** P1b.md's tail (:1247) still says "stop and tell the owner", while its body says to ask the owner
+  nothing; P1b has started and this pass may not edit it, so a restarted P1b session reads the old tail.
+- **Low, check 4 (pre-existing).** In P2.md:20-21, P3.md:19-20, P4.md:20-21, P5.md:22-23 and P6.md:19-20 the X8 quote
+  breaks across two lines after "？". X7 in P9.md:23-24, P10.md:21-22 and P11.md:118-119 uses "..." where
+  register.md:280 has "…". The sync file's older replacement texts at :446-450 and :512-524 still quote D25 without its
+  first words; the residuals record (:731) says the edits as applied fixed that.
+- **Low, check 5.** "No plan file cites a P10 line number" (How the items were sorted) holds for the files this pass
+  may edit; audit/2026-10-23/register.md, corrections.md and older reviews/ records do cite P10 lines, already off
+  before this pass. The P0 and P7 tails (merged phases) still say "Ask the owner (AskUserQuestion) only for a real
+  product decision".
