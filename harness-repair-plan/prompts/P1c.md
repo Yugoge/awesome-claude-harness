@@ -53,9 +53,9 @@ a second one. If a name or form differs from this description, use what is merge
   passes it, and apart from them each deviation that fires only on its base's text (for a block its rows or experiments
   removed). Rows 18 and 19 remove each kept block, and the commit that removes it drops its DEVIATION (X4); a deviation
   of the second list goes with no fix ("Rows 18 and 19, P1b's kept base blocks"). The same list names the dead ends P1b
-  met on its base (its acceptance 14): each one your base still shows is fixed at its producer with the replay that
-  meets it (Goal 2). Its "Live landing" lists each harness script its base's text calls that it emptied to an exit-0
-  stub with a `# STUB:` line (its acceptance 17): leave it; it stays until P10, as D15 keeps a hook stub.
+  met on its base (its acceptances 14 and 21): each one your base still shows is fixed at its producer with the replay
+  that meets it (Goal 2). Its "Live landing" lists each harness script its base's text calls that it emptied to an
+  exit-0 stub with a `# STUB:` line (its acceptance 17): leave it; it stays until P10, as D15 keeps a hook stub.
 - P1: hooks/lib/obligation.py (parse_obligation, resolve_own_obligation, find_unresolved_dispatch_obligations,
   canonical_task_id, registry_dir_for); hooks/lib/stop_contract.py and hooks/lib/command_span.py (is_human_prompt,
   active_command, active_span); the producer-question artifact; the Stop coordinator's relay; P1's PR section
@@ -227,7 +227,8 @@ extracted planning documents.
   point, a launcher, the script that writes the artifact, a producer prompt, or CI. Nothing is added to /close, /commit
   or the changelog-analyst as a check (C2); the two places rows 14 and 18 touch there change how a producer operation
   runs or remove a step a hook refuses, a change to any part of the routing loops P1b's PR left only makes them
-  dispatch a gap's producer again ("Delivered by P1b"), and the PR shows that each hunk adds no check.
+  dispatch a gap's producer again ("Delivered by P1b"), X3's deletions there only remove checks, and the PR shows that
+  each hunk adds no check.
 
 **OPEN owner decisions.** None. Ask the owner nothing, at any point. A product question this prompt does not answer is
 decided by an experiment you run, recorded in the technical-choices table.
@@ -289,11 +290,17 @@ commit. Experiment: with rows 7 and 8 applied, run every (1) scenario and the li
 `CLAUDE_OBLIGATION_STOPGATE=block`; also measure, as P2's prompt describes under "Arming timing" step (1), whether a
 settings env change reaches a running session. Rule: if every compliant scenario has 0 G2 blocks and the live-landing
 replay has no G2 block on a compliant in-flight cycle, add `"CLAUDE_OBLIGATION_STOPGATE": "block"` to settings.json env
-(the tracked clean form; `scripts/install/render-settings check --staged` stays green) in your last commit, and the PR
-tells P2 to arm only G1 and G3. A compliant scenario that G2 blocks is a false block: fix its producer side (the
-template, the agent prose, or G2) and re-run. No branch of this rule ships the suite with F1, F1q or F2 unreturned.
-Either env result is safe: a running session keeps advisory until it ends or picks up block at its next producer stop,
-which acceptance 11 covers. G1 and G3 stay advisory (P2); G4 stays advisory (P5 replaces it).
+(the tracked clean form; `scripts/install/render-settings check --staged` stays green) in Rollback step 7, and the PR
+tells P2 to arm only G1 and G3. That commit also deletes each copy your base kept because only armed G2 stops its faults
+(P1b's E4 and Rollback (7) delete them with the switch, since P1b's CI check reads the switch in settings.json and fails
+on each copy left once it is set), and the PR lists each with its faults; each deletion removes a check and adds none
+(C2). If it deletes one, G2 takes its switch at run time as P1b's E4 describes (through P7b's function, with and without
+CLAUDE_HOME), unless your base's G2 already does or your measurement shows a settings env change reaching a running
+session, so a session started before your merge meets armed G2 once those copies are gone (acceptance 11). A compliant
+scenario that G2 blocks is a false block: fix its producer side (the template, the agent prose, or G2) and re-run. No
+branch of this rule ships the suite with F1, F1q or F2 unreturned. Either env result is then safe: a running session
+picks up block at its next producer stop, or keeps advisory until it ends only where your arm deleted no copy;
+acceptance 11 covers both. G1 and G3 stay advisory (P2); G4 stays advisory (P5 replaces it).
 
 **X4. Literal-prose conflicts: which side changes.** The compliant drivers follow the command and agent prose
 literally: every fenced command block as written with its placeholders filled, every template as written, the
@@ -398,36 +405,60 @@ them from P1's "Capability facts for P5" as corrected in the planning documents'
 and no `origin`, CLI 2.1.303, off a harness host; the PR body's table predates it) or from the CLI documentation read
 in this session (quote it with the date read); do not substitute memory. The change:
 - /dev-overnight's canonical todo list gains a first step "schedule the wake": one recurring scheduled prompt with a
-  fixed text, valid until end_time. pretool-todo-validate accepts that step's completion only after a CronCreate or
-  ScheduleWakeup call in the span (HC2: a gated step, not prose alone). When the prompt fires, prompt-workflow
+  fixed text, the wake, whose span runs from the launch to the session's end, after end_time included, unless the
+  owner's /stop ends it first. pretool-todo-validate accepts that step's completion only after a recurring CronCreate of
+  the wake's text in the span, the call whose id the deletions and the time-lock below name (HC2: a gated step, not
+  prose alone; COV-7 found ScheduleWakeup unavailable outside `/loop`). When the prompt fires, prompt-workflow
   recognises it by the non-human origin that stop_contract.is_human_prompt already excludes (`origin` or `turnOrigin`
-  kind other than "human", stop_contract.py:45-49), if the scheduled prompt's record carries one (UNVERIFIED above),
-  inside an open /dev-overnight span only, and starts the recovery restart.md runs (restart-subagents.py prepare, the
-  fixed recovery SendMessage to the transcript-discovered pending agent ids, status, finalize). `prepare` and that
-  SendMessage both need the session's /restart capability: hooks/userprompt-restart-authorize.py issues it (:146) only
-  for a prompt that starts with `/restart` (`split_invocation` :18-35), and `load_valid_grant`
-  (hooks/lib/subagent_restart.py:377-393) checks it in `prepare_state` (:994) and `authorize_send_message` (:1121),
-  whose yes is the SendMessage exception that both hooks/pretool-block-background-tasks.py (:157-173) and the
-  orchestrator gate's per-turn budget (pretool-orchestrator-gate.py:207-221) take. That exception widens from "typed
-  /restart" to "typed /restart, or the overnight session's own wake inside its span", with the same fixed message and
-  the same id rule, where the capability is issued: the wake's fixed text is a prompt userprompt-restart-authorize.py's
-  rule accepts, or that rule gains the wake case there. That hook stays the capability's one producer and the one reader
-  in subagent_restart.py its one deciding rule (P1b row 14); no second issuer or deciding rule is added. A wake that
-  fires while nothing is interrupted finds 0 candidates and the loop simply continues; the schedule is deleted when the
-  session ends. The widened exception is row 17's own decision under D20 and SG6, not an X4 case: every other message
-  and id stays refused, and the lines that name the typed /restart as the only exception go to P9 ("Hand-offs for the
-  sync list").
-Rule: ship the wake if the documented or captured record shape drives the replay to a completed overnight cycle with 0
-blocks, and the widened exception refuses any other message or id (two replays); a replay that fails is fixed on the
-wake's side and run again, so no branch of this rule ships without the wake or with F6o red. The other two facts above
-(the Stop, the firing) decide nothing: the typed /restart stays beside the wake, so a wake the CLI never fires leaves
-the session as it is today. F6o's driver models the firing on the captured record shape, listed with the other modeled
-CLI behaviour ("Out of scope"). While those facts stay UNVERIFIED, the PR records them as UNVERIFIED for P5; if the
-documentation or a capture shows that a scheduled prompt cannot fire there, the PR quotes it under "Decided by
-experiment" (X8) as a CLI limit for P5, never as D20 met. No branch of this rule asks the owner or adds a wait for him
-(D20); only a cut the CLI never wakes still waits for his /restart, as today, and so does a cut in a session launched
-before your merge, whose todo list has no wake step (row 17), until that session ends; the PR reports both, never
-as D20 met. Never parse an API-error record (D4c).
+  kind other than "human", stop_contract.py:45-49), if the scheduled prompt's record carries one (UNVERIFIED above) and
+  a UserPromptSubmit hook can see it (below), else by its fixed text, inside an open /dev-overnight span only, and
+  starts the recovery restart.md runs (restart-subagents.py prepare, the fixed recovery SendMessage to the
+  transcript-discovered pending agent ids, status, finalize). `prepare` and that SendMessage both need the session's
+  /restart capability: hooks/userprompt-restart-authorize.py issues it (:146) only for a prompt that starts with
+  `/restart` (`split_invocation` :18-35), and `load_valid_grant` (hooks/lib/subagent_restart.py:377-393) checks it in
+  `prepare_state` (:994) and `authorize_send_message` (:1121), whose yes is the SendMessage exception that both
+  hooks/pretool-block-background-tasks.py (:157-173) and the orchestrator gate's per-turn budget
+  (pretool-orchestrator-gate.py:207-221) take. That exception widens from "typed /restart" to "typed /restart, or the
+  overnight session's own wake inside its span", with the same fixed message and the same id rule, decided where the
+  capability is issued: userprompt-restart-authorize.py issues it for the wake only inside its span (the open
+  /dev-overnight span prompt-workflow reads), never for a wake that fires after the owner's /stop. That hook reads no
+  origin at d625284; whether it can tell a scheduled prompt from a typed one, from its payload or from the prompt's own
+  transcript record if the CLI writes that before the hook runs, is decided by experiment on the documented or captured
+  shape (above), and if neither shows that it can, it cannot. If it can, a scheduled prompt gets the capability only as
+  the wake inside its span; if it cannot, the wake's fixed text is not a `/restart` prompt but one that hook recognises
+  by that text, and every prompt that starts with `/restart`, typed or scheduled, still gets the capability as at
+  d625284, which the PR records under X8 as a fact. That hook stays the capability's one producer and the one reader in
+  subagent_restart.py its one deciding rule (P1b row 14); no second issuer or deciding rule is added. A wake that fires
+  while nothing is interrupted finds 0 candidates and the loop simply continues. The schedule is deleted where its span
+  ends: at the session's end, the overnight terminal (Terminal), the last step of Step 21's session-ending branch ("If
+  time expired (session ending)"), after the summary is written, is a CronDelete of the id the wake's CronCreate
+  returned, and after the owner's /stop the last step of commands/stop.md is the same CronDelete where the session
+  scheduled the wake. The time-lock (hooks/stop-overnight-timelock.py), once its closeout check (:138-150) passes,
+  refuses the Stop after end_time while the session's transcript holds a CronCreate of the wake's text whose id no later
+  CronDelete names, naming that id (X6 class G: the orchestrator's own CronDelete clears it), even after /stop or
+  another typed command opened a later span; a transcript with no such call, as in a session launched before your merge,
+  meets nothing new. /stop backdates end_time (scripts/break-overnight-lock.py `_backdate` :81), so each Stop after it
+  is such a Stop (the closeout block your base's /stop then meets, B2.b, is P2 row 9's). The suite's overnight drivers
+  model the schedule as F6o's does (below), a CronDelete of the job's id ending it, and after the terminal advance their
+  modeled clock by two of the wake's intervals: no wake fires there (Terminal). X8's /stop replay (the overnight
+  scenario with the owner's /stop typed inside the window), a replay of (1) in tests/replay/test_pipelines.py outside
+  its scenario table, does the same from stop.md's CronDelete on and drives no Stop after it: on your branch that Stop
+  meets the closeout block above, and row 17's unit tests (acceptance 10) cover the time-lock's wake refusal after
+  /stop. The widened exception is row 17's own decision under D20 and SG6, not an X4 case: every other message and id
+  stays refused, and the lines that name the typed /restart as the only exception go to P9 ("Hand-offs for the sync
+  list").
+Rule: ship the wake if the documented or captured record shape drives both F6o replays (a cut before end_time, and one
+after it before the summary is written) to the overnight terminal with 0 blocks, and the widened exception refuses any
+other message or id and issues no capability for a wake that fires after the owner's /stop (three replays); a replay
+that fails is fixed on the wake's side and run again, so no branch of this rule ships without the wake or with F6o red.
+The other two facts above (the Stop, the firing) decide nothing: the typed /restart stays beside the wake, so a wake the
+CLI never fires leaves the session as it is today. F6o's driver models the firing on the captured record shape, listed
+with the other modeled CLI behaviour ("Out of scope"). While those facts stay UNVERIFIED, the PR records them as
+UNVERIFIED for P5; if the documentation or a capture shows that a scheduled prompt cannot fire there, the PR quotes it
+under "Decided by experiment" (X8) as a CLI limit for P5, never as D20 met. No branch of this rule asks the owner or
+adds a wait for him (D20); only a cut the CLI never wakes still waits for his /restart, as today, and so does a cut in a
+session launched before your merge, whose todo list has no wake step (row 17), until that session ends; the PR reports
+both, never as D20 met. Never parse an API-error record (D4c).
 
 **X9. N1 on a landed home.** The record is P7b's merged PR #7: commits 8ab874b and 98d153a, scripts/install/land's
 "Review N1" block, the tests in tests/test_landing.py whose docstrings begin "Review N1"
@@ -501,7 +532,7 @@ What P1b's PR did is neither your deletion nor your retired rule ("Rules added /
 | 6 | .github/workflows/baseline.yml (P8's) or one new workflow it calls; tests/TESTING.md | the jobs; one short section | The suite as CI jobs, triggered and sharded per X10, reachable from release.yml's workflow_call so a tag cannot publish around it; its full set must be green on the PR head before the reviewer merges (X10; the PR changes no repository setting, and baseline.yml's comment (:181-182 at d625284, :203-204 on master 2acc29b) that calls the `baseline` job "already-required" so it "gates merges" loses both claims). The `baseline` job's own pytest step (baseline.yml:107 at d625284, :112 on master 2acc29b; hooks/tests and tests on python 3.10-3.12) leaves tests/replay/ to the suite's jobs, which run all of it (not a skip). The fault-coverage step ("Merge rule from P1c on"), its code under tests/replay/ with the rest of the suite. The network guard of X2 in every job. TESTING.md gets one short section: how to run the suite locally and the merge rule, nothing more (D21: no manual). |
 | 7 | hooks/subagentstop-artifact-contract-enforce.py (G2) | `ACK_PREFIX` :304 and the ack helpers :319-329; `_load_progress_helper` :351; `_mint_record` :614 (escalations/ :631); `_latest_unadmitted` :637 (escalation-admissions :639, written at :797-798); `_write_side_records` :659 (deferred-checks :691); `_clear_progress` :704; `_gate_decide` :747 (the no-progress hand-off :778-829) | F2g; corrections 2.27 and 2.30; C5; D24. P1b's row 3 delivers this: verify it on your base, add F2g's replay, and change code only for what P1b's PR left. A failing obligation stop is a plain exit 2 that names each failing artifact and check to the stopping producer, in every round. Delete what your base still has of the no-progress hand-off, the `ESCALATION_ACK` admission and its four record stores (escalations/, escalation-admissions/, progress/, deferred-checks/; ledger L25: written, read only by this hook). Before deleting a store, show by grep and the suite's trace that nothing else reads it; a store another reader uses stays and goes into the D24 table. Records left on live homes are ignored (acceptance 11). `GATE_FAULT` (a crashed gate decision, :1158-1163) never admits the stop, and X6 classes its site like any other: G where the stopping producer's repair clears it, U (deleted under D17) where nothing on your base reaches it. Its tests change with it (row 21). |
 | 8 | same | the legacy correlation path :1218-1230 (`_find_correlated_reports`, `_dispatch_task_id`, `_own_reports`) | F7b. When the dispatch prompt carries no obligation block, judge only the reports the stopping agent wrote itself, read from its own transcript's Write and Edit tool uses (agent_transcript_path), never a sibling's or an earlier attempt's. A report it did not write is not its to fix (C5, CC8); it stays for its own producer's stop. |
-| 9 | settings.json | env | X3, only if your base's settings.json does not already set it (P1b's E4 sets it): `"CLAUDE_OBLIGATION_STOPGATE": "block"`, in the last commit together with the fault replays whose return depends on it (Rollback, step 7). Nothing else in settings.json. |
+| 9 | settings.json | env | X3, only if your base's settings.json does not already set it (P1b's E4 sets it): `"CLAUDE_OBLIGATION_STOPGATE": "block"`, in the last commit you plan, together with the fault replays whose return depends on it and X3's deletions of the copies whose faults only armed G2 stops (Rollback, step 7). Nothing else in settings.json. |
 | 10 | hooks/subagentstop-e2e-enforce.py | report resolution :120-137 (`session_ts_filename_match`, then the "last 5" scan) | F1q, F3b, the overnight what-if ("no qa-report-*.json … under session <sid>"). P1b's row 3 moves the obligation-bearing case: verify it on your base, add its replays, and change code only for what P1b's PR left; the case without an obligation is yours. For an obligation-bearing QA dispatch, judge exactly the qa-report path its obligation declares (resolve_own_obligation), whatever the session id format; without an obligation, only a report the stopping QA wrote itself (as row 8). The newest-filename and "last 5" correlation goes. The message names the exact path and the missing field. P1b's row 7 split the deciders on the qa-report by property (G2: existence and shape; this gate: the e2e status policy); keep that split and add no second decider. |
 | 11 | scripts/aggregate-dev-report.py | `_write_blocked_aggregate` :2023-2082 and its callers (:2223 in `_reaggregate_with_shrunk_from_or_block`, :3780, :3830, :3848); `canonical_status = "blocked"` :1591; the shard validation that accepts `needs_review` (a third vocabulary, ledger L21) | F2, F2g. On a shard failure the script writes no canonical report, removes the canonical it wrote earlier for that task (its own output), and exits non-zero naming each failing shard's path and every error. A schema-invalid canonical can then never exist; the existing aggregate check at the next QA dispatch sees the canonical absent and the canonical's one producer, as P1b's E5 chose, writes it once the lane is repaired. The shard check accepts only dev-report.v2's own status set. |
 | 12 | scripts/resolve-dev-artifact-chain.py; commands/dev.md :1338-1344 (and dev-command.md's copy, if it has one) | the fan-out optional-parent branch ("any present optional parent artifact must validate") | F3b; D24 (read-never-written loses its reading branch). P1b's row 7 delivers this: verify it on your base, add F3b's replay, and change code or prose only for what P1b's PR left. In a fan-out cycle no dispatch declares the unsuffixed parent ticket, context or qa-report, and dev.md forbids inventing them, so the resolver no longer reads them; the prose sentence follows. Singular cycles are unchanged. P3 turns the resolver into the disposition and keeps this. |
@@ -509,7 +540,7 @@ What P1b's PR did is neither your deletion nor your retired rule ("Rules added /
 | 14 | scripts/lib/session_index.py; scripts/session-index.py; agents/changelog-analyst.md :660-675 | `sync_failed` raised at :255-256 (`update-index --add --cacheinfo` :252-253); `update-index --force-remove` :248-249, its exit code unchecked (:257 lists the path as synced); the analyst's sync step | F4c, X7's option. X7's wait covers both update-index calls, and no path is reported synced unless update-index wrote it (the deletion branch returns its failure as the `--cacheinfo` branch does). This row changes no prose of the analyst (row 18 changes its :651, :665 and :669 session-index paths and its `rm -f` steps) and adds no check (C2). |
 | 15 | commands/restart.md | :70, :118, :131 (`$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py …`) | F5, F6. Spell each command in the form bash-safety resolves by design (the bashprobe showed `~/.claude/...` passing), per X4 (a). The hook keeps refusing a dynamic command head. |
 | 16 | hooks/pretool-todo-validate.py; hooks/posttool-subagent-track.py | Gate 4 `check_subagent_completion_guard` :251-270 | F5 (and F5f). A subagent step is also satisfied by an Agent tool_use of that role in the span whose agent was resumed by the recovery path and whose resume finalized (the recovery's own journal record, which CLAUDE.md says is journaled through SubagentStop). Read it from the transcript and that record; no replacement call is demanded, which restart.md and Lesson 16 forbid. The message names the step, the role and, where the obligation declares one, the artifact. |
-| 17 | per X8 | — | F6o, X8's wake: scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/userprompt-restart-authorize.py (the widened exception, in the /restart capability's one producer if its rule must gain the wake case; the one reader in hooks/lib/subagent_restart.py stays its one deciding rule, X8), commands/dev-overnight.md (one line). Every step of your base's list keeps its label, content and activeForm, and one rule binds every hook that compares a session's todo list with the canonical list, by length, index or label: it compares the whole list (its length, and each step's content and activeForm) only for a command's first list (the first TodoWrite of its span) or a change of that list's length, as pretool-todo-validate.py:298-300 does at d625284 (prompt-workflow.py starts each command's bookmark with no list, :1880-1897 and :1980-1994), and otherwise pairs each todo with the canonical step of the same content, never of the same index; the wake rule, Gate 4 and what records a step's subagent call find their step that way. At d625284 these break it: Gate 4 and hooks/posttool-subagent-track.py pair by index (pretool-todo-validate.py:227-240, posttool-subagent-track.py:480-525); hooks/posttool-todo-count.py exits 2 after every TodoWrite shorter than the canonical list (:95-103, :60), which locks every other tool (pretool-workflow-gate.py:1179-1192), and hooks/posttool-todo-tracker.py withholds its todo-file write on such a list (:104-122); the Codex runtime's plan check compares length and content index by index on every update (pretool-workflow-gate.py:287-306). A step read by its label (pretool-subagent-enforce.py:69-83) needs only the kept labels. An overnight session running at your merge keeps the todo list it wrote from your base's list, without the wake step and so one step shorter, and resets it every cycle, so that list meets neither the wake rule nor any of these checks (acceptance 11). |
+| 17 | per X8 | — | F6o, X8's wake: scripts/todo/dev-overnight.py (the wake step), hooks/pretool-todo-validate.py (its completion rule), hooks/prompt-workflow.py (recognising the wake), hooks/userprompt-restart-authorize.py (the widened exception: the /restart capability's one producer issues it for the wake only inside the wake's span, never after the owner's /stop; the one reader in hooks/lib/subagent_restart.py stays its one deciding rule, X8), hooks/stop-overnight-timelock.py (its Stop after end_time, the one after the owner's /stop included, requires the wake deleted, X8), commands/dev-overnight.md (two lines: the wake step, and the wake's deletion as the last step of Step 21's session-ending branch), commands/stop.md (one line: the same deletion as its last step). Every step of your base's list keeps its label, content and activeForm, and one rule binds every hook that compares a session's todo list with the canonical list, by length, index or label: it compares the whole list (its length, and each step's content and activeForm) only for a command's first list (the first TodoWrite of its span) or a change of that list's length, as pretool-todo-validate.py:298-300 does at d625284 (prompt-workflow.py starts each command's bookmark with no list, :1880-1897 and :1980-1994), and otherwise pairs each todo with the canonical step of the same content, never of the same index; the wake rule, Gate 4 and what records a step's subagent call find their step that way. At d625284 these break it: Gate 4 and hooks/posttool-subagent-track.py pair by index (pretool-todo-validate.py:227-240, posttool-subagent-track.py:480-525); hooks/posttool-todo-count.py exits 2 after every TodoWrite shorter than the canonical list (:95-103, :60), which locks every other tool (pretool-workflow-gate.py:1179-1192), and hooks/posttool-todo-tracker.py withholds its todo-file write on such a list (:104-122); the Codex runtime's plan check compares length and content index by index on every update (pretool-workflow-gate.py:287-306). A step read by its label (pretool-subagent-enforce.py:69-83) needs only the kept labels. An overnight session running at your merge keeps the todo list it wrote from your base's list, without the wake step and so one step shorter, and resets it every cycle, so that list meets neither the wake rule nor any of these checks (acceptance 11). |
 | 18 | the literal-prose conflicts (X4) | see the list under the table | Each fixed on the side X4 picks, with the replay that met it. |
 | 19 | the /dev-overnight compliant cycle (X5) | see the list under the table | The smallest part of the owning row that lets the compliant overnight scenario run from launch to a Stop after end_time with 0 blocks. |
 | 20 | hooks/pull.sh; hooks/git-fswatch.sh `has_changes`, `safe_pull`; scripts/install/land's "Review N1" block (only if it must be made callable) | pull.sh `HAS_CHANGES` :17-21; fswatch `has_changes` :160, `safe_pull` :174 (fetch :180, stash push :200, `pull --rebase` :210) | X9. N1's window (only if X9 (ii) refuses): on a landed harness home the landing's existing settings.json re-record runs before the stash decision; no second implementation, no new state. Fact 1: each `safe_pull` step is decided by its git command's own exit status, not `tee`'s. |
@@ -609,8 +640,9 @@ replay.
   injection as its bullet in (2) names it (a live lock holder's release included). X8's wake is not one: its record
   carries `isMeta` and `turnOrigin` "scheduled", which is_human_prompt rejects (hooks/lib/stop_contract.py:43-49).
 - *Terminal*: /spec, the spec written and the Stop rc 0; /dev, /redev, /dev-command, the completion step's resolver
-  status pass and the Stop rc 0; /dev-overnight, the Stop after end_time rc 0 with the summary written; /do, the
-  do-report complete and the Stop rc 0; /close, the Stop rc 0 and, as the last non-empty line of the close report
+  status pass and the Stop rc 0; /dev-overnight, the Stop after end_time rc 0 with the summary written and, where its
+  first step scheduled the wake, the wake deleted before that Stop and none fired after it (X8); /do, the do-report
+  complete and the Stop rc 0; /close, the Stop rc 0 and, as the last non-empty line of the close report
   (docs/dev/close-report-<task-id>.md), exactly `CLOSE: YES - with disclosures: <n> items` when the cycle's routing
   loop completed a repair (`<n>` = the lines of the report's `## Disclosures` section), otherwise exactly
   `CLOSE: YES — codex disabled by user` (close.md :754, :772; no scenario passes --codex); /commit, the commit on HEAD
@@ -639,16 +671,19 @@ reports); F4 (index.lock held through a /dev cycle's checkpoints and Stop); F4c 
 before /commit's commit until 20 s after its sync starts, when that process removes it, as X7's live holder does; run
 with a commit that modifies a path and with one that only deletes one); F4s (a stale index.lock at /commit); F5 (a
 single-lane dev cut after its Edit, the human's /restart); F5f (both lanes cut; not run in the pilot); F6 (a usage
-limit mid-subagent in an interactive session, the human's /restart); F6o (a usage limit inside /dev-overnight, no
-human: X8); F7 (a lane dispatched from the pre-P1 template, its obligation unparseable, its report needs_review, the
-sibling compliant); F7b (the same with no obligation block). The F8 faults are CC4's case, an unfinished cycle met by
-the /close or /commit the human types, in F8, F8p and F8c in a later session than the /dev's (P1b's acceptance 7
-replays the same four, those three in a later session too, and adds a close-QA finding that cites no artifact, a /close
-of a /do task whose do-report is not `completed` and a removed canonical aggregate under /commit): F8 (after a 2-lane
-/dev reached its terminal, one lane's QA report removed, then the human's /close); F8q (a 2-lane /dev cut, as in F5,
-after one lane's QA stop and before the other lane's QA dispatch, then the human's /close instead of /restart); F8p
-(after /dev's terminal, a product file one lane's dev wrote broken so that /close's close-QA round names it); F8c (after
-a landed /close, one lane's dev report removed, then the human's /commit). Assert per fault:
+limit mid-subagent in an interactive session, the human's /restart); F6o (a usage limit inside /dev-overnight, once
+before end_time and once after it, before the summary is written, no human: X8); F7 (a lane dispatched from the pre-P1
+template, its obligation unparseable, its report needs_review, the sibling compliant); F7b (the same with no obligation
+block). The F8 faults are CC4's case, an unfinished cycle met by the /close or /commit the human types, in F8, F8p and
+F8c in a later session than the /dev's (P1b's acceptance 7 replays the same four, those three in a later session too,
+and adds a close-QA finding that cites no artifact, one that names only a product file no dispatch of the task wrote
+(each returns to the close-QA round that raised it, through that round's own report and with no default role, as P1b's
+E3 and row 10 route it), a /close of a /do task whose do-report is not `completed` and a removed canonical aggregate
+under /commit): F8 (after a 2-lane /dev reached its terminal, one lane's QA report removed, then the human's /close);
+F8q (a 2-lane /dev cut, as in F5, after one lane's QA stop and before the other lane's QA dispatch, then the human's
+/close instead of /restart); F8p (after /dev's terminal, a product file one lane's dev wrote broken so that /close's
+close-QA round names it); F8c (after a landed /close, one lane's dev report removed, then the human's /commit). Assert
+per fault:
 - every block's text contains the artifact's path (the one its dispatch declares; in F7 and F7b, whose dispatches
   carry no obligation that parses, the report the stopping agent wrote) and the failing check (code and message);
 - the actor that receives the block is the expected producer, and the trace shows the repair written by that same
@@ -764,9 +799,9 @@ pass, human events.
   summary section and its removal of the parking prose P1 merged (D20).
 - The disposition function and the gap format (P3), beyond row 12's removed branch; no owner or fix field is added
   anywhere.
-- /close and /commit beyond rows 14 and 18 and the routing loops "Delivered by P1b" names (P4; P1b's rows 6, 7, 8, 10
-  and 11 removed their re-checks); the unified Stop gate (P5); the D8 derived deny, which P1b's E3 ships for every
-  caller (P5 row 1 adds only a caller P1b's PR left out).
+- /close and /commit beyond rows 14 and 18, X3's deletions and the routing loops "Delivered by P1b" names (P4; P1b's
+  rows 6, 7, 8, 10 and 11 removed their re-checks); the unified Stop gate (P5); the D8 derived deny, which P1b's E3
+  ships for every caller (P5 row 1 adds only a caller P1b's PR left out).
 - D24 consolidation of artifacts rows 7-20 do not touch (P1b did it before you; P2-P10 keep it). P1b's D24 check stays
   green on your branch with no exception, and no change of yours gives an artifact a second producer or a second
   deciding rule. Where the suite shows, on your base, two producers or two deciding consumers of one artifact that
@@ -803,18 +838,20 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
    .github/workflows/baseline.yml exits 0 on python 3.12 (`python3` from a 3.12 venv in place of setup-python; your
    container's own python3.12 may refuse pip as externally managed), P1b's D24 check included, and the suite job(s)
    on your branch. Where your container runs as root, one step is skipped there: "Clean-install smoke" (:83-109 at
-   2acc29b) exits 1 under uid 0 by design (:94-97), and an unprivileged user cannot reach PyPI through your session's
-   proxy, whose certificate only root can read; its verdict is (a)'s. Run (b) with full history: if
+   2acc29b) exits 1 under uid 0 by design (:94-97 at 2acc29b), and an unprivileged user cannot reach PyPI through your
+   session's proxy, whose certificate only root can read; its verdict is (a)'s. Run (b) with full history: if
    `git rev-parse --is-shallow-repository` prints `true`, first `git fetch --unshallow origin`, because "Verify headline
    claims" runs verify-claims.sh's provenance audit in --strict, which fails on a commit source the clone lacks
-   (62957b3, cited by .github/assets/demo-trace.json at 2acc29b; hence the workflow's fetch-depth 0, :45-49). If that
-   fetch fails, that step's verdict is (a)'s too; say so.
+   (62957b3, cited by .github/assets/demo-trace.json at 2acc29b; hence the workflow's fetch-depth 0, :45-49 at 2acc29b).
+   If that fetch fails, that step's verdict is (a)'s too; say so.
 3. **Requirement (1).**
    `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/replay/test_pipelines.py` -> passed; the
-   scenario table with 0 blocks, 0 errors and every terminal reached in both modes. On your base before your changes:
-   the refusals rows 18 and 19 fix, each with its hook text, those of P1b's "Hand-off to P1c" (both its lists) your base
-   still shows among them. On your branch head: `git grep -n 'DEVIATION:'` prints nothing (no driver passes a block or
-   keeps a deviation for one your base no longer shows), and P1b's D24 check passes with no exception (acceptance 2).
+   scenario table with 0 blocks, 0 errors and every terminal reached in both modes; for /dev-overnight, for F6o in
+   acceptance 4 and for X8's /stop replay, 0 wakes fired while the driver's modeled clock runs two wake intervals past
+   the terminal (in the /stop replay, past stop.md's CronDelete; X8). On your base before your changes: the refusals
+   rows 18 and 19 fix, each with its hook text, those of P1b's "Hand-off to P1c" (both its lists) your base still shows
+   among them. On your branch head: `git grep -n 'DEVIATION:'` prints nothing (no driver passes a block or keeps a
+   deviation for one your base no longer shows), and P1b's D24 check passes with no exception (acceptance 2).
 4. **Requirement (2).** The same for tests/replay/test_faults.py, and the fault table: for every block and every gap an
    F8 fault routes, artifact named, check named, receiving actor = expected producer, the first compliant repair round
    passes (F2g: after its forged round), 0 human events, except the one /restart the human types in F5, F5f and F6
@@ -870,14 +907,18 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
     files does not show at the same hook, step (the todo of the same content) and refusal text, or at the same hook and
     step where one of your rows rewrites that hook's message (as row 16 rewrites Gate 4's); each block met is listed in
     the PR with its hook text, and none is new (Goal 4). The same cycles with `CLAUDE_OBLIGATION_STOPGATE=block` (X3):
-    0 G2 blocks on their compliant stops. Repeat with your branch's settings.json.
+    0 G2 blocks on their compliant stops. If X3 deleted copies, the session started before your merge also replays each
+    fault they stopped, with and without CLAUDE_HOME in its env (with your branch's env instead if X3 measured a
+    settings env change reaching a running session): G2 blocks it at its producer's stop, naming the artifact and the
+    failing check, and the next round passes. Repeat with your branch's settings.json.
 12. **D24 table** for every artifact rows 7-20 or X2 touch: the escalation stores (L25), the canonical aggregate (L18),
     the lane reports and the e2e correlation (L17, L22), the cycle contract (L46), the git index the sync updates, the
-    recovery journal (row 16), the /restart capability (row 17), the fan-out parent ticket, context and qa-report whose
-    read row 12 removes (where your base still reads them), the todo list whose comparing hooks row 17 binds to one
-    rule, with the workflow bookmark and the todo file wherever your base still writes them (L07, L08), the product
-    command files (row 18), settings.json (row 20, if taken), each state file X2's write audit moved: producers before
-    -> after, deciding consumers before -> after, proof (writer and reader grep plus the suite's trace).
+    recovery journal (row 16), the /restart capability (row 17; issued for the wake only inside its span, X8), the
+    fan-out parent ticket, context and qa-report whose read row 12 removes (where your base still reads them), the todo
+    list whose comparing hooks row 17 binds to one rule, with the workflow bookmark and the todo file wherever your base
+    still writes them (L07, L08), the product command files (row 18), settings.json (row 20, if taken), each state file
+    X2's write audit moved: producers before -> after, deciding consumers before -> after, proof (writer and reader grep
+    plus the suite's trace).
 13. **C1-C5.** C1: the set of file-name patterns hooks and scripts create during the suite, base against branch, gains
     no new state file: each pattern only the branch creates (a step the base never reached, its replay having
     dead-ended or stopped at a block there) is named with its writer and the line on your base that already writes it.
@@ -899,7 +940,7 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
 
 Added (at most 4):
 - the CI merge rule: the suite green on the PR head, and the fault-coverage step;
-- X8's wake step and the widened SendMessage exception;
+- X8's wake step (scheduled at the launch, deleted where its span ends) and the widened SendMessage exception;
 - row 18's narrow config-guard allowance for a /dev-command dev (a relaxation, counted anyway);
 - `CLAUDE_OBLIGATION_STOPGATE=block` is a switch flip, not a new rule; list it only if row 9 sets it (X3).
 
@@ -953,9 +994,11 @@ Commit order:
 6. the CI jobs, the fault-coverage step and TESTING.md;
 7. last, only if your base's settings.json does not already set it (X3; P1b's E4 sets it): settings.json's
    `CLAUDE_OBLIGATION_STOPGATE` together with the replays whose return to their producer depends on it (F1, F1q, F2,
-   F2j and F2g in the shipped mode; their armed replays get the switch from row 1's armed mode and go in step 3), so it
-   reverts as one unit. If your base sets it, those replays pass under the shipped settings and go with their fault
-   class in step 3.
+   F2j and F2g in the shipped mode; their armed replays get the switch from row 1's armed mode and go in step 3), X3's
+   deletions of the copies whose faults only armed G2 stops and G2's run-time switch read if X3 adds it, so it reverts
+   as one unit. If your base sets it, those replays pass under the shipped settings and go with their fault class in
+   step 3. A commit after step 7 (a review fix, a merge of origin/master) keeps the switch, X3's deletions and X3's
+   rule, and acceptances 3, 4 and 11 are re-run on the PR's head after it.
 Each commit keeps the suite green (TC-54) and reverts on its own; reverting a fix reverts its replay with it. Say in the
 PR what each revert restores. The reviewer reverts; the owner runs nothing.
 
@@ -991,6 +1034,12 @@ PR what each revert restores. The reviewer reverts; the owner runs nothing.
       lists;
     - P3's 2.30 ("ESCALATION_ACK releases nothing") is delivered by P1b's row 3 and replayed here (row 7, F2g), and P5's
       escalation-record deny (corrections 2.45) has nothing left to deny;
+    - P2's thinned time-lock (its row 9) and P5's Stop gate (P5 row 7), which takes over the time-lock's clause (P5 rows
+      9 and 11), keep X8's wake check: a Stop after end_time (once the closeout check passes, where one runs) or after
+      the owner's /stop, whatever the span, is refused while the session's transcript holds a CronCreate of the wake's
+      text whose id no later CronDelete names, naming that id (X6 class G: the orchestrator's own CronDelete clears it;
+      no compliant replay fails without the check, since the drivers delete the wake where the prose does), and their
+      stop.md rewrites (P2 row 14, P5 row 13) keep stop.md's last step, the wake's CronDelete;
     - CLAUDE.md Hook Discipline #5 ("Ordinary /dev recovery has an honest terminal branch", CLAUDE.md:98 at d625284)
       conflicts with the owner's "诚实终态永远不允许" (DT4) and with requirement (3); P9 rewrites it under D20 and D23
       and keeps Lesson 16's reference to #4/#5 (CLAUDE.md:43) consistent;
@@ -998,8 +1047,10 @@ PR what each revert restores. The reviewer reverts; the owner runs nothing.
       ("The sole `SendMessage` exception is the supported human-only `/restart` path"), Lesson 16's "the human-only
       `/restart` command must enumerate every recoverable child" (CLAUDE.md:41), README.md:477 and ARCHITECTURE.md:178;
       P9 rows 16 and 14 add these lines and state them as the merged hook does (typed /restart, or the overnight
-      session's own wake inside its span, the same fixed message and id rule; D20), backed by an E3 replay of the
-      widened exception (an accepted wake, a refused other message, a refused other id);
+      session's own wake inside its span, the same fixed message and id rule, and, where X8 records that the hook cannot
+      tell a scheduled prompt from a typed one, any prompt that starts with /restart; D20), backed by an E3 replay of
+      the widened exception (an accepted wake, a refused other message, a refused other id, no capability for a wake
+      that fires after the owner's /stop);
   - **Release notes** (the list under "Goal").
 - The PR body and each PR comment stay under GitHub's limit of 65,536 characters: measure each in UTF-8 bytes (`wc -c`
   of the file you post; never fewer than its characters) before you post it, and keep it at or under 60,000. Every
@@ -1020,10 +1071,10 @@ PR what each revert restores. The reviewer reverts; the owner runs nothing.
   scheduled prompt, not a file.
 - Do not add a check, scan, filter or re-validation to /close, /commit, the changelog-analyst or any other consumer (C2).
 - Do not ask the owner anything, write a REQUEST for him, give him a step on his machine, park anything, or make any
-  path inside /dev-overnight wait for him (D18-D20). X8 ships the wake on every branch; where the CLI cannot fire it, a
-  usage-limit cut there still waits for his /restart as it does today, a CLI limit the PR reports (X8), never as met;
-  so does a cut in a session launched before your merge, whose todo list has no wake step (row 17), until that
-  session ends; the PR reports it too (X8), never as met.
+  path inside /dev-overnight, after end_time included, wait for him (D18-D20). X8 ships the wake on every branch, for
+  its whole span; where the CLI cannot fire it, a usage-limit cut there still waits for his /restart as it does today, a
+  CLI limit the PR reports (X8), never as met; so does a cut in a session launched before your merge, whose todo list
+  has no wake step (row 17), until that session ends; the PR reports it too (X8), never as met.
 - Do not put a filename-to-role table in code, prose or test data (D21); expected producers come from the declaring
   dispatch record.
 - Do not skip, xfail, quarantine or retry-until-green a scenario; no expected-failure list, no timing-dependent assertion,
@@ -1031,8 +1082,8 @@ PR what each revert restores. The reviewer reverts; the owner runs nothing.
 - Do not weaken a security denial to make a replay pass (bash-safety's removal policy, the git privilege guard, the branch
   firewall, the overnight hook guard, the config guard): change the prose instead. Such a security hook changes only
   under X4 (b), a refusal no written rule backs, with a unit test and a replay showing every other refusal of that hook
-  unchanged. The one refusal a written rule backs that changes is the SendMessage exception X8 widens (row 17's own
-  decision, not an X4 case; its CLAUDE.md lines go to P9).
+  unchanged. The one refusal a written rule backs that changes is the SendMessage exception X8 widens to the overnight
+  wake inside its span (row 17's own decision, not an X4 case; its CLAUDE.md lines go to P9).
 - Do not arm G1, G3 or G4; do not unregister or delete a registered hook (D15 stub rule).
 - Do not edit CLAUDE.md, DECISIONS.md or `harness-repair-plan/`.
 - Do not let any test reach a network service: every origin is a local bare repository; nothing is pushed to a real
@@ -1041,8 +1092,9 @@ PR what each revert restores. The reviewer reverts; the owner runs nothing.
   start a nested `claude`.
 - Do not commit captures from real sessions, sandbox output or personal values.
 - Do not parse an API-error or interrupt record anywhere (D4c).
-- Do not change resolver, aggregator or overnight-loop code beyond rows 11, 12, 13, 17 and 19 and X6's producer-side fix
-  of a dead-end site or deletion of a U site there (on lines a later phase owns, with that phase's mechanism, X5).
+- Do not change resolver, aggregator or overnight-loop code beyond rows 11, 12, 13, 17 and 19, X3's deletions and X6's
+  producer-side fix of a dead-end site or deletion of a U site there (on lines a later phase owns, with that phase's
+  mechanism, X5).
 
 ## Context (read once)
 
