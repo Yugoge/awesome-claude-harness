@@ -927,9 +927,11 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
     recovery journal (row 16), the /restart capability (row 17; issued for the wake only inside its span, X8), the
     fan-out parent ticket, context and qa-report whose read row 12 removes (where your base still reads them), the todo
     list whose comparing hooks row 17 binds to one rule, with the workflow bookmark and the todo file wherever your base
-    still writes them (L07, L08), the product command files (row 18), settings.json (row 20, if taken), each state file
-    X2's write audit moved: producers before -> after, deciding consumers before -> after, proof (writer and reader grep
-    plus the suite's trace).
+    still writes them (L07, L08), the CLI's transcripts and agent meta, on which rows 8, 10, 16 and 17 add or change
+    deciders that call P1b's one reader, the wake's CronCreate and CronDelete records in the session's transcript (the
+    orchestrator's own calls; row 17, X8), the product command files (row 18), settings.json (row 20, if taken), each
+    state file X2's write audit moved: producers before -> after, deciding consumers before -> after, proof (writer and
+    reader grep plus the suite's trace).
 13. **C1-C5.** C1: the set of file-name patterns hooks and scripts create during the suite, base against branch, gains
     no new state file: each pattern only the branch creates (a step the base never reached, its replay having
     dead-ended or stopped at a block there) is named with its writer and the line on your base that already writes it.
