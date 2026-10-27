@@ -615,9 +615,10 @@ at your merge, and no check exception, skip or expected block takes its place (a
   Your container runs the suite too (acceptance 3, 4 and 17): install bubblewrap there if it allows that, otherwise
   give the replay a stand-in, as P2's prompt allows ("the way P8 does for its bwrap argv tests"); say which, for both.
 - E1 (row 13); the e2e QA stop under the overnight session id (row 10).
-- stop-overnight-timelock.py's `CLOSEOUT GATE` (:125) and the cycle-id disagreement (the file check says cycle 0, the
-  contract and closeout say 1): P2 row 7's one cycle index, which P1b's E13 delivers early (every reader of the cycle
-  number calls `cycle_index(state)`): verify it on your base and replay it.
+- stop-overnight-timelock.py's `CLOSEOUT GATE` (:125), the pending-required-calls block before end_time: P1b's row 13
+  deletes it. The cycle-id disagreement (the file check says cycle 0, the contract and closeout say 1): P2 row 7's one
+  cycle index, which P1b's E13 delivers early (every reader of the cycle number calls `cycle_index(state)`): verify it
+  on your base and replay it.
 - Launch prerequisites the fixture meets as a real home does: a clone (origin/HEAD set) and the default launch mode,
   never in place on a protected branch (the launcher refuses that by design).
 The compliant overnight scenario carries no producer question; P2 adds the D20 decide-and-record replay as its fault
