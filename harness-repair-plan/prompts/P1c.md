@@ -1009,8 +1009,8 @@ Commit order:
 Each commit keeps the suite green (TC-54); reverting a fix reverts its replay with it. A commit that no later commit's
 replays or CI jobs need reverts on its own; a revert of any other (such as step 1's fixture and runner, a step-2 unblock
 that later fault replays run through, or a fix a later commit's replay also needs, as F5's needs rows 15 and 16) also
-reverts, last first, each later commit that fails without it or without one of those. Say in the PR what each revert
-restores. The reviewer reverts; the owner runs nothing.
+reverts, last first, each later commit that fails without it or without another commit so reverted. Say in the PR what
+each revert restores. The reviewer reverts; the owner runs nothing.
 
 ## Branch and pull request
 
