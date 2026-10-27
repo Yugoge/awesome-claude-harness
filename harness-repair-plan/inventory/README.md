@@ -27,7 +27,7 @@ disagreements. Run date 2026-10-24.
 | no violation found | 18 |
 | evidence: both code and trace / code only / trace only | 87 / 32 / 1 |
 
-Check positions named in the rows: producer stop 34, G1 dispatch 9, G3 collection 27, elsewhere 77.
+Check positions named in the rows: producer stop 33, G1 dispatch 9, G3 collection 27, elsewhere 77.
 
 Rows per group (the groups become P1b's scope rows): G01 cycle identity and registry 8; G02 workflow bookmark, todo
 list, replay stores 5; G03 dispatch record and producer-gate outputs 4; G04 BA and context family 12; G05 test-writer
@@ -336,7 +336,7 @@ the launch, where the launcher also refuses a shim it cannot execute (scripts/cr
 each time the actor sources it before a git op (commands/dev-overnight.md:289); scripts/score-inject.sh exits 1 on an
 unreadable or malformed score ledger (:128-160); and A120's transcripts, which only the CLI writes, are decided on by
 harness readers through parsers of their own (hooks/lib/subagent_restart.py with hooks/lib/obligation.py,
-hooks/lib/stop_contract.py, hooks/pretool-aggregate-check.py:409, hooks/stop-spec-coverage-enforce.py:129-160), while
+hooks/lib/stop_contract.py, hooks/pretool-aggregate-check.py:409, hooks/stop-spec-coverage-enforce.py:112-157), while
 hooks/pretool-workflow-gate.py and hooks/lib/subagent.py look in them only for a Codex record type and decide nothing
 on them. posttool-todo-count.py and posttool-todo-tracker.py decide on A09's bookmark
 (hooks/posttool-todo-count.py:85-88, exit 2 at :60). Entries that run at the stop or the write of an agent that does
@@ -363,17 +363,30 @@ check position, as A100's uncalled --route mode has none. A31 loses QA Phase 5 a
 the test-writer report), and A85 loses overnight-git-selftest.sh, which runs the source shim. A98, A99, A104 and A105
 no longer cite as live the legacy installers hooks/install-auto-sync.sh, hooks/install-protection-all.sh and
 hooks/install.sh, which exit 0 before any step (:12, :11, :15), so logs/git-watcher.log, written only by
-install-auto-sync.sh, leaves A99. A108 adds /dev-overnight's PM and specialists, which read the project root's
-README.md for the app URL or the product description (agents/pm.md:232-236), a file doc-sync creates when the root has
-none. A17, a name only a comment carries (hooks/subagentstop-artifact-contract-enforce.py:295-296), is dropped as A123
-was. The same read completed the producers, readers, deciders, check cells or cite ranges of A01, A02, A06, A10, A14,
-A19, A23, A24, A27, A31, A32, A34, A35, A36, A37, A38, A39, A45, A47, A49, A53, A57, A59, A63, A64, A68, A69, A76,
-A77, A80, A88, A92, A96, A100, A111, A116 and A119, among them the G3 barrier
-(hooks/pretool-aggregate-check.py:558-633) on every obligation-declared file in A01-A40. The counts in this README
-include all of these corrections; `build_map.py` printed 122 rows, 82 covering the ledger rows, 40 outside the ledger,
-several producers 35, several deciding consumers 37, written never read 29, read never written 18, no violation
-found 21, evidence 86 / 33 / 3, 33 code-only rows, producer stop 30, G1 dispatch 13, G3 collection 18, elsewhere 67,
-G03 5 and G12 6.
+install-auto-sync.sh, leaves A99. A108 adds /dev-overnight's PM and the specialists that /dev, /dev-command and
+/dev-overnight dispatch, which read the project root's README.md for the app URL or the product description
+(agents/pm.md:232-236), a file doc-sync creates when the root has none. A17, a name only a comment carries
+(hooks/subagentstop-artifact-contract-enforce.py:295-296), is dropped as A123 was. The same read completed the
+producers, readers, deciders, check cells or cite ranges of A01, A02, A06, A10, A14, A19, A23, A24, A27, A31, A32,
+A34, A35, A36, A37, A38, A39, A45, A47, A49, A53, A57, A59, A63, A64, A68, A69, A76, A77, A80, A88, A92, A96, A100,
+A111, A116 and A119, among them the G3 barrier (hooks/pretool-aggregate-check.py:558-633) on every obligation-declared
+file in A01-A40. A later code read at d625284 then corrected A108 and A120 again. A108's PM plans from documents only
+when none of CLAUDE.md, the root README.md, .env and docker-compose.yml names an app URL (agents/pm.md:232-236), and
+it sets `credentials_available: false` when neither CLAUDE.md nor the root README.md gives test credentials
+(:290-292), a second decision inside its own work. A120's G2 and e2e entries move to `check_elsewhere` by the stop
+rule above: they run at a subagent's stop, and the CLI, not that subagent, writes the transcripts and the agent meta.
+A120 also gains four deciding parsers of its files: hooks/lib/subagent_restart.py `_scan_child_transcript` (:552-622,
+through `_child_transcript_signals` :649-673), with which /restart's discovery drops a child whose transcript holds
+end_turn (:769, :779-780) and `authorize_send_message` refuses one (:1173-1177); `_metadata_by_tool_use` in the same
+file (:525-549) and hooks/lib/obligation.py `_read_meta_tool_use_id` (:719-727), which read the agent meta (the L1
+cross-check of G2 and e2e fails `meta_not_found` when it is unreadable, :748-750); and scripts/capability-handshake.py
+`cross_check_event` (:103-174), whose transcript checks (:130-172) feed the handshake verdict that
+scripts/capability-doctor-strict.py acts on (:121, :146, :158). A120's `check_elsewhere` now also names /restart's
+prepare (scripts/restart-subagents.py) and the handshake's runners, scripts/doctor --strict and
+scripts/install/preflight. The counts in this README include all of these corrections; `build_map.py` printed 122
+rows, 82 covering the ledger rows, 40 outside the ledger, several producers 35, several deciding consumers 37, written
+never read 29, read never written 18, no violation found 21, evidence 86 / 33 / 3, 33 code-only rows, producer
+stop 30, G1 dispatch 13, G3 collection 18, elsewhere 67, G03 5 and G12 6.
 
 ## Limits
 
