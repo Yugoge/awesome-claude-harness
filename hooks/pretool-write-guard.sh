@@ -16,14 +16,14 @@ TOOL_NAME=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin);
 # Layer A — bulk-commit sentinel write block (M4.3 / AC-04,
 # task 20260524-205206). Deny ANY Write or NotebookEdit tool call (regardless
 # of agent_id; main agent NOT exempt) that targets
-# /tmp/claude-bulk-commit-sentinel-*.json.
+# <state dir>/claude-bulk-commit-sentinel-*.json (any directory: the name is protected).
 # The sentinel is written by the orchestrator via /commit --bulk;
 # model-tool writes are forbidden.
 if [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "NotebookEdit" ]; then
   _BULK_TARGET=$(echo "$INPUT" | python3 -c "import json,sys; d=json.load(sys.stdin); ti=d.get('tool_input',{}); print(ti.get('file_path') or ti.get('notebook_path') or '')" 2>/dev/null)
   case "$_BULK_TARGET" in
-    /tmp/claude-bulk-commit-sentinel-*.json)
-      echo "BLOCKED: bulk-commit-sentinel-write — writing to /tmp/claude-bulk-commit-sentinel-*.json via $TOOL_NAME is FORBIDDEN" >&2
+    */claude-bulk-commit-sentinel-*.json)
+      echo "BLOCKED: bulk-commit-sentinel-write — writing to claude-bulk-commit-sentinel-*.json via $TOOL_NAME is FORBIDDEN" >&2
       echo "Target: $_BULK_TARGET" >&2
       echo "REASON: per task 20260524-205206 M4.3, only the orchestrator via /commit --bulk may" >&2
       echo "        create the bulk-commit sentinel. ALL model tool calls are denied" >&2

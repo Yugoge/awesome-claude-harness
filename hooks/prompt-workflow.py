@@ -1320,7 +1320,7 @@ def _check_workflow_conflict(cmd_name: str, sid: str) -> None:
 def _mint_unique_do_taskid() -> str:
     """Mint a globally-unique pure-timestamp task-id (YYYYMMDD-HHMMSS) for a /do
     invocation, reserved ATOMICALLY across ALL sessions via a flat O_EXCL marker
-    `/tmp/claude-do-resv-<ts>` so two concurrent /do invocations — even in the same
+    `<state dir>/claude-do-resv-<ts>` so two concurrent /do invocations — even in the same
     wall-clock second — can never mint the same id. Pure-timestamp form keeps
     /close + /commit task-id resolution compatible (no nonce suffix that /close's
     timestamp-pattern branch might reject). The flat /tmp marker is reachable by the

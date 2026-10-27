@@ -23,7 +23,7 @@ When a target invocation is detected, this hook independently re-derives
 repo_hash/branch/session_id from live git state and the hook's own trusted
 PreToolUse payload (never trusting the command's own --repo-hash/--branch
 argument text for the LOOKUP/BINDING), then re-validates the push-analyst
-grant at /tmp/agentic-commit/push-analyst/<repo_hash>/<session_id>/<request_id>.json
+grant at <state dir>/agentic-commit/push-analyst/<repo_hash>/<session_id>/<request_id>.json
 against the SAME binding fields scripts/execute-push.py checks: nonce,
 branch, remote_name, session_id, verdict != "blocked", expires_at in the
 future, and head_sha == current `git rev-parse HEAD` -- BEFORE allowing the

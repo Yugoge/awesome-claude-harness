@@ -244,7 +244,7 @@ hooks/
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
 ├── `stop-completion-gate.py` - completion obligation is open (ticket 20261001-161041-r08; reworked by
-├── `stop-do-report-gate.py` - A /do session mints a task-id sidecar (/tmp/claude-do-task-<sid>.json) and a
+├── `stop-do-report-gate.py` - A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) and a
 ├── `stop-obligation-gate.py` - A dev-family session (/dev, /dev-command, /redev, or any /dev-overnight-
 ├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
 ├── `stop-spec-coverage-enforce.py` - Stop Hook: Block spec agent from exiting with < 100% monolith coverage

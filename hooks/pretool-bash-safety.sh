@@ -473,7 +473,7 @@ check_systemctl_targets_all_dev() {
 }
 
 # ── One-shot allowlist bypass (single-shot /allow consume) ────────────────────
-# Reads /tmp/claude-bash-allowlist-<sid>.json (written by userprompt-consent-allowlist.sh).
+# Reads <state dir>/claude-bash-allowlist-<sid>.json (written by userprompt-consent-allowlist.sh).
 # On match: atomically deletes the flag (single-use), audit-logs, emits canonical
 # Claude Code PreToolUse approval JSON to stdout, returns 0.
 # Per task-id 20260509-113838 (R11 relaxation): this helper is invoked from the
@@ -920,7 +920,7 @@ print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" 
 fi
 # ────────────────────────────────────────────────────────────────────────────
 # Sentinel-grant short-circuit (task 20260519-211515 R2 / AC2).
-# Reads /tmp/claude-grants/<task_id>.json via hooks/lib/allowlist.py
+# Reads <state dir>/claude-grants/<task_id>.json via hooks/lib/allowlist.py
 # match_sentinel_grant_for_bash_command(). The predicate is STRUCTURED:
 # allowed_operations[] entries must EQUAL the bash sub-command's op/target
 # tokens — the in-hook command-text grep is REPLACED by this structured
@@ -1311,7 +1311,7 @@ fi
 # task 20260524-205206 + 20260525-095242 iter-3 compound-bypass hardening).
 # Deny ANY model tool call (regardless of agent_id; main agent NOT exempt —
 # codex iter-2 finding #7 fix) that even MENTIONS the protected glob
-# /tmp/claude-bulk-commit-sentinel-*.json
+# claude-bulk-commit-sentinel-*.json (in any directory; it lives in the state dir)
 # in a Bash command, UNLESS the WHOLE command is a single pure-read
 # invocation OR a BARE official-writer invocation.
 #
@@ -1422,7 +1422,7 @@ _any_git_has_subcmd() {
 # Entry gate: protected path mention. Uses TWO grep -F substring matches
 # (item 5 fix, task 20260526-053746 AC-05/AC-05b) to match BOTH literal session-id
 # paths AND glob forms (*, ?, [abc], [!abc]) — POSIX shell-glob bracket syntax.
-# Prior regex `[A-Za-z0-9_\-]*` excluded glob metachars, so `cat /tmp/claude-bulk-commit-sentinel-*.json`
+# Prior regex `[A-Za-z0-9_\-]*` excluded glob metachars, so `cat <state dir>/claude-bulk-commit-sentinel-*.json`
 # entirely skipped Layer 1.F protection. The substring approach is wider but the
 # Layer 1.F entry gate is intentionally permissive — actual write/compound detection
 # happens inside the block via shlex tokenization (items 3+4).
@@ -1430,7 +1430,7 @@ _any_git_has_subcmd() {
 # preserve coverage for compound commands where the context stripper removes the
 # script path from python3 segment tokens. False positives from quoted string
 # arguments are resolved inside the block by _bulk_decision (dev-20260529-210759).
-if echo "$COMMAND" | grep -qF '/tmp/claude-bulk-commit-sentinel-' \
+if echo "$COMMAND" | grep -qF 'claude-bulk-commit-sentinel-' \
    || echo "$COMMAND" | grep -qF 'write-bulk-commit-sentinel.py' \
    || echo "$COMMAND" | grep -qF 'userprompt-bulk-commit-capability.py'; then
   # M5 (task 20260526-052559): canonical /commit --bulk Step 5 venv-activate form.
@@ -1726,7 +1726,7 @@ for t in tokens:
 # and no write-action tokens. The shlex tokenizer (posix=True) unquotes the
 # string arg, so the protected name appears as a substring of the arg token.
 _PROTECTED_SCRIPTS = ('write-bulk-commit-sentinel.py', 'userprompt-bulk-commit-capability.py')
-_SENTINEL_PATH = '/tmp/claude-bulk-commit-sentinel-'
+_SENTINEL_NAME = 'claude-bulk-commit-sentinel-'
 _protected_standalone = False   # a real executable/path reference
 _protected_in_arg = False       # only embedded in a longer argument token
 for _t in tokens:
@@ -1735,9 +1735,9 @@ for _t in tokens:
             _protected_standalone = True
         elif _ps in _t:
             _protected_in_arg = True
-    if _t.startswith(_SENTINEL_PATH) and not any(c in _t[len(_SENTINEL_PATH):] for c in ' \t'):
+    if _t.rsplit('/', 1)[-1].startswith(_SENTINEL_NAME) and not any(c in _t for c in ' \t\n'):
         _protected_standalone = True
-    elif _SENTINEL_PATH in _t:
+    elif _SENTINEL_NAME in _t:
         _protected_in_arg = True
 # Name appears ONLY as argument text (e.g. a codex prompt discussing it), never as
 # a standalone executable/path token -> benign read, allow.

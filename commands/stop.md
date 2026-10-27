@@ -37,7 +37,7 @@ The orchestrator calls the wrapper exactly once:
 bash ~/.claude/hooks/stop.sh
 ```
 
-The wrapper invokes `~/.claude/scripts/break-overnight-lock.py`. Sentinel enforcement (written at `/tmp/claude-stop-userintent-<sid>.flag` by `prompt-workflow.py` on user-typed `/stop`; consumed by the PreToolUse hook before the wrapper runs) prevents agent self-invocation.
+The wrapper invokes `~/.claude/scripts/break-overnight-lock.py`. Sentinel enforcement (written at `<state dir>/claude-stop-userintent-<sid>.flag` by `prompt-workflow.py` on user-typed `/stop`; consumed by the PreToolUse hook before the wrapper runs) prevents agent self-invocation.
 
 ## Why this command exists
 

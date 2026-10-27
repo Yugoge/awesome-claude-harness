@@ -31,8 +31,11 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Sentinel/grant base directory — push.sh reads from here (push.sh:97-98)
-_SENTINEL_BASE = "/tmp/agentic-commit/push-analyst"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+from harness_state_dir import harness_state_dir  # noqa: E402
+
+# Sentinel/grant base directory under the hook state directory, where push.sh reads it
+_SENTINEL_BASE = os.path.join(harness_state_dir(), "agentic-commit", "push-analyst")
 
 # Push.sh location — resolved from this script's install location (<harness home>/hooks)
 _PUSH_SH_TILDE = str(Path(__file__).resolve().parent.parent / "hooks" / "push.sh")

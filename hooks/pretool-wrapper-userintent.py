@@ -9,7 +9,7 @@ helper directly from a Bash tool call.
 
 Mechanism (mirrors the commit/push/merge sentinel-grant model):
   * The UserPromptSubmit hook (`prompt-workflow.py::_write_userintent_sentinel`)
-    writes `/tmp/claude-stop-userintent-<sid>.flag` ONLY when the user actually
+    writes `<state dir>/claude-stop-userintent-<sid>.flag` ONLY when the user actually
     typed `/stop`.
   * THIS PreToolUse hook fires on every Bash command. When the command invokes
     `break-overnight-lock.py` (or `hooks/stop.sh`), it REQUIRES a live sentinel
@@ -42,7 +42,7 @@ except Exception:  # pragma: no cover - fail-soft when lib missing
         return command
 
 # Wrapper scripts whose direct EXECUTION requires a matching user-intent
-# sentinel. The key is the sentinel command-name (/tmp/claude-<name>-userintent-).
+# sentinel. The key is the sentinel command-name (<state dir>/claude-<name>-userintent-).
 #
 # IMPORTANT (no over-block): match only an actual EXECUTION of the wrapper, NOT a
 # mere mention (so read-only `git cat-file … break-overnight-lock.py`, `grep`,

@@ -19,7 +19,7 @@
 #         into match-all; match-all is reachable only by naming no argument.
 #         Pattern passed via env var — never shell-interpolated into Python source.
 # Step 3: on a grant (narrow or unrestricted): write the legacy flag
-#         /tmp/claude-bash-allowlist-<sid>.json with {pattern, is_regex} AND the
+#         <state dir>/claude-bash-allowlist-<sid>.json with {pattern, is_regex} AND the
 #         structured per-task sentinel; log to ~/.claude/logs/bash-consent.log.
 #         An unrestricted grant is logged with a distinct GRANTED_MATCH_ALL verb
 #         so a match-all bypass is never invisible in the audit log.
@@ -691,7 +691,7 @@ if [ "$ALLOW_MATCH_ALL" = "true" ]; then
 fi
 
 # ── Step 4: write sentinel grant (task 20260519-211515 R2 / AC2) ──
-# Sentinel-file grant lifecycle: /tmp/claude-grants/<task_id>.json contains
+# Sentinel-file grant lifecycle: <state dir>/claude-grants/<task_id>.json contains
 # {task_id, session_id, allowed_operations[], created_at, expires_at}.
 # The legacy pattern-string grant (above) remains for back-compat; the new
 # sentinel is a STRUCTURED grant that hooks/lib/allowlist.py reads via

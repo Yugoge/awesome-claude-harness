@@ -21,7 +21,7 @@ deferred commit grant for retry and consumes sentinels on failed commands.
 
 Sentinel-grant consume-on-any-terminal-result semantic (task 20260519-211515
 R2 / AC2): in addition to consuming the legacy pattern-string grant, this
-hook also unlinks any sentinel grant at /tmp/claude-grants/<task_id>.json
+hook also unlinks any sentinel grant at <state dir>/claude-grants/<task_id>.json
 when ANY terminal result is observed for the wrapped tool. The four mandated
 terminal-consumption cases are: success (exit 0), failure / non_zero exit
 (1..255), malformed grant JSON, and comment_only attack (the magic phrase

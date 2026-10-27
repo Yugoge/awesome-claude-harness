@@ -26,7 +26,7 @@ the streak state.
 /do consent (Design A) bypasses streak checks AND does not update
 the streak state, preserving clean exit semantics.
 
-State file: /tmp/claude-tool-streak-<sid>.json --
+State file: <state dir>/claude-tool-streak-<sid>.json --
   {"schema_version": 2, "per_tool_counts": {"Edit": 1},
    "bash_consecutive": {"last_tool": "Bash", "count": 2}}
 """

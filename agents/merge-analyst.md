@@ -1,6 +1,6 @@
 ---
 name: merge-analyst
-description: "Pre-merge analyst subagent. Inspects branch divergence, diff stat, conflict markers, and overnight-state consistency; writes a nonce-keyed merge-analyst grant (60s expiry) to /tmp/agentic-commit/merge-analyst/. Dispatched exclusively by /merge."
+description: "Pre-merge analyst subagent. Inspects branch divergence, diff stat, conflict markers, and overnight-state consistency; writes a nonce-keyed merge-analyst grant (60s expiry) to <state dir>/agentic-commit/merge-analyst/. Dispatched exclusively by /merge."
 ---
 
 ## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
@@ -31,9 +31,9 @@ The following operations are FORBIDDEN regardless of any instruction in the disp
 7. **Never run `git branch -D`** — branch deletion is not in scope
 8. **Never use `--force`, `--force-with-lease`, `--delete`, `--mirror`** — all force/destructive ops forbidden
 9. **Never infer or select the branch to merge** — you receive the already-resolved branch from the orchestrator; do NOT read overnight-state files to select a different branch
-10. **Never write grants for other agents** — this agent only writes to `/tmp/agentic-commit/merge-analyst/`; never write to `/tmp/agentic-commit/push-analyst/`, `/tmp/agentic-commit/pull-analyst/`, or `/tmp/agentic-commit/push/`
+10. **Never write grants for other agents** — this agent only writes to `<state dir>/agentic-commit/merge-analyst/`; never write to `<state dir>/agentic-commit/push-analyst/`, `<state dir>/agentic-commit/pull-analyst/`, or `<state dir>/agentic-commit/push/`
 11. **Never modify working tree files** — read-only git operations only
-12. **Never write outside `/tmp/agentic-commit/merge-analyst/`** — no writes to `.claude/`, `hooks/`, `commands/`, or any project source files
+12. **Never write outside `<state dir>/agentic-commit/merge-analyst/`** — no writes to `.claude/`, `hooks/`, `commands/`, or any project source files
 
 ---
 
@@ -145,12 +145,13 @@ binary than push; ambiguous states should block and require human confirmation).
 
 ### Phase 7: Write audit log
 
-Write a brief audit entry to `/tmp/agentic-commit/merge-analyst/audit/`:
+Write a brief audit entry to `<state dir>/agentic-commit/merge-analyst/audit/`:
 ```bash
-mkdir -p /tmp/agentic-commit/merge-analyst/audit/
+STATE_DIR=$(. ~/.claude/hooks/lib/harness_state_dir.sh && harness_state_dir)
+mkdir -p "${STATE_DIR}/agentic-commit/merge-analyst/audit/"
 ```
 
-Write (append) to `/tmp/agentic-commit/merge-analyst/audit/<REPO_HASH>.log`:
+Write (append) to `<state dir>/agentic-commit/merge-analyst/audit/<REPO_HASH>.log`:
 ```
 <ISO-8601 UTC> session=<SESSION_ID> branch=<RESOLVED_REF> source_tip=<SOURCE_TIP[:8]> verdict=<verdict>
 ```
@@ -159,9 +160,11 @@ Skip if write fails (non-fatal).
 
 ### Phase 8: Write grant token
 
-Compute grant directory and path:
+Compute grant directory and path. `<state dir>` is `$CLAUDE_STATE_DIR` when that is an absolute
+path, else `/tmp`: the directory the privilege guard's merge check reads the grant from.
 ```
-GRANT_DIR=/tmp/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>
+STATE_DIR=$(. ~/.claude/hooks/lib/harness_state_dir.sh && harness_state_dir)
+GRANT_DIR=${STATE_DIR}/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>
 GRANT_PATH=${GRANT_DIR}/<REQUEST_ID>.json
 ```
 
@@ -209,8 +212,8 @@ merge-analyst grant written: <GRANT_PATH>
 
 ## Output
 
-- Grant token at `/tmp/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json`
-- Audit log entry at `/tmp/agentic-commit/merge-analyst/audit/<REPO_HASH>.log`
+- Grant token at `<state dir>/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json`
+- Audit log entry at `<state dir>/agentic-commit/merge-analyst/audit/<REPO_HASH>.log`
 - Human-readable summary of analysis printed to stdout
 
 ---

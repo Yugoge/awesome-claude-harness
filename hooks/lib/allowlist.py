@@ -16,8 +16,8 @@ JSON-load/match implementations across hook files.
 
 Sentinel-file grant lifecycle (task 20260519-211515 R2 / AC2):
   - In addition to the legacy pattern-string grant file
-    (/tmp/claude-bash-allowlist-<sid>.json), the orchestrator may write a
-    structured sentinel grant at /tmp/claude-grants/<task_id>-<nonce>.json
+    (<state dir>/claude-bash-allowlist-<sid>.json), the orchestrator may write a
+    structured sentinel grant at <state dir>/claude-grants/<task_id>-<nonce>.json
     containing {task_id, session_id, allowed_operations[], created_at,
     expires_at}. allowed_operations[] is a structured list of {op, target,
     args_contain?, ...} dicts, NOT a free-text regex.
@@ -136,7 +136,7 @@ def _load_and_match(
     then delegate to _match_loaded_grant.
 
     Args:
-        sid: session id (used to locate /tmp/claude-bash-allowlist-<sid>.json)
+        sid: session id (used to locate <state dir>/claude-bash-allowlist-<sid>.json)
         candidates: list of strings to match against
         literal_policy: passed through to _match_loaded_grant
         regex_timeout: passed through to _match_loaded_grant
@@ -347,7 +347,7 @@ def consume_grant_for_posttool(sid: str, tool_name: str, command: str) -> bool:
 # Sentinel-grant lifecycle (task 20260519-211515 R2 / AC2)
 #
 # The sentinel grant is a STRUCTURED replacement for the legacy
-# pattern-string grant. The hook reads /tmp/claude-grants/<task_id>.json
+# pattern-string grant. The hook reads <state dir>/claude-grants/<task_id>.json
 # at PreToolUse time instead of grepping the command text. The predicate
 # never substring-matches against the command line; allowed_operations[]
 # is a structured list of {op, target?, args_contain?} dicts that must

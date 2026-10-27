@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stop hook: enforce the /do do-report completion contract at session stop.
 
-A /do session mints a task-id sidecar (/tmp/claude-do-task-<sid>.json) and a
+A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) and a
 pending do-report skeleton (docs/dev/do-report-<task_id>.json) at consent time
 (hooks/prompt-workflow.py::handle_do_consent). commands/do.md obliges the agent
 to rewrite that skeleton to a terminal status BEFORE stopping. Historically the
@@ -33,7 +33,7 @@ git diff (forbidden by commands/do.md — git is session-unaware), and it never
 writes the report itself.
 
 DEADLOCK GUARD (block mode): per-session attempt counter
-/tmp/claude-do-report-gate-<sid>.json; after MAX_BLOCKS blocks for the same
+<state dir>/claude-do-report-gate-<sid>.json; after MAX_BLOCKS blocks for the same
 task_id the gate force-allows with a loud stderr warning (an unwritable
 docs/dev or a confused agent must not trap the session forever).
 

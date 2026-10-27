@@ -186,7 +186,8 @@ MUST NOT manually read, validate, or unlink the push-analyst grant file. Pass al
 snapshot values to the script directly. No subagent delegation.
 
 For reference, the script validates the following grant fields from
-`/tmp/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json`:
+`<state dir>/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json` (the state dir
+is `$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`, the same for every reader and writer):
 - File exists and is valid JSON
 - `nonce` field matches `REQUEST_ID`
 - `branch` field matches `BRANCH`
@@ -211,7 +212,7 @@ atomically, and exec's push.sh — all in a single process. See Step 5.
 validate-push and the actual push MUST be a
 **single-process exec pattern** — `execute-push.py` writes a Chain-B success
 sentinel at
-`/tmp/agentic-commit/push-analyst/<REPO_HASH>/<BRANCH_ENCODED>-chainB.validated.sentinel.json`
+`<state dir>/agentic-commit/push-analyst/<REPO_HASH>/<BRANCH_ENCODED>-chainB.validated.sentinel.json`
 (atomic temp+rename, mtime ≤ 60s, bound to `request_id` + `head` + `branch` + `remote`)
 and then `os.execv`s `~/.claude/hooks/push.sh` so both run as ONE PID. The sentinel
 is read ONLY once from inside push.sh; missing / expired / FAIL / mismatched sentinel

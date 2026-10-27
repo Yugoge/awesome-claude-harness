@@ -32,7 +32,7 @@ SEMANTICS (decision table, first match wins):
   5. otherwise (main agent, /do active) ...................... exit 2
 
   Active-/do detection reuses the EXACT same source of truth as the existing
-  consent bypasses: /tmp/claude-orchestrator-consent-<session_id>.flag exists
+  consent bypasses: <state dir>/claude-orchestrator-consent-<session_id>.flag exists
   AND its content is the string "true" (mirrors _has_consent in
   pretool-subagent-enforce.py). No new sentinel, no second convention.
 

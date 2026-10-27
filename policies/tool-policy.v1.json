@@ -801,6 +801,7 @@
         "*/dev/stdout",
         "*/tmp/claude-scratch/push-analyst/",
         "/tmp/agentic-commit/push-analyst/*",
+        "*/agentic-commit/push-analyst/*",
         "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
@@ -812,7 +813,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "push-analyst: pre-push git read-only analysis; reads commits-to-push range, sensitive file patterns, and divergence; writes nonce-keyed grant to /tmp/agentic-commit/push-analyst/ (role-specific directory only, no broad /tmp/*); no write access to protected infra"
+      "rationale": "push-analyst: pre-push git read-only analysis; reads commits-to-push range, sensitive file patterns, and divergence; writes nonce-keyed grant to <state dir>/agentic-commit/push-analyst/ (role-specific directory only, no broad /tmp/*; the /tmp entry is the default state dir's exception to the raw-temp denial, the */ entry a CLAUDE_STATE_DIR outside the temp roots); no write access to protected infra"
     },
     "merge-analyst": {
       "allowed_tools": [
@@ -828,6 +829,7 @@
         "*/dev/stdout",
         "*/tmp/claude-scratch/merge-analyst/",
         "/tmp/agentic-commit/merge-analyst/*",
+        "*/agentic-commit/merge-analyst/*",
         "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
@@ -839,7 +841,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "merge-analyst: pre-merge git read-only analysis; reads branch divergence, diff stat, conflict markers, and overnight-state for consistency validation; writes nonce-keyed grant (60s expiry) to /tmp/agentic-commit/merge-analyst/ (role-specific directory only, no broad /tmp/*); no write access to protected infra"
+      "rationale": "merge-analyst: pre-merge git read-only analysis; reads branch divergence, diff stat, conflict markers, and overnight-state for consistency validation; writes nonce-keyed grant (60s expiry) to <state dir>/agentic-commit/merge-analyst/ (role-specific directory only, no broad /tmp/*; the /tmp entry is the default state dir's exception to the raw-temp denial, the */ entry a CLAUDE_STATE_DIR outside the temp roots); no write access to protected infra"
     },
     "pull-analyst": {
       "allowed_tools": [

@@ -61,7 +61,7 @@ hooks/tests/test_posttool_commit_grant_finalize.py.
 WHAT THIS IS NOT
 ----------------
 This is NOT an authorization boundary, and it must never be described as one. No hook
-guards `/tmp/agentic-commit/**`, and `hooks/push.sh` authorizes purely on
+guards `<state dir>/agentic-commit/**`, and `hooks/push.sh` authorizes purely on
 `token.commit_sha == HEAD`. An adversary who can emit arbitrary Bash (THREAT-MODEL §1.2)
 can therefore write the push-gate token directly and open the gate, which is strictly
 cheaper than forging a journal entry. The journal accordingly grants an attacker NO new
@@ -104,7 +104,7 @@ except ImportError:  # hooks/lib itself is on sys.path
 
 SCHEMA = "commit-event/1"
 
-# Journal root. Shares the /tmp/agentic-commit/ family with the push-gate token and the
+# Journal root. Shares the <state dir>/agentic-commit/ family with the push-gate token and the
 # Phase 3 commit locks, so a single tmp sweep clears the whole coordination surface.
 JOURNAL_ROOT = harness_state_dir() + "/agentic-commit/commit-events"
 

@@ -9,7 +9,7 @@ Unlike the single-use commit grant written for non-bulk commits, this
 sentinel is NOT consumed on each validation — it persists until expiry
 so that changelog-analyst can commit one subsystem group at a time.
 
-File: /tmp/claude-bulk-commit-sentinel-<sid>-<nonce>.json
+File: <state dir>/claude-bulk-commit-sentinel-<sid>-<nonce>.json
 Contents: {kind, sid, nonce, created_at, expires_at}
 
 The privilege guard checks for this file inside _evaluate_commit when
@@ -29,6 +29,9 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+from harness_state_dir import harness_state_dir  # noqa: E402
+
 SENTINEL_TTL_MINUTES = 30
 
 
@@ -44,8 +47,8 @@ def _parse_args(argv):
     )
     parser.add_argument(
         "--output-dir",
-        default="/tmp",
-        help="Directory to write the sentinel JSON into. Default: /tmp.",
+        default=harness_state_dir(),
+        help="Directory to write the sentinel JSON into. Default: the hook state directory.",
     )
     parser.add_argument(
         "--origin",

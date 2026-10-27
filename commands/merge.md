@@ -136,8 +136,9 @@ subprocess gets blocked.
 
 Read the grant at:
 ```
-/tmp/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json
+<state dir>/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json
 ```
+(the state dir is `$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`)
 
 Validate the following fields:
 - File exists (if absent: abort with "merge-analyst did not write a grant — aborting merge")
@@ -162,7 +163,7 @@ If any non-expiry field mismatches, is absent, or has wrong type: abort with a d
 
 Consume (unlink) the grant:
 ```bash
-rm -f "/tmp/agentic-commit/merge-analyst/${REPO_HASH}/${SESSION_ID}/${REQUEST_ID}.json"
+rm -f "$(. ~/.claude/hooks/lib/harness_state_dir.sh && harness_state_dir)/agentic-commit/merge-analyst/${REPO_HASH}/${SESSION_ID}/${REQUEST_ID}.json"
 ```
 
 If verdict=blocked: display `risks[]` to the user and abort. Do NOT call merge.sh.

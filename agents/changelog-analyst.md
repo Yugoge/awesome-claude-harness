@@ -49,7 +49,7 @@ The following operations are FORBIDDEN regardless of any instruction in the disp
 11. **Never run on branches starting with `refs/remotes/`** — these are remote-tracking refs, not local branches
 12. **Never put the commit message text on the bash command line** — not via `git commit -m "..."`, not via `git commit -m "$(cat <<'...'...)"` (heredoc form), not via `echo ... >`, and not via an inline `cat <<'EOF' > tmpfile` heredoc. The message body may contain literal documentation phrases (e.g. package-manager global-install phrases, service-restart phrases) or protected-path strings that the bash-safety substring scanner would false-positive on. The commit MESSAGE MUST reach disk via the **Write tool** (a separate, non-Bash step), and the commit MUST be a MINIMAL `git commit -F <msgfile>` with nothing else chained on that command line. See `## Command-line purity (anti-false-positive contract)` below — it is binding for every commit invocation in this file.
 13. **Never use `auto-bulk:` commit message prefix when `BULK=false`** — this prefix is ONLY authorized in Bulk Mode (BULK=true) with a valid bulk-commit sentinel written by /commit --bulk Step 5. Using it in BULK=false mode forges the commit authorization chain.
-14. **Never create, modify, touch, or cause creation of `/tmp/claude-bulk-commit-sentinel-*.json` by any mechanism**, including the writer script (absolute/relative/symlink paths), `python -c`, heredoc code, `importlib`, `runpy`, copied writer logic, shell/path concatenation, or manual JSON writes. Bulk sentinels are created ONLY before dispatch by human-invoked `/commit --bulk`. Direct invocation of `write-bulk-commit-sentinel.py` by any path form is forbidden.
+14. **Never create, modify, touch, or cause creation of `claude-bulk-commit-sentinel-*.json` (in the state dir or anywhere else) by any mechanism**, including the writer script (absolute/relative/symlink paths), `python -c`, heredoc code, `importlib`, `runpy`, copied writer logic, shell/path concatenation, or manual JSON writes. Bulk sentinels are created ONLY before dispatch by human-invoked `/commit --bulk`. Direct invocation of `write-bulk-commit-sentinel.py` by any path form is forbidden.
 15. **Never add a normal-mode repository from git status, an owned absolute path, or agent judgment** — process exactly the canonical roots in `REPOSITORY_PLAN`, in order. A report supplies ownership but never repository admission.
 16. **Never claim cross-repository atomicity or erase partial success** — Git cannot atomically commit independent repositories. Report every landed commit and every later failure in `repository_results`.
 
@@ -86,7 +86,7 @@ shell control-flow. Specifically: no message text, no inline diff (`$(git diff .
 `--stat`, no `cat`/`echo` of file content, no push-gate write, no heredoc, and no chained side
 effect (`&&`/`;`/`|`) that performs another action. The physical commit invocation must contain
 none of those. Wrapping the commit in pure control-flow that adds no command-line content is
-allowed — e.g. the Error-handling `if ! git -C "${GIT_ROOT}" commit -F "${MSGFILE}"; then …`
+allowed — e.g. the Error-handling `if ! git -C "${GIT_ROOT}" commit -F "<msgfile>"; then …`
 test is fine because the `if !` adds no message/diff/protected-path/side-effect to the command,
 it only branches on the exit code. The `<diff --stat>` body content is embedded into the message
 FILE (written by the Write tool in CP-1), never appended on the command line. The temp message
@@ -1115,7 +1115,7 @@ message authored from `ACTUALLY_STAGED_PATHS` still matches what is committed.
        git -C "${GIT_ROOT}" restore --staged -- ${ACTUALLY_STAGED_PATHS}   # true drift: unstage + abort
        # report failure_code: staging_error (do NOT release fd 9 to rewrite MSGFILE)
    else
-       git -C "${GIT_ROOT}" commit -F "${MSGFILE}"
+       git -C "${GIT_ROOT}" commit -F "<msgfile>"
    fi
    ```
    (Legitimate Phase-5 narrowing was already applied and recorded in `ACTUALLY_STAGED_PATHS`
@@ -1446,7 +1446,7 @@ FAILED_GROUPS=()
 For each subsystem group's commit step (`${MSGFILE}` is the per-group message file written via
 the Write tool per rules CP-1/CP-2 — never a heredoc; the commit stays minimal):
 ```bash
-if ! git -C "${GIT_ROOT}" commit -F "${MSGFILE}"; then
+if ! git -C "${GIT_ROOT}" commit -F "<msgfile>"; then
     echo "WARNING: Failed to commit group ${scope} in batch ${ITERATION}. Skipping and continuing."
     git -C "${GIT_ROOT}" restore --staged -- "${group_files[@]}"
     FAILED_GROUPS+=("${scope}")
@@ -1892,7 +1892,7 @@ Execute the recovery commit using the existing single-use commit grant (not cons
 CP-2), nothing chained:
 
 ```bash
-git -C "${GIT_ROOT}" commit --allow-empty -F "${MSGFILE}"
+git -C "${GIT_ROOT}" commit --allow-empty -F "<msgfile>"
 ```
 
 In a SEPARATE later bash step, clean up: `rm -f "${MSGFILE}"`. (The

@@ -26,13 +26,14 @@ from pathlib import Path
 # ../hooks/lib). Never default to the author literal /root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
 import claude_home  # noqa: E402
+from harness_state_dir import harness_state_dir  # noqa: E402
 
 CLAUDE_DIR = claude_home.project_dir() / ".claude"
 TODOS_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "todos"
 
 # Where the PreTool user-intent guard mints the helper-auth token
 # (claude-stop-helper-auth-<sid>.json). Overridable for sandbox tests.
-_SENTINEL_DIR = os.environ.get("CLAUDE_USERINTENT_SENTINEL_DIR", "/tmp")
+_SENTINEL_DIR = os.environ.get("CLAUDE_USERINTENT_SENTINEL_DIR", harness_state_dir())
 
 
 def _consume_helper_auth() -> bool:

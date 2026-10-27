@@ -239,7 +239,7 @@ def check_manifest_bijection() -> None:
     for art in (CAPTURE, MANIFEST, SVG):
         text = art.read_text(encoding="utf-8", errors="replace")
         for ln in text.splitlines():
-            if "/tmp/claude-grants/" in ln and RESERVED_TASK_ID not in ln:
+            if "/claude-grants/" in ln and RESERVED_TASK_ID not in ln:
                 fail(f"{art.name} discloses a foreign grant path")
                 break
 

@@ -32,7 +32,7 @@ fi
 # hooks/prompt-workflow.py (D5: one clearer per fact), never at Stop.
 
 # ── Sentinel-grant reap (task 20260519-211515 R2 / AC2) ──
-# At session stop, sweep /tmp/claude-grants/*.json: unlink any sentinel
+# At session stop, sweep <state dir>/claude-grants/*.json: unlink any sentinel
 # whose expires_at has elapsed OR whose JSON is malformed. Bounded
 # best-effort; never blocks agent stop. The reaper delegates to
 # hooks/lib/allowlist.reap_expired_sentinel_grants().
@@ -41,17 +41,19 @@ python3 -c "
 import sys
 sys.path.insert(0, '${HOOK_DIR}')
 from lib.allowlist import reap_expired_sentinel_grants
-print('[stop-cleanup] reaped', reap_expired_sentinel_grants(), '/tmp/claude-grants/* sentinel grants', file=sys.stderr)
+print('[stop-cleanup] reaped', reap_expired_sentinel_grants(), 'claude-grants/* sentinel grants', file=sys.stderr)
 " 2>>"$CONSENT_LOG" || true
 
 # ── Bulk-commit sentinel reap ──
-# /commit --bulk writes /tmp/claude-bulk-commit-sentinel-<sid>-<nonce>.json
+# /commit --bulk writes <state dir>/claude-bulk-commit-sentinel-<sid>-<nonce>.json
 # (30 min TTL, multi-use). Reap any that have expired at session end.
 python3 -c "
-import glob, json, os
+import glob, json, os, sys
 from datetime import datetime, timezone
+sys.path.insert(0, '${HOOK_DIR}')
+from lib.harness_state_dir import harness_state_dir
 reaped = 0
-for p in glob.glob('/tmp/claude-bulk-commit-sentinel-*.json'):
+for p in glob.glob(os.path.join(harness_state_dir(), 'claude-bulk-commit-sentinel-*.json')):
     try:
         d = json.loads(open(p).read())
         exp = d.get('expires_at', '')

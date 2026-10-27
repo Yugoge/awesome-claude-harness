@@ -131,7 +131,7 @@ _UNTRUSTED_READ_LIMIT = 65536
 def _read_identified(path: str, limit: int = _UNTRUSTED_READ_LIMIT):
     """`(parsed_json_or_None, (st_dev, st_ino)_or_None)` for an untrusted path.
 
-    Revocation reads grant files and deferred-consume pointers out of /tmp,
+    Revocation reads grant files and deferred-consume pointers out of the state dir,
     where any local user can plant a FIFO (open blocks until a writer appears)
     or a symlink aimed elsewhere. A plain `open()` would follow the symlink and
     then report the TARGET's identity while the unlink acted on the LINK — so
@@ -265,8 +265,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="/tmp",
-        help="Directory to write the grant JSON into. Default: /tmp.",
+        default=harness_state_dir(),
+        help="Directory to write the grant JSON into. Default: the hook state directory.",
     )
     parser.add_argument(
         "--repo-root",

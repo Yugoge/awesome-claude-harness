@@ -49,7 +49,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # The fixed, reserved, demo-specific task id (M4). Fixed rather than random so it never
 # has to be normalized away, which would weaken the byte-diff linkage.
 RESERVED_TASK_ID = "readme-hero-demo-reserved"
-SENTINEL_GRANT_DIR = Path("/tmp/claude-grants")
+sys.path.insert(0, str(REPO_ROOT / "hooks" / "lib"))
+from harness_state_dir import harness_state_dir  # noqa: E402
+
+SENTINEL_GRANT_DIR = Path(harness_state_dir()) / "claude-grants"
 GRANT_PATH = SENTINEL_GRANT_DIR / f"{RESERVED_TASK_ID}.json"
 
 DEFAULT_CAPTURE = REPO_ROOT / ".github/assets/hero-capture.txt"
@@ -374,7 +377,7 @@ def main() -> int:
 
         # M4b non-disclosure: no foreign task_id, no foreign grant path in the capture.
         for ln in lines:
-            if "/tmp/claude-grants/" in ln and RESERVED_TASK_ID not in ln:
+            if "/claude-grants/" in ln and RESERVED_TASK_ID not in ln:
                 failures.append(f"capture discloses a foreign grant path: {ln!r}")
 
         evidence = {

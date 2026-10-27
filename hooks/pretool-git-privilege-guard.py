@@ -52,7 +52,7 @@ Revision history:
        in the child's environment (NOT inline-prepended on the agent
        command line), AND
     2. a single-use grant manifest at
-       `/tmp/claude-{push|commit}-grant-<sid>.json` whose contents
+       `<state dir>/claude-{push|commit}-grant-<sid>.json` whose contents
        bind the operation to a specific branch + expected_head + remote
        (push) or task_id + allowed_files + expected_message_sha256
        (commit).
@@ -155,6 +155,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import read_grant_for_git_command, match_sentinel_grant_for_bash_command  # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
     iter_git_invocations, GitInvocation, classify_git_command)
 # Segment/tokenization primitives reused (read-only) so the commit-grant binding
@@ -164,6 +165,7 @@ from lib.git_command_classifier import (  # noqa: E402
 # These are consumed, NOT modified — the shared classifier stays untouched
 # (scope: this fix is the COMMIT grant path only).
 from lib.git_command_classifier import (  # noqa: E402
+    _unquote_token,
     _segments as _shell_segments,
     _command_token_index as _cmd_token_index,
     _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,
@@ -255,7 +257,7 @@ def _get_session_id(data):
     """Extract session_id from the parsed PreToolUse stdin payload.
 
     Returns empty string when missing.  Used to compute the per-session
-    grant-file path /tmp/claude-{kind}-grant-<sid>.json.
+    grant-file path <state dir>/claude-{kind}-grant-<sid>.json.
     """
     try:
         sid = data.get('session_id', '') or ''
@@ -272,7 +274,7 @@ def _has_do_consent(data: dict) -> bool:
     if not sid:
         return False
     try:
-        flag = Path(f'/tmp/claude-orchestrator-consent-{sid}.flag')
+        flag = Path(harness_state_dir()) / f'claude-orchestrator-consent-{sid}.flag'
         return flag.exists() and flag.read_text().strip() == 'true'
     except Exception:
         return False
@@ -319,14 +321,14 @@ def _find_grant(kind, sid):
     """Return (resolved_path, grant_dict) or (None, None) on miss/invalid.
 
     Per close-report-20260425-push-commit-debate.md §1-2, wrappers write
-    per-nonce filenames `/tmp/claude-{kind}-grant-<sid>-<nonce>.json` so
+    per-nonce filenames `<state dir>/claude-{kind}-grant-<sid>-<nonce>.json` so
     that two concurrent wrapper invocations under the same SID cannot
     collide on a single shared file.  The guard discovers the grant by
     glob, sorts by mtime descending, and returns the most recent
     JSON-parseable candidate.  The caller is responsible for unlinking
     the resolved path (single-use) on validation success.
     """
-    pattern = '/tmp/claude-%s-grant-%s-*.json' % (kind, sid)
+    pattern = os.path.join(harness_state_dir(), 'claude-%s-grant-%s-*.json' % (kind, sid))
     try:
         candidates = glob.glob(pattern)
     except Exception:
@@ -370,7 +372,7 @@ def _find_grant_any(kind):
     from the orchestrator's CLAUDE_SESSION_ID used when writing the grant.
     Searches all grants of the given kind, returns the most recent valid one.
     """
-    pattern = '/tmp/claude-%s-grant-*-*.json' % kind
+    pattern = os.path.join(harness_state_dir(), 'claude-%s-grant-*-*.json' % kind)
     try:
         candidates = glob.glob(pattern)
     except Exception:
@@ -404,7 +406,7 @@ def _collect_commit_grant_candidates():
     _find_grant_any. Locked (.lck) grants are excluded (single-use in-flight),
     matching _find_grant / _find_grant_any.
     """
-    pattern = '/tmp/claude-commit-grant-*-*.json'
+    pattern = os.path.join(harness_state_dir(), 'claude-commit-grant-*-*.json')
     try:
         paths = glob.glob(pattern)
     except Exception:
@@ -1252,16 +1254,30 @@ def _extract_commit_message(command):
     m = re.search(r'-m\s+(\S+)', command)
     if m:
         return m.group(1)
-    # -F / --file: changelog-analyst always uses git commit -F <tmpfile>.
-    # Read the subject line from the file so BLESSED_BRIDGE_RE can match.
-    for p in [r'(?:^|\s)-F\s+(\S+)', r'--file[= ](\S+)']:
-        m = re.search(p, command)
-        if m:
+    # -F / --file: changelog-analyst always uses git commit -F <msgfile>. The
+    # operand comes from the tokenised commit invocation, shell-unquoted, so the
+    # subject line BLESSED_BRIDGE_RE matches is the file the analyst wrote.
+    for invocation in iter_git_invocations(command):
+        if invocation.subcommand != 'commit':
+            continue
+        path = _commit_file_operand(invocation.args)
+        if path:
             try:
-                with open(m.group(1)) as fh:
+                with open(path) as fh:
                     return fh.readline().strip()
             except OSError:
                 pass
+    return ''
+
+
+def _commit_file_operand(args):
+    for i, tok in enumerate(args):
+        if tok in ('-F', '--file') and i + 1 < len(args):
+            return _unquote_token(args[i + 1])
+        if tok.startswith('--file='):
+            return _unquote_token(tok[len('--file='):])
+        if tok.startswith('-F') and len(tok) > 2:
+            return _unquote_token(tok[2:])
     return ''
 
 
@@ -1353,14 +1369,14 @@ def _has_bulk_commit_sentinel(data):
     always find the sentinel written by the user's orchestrator session.
     Acceptable because: (a) sentinels require user-invoked /commit --bulk
     to be created at all; (b) 30-min TTL bounds exposure; (c) kind=
-    'bulk-commit' check prevents other JSON files in /tmp from matching.
+    'bulk-commit' check prevents other JSON files in the state dir from matching.
     """
     sid = _get_session_id(data)
     patterns = []
     if sid:
-        patterns.append('/tmp/claude-bulk-commit-sentinel-%s-*.json' % sid)
+        patterns.append(os.path.join(harness_state_dir(), 'claude-bulk-commit-sentinel-%s-*.json' % sid))
     # Global fallback — see docstring above for rationale.
-    patterns.append('/tmp/claude-bulk-commit-sentinel-*-*.json')
+    patterns.append(os.path.join(harness_state_dir(), 'claude-bulk-commit-sentinel-*-*.json'))
     seen = set()
     for pattern in patterns:
         try:
@@ -1406,8 +1422,8 @@ def _has_active_commit_grant(command=''):
     binding + spent test decides both; an empty command (or an unresolvable
     target) keeps the old defer-on-doubt behavior.
     """
-    for pattern in ('/tmp/claude-commit-grant-*.json',
-                    '/tmp/claude-commit-grant-*.lck'):
+    for pattern in (os.path.join(harness_state_dir(), 'claude-commit-grant-*.json'),
+                    os.path.join(harness_state_dir(), 'claude-commit-grant-*.lck')):
         try:
             for path in glob.glob(pattern):
                 grant = _load_grant(path)
@@ -1543,7 +1559,7 @@ def _evaluate_commit(command, data):
             if _has_active_commit_grant(command):
                 _block(
                     '\nDEFERRED: auto-bulk commit skipped — an active single-use '
-                    'commit grant exists (/tmp/claude-commit-grant-*.json or *.lck) '
+                    'commit grant exists (<state dir>/claude-commit-grant-*.json or *.lck) '
                     'that is bound to THIS repo/branch/HEAD and still unspent.\n'
                     'A /commit cycle is in progress; auto-bulk will retry on the '
                     'next scheduled cycle.\n'
@@ -1553,7 +1569,7 @@ def _evaluate_commit(command, data):
             '\nBLOCKED: auto-bulk commit requires a bulk-commit sentinel.\n'
             'The `auto-bulk:` prefix is only authorized when changelog-analyst '
             'is dispatched by the user via /commit --bulk, which writes '
-            '/tmp/claude-bulk-commit-sentinel-<sid>-<nonce>.json (30 min TTL).\n'
+            '<state dir>/claude-bulk-commit-sentinel-<sid>-<nonce>.json (30 min TTL).\n'
             'To run bulk commits: invoke /commit --bulk from your Claude session.\n'
         )
     if _check_git_allowlist(command, data):
@@ -1952,9 +1968,9 @@ def _find_merge_grant(sid):
     """Return (resolved_path, grant_dict) or (None, None) on miss/invalid.
 
     merge-analyst grants live at a NESTED path -- not the flat
-    /tmp/claude-{kind}-grant-<sid>-<nonce>.json convention _find_grant
+    <state dir>/claude-{kind}-grant-<sid>-<nonce>.json convention _find_grant
     assumes (agents/merge-analyst.md Phase 8):
-      /tmp/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json
+      <state dir>/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json
     REPO_HASH is recomputed fresh from the hook's OWN live repo state (never
     trusted from the grant), so a grant cannot claim membership in a repo it
     does not match. REQUEST_ID (nonce) is unknown to the hook -- the
@@ -1968,7 +1984,7 @@ def _find_merge_grant(sid):
     repo_hash = _merge_repo_hash()
     if not repo_hash:
         return (None, None)
-    pattern = '/tmp/agentic-commit/merge-analyst/%s/%s/*.json' % (repo_hash, sid)
+    pattern = os.path.join(harness_state_dir(), 'agentic-commit/merge-analyst/%s/%s/*.json' % (repo_hash, sid))
     try:
         candidates = glob.glob(pattern)
     except Exception:
@@ -2093,7 +2109,7 @@ def _validate_push_grant_remote(grant, push_invocation):
 
 def _block_missing_push_grant(sid):
     """AC-A4: env present but no on-disk grant for this SID."""
-    pattern = '/tmp/claude-push-grant-%s-*.json' % sid
+    pattern = os.path.join(harness_state_dir(), 'claude-push-grant-%s-*.json' % sid)
     _block(
         '\nBLOCKED: agent git push - CLAUDE_PUSH_COMMAND_ACTIVE=1 '
         'is set but no valid grant manifest matching %s.\n' % pattern
@@ -2237,7 +2253,7 @@ def _evaluate_forbidden_plumbing(command, data):
 # than silent.
 # ---------------------------------------------------------------------------
 
-_RESIDUAL_OVERRIDE_DIR = '/tmp/claude-git-residual-override'
+_RESIDUAL_OVERRIDE_DIR = os.path.join(harness_state_dir(), 'claude-git-residual-override')
 _RESIDUAL_OVERRIDE_KIND = 'git-residual-override'
 _RESIDUAL_HUMAN_ORIGIN = 'userpromptsubmit-hook'
 
