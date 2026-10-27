@@ -820,7 +820,8 @@ pass, human events.
   (list it only if your base still shows it; P6's FIRST ACTION lines); `dev-command-<ts>/graphify.json`, which the
   /dev-command graphify dispatch's FIRST ACTION reads, is written only when a graphify binary resolves
   (prompt-workflow.py:1531-1547, the same rule as /dev), so without one the read finds nothing while Gate 4 still
-  demands the graphify step (row 18, first bullet).
+  demands the graphify step (row 18, first bullet); P1b's row 1 deletes that read's branch or writes the sentinel
+  wherever graphify is dispatched, so list it only if your base still shows it.
 - The real CLI's behaviour, which the drivers model (UNVERIFIED in the pilot: tool_result and PostToolUse or
   PostToolUseFailure for interrupted and quota-killed Agent calls, SubagentStop for a quota-killed child, a cap on
   repeated stop blocks, whether the CLI's Bash env carries CLAUDE_PROJECT_DIR). List each as modeled, with its source.
