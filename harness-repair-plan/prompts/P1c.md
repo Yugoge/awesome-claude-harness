@@ -303,9 +303,12 @@ on each copy left once it is set), and the PR lists each with its faults; each d
 CLAUDE_HOME), unless your base's G2 already does or your measurement shows a settings env change reaching a running
 session, so a session started before your merge meets armed G2 once those copies are gone (acceptance 11). A compliant
 scenario that G2 blocks is a false block: fix its producer side (the template, the agent prose, or G2) and re-run. No
-branch of this rule ships the suite with F1, F1q or F2 unreturned. Either env result is then safe: a running session
-picks up block at its next producer stop, or keeps advisory until it ends only where your arm deleted no copy;
-acceptance 11 covers both. G1 and G3 stay advisory (P2); G4 stays advisory (P5 replaces it).
+branch of this rule ships the suite with F1, F1q or F2 unreturned. Either env result is then safe for each producer stop
+after your merge: a running session picks up block at its next producer stop, or keeps advisory until it ends only where
+your arm deleted no copy; acceptance 11 covers both. A fault a producer left at a stop before your merge, where your
+base's G2 blocked nothing, is stopped only where a check its run still reaches decides on that artifact, as P1b's
+release notes say of its own deletions; the PR names each such fault and the deleted copy that stopped it. G1 and G3
+stay advisory (P2); G4 stays advisory (P5 replaces it).
 
 **X4. Literal-prose conflicts: which side changes.** The compliant drivers follow the command and agent prose
 literally: every fenced command block as written with its placeholders filled, every template as written, the
