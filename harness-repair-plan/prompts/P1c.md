@@ -678,8 +678,10 @@ block). The F8 faults are CC4's case, an unfinished cycle met by the /close or /
 F8c in a later session than the /dev's (P1b's acceptance 7 replays the same four, those three in a later session too,
 and adds a close-QA finding that cites no artifact, one that names only a product file no dispatch of the task wrote
 (each returns to the close-QA round that raised it, through that round's own report and with no default role, as P1b's
-E3 and row 10 route it), a /close of a /do task whose do-report is not `completed` and a removed canonical aggregate
-under /commit): F8 (after a 2-lane /dev reached its terminal, one lane's QA report removed, then the human's /close);
+E3 and row 10 route it), a /close of a /do task whose do-report is not `completed`, a removed canonical aggregate
+under /commit, and a /close --late-repair of a singular /dev cycle whose ticket and context were removed, with its
+/commit and, replayed to the same landed /close, a /commit after the task's QA report was removed): F8 (after a 2-lane
+/dev reached its terminal, one lane's QA report removed, then the human's /close);
 F8q (a 2-lane /dev cut, as in F5, after one lane's QA stop and before the other lane's QA dispatch, then the human's
 /close instead of /restart); F8p (after /dev's terminal, a product file one lane's dev wrote broken so that /close's
 close-QA round names it); F8c (after a landed /close, one lane's dev report removed, then the human's /commit). Assert
