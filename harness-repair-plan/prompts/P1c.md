@@ -681,11 +681,10 @@ and adds a close-QA finding that cites no artifact, one that names only a produc
 E3 and row 10 route it), a /close of a /do task whose do-report is not `completed`, a removed canonical aggregate
 under /commit, and a /close --late-repair of a singular /dev cycle whose ticket and context were removed, with its
 /commit and, replayed to the same landed /close, a /commit after the task's QA report was removed): F8 (after a 2-lane
-/dev reached its terminal, one lane's QA report removed, then the human's /close);
-F8q (a 2-lane /dev cut, as in F5, after one lane's QA stop and before the other lane's QA dispatch, then the human's
-/close instead of /restart); F8p (after /dev's terminal, a product file one lane's dev wrote broken so that /close's
-close-QA round names it); F8c (after a landed /close, one lane's dev report removed, then the human's /commit). Assert
-per fault:
+/dev reached its terminal, one lane's QA report removed, then the human's /close); F8q (a 2-lane /dev cut, as in F5,
+after one lane's QA stop and before the other lane's QA dispatch, then the human's /close instead of /restart); F8p
+(after /dev's terminal, a product file one lane's dev wrote broken so that /close's close-QA round names it); F8c (after
+a landed /close, one lane's dev report removed, then the human's /commit). Assert per fault:
 - every block's text contains the artifact's path (the one its dispatch declares; in F7 and F7b, whose dispatches
   carry no obligation that parses, the report the stopping agent wrote) and the failing check (code and message);
 - the actor that receives the block is the expected producer, and the trace shows the repair written by that same
