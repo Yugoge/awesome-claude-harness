@@ -55,7 +55,12 @@ a second one. If a name or form differs from this description, use what is merge
   of the second list goes with no fix ("Rows 18 and 19, P1b's kept base blocks"). The same list names the dead ends P1b
   met on its base (its acceptances 14 and 21): each one your base still shows is fixed at its producer with the replay
   that meets it (Goal 2). Its "Live landing" lists each harness script its base's text calls that it emptied to an
-  exit-0 stub with a `# STUB:` line (its acceptance 17): leave it; it stays until P10, as D15 keeps a hook stub.
+  exit-0 stub with a `# STUB:` line (its acceptance 17): leave it; it stays until P10, as D15 keeps a hook stub. Every
+  decider you add or change on the CLI's transcripts and agent meta calls P1b's one reader of them (its row 18;
+  command_span.py reads through it or is it, as P1b's PR chose) in place of a parse of its own: X8's recognition of the
+  wake, the wake step's completion rule and the time-lock's wake check, the own-transcript reads of rows 8 and 10, row
+  16's transcript read and row 17's todo-list comparisons. P1b's check still derives one deciding rule on these files
+  (its row 19 rule 4).
 - P1: hooks/lib/obligation.py (parse_obligation, resolve_own_obligation, find_unresolved_dispatch_obligations,
   canonical_task_id, registry_dir_for); hooks/lib/stop_contract.py and hooks/lib/command_span.py (is_human_prompt,
   active_command, active_span); the producer-question artifact; the Stop coordinator's relay; P1's PR section
@@ -298,9 +303,12 @@ on each copy left once it is set), and the PR lists each with its faults; each d
 CLAUDE_HOME), unless your base's G2 already does or your measurement shows a settings env change reaching a running
 session, so a session started before your merge meets armed G2 once those copies are gone (acceptance 11). A compliant
 scenario that G2 blocks is a false block: fix its producer side (the template, the agent prose, or G2) and re-run. No
-branch of this rule ships the suite with F1, F1q or F2 unreturned. Either env result is then safe: a running session
-picks up block at its next producer stop, or keeps advisory until it ends only where your arm deleted no copy;
-acceptance 11 covers both. G1 and G3 stay advisory (P2); G4 stays advisory (P5 replaces it).
+branch of this rule ships the suite with F1, F1q or F2 unreturned. Either env result is then safe for each producer stop
+after your merge: a running session picks up block at its next producer stop, or keeps advisory until it ends only where
+your arm deleted no copy; acceptance 11 covers both. A fault a producer left at a stop before your merge, where your
+base's G2 blocked nothing, is stopped only where a check its run still reaches decides on that artifact, as P1b's
+release notes say of its own deletions; the PR names each such fault and the deleted copy that stopped it. G1 and G3
+stay advisory (P2); G4 stays advisory (P5 replaces it).
 
 **X4. Literal-prose conflicts: which side changes.** The compliant drivers follow the command and agent prose
 literally: every fenced command block as written with its placeholders filled, every template as written, the
@@ -610,9 +618,10 @@ at your merge, and no check exception, skip or expected block takes its place (a
   Your container runs the suite too (acceptance 3, 4 and 17): install bubblewrap there if it allows that, otherwise
   give the replay a stand-in, as P2's prompt allows ("the way P8 does for its bwrap argv tests"); say which, for both.
 - E1 (row 13); the e2e QA stop under the overnight session id (row 10).
-- stop-overnight-timelock.py's `CLOSEOUT GATE` (:125) and the cycle-id disagreement (the file check says cycle 0, the
-  contract and closeout say 1): P2 row 7's one cycle index, which P1b's E13 delivers early (every reader of the cycle
-  number calls `cycle_index(state)`): verify it on your base and replay it.
+- stop-overnight-timelock.py's `CLOSEOUT GATE` (:125), the pending-required-calls block before end_time: P1b's row 13
+  deletes it. The cycle-id disagreement (the file check says cycle 0, the contract and closeout say 1): P2 row 7's one
+  cycle index, which P1b's E13 delivers early (every reader of the cycle number calls `cycle_index(state)`): verify it
+  on your base and replay it.
 - Launch prerequisites the fixture meets as a real home does: a clone (origin/HEAD set) and the default launch mode,
   never in place on a protected branch (the launcher refuses that by design).
 The compliant overnight scenario carries no producer question; P2 adds the D20 decide-and-record replay as its fault
@@ -918,9 +927,11 @@ worktree); the suite itself through pytest in your checkout, with the `python3` 
     recovery journal (row 16), the /restart capability (row 17; issued for the wake only inside its span, X8), the
     fan-out parent ticket, context and qa-report whose read row 12 removes (where your base still reads them), the todo
     list whose comparing hooks row 17 binds to one rule, with the workflow bookmark and the todo file wherever your base
-    still writes them (L07, L08), the product command files (row 18), settings.json (row 20, if taken), each state file
-    X2's write audit moved: producers before -> after, deciding consumers before -> after, proof (writer and reader grep
-    plus the suite's trace).
+    still writes them (L07, L08), the CLI's transcripts and agent meta, on which rows 8, 10, 16 and 17 add or change
+    deciders that call P1b's one reader, the wake's CronCreate and CronDelete records in the session's transcript (the
+    orchestrator's own calls; row 17, X8), the product command files (row 18), settings.json (row 20, if taken), each
+    state file X2's write audit moved: producers before -> after, deciding consumers before -> after, proof (writer and
+    reader grep plus the suite's trace).
 13. **C1-C5.** C1: the set of file-name patterns hooks and scripts create during the suite, base against branch, gains
     no new state file: each pattern only the branch creates (a step the base never reached, its replay having
     dead-ended or stopped at a block there) is named with its writer and the line on your base that already writes it.
@@ -1004,8 +1015,8 @@ Commit order:
 Each commit keeps the suite green (TC-54); reverting a fix reverts its replay with it. A commit that no later commit's
 replays or CI jobs need reverts on its own; a revert of any other (such as step 1's fixture and runner, a step-2 unblock
 that later fault replays run through, or a fix a later commit's replay also needs, as F5's needs rows 15 and 16) also
-reverts, last first, each later commit that fails without it or without one of those. Say in the PR what each revert
-restores. The reviewer reverts; the owner runs nothing.
+reverts, last first, each later commit that fails without it or without another commit so reverted. Say in the PR what
+each revert restores. The reviewer reverts; the owner runs nothing.
 
 ## Branch and pull request
 

@@ -15,21 +15,21 @@ disagreements. Run date 2026-10-24.
 
 | | rows |
 |---|---|
-| artifacts (rows) | 120 |
+| artifacts (rows) | 121 |
 | covering the 56 ledger rows (split where one ledger row holds several files with different producers) | 81 |
-| found by the static extractor or the traces outside the ledger | 39 |
+| found outside the ledger by the static extractor, the traces or a later code read | 40 |
 | several producers | 43 |
-| several deciding consumers (each with its own rule) | 52 |
-| consumer-side re-check or re-derivation | 29 |
-| written never read | 26 |
+| several deciding consumers (each with its own rule) | 56 |
+| consumer-side re-check or re-derivation | 32 |
+| written never read | 29 |
 | read never written | 24 |
-| hand-written table | 27 |
-| no violation found | 18 |
-| evidence: both code and trace / code only / trace only | 87 / 32 / 1 |
+| hand-written table | 35 |
+| no violation found | 15 |
+| evidence: both code and trace / code only / trace only | 87 / 33 / 1 |
 
-Check positions named in the rows: producer stop 33, G1 dispatch 9, G3 collection 27, elsewhere 77.
+Check positions named in the rows: producer stop 41, G1 dispatch 9, G3 collection 28, elsewhere 78.
 
-Rows per group (the groups become P1b's scope rows): G01 cycle identity and registry 8; G02 workflow bookmark, todo
+Rows per group (the groups become P1b's scope rows): G01 cycle identity and registry 9; G02 workflow bookmark, todo
 list, replay stores 5; G03 dispatch record and producer-gate outputs 4; G04 BA and context family 12; G05 test-writer
 artifacts 4; G06 dev-report family and ownership facts 10; G07 QA report, completion report, chain disposition 3; G08
 spec, checkpoints, split views 4; G09 /do 5; G10 /close 6; G11 /commit chain 9; G12 /push and /merge grants 5; G13
@@ -37,7 +37,7 @@ overnight 12; G14 grants, consent, intent 7; G15 logs, scores, capability, daemo
 G17 doc-sync and session by-products 8; G18 probes nothing writes, tables, rosters, transcripts 5.
 
 Compared with the ledger (22 rows with several producers, 20 with several deciding consumers, 8 dead, 5 tables): the
-map splits rows and adds 39 artifacts the ledger did not list, and it counts a table wherever a hand-written list in
+map splits rows and adds 40 artifacts the ledger did not list, and it counts a table wherever a hand-written list in
 code or prose names the artifact (D21's wider reading, 51 tables in the ledger re-check). The ledger's own 18
 claims that the code does not support are removed (column `resolution`).
 
@@ -45,7 +45,7 @@ claims that the code does not support are removed (column `resolution`).
 
 | column | meaning |
 |---|---|
-| `id` | A01-A124 (A17, A25, A115 and A123 were dropped, see "Excluded") |
+| `id` | A01-A125 (A17, A25, A115 and A123 were dropped, see "Excluded") |
 | `group` | G01-G18, the planning groups P1b's scope rows follow |
 | `ledger_row` | the `ledger.md` row(s), or `-` for an artifact the ledger does not list |
 | `artifact`, `paths` | name and path pattern (`<proj>` the product repository, `<state>` the hook state directory, `CLAUDE_STATE_DIR` or `/tmp`, `<ts>` a cycle timestamp, `<lane>` a fan-out lane, `<sid>` a session id) |
@@ -135,7 +135,7 @@ overnight (trace-b, posttool-subagent-track.py and pretool-subagent-enforce.py).
 - Pipelines and steps the traces did not replay, or replayed with substitutions: prompts/P1b.md, "What the planning
   trace replayed". Singular /dev was not replayed either, and the CLI's settings writes were modelled as well as its
   transcripts and todos.
-- 32 rows rest on code reading alone (`evidence` = code); they are the first places the regenerated map must trace.
+- 33 rows rest on code reading alone (`evidence` = code); they are the first places the regenerated map must trace.
 - Commands outside the ten pipelines (/clean, /pull, /test) appear only where their artifacts were found.
 
 ## How it was produced
@@ -291,52 +291,54 @@ registered. A85 drops the modern-git slot, the operator's distribution that no h
 (scripts/modern-git-slot/README.md:3-16), so like `.hook-refactor-allow` it has no row; A124 drops its six -output-*
 paths, which orchestrator.sh only prints, as A123 was dropped. The check columns follow one rule (a later read moved
 the entries this read had left outside it). A hook or script decider is named under `check_producer_stop` when the
-producer reads its own file to decide, as A16's G2 does (A11, A13, A30's ensure-async, A43's late-repair controller,
-A48's spec-check.py, A53, A55, A85's helper at the launch, A90, A93's refusal journal, A113, A99's watcher, the
-launcher's check in A02, A03, A05 and A85, and the producing hook's re-check in A02, A03 and A05), so A11's dev-start
-replay store, a cache its writer reads back, shows no violation; otherwise it goes under `check_elsewhere`, as in A93
-and A104 (A02, A05, A29, A30, A81, A85's helper each time the actor sources it, A91's and A120's checks on /restart's
-SendMessage, A92, A99's manager, A108, A111, A116). A check at a collection point is named at G3 (A33's existence
-check; A79's reader at the Agent call's PostToolUse; check-overnight-reports.py, whose one run is at the specialists'
-collection, commands/dev-overnight.md:682, for A77 and A80), and an orchestrator prose route elsewhere goes under
-`check_elsewhere` (A26's status route before the BA dispatch; A28's Step 11g fingerprint check, which A19 and A20 also
-name, leaves G1, which the column keeps for PreToolUse checks on the Agent call). A decision made inside an agent's
-own work gets no column (QA in A06, A26, A32, A33 and A121, A87's PM, A108's cleanliness-inspector), apart from the
-/close and /commit checks that `check_elsewhere` names (close QA in A56, the changelog-analyst in A34 and A54). Cells
-that named a skip, a write, a hint, a read that does not happen, or a check that decides nothing or never runs lose
-their entry (A10, A21, A39, A45, A60, A64, A78, A87). The same read completed the producers, readers, deciders, check
-cells or cite ranges of A01, A09, A14, A19, A22, A34, A35, A40, A43, A44, A45, A47, A50, A54, A57, A65, A76, A84, A91,
-A96, A98, A101, A102, A103, A107, A117, A120 and A121, among them four warn-only hooks that read the newest BA context
-by mtime (A19), and recorded P8's line shifts in A51, A62, A65, A69, A73 and A76. A later code read then completed
-nine rows: A06's QA comparison is its Phase 6 (agents/qa.md:1150-1169; :1609 is the report field); in the actor's
---verify-only run the initializer first asserts that A02's requirement document exists and matches
-(scripts/overnight-init.sh:163-165, through :447) and that A03's registry directory exists (:136, through :253);
-/dev-command runs A26's pre-query and routes on its status too (commands/dev-command.md:194);
-late-repair-controller.py verify-disclosure reads the singular context or ticket (A19, A22), dev report (A34) and QA
-report (A44) its run record names and refuses on a missing file, a missing block or a hash mismatch (:438-454), at
-/close --late-repair (commands/close.md:143) and, through resolve_effective_report_state (:496), at /commit; and
-A108's cleaner writes only INDEX.md, through the rule-inspector's index script (agents/cleaner.md:77, :91). Another
-verification read of every row, from code and prose reads at d625284, then corrected the following. A producer that
-reads its own file back to decide is now named under `check_producer_stop` in more rows: the producing hook runs the
-initializer's --verify-only check itself, at the /dev-overnight launch (a failure removes the record and exits 2) and
-at each prompt that names no command while the record is live, with a --repair-only run between two checks
-(hooks/prompt-workflow.py:1966-1972, :1179, :1690-1729), which A02, A03 and A05 now name, as A02 does the id mint's
-skip of a timestamp whose requirement document exists (:1470-1472); the late-repair controller refuses on A43's run
-record at record-stage and finalize (scripts/late-repair-controller.py:273-290, :327-334), and A43 also gains
-verify-disclosure's run at /close --late-repair (commands/close.md:143), which reads the run record and the effective
-report; scripts/spec-check.py refuses a mark or waive on A48's cp-state that another role or agent owns or that is
-closed (:495-514, :564-654, :804-827, :873-908); and the git privilege guard, the only writer of A93's refusal
-journal, reads it back at a later call (hooks/pretool-git-privilege-guard.py:2281-2303). A28, A30, A85, A95 and A120
-now show several deciding consumers: closeout re-checks A28's cycle copy before the time-lock's exit 2
-(hooks/lib/closeout.py:451-470, hooks/stop-overnight-timelock.py:248-250) beside Step 11g's fingerprint skip;
-graphify-maintain.py ensure-async decides by its own rule on A30's cache, which its own init builds
-(scripts/graphify-maintain.py:675-691), a `check_producer_stop` entry; A85's shims are checked by their own writer,
-which refuses to arm when an installed file differs from its source (scripts/overnight-git-env.sh:49-55, :77-82), at
-the launch, where the launcher also refuses a shim it cannot execute (scripts/create-overnight-state.sh:609-625), and
-each time the actor sources it before a git op (commands/dev-overnight.md:289); scripts/score-inject.sh exits 1 on an
-unreadable or malformed score ledger (:128-160); and A120's transcripts, which only the CLI writes, are decided on by
-harness readers through parsers of their own (hooks/lib/subagent_restart.py with hooks/lib/obligation.py,
-hooks/lib/stop_contract.py, hooks/pretool-aggregate-check.py:409, hooks/stop-spec-coverage-enforce.py:112-157), while
+producer reads its own file to decide, as A16's G2 does (A03's write-qa-mode.sh, A09's co-writers, A11, A13, A30's
+ensure-async, A37's seal log, A43's late-repair controller, A48's spec-check.py, A53, A55, A85's helper at the launch,
+A86's delivery marker, A88's hero capture, A90, A93's refusal journal, A95's score-update.sh, A97's fail counter,
+A101, A109, A110's cache, A113, A99's watcher, the launcher's check in A02, A03, A05 and A85, and the producing hook's
+re-check in A02, A03 and A05), so A11's dev-start replay store, a cache its writer reads back, shows no violation;
+otherwise it goes under `check_elsewhere`, as in A93 and A104 (A02, A05, A29, A30, A81, A85's helper each time the
+actor sources it, A91's and A120's checks on /restart's SendMessage, A92, A99's manager, A108, A111, A116). A check at
+a collection point is named at G3 (A33's existence check; A79's reader at the Agent call's PostToolUse;
+check-overnight-reports.py, whose one run is at the specialists' collection, commands/dev-overnight.md:682, for A77
+and A80), and an orchestrator prose route elsewhere goes under `check_elsewhere` (A26's status route before the BA
+dispatch; A28's Step 11g fingerprint check, which A19 and A20 also name, leaves G1, which the column keeps for
+PreToolUse checks on the Agent call). A decision made inside an agent's own work gets no column (QA in A06, A26, A32,
+A33 and A121, A87's PM, A108's cleanliness-inspector), apart from the /close and /commit checks that `check_elsewhere`
+names (close QA in A56, the changelog-analyst in A34, A46, A54, A57, A66 and A70). Cells that named a skip, a write, a
+hint, a read that does not happen, or a check that decides nothing or never runs lose their entry (A10, A21, A39, A45,
+A60, A64, A78, A87). The same read completed the producers, readers, deciders, check cells or cite ranges of A01, A09,
+A14, A19, A22, A34, A35, A40, A43, A44, A45, A47, A50, A54, A57, A65, A76, A84, A91, A96, A98, A101, A102, A103, A107,
+A117, A120 and A121, among them four warn-only hooks that read the newest BA context by mtime (A19), and recorded P8's
+line shifts in A51, A62, A65, A69, A73 and A76. A later code read then completed nine rows: A06's QA comparison is its
+Phase 6 (agents/qa.md:1150-1169; :1609 is the report field); in the actor's --verify-only run the initializer first
+asserts that A02's requirement document exists and matches (scripts/overnight-init.sh:163-165, through :447) and that
+A03's registry directory exists (:136, through :253); /dev-command runs A26's pre-query and routes on its status too
+(commands/dev-command.md:194); late-repair-controller.py verify-disclosure reads the singular context or ticket (A19,
+A22), dev report (A34) and QA report (A44) its run record names and refuses on a missing file, a missing block or a
+hash mismatch (:438-454), at /close --late-repair (commands/close.md:143) and, through resolve_effective_report_state
+(:496), at /commit; and A108's cleaner writes only INDEX.md, through the rule-inspector's index script
+(agents/cleaner.md:77, :91). Another verification read of every row, from code and prose reads at d625284, then
+corrected the following. A producer that reads its own file back to decide is now named under `check_producer_stop` in
+more rows: the producing hook runs the initializer's --verify-only check itself, at the /dev-overnight launch (a
+failure removes the record and exits 2) and at each prompt that names no command while the record is live, with a
+--repair-only run between two checks (hooks/prompt-workflow.py:1966-1972, :1179, :1690-1729), which A02, A03 and A05
+now name, as A02 does the id mint's skip of a timestamp whose requirement document exists (:1470-1472); the
+late-repair controller refuses on A43's run record at record-stage and finalize
+(scripts/late-repair-controller.py:273-290, :327-334), and A43 also gains verify-disclosure's run at /close
+--late-repair (commands/close.md:143), which reads the run record and the effective report; scripts/spec-check.py
+refuses a mark or waive on A48's cp-state that another role or agent owns or that is closed
+(:495-514, :564-654, :804-827, :873-908); and the git privilege guard, the only writer of A93's refusal journal, reads
+it back at a later call (hooks/pretool-git-privilege-guard.py:2281-2303). A28, A30, A85, A95 and A120 now show several
+deciding consumers: closeout re-checks A28's cycle copy before the time-lock's exit 2 (hooks/lib/closeout.py:451-470,
+hooks/stop-overnight-timelock.py:248-250) beside Step 11g's fingerprint skip; graphify-maintain.py ensure-async
+decides by its own rule on A30's cache, which its own init builds (scripts/graphify-maintain.py:675-691), a
+`check_producer_stop` entry; A85's shims are checked by their own writer, which refuses to arm when an installed file
+differs from its source (scripts/overnight-git-env.sh:49-55, :77-82), at the launch, where the launcher also refuses a
+shim it cannot execute (scripts/create-overnight-state.sh:609-625), and each time the actor sources it before a git op
+(commands/dev-overnight.md:289); scripts/score-inject.sh exits 1 on an unreadable or malformed score ledger
+(:128-160); and A120's transcripts, which only the CLI writes, are decided on by harness readers through parsers of
+their own (hooks/lib/subagent_restart.py with hooks/lib/obligation.py, hooks/lib/stop_contract.py,
+hooks/pretool-aggregate-check.py:409, hooks/stop-spec-coverage-enforce.py:112-157), while
 hooks/pretool-workflow-gate.py and hooks/lib/subagent.py look in them only for a Codex record type and decide nothing
 on them. posttool-todo-count.py and posttool-todo-tracker.py decide on A09's bookmark
 (hooks/posttool-todo-count.py:85-88, exit 2 at :60). Entries that run at the stop or the write of an agent that does
@@ -357,12 +359,12 @@ hooks/pretool-push-analyst-grant-guard.py re-validates at the Bash PreToolUse (:
 validates. Cells that named a check that decides nothing or never runs lose it: hooks/pretool-subagent-code-block.py,
 which exits 0 on every path (:34-56), is no longer a decider or a check in A04 and A48; nor is
 hooks/pretool-overnight-hook-guard.py in A48, reached only behind a contract self_repair block no writer sets
-(:339-343); the unregistered hooks/sessionstart-artifact-census.py leaves A46 and A57; and A103's
-scripts/session-resources.py, which no command, hook or script runs (settings.json:183-184 only permit it), loses its
-check position, as A100's uncalled --route mode has none. A31 loses QA Phase 5 as a reader (agents/qa.md never names
-the test-writer report), and A85 loses overnight-git-selftest.sh, which runs the source shim. A98, A99, A104 and A105
-no longer cite as live the legacy installers hooks/install-auto-sync.sh, hooks/install-protection-all.sh and
-hooks/install.sh, which exit 0 before any step (:12, :11, :15), so logs/git-watcher.log, written only by
+(:339-343); the unregistered hooks/sessionstart-artifact-census.py leaves the deciders and check cells of A46 and A57;
+and A103's scripts/session-resources.py, which no command, hook or script runs (settings.json:183-184 only permit it),
+loses its check position, as A100's uncalled --route mode has none. A31 loses QA Phase 5 as a reader (agents/qa.md
+never names the test-writer report), and A85 loses overnight-git-selftest.sh, which runs the source shim. A98, A99,
+A104 and A105 no longer cite as live the legacy installers hooks/install-auto-sync.sh, hooks/install-protection-all.sh
+and hooks/install.sh, which exit 0 before any step (:12, :11, :15), so logs/git-watcher.log, written only by
 install-auto-sync.sh, leaves A99. A108 adds /dev-overnight's PM and the specialists that /dev, /dev-command and
 /dev-overnight dispatch, which read the project root's README.md for the app URL or the product description
 (agents/pm.md:232-236), a file doc-sync creates when the root has none. A17, a name only a comment carries
@@ -381,12 +383,131 @@ end_turn (:769, :779-780) and `authorize_send_message` refuses one (:1173-1177);
 file (:525-549) and hooks/lib/obligation.py `_read_meta_tool_use_id` (:719-727), which read the agent meta (the L1
 cross-check of G2 and e2e fails `meta_not_found` when it is unreadable, :748-750); and scripts/capability-handshake.py
 `cross_check_event` (:103-174), whose transcript checks (:130-172) feed the handshake verdict that
-scripts/capability-doctor-strict.py acts on (:121, :146, :158). A120's `check_elsewhere` now also names /restart's
-prepare (scripts/restart-subagents.py) and the handshake's runners, scripts/doctor --strict and
-scripts/install/preflight. The counts in this README include all of these corrections; `build_map.py` printed 122
-rows, 82 covering the ledger rows, 40 outside the ledger, several producers 35, several deciding consumers 37, written
-never read 29, read never written 18, no violation found 21, evidence 86 / 33 / 3, 33 code-only rows, producer
-stop 30, G1 dispatch 13, G3 collection 18, elsewhere 67, G03 5 and G12 6.
+scripts/capability-doctor-strict.py acts on (:121, :146, :158) once a receipt arrives
+(capability-handshake.py:207-221). A120's `check_elsewhere` now also names /restart's prepare
+(scripts/restart-subagents.py). A further verification read of every row, from code and prose reads at d625284, then
+corrected the following. hooks/pretool-gitignore-preflight.py opens each dev report an Agent dispatch names and blocks
+that dispatch, exit 2, when a file the report lists is gitignored and the report carries no waiver (:717-818), so A34
+and A35 name it at G3. Under /dev-overnight the cycle contract's BA and dev entries name A19's and A34's files
+(commands/dev-overnight.md:836-837), and four checks decide on them: at the Agent call's PostToolUse
+posttool-overnight-file-check.py (exit 2 at :366-367) and hooks/posttool-subagent-track.py, which leaves the step
+unmarked when the file is missing or invalid (:341-355, :402-407); closeout before the time-lock's exit 2
+(hooks/lib/closeout.py:451-470, hooks/stop-overnight-timelock.py:248-250); and scripts/check-overnight-reports.py
+(exit 1 at :148), as closeout and that script do on A28. A02, A28 and A39 show a consumer-side re-check, as A08, A44
+and A80 do: the aggregator's minted-identity test at /close Step 0 and /commit row 1 (A02,
+hooks/doc_sync/ledger_contract.py:161-173), closeout and check-overnight-reports.py on the cycle copy (A28), and the
+aggregator's re-runs, scripts/resolve-commit-repos.py:269 and the resolver at /close and /commit (A39). A19, A23, A32,
+A33 and A35 carry the hand-written tables that name them, as the other rows those tables name do:
+hooks/pretool-aggregate-check.py:95-108 (A19, A35), the naming lists at commands/dev.md:1392-1396 and
+dev-command.md:916-920 (A19, A35), hooks/posttool-overnight-trace.py:256-269 and
+scripts/late-repair-controller.py:82-88 (A19), commands/dev.md:818 (A32 and A33, as A31), and
+agents/changelog-analyst.md:282-286, which A56 and A57 also record (A23). A37's seal log, A86's delivery marker,
+A101's usage-snapshot cache and warning counter, and A109's notice dedupe state, each a cache or a throttle its writer
+reads back to decide (scripts/seal-attribution-journal.py:181-183, hooks/prompt-workflow.py:1180-1184,
+hooks/userprompt-usage-snapshot.py:238-247, hooks/userprompt-tmpfs-pressure.sh:101-134,
+hooks/doc_sync/notice.py:469-483), now name that writer among their deciders and under `check_producer_stop`, as A11
+and A113 do. scripts/capture-hero-run.py, which writes the README demo's reserved sentinel in A88, reads it back to
+decide (its preflight, watcher and outlived checks, :108-113, :236-237, :341-346, :354-355; exit 2 at :430-431), a
+`check_producer_stop` entry too, and fails when any other sentinel under /tmp/claude-grants changed during the run
+(:357-364), a check elsewhere; A88's reaper, the Stop coordinator's cleanup phase, which removes the legacy flag and
+every expired or unparseable sentinel (hooks/stop-cleanup-allowlist.sh:26-29, hooks/lib/allowlist.py:712-747), is
+named among its deciders as the consuming hook is. A46's G2 qa wire runs the resolver at QA's stop, and the resolver,
+not QA, produces the chain disposition, so the entry moves to `check_elsewhere` by the stop rule above; A46's readers
+drop a count of thirteen callers that included three nothing runs (hooks/sessionstart-artifact-census.py,
+scripts/dev-fix.py and scripts/spec-update-contract.py). A49 gains the resolver's other runs, each taking its one
+conclusion: at /dev-command's entry (commands/dev-command.md:101-112), at the /dev-overnight launch, where the
+launcher degrades the session to autonomous mode on a failed resolution (scripts/create-overnight-state.sh:678-700),
+and in the initializer (scripts/overnight-init.sh:377-394), which exits 1 on a failed resolution at the launch, at
+each continuation and at the actor's --verify-only step; it also gains the files the spec subagent writes under views/
+besides the four views the row named: a view for each agent it selects (agents/spec.md:374),
+views/mandate-omissions.json, which scripts/spec-verify/spec_verify_mandate.py also writes (:324-335), and
+views/allocation-decisions.json (agents/spec.md:538), which nothing reads. A50 gains /spec's evidence copies
+(commands/spec.md:222-226) and, as a reader and decider of them and of the design turns, the split QA, whose check 6
+asks that each design or evidence file a reference names exist (:356-357) and whose fail verdict re-dispatches the
+spec subagent, which writes neither; nothing reads .spec-binding.json. A77's cycle-current.json, the symlink
+commands/dev-overnight.md:826 calls stable for hooks, and the re-plan's cycle-contract.v2.json (:852) are written
+never read: contract_runtime opens only cycle-contract.json and the .claude mirror
+(hooks/lib/contract_runtime.py:79-98), and closeout only cycle-contract.json (hooks/lib/closeout.py:119). A59 records
+a third artifact-name-to-role table, scripts/generate-repair-map.py:276-295, which fills schemas/repair-map.v1.json
+for scripts/close-commit-repair-orchestrate.py, a pair no command, hook, agent or skill runs.
+hooks/capability-canary.py, which alone appends A100's receipts, is registered in no settings.json or install profile
+at d625284 (nor at P7b, P8 or master 2acc29b) and runs only under scripts/capability-handshake.py --fixture-diagnostic
+(:399-440), which no command runs, so run_handshake finds no receipt and its verdict is never PASS;
+`cross_check_event` therefore reads none of A120's transcripts and keeps no check position in A120, as A100's
+unregistered gate has none. A116 adds docs/clean/combined-report-<id>.json, which /clean reads
+(commands/clean.md:404, :454) and no step creates: its Step 11 names scripts/orchestrator.sh clean-merge-reports,
+which writes A124's /tmp/combined-report-<epoch>.json instead (scripts/orchestrator.sh:287, :318). A91 now names the
+writer of its artifact-census/* queue, hooks/sessionstart-artifact-census.py (one of A46's three callers above), which
+alone reads its records back, and A86 that its self-repair log is written only behind a contract self_repair block no
+harness file writes (A48). A02, A09, A19, A34 and A44 gain readers they missed: the specialists' read of the
+requirement document (commands/dev.md:305), hooks/posttool-subagent-track.py's read of the bookmark (:70-79, :429),
+hooks/posttool-overnight-trace.py's read of the agent's report (:370-388), and the QA report's reads by
+scripts/refine-context.sh (:14, :19-26) and scripts/aggregate-permissions.py (:9-20); A06 and A30 tag `{c}` the static
+cites a code read confirmed. The same read completed the producers, readers, deciders, check cells or cite ranges of
+A48, A54, A59, A68, A71, A72, A74, A75, A77, A80, A95, A97, A98, A100, A102, A116, A120 and A124. The next
+verification read of every row, from code and prose reads at d625284 and at P8's head, then corrected the following.
+The codex skill ledger, `.claude/dev-registry/<reg>/codex-ledger/<aid>.json`, had no row:
+hooks/posttool-codex-skill-ledger.py writes an entry at each Skill call of codex (:93-116; PostToolUse on Skill,
+settings.json:769), and hooks/subagentstop-codex-enforce.py, at the stop of a BA, dev or QA subagent whose registry's
+codex flag (A05) is enabled, blocks the stop, exit 2, when that agent has none (:86-99); no replay ran --codex, and
+both hooks build the path from parts (:93, :87). It is now A125, a G01 row outside the ledger whose evidence is code;
+its check is under `check_elsewhere`, since the hook, not the stopping subagent, writes the ledger, as A36's
+attribution hooks write the journal, and the enforcing hook's role list (:31), which A05 records, is its hand-written
+table. A09 names at G1 the two Agent PreToolUse checks A10 names there, hooks/pretool-spec-block-foreground-agent.py
+(:49-54, :93, exit 2 at :133) and hooks/pretool-block-background-tasks.py's Explore exemption (:91-92, :108-118). The
+writers of A09's bookmark that read it back to decide (hooks/pretool-workflow-gate.py, posttool-todo-sequence.py,
+posttool-todo-count.py, posttool-todo-tracker.py, posttool-subagent-track.py and prompt-workflow.py), A03's
+scripts/write-qa-mode.sh, which refuses a missing, unparseable or foreign qa.json before it writes qa_mode (:73-85),
+and A95's scripts/score-update.sh, which reads the score ledger back under its flock before each append to decide (its
+compare-and-set, --undo and malformed-line refusals, :294-387), move from `check_elsewhere` to `check_producer_stop`
+by the rule above, where A02's mint skip and A30's ensure-async, also a writer's checks on a file others write too,
+already are. A97's fail counter and A110's doc-sync cache, each read back by its writer to decide
+(hooks/lib/checkpoint-core.sh:124-137, the counter's alert threshold; hooks/userprompt-doc-sync-check.py:132-181, its
+throttle and the deletion check that picks the directories it resyncs), now name that writer among their deciders and
+under `check_producer_stop`, as A101 and A109 do. A33 loses several producers: one component, the test-writer, upserts
+the global index for every task. hooks/prompt-workflow.py's turn reset deletes A90's streak counter (:1999-2016),
+which hooks/pretool-orchestrator-gate.py writes, so A90 shows several producers, as A100 and A102 do for a removal by
+another component. hooks/pretool-gitignore-preflight.py, which A34 and A35 name at G3, also opens A43's effective
+report when /commit's changelog-analyst dispatch names it as the repository plan's report on a verified late repair
+(commands/commit.md:324-325, :602; its pattern :385 matches the .effective.json name) and blocks that dispatch on a
+gitignored path in its file lists (:717-818); it reads that report's task id as `<task>.effective` (:599-602), so its
+E5 admission never applies, and A43 shows several deciding consumers. As A88's reaper is, the Stop coordinator's
+cleanup phase is named among the deciders of A65's bulk-commit sentinel, whose expired sentinels it unlinks
+(hooks/stop-cleanup-allowlist.sh:50-65), and of A63's commit grant, whose owned or 1800-second-old pointers and locks
+it removes (:286-314); with the privilege guard and /commit Step 5's route on the sentinel's absence
+(commands/commit.md:248-249), A65 shows several deciding consumers. The /do main agent decides on A52's task sidecar
+as well: it mints its own id when the sidecar is missing (commands/do.md:55-58), where the /do Stop gate leaves the
+session alone. hooks/doc_sync/notice.py keeps its notice dedupe only while A111's .owner exists (:363-365), a rule of
+its own beside the SessionEnd sweep's, so A111 shows several deciding consumers. hooks/posttool-overnight-trace.py
+reads A80's PM and specialist reports as it reads A44's (:370-388, and for a specialist hooks/lib/specialist_yield.py
+classify_report, :190-202, through :493-514) by a per-role table and a specialist roster that name their roles
+(:256-269, :50), and A48 carries the role rosters that decide which cp-state files are read and written
+(hooks/pretool-cp-checkin.py:62-84, scripts/spec-check.py:91-110), as A14 and A78 carry theirs: each is a hand-written
+table. A19, A22, A34, A35, A43, A44, A45, A54, A56 and A57 carry the hand-written lists that name them: the
+late-repair controller's stage roster and stage-to-basenames table (scripts/late-repair-controller.py:51, :82-88,
+whose BA entry names A22's ticket beside A19's context), the naming lists (commands/dev.md:1394, :1396;
+dev-command.md:918, :920), the resolver's lane, parent and family lists
+(scripts/resolve-dev-artifact-chain.py:1030-1035, :1137-1143, :1196-1200), /dev-command's completion list
+(commands/dev-command.md:869-871), the task discovery by filename, which A46 records, and the filename regexes
+(scripts/dev-lifecycle.py:667-672, hooks/pretool-aggregate-check.py:95-108), the deliverable prefixes
+(hooks/pretool-gitignore-preflight.py:398-403) and the changelog-analyst's staging list
+(agents/changelog-analyst.md:282-286). A99's watcher writes a state file and a log that no code opens
+(hooks/git-fswatch.sh:27, :31), the other side of the manager's reads under other names, so A99 shows written never
+read as well. A50's design turns and evidence copies are not written never read: the split QA tests that each exists.
+A02 now names the requirement document line in every BA, QA, dev, PM and specialist dispatch of /dev, /dev-command and
+/dev-overnight; A30 the graphify binary runs that write graph.json with GRAPHIFY_OUT set to the cache
+(scripts/graphify-maintain.py:194-196, scripts/graphify-enrich.py:515-518, scripts/graphify_lib.py:295); A88 the
+unregistered hooks/pretool-overwrite-guard.py, which reads and spends structured sentinels (:268-303, :339-403); A97
+hooks/checkpoint.sh:54, which shows logs/checkpoint.log to the owner; A108 hooks/userprompt-doc-sync-check.py, which
+re-runs doc-sync for a watched directory that lost a file and removes INDEX.md from one left empty (:160-181); and
+A119 the spec subagent's sixteen-role view consumer set (agents/spec.md:52-57). A99 notes that fswatch-manager.sh:81
+only starts the watcher and writes none of its files, A103 that P8 deletes scripts/laneb-integration-gate.py, the one
+run of scripts/session-resources.py, and A118 gives its prefix count at d625284. The same read completed the readers,
+producers, check cells or cites of A44, A47, A48, A51, A66 and A76 (whose writer scripts/update-overnight-state.sh
+nothing runs). The counts in this README include all of these corrections; `build_map.py` printed 122 rows, 82
+covering the ledger rows, several producers 35, several deciding consumers 37, consumer-side re-check 29, read never
+written 18, hand-written table 27, no violation found 21, evidence 86 / 33 / 3, producer stop 30, G1 dispatch 13, G3
+collection 18, elsewhere 67, G01 8, G03 5 and G12 6.
 
 ## Limits
 
