@@ -32,9 +32,9 @@ Experiments run for this check (scratch only, HOME and git config in scratch):
 
 | Prompt | Stated wave | Must be merged first (how checked) | Products checked, and the prompt that ships each | PLAN-v2 / HANDOVER | Match |
 |---|---|---|---|---|---|
-| P9 | 7, alone | P7b, P1, P8, P2, P3, P4, P5, P6 (merge titles in `git log --merges --format='%H %s%n%b'`) | hooks/lib/close_rating.py, hooks/posttool-close-rating.py (P4 row 7); hooks/stop-launch.py, hooks/stop-command-gate.py (P5 rows 7, 10); do-report.v1 without "blocked" (P5 row 21); agents/dev.md without the git derivation (P6 acceptance 11); `"CLAUDE_OBLIGATION_STOPGATE": "block"` (P2 row 17); tests/generated/INDEX.md absent (P8 row 3b); scripts/score-update.sh present (nobody before P9 deletes it: P4 DO NOT) | W7 after P6 and P8; HANDOVER "P9 after P6" | yes (stricter, transitively implied) |
-| P10 | 8, alone | P7b, P1, P8, P2-P6, P9 | stop-launch.py and its one registration (P5 rows 10, 12, acceptance 22); a `# STUB:` file incl. stop-completion-gate.py (P1 row 22); score-update.sh absent (P9 row 10); conftest.py without collect_ignore (P8); auto-commit.sh calls the landing (P7b R1; implementation: scripts/install/land) | W8 after P9 | yes |
-| P11 | 9, alone, last | every phase PR (P7b, P1, P8, P2-P6, P9, P10) and no open PR | landing trigger (P7b R1); engine reads private-literals.txt (P7, kept by P8: f8c18c2 check-public-core.sh :54-61); scripts/size-ratchet.py (P10 row 15) | W9, every PR merged, none open; owner go-ahead at execution (D16, D18) | yes |
+| P9 | 7, alone | P7b, P1, P8, P1b, P1c, P2, P3, P4, P5, P6 (merge titles in `git log --merges --format='%H %s%n%b'`) | hooks/lib/close_rating.py, hooks/posttool-close-rating.py (P4 row 7); hooks/stop-launch.py, hooks/stop-command-gate.py (P5 rows 7, 10); do-report.v1 without "blocked" (P5 row 21); agents/dev.md without the git derivation (P6 acceptance 11); `"CLAUDE_OBLIGATION_STOPGATE": "block"` (P2 row 17); tests/generated/INDEX.md absent (P8 row 3b); scripts/score-update.sh present (nobody before P9 deletes it: P4 DO NOT) | W7 after P6 and P8; HANDOVER "P9 after P6" | yes (stricter, transitively implied) |
+| P10 | 8, alone | P7b, P1, P8, P1b, P1c, P2-P6, P9 | stop-launch.py and its one registration (P5 rows 10, 12, acceptance 22); a `# STUB:` file incl. stop-completion-gate.py (P1 row 22); score-update.sh absent (P9 row 10); conftest.py without collect_ignore (P8); auto-commit.sh calls the landing (P7b R1; implementation: scripts/install/land) | W8 after P9 | yes |
+| P11 | 9, alone, last | every phase PR (P7b, P1, P8, P1b, P1c, P2-P6, P9, P10) and no open PR | landing trigger (P7b R1); engine reads private-literals.txt (P7, kept by P8: f8c18c2 check-public-core.sh :54-61); scripts/size-ratchet.py (P10 row 15) | W9, every PR merged, none open; owner go-ahead at execution (D16, D18) | yes |
 
 Merge order is strictly sequential (P9 -> P10 -> P11), as told to the owner (O45) and in HANDOVER. P0, P0b and P7 are
 ancestors of f8c18c2 (the merge-base check). The merge-title check reads the body, which carries the PR title of a
@@ -73,7 +73,7 @@ a fix in section (d).
 |---|---|---|
 | P9 table (spec_path, doc-sync, settings, consent, roster and git table, includes, prose, score tests/scripts/prose, OPTIONS_XML, config, README/ARCHITECTURE, CLAUDE.md) | P9 rows 1-16 (one-to-one; sources file maps each) | ok |
 | P10 table (doctor, junk, stubs, TC-35, I5/I6, graphify/propagate/sweep/seal/.gitignore, records, ba/backlog/git rm/cleaner/ratchet) | P10 rows 1-18 | ok |
-| P11 steps 1-9 | P11 A1-A9 (steps 2-8), B1-B9 (step 9 as in-place re-sync, D19), stage 2 hand-off (step 1's checks become A8 preflight and hand-off item 3) | ok |
+| P11 steps 1-8 and goal bullet 4 (the pre-push guard) | P11 A1-A9 (steps 2-8), B1-B9 (the landing on each home, D19; no re-sync: B3, B6 and B7 deleted 2026-10-23 for the pre-push guard), stage 2 hand-off (step 1's checks become A8 preflight and hand-off item 3) | ok |
 | Ledger UD-CM, UD1, UD4, UD5, UD6, UD7, UD8, U-F3c, U2/U6/U7, U-E3b, H-Q10, D-D1e | P9 E1-E10, row 14 | ok (decided by experiment) |
 | Ledger U-E1a (D17), U-E1b, U-E1c, E2.b, U-E2a, U-F1a, U-F2a; TC-35, TC-37, TC-53..TC-57 | P10 exps 1-9, acceptance 11-15, rows 6-15 | ok; U-E1b's exception narrowed (fix 9) |
 | Ledger C3.b, GitHub purge | P11 (C3.b resolved by S7/D16; purge: A9 text, filed by whoever the docs allow) | ok |
@@ -105,7 +105,7 @@ a fix in section (d).
 | P5 | README :400, :479, :570, ARCHITECTURE :329 naming stubs as live hooks (P5 row 17) | P9 row 14 named only :536 and ARCHITECTURE :167 | fixed (fix 3) |
 | P6 | FIRST ACTION lines; changelog-analyst :253-256; candidate_tree :69-83; U-F3c | P9 rows 8, 9, E6 | ok |
 | P6 | attribution_aggregate_view; agent-index.json in product repos | P10 row 6; exp 9 | ok |
-| P7b | the landing (trigger, lock, notice, log, "landed" fast path) | extended by P9 (E1/E9, optional), P10 (R-e, exp 10), P11 (B1-B9); each keeps the earlier steps | ok |
+| P7b | the landing (trigger, lock, notice, log, "landed" fast path) | extended by P9 (E1/E9, optional), P10 (R-e, exp 10), P11 (B1-B9; B3, B6 and B7 deleted); each keeps the earlier steps | ok |
 | P7b | off-site backup out of scope | nobody | fixed (P11 out of scope, D18 rule; fix 13) |
 | P8 | unreachable code outside its list; overwrite-guard; gen-test-baseline.py; rest of .gitignore; ratchet | P10 rows 4, 6, 9, 15 | ok |
 | P8 | score shell tests; residue entries | P9 rows 10, 13 | ok |
@@ -124,7 +124,7 @@ twice):
 | agents/INDEX.md, agents/README.md | rows 8-9 edit the doc-sync lines that mirror agent descriptions | row 5 deleted them on an unverified premise | - | P10 now deletes them only if Claude Code loads a frontmatter-less agents/*.md (fix 9) |
 | .gitignore | row 13 (false comment), E1 keeps `/agent-scores.json*`, `logs/*` | row 9 minimisation | - | P10 could have deleted E1's lines as "no writer" (fix 8) |
 | INDEX.md, scripts/INDEX.md, scripts/README.md, tests/INDEX.md, TESTING.md | row 10 rows | row 18 rows | - | pull-safety rule now in both (fixes 6, 7) |
-| P7b's landing | E1/E9 at most one step | R-e, exp 10 | B1-B9 | P10, P11 told to keep earlier steps |
+| P7b's landing | E1/E9 at most one step | R-e, exp 10 | B1-B9 (B3, B6, B7 deleted) | P10, P11 told to keep earlier steps |
 | settings.json | row 3 (dead denies, missing/score allows) | row 17 (allows of deleted targets, old spellings), env | none | disjoint |
 | hooks/pretool-bash-safety.sh | consent readers | git rm block | none | disjoint |
 | hooks/prompt-workflow.py | rows 1, 4, 5 | read_command_spec | none (DO NOT) | disjoint functions |

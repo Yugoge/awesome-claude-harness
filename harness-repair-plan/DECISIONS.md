@@ -48,7 +48,7 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
 - **D23 Asking with the question component is the pause (corrects the "nothing pauses" reading of D3 in S1, P3 and
   P5).** Answering "P5：所有受控命令共用一个 Stop 门，agent 没法自己放行？": "但是我是不是说过agent可以给我使用提问的组件询问问题作为暂停方式？"
   [But didn't I say the agent may ask me with the question component as the way to pause?] O19
-  ("交回一个'需要你决定'的问题块 / 这样就可以暂停") stands, and O22 ("提问一定要有solid问题而不是当作逃生窗口") qualifies it. Outside /dev-overnight, an
+  ("交回一个"需要你决定"的问题块 / 这样就可以暂停") stands, and O22 ("提问一定要有solid问题而不是当作逃生窗口") qualifies it. Outside /dev-overnight, an
   agent that needs the owner pauses by asking with AskUserQuestion inside the turn. The question names a real,
   specific decision. Neither asking nor answering releases a gate. No document says "nothing pauses" or "no pause
   form". Asked on 2026-10-24 (AskUserQuestion, "agent 用提问组件问你选择题时，你的回答能不能让这条命令提前结束？"), the owner

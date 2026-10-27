@@ -6,12 +6,15 @@ Working material for repairing this harness, phase by phase. Personal values are
 | Path | What it is |
 |---|---|
 | DECISIONS.md | The owner's decisions. **Overrides PLAN-v1.md** wherever they disagree. Read it first. |
-| PLAN-v2.md | The current plan, phases P0-P11: goal, file:line scope, acceptance tests, risks, technical choices, decision ledger, waves. Line numbers at master 09ab15b. |
+| PLAN-v2.md | The current plan, phases P0-P11 plus P7b (section 14), P1b and P1c (section 15): goal, file:line scope, acceptance tests, risks, technical choices, decision ledger, waves. Line numbers at master 09ab15b. |
 | PLAN-v1.md | Earlier plan, phases P0-P9 (old numbering). Loses to PLAN-v2.md wherever they differ. |
 | prompts/ | One self-contained prompt per phase, pasted into a new session. |
 | landscape/ | Every problem, every file and every file:line, by cluster (00-INDEX.md first). G = stop gates, H = scoring. |
 | reports/ | Evidence: runtime verification, armed core-architecture test, adversarial runs, problem list, file manifest. |
 | tools/ | The sandbox used for the runtime evidence (below). tools/proto/ holds the planning prototypes of the unified Stop gate (stop_command_gate.py, command_span.py, run_scenarios.py, txbuild.py) and the crash/slow phase stubs PLAN-v2 cites. |
+| inventory/ | The d625284 artifact map (P1b planning evidence). |
+| audit/ | The 2026-10-23 owner register, artifact ledger, corrections and report-zh. |
+| reviews/ | Review records and plan-sync lists. |
 
 ## Sandbox (runtime evidence without touching any real ~/.claude)
 

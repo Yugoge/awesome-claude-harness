@@ -244,8 +244,8 @@ in (a)).
    default as written unless the reviewer obtains the owner's answer first.
 9. **P2.md:752-756 (PR body).** Add the heading "**Hand-off to P4 and P5**: the signatures and rules of session_state,
    window_open, closeout_gaps, cycle_index and stop_contract.timelock_released; the locator per isolation kind
-   (fresh-clone case included); the coordinator's timelock-fallback rule the launcher copies; the loop's seed
-   rendering and continuation print."
+   (fresh-clone case included); the coordinator's timelock-fallback rule, which the launcher imports by path and
+   never copies; the loop's seed rendering and continuation print."
 10. **P5.md:400-420 (Corrections to PLAN-v2).** Add: "Section 13's P9 row asks README to list the `# comment`/`$'..'`
     REG-D fallback and the `!`/`&` hard-ban case as limits; row 6 fixes both, so they are not limits after this
     phase. List the README limits lines under 'Out of scope, found' for P9, whose row keeps only the refused-snapshot
@@ -279,9 +279,9 @@ in (a)).
    (fix 8); P8 TC-47's three tool-policy rules plus any root/non-root test case; P2 in_place without bwrap; P4 H-Q5 and
    H-Q3; P5 Arming timing (one answer for P2's G1-G3 arming and P5-d, fix 2); P6 general-purpose subagents.
 2. How merged code reaches the live homes: no hook pulls, /pull is human-only, P7b forbids an automatic pull, and only a
-   manually started fswatch daemon pulls. Every "live landing" acceptance assumes the merge arrives. Also unanswered:
-   whether a home already pulled P7 alone and sits in S3/S4, where P7b can never reach it (P7b fact 9; the reviewer's
-   2026-10-18 09:18 request is open).
+   manually started fswatch daemon pulls. Every "live landing" acceptance assumes the merge arrives. A home that pulled
+   P7 alone and sits in S3 or S4 receives no code by any pull path (P7b fact 9); this is recorded as a fact and nobody
+   is asked (D18, D19). COVERAGE-P9-P11.md row 7's 'P7b R2 (S3 repaired, S4 reported)' holds only for homes P7b reaches.
 3. Later-phase human steps that O44 refuses: UD-CM (apply the CLAUDE.md diff; PLAN forbids agent CLAUDE.md edits),
    H-Q10 (local score stores), P10 "run doctor on each home before stub deletion", P11 (every step human-run; who
    deletes the 255 refs, STATE 8.15). Decide before those prompts are written.
