@@ -55,7 +55,12 @@ a second one. If a name or form differs from this description, use what is merge
   of the second list goes with no fix ("Rows 18 and 19, P1b's kept base blocks"). The same list names the dead ends P1b
   met on its base (its acceptances 14 and 21): each one your base still shows is fixed at its producer with the replay
   that meets it (Goal 2). Its "Live landing" lists each harness script its base's text calls that it emptied to an
-  exit-0 stub with a `# STUB:` line (its acceptance 17): leave it; it stays until P10, as D15 keeps a hook stub.
+  exit-0 stub with a `# STUB:` line (its acceptance 17): leave it; it stays until P10, as D15 keeps a hook stub. Every
+  decider you add or change on the CLI's transcripts and agent meta calls P1b's one reader of them (its row 18;
+  command_span.py reads through it or is it, as P1b's PR chose) in place of a parse of its own: X8's recognition of the
+  wake, the wake step's completion rule and the time-lock's wake check, the own-transcript reads of rows 8 and 10, row
+  16's transcript read and row 17's todo-list comparisons. P1b's check still derives one deciding rule on these files
+  (its row 19 rule 4).
 - P1: hooks/lib/obligation.py (parse_obligation, resolve_own_obligation, find_unresolved_dispatch_obligations,
   canonical_task_id, registry_dir_for); hooks/lib/stop_contract.py and hooks/lib/command_span.py (is_human_prompt,
   active_command, active_span); the producer-question artifact; the Stop coordinator's relay; P1's PR section
