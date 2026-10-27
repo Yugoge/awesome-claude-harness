@@ -128,7 +128,13 @@ Put these release notes in the PR (adjust them to what you actually did):
   workflow-history, the overnight continuation sentinel, harness-report.json, the escalation records).
 - G2 blocks at the producer's stop from this PR's arming commit (E4); G1 and G3 stay advisory until P2 arms them, and
   each consumer-side check whose faults only they would stop stays until then (the PR lists each with its gate). Every
-  fault a deleted check used to stop is still stopped and returned to its own producer; the PR names each stop.
+  fault a deleted check used to stop is still stopped and returned to its own producer when that producer stops after
+  the merge reaches the harness home, also in a session started before it; the PR names each stop. A fault a producer
+  left at a stop before then, where the base's G2 blocked nothing, is stopped only where a check its run still reaches
+  decides on that artifact: the run then runs the current hook and script files (D15), without the checks this PR
+  deletes, and G2 decides only at a producer's stop. So a split only `spec-verify.py --strict` rejects passes when the
+  spec subagent's last stop came before the merge and the /spec orchestrator's Stop after it (row 8); the PR names
+  each such fault.
 
 ## Owner decisions that govern this phase
 
