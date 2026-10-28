@@ -21,8 +21,8 @@ Scope discipline (deliberately the SAME blocking surface as /close):
   - A MISSING report is NOT blocked here: qa-report existence is already
     enforced (exit 2) by subagentstop-e2e-enforce.py, and dev-report
     existence by /close's Step-0 artifact-chain resolver. Duplicating
-    existence enforcement would create a drift-prone mirrored pair; a
-    missing report is only recorded to the advisory JSONL for observability.
+    existence enforcement would create a drift-prone mirrored pair, so a
+    missing report passes here.
 
 Activation chain (every step fails open to exit 0):
   1. stdin carries agent_id (subagent stop, not a main-session stop).
@@ -36,10 +36,7 @@ Activation chain (every step fails open to exit 0):
      --flag artifact-contract from /dev-family init and /close Step 2).
   5. agent_type is listed in the flag's enforced_agent_types — this hook
      actually compares that declared list at runtime.
-  6. Not a forced close (claude-close-force-<sid>.flag under the harness state
-     dir, the process temp dir, or the legacy fixed location — forced closes
-     dispatch no QA by design; parity with subagentstop-e2e-enforce.py) and,
-     for qa, not a ba_validation-mode dispatch (no report obligation).
+  6. For qa, not a ba_validation-mode dispatch (no report obligation).
 
 Report correlation adapts the two dimensions established by
 subagentstop-e2e-enforce.py (session_ts filename/content match + the
@@ -55,14 +52,12 @@ narrowed to that task's reports: each producer is judged on its own report
 at its own stop, never on a sibling lane's.
 The algorithm is intentionally NOT imported from the sibling hook: a runtime
 import would let an unrelated refactor of that file silently disable this
-gate via the fail-open wrapper, whereas a local copy degrades observably
-(missing_report advisory records) if correlation drifts.
+gate via the fail-open wrapper.
 
 Mode: ARTIFACT_CONTRACT_ENFORCE_MODE environment variable.
-  "block" (default) — schema-fail writes an advisory record AND exits 2
-                      with an ARTIFACT_CONTRACT_BLOCKED message.
-  "advisory"        — schema-fail only appends to
-                      ~/.claude/logs/artifact-contract-advisory.jsonl.
+  "block" (default) — schema-fail exits 2 with an
+                      ARTIFACT_CONTRACT_BLOCKED message.
+  "advisory"        — schema-fail allows the stop.
   Default is block — unlike cp-enforce's advisory-first default — because
   the validator is not new judgment: the identical engine already blocks
   these exact reports at /close today; this hook only moves WHERE the
@@ -113,15 +108,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_dev_registry_entry
 from lib import contract_runtime
 from lib import obligation
-from lib.harness_state_dir import harness_state_dir
 
 # Producer agent types and the report family each is obligated to write.
 REPORT_PREFIX_BY_AGENT_TYPE = {
     "qa": "qa-report-",
     "dev": "dev-report-",
 }
-
-ADVISORY_LOG = os.path.join("~", ".claude", "logs", "artifact-contract-advisory.jsonl")
 
 # Same identifier-safety shape write-qa-mode.sh enforces for --session-id /
 # --task-id: an unsafe or path-shaped anchor degrades silently to "no anchor".
@@ -141,21 +133,6 @@ def _read_json(path: Path) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
-
-
-def _emit_advisory(record: dict) -> None:
-    """Best-effort append to the advisory log. Never affects exit."""
-    try:
-        log_path = os.path.expanduser(ADVISORY_LOG)
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        record = {
-            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            **record,
-        }
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
 
 
 def _last_nonempty_line(text: str) -> str:
@@ -298,7 +275,6 @@ def _own_reports(report_paths: list, prefix: str, task_id: str) -> list:
 # ---------------------------------------------------------------------------
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
-LEGACY_FLAG_DIR = "/tmp"  # historical forced-close flag location (read-only)
 WIRE_FILE_TIMEOUT_S = 30
 WIRE_TOTAL_BUDGET_S = 120
 ACK_PREFIX = "ESCALATION_ACK"
@@ -360,17 +336,6 @@ def _finding_key(pm, code: str, path: str, project_dir: str) -> str:
         return pm.finding_id(code, path, project_dir)
     # Helper unavailable (fault path only): same code|relpath shape.
     return f"{code}|{os.path.normpath(str(path)).replace(os.sep, '/')}"
-
-
-def _forced_close_flag_present(dev_session_id: str) -> bool:
-    """Forced-close sentinel lookup through ONE helper: the harness state root,
-    the process temp dir (honours TMPDIR) and the legacy fixed location."""
-    name = f"claude-close-force-{dev_session_id}.flag"
-    roots = []
-    for root in (harness_state_dir(), tempfile.gettempdir(), LEGACY_FLAG_DIR):
-        if root and root not in roots:
-            roots.append(root)
-    return any(os.path.exists(os.path.join(root, name)) for root in roots)
 
 
 def _load_script_module(script_name: str):
@@ -448,23 +413,6 @@ def _load_lib_module(name: str):
     return mod
 
 
-def _write_journal_view_sidecar(project_dir: str, task_id: str) -> None:
-    """Best-effort, non-blocking real caller for scripts/lib/attribution_
-    aggregate_view.py (attribution-journal consumer cutover; see
-    _wire_ledger_judgment's docstring) -- it otherwise has zero callers.
-    Never raises: a failure here is simply no sidecar, never a finding."""
-    try:
-        view = _load_lib_module("attribution_aggregate_view")
-        events, _ = view.aj.read_all_journals(None)
-        doc = view.build_view(events, {"task_id": task_id}, root=project_dir)
-        out = Path(project_dir) / "docs" / "dev" / f"journal-view-{task_id}.json"
-        if not out.exists():
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    except Exception:
-        pass
-
-
 def _wire_ledger_judgment(report: dict, report_rel: str, project_dir: str, task_id: str,
                           deadline: float):
     """Attribution-journal consumer cutover (docs/reference/attribution-
@@ -516,7 +464,6 @@ def _wire_ledger_judgment(report: dict, report_rel: str, project_dir: str, task_
                 "errors": [("write-time attribution journal (consumer: attribution_adjudicator.py) measures "
                            f"an unresolved structural conflict for this file: {verdict.get('detail', '')}")[:400]],
             })
-    _write_journal_view_sidecar(project_dir, task_id)
     return findings, faults
 
 
@@ -683,8 +630,6 @@ def _write_side_records(project_dir: str, ob: dict, agent_id: str, agent_type: s
                                    "upstream_defect_notice", None, keys, paths)
                 rec["upstream_errors"] = upstream
                 _atomic_write_json(Path(rec.pop("_path")), rec)
-            _emit_advisory({"kind": "obligation_upstream_defect_notice", "agent_id": agent_id,
-                            "task_id": ob.get("task_id"), "finding_keys": keys})
         if deferrals:
             checks = sorted({c for d in deferrals for c in d["checks"]})
             _atomic_write_json(
@@ -693,9 +638,6 @@ def _write_side_records(project_dir: str, ob: dict, agent_id: str, agent_type: s
                  "agent_id": agent_id, "lane": ob.get("lane"), "checks": checks,
                  "created_at": _now_iso()},
             )
-            _emit_advisory({"kind": "obligation_check_deferred", "agent_id": agent_id,
-                            "task_id": ob.get("task_id"), "lane": ob.get("lane"),
-                            "reason": "not_evaluable_at_lane_granularity", "checks": checks})
     except Exception as exc:
         faults.append(_fault("gate_exception", f"cannot write side record: {exc!r}"))
     return faults
@@ -799,8 +741,6 @@ def _gate_decide(project_dir: str, ob: dict, agent_id: str, agent_type: str, fai
                 {"record_id": prior["record_id"], "nonce": prior["nonce"], "agent_id": agent_id,
                  "admitted_at": _now_iso()},
             )
-            _emit_advisory({"kind": "obligation_escalation_admitted", "agent_id": agent_id,
-                            "task_id": task_id, "reason": reason, "record_id": prior["record_id"]})
             return 0
     except Exception as exc:
         faults.append(_fault("gate_exception", f"admission check failed: {exc!r}"))
@@ -878,22 +818,12 @@ def main() -> None:
                 markdown_artifacts = [a for a in artifacts if a.get("kind") == "markdown"]
                 response_line_artifacts = [a for a in artifacts if a.get("kind") == "response_line"]
                 response_block_artifacts = [a for a in artifacts if a.get("kind") == "response_block"]
+                # W1/M4: any other kind belongs to a different G5 bullet;
+                # it is skipped here, never blocked or crashed on.
                 verified_artifacts = (
                     json_artifacts + markdown_artifacts + response_line_artifacts
                     + response_block_artifacts
                 )
-                for art in artifacts:
-                    if art.get("kind") not in ("json", "markdown", "response_line", "response_block"):
-                        # W1/M4: any other unknown kind belongs to a
-                        # different G5 bullet; informationally skipped
-                        # here, never blocked or crashed on.
-                        _emit_advisory(
-                            {
-                                "kind": "obligation_artifact_kind_unsupported",
-                                "artifact_kind": art.get("kind"),
-                                "agent_id": agent_id,
-                            }
-                        )
                 failures = []
                 question = (
                     _producer_question(project_dir, resolution.obligation)
@@ -902,8 +832,6 @@ def main() -> None:
                 if question == "valid":
                     # The question stands in for every declared artifact; nothing
                     # that reads those artifacts runs for this stop.
-                    _emit_advisory({"kind": "obligation_producer_question", "agent_id": agent_id,
-                                    "task_id": resolution.obligation.get("task_id")})
                     if stopgate_mode == "block":
                         _clear_progress(project_dir, resolution.obligation, agent_id)
                     sys.exit(0)
@@ -917,13 +845,6 @@ def main() -> None:
                     if result.get("status") == "skip":
                         # Infra unavailable (unregistered schema id, registry
                         # error): fail-safe, never a verification failure.
-                        _emit_advisory(
-                            {
-                                "kind": "obligation_artifact_skip",
-                                "path": art["path"],
-                                "reason": result.get("reason"),
-                            }
-                        )
                         continue
                     if result.get("status") == "fail":
                         failures.append(
@@ -973,13 +894,6 @@ def main() -> None:
                         and re.search(waiver, _last_nonempty_line(last_assistant_message))
                     ):
                         markdown_waived_paths.add(art["path"])
-                        _emit_advisory(
-                            {
-                                "kind": "obligation_markdown_waived",
-                                "path": art["path"],
-                                "agent_id": agent_id,
-                            }
-                        )
                         continue
                     full_path = Path(project_dir) / art["path"]
                     result = contract_runtime.validate_markdown_artifact_for_obligation(
@@ -1023,13 +937,6 @@ def main() -> None:
                         last_assistant_message, art.get("begin"), art.get("end"), art["schema"]
                     )
                     if result.get("status") == "skip":
-                        _emit_advisory(
-                            {
-                                "kind": "obligation_artifact_skip",
-                                "path": "<response_block>",
-                                "reason": result.get("reason"),
-                            }
-                        )
                         continue
                     if result.get("status") == "fail":
                         failures.append(
@@ -1107,15 +1014,6 @@ def main() -> None:
                             upstream_defects, shard_deferrals, fingerprint_paths,
                         )
                     )
-                elif upstream_defects or shard_deferrals:
-                    _emit_advisory(
-                        {
-                            "kind": "obligation_wire_notice",
-                            "agent_id": agent_id,
-                            "upstream_defects": upstream_defects[:10],
-                            "deferred": shard_deferrals[:10],
-                        }
-                    )
                 if not failures and not gate_faults:
                     # M3: all pass -- bypass the legacy correlation path
                     # entirely for this stop.
@@ -1123,17 +1021,6 @@ def main() -> None:
                         _clear_progress(project_dir, resolution.obligation, agent_id)
                     sys.exit(0)
                 task_id = resolution.obligation.get("task_id")
-                _emit_advisory(
-                    {
-                        "kind": "obligation_verify_fail",
-                        "mode": stopgate_mode,
-                        "agent_id": agent_id,
-                        "agent_type": agent_type,
-                        "task_id": task_id,
-                        "failures": failures[:10],
-                        "faults": gate_faults[:10],
-                    }
-                )
                 if stopgate_mode == "block":
                     detail_lines = ""
                     for f in failures[:10]:
@@ -1162,30 +1049,13 @@ def main() -> None:
                     sys.exit(decision)
                 # advisory mode: never blocks (AC4/AC5).
                 sys.exit(0)
-            elif isinstance(resolution, obligation.Unresolvable):
-                # S1: lightweight advisory record for rollout observability.
-                _emit_advisory(
-                    {
-                        "kind": "obligation_unresolvable",
-                        "agent_id": agent_id,
-                        "reason": resolution.reason,
-                        "detail": resolution.detail,
-                    }
-                )
-            # else: NoObligationInPrompt -- the expected, extremely common
-            # case for every non-obligated dispatch; no advisory record
-            # (would spam the log for zero informational value).
-        except Exception as exc:
+            # Unresolvable or NoObligationInPrompt: the legacy path below
+            # decides.
+        except Exception:
             # M4: an obligation-mode-only failure must degrade to "run
             # legacy path", never "allow" and never escape from inside
             # this except block.
-            _emit_advisory(
-                {
-                    "kind": "obligation_gate_error",
-                    "agent_id": agent_id,
-                    "error": repr(exc),
-                }
-            )
+            pass
 
     prefix = REPORT_PREFIX_BY_AGENT_TYPE.get(agent_type)
     if prefix is None:
@@ -1210,11 +1080,6 @@ def main() -> None:
     if isinstance(enforced_types, list) and agent_type not in enforced_types:
         sys.exit(0)
 
-    # Forced closes dispatch zero QA subagents by design; parity with the
-    # e2e hook's defense-in-depth sentinel check.
-    if _forced_close_flag_present(dev_session_id):
-        sys.exit(0)
-
     sentinel = _read_json(registry_dir / f"{agent_type}.json")
     if agent_type == "qa" and sentinel.get("qa_mode") == "ba_validation":
         # BA-validation QA has no qa-report obligation.
@@ -1228,17 +1093,7 @@ def main() -> None:
         report_paths = _own_reports(report_paths, prefix, own_task_id)
     if not report_paths:
         # Existence enforcement belongs to subagentstop-e2e-enforce.py (qa)
-        # and /close's chain resolver (dev). Observe, never block, here.
-        _emit_advisory(
-            {
-                "kind": "missing_report",
-                "agent_id": agent_id,
-                "agent_type": agent_type,
-                "dev_session_id": dev_session_id,
-                "prefix": prefix,
-                "project_dir": project_dir,
-            }
-        )
+        # and /close's chain resolver (dev). Never block here.
         sys.exit(0)
 
     failures = []
@@ -1250,23 +1105,6 @@ def main() -> None:
         sys.exit(0)
 
     mode = os.environ.get("ARTIFACT_CONTRACT_ENFORCE_MODE", "block").strip().lower()
-    _emit_advisory(
-        {
-            "kind": "schema_fail",
-            "mode": mode,
-            "agent_id": agent_id,
-            "agent_type": agent_type,
-            "dev_session_id": dev_session_id,
-            "failures": [
-                {
-                    "report_path": str(p),
-                    "schema": r.get("schema"),
-                    "errors": r.get("errors", [])[:10],
-                }
-                for p, r in failures[:10]
-            ],
-        }
-    )
     if mode == "advisory":
         sys.exit(0)
 

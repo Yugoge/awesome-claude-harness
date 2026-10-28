@@ -1015,8 +1015,7 @@ global `Skill(commit:*)` deny) is documented in
 `docs/dev/ticket-20260808-035658-lanel.md` AC-L21: a separate
 human-operator-executed transcript at
 `docs/dev/human-operator-transcript-<task-id>.md`, using the
-`PARENT_START: <task_id>` / `PARENT_END: <task_id> outcome=<...>` schema
-`scripts/dev-lifecycle.py`'s `parse_human_operator_transcript()` parses.
+`PARENT_START: <task_id>` / `PARENT_END: <task_id> outcome=<...>` schema.
 
 ## Close-gate verification reference
 

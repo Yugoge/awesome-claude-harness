@@ -9,7 +9,7 @@ disable-model-invocation: true
 True wrapper. Three TodoSteps (user-visible work):
 1. Dispatch three inspectors (parallel for single-dev cycles; sequential for parallel-dev cycles).
 2. Delegate close debate to QA subagent.
-3. Generate close-report + spec/temp update (echo QA verdict + write report + emit next-step update).
+3. Generate close-report + next step (echo QA verdict + write report + name the next step).
 
 Argument parsing (`--codex` / `--force`) and task-id resolution still happen
 in this command body, but are no longer TodoSteps — they are command-internal
@@ -229,7 +229,7 @@ close_progress() {
 }
 
 # The one defined wait. Prints exactly one structured line and nothing else: no
-# CLOSE: line of any kind, no close-report section, no temp update.
+# CLOSE: line of any kind and no close-report section.
 close_awaiting_input() {
   local need why who
   need="$(printf '%s' "${1:-}" | tr '\n' ' ')"
@@ -277,7 +277,7 @@ Mapping rows: `dev-report*` -> dev; `*qa-report*` -> qa; `ticket*|ba-spec*|conte
 
 **`source_check` values** (the one check that produced the finding): the aggregate writer run, the route-select / resolver run, the artifact schema gate, `resolve-spec-artifacts`, an inspector report validation, or a QA bullet. The command builds each entry itself with `close_required_action`; there is no engine output and no code table.
 
-**Awaiting-input (R1-b / R6) — closed cause set.** The ONLY causes that wait are: (i) a human-only authorized operation (deletion, `/allow`, freeing `/tmp`, a rule-conflict ruling, or a hook rejection, which pauses per Subagent Hook Discipline and is never retried or worked around); (ii) an environment fault (R14) that needs a human action; (iii) pre-cycle argument or usage input the human must correct or supply (an invalid flag combination, `--auto` with a task-id / `--force` / `--reason`, `--late-repair` with `--force`, no resolvable task-id). Any other cause is routed (mapping + loop), never waited on. While waiting, NOTHING lands as complete: no `CLOSE:` line of any kind, no `CLOSE_FINDINGS:` line, no close-report section, and no temp update is written; the wait is signalled by the single `AWAITING_INPUT:` line, and a consumer tells a wait from a landed verdict by the absence of any `CLOSE:` line. When the awaited input arrives, the loop resumes at the same step in place.
+**Awaiting-input (R1-b / R6) — closed cause set.** The ONLY causes that wait are: (i) a human-only authorized operation (deletion, `/allow`, freeing `/tmp`, a rule-conflict ruling, or a hook rejection, which pauses per Subagent Hook Discipline and is never retried or worked around); (ii) an environment fault (R14) that needs a human action; (iii) pre-cycle argument or usage input the human must correct or supply (an invalid flag combination, `--auto` with a task-id / `--force` / `--reason`, `--late-repair` with `--force`, no resolvable task-id). Any other cause is routed (mapping + loop), never waited on. While waiting, NOTHING lands as complete: no `CLOSE:` line of any kind, no `CLOSE_FINDINGS:` line, and no close-report section is written; the wait is signalled by the single `AWAITING_INPUT:` line, and a consumer tells a wait from a landed verdict by the absence of any `CLOSE:` line. When the awaited input arrives, the loop resumes at the same step in place.
 
 ### Routing loop (finding -> role -> fix -> same check re-run)
 
@@ -437,7 +437,7 @@ The structural preflight above is a hand-rolled shape check. It does NOT run the
 
 Run the gate over the exact normal-path `ARTIFACT_CHAIN.report_paths[]`; this is
 the canonical dev + QA pair for singular mode and the canonical aggregate plus
-every lane dev/QA report (and a validated optional parent QA if present) for
+every lane dev/QA report for
 fan-out mode. Do not synthesize a parent QA input. On the do-report path pass
 `$DO_REPORT` as before. Paths are relative to the resolver's `--project-dir`;
 the harness code + schemas live under `~/.claude`. Populate
@@ -485,8 +485,7 @@ Blocking semantics:
   for an artifact kind with no registered schema, unparseable JSON
   already rejected by the structural resolver, or an unversioned legacy record.
   Every required dev/QA report in a fan-out chain is nevertheless presented to
-  this gate through `report_paths`; an optional parent report is omitted only
-  when the resolver says it is absent and optional.
+  this gate through `report_paths`.
 
 `/close --force` is deprecated and no longer short-circuits before this gate (see "Forced-override path" above) — this gate always runs. On the do-report path, run the same command with `$DO_REPORT` as the sole argument — a versioned do-report is validated against `do-report.v1` (schema violations block exactly like dev/qa reports); an unversioned legacy do-report still returns `SKIP`.
 
@@ -777,7 +776,7 @@ Overwrite policy: if `docs/dev/close-report-<task-id>.md` already exists with a 
   (activates the venv first, matching Step 0's own invocation pattern above). The helper performs an atomic, verified append and never mutates a byte of the file's existing content — see its own module docstring for the full read-append-readback-verification and atomicity design. Branch explicitly on its exit code:
   - **exit 0**: stdout is one line of JSON `{"status":"ok","report_path":...,"verdict_line":...}` — validate `status == "ok"`, then use `verdict_line` (NOT the raw JSON) as QA's own Return-value line.
   - **exit non-zero**: stdout is exactly the sentinel line below; propagate that exact line as QA's own Return-value output. Any other stdout shape (missing/malformed JSON on exit 0, or a non-sentinel line on exit non-zero) is a bug in the invocation itself — treat it as a verification failure and fail closed rather than guessing a verdict.
-  Such a failure is NEVER a basis for falling back to treating the prior closure's verdict as authoritative for this new attempt: print the single non-`CLOSE:`-prefixed line `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` as this attempt's not-landed signal, and run no Step 3 verdict echo, scoring, session summary, or workflow update for it — the pre-existing report's prior verdict is never reused as this attempt's result. The command then retries the atomic append under the R15 progress measure (progress = the section is now appended): a persistent environment-class cause (R14) is the defined wait (`close_awaiting_input`); a defective section text is a finding on `docs/dev/close-report-<task-id>.md` (the close-report row: qa), which repairs the section text. On any such failure the helper also attempts a best-effort, durable JSON marker recording the failed attempt in a dedicated directory independent of `docs/dev/` — its exact location, rationale, and durability caveats are documented in the helper's own module docstring; marker-write success or failure never changes the primary sentinel behavior above.
+  Such a failure is NEVER a basis for falling back to treating the prior closure's verdict as authoritative for this new attempt: print the single non-`CLOSE:`-prefixed line `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` as this attempt's not-landed signal, and run no Step 3 verdict echo, scoring, session summary, or workflow update for it — the pre-existing report's prior verdict is never reused as this attempt's result. The command then retries the atomic append under the R15 progress measure (progress = the section is now appended): a persistent environment-class cause (R14) is the defined wait (`close_awaiting_input`); a defective section text is a finding on `docs/dev/close-report-<task-id>.md` (the close-report row: qa), which repairs the section text.
 
 Return value: print to stdout exactly ONE of these lines as the final line of your response. The landed forms are exactly the five `CLOSE: YES*` lines listed below; the only other legal return is the round-open line `CLOSE_FINDINGS: <n> items`, which is NON-LANDING (findings are open and routed; nothing is granted). Runtime consumers classify the last non-empty line through the shared close-verdict helper: `YES`, `YES` with a suffix (including degraded consultation or codex-disabled annotations), and `YES (FORCED)` map to `yes`; the round-open line maps to the not-landed class; anything else maps to `unknown` and fails closed. `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` (see Overwrite policy above) is a deliberate, sanctioned exception to this "exactly ONE of these lines" list, not an oversight: it is a per-attempt not-landed signal emitted before Step 2 ever reaches a verdict at all, is by design none of the forms below, and is classified `unknown`/fail-closed by the same helper because no legitimate verdict was reached for this attempt. This exception does not weaken the contract for the normal case — the last non-empty line of a report that DID reach a verdict must still be exactly one of the five landed forms or the round-open form below.
   CLOSE: YES
@@ -790,7 +789,7 @@ Return value: print to stdout exactly ONE of these lines as the final line of yo
 
 ### Step 3: Generate close-report + workflow update
 
-Take the final line QA returned — either a landed `CLOSE: YES*` form or the round-open `CLOSE_FINDINGS: <n> items` — and echo whichever one QA returned in the orchestrator's text message to the user. A round-open echo is followed by routing (the Routing loop, then a fresh QA round), never by this step's scoring, session summary, rating, or temp-update branches. The close-report itself is written by QA inside Step 2; this step is the echo + ensures the report file exists at `docs/dev/close-report-<task-id>.md`.
+Take the final line QA returned — either a landed `CLOSE: YES*` form or the round-open `CLOSE_FINDINGS: <n> items` — and echo whichever one QA returned in the orchestrator's text message to the user. A round-open echo is followed by routing (the Routing loop, then a fresh QA round), never by this step's scoring, session summary, rating, or workflow-update branches. The close-report itself is written by QA inside Step 2; this step is the echo + ensures the report file exists at `docs/dev/close-report-<task-id>.md`.
 
 **Two distinct final-line contracts — DO NOT confuse**:
 - **Close-report FILE** (`docs/dev/close-report-<task-id>.md`): the LAST non-empty line of the FILE must be EXACTLY one of the legal `CLOSE:` forms listed in Step 2's Return value section. This is the runtime-parser contract consumed by `hooks/lib/close-verdict.py` and `/commit`'s admission check. This contract is enforced INSIDE the file QA wrote in Step 2; nothing in Step 3 alters it.
@@ -893,13 +892,8 @@ Defense-in-depth: `scripts/score-update.sh` itself enforces the same preconditio
 
 Then branch the workflow update:
 
-- If the final verdict is `CLOSE: YES*`, create a compact temp update using
-  `/spec-update --temp`. The update is for the next `/commit` attempt and MUST
-  reference, not duplicate: `docs/dev/close-report-<task-id>.md`, the exact
-  `ARTIFACT_CHAIN.artifact_paths` / `report_paths` (or `$DO_REPORT`), and the
-  three inspector report paths from Step 1. In fan-out mode do not add a
-  nonexistent parent QA-report merely to make this update singular-shaped.
-  Next action: `/commit <task-id> -m "<real session summary>"`.
+- If the final verdict is `CLOSE: YES*`, the next action is
+  `/commit <task-id> -m "<real session summary>"`.
 - **(Edge Case 8 — resume guidance)** If `/close` printed an `AWAITING_INPUT:` line (a defined wait: causes (i)-(iii) in Routing helpers; no `CLOSE:` line and no close-report section were written, so nothing landed), the human's input channel is one of two routes, and the loop resumes in place from the step that was waiting once the input arrives (distinct from `/dev`'s internal 5-iteration-exhaustion guard in Step 16, which has its own documented path, unaffected by this section):
   - **Same-task-id resume** (default when the rejection doesn't require
     reopening scope): re-dispatch Dev, then QA, reusing the SAME `<task-id>`
@@ -1002,8 +996,7 @@ Human-operator verification of this mode (QA cannot literally invoke
 global `Skill(close:*)` deny) is documented in `docs/dev/ticket-20260808-035658-lanel.md`
 AC-L21: a separate human-operator-executed transcript at
 `docs/dev/human-operator-transcript-<task-id>.md`, using the
-`PARENT_START: <task_id>` / `PARENT_END: <task_id> outcome=<...>` schema
-`scripts/dev-lifecycle.py`'s `parse_human_operator_transcript()` parses.
+`PARENT_START: <task_id>` / `PARENT_END: <task_id> outcome=<...>` schema.
 
 ## Constraints
 

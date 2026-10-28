@@ -143,21 +143,6 @@ This is not a risk — the orchestrator has already resolved the branch correctl
 Note: merge-analyst uses only `approved` or `blocked` — no `warn` verdict (merge is more
 binary than push; ambiguous states should block and require human confirmation).
 
-### Phase 7: Write audit log
-
-Write a brief audit entry to `<state dir>/agentic-commit/merge-analyst/audit/`:
-```bash
-STATE_DIR=$(. ~/.claude/hooks/lib/harness_state_dir.sh && harness_state_dir)
-mkdir -p "${STATE_DIR}/agentic-commit/merge-analyst/audit/"
-```
-
-Write (append) to `<state dir>/agentic-commit/merge-analyst/audit/<REPO_HASH>.log`:
-```
-<ISO-8601 UTC> session=<SESSION_ID> branch=<RESOLVED_REF> source_tip=<SOURCE_TIP[:8]> verdict=<verdict>
-```
-
-Skip if write fails (non-fatal).
-
 ### Phase 8: Write grant token
 
 Compute grant directory and path. `<state dir>` is `$CLAUDE_STATE_DIR` when that is an absolute
@@ -213,7 +198,6 @@ merge-analyst grant written: <GRANT_PATH>
 ## Output
 
 - Grant token at `<state dir>/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json`
-- Audit log entry at `<state dir>/agentic-commit/merge-analyst/audit/<REPO_HASH>.log`
 - Human-readable summary of analysis printed to stdout
 
 ---

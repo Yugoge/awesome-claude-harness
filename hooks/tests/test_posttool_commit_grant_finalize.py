@@ -42,8 +42,8 @@ the .lck. R2-4: revocation discovers event-keyed pointers by their recorded gran
 TWO PROPERTIES THIS FILE EXISTS TO HOLD.
   - The ORDINARY path must keep journaling. The grant is minted under the orchestrator's
     session id while the finalizer runs under the subagent's; that divergence is normal
-    (the guard records it in _find_grant_any) and `ordinary_flow_*` keeps every session id
-    distinct, so a binding that quietly depended on one would fail here and not in
+    (the guard records it in _collect_commit_grant_candidates) and `ordinary_flow_*` keeps
+    every session id distinct, so a binding that quietly depended on one would fail here and not in
     production, where reconciliation would just stop working unnoticed.
   - Grants must not be stranded. The wildcard scan used to clear abandoned pointers by
     accident; `stranding_*` pins the deliberate replacements.
@@ -687,8 +687,8 @@ def _run(tmp):
     # POSITIVE CONTROL, and the regression this binding could most easily cause. Every
     # session id in play is DIFFERENT — payload (subagent), environment (orchestrator), and
     # the grant's own --sid — which is the production shape the guard records in
-    # _find_grant_any. Journalling must survive it; if it does not, reconciliation stops
-    # silently and nobody notices.
+    # _collect_commit_grant_candidates. Journalling must survive it; if it does not,
+    # reconciliation stops silently and nobody notices.
     base, repo, parent, head = scene(tmp, "ordinary-success")
     set_env(CLAUDE_SESSION_ID="sid-orchestrator")
     owner = mint(base, "tu-toolu_01ORDINARY", "T-OWNER", repo, parent, sid="sid-grant-cli")

@@ -14,11 +14,11 @@ def _use_current_policy(monkeypatch):
     assert policy_registry.load_policy() is not None
 
 
-def test_ba_exact_observations_ledger_only(monkeypatch):
+def test_ba_cannot_write_the_retired_observations_ledger(monkeypatch):
+    # BA no longer keeps docs/dev/observations-ledger.md (nothing read it), so no prefix admits it.
     _use_current_policy(monkeypatch)
     ledger = ROOT / "docs/dev/observations-ledger.md"
-    assert policy_registry.is_allowed("ba", "Write", str(ledger)) == (True, "ok")
-    allowed, reason = policy_registry.is_allowed("ba", "Edit", str(ledger) + ".bak")
+    allowed, reason = policy_registry.is_allowed("ba", "Write", str(ledger))
     assert not allowed and reason.endswith("not in allowed_write_path_prefixes")
     allowed, reason = policy_registry.is_allowed(
         "ba", "Write", str(ROOT / ".claude/policies/escape.json")

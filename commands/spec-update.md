@@ -55,8 +55,7 @@ precisely where `errors[]` and the existing lane matrix are useful. Use the
 existing paths named by `artifact_paths`, `report_paths`, `qa_inputs`, and
 `lanes[]`, plus `docs/dev/close-report-<task-id>.md` when present. In singular
 mode this is the existing parent chain; in fan-out mode it is every lane
-ticket/context/dev/QA plus the parent canonical/completion and only optional
-parent artifacts that actually exist. Never replace this with a singular
+ticket/context/dev/QA plus the parent canonical/completion. Never replace this with a singular
 parent context/QA assumption or fabricate missing parent artifacts.
 
 For legacy or non-`/dev` work where no resolver result is available, retain the

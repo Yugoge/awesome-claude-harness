@@ -384,9 +384,6 @@ def _collect_violations(per_worker, canonical_present, scope_task_ids):
 #  ---------------------------------------------------------------------------
 
 OBLIGATION_BARRIER_ENV = "CLAUDE_OBLIGATION_BARRIER"
-OBLIGATION_ADVISORY_LOG = os.path.join(
-    "~", ".claude", "logs", "obligation-barrier-advisory.jsonl"
-)
 
 
 def _dispatch_prompt_body(data):
@@ -544,25 +541,13 @@ def _format_barrier_violation(code, path, problem, role, lane, action):
     return f"[{code}] {path}: {problem} | role: {role_s}({lane_s}) | fix: {action}"
 
 
-def _log_barrier_advisory(record):
-    """Best-effort append to the G3 advisory log. Never raises."""
-    try:
-        log_path = os.path.expanduser(OBLIGATION_ADVISORY_LOG)
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record) + "\n")
-    except Exception:
-        pass
-
-
 def _run_obligation_barrier(data):
     """G3 collection barrier orchestrator (ticket M1-M9).
 
     Entire body wrapped in its own try/except (layered ON TOP of this
     file's outer __main__ try/except, which is silent): any unexpected
-    exception here is advisory-logged with reason "gate_error" and
-    swallowed -- the caller (main()) always proceeds to its own
-    sys.exit(0) afterward.
+    exception here is swallowed -- the caller (main()) always proceeds to
+    its own sys.exit(0) afterward.
     """
     try:
         mode = os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower()
@@ -607,15 +592,6 @@ def _run_obligation_barrier(data):
                 ok, violation = _verify_prior_artifact(entry, project_dir)
                 if ok:
                     continue
-                record = {
-                    "reason": "obligation_barrier_violation",
-                    "code": violation["code"],
-                    "path": violation["path"],
-                    "problem": violation["problem"],
-                    "role": role,
-                    "lane": lane,
-                    "task_id": task_id,
-                }
                 if mode == "block":
                     sys.stderr.write(
                         "\n"
@@ -628,9 +604,8 @@ def _run_obligation_barrier(data):
                         + "\n"
                     )
                     sys.exit(2)
-                _log_barrier_advisory(record)
     except Exception:
-        _log_barrier_advisory({"reason": "gate_error"})
+        pass  # fail open: an internal error never blocks a dispatch
 
 
 def main():

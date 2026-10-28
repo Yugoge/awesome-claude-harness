@@ -290,8 +290,8 @@ Mandatory actions:
    uses of "all" where no concrete entity set exists (e.g., "make sure all edge
    cases are handled").
 
-Cross-link: see the `out_of_scope_observations` chapter below for the schema,
-the ledger lazy-create rules, and the path-external observation template.
+Cross-link: see the `out_of_scope_observations` chapter below for the schema
+and the path-external observation template.
 
 ### Contract C: Reference Integrity
 
@@ -471,50 +471,12 @@ If the cycle generated zero out-of-scope observations, omit the section
 entirely (do NOT emit an empty table — empty table shipping is a
 forbidden Pandora's-box phrasing).
 
-### Cross-cycle observations ledger (M1.5 — deterministic lazy-create)
-
-Cross-cycle, path-external observations accumulate in
-`docs/dev/observations-ledger.md` (per-repo, single shared file). The
-ledger is **lazy** — it is created only when the first observation
-actually lands. This prevents an empty ledger from being committed.
-
-Schema docblock (the ledger's first lines on create):
-
-```markdown
-# Observations Ledger
-
-<!--
-Schema:
-  ts                 ISO-8601 timestamp
-  task_id            task-id of the cycle that logged this row
-  file               relative path
-  line               line number (or empty for file-level)
-  observation        concise description
-  in_user_path       always `false` for ledger rows
-  security_relevant  bool
--->
-
-| ts | task_id | file | line | observation | in_user_path | security_relevant |
-|----|---------|------|------|-------------|--------------|-------------------|
-```
-
-Three deterministic conditionals (verbatim — these are the M1.5
-behavior contract; QA verifies presence by AC-1.7 grep):
-
-- **IF `docs/dev/observations-ledger.md` does NOT exist AND this cycle
-  generated ≥1 `out_of_scope_observation` → create with header
-  `# Observations Ledger` + the schema docblock + the first row.**
-- **IF the ledger file already exists → append a new row, preserving
-  the existing header and all prior rows (no rewrite, no reordering).**
-- **IF this cycle generated 0 `out_of_scope_observations` → do NOT
-  create the ledger file (lazy semantics).**
-
 Cross-link: Contract B above (mandatory action 4 + 5 + 6) describes
 the upstream classification step that decides what lands here.
 Requirements Decomposition above (out-of-path classification) is the
 other entry point. The 14-file philosophy refactor of
 spec-20260503-091826 introduced this chapter — see Section 5.6 of that
-spec for the cumulative-ledger rationale.
+spec for the rationale.
 
 **Out-of-user-need-scope modification proposals — MUST be ledger-only**:
 
@@ -984,8 +946,7 @@ path-external clauses cleanly without expanding the fix scope.
 
 (Omit this section entirely if the cycle generated zero out_of_scope_observations.
 Render as a Markdown table cross-referencing the JSON `out_of_scope_observations`
-array; see the `out_of_scope_observations` chapter for the schema and the
-ledger lazy-create rules.)
+array; see the `out_of_scope_observations` chapter for the schema.)
 
 | ts | file:line | observation | security_relevant |
 |----|-----------|-------------|-------------------|

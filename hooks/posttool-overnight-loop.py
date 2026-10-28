@@ -22,25 +22,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# G4 overnight-loop-reset anchor (ticket 20260930-132644-l4 item 7). Shares
-# the SAME env var and advisory-log file as hooks/stop-obligation-gate.py --
-# one switch, one log stream, for both halves of gate G4.
-ADVISORY_LOG = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'logs' / 'obligation-terminal-gate-advisory.jsonl'
-
 # Mirrors hooks/stop-do-report-gate.py's TERMINAL_STATUSES constant: "blocked"
 # is a legitimate terminal dev status, never "incomplete" (R9).
 TERMINAL_DEV_STATUSES = {"completed", "blocked"}
-
-
-def _log_event(record: dict) -> None:
-    """Best-effort append to the shared G4 advisory log. Never raises."""
-    try:
-        ADVISORY_LOG.parent.mkdir(parents=True, exist_ok=True)
-        record['ts'] = datetime.now(timezone.utc).isoformat()
-        with open(ADVISORY_LOG, 'a', encoding='utf-8') as f:
-            f.write(json.dumps(record, ensure_ascii=False) + '\n')
-    except Exception:
-        pass
 
 
 def _all_completed(data: dict) -> bool:
@@ -270,26 +254,21 @@ def main() -> None:
     # required conditions, inserted AFTER the expiry check above (which keeps
     # precedence, unconditionally, per the pre-existing guard) and BEFORE the
     # pre-existing reset call below. "off" mode skips both conditions
-    # entirely -- not even a log write. Any unexpected exception fails open
-    # to the ORIGINAL unconditional reset (never raises past main()).
+    # entirely. Any unexpected exception fails open to the ORIGINAL
+    # unconditional reset (never raises past main()).
     mode = (os.environ.get('CLAUDE_OBLIGATION_TERMINAL', 'advisory') or 'advisory').strip().lower()
     if mode != 'off':
-        session_id_for_log = data.get('session_id', '')
         project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
         try:
             reason = _terminal_gate_block_reason(data, state, project_dir)
-        except Exception as exc:
+        except Exception:
             reason = None
-            _log_event({'event': 'gate_error', 'session_id': session_id_for_log, 'error': repr(exc)})
-        if reason is not None:
-            if mode == 'block':
-                _write_terminal_gate_reason(state, state_path, reason)
-                print(f'OVERNIGHT LOOP: cycle reset BLOCKED -- {reason}')
-                sys.exit(0)
-            # advisory (default, or any value other than "block"/"off"): the
-            # ORIGINAL reset still happens below, unchanged; only log it.
-            _log_event({'event': 'would_block_reset', 'mode': mode,
-                        'session_id': session_id_for_log, 'reason': reason})
+        # advisory (default, or any value other than "block"/"off"): the
+        # ORIGINAL reset still happens below, unchanged.
+        if reason is not None and mode == 'block':
+            _write_terminal_gate_reason(state, state_path, reason)
+            print(f'OVERNIGHT LOOP: cycle reset BLOCKED -- {reason}')
+            sys.exit(0)
 
     _update_state_cycle(state, state_path)
     _print_loop_instructions(state, end_time, state_path)

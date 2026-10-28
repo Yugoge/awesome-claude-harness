@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PostToolUse Hook (Write|Edit|NotebookEdit|MultiEdit matcher): detect the
 instant a lane-shard dev-report write completes its declared lane_set
-roster, and durably record that fact -- closing the detection-window gap
+roster, and attempt the aggregation then -- closing the detection-window gap
 that otherwise depends on the orchestrator's NEXT Agent/Task dispatch
 (hooks/pretool-aggregate-check.py) or a later /close invocation ever
 happening in the same session (ticket 20261001-161041-r05).
@@ -15,37 +15,34 @@ reading stdin (AC1).
 M3: the just-written shard's OWN `lane_set` field (schema v2, required
 non-null when `lane` is a string -- schemas/dev-report.v2.json) is the
 authoritative expected roster. A legacy/v1 shard (`lane_set` absent/null)
-carries no authoritative roster -- this hook never guesses one; it logs an
-advisory-only record and exits 0, attempting no completeness detection
-(AC4).
+carries no authoritative roster -- this hook never guesses one; it exits
+0, attempting no completeness detection (AC4).
 
 M4: when `lane_set` is authoritative, scan docs/dev/ (via the shared
 lib.dev_report_shard_patterns module) for a shard for every declared lane.
 An incomplete roster is the normal mid-cycle state for every write before
 the last one -- exit 0, zero side effects (AC3).
 
-M5: a complete roster with no fresh canonical aggregate on disk writes a
-durable, idempotent marker at
-.claude/dev-registry/dev-<task_id>/aggregate-pending.json (AC2, AC7).
+M5: a complete roster with no fresh canonical aggregate on disk is the only
+state that goes on to S1 below.
 "Fresh" means the canonical's own mtime is not older than the newest
 roster shard's mtime -- the same staleness notion
 hooks/pretool-aggregate-check.py / scripts/resolve-dev-artifact-chain.py
 apply when deciding whether an existing canonical still covers the current
 shard set.
 
-S1: in addition to the marker, the hook attempts
+S1: the hook then attempts
 `python3 scripts/aggregate-dev-report.py --task-id <task_id>` (bounded
 timeout). Both of the aggregator's own legitimate outcomes -- exit 0, or
 exit 1 with its own R29 blocked-canonical write -- count as "invocation
 completed," never as a hook malfunction. Any exception/timeout/non-zero
-exit is swallowed and advisory-logged; the hook's own exit code is
-unaffected (AC6).
+exit is swallowed; the hook's own exit code is unaffected (AC6).
 
 lane_set trust boundary: a shard's self-declared lane_set is cross-checked
 for verbatim equality (lib.obligation.lane_sets_identical, design
 Â§1.3-G1 check 4) against every OTHER on-disk shard found for the same
 task_id. Any mismatch makes the roster non-authoritative for this event
-(advisory log, exit 0) rather than risking a false-positive completeness
+(exit 0) rather than risking a false-positive completeness
 signal from a malformed or adversarial lane_set.
 
 Fail-open contract (universal in this codebase): parsing failures, missing
@@ -57,16 +54,12 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib import obligation as obligation_lib  # noqa: E402
 from lib.dev_report_shard_patterns import classify_filename  # noqa: E402
 
-ADVISORY_LOG = os.path.join(
-    "~", ".claude", "logs", "lane-completeness-watch-advisory.jsonl"
-)
 AGGREGATOR_TIMEOUT_SECONDS = 30
 
 
@@ -91,17 +84,6 @@ def _resolve_project_dir():
     return os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
 
 
-def _log_advisory(record):
-    """Best-effort append to the advisory log. Never raises."""
-    try:
-        log_path = os.path.expanduser(ADVISORY_LOG)
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record) + "\n")
-    except Exception:
-        pass
-
-
 def _read_json(path):
     try:
         with open(path, "r", encoding="utf-8") as handle:
@@ -110,24 +92,8 @@ def _read_json(path):
         return None
 
 
-def _dev_session_dir_name(task_id):
-    """Map a filename-derived task_id to its .claude/dev-registry/ session
-    directory name. The active /dev adapter's own task_id already carries a
-    literal "dev-" prefix (e.g. "dev-20260427-130000"); a bare timestamp
-    (e.g. "20261001-161041") gets one prepended -- matching the convention
-    observed on disk for both families (never double-prefixed)."""
-    return task_id if task_id.startswith("dev-") else f"dev-{task_id}"
-
-
 def _canonical_filename(task_id):
     return f"dev-report-{task_id}.json"
-
-
-def _marker_path(project_dir, task_id):
-    return (
-        Path(project_dir) / ".claude" / "dev-registry"
-        / _dev_session_dir_name(task_id) / "aggregate-pending.json"
-    )
 
 
 def _scan_roster(dev_dir, task_id, lane_set):
@@ -185,28 +151,6 @@ def _roster_authoritative(lane_set, sibling_lane_sets):
     return True
 
 
-def _write_marker_if_absent(marker_path, task_id, lane_set):
-    """Idempotent: a marker that already exists is left untouched (AC2 --
-    replay of the completing event must not duplicate or corrupt it)."""
-    if marker_path.exists():
-        return False
-    try:
-        marker_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = marker_path.with_name(marker_path.name + ".tmp")
-        document = {
-            "task_id": task_id,
-            "lane_set": lane_set,
-            "detected_at": datetime.now(timezone.utc).isoformat(),
-        }
-        with open(tmp_path, "w", encoding="utf-8") as handle:
-            json.dump(document, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
-        os.replace(tmp_path, marker_path)
-        return True
-    except Exception:
-        return False
-
-
 def _invoke_aggregator(project_dir, task_id):
     """S1: best-effort aggregator auto-invocation. The aggregator's own
     non-zero R29 blocked-canonical exit, a timeout, or any unexpected
@@ -216,24 +160,15 @@ def _invoke_aggregator(project_dir, task_id):
         script = Path(project_dir) / "scripts" / "aggregate-dev-report.py"
         if not script.exists():
             return
-        result = subprocess.run(
+        subprocess.run(
             ["python3", str(script), "--task-id", task_id],
             cwd=project_dir,
             capture_output=True,
             timeout=AGGREGATOR_TIMEOUT_SECONDS,
             check=False,
         )
-        _log_advisory({
-            "reason": "aggregator_invoked",
-            "task_id": task_id,
-            "returncode": result.returncode,
-        })
-    except Exception as exc:
-        _log_advisory({
-            "reason": "aggregator_invocation_failed",
-            "task_id": task_id,
-            "error": str(exc),
-        })
+    except Exception:
+        pass
 
 
 def main():
@@ -250,7 +185,7 @@ def main():
     if result is None or result[0] != "worker":
         sys.exit(0)
 
-    _, task_id, lane = result
+    _, task_id, _ = result
 
     project_dir = _resolve_project_dir()
     dev_dir = Path(project_dir) / "docs" / "dev"
@@ -268,14 +203,6 @@ def main():
         sys.exit(0)
 
     lane_set = shard.get("lane_set")
-    if lane_set is None:
-        _log_advisory({
-            "reason": "legacy_shard_no_lane_set",
-            "task_id": task_id,
-            "lane": lane,
-            "path": path,
-        })
-        sys.exit(0)
     if not isinstance(lane_set, list) or not lane_set:
         sys.exit(0)
 
@@ -287,11 +214,6 @@ def main():
         sys.exit(0)
 
     if not _roster_authoritative(lane_set, siblings):
-        _log_advisory({
-            "reason": "lane_set_mismatch_non_authoritative",
-            "task_id": task_id,
-            "lane": lane,
-        })
         sys.exit(0)
 
     missing = [member for member in lane_set if member not in present]
@@ -305,14 +227,6 @@ def main():
     if canonical_fresh:
         sys.exit(0)
 
-    marker_path = _marker_path(project_dir, task_id)
-    written = _write_marker_if_absent(marker_path, task_id, lane_set)
-    if written:
-        _log_advisory({
-            "reason": "aggregate_pending_marker_written",
-            "task_id": task_id,
-            "marker_path": str(marker_path),
-        })
     _invoke_aggregator(project_dir, task_id)
 
     sys.exit(0)

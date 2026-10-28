@@ -16,7 +16,6 @@ Exit codes:
   2: Block tool use
 """
 
-import hashlib
 import json
 import os
 import re
@@ -44,37 +43,10 @@ except Exception:  # pragma: no cover - fail-soft when modules missing
     _resolve_agent_type = None  # type: ignore[assignment]
     _resolve_dev_registry_entry = None  # type: ignore[assignment]
 
-try:  # WS1 shared harness-home resolver (route the audit-log default off /root).
-    from lib import claude_home as _claude_home  # noqa: E402
-except Exception:  # pragma: no cover - fail-soft when the resolver is absent
-    _claude_home = None  # type: ignore[assignment]
-
 
 # ---------------------------------------------------------------------------
 # T2.4: Contract-driven self-repair grant (BUG-B-Q0E-CONTRACT-SELF-REPAIR-GAP)
 # ---------------------------------------------------------------------------
-
-# Relative location of the self-repair audit log under the harness home. Resolved
-# at runtime via the WS1 resolver (see _self_repair_audit_log) rather than the
-# author literal /root/.claude so a fresh non-root clone audits under its OWN home.
-_SELF_REPAIR_AUDIT_RELPATH = 'logs/overnight-self-repair.jsonl'
-
-
-def _self_repair_audit_log() -> Path:
-    """Resolve the self-repair audit-log path via the WS1 harness-home resolver.
-
-    Order: resolved harness home -> CLAUDE_PROJECT_DIR/.claude -> cwd/.claude.
-    Never the author literal /root. The audit append already degrades softly
-    (_persist_audit_row returns False on OSError), so an unresolved home falls
-    back to the project dir rather than failing.
-    """
-    if _claude_home is not None:
-        home = _claude_home.resolve()
-        if home is not None:
-            return home / _SELF_REPAIR_AUDIT_RELPATH
-        return _claude_home.project_dir() / '.claude' / _SELF_REPAIR_AUDIT_RELPATH
-    base = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd())) / '.claude'
-    return base / _SELF_REPAIR_AUDIT_RELPATH
 
 
 def _self_repair_block(contract: dict | None) -> dict | None:
@@ -271,70 +243,12 @@ def _grant_decision_for(target: str, role: str, pipeline_id: str, sr: dict) -> t
     return True, 'granted'
 
 
-def _hash_tool_input(payload: dict) -> str:
-    """SHA-256 (truncated) of tool_input dict for audit traceability."""
-    ti = payload.get('tool_input', {}) if isinstance(payload, dict) else {}
-    if not ti:
-        return ''
-    raw = json.dumps(ti, sort_keys=True, default=str)
-    return hashlib.sha256(raw.encode('utf-8', errors='replace')).hexdigest()[:16]
-
-
-def _build_audit_row(state: dict, payload: dict, role: str, target: str, sr: dict, reason: str) -> dict:
-    """Construct the JSONL audit row dict."""
-    sid = state.get('session_id') or payload.get('session_id') or ''
-    cycle_id = state.get('cycle_id') or state.get('current_cycle')
-    return {
-        'ts': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
-        'session_id': sid,
-        'cycle_id': cycle_id,
-        'role': role,
-        'pipeline_id': _payload_pipeline_id(payload),
-        'target': target,
-        'tool_name': payload.get('tool_name', '') if isinstance(payload, dict) else '',
-        'command_or_input_hash': _hash_tool_input(payload),
-        'decision': 'grant',
-        'decision_reason': reason,
-        'reason_text': sr.get('reason', ''),
-        'remaining_max_files': sr.get('max_files', 50),
-        'expires_at': sr.get('expires_at', ''),
-    }
-
-
-def _persist_audit_row(row: dict) -> bool:
-    """Append a single JSONL row to the audit log; True iff fsync succeeded.
-
-    The whole path (WS1 resolver -> mkdir -> open -> fsync) is wrapped in a
-    blanket except so a non-OSError resolver failure (e.g. the resolver raising
-    something other than OSError) degrades to a soft False — NOT a propagated
-    exception that would crash this PreToolUse security guard and bypass its
-    fail-closed block path. A False return on audit_required collapses the grant
-    to denied (is_self_repair_allowed), so audit failure stays fail-closed.
-    """
-    try:
-        audit_log = _self_repair_audit_log()
-        audit_log.parent.mkdir(parents=True, exist_ok=True)
-        with audit_log.open('a', encoding='utf-8') as fh:
-            fh.write(json.dumps(row, default=str) + '\n')
-            fh.flush()
-            os.fsync(fh.fileno())
-        return True
-    except Exception:
-        return False
-
-
-def _audit_grant(state: dict, payload: dict, role: str, target: str, sr: dict, reason: str) -> bool:
-    """Build + persist audit row. True iff fully persisted."""
-    row = _build_audit_row(state, payload, role, target, sr, reason)
-    return _persist_audit_row(row)
-
-
 def is_self_repair_allowed(target: str, state: dict, payload: dict) -> bool:
     """True iff cycle-contract grants self_repair for (target, role, pipeline).
 
     Fail-closed: missing contract / disabled grant / role mismatch /
-    target outside prefixes / pipeline mismatch / expired / audit append
-    failure (when audit_required) all collapse to False.
+    target outside prefixes / pipeline mismatch / expired all collapse
+    to False.
     """
     contract = _load_active_contract(state)
     sr = _self_repair_block(contract)
@@ -342,14 +256,8 @@ def is_self_repair_allowed(target: str, state: dict, payload: dict) -> bool:
         return False
     role = _resolve_role(payload)
     pipeline_id = _payload_pipeline_id(payload)
-    granted, reason = _grant_decision_for(target, role, pipeline_id, sr)
-    if not granted:
-        return False
-    audit_required = sr.get('audit_required', True)
-    audit_ok = _audit_grant(state, payload, role, target, sr, reason)
-    if audit_required and not audit_ok:
-        return False
-    return True
+    granted, _reason = _grant_decision_for(target, role, pipeline_id, sr)
+    return granted
 
 
 # Module-level request context; populated by main() so existing helper
@@ -745,9 +653,6 @@ def check_bash_targets_state(command: str) -> bool:
     are scanned for actual state-file write/delete idioms.
     """
     stripped = command_without_heredoc_bodies(command)
-    # Whitelist: update-overnight-state.sh is the sanctioned state mutation tool
-    if 'update-overnight-state.sh' in stripped:
-        return False
     return _matches_any(stripped, [
         r'rm\s+.*overnight-state-',
         r'rm\s+-f\s+.*overnight-state-',
@@ -859,9 +764,6 @@ def _maybe_block_bash(command: str, predicate, message: str, grantable: bool) ->
 
 def _check_bash_security(command: str) -> None:
     """Block Bash commands targeting hooks, commands, or state files (T2.4-aware)."""
-    stripped = command_without_heredoc_bodies(command)
-    if 'update-overnight-state.sh' in stripped:
-        return
     _maybe_block_bash(command, check_bash_targets_hooks,
                       '\nOVERNIGHT HOOK PROTECTION: Writing to .claude/hooks/ '
                       'via Bash is blocked during overnight sessions.\n', True)

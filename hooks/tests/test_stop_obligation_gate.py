@@ -25,8 +25,8 @@ REPO_ROOT = HOOK.parent.parent
 
 
 def _run_gate(transcript_path, project_dir, home, mode=None, session_id="gate-test-sess"):
-    # The gate keeps its advisory log under the configuration directory
-    # (CLAUDE_CONFIG_DIR, else ~/.claude): pin both to the scratch home.
+    # Pin HOME and the configuration directory (CLAUDE_CONFIG_DIR, else
+    # ~/.claude) to the scratch home so the gate never sees the real one.
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir), "HOME": str(home),
            "CLAUDE_CONFIG_DIR": str(home / ".claude")}
     if mode is None:
@@ -48,8 +48,10 @@ def _run_gate(transcript_path, project_dir, home, mode=None, session_id="gate-te
     )
 
 
-def _advisory_log(home):
-    return home / ".claude" / "logs" / "obligation-terminal-gate-advisory.jsonl"
+def _written_logs(home):
+    """Files under the scratch home's logs/ directory: the gate writes none."""
+    logs = home / ".claude" / "logs"
+    return sorted(p.name for p in logs.rglob("*")) if logs.is_dir() else []
 
 
 # --------------------------------------------------------------------------
@@ -80,11 +82,11 @@ def test_hook_registered_and_valid(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Scenario (a): unresolved obligation -- advisory logs+passes, block rejects
+# Scenario (a): unresolved obligation -- advisory passes, block rejects
 # with a three-element message (AC-L4-02)
 # --------------------------------------------------------------------------
 
-def test_unresolved_obligation_advisory_logs_and_block_exits2(tmp_path):
+def test_unresolved_obligation_advisory_passes_and_block_exits2(tmp_path):
     """Scenario (a) / AC-L4-02."""
     project_dir = tmp_path / "project"
     project_dir.mkdir()
@@ -98,17 +100,10 @@ def test_unresolved_obligation_advisory_logs_and_block_exits2(tmp_path):
     transcript = fx.make_dev_family_transcript(tmp_path, project_dir, token, obligation_doc=doc)
     # Deliberately do NOT create docs/dev/dev-report-MISSING-a.json.
 
-    advisory_log = _advisory_log(home)
-    if advisory_log.exists():
-        advisory_log.unlink()
-
     unset_result = _run_gate(transcript, project_dir, home, mode=None)
     assert unset_result.returncode == 0
-    assert advisory_log.is_file()
-    lines = [line for line in advisory_log.read_text().splitlines() if line.strip()]
-    assert len(lines) == 1
-    record = json.loads(lines[0])
-    assert record.get("artifact_path") == "docs/dev/dev-report-MISSING-a.json"
+    assert unset_result.stderr == ""
+    assert _written_logs(home) == []
 
     block_result = _run_gate(transcript, project_dir, home, mode="block")
     assert block_result.returncode == 2
@@ -131,7 +126,7 @@ def test_unresolved_obligation_advisory_logs_and_block_exits2(tmp_path):
 def test_close_commit_session_with_unresolved_obligation_now_blocks(tmp_path):
     """AC1: removing the exemption makes G4 reachable in block mode for a
     /close or /commit session carrying an unresolved obligation -- advisory
-    mode still only logs, block mode exits 2 naming the artifact."""
+    mode still allows, block mode exits 2 naming the artifact."""
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     home = tmp_path / "home"
@@ -146,13 +141,9 @@ def test_close_commit_session_with_unresolved_obligation_now_blocks(tmp_path):
             transcript_dir, project_dir, token, obligation_doc=doc,
             first_user_message=first_message,
         )
-        advisory_log = _advisory_log(home)
-        if advisory_log.exists():
-            advisory_log.unlink()
-
         advisory_result = _run_gate(transcript, project_dir, home, mode=None)
         assert advisory_result.returncode == 0, (first_message, advisory_result.stderr)
-        assert advisory_log.is_file(), first_message
+        assert _written_logs(home) == [], first_message
 
         block_result = _run_gate(transcript, project_dir, home, mode="block")
         assert block_result.returncode == 2, (first_message, block_result.stderr)
@@ -180,7 +171,7 @@ def test_close_commit_non_obligated_session_still_exits_zero(tmp_path):
 
 # --------------------------------------------------------------------------
 # Scenario (e): no dev-registry reference anywhere -> exit 0 immediately,
-# any mode, no advisory write (AC-L4-09)
+# any mode, nothing written (AC-L4-09)
 # --------------------------------------------------------------------------
 
 def test_non_dev_family_session_exits_silently(tmp_path):
@@ -190,19 +181,16 @@ def test_non_dev_family_session_exits_silently(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     transcript = fx.make_non_dev_family_transcript(tmp_path)
-    advisory_log = _advisory_log(home)
 
     for mode in (None, "block", "off"):
-        if advisory_log.exists():
-            advisory_log.unlink()
         result = _run_gate(transcript, project_dir, home, mode=mode)
         assert result.returncode == 0
-        assert not advisory_log.exists()
+        assert _written_logs(home) == []
 
 
 # --------------------------------------------------------------------------
 # Scenario (f) (stop-hook half): off mode skips the new logic entirely --
-# no log write even when an unresolved obligation is present
+# nothing written even when an unresolved obligation is present
 # --------------------------------------------------------------------------
 
 def test_off_mode_skips_entirely_stop_hook(tmp_path):
@@ -216,13 +204,10 @@ def test_off_mode_skips_entirely_stop_hook(tmp_path):
     token = "20260930-132644-l4"
     doc = fx.build_obligation_doc(task_id=token, artifact_path="docs/dev/dev-report-MISSING-f.json")
     transcript = fx.make_dev_family_transcript(tmp_path, project_dir, token, obligation_doc=doc)
-    advisory_log = _advisory_log(home)
-    if advisory_log.exists():
-        advisory_log.unlink()
 
     result = _run_gate(transcript, project_dir, home, mode="off")
     assert result.returncode == 0
-    assert not advisory_log.exists()
+    assert _written_logs(home) == []
 
 
 # --------------------------------------------------------------------------

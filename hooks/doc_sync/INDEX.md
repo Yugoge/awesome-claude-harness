@@ -2,7 +2,7 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-09-30T07:57:42Z*
-**Total entries**: 13
+**Total entries**: 12
 **Convention**: kebab
 
 ## Tree
@@ -19,7 +19,6 @@ doc_sync/
 ├── `regen_index.py` - Regenerate INDEX.md for a directory.
 ├── `regen_readme.py` - Regenerate README.md for a directory.
 ├── `regions.py` - Four unrelated predicates used to decide what a file's AUTO region is (README first
-├── `systemd.py` - Query systemctl for project-configured services and generate a markdown table.
 └── `tree.py` - Build directory trees for INDEX.md.
 ```
 <!-- /AUTO:index-stats -->

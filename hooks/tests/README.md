@@ -66,7 +66,6 @@
 - `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 - `test_runtime_guard.py` - Two layers:
 - `test_scratch_lifecycle.py` - Covers:
-- `test_sessionstart_artifact_census.py` - Every run is a subprocess against throwaway directories; the real restart
 - `test_stop_do_report_gate.py` - Covers the contract from commands/do.md Step 5: a /do session may stop only
 - `test_stop_obligation_gate.py` - gate, ticket 20260930-132644-l4)
 - `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.

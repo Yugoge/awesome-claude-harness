@@ -48,19 +48,8 @@ for repo in "${REPOS[@]}"; do
     fi
 
     # Start fswatch
-    log_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/fswatch-$repo_name.log"
-    pid_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/fswatch-$repo_name.pid"
-
-    # Create logs directory if not exists
-    mkdir -p "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs"
-
-    # Remove old lock file if exists
-    . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-      || harness_state_dir() { printf '%s\n' /tmp; }
-    rm -f "$(harness_state_dir)/git-fswatch-${USER}.lock" 2>/dev/null
-
     nohup bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/git-fswatch.sh" "$repo" \
-        > "$log_file" 2>&1 &
+        > /dev/null 2>&1 &
 
     pid=$!
 
@@ -68,11 +57,10 @@ for repo in "${REPOS[@]}"; do
     sleep 1
 
     if ps -p $pid > /dev/null 2>&1; then
-        echo $pid > "$pid_file"
         echo "✅ $repo_name: Monitoring started (PID: $pid)"
         ((started_count++))
     else
-        echo "❌ $repo_name: Failed to start (check $log_file)"
+        echo "❌ $repo_name: Failed to start (check ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/git-fswatch-$repo_name.log)"
         ((failed_count++))
     fi
 done
@@ -88,7 +76,7 @@ echo "  - Failed:   $failed_count"
 echo ""
 echo "Commands:"
 echo "  Check status:   bash ~/.claude/hooks/protection-status.sh"
-echo "  View logs:      tail -f ~/.claude/logs/fswatch-*.log"
+echo "  View logs:      tail -f ~/.claude/logs/git-fswatch-*.log"
 echo "  Stop all:       pkill -f git-fswatch.sh"
-echo "  Stop specific:  kill \$(cat ~/.claude/logs/fswatch-REPO_NAME.pid)"
+echo "  Stop specific:  pkill -f 'git-fswatch.sh REPO_PATH'"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

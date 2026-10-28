@@ -25,8 +25,8 @@ HOOK = Path(__file__).resolve().parent.parent / "posttool-overnight-loop.py"
 
 
 def _run_loop(payload, project_dir, home, mode=None):
-    # The advisory log lives under the configuration directory (CLAUDE_CONFIG_DIR,
-    # else ~/.claude): pin both to the scratch home.
+    # Pin HOME and the configuration directory (CLAUDE_CONFIG_DIR, else
+    # ~/.claude) to the scratch home so the hook never sees the real one.
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir), "HOME": str(home),
            "CLAUDE_CONFIG_DIR": str(home / ".claude")}
     if mode is None:
@@ -51,8 +51,10 @@ def _read_state(project_dir, session_id):
     return json.loads(_state_path(project_dir, session_id).read_text())
 
 
-def _advisory_log(home):
-    return home / ".claude" / "logs" / "obligation-terminal-gate-advisory.jsonl"
+def _written_logs(home):
+    """Files under the scratch home's logs/ directory: the hook writes none."""
+    logs = home / ".claude" / "logs"
+    return sorted(p.name for p in logs.rglob("*")) if logs.is_dir() else []
 
 
 # --------------------------------------------------------------------------
@@ -61,7 +63,7 @@ def _advisory_log(home):
 # mode (unset, default), the ORIGINAL reset still occurs (AC-L4-04)
 # --------------------------------------------------------------------------
 
-def test_unresolved_obligation_block_skips_reset_advisory_resets_and_logs(tmp_path):
+def test_unresolved_obligation_block_skips_reset_advisory_resets(tmp_path):
     """Scenario (b) / AC-L4-04."""
     project_dir = tmp_path / "project"
     project_dir.mkdir()
@@ -77,10 +79,6 @@ def test_unresolved_obligation_block_skips_reset_advisory_resets_and_logs(tmp_pa
     fx.write_overnight_state(state_path, session_id, cycle_count=3, current_issues=[])
     payload = fx.all_completed_todo_payload(session_id, transcript_path=str(transcript))
 
-    advisory_log = _advisory_log(home)
-    if advisory_log.exists():
-        advisory_log.unlink()
-
     # block mode: reset is skipped, reason is populated.
     block_result = _run_loop(payload, project_dir, home, mode="block")
     assert block_result.returncode == 0
@@ -89,17 +87,14 @@ def test_unresolved_obligation_block_skips_reset_advisory_resets_and_logs(tmp_pa
     assert blocked_state.get("terminal_gate_blocked_reason")
     assert "condition (a)" in blocked_state["terminal_gate_blocked_reason"]
 
-    # advisory (unset, default): ORIGINAL reset still happens, plus a log entry.
+    # advisory (unset, default): ORIGINAL reset still happens, nothing written.
     fx.write_overnight_state(state_path, session_id, cycle_count=3, current_issues=[])
-    if advisory_log.exists():
-        advisory_log.unlink()
     advisory_result = _run_loop(payload, project_dir, home, mode=None)
     assert advisory_result.returncode == 0
     advisory_state = _read_state(project_dir, session_id)
     assert advisory_state["cycle_count"] == 4
-    assert advisory_log.is_file()
-    lines = [line for line in advisory_log.read_text().splitlines() if line.strip()]
-    assert any(json.loads(line).get("event") == "would_block_reset" for line in lines)
+    assert "terminal_gate_blocked_reason" not in advisory_state
+    assert _written_logs(home) == []
 
 
 # --------------------------------------------------------------------------
@@ -218,16 +213,12 @@ def test_off_mode_skips_entirely_overnight_loop(tmp_path):
     fx.write_overnight_state(state_path, session_id, cycle_count=1, current_issues=current_issues)
     payload = fx.all_completed_todo_payload(session_id, transcript_path=str(transcript))
 
-    advisory_log = _advisory_log(home)
-    if advisory_log.exists():
-        advisory_log.unlink()
-
     result = _run_loop(payload, project_dir, home, mode="off")
     assert result.returncode == 0
     state = _read_state(project_dir, session_id)
     assert state["cycle_count"] == 2
     assert "terminal_gate_blocked_reason" not in state
-    assert not advisory_log.exists()
+    assert _written_logs(home) == []
 
 
 # --------------------------------------------------------------------------

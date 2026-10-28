@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # Description: Verify CAS and append-only invariants for scripts/score-update.sh and
-#              scripts/lifecycle-baseline-import.sh against a temporary lifecycle JSONL.
-# Usage: test-lifecycle-cas.sh [--score-update <path>] [--score-inject <path>] [--baseline-import <path>]
+#              the lifecycle read of scripts/score-inject.sh against a temporary lifecycle JSONL.
+# Usage: test-lifecycle-cas.sh [--score-update <path>] [--score-inject <path>]
 # Exit codes: 0=all pass, 1=at least one test failed
 #
 # Tests:
 #   (a) successful append writes exactly one new JSONL line
 #   (b) CAS conflict (wrong --expected-prev-score) exits 3 and appends zero lines
 #   (c) append-only invariant: existing lines are byte-preserved after append
-#   (d) baseline-import is idempotent (second run writes no new lines for already-imported agents)
 #   (e) score-inject.sh reads lifecycle.jsonl and ignores agent-scores.json after baseline import
 #
 # Root cause ref: arch-7 phase 2 (task 20260525-050824)
@@ -20,14 +19,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 SCORE_UPDATE="${SCORE_UPDATE:-$REPO_ROOT/scripts/score-update.sh}"
 SCORE_INJECT="${SCORE_INJECT:-$REPO_ROOT/scripts/score-inject.sh}"
-BASELINE_IMPORT="${BASELINE_IMPORT:-$REPO_ROOT/scripts/lifecycle-baseline-import.sh}"
 
 # Allow override via positional args for legacy compat
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --score-update)    SCORE_UPDATE="${2:?}"; shift 2 ;;
     --score-inject)    SCORE_INJECT="${2:?}"; shift 2 ;;
-    --baseline-import) BASELINE_IMPORT="${2:?}"; shift 2 ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -142,46 +139,6 @@ if [[ "$new_content" == "${original_content}"* ]]; then
   assert_pass "c: existing lines byte-preserved after append"
 else
   assert_fail "c: existing lines byte-preserved after append" "original content is not a prefix of new content"
-fi
-
-# ---------------------------------------------------------------
-# Test (d): baseline-import idempotency
-# ---------------------------------------------------------------
-# Create a fake agent-scores.json with score 42 for all agents
-( source ~/.claude/venv/bin/activate && python3 - "$FAKE_SCORES" <<'PYEOF'
-import json, sys
-CANONICAL_AGENTS = [
-    "ba", "dev", "qa",
-    "ui-specialist", "architect", "product-owner", "user", "pm",
-    "changelog-analyst", "push-analyst", "merge-analyst", "pull-analyst",
-    "cleanliness-inspector", "style-inspector", "prompt-inspector",
-    "rule-inspector", "git-edge-case-analyst", "cleaner",
-    "test-validator", "test-executor", "spec",
-]
-data = {"global":{"agents":{ag:{"score":42,"rank":"Skilled Craftsman","history":[]} for ag in CANONICAL_AGENTS}}}
-with open(sys.argv[1], "w") as f:
-    json.dump(data, f)
-PYEOF
-)
-
-# Start with empty lifecycle
-rm -f "$LIFECYCLE" && touch "$LIFECYCLE"
-bash "$BASELINE_IMPORT" --lifecycle-file "$LIFECYCLE" --scores-file "$FAKE_SCORES" >/dev/null
-after_first=$(line_count)
-
-bash "$BASELINE_IMPORT" --lifecycle-file "$LIFECYCLE" --scores-file "$FAKE_SCORES" >/dev/null
-after_second=$(line_count)
-
-if [[ $after_first -eq 21 ]]; then
-  assert_pass "d: first baseline-import appends 21 lines (one per canonical agent)"
-else
-  assert_fail "d: first baseline-import appends 21 lines" "got $after_first"
-fi
-
-if [[ $after_second -eq $after_first ]]; then
-  assert_pass "d: second baseline-import is idempotent (appends zero new lines)"
-else
-  assert_fail "d: second baseline-import is idempotent" "after_first=$after_first after_second=$after_second"
 fi
 
 # ---------------------------------------------------------------

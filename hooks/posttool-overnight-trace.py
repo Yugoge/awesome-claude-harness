@@ -388,31 +388,6 @@ def _compute_evidence_completeness(
     return _evidence_completeness_from_report(report, agent_type)
 
 
-def _start_ts_from_bookmark(project_dir: Path, session_id: str | None) -> str | None:
-    if not session_id:
-        return None
-    bookmark = project_dir / ".claude" / f"agent-bookmark-{session_id}.json"
-    if not bookmark.exists():
-        return None
-    data = _try_load_json(bookmark)
-    if not isinstance(data, dict):
-        return None
-    ts = data.get("start_ts") or data.get("started_at")
-    return ts if isinstance(ts, str) and ts else None
-
-
-def _duration_ms(start_ts: str | None, end_ts: str) -> int | None:
-    if not start_ts:
-        return None
-    try:
-        s = datetime.fromisoformat(start_ts.replace("Z", "+00:00"))
-        e = datetime.fromisoformat(end_ts.replace("Z", "+00:00"))
-        delta = (e - s).total_seconds() * 1000.0
-        return int(delta) if delta >= 0 else None
-    except Exception:
-        return None
-
-
 def _exit_status(tool_response: dict | None) -> str:
     if not isinstance(tool_response, dict):
         return "success"
@@ -435,7 +410,6 @@ def _build_record(
     state: dict | None,
 ) -> dict[str, Any]:
     end_ts = _now_iso()
-    start_ts = _start_ts_from_bookmark(_project_dir(), session_id)
     tool_response = _tool_response(stdin_ctx)
     agent_type = _agent_type(stdin_ctx)
     artifact_paths = _artifact_paths_from_response(tool_response)
@@ -449,9 +423,10 @@ def _build_record(
         "role": agent_type,
         "mode": _mode_from_input(stdin_ctx),
         "pipeline_id": _pipeline_id_from(stdin_ctx, contract),
-        "start_ts": start_ts,
+        # No writer records an agent's start, so these stay null.
+        "start_ts": None,
         "end_ts": end_ts,
-        "duration_ms": _duration_ms(start_ts, end_ts),
+        "duration_ms": None,
         "tool_call_count": _tool_call_count(tool_response),
         "estimated_tokens": _estimated_tokens(tool_response),
         "estimated_cost_usd": None,

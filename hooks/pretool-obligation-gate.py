@@ -8,7 +8,7 @@ WHY THIS HOOK EXISTS:
   is the FIRST of five enforcement doors (G1-G4 + repair engine) that make
   that possible. G1 runs on every Agent dispatch whose subagent_type is a
   producer role and evaluates whether the dispatch prompt carries a valid
-  <obligation v="1"> block (hooks/lib/obligation.py grammar), logging
+  <obligation v="1"> block (hooks/lib/obligation.py grammar), allowing
   (advisory mode) or rejecting (block mode) when it does not.
 
 SEMANTICS (turn-1 blueprint L1, docs/dev/specs/20260930-092323/design/
@@ -28,21 +28,20 @@ turn-1-one-shot-blueprint.md:36-50,147-165), first match wins:
        - ParsedObligation -> its role must equal the dispatch's subagent_type
          (role_mismatch) and its dispatched_at must lie within
          DISPATCH_CLOCK_BOUND_SECONDS of now (dispatch_clock_out_of_bound; an
-         uncomparable value fails closed). Otherwise exit 0, no log.
+         uncomparable value fails closed). Otherwise exit 0.
        - NoBlock on a producer dispatch: a violation (missing_block) only
          while the human-typed span (lib/command_span.active_span) is one of
          SPAN_COMMANDS_REQUIRING_BLOCK (TC-41); otherwise exit 0.
        - Rejection (malformed block, unregistered schema id, OR
          tool_input.prompt absent/non-string -- hooks/lib/obligation.py's own
          bad_prompt case): UNCONDITIONAL.
-     A violation writes an advisory record; advisory mode then exits 0, block
-     mode also prints the three-element stderr message and exits 2.
+     On a violation advisory mode exits 0; block mode prints the
+     three-element stderr message and exits 2.
   4. Any exception raised anywhere in step 2/3 (malformed/empty stdin,
      unreadable dev-registry path, any unexpected internal failure) is caught
-     by the single wrapping try/except: a best-effort advisory record with
-     reason="gate_error" is written and the hook exits 0 -- it never raises
-     past main() and never exits non-zero outside the deliberate block-mode
-     rejection in step 3.
+     by the single wrapping try/except and the hook exits 0 -- it never
+     raises past main() and never exits non-zero outside the deliberate
+     block-mode rejection in step 3.
 
 FAIL-OPEN, never-wedge: matches the unified gate template byte-for-byte in
 spirit (turn-1-one-shot-blueprint.md:147-165) and
@@ -53,7 +52,7 @@ parse_obligation() -- this hook never re-implements obligation-block
 grammar or field validation (ticket-20260930-132644-l1 constraint).
 
 Exit codes:
-  0 -- allow (pass-through, valid block, or advisory-logged-and-pass).
+  0 -- allow (pass-through, valid block, or a violation in advisory mode).
   2 -- reject (block mode only: missing block inside a gated span, or any
        malformed/invalid block, role mismatch, out-of-bound clock, bad prompt).
 """
@@ -88,33 +87,12 @@ PRODUCER_ROLES = frozenset({
 SPAN_COMMANDS_REQUIRING_BLOCK = frozenset({
     "dev", "redev", "dev-command", "dev-overnight", "do", "close", "commit",
 })
-ADVISORY_LOG = os.path.join("~", ".claude", "logs", "obligation-gate-advisory.jsonl")
 GRAMMAR_DOC_REF = "docs/reference/close-commit-zero-failure-mechanism-20260928.md"
 
 
 def _span_requires_block(transcript_path) -> bool:
     span = command_span.active_span(transcript_path) if transcript_path else None
     return span is not None and span.command in SPAN_COMMANDS_REQUIRING_BLOCK
-
-
-def _emit_advisory(session_id, subagent_type, reason) -> None:
-    """Best-effort JSONL append. A log-write failure must never affect the
-    exit code (M4) -- kept LOCAL, not imported, per the documented rationale
-    in hooks/subagentstop-artifact-contract-enforce.py (an unrelated refactor
-    of a shared helper must never silently disable this gate)."""
-    try:
-        log_path = os.path.expanduser(ADVISORY_LOG)
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        record = {
-            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "session_id": session_id,
-            "subagent_type": subagent_type,
-            "reason": reason,
-        }
-        with open(log_path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record) + "\n")
-    except Exception:
-        pass
 
 
 def _emit_block(session_id, subagent_type, reason) -> None:
@@ -161,7 +139,6 @@ def _evaluate(data: dict, mode: str) -> None:
         reason = "missing_block"
     else:  # Rejection -- unconditional, whatever the span
         reason = parsed.reason
-    _emit_advisory(session_id, subagent_type, reason)
     if mode == "block":
         _emit_block(session_id, subagent_type, reason)
         sys.exit(2)
@@ -170,7 +147,6 @@ def _evaluate(data: dict, mode: str) -> None:
 def main() -> None:
     if os.environ.get(SWITCH_ENV, "").strip().lower() == "off":
         sys.exit(0)
-    data: dict = {}
     try:
         data = json.load(sys.stdin)
         mode = os.environ.get(SWITCH_ENV, "advisory").strip().lower()
@@ -178,10 +154,7 @@ def main() -> None:
     except SystemExit:
         raise
     except Exception:
-        session_id = data.get("session_id") if isinstance(data, dict) else None
-        tool_input = data.get("tool_input") if isinstance(data, dict) else None
-        subagent_type = tool_input.get("subagent_type") if isinstance(tool_input, dict) else None
-        _emit_advisory(session_id, subagent_type, "gate_error")
+        pass  # fail open: an internal error never blocks a dispatch
     sys.exit(0)
 
 

@@ -288,7 +288,7 @@ When QA's verification surfaces a finding that lies outside the user-need path (
 
 1. Append the finding to the QA report's `out_of_scope_observations[]` array (schema mirrors agents/ba.md / agents/pm.md). Each entry: `{ts, file, line, observation, in_user_path: false, security_relevant: bool}`.
 2. **Do NOT add the finding to the FAIL list.** Path-external observations are not blocking unless `security_relevant: true`.
-3. The orchestrator routes the QA report's `out_of_scope_observations[]` to the cycle's BA spec / observations-ledger handoff (per agents/ba.md `out_of_scope_observations` chapter / ledger lazy-create rules).
+3. The orchestrator routes the QA report's `out_of_scope_observations[]` to the cycle's BA spec handoff (per agents/ba.md `out_of_scope_observations` chapter).
 
 ---
 
@@ -1158,7 +1158,7 @@ python3 scripts/blast-radius-tool.py \
   --task-id <task_id>
 ```
 
-Use `--base HEAD` (the default) — Dev's changes during this cycle are typically uncommitted, so `git diff HEAD` captures the working-tree mutation set. If the task was committed mid-cycle (rare), substitute the task's starting SHA recorded in `.claude/dev-registry/dev-<task_id>/start-sha` (if present) for `<base>`. Using `HEAD~1` would mix in unrelated prior-commit changes and produce false Phase-2 gaps.
+Use `--base HEAD` (the default) — Dev's changes during this cycle are typically uncommitted, so `git diff HEAD` captures the working-tree mutation set. Using `HEAD~1` would mix in unrelated prior-commit changes and produce false Phase-2 gaps.
 
 Compare:
 - Each `coverage_gaps[]` entry in the Phase 2 map MUST have a matching entry in Dev's `blast_radius_declarations[]` (by file).

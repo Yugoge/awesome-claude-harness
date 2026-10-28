@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 10
+- **Total files**: 9
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -14,7 +14,6 @@
 - `patch.py` - Patch CLAUDE.md dynamic sections using AUTO markers.
 - `regen_index.py` - Regenerate INDEX.md for a directory.
 - `regen_readme.py` - Regenerate README.md for a directory.
-- `systemd.py` - Query systemctl for known services and generate markdown table.
 - `tree.py` - Build directory trees for INDEX.md.
 
 ---

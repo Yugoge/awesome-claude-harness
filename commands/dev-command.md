@@ -900,9 +900,7 @@ The fixed entrypoint contract is `scripts/resolve-dev-artifact-chain.py --task-i
   otherwise create a new spec. The next command is `/dev --spec <spec_path>`.
   Do NOT hand unfinished work to `/close` or `/commit`.
 - If all requested development is complete and only closure/shipping remains,
-  create a compact temp update using `/spec-update --temp`. Include `Task ID: <timestamp>`,
-  artifact paths (ticket, context, dev-report, QA-report, completion), QA status,
-  iteration count, and suggested next commands: `/close <task-id>` → `/commit <task-id>` → `/push`.
+  the next commands are `/close <task-id>` → `/commit <task-id>` → `/push`.
 
 **Present to user**: Show summary with key changes and next steps. Suggest `/close <task-id>` as the next action.
 

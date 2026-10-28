@@ -39,7 +39,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_dev_registry_entry
 from lib import obligation
-from lib.harness_state_dir import harness_state_dir
 
 # Only enforce for QA agents
 ENFORCED_AGENT_TYPE = "qa"
@@ -379,17 +378,6 @@ def main() -> None:
     enforce_data = _read_json(enforce_path)
     if not enforce_data.get("enabled"):
         # Enforcement explicitly disabled
-        sys.exit(0)
-
-    # Check for force-mode sentinel: /close --force writes this before any QA dispatch.
-    # If present, skip E2E enforcement — forced closes dispatch zero QA subagents by design.
-    # This is defense-in-depth; the primary fix is the 2-step force-path todo in close.md.
-    force_sentinel_pattern = f"{harness_state_dir()}/claude-close-force-{dev_session_id}.flag"
-    if glob.glob(force_sentinel_pattern):
-        sys.stderr.write(
-            f"subagentstop-e2e-enforce: force-mode sentinel found at "
-            f"{force_sentinel_pattern}; skipping E2E enforcement.\n"
-        )
         sys.exit(0)
 
     # Read qa_mode from authoritative sentinel (set by orchestrator before dispatch)

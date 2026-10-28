@@ -603,27 +603,6 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# WS1: default to the resolved harness home, never the author literal <author-path>.\""
     },
     {
-      "path": "hooks/notification-idle-overnight.py",
-      "fingerprint": "3ff5a92ba4c641e6",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"not the author literal <author-path>) with fields:\""
-    },
-    {
-      "path": "hooks/notification-idle-overnight.py",
-      "fingerprint": "5d8e624111a4898a",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"Never the author literal <author-path>. This is an OPTIONAL observability sink: a\""
-    },
-    {
-      "path": "hooks/notification-idle-overnight.py",
-      "fingerprint": "ba7a535067a4f9b4",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
-    },
-    {
       "path": "hooks/posttool-overnight-trace.py",
       "fingerprint": "9149e513f150b805",
       "ordinal": 1,
@@ -681,31 +660,10 @@
     },
     {
       "path": "hooks/pretool-overnight-hook-guard.py",
-      "fingerprint": "7578584fe0b3285c",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"Never the author literal <author-path>. The audit append already degrades softly\""
-    },
-    {
-      "path": "hooks/pretool-overnight-hook-guard.py",
       "fingerprint": "9a967e3138b57187",
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
       "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"/proc/<pid><author-path> re-entry cannot reach a RW alias of main.\"\"\"\""
-    },
-    {
-      "path": "hooks/pretool-overnight-hook-guard.py",
-      "fingerprint": "d029d660336b4e8c",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"try: # WS1 shared harness-home resolver (route the audit-log default off <author-path>).\""
-    },
-    {
-      "path": "hooks/pretool-overnight-hook-guard.py",
-      "fingerprint": "f2a413f784920a31",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
     },
     {
       "path": "hooks/prompt-workflow.py",

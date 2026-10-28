@@ -139,7 +139,6 @@ def _make_fanout(
     root: Path,
     *,
     workers: list[str] | None = None,
-    optional_parent: bool = False,
 ) -> tuple[dict[str, Path], dict[str, dict[str, Path]]]:
     workers = workers or list(WORKERS)
     parents = _parent_paths(root)
@@ -167,10 +166,6 @@ def _make_fanout(
     aggregate = RESOLVER._load_aggregate_module()._build_aggregate(loaded, TASK_ID)
     _write(parents["dev"], aggregate)
     _write(parents["completion"], _completion(TASK_ID, references))
-    if optional_parent:
-        _write(parents["ticket"], _ticket(TASK_ID))
-        _write(parents["context"], {"request_id": TASK_ID, "task_id": TASK_ID})
-        _write(parents["qa"], _qa_document(TASK_ID))
     return parents, lanes
 
 
@@ -301,7 +296,7 @@ def test_singular_chain_passes_with_stable_consumer_fields(tmp_path: Path) -> No
         _relative(tmp_path, parents["dev"]),
         _relative(tmp_path, parents["qa"]),
     ]
-    assert result["optional_parent_artifacts"] == {}
+    assert "optional_parent_artifacts" not in result
 
 
 def test_markdown_identity_accepts_generated_bullet_style(tmp_path: Path) -> None:
@@ -335,9 +330,7 @@ def test_fanout_without_parent_optional_artifacts_is_read_only_and_stable(
             for kind in ("dev", "qa")
         ],
     ]
-    assert all(
-        not item["present"] for item in result["optional_parent_artifacts"].values()
-    )
+    assert "optional_parent_artifacts" not in result
     assert before == middle == after
     assert not parents["ticket"].exists()
     assert not parents["context"].exists()
@@ -391,16 +384,6 @@ def test_missing_canonical_is_aggregated_before_read_only_resolution(
     assert result["status"] == "pass"
     assert result["mode"] == "fanout"
     assert [lane["worker"] for lane in result["lanes"]] == WORKERS
-
-
-def test_fanout_accepts_valid_optional_parent_artifacts(tmp_path: Path) -> None:
-    parents, _ = _make_fanout(tmp_path, optional_parent=True)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass"
-    assert all(
-        item["present"] for item in result["optional_parent_artifacts"].values()
-    )
-    assert result["report_paths"][-1] == _relative(tmp_path, parents["qa"])
 
 
 def test_current_three_lane_shape_with_r01_identity_and_full_index_passes(
@@ -512,13 +495,6 @@ def test_singular_with_worker_shard_is_ambiguous(tmp_path: Path) -> None:
     _write(lane, _dev_document(f"{TASK_ID}-lane-a"))
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
     assert "AMBIGUOUS_SINGULAR_CHAIN" in _error_codes(result)
-
-
-def test_invalid_optional_parent_artifact_is_not_ignored(tmp_path: Path) -> None:
-    parents, _ = _make_fanout(tmp_path)
-    _write(parents["qa"], _qa_document("wrong-parent"))
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert "IDENTITY_MISMATCH" in _error_codes(result)
 
 
 def test_cli_validation_failure_is_json_and_exit_two(tmp_path: Path) -> None:

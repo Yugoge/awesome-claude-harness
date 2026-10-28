@@ -38,18 +38,14 @@ SECTION_TEXT = "## New attempt\n\nDetails of this attempt.\n\nCLOSE: YES\n"
 def _load_module():
     """Fresh import of scripts/close-report-append.py per test (hyphenated
     filename -- not a valid Python module name for a normal import). A
-    fresh load avoids module-global state (e.g. _DEFAULT_MARKER_DIR)
-    leaking between tests."""
+    fresh load avoids module-global state (e.g. _LOCK_TIMEOUT_SECONDS,
+    which main() overrides) leaking between tests."""
     return SourceFileLoader("close_report_append_under_test", str(_SCRIPT_PATH)).load_module()
 
 
 @pytest.fixture
-def mod(tmp_path, monkeypatch):
-    m = _load_module()
-    # Redirect the durable failure-marker directory into this test's own
-    # scratch dir -- never the real /tmp/claude-close-report-markers.
-    monkeypatch.setattr(m, "_DEFAULT_MARKER_DIR", tmp_path / "markers")
-    return m
+def mod():
+    return _load_module()
 
 
 @pytest.fixture
@@ -72,7 +68,7 @@ def scenario(tmp_path):
 
 
 def _run(mod, scenario):
-    return mod.run(scenario["report_path"], scenario["section_path"], "t1", _REPO_ROOT)
+    return mod.run(scenario["report_path"], scenario["section_path"], _REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +285,7 @@ def test_ac5_new_files_exist_at_expected_paths():
 def test_ac6_pre_publish_missing_section_file_sentinel_unchanged(mod, tmp_path):
     report_path = tmp_path / "close-report-t2.md"
     section_path = tmp_path / "does-not-exist.md"
-    ok, line = mod.run(report_path, section_path, "t2", _REPO_ROOT)
+    ok, line = mod.run(report_path, section_path, _REPO_ROOT)
     assert ok is False
     assert line.startswith("CLOSE_REPORT_APPEND_ERROR: read: section-file:")
     assert not report_path.exists()
@@ -299,21 +295,20 @@ def test_ac6_pre_publish_illegal_close_line_sentinel_unchanged(mod, tmp_path):
     report_path = tmp_path / "close-report-t3.md"
     section_path = tmp_path / "section-bad.md"
     section_path.write_text("Some notes.\n\nNo verdict line here.\n", encoding="utf-8")
-    ok, line = mod.run(report_path, section_path, "t3", _REPO_ROOT)
+    ok, line = mod.run(report_path, section_path, _REPO_ROOT)
     assert ok is False
     assert line.startswith("CLOSE_REPORT_APPEND_ERROR: append:")
     assert "not a legal CLOSE" in line
     assert not report_path.exists()
 
 
-def test_ac6_main_exit_code_1_unchanged_for_pre_publish_failure(tmp_path, monkeypatch, capsys):
+def test_ac6_main_exit_code_1_unchanged_for_pre_publish_failure(tmp_path, capsys):
     # --section-file must itself exist (main()'s own is_file() precheck
     # returns exit code 2 for a missing/bad-invocation path, a DIFFERENT
     # and already-unchanged contract -- see AC6's own "2 = bad invocation"
     # exit code); the failure exercised here is inside run() itself
     # (illegal CLOSE: line), which is the pre-publish exit-1 path.
     m = _load_module()
-    monkeypatch.setattr(m, "_DEFAULT_MARKER_DIR", tmp_path / "markers")
     report_path = tmp_path / "close-report-t4.md"
     section_path = tmp_path / "section-bad.md"
     section_path.write_text("Some notes.\n\nNo verdict line here.\n", encoding="utf-8")

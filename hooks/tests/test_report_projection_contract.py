@@ -54,7 +54,6 @@ def _load_module(name: str, relative: str):
 
 aggregate = _load_module("projection_aggregate", "scripts/aggregate-dev-report.py")
 resolver = _load_module("projection_resolver", "scripts/resolve-dev-artifact-chain.py")
-closeout = _load_module("projection_closeout", "hooks/lib/closeout.py")
 file_check = _load_module(
     "projection_file_check", "hooks/posttool-overnight-file-check.py"
 )
@@ -732,17 +731,6 @@ def test_direct_caller_keeps_invalid_json_and_projection_fail_closed(tmp_path: P
     invalid.write_text("not-json", encoding="utf-8")
     assert file_check._validate_one_artifact(invalid, "dev-report.v1")[0] == "invalid_json"
     assert file_check._validate_one_artifact(tmp_path / "missing.json", "dev-report.v1")[0] == "missing"
-
-
-@pytest.mark.parametrize(("ui", "coverage"), [(False, None), (True, 1.0)])
-def test_projected_qa_activates_correct_closeout_metrics(ui: bool, coverage) -> None:
-    report = _qa_report(ui=ui)
-    assert runtime.validate(report, "qa-report.v1")["ok"]
-    loaded = [{"entry": {"ui_pipeline": ui}, "report": report}]
-
-    assert closeout._count_passed_pipelines(loaded) == 1
-    assert closeout._false_pass_risk_count(loaded) == 0
-    assert closeout._ui_evidence_coverage(loaded) == coverage
 
 
 def test_projected_dev_preserves_aggregate_and_resolver_nested_semantics(

@@ -167,7 +167,7 @@ class TestEvaluateCommitBlessedBridge(unittest.TestCase):
             # No candidate grants => the regular path fails closed (default-deny);
             # the key assertion is that the sentinel path is never consulted.
             # (Post grant-selection refactor _evaluate_commit collects candidates
-            # via _collect_commit_grant_candidates, not _find_grant/_find_grant_any.)
+            # via _collect_commit_grant_candidates, not _find_grant.)
             with patch.object(guard, "_collect_commit_grant_candidates", return_value=[]):
                 try:
                     guard._evaluate_commit(self.REGULAR_CMD, _make_data())

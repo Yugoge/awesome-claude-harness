@@ -9,7 +9,7 @@
 # workflow-enforce.py) release on the next stop attempt and the session
 # can terminate normally.
 #
-# Sentinel guard mirrors commit/push/merge: pretool-wrapper-userintent.py
+# Sentinel guard: pretool-wrapper-userintent.py
 # enforces that this script is only invocable via /stop slash command.
 # Model agents using Bash to invoke stop.sh directly will be blocked.
 set -euo pipefail

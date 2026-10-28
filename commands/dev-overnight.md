@@ -114,7 +114,7 @@ Step 1: Read state file + cd into the working root (first run only)
 1. **Autonomy is gated by `spec_mode`**, with a third clause for autonomy-directive override.
    - **Clause A** — `spec_mode == "autonomous"`: do NOT ask the user anything inside the time-lock window; make routine decisions yourself and record each assumption (Hard Rule 5). A genuine owner decision parks its pipeline (Hard Rule 5).
    - **Clause B** — `spec_mode == "user-provided"` AND focus does NOT contain autonomy-directive tokens: honor the spec's user gates (orchestrator view Hard Rule 10). Inside the window a spec-defined user gate parks the pipeline it gates exactly as Hard Rule 5 parks a genuine owner decision: the gate's decision is recorded as a parked question (task id, need, options, default), the gated family stays incomplete and lands nothing, and the loop continues with the other pipelines. Never resolve the gate yourself; after `end_time` it is asked with AskUserQuestion (Hard Rule 5).
-   - **Clause C (autonomy-directive override)** — `spec_mode == "user-provided"` AND focus contains any of `\b(autonomously|manual\s+interrupt|don.?t\s+ask|no\s+questions)\b` (case-insensitive): treat the run as autonomous regardless of spec_mode. The orchestrator MUST NOT emit `<options>` XML or interrogative endings. When genuine deadlock occurs (e.g., META-DEADLOCK where a hook blocks the very fix needed), the orchestrator MUST: (a) write a deadlock report to `docs/dev/overnight-deadlock-<ts>.md` with the situation summary; (b) park the deadlocked pipeline (Hard Rule 5), with the decision the deadlock needs as its parked question; (c) continue with the next pipeline; (d) record every owner question as a parked question for the overnight summary, to be asked with AskUserQuestion after `end_time`. Asking the user mid-cycle is a Clause-C violation.
+   - **Clause C (autonomy-directive override)** — `spec_mode == "user-provided"` AND focus contains any of `\b(autonomously|manual\s+interrupt|don.?t\s+ask|no\s+questions)\b` (case-insensitive): treat the run as autonomous regardless of spec_mode. The orchestrator MUST NOT emit `<options>` XML or interrogative endings. When genuine deadlock occurs (e.g., META-DEADLOCK where a hook blocks the very fix needed), the orchestrator MUST: (a) park the deadlocked pipeline (Hard Rule 5), with the decision the deadlock needs as its parked question; (b) continue with the next pipeline; (c) record every owner question as a parked question for the overnight summary, to be asked with AskUserQuestion after `end_time`. Asking the user mid-cycle is a Clause-C violation.
 2. **Loop continuously until `end_time`**. After each fix cycle the todo completion hook handles looping; this is non-negotiable. When `spec_mode == "user-provided"`, a spec-defined user gate does not pause the loop: inside the window the pipeline it gates parks (Hard Rule 5) and the loop continues with the other pipelines; after `end_time` the gate's question is asked with AskUserQuestion and that pipeline is finished.
 3. **Cycles are user-pathway-filtered and priority-driven** (per spec-20260503-091826 Section 5.5 decision #2 — same user-need-centric philosophy as `/dev`, with explore-mode compatibility preserved per Section 5.7 anti-pattern #5). Specialists' free exploration behavior is unchanged — they continue to discover broadly. PM triage applies the user-need path-relevance filter (agents/pm.md Step 4): in **user-provided mode**, the user spec's Section 5 user-need IS the path; pipelines are gated to user-pathway-relevant findings. In **autonomous mode**, only Tier 1 blockers AND multi-agent-consensus findings get pipelines; remaining findings route to the cycle's `out_of_scope_observations` array (per agents/pm.md schema). Within the gated pipeline set, ordering remains by tier: Tier 1 (blockers) first, Tier 2 (major), Tier 3 (minor/cosmetic). Specialists continue to explore broadly — the gating is purely on what becomes a pipeline, not on what specialists are allowed to discover.
 4. **ALL exploration and fixes via subagents**. Use Agent tool for ALL scanning, analysis, and implementation work. Main context only handles TodoWrite and loop control.
@@ -275,7 +275,7 @@ REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
 
 Never create a worktree yourself in any mode, and never "upgrade" an `in_place` session to an isolated one — the user chose.
 
-**`protected_branch` (schema v9)**: the record carries the repository's protected branch name, resolved once by `create-overnight-state.sh` in the primary checkout, at launch, before any working root is established (and, under `--worktree`, before the worktree exists). It is resolved from **local refs only** (`refs/remotes/origin/HEAD`); the launch **refuses and writes no state** when it cannot be resolved, because a chain that protects a branch the repository does not have is inert. The value is **immutable** (`update-overnight-state.sh` rejects `--set protected_branch`) and is the operand the keystone (`hooks/git-keystone/reference-transaction`) and the policy shim (`scripts/overnight-git/git-policy-shim`) compare against at decision time — neither holds a branch-name literal or a fixed list of names. Both consumers **fail closed** when no live record declares the field: they refuse the ref write and name `/stop` + relaunch as the remedy. A session launched under schema v8 therefore cannot be upgraded in place — release it with `/stop` and relaunch.
+**`protected_branch` (schema v9)**: the record carries the repository's protected branch name, resolved once by `create-overnight-state.sh` in the primary checkout, at launch, before any working root is established (and, under `--worktree`, before the worktree exists). It is resolved from **local refs only** (`refs/remotes/origin/HEAD`); the launch **refuses and writes no state** when it cannot be resolved, because a chain that protects a branch the repository does not have is inert. The value is **immutable** after launch and is the operand the keystone (`hooks/git-keystone/reference-transaction`) and the policy shim (`scripts/overnight-git/git-policy-shim`) compare against at decision time — neither holds a branch-name literal or a fixed list of names. Both consumers **fail closed** when no live record declares the field: they refuse the ref write and name `/stop` + relaunch as the remedy. A session launched under schema v8 therefore cannot be upgraded in place — release it with `/stop` and relaunch.
 
 It is a **different concept from `main_branch_at_start`**, which records whichever branch the primary checkout happened to be sitting on at launch and is never used for protection.
 
@@ -1337,12 +1337,11 @@ Read dev report: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`
 - Re-invoke only that pipeline's dev subagent (a fresh dispatch: same obligation template, fresh `dispatched_at`)
 - Validate again; a completed dev report that passes validation is the only way forward
 
-### Step 14: Prepare QA Environment (Docker Rebuild + Verification Plan)
+### Step 14: Prepare QA Environment (Docker Rebuild)
 
 **This step bridges Dev and QA by:**
 1. Reading ALL dev reports to understand what changed
 2. Rebuilding Docker containers so QA tests the NEW code (autonomous-mode only — see Hard Rule 9)
-3. Writing specific verification steps for each QA pipeline
 
 **Without this step, QA tests stale code and produces false passes.**
 
@@ -1354,14 +1353,6 @@ Read dev report: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`
    - Verify build contexts point to `worktree_path`. Under `--worktree` that means the isolated worktree and NOT the main project directory; under `in_place` the two are the same path and no relocation is expected.
    - Run `docker compose build` then `docker compose up -d` for the affected services. Wait for services to be healthy.
    - When `spec_mode == "user-provided"`, skip the rebuild unless the spec's Pipeline Workflow explicitly requires it.
-3. **Write QA verification plans**: For EACH pipeline, write concrete QA verification steps:
-   - Exact URLs to visit
-   - Exact actions (click, type, wait)
-   - Exact assertions (text, element, state)
-   - For backend pipeline fixes: MUST trigger E2E generation via browser
-   - For frontend fixes: MUST do visual/interaction checks
-
-Output: `qa-verification-plans.json` with per-pipeline steps and docker status. The orchestrator writes this file directly (no subagent dispatch).
 
 **If Docker rebuild fails (autonomous mode)**: CYCLE BLOCKER. Debug and retry (max 3 attempts).
 Do NOT proceed to QA with stale containers.

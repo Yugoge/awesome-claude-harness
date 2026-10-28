@@ -484,8 +484,6 @@ check_systemctl_targets_all_dev() {
 # including dangerous ones when the user explicitly grants the pattern; consume
 # covers ANY safety block when the user-granted pattern matches.
 # NEVER bypasses subagent calls (checked via IS_SUBAGENT script-global set at top of script).
-CONSENT_LOG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/bash-consent.log"
-
 check_and_consume_allowlist() {
   local cmd="$1"
 
@@ -542,8 +540,6 @@ PYEOF
       rest="${rest#*$'\t'}"
       is_regex="${rest%%$'\t'*}"
       matched_sub="${rest#*$'\t'}"
-      mkdir -p "$(dirname "$CONSENT_LOG")"
-      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$sid CONSUMED pattern='$pattern' is_regex=$is_regex matched_subcmd='$matched_sub' full_cmd='$cmd'" >> "$CONSENT_LOG"
       echo "[allow] Grant matched for pattern='$pattern' (matched subcommand: '$matched_sub'). consume deferred to PostToolUse. Command will proceed." >&2
       # DEFECT 3a fix iter-2 (task-id 20260509-113838): emit the canonical Claude
       # Code PreToolUse approval JSON to stdout. Field shape verified against the
@@ -617,14 +613,8 @@ check_and_consume_daemon_restart_grant() {
   mkdir -p "$(dirname "$DAEMON_RESTART_AUDIT_LOG")" 2>/dev/null || true
 
   local flag_file="${DAEMON_RESTART_GRANT_DIR%/}/claude-allow-daemon-restart-${target}.flag"
-  local flag_all="${DAEMON_RESTART_GRANT_DIR%/}/claude-allow-daemon-restart-all.flag"
   local lock_file="${flag_file}.lock"
 
-  # Try target-specific flag first; if absent, try the "all" flag.
-  if [ ! -f "$flag_file" ] && [ -f "$flag_all" ]; then
-    flag_file="$flag_all"
-    lock_file="${flag_all}.lock"
-  fi
   [ ! -f "$flag_file" ] && return 1
 
   local consume_result
@@ -966,8 +956,6 @@ PYEOF
       # Grant exit 2 of 4 — snapshot-or-deny BEFORE the approval JSON is emitted,
       # so a denied clean never advertises an "allow" decision.
       _preclean_snapshot_guard
-      mkdir -p "$(dirname "$CONSENT_LOG")"
-      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) task=$TASK_ID_FOR_SENTINEL SENTINEL_GRANT_MATCHED command='$COMMAND'" >> "$CONSENT_LOG"
       echo "[allow-sentinel] structured grant matched for task=$TASK_ID_FOR_SENTINEL. consume-on-any-terminal-result deferred to PostToolUse." >&2
       "$PYTHON_BIN" -c 'import json; print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "/allow sentinel grant consumed (structured allowed_operations[] match)"}}))'
       exit 0

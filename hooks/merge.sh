@@ -10,8 +10,6 @@
 # PreToolUse), exporting the env var locally so the privilege-guard inside
 # the subprocess admits the inner command.
 #
-# Sentinel check mirrors commit.sh/push.sh (2026-04-28 SlashCommand-bypass plug).
-#
 # 2026-10-06 (merge-source generalization). The merge source is ANY resolvable
 # commit-ish, not just a local branch head:
 #   * local branch            master, worktree-overnight-...
@@ -37,8 +35,8 @@
 #   3. The post-merge invariant is still enforced before any cleanup runs.
 set -euo pipefail
 
-# Sentinel enforcement is handled by pretool-wrapper-userintent.py (PreToolUse hook)
-# before this script runs. The wrapper itself stays pure git work.
+# /merge writes no user-intent sentinel, so none is checked before this script
+# runs. The wrapper itself stays pure git work.
 
 # WS1: resolve the harness home from this script's own location (hooks/merge.sh
 # -> harness home) via the shared resolver, so helper paths + the project-dir

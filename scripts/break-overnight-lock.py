@@ -83,7 +83,7 @@ def _backdate(sf: Path, past: str, release_isolation: bool) -> str:
     d["current_phase"] = "completed"
     # M10/AC8 + fix-4: this user `/stop` release path is the ONLY sanctioned
     # setter of isolation_released_at and the closer of isolation_active_until.
-    # update-overnight-state.sh rejects --set on these fields. The release of the
+    # Both fields are otherwise immutable after launch. The release of the
     # isolation guarantee fields happens here ONLY when a valid /stop user-intent
     # helper-auth token was consumed (release_isolation); otherwise the helper
     # MUST NOT touch isolation_released_at / isolation_active_until — so an

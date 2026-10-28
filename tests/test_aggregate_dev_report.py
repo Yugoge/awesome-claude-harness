@@ -2485,16 +2485,11 @@ class TestObligationBarrierRepairProfileBypass:
 
         # No profile is exempt any more: with a parser that accepts the
         # "repair" profile, G3 checks the completed prior stage like any other
-        # dispatch -- block exits 2, advisory logs the violation, off is off.
+        # dispatch -- block exits 2, advisory and off allow, none writes a log.
         monkeypatch.setattr(_hook_mod, "_scan_transcript_for_prior_obligations", real_scan)
         monkeypatch.setattr(_hook_mod, "_parsed_obligation", _lenient_obligation)
         assert _run_barrier_hook(monkeypatch, data) == (2 if mode == "block" else 0)
-        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
-        if mode in (None, "advisory"):
-            records = [json.loads(ln) for ln in log_path.read_text().splitlines() if ln.strip()]
-            assert [r["path"] for r in records] == [missing_rel]
-        else:
-            assert not log_path.exists()
+        assert not (fake_home / ".claude" / "logs").exists()
 
 
 class TestObligationBarrierBlockMissingPriorArtifact:
@@ -2540,13 +2535,14 @@ class TestObligationBarrierBlockMissingPriorArtifact:
             assert capsys.readouterr().err == ""
 
 
-class TestObligationBarrierAdvisoryLogsAndPasses:
-    """AC4: advisory (unset default, or explicit "advisory") -> exit 0, one
-    JSON line appended to the advisory log recording the violation."""
+class TestObligationBarrierAdvisoryPasses:
+    """AC4: advisory (unset default, or explicit "advisory") -> exit 0, no
+    block message and nothing written, though the prior artifact is missing."""
 
     @pytest.mark.parametrize("explicit_mode", [None, "advisory"])
-    def test_obligation_barrier_advisory_logs_and_passes(
-        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, explicit_mode
+    def test_obligation_barrier_advisory_passes(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture, explicit_mode,
     ):
         fake_home = tmp_path / f"fakehome-{explicit_mode}"
         fake_home.mkdir()
@@ -2571,17 +2567,13 @@ class TestObligationBarrierAdvisoryLogsAndPasses:
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
         assert _run_barrier_hook(monkeypatch, data) == 0
-
-        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
-        lines = [ln for ln in log_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(lines) == 1
-        record = json.loads(lines[0])
-        assert record["path"] == missing_rel
+        assert missing_rel not in capsys.readouterr().err
+        assert not (fake_home / ".claude" / "logs").exists()
 
 
 class TestObligationBarrierOffSwitchFullBypass:
-    """AC5: CLAUDE_OBLIGATION_BARRIER=off -> exit 0, no advisory record
-    written at all (full kill-switch bypass)."""
+    """AC5: CLAUDE_OBLIGATION_BARRIER=off -> exit 0, nothing written at all
+    (full kill-switch bypass)."""
 
     def test_obligation_barrier_off_switch_full_bypass(
         self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -2590,7 +2582,7 @@ class TestObligationBarrierOffSwitchFullBypass:
         fake_home.mkdir()
         monkeypatch.setenv("HOME", str(fake_home))
         monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "off")
-        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
+        log_path = fake_home / ".claude" / "logs"
         assert not log_path.exists()
 
         transcript = project_dir / "transcript.jsonl"
@@ -2646,7 +2638,7 @@ class TestObligationBarrierSkipsResponseKinds:
 
 class TestObligationBarrierFailOpenOnException:
     """AC7: an unexpected exception inside the new logic -> fail-open, still
-    exits 0 even in block mode (advisory-logged as gate_error)."""
+    exits 0 even in block mode, nothing written."""
 
     def test_obligation_barrier_fail_open_on_exception(
         self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -2670,10 +2662,7 @@ class TestObligationBarrierFailOpenOnException:
         assert _run_barrier_hook(monkeypatch, data) == 0
         # The current block parses, so the scan ran (and raised).
         assert len(calls) == 1
-        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
-        assert [json.loads(ln) for ln in log_path.read_text().splitlines()] == [
-            {"reason": "gate_error"}
-        ]
+        assert not (fake_home / ".claude" / "logs").exists()
 
 
 class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:

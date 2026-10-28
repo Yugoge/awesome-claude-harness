@@ -1143,33 +1143,6 @@ def _parent_paths(dev_dir: Path, task_id: str) -> dict[str, Path]:
     }
 
 
-def _optional_parent_result(
-    validator: ChainValidator,
-    paths: dict[str, Path],
-) -> dict[str, dict[str, Any]]:
-    result: dict[str, dict[str, Any]] = {}
-    for kind in ("ticket", "context", "qa_report"):
-        path = paths[kind]
-        result[kind] = {
-            "path": _rel(path, validator.root),
-            "present": path.is_file(),
-        }
-        if not path.is_file():
-            continue
-        if kind == "ticket":
-            text = validator.read_text(path)
-            if text is not None:
-                validator.validate_markdown_identity(text, validator.task_id, path)
-        else:
-            value = validator.read_json(path)
-            if value is not None:
-                if kind == "qa_report":
-                    validator.validate_qa(value, validator.task_id, path)
-                else:
-                    validator.validate_json_identity(value, validator.task_id, path)
-    return result
-
-
 def _find_undeclared_lane_artifacts(
     validator: ChainValidator, workers: list[str], aggregate: ModuleType | None
 ) -> None:
@@ -1298,7 +1271,6 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         "parallel_workers": [],
         "parallel_workers_declaration": "unknown",
         "lanes": [],
-        "optional_parent_artifacts": {},
         "report_paths": [],
         "artifact_paths": [],
         "commit_whitelist_artifacts": [],
@@ -1977,13 +1949,6 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             validator.validate_completion(
                 completion, task_id, parents["completion"], completion_refs
             )
-        optional = _optional_parent_result(validator, parents)
-        result["optional_parent_artifacts"] = optional
-        artifact_paths.extend(
-            value["path"] for value in optional.values() if value["present"]
-        )
-        if optional["qa_report"]["present"]:
-            result["report_paths"].append(optional["qa_report"]["path"])
         result["artifact_paths"] = artifact_paths
         result["commit_whitelist_artifacts"] = artifact_paths
         result["qa_inputs"] = [

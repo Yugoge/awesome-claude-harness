@@ -127,7 +127,6 @@ dot-claude/
 │   │   ├── `regen_index.py` - Regenerate INDEX.md for a directory.
 │   │   ├── `regen_readme.py` - Regenerate README.md for a directory.
 │   │   ├── `regions.py` - Four unrelated predicates used to decide what a file's AUTO region is (README first
-│   │   ├── `systemd.py` - Query systemctl for project-configured services and generate a markdown table.
 │   │   └── `tree.py` - Build directory trees for INDEX.md.
 │   ├── git-hooks/
 │   │   ├── `post-commit-auto-push` - post-commit-auto-push file
@@ -227,7 +226,6 @@ dot-claude/
 │   │   ├── `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 │   │   ├── `test_runtime_guard.py` - Two layers:
 │   │   ├── `test_scratch_lifecycle.py` - Covers:
-│   │   ├── `test_sessionstart_artifact_census.py` - Every run is a subprocess against throwaway directories; the real restart
 │   │   ├── `test_stop_do_report_gate.py` - Covers the contract from commands/do.md Step 5: a /do session may stop only
 │   │   ├── `test_stop_obligation_gate.py` - gate, ticket 20260930-132644-l4)
 │   │   ├── `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
@@ -241,7 +239,6 @@ dot-claude/
 │   │   ├── `test_userprompt_bulk_commit_capability.py` - Tests for hooks/userprompt-bulk-commit-capability.py's /commit --bulk detector.
 │   │   ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 │   │   └── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
-│   ├── `audit-slashcommand.sh` - audit-slashcommand.sh
 │   ├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
 │   ├── `capability-canary.py` - Registered once per relied-upon lifecycle event, each registration carrying its
 │   ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
@@ -333,7 +330,6 @@ dot-claude/
 │   ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 │   ├── `session_start.sh` - SessionStart Hook - Display working environment info
 │   ├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
-│   ├── `sessionstart-artifact-census.py` - Enumerates and notifies only. Every unclosed chain gets a queue record; the
 │   ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 │   ├── `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
 │   ├── `stop-completion-gate.py` - completion obligation is open (ticket 20261001-161041-r08; reworked by
@@ -406,7 +402,6 @@ dot-claude/
 │   │   ├── `attribution_adjudicator.py` - Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
 │   │   ├── `attribution_aggregate_view.py` - Emits the canonical dev-report document shape that /close and /commit
 │   │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
-│   │   ├── `dispatch_metadata.py` - answer "which bytes are this task's" -- (1) nothing records which agent identity
 │   │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
 │   │   ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
@@ -461,7 +456,6 @@ dot-claude/
 │   ├── `capability-doctor-strict.py` - Two properties this file exists to guarantee:
 │   ├── `capability-handshake.py` - Proves (or refuses to claim) that this harness's hook-based security boundary is
 │   ├── `capability-status-line.sh` - Description: statusLine command that renders the persistent host-capability marker.
-│   ├── `capture-dispatch-metadata.py` - dispatch-time baseline content for files already dirty at dispatch) in the --lanes
 │   ├── `capture-hero-run.py` - Description: Builds a hermetic fixture, installs one narrowly-scoped single-use grant,
 │   ├── `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 │   ├── `check-file-references.sh` - File reference detection script - used by /clean command
@@ -472,7 +466,6 @@ dot-claude/
 │   ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 │   ├── `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 │   ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
-│   ├── `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
 │   ├── `close-commit-repair-orchestrate.py` - Consumes schemas/repair-map.v1.json; given a findings list, looks up each
 │   ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 │   ├── `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
@@ -504,7 +497,6 @@ dot-claude/
 │   ├── `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
 │   ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
 │   ├── `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
-│   ├── `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
 │   ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 │   ├── `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
 │   ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
@@ -545,7 +537,6 @@ dot-claude/
 │   ├── `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
 │   ├── `test` - test file
 │   ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
-│   ├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
 │   ├── `verify-attribution-chain.py` - Folds each file's events across ALL session journals into a hash chain and
 │   ├── `verify-claims-extended.sh` - Description: Extended headline-claims gate. Closes the four documented coverage gaps in
 │   ├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and

@@ -269,9 +269,8 @@ The candidate set is restricted to a **staging whitelist** consisting of:
    equivalent to the existing parent ticket/context/dev/QA/completion set when
    `mode == "singular"`. When `mode == "fanout"` it instead admits every
    resolver-validated lane ticket/context/dev/QA artifact plus the parent
-   canonical/completion and only those optional parent artifacts that were
-   actually present and validated. Do not glob lane suffixes, require missing
-   optional parents, or create pseudo-parent artifacts. **R4 late-repair
+   canonical/completion. Do not glob lane suffixes or create pseudo-parent
+   artifacts. **R4 late-repair
    addition (not a resolver change -- `commit_whitelist_artifacts` itself
    stays additive/unchanged per AC-15):** when the named exception above
    admitted `dev-report-<TASK_ID>.effective.json` as `REPOSITORY_PLAN.report_path`

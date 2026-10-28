@@ -50,7 +50,7 @@ Every `/do` invocation MUST end with a terminal do-report at `docs/dev/do-report
 - `"completed"` — normal finish. Fill `do.summary` and `do.files_modified`/`do.files_created`.
 - `"blocked"` — honest terminal state when the task could not be finished (user abandoned it, an operation stayed unauthorized). Fill `do.summary` with what blocked it. NEVER report abandoned work as completed.
 
-Enforcement: `hooks/stop-do-report-gate.py` (Stop hook) checks this report against `schemas/do-report.v1.json` plus terminal-status/summary shape at session stop. In block mode a pending or malformed report blocks the stop (deadlock-guarded); in advisory mode (default) violations are logged to `~/.claude/logs/do-report-gate-advisory.jsonl`. The gate checks shape only — it never derives `files_modified` from git, and it never writes the report for you.
+Enforcement: `hooks/stop-do-report-gate.py` (Stop hook) checks this report against `schemas/do-report.v1.json` plus terminal-status/summary shape at session stop. In block mode a pending or malformed report blocks the stop (deadlock-guarded); in advisory mode violations are allowed. The gate checks shape only — it never derives `files_modified` from git, and it never writes the report for you.
 
 **Resolve `TASK_ID` deterministically for the CURRENT session** — do NOT list the newest `claude-orchestrator-consent-*.flag` in the state dir (that returns the globally-newest flag, so two concurrent `/do` sessions alias onto ONE id and silently overwrite each other's do-reports — the cross-task data-loss bug this resolution exists to prevent). Instead:
 1. `SID = $CLAUDE_CODE_SESSION_ID` (fallback `$CLAUDE_SESSION_ID`).

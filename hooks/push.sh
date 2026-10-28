@@ -21,8 +21,10 @@
 #             committed commits to remote. Automated snapshots live on
 #             refs/checkpoints/<branch> and must NOT be promoted to HEAD.)
 
-# ─── User-intent sentinel ────────────────────────────────────────────────────
-# Enforcement lives in pretool-wrapper-userintent.py (PreToolUse hook).
+# ─── Invocation gate ─────────────────────────────────────────────────────────
+# /push writes no user-intent sentinel. A Bash call that runs this script is
+# gated by pretool-push-analyst-grant-guard.py (PreToolUse hook), which needs a
+# live push-analyst grant for this repo/branch/HEAD.
 
 # WS1: resolve the harness home from this script's own location, so the
 # git-toplevel fallbacks below default to the resolved home (used only to key a
@@ -430,17 +432,6 @@ rm -f "$GRANT_PATH"
 
 # Delete push-gate token after successful push
 rm -f "$_TOKEN_PATH"
-
-# Step 10.5: Append audit log line (AC-B6 / AC-AUDIT-1)
-# Records every successful /push invocation for forensic review. Append-only.
-# The grant file itself is unlinked by THIS WRAPPER on the success path above —
-# PreToolUse hooks do not fire on subprocesses, so the guard cannot do it. This
-# log is the durable record independent of grant-file lifecycle.
-mkdir -p ~/.claude/logs
-AUDIT_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-printf '%s sid=%s command_kind=push remote=%s branch=%s head=%s sentinel_nonce=%s ppid=%s\n' \
-  "$AUDIT_TS" "$SID" "$REMOTE" "$BRANCH" "$CURRENT_HEAD" "$NONCE" "$$" \
-  >> ~/.claude/logs/git-privilege-grants.log
 
 # Step 11: Success summary
 echo ""

@@ -20,9 +20,7 @@
 #         Pattern passed via env var — never shell-interpolated into Python source.
 # Step 3: on a grant (narrow or unrestricted): write the legacy flag
 #         <state dir>/claude-bash-allowlist-<sid>.json with {pattern, is_regex} AND the
-#         structured per-task sentinel; log to ~/.claude/logs/bash-consent.log.
-#         An unrestricted grant is logged with a distinct GRANTED_MATCH_ALL verb
-#         so a match-all bypass is never invisible in the audit log.
+#         structured per-task sentinel.
 #
 # Exit 0 always. Stop hook (stop-cleanup-allowlist.sh) wipes any unconsumed flag.
 set -u
@@ -383,7 +381,7 @@ fi
 # derivable, OR the derived regex is effectively universal. Write NO grant on
 # EITHER channel, remove any stale grant for this SID/TASK_ID across the full
 # loader glob (AC15), print a usage error, and exit 0 (non-wedging). This runs
-# BEFORE the nested-quantifier check, the audit log, and both grant writes. If
+# BEFORE the nested-quantifier check and both grant writes. If
 # the Python parser failed to emit a recognized status, fail closed (REFUSE).
 if [ "$PARSED_STATUS" != "GRANT" ]; then
   _remove_stale_grants
@@ -661,25 +659,6 @@ data = {
 with open(os.environ['FLAG_PATH'], 'w') as f:
     json.dump(data, f)
 " 2>/dev/null
-
-# ── Audit log ───────────────────────────────────────────────────────
-CONSENT_LOG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/bash-consent.log"
-mkdir -p "$(dirname "$CONSENT_LOG")"
-# A match-all bypass must never be invisible in the audit log: it is recorded
-# with its own verb plus an explicit scope token, so grepping the log for
-# unrestricted grants never depends on recognizing '.*' as a pattern value.
-# The verb keeps 'GRANTED' as a prefix so existing log readers still match.
-GRANT_VERB="GRANTED"
-GRANT_SCOPE=""
-if [ "$ALLOW_MATCH_ALL" = "true" ]; then
-  GRANT_VERB="GRANTED_MATCH_ALL"
-  GRANT_SCOPE=" scope=unrestricted single_use=true"
-fi
-if [ -n "$COMMENT" ]; then
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$SID $GRANT_VERB pattern='$PATTERN' is_regex=$IS_REGEX$GRANT_SCOPE comment='$COMMENT'" >> "$CONSENT_LOG"
-else
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$SID $GRANT_VERB pattern='$PATTERN' is_regex=$IS_REGEX$GRANT_SCOPE" >> "$CONSENT_LOG"
-fi
 
 if [ -n "$COMMENT" ]; then
   echo "[allow] Grant recorded: pattern='$PATTERN' is_regex=$IS_REGEX comment='$COMMENT'. Valid for ONE matching bash call this turn."

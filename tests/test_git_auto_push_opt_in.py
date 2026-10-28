@@ -288,8 +288,8 @@ def _trigger_fswatch(base: Path, env: dict, case: str) -> Run:
                  f"origin/{BRANCH}..HEAD")
     head = _git(env, "-C", repo, "rev-parse", "HEAD")
     origin_before = _origin_refs(env, origin)
-    # Sourcing installs an EXIT trap that exits 0 and writes a state file:
-    # clear it before calling safe_push so the exit status is safe_push's own.
+    # Sourcing installs an EXIT trap that exits 0: clear it before calling
+    # safe_push so the exit status is safe_push's own.
     script = ('source "$1" "$2"; loaded=$?; trap - EXIT INT TERM; '
               '[ "$loaded" -eq 0 ] || exit 90; safe_push')
     proc = _run(["bash", "-c", script, "bash", functions, repo], env,

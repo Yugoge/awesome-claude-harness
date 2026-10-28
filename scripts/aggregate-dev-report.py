@@ -112,16 +112,10 @@ except Exception:
         re.IGNORECASE,
     )
 
-# Superseded-round shard, discovered under docs/dev/superseded-<task-id>/ for
-# a lane already present in the primary shard set (backlog #99): a QA-FAIL'd
-# round-N attempt archived there before a corrective retry was promoted as
-# that lane's own top-level shard.
-SUPERSEDED_ROUND_RE = re.compile(
-    r"^dev-report-(?P<task_id>\d{8}-\d{6})-(?P<lane>[A-Za-z0-9][A-Za-z0-9.\-]*)-round(?P<round>\d+)\.json$"
-)
-
-# Strips a superseded-round label's "-round<N>" suffix back to its lane's own
-# base label (backlog #99 iteration 1): e.g. "d-round0" -> "d". Used by
+# Strips a round shard's "-round<N>" label suffix back to its lane's own base
+# label (backlog #99 iteration 1): e.g. "d-round0" -> "d". _scan_shards keeps
+# that label for a dev-report-<task-id>-<lane>-round<N>.json that declares no
+# usable lane identity (see _attribute_shards_by_identity). Used by
 # _merge_owned_edits to recognise that a round shard and its lane's own
 # promoted shard are the SAME lane, for the same-anchor collapse there.
 _ROUND_LABEL_SUFFIX_RE = re.compile(r"-round\d+$")
@@ -873,37 +867,35 @@ def _merge_owned_edits(shards: list[tuple[str, dict]]) -> dict:
     guess. A shard whose owned_edits is not a dict, or a per-file value that
     is not a list, is skipped for that shard/file rather than raising.
 
-    Same-anchor collapse (backlog #99 iteration 1): when
-    _expand_shards_with_superseded_rounds feeds a lane's own superseded
-    round(s) ahead of its promoted shard, the promoted report is free to
-    re-declare a hunk for the SAME `old` anchor a round already declared --
-    e.g. a squashed "final authored text of the region" hunk that already
-    incorporates the round's own edit plus later revisions (observed on the
-    real cycle 20260921-134709's lane a: round0 and promoted both anchor a
-    hunk on the identical `old` text, but promoted's `new` text differs and
-    carries an extra 'note' key). Exact-JSON-value dedup does not recognise
-    these as the same edit, so BOTH would ship, and stage-owned-hunks.py's
-    sequential replay then double-applies the same region -- corrupting the
-    ledger even though a naive anchor search may still "succeed" (a large
-    `new` block can happen to re-embed the anchor text at its own tail).
-    Two hunks sharing an `old` anchor can never BOTH be truthfully replayed,
-    so only one may survive: within a single lane's OWN fold sequence (its
-    round(s), then its own promoted shard -- `_base_lane` strips the
-    "-roundN" suffix _expand_shards_with_superseded_rounds adds, to
-    recognise this), the LATER declaration wins on CONTENT (it is that
-    lane's own final authored state for the region -- verified empirically
-    against the real cycle: taking the promoted shard's hunks alone already
-    byte-replays the live file), while keeping the EARLIER declaration's
-    ledger POSITION so replay order is otherwise unaffected. No information
-    is lost by discarding the earlier declaration here: it remains fully
-    recoverable from its own archived docs/dev/superseded-<task-id>/ report
-    (untouched by this fix); it is excluded only from this replay-facing
-    ledger. The winning hunk's own auxiliary metadata (e.g. 'note') is kept
-    as-is, since the entry is kept wholesale, not merged field-by-field.
-    This collapse is intentionally scoped to a single base lane -- two
-    DIFFERENT lanes sharing an `old` anchor (never observed in practice,
-    and not this ticket's defect) are NOT collapsed, so ordinary cross-lane
-    merges keep their pre-existing exact-JSON-only dedup, unchanged.
+    Same-anchor collapse (backlog #99 iteration 1): when a lane's round
+    shard reaches this merge beside its own promoted shard, the promoted
+    report is free to re-declare a hunk for the SAME `old` anchor a round
+    already declared -- e.g. a squashed "final authored text of the region"
+    hunk that already incorporates the round's own edit plus later revisions
+    (observed on the real cycle 20260921-134709's lane a: round0 and
+    promoted both anchor a hunk on the identical `old` text, but promoted's
+    `new` text differs and carries an extra 'note' key). Exact-JSON-value
+    dedup does not recognise these as the same edit, so BOTH would ship, and
+    stage-owned-hunks.py's sequential replay then double-applies the same
+    region -- corrupting the ledger even though a naive anchor search may
+    still "succeed" (a large `new` block can happen to re-embed the anchor
+    text at its own tail). Two hunks sharing an `old` anchor can never BOTH
+    be truthfully replayed, so only one may survive: within a single lane's
+    OWN fold sequence (its round shard(s) and its own promoted shard --
+    `_base_lane` strips the "-roundN" label suffix to recognise this), the
+    LATER declaration wins on CONTENT (it is that lane's own final authored
+    state for the region -- verified empirically against the real cycle:
+    taking the promoted shard's hunks alone already byte-replays the live
+    file), while keeping the EARLIER declaration's ledger POSITION so replay
+    order is otherwise unaffected. No information is lost by discarding the
+    earlier declaration here: it remains fully recoverable from its own
+    report on disk; it is excluded only from this replay-facing ledger. The
+    winning hunk's own auxiliary metadata (e.g. 'note') is kept as-is, since
+    the entry is kept wholesale, not merged field-by-field. This collapse is
+    intentionally scoped to a single base lane -- two DIFFERENT lanes
+    sharing an `old` anchor (never observed in practice, and not this
+    ticket's defect) are NOT collapsed, so ordinary cross-lane merges keep
+    their pre-existing exact-JSON-only dedup, unchanged.
     """
     result: dict[str, list] = {}
     seen_json: dict[str, set] = {}
@@ -957,83 +949,6 @@ def _merge_pre_edit_snapshots(shards: list[tuple[str, dict]]) -> dict:
             if file_path not in result:
                 result[file_path] = snapshot
     return result
-
-
-def _scan_superseded_shards(
-    dev_dir: Path, bare_tid: str, lanes: set[str]
-) -> dict[str, list[tuple[int, Path]]]:
-    """Discover per-lane superseded-round shards for lanes already present in
-    the primary shard set (backlog #99): scans docs/dev/superseded-<task-id>/
-    directories whose own bare timestamp matches bare_tid, for files named
-    dev-report-<bare_tid>-<lane>-round<N>.json, restricted to `lanes`.
-
-    Ordering within a lane is derived strictly from the filename's numeric
-    round suffix -- never mtime or directory-listing order, per
-    commands/dev.md:858's existing "never discovered by mtime" principle. A
-    lane with no superseded rounds on disk is simply absent from the result,
-    leaving the no-retry case untouched.
-    """
-    by_lane: dict[str, list[tuple[int, Path]]] = {}
-    if not dev_dir.is_dir():
-        return by_lane
-    try:
-        top_level = list(dev_dir.iterdir())
-    except OSError:
-        return by_lane
-    for entry in top_level:
-        if not entry.is_dir() or not entry.name.startswith("superseded-"):
-            continue
-        if _bare_task_id(entry.name[len("superseded-"):]) != bare_tid:
-            continue
-        try:
-            children = list(entry.iterdir())
-        except OSError:
-            continue
-        for child in children:
-            if not child.is_file():
-                continue
-            m = SUPERSEDED_ROUND_RE.match(child.name)
-            if not m or m.group("task_id") != bare_tid:
-                continue
-            lane = m.group("lane")
-            if lane not in lanes:
-                continue
-            by_lane.setdefault(lane, []).append((int(m.group("round")), child))
-    for entries in by_lane.values():
-        entries.sort(key=lambda t: t[0])
-    return by_lane
-
-
-def _expand_shards_with_superseded_rounds(
-    shards: list[tuple[str, dict]], dev_dir: Path, bare_tid: str
-) -> list[tuple[str, dict]]:
-    """Fold each lane's superseded-round reports ahead of its own promoted
-    shard, for owned_edits/pre_edit_snapshots merge input ONLY (backlog #99).
-
-    A retried lane's promoted report may record only a delta on top of its
-    superseded round(s) rather than full re-attribution; without this, the
-    round(s)' owned_edits/pre_edit_snapshots entries would be invisible to
-    _merge_owned_edits/_merge_pre_edit_snapshots. Callers must use the
-    returned list ONLY for that merge -- every OTHER field
-    (tasks_completed/files_modified/etc.) keeps using the original `shards`
-    unchanged. `shards`' own alphabetical-by-lane order (from _scan_shards)
-    is preserved; only each lane's own superseded rounds are inserted
-    immediately before that lane's entry, in ascending round order. When no
-    lane in `shards` has any superseded round on disk (the ordinary
-    no-retry case), this returns `shards` itself, unmodified.
-    """
-    lanes = {label for label, _ in shards}
-    superseded = _scan_superseded_shards(dev_dir, bare_tid, lanes)
-    if not superseded:
-        return shards
-    expanded: list[tuple[str, dict]] = []
-    for label, data in shards:
-        for round_num, round_path in superseded.get(label, []):
-            round_data = _load_shard(round_path)
-            if round_data is not None:
-                expanded.append((f"{label}-round{round_num}", round_data))
-        expanded.append((label, data))
-    return expanded
 
 
 # Ownership-completeness diagnostics (backlog #99 criterion C) travel on THIS
@@ -1604,22 +1519,6 @@ def _build_aggregate(
     if needs_review_labels and not has_deviation:
         dev_block["status_rationale"] = _synthesize_status_rationale(shards, needs_review_labels)
 
-    # backlog #99: fold each lane's superseded-round reports (a QA-FAIL'd
-    # attempt archived under docs/dev/superseded-<task-id>/) ahead of that
-    # lane's own promoted contribution, for owned_edits/pre_edit_snapshots
-    # ONLY -- every other field above still unions the original `shards`.
-    # _resolve_project_root()'s __file__ fallback is unavailable when this
-    # module is exec()'d into a bare namespace without CLAUDE_PROJECT_DIR set
-    # (e.g. tests/test_ac_deviation_record_chain.py's minimal loader) -- fall
-    # back to `shards` unchanged rather than crash a caller that never asked
-    # for superseded-round discovery in the first place.
-    try:
-        owned_edit_shards = _expand_shards_with_superseded_rounds(
-            shards, _resolve_dev_dir(_resolve_project_root()), _bare_task_id(task_id)
-        )
-    except NameError:
-        owned_edit_shards = shards
-
     aggregate = {
         "request_id": task_id,
         "task_id": task_id,
@@ -1645,8 +1544,8 @@ def _build_aggregate(
         # actually measured.
         OWNERSHIP_COMPLETENESS_BLOCKING_KEY: [],
         "recommendations": _union_list(shards, ["recommendations"]),
-        "owned_edits": _merge_owned_edits(owned_edit_shards),
-        "pre_edit_snapshots": _merge_pre_edit_snapshots(owned_edit_shards),
+        "owned_edits": _merge_owned_edits(shards),
+        "pre_edit_snapshots": _merge_pre_edit_snapshots(shards),
     }
     wave = _baseline_wave_projection(shards)
     if wave is not None:
@@ -2572,14 +2471,14 @@ def _evidenced_claimant_candidates(
 
 
 def _lane_candidates_for_file(
-    expanded_shards: list[tuple[str, dict]], rel: str,
+    shards: list[tuple[str, dict]], rel: str,
     cycle_claimants: list | None = None, project_root: Path | None = None,
 ) -> list[tuple[str, object, list]]:
     """Per-declaring-lane (snapshot, hunks) candidates for `rel` (task
     20261001-close-multilane-stall), each folded through the SAME
     _merge_owned_edits/_merge_pre_edit_snapshots functions used for the real
-    merge, scoped to only that lane's own shard(s) (its superseded round(s),
-    if any, plus its promoted shard) -- so a retried lane's own round-fold
+    merge, scoped to only that lane's own shard(s) (its round shard(s), if
+    any, plus its promoted shard) -- so a retried lane's own same-anchor
     collapse happens exactly as it would in the real merge. Lanes not
     declaring `rel` are omitted. Empty when no lane declares `rel`.
 
@@ -2598,14 +2497,14 @@ def _lane_candidates_for_file(
     replay output and so structurally cannot reach backwards past it."""
     base_lanes: list[str] = []
     seen: set[str] = set()
-    for label, _ in expanded_shards:
+    for label, _ in shards:
         base = _base_lane(label)
         if base not in seen:
             seen.add(base)
             base_lanes.append(base)
     candidates = []
     for base in base_lanes:
-        subset = [(label, data) for label, data in expanded_shards if _base_lane(label) == base]
+        subset = [(label, data) for label, data in shards if _base_lane(label) == base]
         lane_hunks = _merge_owned_edits(subset).get(rel)
         if not isinstance(lane_hunks, list) or not lane_hunks:
             continue
@@ -3563,8 +3462,7 @@ def _apply_completeness_check(
 
     `loaded` (task 20261001-close-multilane-stall): the per-lane shards this
     aggregate was built from. When supplied, recovers each declaring lane's
-    OWN (snapshot, hunks) pair per file (via `_lane_candidates_for_file`,
-    folding in superseded rounds exactly as `_build_aggregate` does) so
+    OWN (snapshot, hunks) pair per file (via `_lane_candidates_for_file`) so
     `_completeness_check_file` can try the declaring lanes' own (snapshot,
     order) combinations instead of assuming shard-alphabetical order is
     dependency order. Optional and defaulting to None for back-compat with
@@ -3592,14 +3490,6 @@ def _apply_completeness_check(
     baseline_head_sha = aggregate.get("baseline_head_sha") or ""
     dev_dir = _resolve_dev_dir(project_root)
     own_bare_tid = _bare_task_id(str(aggregate.get("task_id") or ""))
-    expanded_shards = None
-    if loaded:
-        try:
-            expanded_shards = _expand_shards_with_superseded_rounds(
-                loaded, dev_dir, own_bare_tid,
-            )
-        except Exception:
-            expanded_shards = None
     claimants = _cycle_claimant_index(
         dev_dir, own_bare_tid, str(aggregate.get("task_id") or "")
     )
@@ -3608,7 +3498,7 @@ def _apply_completeness_check(
         if not _tracked_at_baseline(project_root, baseline_head_sha, rel):
             continue  # untracked at baseline / new-at-cycle-time -- AC-6, skip
         lane_candidates = (
-            _lane_candidates_for_file(expanded_shards, rel) if expanded_shards else None
+            _lane_candidates_for_file(loaded, rel) if loaded else None
         )
         ok, diagnostic = _completeness_check_file(
             project_root, baseline_head_sha, rel, owned[rel], snapshots.get(rel),
@@ -3628,7 +3518,7 @@ def _apply_completeness_check(
             # by no declaration" figure on scripts/aggregate-dev-report.py
             # with a bare BOUNDARY_INDETERMINATE from a deeper permutation.
             widened = _lane_candidates_for_file(
-                expanded_shards or [], rel,
+                loaded or [], rel,
                 cycle_claimants=claimants[rel], project_root=project_root,
             )
             if len(widened) > len(lane_candidates or []):

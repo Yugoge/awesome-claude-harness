@@ -601,8 +601,8 @@ def select_dispatch_attestation(sids, grant_created_at: str, agent_id: str,
     `sids` is the candidate session list -- in practice the grant's own `sid`
     plus the consuming payload's `session_id`. Both are accepted because a
     subagent's payload session id and the dispatching session's id
-    legitimately differ in this harness (the privilege guard's own
-    `_find_grant_any` exists for that same reason), and an attestation under
+    legitimately differ in this harness (the privilege guard's commit-grant
+    candidate scan admits both for that same reason), and an attestation under
     either id is still the product of a real changelog-analyst dispatch in
     that session -- the property being proved.
 

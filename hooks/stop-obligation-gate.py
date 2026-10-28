@@ -37,9 +37,8 @@ scan-and-check algorithm this gate shares with
 hooks/posttool-overnight-loop.py's new reset conditions. Do not duplicate
 that scan here.
 
-FAIL-SAFE: any unexpected error during classification -> exit 0 (allow stop)
-plus one best-effort "gate_error" advisory record. No network, no
-subprocess, read-only filesystem access only.
+FAIL-SAFE: any unexpected error during classification -> exit 0 (allow
+stop). No network, no subprocess, read-only filesystem access only.
 
 Exit codes: 0 = allow stop; 2 = block stop (block mode only; stderr names,
 per unresolved artifact, what is unmet / whose responsibility it is / how to
@@ -47,25 +46,12 @@ satisfy it).
 """
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import sys
 from pathlib import Path
 
-ADVISORY_LOG = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "obligation-terminal-gate-advisory.jsonl"
 _HOOKS_DIR = Path(__file__).resolve().parent
-
-
-def _log_event(record: dict) -> None:
-    """Best-effort append to the advisory log. Never affects exit."""
-    try:
-        ADVISORY_LOG.parent.mkdir(parents=True, exist_ok=True)
-        record["ts"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        with open(ADVISORY_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
 
 
 def _import_obligation_lib():
@@ -113,12 +99,6 @@ def main() -> int:
         payload = {}
 
     transcript_path = str(payload.get("transcript_path") or "")
-    session_id = str(
-        payload.get("session_id")
-        or os.environ.get("CLAUDE_CODE_SESSION_ID")
-        or os.environ.get("CLAUDE_SESSION_ID")
-        or ""
-    )
 
     project_dir = str(
         Path(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd())
@@ -128,16 +108,10 @@ def main() -> int:
         if not transcript_path or not Path(transcript_path).is_file():
             return 0
         unresolved = _find_unresolved(transcript_path, project_dir)
-    except Exception as exc:  # item 6: fail-open on ANY unexpected error
-        _log_event({"event": "gate_error", "session_id": session_id, "error": repr(exc)})
+    except Exception:  # item 6: fail-open on ANY unexpected error
         return 0
 
-    if not unresolved:
-        return 0
-
-    if mode != "block":
-        for item in unresolved:
-            _log_event({"event": "would_block", "mode": mode, "session_id": session_id, **item})
+    if not unresolved or mode != "block":
         return 0
 
     for item in unresolved:
@@ -148,9 +122,5 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as exc:  # FAIL-SAFE: a gate bug must never trap the session
-        try:
-            _log_event({"event": "gate_error", "error": repr(exc)})
-        except Exception:
-            pass
+    except Exception:  # FAIL-SAFE: a gate bug must never trap the session
         sys.exit(0)

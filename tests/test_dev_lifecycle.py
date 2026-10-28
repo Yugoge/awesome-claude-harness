@@ -1,6 +1,6 @@
 """Canonical test suite for scripts/dev-lifecycle.py (task 20260808-035658-lanel).
 
-Covers the pure state-derivation/cache/table logic against fixture docs/dev/
+Covers the pure state-derivation/table logic against fixture docs/dev/
 directory trees, entirely without slash-command invocation (QA is globally
 denied Skill(close:*)/Skill(commit:*) -- see AC-L21). AC-specific assertions
 live in tests/generated/20260808-035658-lanel/test_AC_L*.py; this file is the
@@ -9,7 +9,6 @@ broader/standalone suite named in the BA ticket's files_to_create list.
 
 from __future__ import annotations
 
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -148,35 +147,6 @@ def test_auto_flag_combination_rejects_bulk():
 
 def test_auto_flag_combination_noop_when_not_auto():
     assert dlc.validate_auto_flag_combination(False, "x", True, True) is None
-
-
-# --------------------------------------------------------------------------
-# rebuild_cache -- wholesale rebuild proof (poison-row elimination, AC-L16)
-# --------------------------------------------------------------------------
-
-
-def test_rebuild_cache_is_wholesale_not_merged(tmp_path):
-    cache_path = tmp_path / "cache" / "dev-lifecycle.sqlite3"
-    dlc.rebuild_cache(cache_path, [{"task_id": "poison", "kind": "ticket", "state": "close_pending",
-                                     "next_action": "close", "parent_task_id": None,
-                                     "parent_spec_id": None, "source_path": None}])
-    conn = sqlite3.connect(str(cache_path))
-    try:
-        rows = conn.execute("SELECT task_id FROM lifecycle_rows").fetchall()
-        assert rows == [("poison",)]
-    finally:
-        conn.close()
-
-    # Second scan/rebuild with a DIFFERENT row set must fully replace, not merge.
-    dlc.rebuild_cache(cache_path, [{"task_id": "fresh", "kind": "ticket", "state": "analyzed",
-                                     "next_action": "develop", "parent_task_id": None,
-                                     "parent_spec_id": None, "source_path": None}])
-    conn = sqlite3.connect(str(cache_path))
-    try:
-        rows = conn.execute("SELECT task_id FROM lifecycle_rows").fetchall()
-        assert rows == [("fresh",)], "poison row survived a rebuild -- cache is being merged, not rebuilt wholesale"
-    finally:
-        conn.close()
 
 
 # --------------------------------------------------------------------------

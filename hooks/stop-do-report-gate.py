@@ -13,7 +13,7 @@ MODE (env DO_REPORT_GATE_MODE): "block" (default) | "advisory" | "off".
 ADVISORY-FIRST shipped the gate deliberately conservatively — a buggy blocking
 Stop hook on the MAIN session traps every session exit, worse blast radius
 than the SubagentStop analogue that taught this lesson
-(subagentstop-cp-enforce.py). The advisory log has since shown low false
+(subagentstop-cp-enforce.py). The advisory period has since shown low false
 positives, so spec-20260930-092323 L5 flips the default to "block"; the
 MAX_BLOCKS deadlock guard below still prevents a true deadlock.
 
@@ -44,7 +44,6 @@ agent exactly which fields are missing).
 """
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import re
@@ -55,24 +54,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 MAX_BLOCKS = 2
-ADVISORY_LOG = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "do-report-gate-advisory.jsonl"
 TERMINAL_STATUSES = {"completed", "blocked"}
 
 # Identifier-safety pattern reused from subagentstop-e2e-enforce.py: an unsafe/
 # path-shaped sidecar task_id degrades silently to "no enforcement" rather than
 # escaping docs/dev/ or raising.
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-
-def _log_event(record: dict) -> None:
-    """Best-effort append to the advisory log. Never affects exit."""
-    try:
-        ADVISORY_LOG.parent.mkdir(parents=True, exist_ok=True)
-        record["ts"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        with open(ADVISORY_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
 
 
 def _compliance_problems(report_path: Path, task_id: str) -> list[str]:
@@ -208,17 +195,11 @@ def main() -> int:
         return 0
 
     if mode != "block":
-        _log_event({"event": "would_block", "mode": mode, "session_id": sid,
-                    "task_id": task_id, "report": str(report_path), "problems": problems})
         return 0
 
     blocks = _read_blocks(sid, task_id)
     if blocks >= MAX_BLOCKS:
         rewritten = _rewrite_pending_to_blocked(report_path, task_id)
-        _log_event({"event": "forced_allow", "mode": mode, "session_id": sid,
-                    "task_id": task_id, "report": str(report_path),
-                    "blocks": blocks, "problems": problems,
-                    "rewrote_pending_to_blocked": rewritten})
         sys.stderr.write(
             f"[do-report-gate] FORCED ALLOW after {blocks} blocks — do-report for task "
             f"{task_id} is STILL non-compliant ({'; '.join(problems)})."
@@ -228,9 +209,6 @@ def main() -> int:
         return 0
 
     _write_blocks(sid, task_id, blocks + 1)
-    _log_event({"event": "block", "mode": mode, "session_id": sid,
-                "task_id": task_id, "report": str(report_path),
-                "blocks": blocks + 1, "problems": problems})
     sys.stderr.write(
         "DO_REPORT_GATE_BLOCKED — the /do contract (commands/do.md) requires a completed "
         f"do-report before this session may stop.\n"
@@ -246,9 +224,5 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as exc:  # FAIL-SAFE: a gate bug must never trap the session
-        try:
-            _log_event({"event": "gate_error", "error": repr(exc)})
-        except Exception:
-            pass
+    except Exception:  # FAIL-SAFE: a gate bug must never trap the session
         sys.exit(0)

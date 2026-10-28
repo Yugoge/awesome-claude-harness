@@ -28,7 +28,6 @@ def _squash(text: str) -> str:
 def test_dev_completion_uses_shared_read_only_resolver() -> None:
     text = _read("commands/dev.md")
     section = text[text.index("**Codex-native artifact postcondition") :]
-    flat = _squash(section)
 
     assert FIXED_ENTRYPOINT in section
     assert 'status == "pass"' in section
@@ -36,7 +35,6 @@ def test_dev_completion_uses_shared_read_only_resolver() -> None:
     assert "The resolver is read-only" in section
     assert 'mode == "singular"' in section
     assert 'mode == "fanout"' in section
-    assert "parent ticket, context, and QA-report are optional" in flat
     assert "Never create, copy, or invent" in section
     for field in RESULT_FIELDS:
         assert f"`{field}`" in section

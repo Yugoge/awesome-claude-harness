@@ -492,10 +492,9 @@ def test_r03_immediate_same_clock_distinct_active_reentry_preserves_prior_family
     families = _task_families(fixture)
     assert set(families) == {first_task, second_task}
     assert families[first_task] == prior_bytes
-    history = fixture["root"] / ".claude" / "workflow-history" / fixture["sid"]
-    archived = list(history.glob(f"*-{first_task}/bookmark.json"))
-    assert len(archived) == 1
-    assert json.loads(archived[0].read_text())["task_id"] == first_task
+    # The prior family survives in its dev-registry directory; the start no
+    # longer copies the bookmark and checklist into a history directory.
+    assert not (fixture["root"] / ".claude" / "workflow-history").exists()
 
 
 @pytest.mark.parametrize("runtime", ["claude"])

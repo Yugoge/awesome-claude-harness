@@ -198,7 +198,7 @@ weakens no check -- every preflight runs first, it simply stops earlier. Re-run 
 
 The wrapper handles every step internally so that the privilege-guard literal-string match on the merge command does not fire on main-agent PreToolUse (the wrapper runs git operations in its OWN subprocess, which is not seen by main-agent hooks):
 
-1. User-intent sentinel check (must come from /merge slash command, not bash tool)
+1. Argument parsing -- one merge source plus optional `--no-commit`; an unknown option, a second source or no source exits 2 (no user-intent sentinel is checked: /merge writes none)
 2. Default-branch resolution (via ~/.claude/scripts/derive-default-branch.sh)
 3. Source resolution -- `git rev-parse --verify --quiet "<ref>^{commit}"`; a ref resolving to no commit object is rejected
 4. Self-merge refusal -- resolved source sha equals resolved default-branch sha: abort non-zero (rule stated at Step 1)

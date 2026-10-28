@@ -5,7 +5,7 @@ disable-model-invocation: true
 
 # /stop — Overnight Lock Release
 
-Releases every active overnight session's time-lock and workflow-enforce so the conversation can stop normally. User-invoked emergency exit; agents cannot self-invoke (sentinel guard mirrors `/commit /push /merge`).
+Releases every active overnight session's time-lock and workflow-enforce so the conversation can stop normally. User-invoked emergency exit; agents cannot self-invoke (user-intent sentinel guard, see Implementation).
 
 ## Usage
 

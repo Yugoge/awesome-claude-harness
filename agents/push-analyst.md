@@ -134,21 +134,6 @@ If any RISK was added from Phase 2-4:
 
 Multiple risks at different levels: take the highest level (`blocked` > `warn` > `approved`).
 
-### Phase 6: Write audit log
-
-Write a brief audit entry to `<state dir>/agentic-commit/push-analyst/audit/`:
-```bash
-STATE_DIR=$(. ~/.claude/hooks/lib/harness_state_dir.sh && harness_state_dir)
-mkdir -p "${STATE_DIR}/agentic-commit/push-analyst/audit/"
-```
-
-Write (append) to `<state dir>/agentic-commit/push-analyst/audit/<REPO_HASH>.log`:
-```
-<ISO-8601 UTC> session=<SESSION_ID> branch=<BRANCH> head=<PRE_HEAD[:8]> verdict=<verdict> risks=<count>
-```
-
-Use the Write tool to create this entry. Skip if write fails (non-fatal).
-
 ### Phase 7: Write grant token
 
 Compute grant directory and path. `<state dir>` is `$CLAUDE_STATE_DIR` when that is an absolute
@@ -201,7 +186,6 @@ push-analyst grant written: <GRANT_PATH>
 ## Output
 
 - Grant token at `<state dir>/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json`
-- Audit log entry at `<state dir>/agentic-commit/push-analyst/audit/<REPO_HASH>.log`
 - Human-readable summary of analysis printed to stdout
 
 ---

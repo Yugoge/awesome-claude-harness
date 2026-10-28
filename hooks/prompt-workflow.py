@@ -1799,35 +1799,6 @@ def _dev_report_reached_terminal(task_id: str) -> bool:
         return False
 
 
-def _archive_current_generation(sid: str) -> None:
-    """Copy current pointer/checklist bytes to immutable, addressable history."""
-    bookmark = workflow_bookmark_path(sid)
-    todos = official_todos_path(sid)
-    if not bookmark.exists():
-        return
-    bookmark_bytes = bookmark.read_bytes()
-    try:
-        state = json.loads(bookmark_bytes)
-    except Exception:
-        state = {}
-    identity = str(state.get('task_id') or state.get('workflow_instance_id') or 'unknown')
-    generation = int(state.get('workflow_generation', 1) or 1)
-    history = PROJECT_DIR / '.claude' / 'workflow-history' / sid / f'{generation:06d}-{identity}'
-    try:
-        history.mkdir(parents=True, exist_ok=False)
-        _write_new_file(history / 'bookmark.json', bookmark_bytes)
-        if todos.exists():
-            _write_new_file(history / 'todos.json', todos.read_bytes())
-        _fsync_directory(history.parent)
-    except FileExistsError:
-        # A previously archived generation is immutable.  Its exact bytes must
-        # match before the current pointer can move again.
-        if (history / 'bookmark.json').read_bytes() != bookmark_bytes:
-            raise RuntimeError('prior workflow history collision')
-        if todos.exists() and (history / 'todos.json').read_bytes() != todos.read_bytes():
-            raise RuntimeError('prior checklist history collision')
-
-
 def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_digest: str) -> None:
     """Commit one distinct Dev family or replay an exact envelope verbatim."""
     if not envelope_digest:
@@ -1890,7 +1861,6 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
         arguments = _extract_arguments(user_input, cmd_name)
         if arguments:
             data['arguments'] = arguments
-        _archive_current_generation(sid)
         # The checklist is fully durable before the bookmark/current-pointer
         # replace.  The bookmark is the authoritative generation selector.
         _atomic_write_json(official_todos_path(sid), todos)
@@ -1922,7 +1892,7 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
 
 def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: str = '') -> None:
     """Phase A: slash command detected -- setup todos, state, emit checklist."""
-    if cmd_name in ("commit", "push", "merge", "stop"):
+    if cmd_name in ("commit", "stop"):
         _write_userintent_sentinel(cmd_name, sid)
     if cmd_name == "do":
         handle_do_consent(sid, user_input)

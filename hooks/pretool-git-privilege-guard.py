@@ -365,34 +365,11 @@ def _load_grant(grant_path):
         return None
 
 
-def _find_grant_any(kind):
-    """Fallback grant search ignoring SID.
-
-    Used when the subagent's session_id (from PreToolUse payload) differs
-    from the orchestrator's CLAUDE_SESSION_ID used when writing the grant.
-    Searches all grants of the given kind, returns the most recent valid one.
-    """
-    pattern = os.path.join(harness_state_dir(), 'claude-%s-grant-*-*.json' % kind)
-    try:
-        candidates = glob.glob(pattern)
-    except Exception:
-        return (None, None)
-    try:
-        candidates.sort(key=lambda p: os.stat(p).st_mtime, reverse=True)
-    except Exception:
-        candidates.sort(reverse=True)
-    for path in candidates:
-        grant = _load_grant(path)
-        if grant is not None:
-            return (path, grant)
-    return (None, None)
-
-
 def _collect_commit_grant_candidates():
     """Return ALL parseable commit-grant candidates as (path, grant) pairs,
     most-recent (highest mtime) first.
 
-    Unlike _find_grant / _find_grant_any (which return only the single newest
+    Unlike _find_grant (which returns only the single newest
     grant), this returns every candidate so _evaluate_commit can SELECT the
     grant whose repo_root/branch/expected_head match the commit's target repo
     instead of blindly trusting the newest one. /commit (BULK=false) writes TWO
@@ -402,9 +379,10 @@ def _collect_commit_grant_candidates():
     a repository mismatch (docs/dev/peer-review-grant-parity.md CRITICAL).
 
     The any-SID glob is a superset of the SID-specific glob, so one glob covers
-    both the fast path and the subagent SID-propagation fallback documented in
-    _find_grant_any. Locked (.lck) grants are excluded (single-use in-flight),
-    matching _find_grant / _find_grant_any.
+    both the fast path and the subagent SID-propagation fallback (a subagent's
+    PreToolUse session_id differs from the orchestrator's CLAUDE_SESSION_ID the
+    grant was written under). Locked (.lck) grants are excluded (single-use
+    in-flight), matching _find_grant.
     """
     pattern = os.path.join(harness_state_dir(), 'claude-commit-grant-*-*.json')
     try:
@@ -715,7 +693,7 @@ def _lock_grant_for_posttool(grant_path, event_key, raw_event_id=''):
     """Lock a commit grant for deferred PostToolUse consumption (Fix B).
 
     Renames grant_path → grant_path + ".lck" to atomically remove it from
-    _find_grant / _find_grant_any searches (prevents double-use), then writes a
+    _collect_commit_grant_candidates' search (prevents double-use), then writes a
     pointer named for THIS EVENT so posttool-allowlist-consume.py can finalize:
       - success terminal result → journal the commit event, unlink the .lck (consumed)
       - any other terminal      → rename .lck back to original (preserved for retry)
@@ -1362,7 +1340,7 @@ def _has_bulk_commit_sentinel(data):
     that multiple auto-bulk commits in a single session all succeed.
     Expires 30 minutes after creation (SENTINEL_TTL_MINUTES in the writer).
 
-    SID fallback rationale (mirrors _find_grant_any for regular commits):
+    SID fallback rationale (mirrors _collect_commit_grant_candidates for regular commits):
     changelog-analyst subagents carry a different session_id than the
     orchestrator that wrote the sentinel. The SID-specific glob is tried
     first (fast path); the global glob is the fallback so subagents can
@@ -1617,7 +1595,8 @@ def _evaluate_commit(command, data):
             # still _block()s (exit 2). Single source of truth for the allow.
             _enforce_commit_grant_binding(grant, command)
             # Key the pointer on THIS EVENT, not on any session id: the grant's sid
-            # and the finalizer's sid legitimately differ (see _find_grant_any), and
+            # and the finalizer's sid legitimately differ (see
+            # _collect_commit_grant_candidates), and
             # a session-named pointer is claimable by an unrelated later commit.
             # The RAW tool_use_id rides along so ownership survives the lossy
             # filename derivation (audit R2-2).
@@ -2376,8 +2355,8 @@ def _consume_residual_override(path):
         return False
 
 
-def _audit_residual_override(path, ovr, command, kinds, segments, digest, data):
-    """Emit the honor record. stderr first: the transcript is the durable copy."""
+def _audit_residual_override(path, ovr, kinds, segments, digest):
+    """Emit the honor record on stderr: the transcript is the durable copy."""
     sys.stderr.write(
         '\nRESIDUAL-OVERRIDE HONORED: a human authorization cleared the '
         '"could not be statically classified" refusal for this command.\n'
@@ -2391,23 +2370,6 @@ def _audit_residual_override(path, ovr, command, kinds, segments, digest, data):
         + 'This clears ONLY the unparseable-token refusal. Every other policy '
         'check still applies to every part of this command the guard can read.\n'
     )
-    _append_residual_record('audit.jsonl', {
-        'event': 'residual_override_honored',
-        'at': datetime.now(timezone.utc).isoformat(),
-        'override_path': str(path),
-        'authorized_by': ovr.get('authorized_by', ''),
-        'reason': ovr.get('reason', ''),
-        'origin': ovr.get('origin', ''),
-        'issued_session_id': ovr.get('session_id', ''),
-        'used_session_id': _get_session_id(data),
-        'used_agent_id': str(data.get('agent_id') or ''),
-        'command_sha256': digest,
-        'command_excerpt': command[:200],
-        'residual_kinds': kinds,
-        'residual_segments': [s.strip()[:200] for s in segments],
-        'created_at': ovr.get('created_at', ''),
-        'expires_at': ovr.get('expires_at', ''),
-    })
 
 
 def _evaluate_command(command, data):
@@ -2454,8 +2416,7 @@ def _evaluate_command(command, data):
             # control falls through to every check below, so each part of the
             # command the guard CAN parse is still judged on its merits.
             _consume_residual_override(ovr_path)
-            _audit_residual_override(
-                ovr_path, ovr, command, kinds, segments, digest, data)
+            _audit_residual_override(ovr_path, ovr, kinds, segments, digest)
         else:
             _block(
                 '\nBLOCKED: agent git command could not be statically classified.\n'

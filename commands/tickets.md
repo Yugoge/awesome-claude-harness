@@ -7,10 +7,7 @@ argument-hint: "[--format table|json]"
 
 Read-only lifecycle table. Runs `scripts/dev-lifecycle.py scan` and renders
 the result. Never writes to `docs/dev/`, `.git` (HEAD/refs/index/worktree), or
-any `/tmp` commit-grant or bulk-commit-sentinel file — its ONLY permitted
-mutation anywhere on disk is the disposable SQLite cache at
-`.claude/cache/dev-lifecycle.sqlite3` (rebuilt wholesale on every run, never
-merged with the prior run's rows).
+any commit-grant or bulk-commit-sentinel file: the scan writes nothing at all.
 
 Root-cause reference: `docs/dev/ticket-20260808-035658-lanel.md` (5.2 — the
 user's requirement for an always-available table showing what state every

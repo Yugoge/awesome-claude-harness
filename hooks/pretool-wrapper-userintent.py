@@ -7,7 +7,7 @@ overnight isolation by running `scripts/break-overnight-lock.py` (via
 overnight ACTOR must NOT be able to self-release isolation by invoking that
 helper directly from a Bash tool call.
 
-Mechanism (mirrors the commit/push/merge sentinel-grant model):
+Mechanism:
   * The UserPromptSubmit hook (`prompt-workflow.py::_write_userintent_sentinel`)
     writes `<state dir>/claude-stop-userintent-<sid>.flag` ONLY when the user actually
     typed `/stop`.

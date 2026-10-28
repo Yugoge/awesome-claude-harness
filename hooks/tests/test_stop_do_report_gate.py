@@ -4,7 +4,7 @@
 Covers the contract from commands/do.md Step 5: a /do session may stop only
 when its do-report reached a terminal, shape-valid state. Block mode is the
 shipped default (DO_REPORT_GATE_MODE unset); advisory mode (opt-in) is
-asserted to never block and to journal would-block events. Deadlock guard:
+asserted to never block and to write nothing. Deadlock guard:
 after MAX_BLOCKS blocks the gate force-allows, honestly rewriting a still-
 "pending" do-report to "blocked" rather than leaving it silently pending.
 
@@ -302,17 +302,14 @@ def test_default_mode_blocks_and_honest_giveup_rewrite():
             _cleanup(sid2)
 
 
-def test_advisory_mode_never_blocks_and_journals():
+def test_advisory_mode_never_blocks_and_writes_nothing():
     sid, tid = _sid(), "20260101-000010"
     with tempfile.TemporaryDirectory() as tmp:
         _write_sidecar(sid, tid)
         try:
             r = _run_gate(sid, tmp, tmp, mode="advisory", task_id=tid)
             assert r.returncode == 0, f"advisory mode must never block: rc={r.returncode}"
-            log = Path(tmp) / ".claude" / "logs" / "do-report-gate-advisory.jsonl"
-            assert log.exists(), "advisory mode must journal the would-block event"
-            rec = json.loads(log.read_text().strip().splitlines()[-1])
-            assert rec["event"] == "would_block" and rec["task_id"] == tid
+            assert not (Path(tmp) / ".claude" / "logs").exists(), "advisory mode writes nothing"
         finally:
             _cleanup(sid)
 

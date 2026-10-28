@@ -6,14 +6,13 @@ The hook is the producer-side port of /close's Artifact schema gate
 session whose artifact-contract-enforce.json flag is enabled must not stop
 while its correlated report declares report_version yet violates its schema
 (exit 2). Everything else — unversioned legacy reports, missing reports,
-unregistered agents, absent flag, non-enforced agent types, ba_validation QA,
-forced closes — passes through (exit 0). Missing reports and would-block
-events land in ~/.claude/logs/artifact-contract-advisory.jsonl.
+unregistered agents, absent flag, non-enforced agent types, ba_validation QA
+— passes through (exit 0). The hook writes no log.
 
 Models tests/test_subagentstop_e2e_enforce.py's fixture and invocation
 patterns (importlib for the hyphenated module, subprocess with
-CLAUDE_PROJECT_DIR; HOME is redirected per-test so advisory log writes stay
-inside tmp_path).
+CLAUDE_PROJECT_DIR; HOME is redirected per-test so the hook never sees the
+real one).
 """
 
 from __future__ import annotations
@@ -258,15 +257,19 @@ def _valid_dev_report_v1(task_id: str) -> dict:
     }
 
 
-def _advisory_records(home_dir: Path) -> list[dict]:
-    log = home_dir / ".claude" / "logs" / "artifact-contract-advisory.jsonl"
-    if not log.exists():
-        return []
-    return [
-        json.loads(line)
-        for line in log.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+def _written_logs(home_dir: Path) -> list[str]:
+    """Files under the scratch home's logs/ directory: the hook writes none."""
+    logs = home_dir / ".claude" / "logs"
+    return sorted(p.name for p in logs.rglob("*")) if logs.is_dir() else []
+
+
+def _resolution(home_dir: Path, project_dir: Path, session_id: str, agent_id: str, role: str):
+    """What the hook's obligation branch resolves for this stop, read from the
+    transcript store the hook reads (the scratch home's projects/)."""
+    return HOOK.obligation.resolve_own_obligation(
+        session_id=session_id, agent_id=agent_id, project_dir=str(project_dir),
+        expected_role=role, roots=[home_dir / ".claude" / "projects"],
+    )
 
 
 def _standard_setup(tmp_path: Path, agent_type: str, agent_id: str, **sentinel_extra):
@@ -390,32 +393,6 @@ def test_ba_validation_qa_exempt(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-def test_force_close_sentinel_allows(tmp_path):
-    # Unique session id so the /tmp sentinel cannot collide across runs.
-    session = "dev-19990101-000001"
-    project = tmp_path / "project"
-    home = tmp_path / "home"
-    home.mkdir()
-    _register_agent(project, "agent-qa-1", session, "qa")
-    _write(
-        project / ".claude" / "dev-registry" / session
-        / "artifact-contract-enforce.json",
-        {"enabled": True, "enforced_agent_types": ["dev", "qa"]},
-    )
-    _write_sentinel(project, session, "qa")
-    _write(
-        project / "docs" / "dev" / "qa-report-19990101-000001.json",
-        _invalid_qa_report("19990101-000001"),
-    )
-    sentinel = Path(f"/tmp/claude-close-force-{session}.flag")
-    sentinel.write_text("", encoding="utf-8")
-    try:
-        proc = _run_hook(project, home, "agent-qa-1")
-        assert proc.returncode == 0, proc.stderr
-    finally:
-        sentinel.unlink(missing_ok=True)
-
-
 # ---------------------------------------------------------------------------
 # Blocking surface: versioned-and-invalid only (same as /close's schema gate)
 # ---------------------------------------------------------------------------
@@ -431,8 +408,7 @@ def test_qa_schema_invalid_blocks(tmp_path):
     assert proc.returncode == 2, proc.stderr
     assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr
     assert "qa-report.v1" in proc.stderr
-    records = _advisory_records(home)
-    assert any(r["kind"] == "schema_fail" for r in records)
+    assert _written_logs(home) == []
 
 
 def test_dev_schema_invalid_blocks(tmp_path):
@@ -468,16 +444,15 @@ def test_qa_unversioned_legacy_allows(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-def test_missing_report_allows_and_logs(tmp_path):
+def test_missing_report_allows(tmp_path):
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-1")
     (project / "docs" / "dev").mkdir(parents=True, exist_ok=True)
     proc = _run_hook(project, home, "agent-qa-1")
     assert proc.returncode == 0, proc.stderr
-    records = _advisory_records(home)
-    assert any(r["kind"] == "missing_report" for r in records)
+    assert _written_logs(home) == []
 
 
-def test_advisory_mode_logs_but_never_blocks(tmp_path):
+def test_advisory_mode_never_blocks(tmp_path):
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-1")
     _write(
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json",
@@ -485,10 +460,8 @@ def test_advisory_mode_logs_but_never_blocks(tmp_path):
     )
     proc = _run_hook(project, home, "agent-qa-1", mode="advisory")
     assert proc.returncode == 0, proc.stderr
-    records = _advisory_records(home)
-    assert any(
-        r["kind"] == "schema_fail" and r["mode"] == "advisory" for r in records
-    )
+    assert "ARTIFACT_CONTRACT_BLOCKED" not in proc.stderr
+    assert _written_logs(home) == []
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +605,7 @@ def test_task_id_anchor_blocks_when_session_ts_never_matches(tmp_path):
 
 def test_uncorrelated_report_is_not_grabbed(tmp_path):
     # A report from an unrelated task must not be validated against this
-    # session: no correlation -> missing_report advisory, exit 0.
+    # session: no correlation -> exit 0.
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-1")
     _write(
         project / "docs" / "dev" / "qa-report-20200909-090909.json",
@@ -640,8 +613,6 @@ def test_uncorrelated_report_is_not_grabbed(tmp_path):
     )
     proc = _run_hook(project, home, "agent-qa-1")
     assert proc.returncode == 0, proc.stderr
-    records = _advisory_records(home)
-    assert any(r["kind"] == "missing_report" for r in records)
 
 
 # ---------------------------------------------------------------------------
@@ -728,10 +699,10 @@ def test_ac3_resolved_obligation_all_valid_bypasses_legacy_path(tmp_path):
     assert "ARTIFACT_CONTRACT_BLOCKED" not in proc.stderr
 
 
-def test_ac4_advisory_mode_never_blocks_logs_verify_fail(tmp_path):
-    """AC4: the AC2 setup under advisory mode (the default) exits 0 and
-    appends an obligation_verify_fail advisory record naming the missing
-    artifact's path."""
+def test_ac4_advisory_mode_never_blocks(tmp_path):
+    """AC4: the AC2 setup under advisory mode (the default): the obligation
+    resolves, yet the stop exits 0 with no block message and nothing
+    written."""
     harness_session = "harness-ac4"
     agent_id = "agent-dev-ac4"
     task_id = "20260101-000004"
@@ -746,11 +717,10 @@ def test_ac4_advisory_mode_never_blocks_logs_verify_fail(tmp_path):
     )
     proc = _run_hook(project, home, agent_id, session_id=harness_session)
     assert proc.returncode == 0, proc.stderr
-    records = _advisory_records(home)
-    fails = [r for r in records if r["kind"] == "obligation_verify_fail"]
-    assert fails, records
-    assert any(
-        f.get("path") == artifact_path for r in fails for f in r.get("failures", [])
+    assert "OBLIGATION_STOPGATE_BLOCKED" not in proc.stderr
+    assert _written_logs(home) == []
+    assert isinstance(
+        _resolution(home, project, harness_session, agent_id, "dev"), HOOK.obligation.Resolved
     )
 
 
@@ -784,8 +754,8 @@ def test_ac5_off_switch_never_calls_resolve_own_obligation(monkeypatch, tmp_path
 def test_ac6_internal_exception_falls_through_to_legacy_path(
     monkeypatch, tmp_path, capsys
 ):
-    """AC6: a forced exception inside validate_artifact_for_obligation logs
-    obligation_gate_error and falls through; the legacy path's OWN
+    """AC6: a forced exception inside validate_artifact_for_obligation falls
+    through; the legacy path's OWN
     schema-invalid correlated report alone determines the final exit code
     (proved by independently making the legacy path find one)."""
     harness_session = "harness-ac6"
@@ -825,8 +795,6 @@ def test_ac6_internal_exception_falls_through_to_legacy_path(
     assert exc_info.value.code == 2
     captured = capsys.readouterr()
     assert "ARTIFACT_CONTRACT_BLOCKED" in captured.err
-    records = _advisory_records(home)
-    assert any(r["kind"] == "obligation_gate_error" for r in records)
 
 
 # ---------------------------------------------------------------------------
@@ -966,10 +934,10 @@ def test_markdown_ac4_terminal_line_mismatch_blocks_distinct_from_ac3(tmp_path):
     assert "identity_anchor" not in proc.stderr
 
 
-def test_markdown_ac5_advisory_mode_never_blocks_logs_verify_fail(tmp_path):
+def test_markdown_ac5_advisory_mode_never_blocks(tmp_path):
     """This ticket's AC5: the AC3 setup (identity_anchor missing) under
-    advisory mode (default/unset) -> exit 0, and an obligation_verify_fail
-    advisory record naming the markdown artifact's path is appended."""
+    advisory mode (default/unset): the obligation resolves, yet the stop
+    exits 0 with no block message and nothing written."""
     harness_session = "harness-md-ac5"
     agent_id = "agent-dev-md-ac5"
     task_id = "20260101-000105"
@@ -996,11 +964,10 @@ def test_markdown_ac5_advisory_mode_never_blocks_logs_verify_fail(tmp_path):
     _write(project / md_path, "# Ticket\nNo anchor here.\nSTATUS: ready\n")
     proc = _run_hook(project, home, agent_id, session_id=harness_session)
     assert proc.returncode == 0, proc.stderr
-    records = _advisory_records(home)
-    fails = [r for r in records if r["kind"] == "obligation_verify_fail"]
-    assert fails, records
-    assert any(
-        f.get("path") == md_path for r in fails for f in r.get("failures", [])
+    assert "OBLIGATION_STOPGATE_BLOCKED" not in proc.stderr
+    assert _written_logs(home) == []
+    assert isinstance(
+        _resolution(home, project, harness_session, agent_id, "dev"), HOOK.obligation.Resolved
     )
 
 
@@ -1045,9 +1012,6 @@ def test_markdown_ac6_response_block_kind_now_verified_not_advisory_only(tmp_pat
         last_assistant_message=response,
     )
     assert proc.returncode == 0, proc.stderr
-    records = _advisory_records(home)
-    assert not any(r["kind"] == "obligation_artifact_kind_unsupported" for r in records)
-    assert not any(r["kind"] == "obligation_verify_fail" for r in records)
 
 
 # ---------------------------------------------------------------------------
@@ -1105,7 +1069,7 @@ def test_response_line_ac4_waived_by_response_skips_file_check(tmp_path):
     """AC4: the markdown file's last line is wrong (would fail standalone),
     but the response matches the declared waived_by_response sentinel ->
     the file check is SKIPPED (not failed): exit 0 even under block mode,
-    and an obligation_markdown_waived advisory record names the path."""
+    decided by the resolved obligation."""
     harness_session = "harness-rl-ac4"
     agent_id = "agent-qa-rl-ac4"
     task_id = "20260101-000108"
@@ -1136,11 +1100,9 @@ def test_response_line_ac4_waived_by_response_skips_file_check(tmp_path):
         last_assistant_message="CLOSE_REPORT_APPEND_ERROR: append: disk full",
     )
     assert proc.returncode == 0, proc.stderr
-    records = _advisory_records(home)
-    waived = [r for r in records if r["kind"] == "obligation_markdown_waived"]
-    assert waived, records
-    assert waived[0]["path"] == md_path
-    assert not any(r["kind"] == "obligation_verify_fail" for r in records)
+    assert isinstance(
+        _resolution(home, project, harness_session, agent_id, "qa"), HOOK.obligation.Resolved
+    )
 
 
 def test_response_line_ac5_verdict_class_inconsistency_blocks(tmp_path):
@@ -1295,8 +1257,8 @@ def test_response_block_unparseable_json_blocks(tmp_path):
 
 
 def test_response_block_advisory_mode_never_blocks(tmp_path):
-    """Parity with every other obligation kind: advisory mode logs the
-    obligation_verify_fail record but never exits non-zero."""
+    """Parity with every other obligation kind: advisory mode never exits
+    non-zero and writes nothing."""
     harness_session = "harness-rb-advisory"
     agent_id = "agent-ca-rb-advisory"
     task_id = "20260101-000205"
@@ -1309,12 +1271,11 @@ def test_response_block_advisory_mode_never_blocks(tmp_path):
         last_assistant_message="no sentinels anywhere",
     )
     assert proc.returncode == 0, proc.stderr
-    records = _advisory_records(home)
-    assert any(r.get("kind") == "obligation_verify_fail" for r in records)
+    assert _written_logs(home) == []
 
 
 def test_dev_report_obligation_blocks_even_when_agent_index_entry_missing(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, capsys
 ):
     """Lane r04 (dev-report.v2 parity with r02's context.json finding): an
     UNREGISTERED dev agent_id (agent-index.json carries no entry -- the
@@ -1381,12 +1342,7 @@ def test_dev_report_obligation_blocks_even_when_agent_index_entry_missing(
         "short-circuited by the registry-entry guard"
     )
     assert exc_info.value.code == 2
-    records = _advisory_records(home)
-    fails = [r for r in records if r["kind"] == "obligation_verify_fail"]
-    assert fails, records
-    assert any(
-        f.get("path") == artifact_path for r in fails for f in r.get("failures", [])
-    )
+    assert f"  - {artifact_path}:" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -1766,7 +1722,6 @@ def test_l2_ac2_terminal_state_right_passes(tmp_path):
     _l2_write(s, _l2_dev_report(s.task))
     proc = _l2_stop(s)
     assert proc.returncode == 0, proc.stderr
-    assert not [r for r in _advisory_records(s.home) if r["kind"] == "obligation_verify_fail"]
     assert _l2_records(s) == []
 
 
@@ -1995,44 +1950,6 @@ def test_l2_ac8_no_residual_fail_open(tmp_path):
     assert (reg / "escalations").is_file()
 
 
-# AC9 -----------------------------------------------------------------------
-
-
-def test_l2_ac9_forced_close_flag_locations(tmp_path):
-    def build(name):
-        project, home = _standard_setup(tmp_path / name, "dev", f"agent-{name}")
-        _write(project / "docs" / "dev" / f"dev-report-{SESSION_TS}.json",
-               _invalid_dev_report(f"dev-{SESSION_TS}"))
-        return project, home, f"agent-{name}"
-
-    flag_name = f"claude-close-force-{SESSION}.flag"
-    # (1) flag only in TMPDIR scratch -> bypass honoured.
-    project, home, agent = build("tmpdir")
-    scratch = tmp_path / "tmpdir" / "scratch"
-    scratch.mkdir(parents=True)
-    (scratch / flag_name).write_text("1", encoding="utf-8")
-    proc = _run_hook(project, home, agent, extra_env={"TMPDIR": str(scratch)})
-    assert proc.returncode == 0, proc.stderr
-    # (2) flag nowhere -> blocked, and no gate scratch outside the registry / tmp default.
-    project, home, agent = build("none")
-    empty = tmp_path / "none" / "scratch"
-    empty.mkdir(parents=True)
-    proc = _run_hook(project, home, agent, extra_env={"TMPDIR": str(empty)})
-    assert proc.returncode == 2, proc.stderr
-    assert not any(empty.iterdir())
-    # (3) flag redirected through the harness state dir -> bypass honoured.
-    project, home, agent = build("state")
-    state = tmp_path / "state" / "statedir"
-    state.mkdir(parents=True)
-    (state / flag_name).write_text("1", encoding="utf-8")
-    proc = _run_hook(project, home, agent, extra_env={"CLAUDE_STATE_DIR": str(state),
-                                                      "TMPDIR": str(empty)})
-    assert proc.returncode == 0, proc.stderr
-    # (4) the legacy fixed location remains honoured (see test_force_close_sentinel_allows).
-    assert HOOK.LEGACY_FLAG_DIR == "/tmp"
-    assert HOOK._forced_close_flag_present("l2-never-created-session") is False
-
-
 # AC12 ----------------------------------------------------------------------
 
 
@@ -2058,7 +1975,6 @@ def test_l2_ac12_shard_defers_plan_and_replay_single_lane_blocks(tmp_path):
     deferrals = _l2_records(shard, "deferred-checks")
     assert len(deferrals) == 1 and deferrals[0]["kind"] == "not_evaluable_at_lane_granularity"
     assert set(deferrals[0]["checks"]) == {"trial_plan"}
-    assert any(r["kind"] == "obligation_check_deferred" for r in _advisory_records(shard.home))
 
     single = _l2_setup(tmp_path / "single")
     single.lane = None
@@ -2260,11 +2176,10 @@ def _g2_stop(s, msg=None) -> subprocess.CompletedProcess:
 
 
 def _g2_assert_decided_by_obligation(s) -> None:
-    """The obligation resolved and the obligation branch made the decision:
-    no unresolvable/invalid-obligation record, no fallback to the legacy
-    path."""
-    kinds = {r.get("kind") for r in _advisory_records(s.home)}
-    assert not kinds & {"obligation_unresolvable", "obligation_gate_error"}, kinds
+    """The obligation resolves, so the obligation branch made the decision:
+    no fallback to the legacy path."""
+    resolution = _resolution(s.home, s.project, s.harness, s.agent_id, s.obligation["role"])
+    assert isinstance(resolution, HOOK.obligation.Resolved), resolution
 
 
 def _g2_assert_blocked_on(proc, path: str, reason: str) -> None:
@@ -2344,12 +2259,6 @@ def test_g2_valid_producer_question_stands_in_for_declared_artifacts(tmp_path, r
     proc = _g2_stop(s, msg="One owner decision is needed; see the question artifact.")
     assert proc.returncode == 0, proc.stderr
     _g2_assert_decided_by_obligation(s)
-    records = _advisory_records(s.home)
-    assert any(
-        r.get("kind") == "obligation_producer_question" and r.get("task_id") == G2_TASK
-        for r in records
-    ), records
-    assert not any(r.get("kind") == "obligation_verify_fail" for r in records)
     for art in artifacts:
         assert not (s.project / art["path"]).exists()
 
@@ -2404,9 +2313,6 @@ def test_g2_stale_producer_question_is_ignored(tmp_path):
     proc = _g2_stop(s)
     assert proc.returncode == 0, proc.stderr
     _g2_assert_decided_by_obligation(s)
-    assert not any(
-        r.get("kind") == "obligation_producer_question" for r in _advisory_records(s.home)
-    )
 
 
 # (f) no reply text stands in for an artifact -----------------------------
@@ -2438,9 +2344,6 @@ def test_g2_qa_question_artifact_does_not_stand_in_for_qa_report(tmp_path):
     proc = _g2_stop(s)
     _g2_assert_blocked_on(proc, report, _G2_MISSING)
     assert "producer_question" not in proc.stderr
-    assert not any(
-        r.get("kind") == "obligation_producer_question" for r in _advisory_records(s.home)
-    )
 
 
 # (h) close-QA: the waiver reads the reply's final non-empty line ---------
@@ -2486,8 +2389,6 @@ def test_g2_close_qa_append_error_final_line_waives_markdown(tmp_path):
     proc = _g2_stop(s, msg=reply)
     assert proc.returncode == 0, proc.stderr
     _g2_assert_decided_by_obligation(s)
-    waived = [r for r in _advisory_records(s.home) if r.get("kind") == "obligation_markdown_waived"]
-    assert [r["path"] for r in waived] == [report]
 
 
 def test_g2_close_qa_sentinel_quoted_on_earlier_line_does_not_waive(tmp_path):
@@ -2502,9 +2403,6 @@ def test_g2_close_qa_sentinel_quoted_on_earlier_line_does_not_waive(tmp_path):
     assert "OBLIGATION_STOPGATE_BLOCKED" in proc.stderr
     assert f"  - {report}: terminal_line_mismatch" in proc.stderr, proc.stderr
     assert "  - <response_line>: terminal_line_mismatch" in proc.stderr, proc.stderr
-    assert not any(
-        r.get("kind") == "obligation_markdown_waived" for r in _advisory_records(s.home)
-    )
 
 
 # (i) a missing declared artifact blocks ----------------------------------
@@ -2582,8 +2480,9 @@ def test_fanout_legacy_check_judges_only_the_stopping_lanes_own_report(
     if expected == 2:
         assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr
         assert l2_report in proc.stderr
-    assert any(r.get("kind") == "obligation_unresolvable"
-               and r.get("reason") == "invalid_obligation" for r in _advisory_records(home))
+    resolution = _resolution(home, project, _FANOUT_HARNESS, "agent-dev-l2", "dev")
+    assert isinstance(resolution, HOOK.obligation.Unresolvable), resolution
+    assert resolution.reason == "invalid_obligation"
 
     # l1 is still judged on its own report, at its own stop.
     proc_l1 = _run_hook(project, home, "agent-dev-l1", session_id=_FANOUT_HARNESS,

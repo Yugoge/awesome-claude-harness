@@ -43,7 +43,7 @@ Step 11  Aggregate lane-suffixed dev-reports → ONE canonical dev-report  (sing
   ↓
 IF all lanes pass → Generate ONE completion report   (one parent cycle / same cycle)
   ↓
-Emit spec continuation or temp closure update
+Emit spec continuation or the `/close` next step
 ```
 
 **Key Principles**:
@@ -56,7 +56,7 @@ Emit spec continuation or temp closure update
 - QA verification after each dev cycle
 - Iterate until all quality standards met
 - Unfinished work is handed off into a continuation spec; only complete work
-  heading to `/close` uses a compact temp update.
+  heads to `/close`.
 
 **Orchestrator Dispatch Model**:
 - A single `/dev` cycle MAY carry multiple requirements. The orchestrator decomposes them and fans them out to N parallel one-issue lanes within the SAME cycle — see the **Requirement Decomposition & Fan-Out** section below. Multiplicity alone MUST NOT cause refusal or the creation of separate cycles; genuine per-lane safety/hard-contract violations remain enforceable for the affected lane only.
@@ -1337,9 +1337,8 @@ same result object (`mode`, `lanes`, `report_paths`, `artifact_paths`,
   completion are required with the existing identity and nested-status checks.
 - **Fan-out cycle (N > 1):** `mode == "fanout"` requires, for every entry in
   `lanes`, its lane ticket, context, dev-report, and passing QA-report, plus only
-  the parent canonical aggregate dev-report and parent completion. The parent
-  ticket, context, and QA-report are optional; their absence is valid, while any
-  present optional parent artifact must validate. Never create, copy, or invent
+  the parent canonical aggregate dev-report and parent completion.
+  Never create, copy, or invent
   a parent ticket/context/QA-report to satisfy a singular-shaped check. The
   completion must index the canonical report and every lane artifact.
 - Artifact identities, nested `dev.status == "completed"` /
@@ -1363,12 +1362,8 @@ repair, refresh, or fabricate any artifact.
   otherwise create a new spec. The next command is `/dev --spec <spec_path>`.
   Do NOT hand unfinished work to `/close` or `/commit`.
 - If all requested development is complete and only closure/shipping remains,
-  create a compact temp update using `/spec-update --temp`. Default to
-  `mktemp -t update-XXXXXX.md`; do not write this update into the repo unless
-  the user explicitly asks. Include `Task ID: <timestamp>`,
-  ticket/spec/context/dev-report/QA-report/completion paths, QA status,
-  iteration count, and suggested next command `/close <task-id>` (or bare
-  `/close` only when the same conversation context is still active).
+  the next command is `/close <task-id>` (or bare `/close` only when the same
+  conversation context is still active).
 
 **Present to user**: Show summary with key changes and next steps
 

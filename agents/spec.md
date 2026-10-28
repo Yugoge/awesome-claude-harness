@@ -535,13 +535,7 @@ If after ONE retry the coverage is still < 100%, apply this deterministic rule:
 
    The verifier (`spec-verify.py`, R4a.2) recomputes this hash from the cited range and rejects mismatches. The marker is whitelisted by R4a.4 so the fabrication check ignores the comment line itself.
 
-4. **Allocation conflicts → `views/allocation-decisions.json` (R2.A.4)**. When a block's consumer set is non-obvious (multiple INCLUDE matches with no explicit consumers tag, or a consumers tag that names an agent not in the selected consumer set), append a record to `views/allocation-decisions.json`:
-
-   ```json
-   {"block_id": "L{N}-L{M}", "consumers": ["dev", "qa"], "source_range": "L{N}-L{M}", "reason": "<short rationale>"}
-   ```
-
-5. **Orphan-block halt (R2.A.5)**. If any monolith block carries `consumers: [agent]` for an agent that produced no view in Phase 0, OR if a block has no matching consumer at all (no INCLUDE match, no consumers tag), HALT before writing any view. Emit a clear error: `"orphan block L{N}-L{M}: consumers=[X] but X not in selected views"` or `"orphan block L{N}-L{M}: no consumer matched"`.
+4. **Orphan-block halt (R2.A.5)**. If any monolith block carries `consumers: [agent]` for an agent that produced no view in Phase 0, OR if a block has no matching consumer at all (no INCLUDE match, no consumers tag), HALT before writing any view. Emit a clear error: `"orphan block L{N}-L{M}: consumers=[X] but X not in selected views"` or `"orphan block L{N}-L{M}: no consumer matched"`.
 
 3. Append the assigned lines (preserving monolith order) to that agent's view under a `## Additional Content (coverage fallback)` heading.
 

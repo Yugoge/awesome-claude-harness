@@ -9,7 +9,6 @@
 ## Files
 - `QUICKSTART.md` - Quick Start — the hooks layer
 - `README-TODO-INJECTION.md` - Global Todo Injection Hook
-- `audit-slashcommand.sh` - audit-slashcommand.sh
 - `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
 - `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
 - `checkpoint.sh` - checkpoint.sh - Manual /checkpoint command

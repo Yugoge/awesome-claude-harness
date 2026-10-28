@@ -8,8 +8,8 @@ real, executed-path callers for scripts/resolve-commit-repos.py's ownership gate
 hooks/subagentstop-artifact-contract-enforce.py's artifact-contract section, and
 scripts/aggregate-dev-report.py's same-cycle-only completeness gate. The full
 per-task adjudicator below (adjudicate_file / adjudicate_task, requiring real lane
-metadata from scripts/lib/dispatch_metadata.py, which still has no dispatcher
-caller) remains additive until a future cycle wires dispatch-time capture.
+metadata, which no dispatcher records yet) remains additive until a future cycle
+wires dispatch-time capture.
 
 It reads journal events (hooks/lib/attribution_journal.py) and the chain fold
 (scripts/verify-attribution-chain.py), and for each file under a task baseline
@@ -746,9 +746,9 @@ def ledger_structural_verdict(path, *, root=None, journal_dir=None, gitdir=None,
     """Lane-agnostic ledger verdict for ONE path, for a consumer that is
     switching off the self-reported ("replay owned_edits hunks, compare to
     disk") judgment per docs/reference/attribution-journal-cutover-flip-plan-
-    20261003.md, without per-task lane metadata (scripts/lib/dispatch_metadata.py
-    has no dispatcher caller yet, so no `agent_id -> task_id` map or
-    dispatch-time baseline exists for any real task today).
+    20261003.md, without per-task lane metadata (no dispatcher records any
+    yet, so no `agent_id -> task_id` map or dispatch-time baseline exists for
+    any real task today).
 
     Without that map every event is foreign, so WHOLE_FILE_ELIGIBLE /
     SYNTHESIZED_STAGE can never be reached here -- this never claims

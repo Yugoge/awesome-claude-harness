@@ -14,8 +14,7 @@ docs/dev/ticket-20260808-035658-lanel.md (revision 3):
              detection
 
 Never mutates docs/dev/, .git refs/index/worktree, or /tmp grant/sentinel
-files. The ONLY permitted mutation anywhere is the disposable SQLite cache
-this module rebuilds wholesale on every scan (see rebuild_cache()).
+files.
 
 Root-cause reference: docs/dev/ticket-20260808-035658-lanel.md and
 docs/dev/acceptance-criteria-20260808-035658-lanel.json (AC-L1..AC-L22).
@@ -26,7 +25,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -750,46 +748,6 @@ def actionable_parents(rows: list[dict], next_action: str) -> list[str]:
     )
 
 
-_OUTCOME_TOKENS = ("ordinary_reject", "hook_deny", "success", "partial_abort")
-
-_PARENT_START_RE = re.compile(r"^PARENT_START:\s*(\S+)\s*$")
-_PARENT_END_RE = re.compile(
-    r"^PARENT_END:\s*(\S+)\s+outcome=(" + "|".join(_OUTCOME_TOKENS) + r")\s*$"
-)
-
-
-def human_operator_transcript_path(task_id: str) -> str:
-    """AC-L21's bound artifact path for the human-operator --auto demonstration."""
-    return f"docs/dev/human-operator-transcript-{task_id}.md"
-
-
-def parse_human_operator_transcript(text: str) -> list[dict]:
-    """Parse the PARENT_START/PARENT_END schema (AC-L21, objection 8).
-
-    Returns one dict per matched parent: {"task_id": str, "outcome": str|None}.
-    A PARENT_START with no matching PARENT_END yields outcome=None (incomplete
-    walk); an outcome must be one of the AC-L18/AC-L19 taxonomy tokens or the
-    line is not recognised as a valid PARENT_END.
-    """
-    entries: list[dict] = []
-    open_task_id: Optional[str] = None
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        start_match = _PARENT_START_RE.match(line)
-        if start_match:
-            if open_task_id is not None:
-                entries.append({"task_id": open_task_id, "outcome": None})
-            open_task_id = start_match.group(1)
-            continue
-        end_match = _PARENT_END_RE.match(line)
-        if end_match and open_task_id is not None and end_match.group(1) == open_task_id:
-            entries.append({"task_id": open_task_id, "outcome": end_match.group(2)})
-            open_task_id = None
-    if open_task_id is not None:
-        entries.append({"task_id": open_task_id, "outcome": None})
-    return entries
-
-
 def validate_auto_flag_combination(
     auto: bool, explicit_task_id: Optional[str], force: bool, bulk: bool
 ) -> Optional[str]:
@@ -838,53 +796,6 @@ def classify_walk_outcome(tool_result_text: str, *, partial_multi_repo_commit: b
 
 
 # --------------------------------------------------------------------------
-# SQLite disposable cache (wholesale rebuild -- never merged, AC-L16)
-# --------------------------------------------------------------------------
-
-_CACHE_SCHEMA = """
-CREATE TABLE lifecycle_rows (
-    task_id TEXT,
-    kind TEXT,
-    state TEXT,
-    next_action TEXT,
-    parent_task_id TEXT,
-    parent_spec_id TEXT,
-    source_path TEXT,
-    row_json TEXT NOT NULL
-)
-"""
-
-
-def rebuild_cache(cache_path: Path, rows: list[dict]) -> None:
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(cache_path))
-    try:
-        conn.execute("DROP TABLE IF EXISTS lifecycle_rows")
-        conn.execute(_CACHE_SCHEMA)
-        conn.executemany(
-            "INSERT INTO lifecycle_rows "
-            "(task_id, kind, state, next_action, parent_task_id, parent_spec_id, source_path, row_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    r.get("task_id"),
-                    r.get("kind"),
-                    r.get("state"),
-                    r.get("next_action"),
-                    r.get("parent_task_id"),
-                    r.get("parent_spec_id"),
-                    r.get("source_path"),
-                    json.dumps(r, ensure_ascii=False, sort_keys=True, default=str),
-                )
-                for r in rows
-            ],
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-# --------------------------------------------------------------------------
 # /tickets table rendering
 # --------------------------------------------------------------------------
 
@@ -919,10 +830,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="dev-lifecycle.py")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    scan_parser = sub.add_parser("scan", help="Scan docs/dev/ and rebuild the lifecycle cache.")
+    scan_parser = sub.add_parser("scan", help="Scan docs/dev/ and print the lifecycle rows.")
     scan_parser.add_argument("--format", choices=["table", "json"], default="table")
     scan_parser.add_argument("--project-dir", default=_default_project_dir())
-    scan_parser.add_argument("--cache-path", default=None)
 
     list_parser = sub.add_parser("list-actionable", help="List parent task-ids with a given next_action.")
     list_parser.add_argument("--next-action", required=True, choices=["close", "commit"])
@@ -933,10 +843,6 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.command == "scan":
         rows = scan(project_root)
-        cache_path = (
-            Path(args.cache_path) if args.cache_path else project_root / ".claude" / "cache" / "dev-lifecycle.sqlite3"
-        )
-        rebuild_cache(cache_path, rows)
         if args.format == "json":
             print(json.dumps(rows, ensure_ascii=False, indent=2, sort_keys=True, default=str))
         else:

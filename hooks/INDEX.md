@@ -21,7 +21,6 @@ hooks/
 │   ├── `regen_index.py` - Regenerate INDEX.md for a directory.
 │   ├── `regen_readme.py` - Regenerate README.md for a directory.
 │   ├── `regions.py` - Four unrelated predicates used to decide what a file's AUTO region is (README first
-│   ├── `systemd.py` - Query systemctl for project-configured services and generate a markdown table.
 │   └── `tree.py` - Build directory trees for INDEX.md.
 ├── git-hooks/
 │   ├── `post-commit-auto-push` - post-commit-auto-push file
@@ -134,7 +133,6 @@ hooks/
 │   ├── `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 │   ├── `test_runtime_guard.py` - Two layers:
 │   ├── `test_scratch_lifecycle.py` - Covers:
-│   ├── `test_sessionstart_artifact_census.py` - Every run is a subprocess against throwaway directories; the real restart
 │   ├── `test_stop_do_report_gate.py` - Covers the contract from commands/do.md Step 5: a /do session may stop only
 │   ├── `test_stop_obligation_gate.py` - gate, ticket 20260930-132644-l4)
 │   ├── `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
@@ -148,7 +146,6 @@ hooks/
 │   ├── `test_userprompt_bulk_commit_capability.py` - Tests for hooks/userprompt-bulk-commit-capability.py's /commit --bulk detector.
 │   ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 │   └── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
-├── `audit-slashcommand.sh` - audit-slashcommand.sh
 ├── `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
 ├── `capability-canary.py` - Registered once per relied-upon lifecycle event, each registration carrying its
 ├── `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
@@ -240,7 +237,6 @@ hooks/
 ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 ├── `session_start.sh` - SessionStart Hook - Display working environment info
 ├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
-├── `sessionstart-artifact-census.py` - Enumerates and notifies only. Every unclosed chain gets a queue record; the
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
 ├── `stop-completion-gate.py` - completion obligation is open (ticket 20261001-161041-r08; reworked by

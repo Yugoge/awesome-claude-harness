@@ -39,7 +39,6 @@ accepts only an optional remote and `--auto` for non-interactive lock handling.
    nonce, ppid, and timestamp.
 6. Export the wrapper-only push env var for the child process.
 7. Run a normal branch push, with `-u` only when setting an upstream.
-8. Append the push audit log on success.
 
 ## Safety contract
 
