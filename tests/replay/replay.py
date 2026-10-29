@@ -261,8 +261,11 @@ class Replay:
             raw = hookrun.refusal(b)
             text = self.norm_text(raw)
             dev = next((d for d in devs if d.covers(b["hook"], raw, text)), None)
+            # step_norm: the label with the run's own ids normalised (a label naming an artifact path
+            # holds the session id or a task id), so kept-block comparisons hold across runs.
             self.blocks.append({"step": label, "event": ev.event, "hook": b["hook"], "how": b["how"],
-                                "text": text, "passed_by_deviation": dev is not None})
+                                "text": text, "passed_by_deviation": dev is not None,
+                                "step_norm": self.norm_text(label)})
             if dev:
                 self.deviations.append({"step": label, "event": ev.event, "hook": b["hook"],
                                         "quote": dev.quote, "why": dev.why, "text": text})

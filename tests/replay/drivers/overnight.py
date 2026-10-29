@@ -43,6 +43,10 @@ Then, in one session, the main agent:
 * the owner interrupts and types /stop; the main agent runs stop.md's Implementation block once
   and stops.
 
+A dispatch the hooks refuse that no declared deviation passes (on the working tree: any block that
+is not a kept base block) leaves the orchestrator no compliant way on; the driver records it, the
+cycle stops there, and the owner's /stop ends the session.
+
 Subagents are played by agents.Player: PM (PLAN, TRIAGE, RETRO), the specialists, BA, QA, graphify
 and dev, each from its dispatch prompt and its agent file (roles.py for dev's and QA's work). Where
 a dispatch's obligation declares its report (the working tree's PM and specialist templates), the
@@ -59,9 +63,12 @@ Driver arguments (cli.py --arg K=V):
   variant=stop    the owner's /stop inside cycle 1's window, once Step `stop_at` (default 12) is done
   stop_at=N       the step after which variant=stop interrupts
   kit=base        the replay of the base kit's text: row 7's respellings below are applied
-  kept=<JSON>     [[hook, step, normalised text], ...]: a declared deviation passes only a block in
-                  that list (drivers/dev.py KeptOnly); without it every declared deviation passes
+  kept=<JSON>     [[hook, step_norm, normalised text], ...]: a declared deviation passes only a block
+                  in that list (drivers/dev.py KeptOnly, the step compared with the run's own ids
+                  normalised, blocks.json "step_norm"); without it every declared deviation passes
   until=N         development aid only (not a compliant replay): end after cycle 1's Step N
+  diagnose=pass-all  development aid only (not a compliant replay): every block is passed (recorded
+                  with why "diagnose=pass-all"), to see what lies behind a new block
 
 Respellings (row 7), driver only, each application recorded in blocks.json "respellings":
 drivers/dev.py's list, applied only where the text still has the old form (the /dev-overnight text
@@ -157,6 +164,13 @@ DEVIATIONS = Deviations([
     ("*Edit*", Deviation(
         "hooks/pretool-orchestrator-gate.py", "Edit used consecutively beyond limit",
         "an orchestrator edit the text asks for after the turn's first Edit")),
+    # DEVIATION: 'BLOCKED by tool-policy.v1: {"role":"architect","tool":"Edit", ...
+    # "deny_reason":"tool Edit not in allowed_tools"}' pretool-tool-policy.py refuses a specialist's Edit
+    # of its report from the previous cycle: the report path names no cycle and the write guard refuses
+    # a Write over an existing file, so the cycle-2 report is the cycle-1 file edited in place.
+    ("agent:* Write *(Edit)", Deviation(
+        "hooks/pretool-tool-policy.py", "tool Edit not in allowed_tools",
+        "a specialist's report of an earlier cycle, rewritten in place")),
     # DEVIATION: "failed_phase=timelock ... CLOSEOUT GATE: final overnight artifacts are incomplete."
     # (or "... cycle still has unresolved required_calls."): after /stop backdates the end time, the
     # time-lock's closeout rule (landscape B2.b, P2 row 9's) refuses the main agent's Stop on state
@@ -431,6 +445,57 @@ def report_work(content, reads=(), globs=()):
     return work
 
 
+# ---------------------------------------------------------------- deviations on another tree
+
+class _NormKept:
+    """A declared deviation bound to its step that passes only a kept base block, the step compared
+    with the run's own ids normalised (blocks.json "step_norm")."""
+
+    def __init__(self, dev, step_norm: str, kept: set):
+        self.dev, self.step_norm, self.kept = dev, step_norm, kept
+        self.hook, self.quote, self.why = dev.hook, dev.quote, dev.why
+
+    def covers(self, block_hook: str, raw: str, text: str) -> bool:
+        return self.dev.covers(block_hook, raw, text) and any(
+            (block_hook, step, text) in self.kept for step in (self.step_norm, self.step_norm + " stop"))
+
+
+class NormKeptOnly(Deviations):
+    """drivers/dev.py KeptOnly, with steps compared normalised: a label naming an artifact path holds
+    the session id or a task id, which differ from run to run (kept=[[hook, step_norm, text], ...])."""
+
+    def __init__(self, inner: Deviations, kept, rp):
+        super().__init__(inner.pairs)
+        self.kept, self.rp = {tuple(k) for k in kept}, rp
+
+    def at(self, label: str) -> list:
+        return [_NormKept(d, self.rp.norm_text(label), self.kept) for d in super().at(label)]
+
+
+class PassAll(Deviations):
+    """diagnose=pass-all (development aid, not a compliant replay): the declared deviations, and every
+    other block passed too, recorded with why "diagnose=pass-all", to see what lies behind a new block."""
+
+    def __init__(self, inner: Deviations):
+        super().__init__(inner.pairs)
+        self.inner = inner
+
+    def at(self, label: str) -> list:
+        return self.inner.at(label) + [_Any()]
+
+
+class _Any:
+    hook, quote, why = "*", "(any block)", "diagnose=pass-all: not a compliant replay"
+
+    def covers(self, block_hook: str, raw: str, text: str) -> bool:
+        return True
+
+
+class Refused(Exception):
+    """A dispatch the hooks refused and no declared deviation passes: the text gives the orchestrator
+    no compliant way on, so the cycle ends there and the owner's /stop ends the session."""
+
+
 # ---------------------------------------------------------------- the orchestrator
 
 class NightOrchestrator(Orchestrator):
@@ -473,7 +538,9 @@ class Night:
         self.rp, self.variant = rp, variant
         devs = DEVIATIONS
         if rp.args.get("kept"):
-            devs = devdrv.KeptOnly(DEVIATIONS, json.loads(rp.args["kept"]))
+            devs = NormKeptOnly(DEVIATIONS, json.loads(rp.args["kept"]), rp)
+        if rp.args.get("diagnose") == "pass-all":
+            devs = PassAll(devs)
         self.project = rp.layout.project
         self.base_kit = rp.args.get("kit") == "base"
         self.owner_setup()  # before the session starts (the Orchestrator starts it)
@@ -651,7 +718,10 @@ class Night:
         fields = dict(fields, prompt=self.prep(fields["prompt"], pipe),
                       description=fill_curly(fields.get("description", ""), pipe.rec if pipe else None,
                                              {"N": self.n}))
-        return self.o.dispatch(fields, act, self.L + label, task_id, subagent_type=atype)
+        d = self.o.dispatch(fields, act, self.L + label, task_id, subagent_type=atype)
+        if d.blocked:  # refused, and no declared deviation passes the refusal
+            raise Refused(self.L + label)
+        return d
 
     def git(self, cmd: str) -> str:
         """A command that runs git, composed as the ACTOR GIT-ENV GUARD says: the env helper the record
@@ -711,7 +781,7 @@ class Night:
         self.ts = self.stamp()
         self.rp.task(self.ts)
         plan_rel = f"{self.sdir}/test-plan.json"
-        n = self.n
+        n = self.cycle  # what PM learns from the session history it reads (the retro reports)
 
         def content():
             plan = {"plan_id": f"tp-{self.ts}", "version": 1, "timestamp": utc_now(), "session_id": self.sid,
@@ -813,7 +883,11 @@ class Night:
         sec = o.section("Specialist Calling Rule")
         check = re.search(r"run `(~/\.claude/scripts/check-overnight-reports\.sh[^`]*)`", sec)
         if check:  # the base text: the report check script, then the sanity checks (each report Read)
-            self.bash(o.bind(check.group(1)), "Validate the specialist reports", "Step 3 Bash check-overnight-reports")
+            c = self.bash(o.bind(check.group(1)), "Validate the specialist reports", "Step 3 Bash check-overnight-reports")
+            bad = [l for l in (c.error if not c.ok else "").split("\n") if l.startswith("INVALID")]
+            if bad:  # "Log which reports failed and why"; no specialist report is among them: proceed
+                o.s.say("check-overnight-reports: " + "; ".join(bad)[:600] + "\nNone of these is a report a "
+                        "specialist of this cycle wrote; proceeding with the specialist reports.")
         if "Sanity checks on each report" in sec:
             for role in launch:
                 self.read(f"{self.sdir}/{role}-report.json", f"Step 3 Read {role} report")
@@ -1308,14 +1382,15 @@ class Night:
         self.launch()
         self.step1()
         until = int(self.rp.args["until"]) if self.rp.args.get("until") else None
-        if self.variant == "stop":
-            stop_at = int(self.rp.args.get("stop_at", "12"))
-            self.run_cycle(until=stop_at)
-            self.owner_stop()
-            return
-        if not self.run_cycle(until=until):
-            return
-        self.run_cycle()
+        try:
+            if self.variant == "stop":
+                self.run_cycle(until=int(self.rp.args.get("stop_at", "12")))
+            else:
+                if not self.run_cycle(until=until):
+                    return
+                self.run_cycle()
+        except Refused as r:
+            self.o.s.say(f"{r}: the dispatch was refused and the text gives no way on; the cycle stops here.")
         self.owner_stop()
 
 
