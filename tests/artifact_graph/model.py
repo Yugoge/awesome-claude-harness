@@ -81,6 +81,8 @@ class Invocation:
     captured: bool = False  # stdout captured into a value
     function: str = ""
     args: tuple = ()        # the values it passes after the target (argv[1:], $1...)
+    into: tuple = ()        # templates of the files its stdout is written into (`... | sed >> log`)
+    into_stderr: bool = False   # its stderr goes there too (`2>&1`)
 
 
 @dataclass

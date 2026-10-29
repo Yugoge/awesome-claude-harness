@@ -421,6 +421,38 @@ def test_every_roster_role_registers_and_nothing_else(tmp_path):
     assert {entry["agent_type"] for entry in index.values()} == roles
 
 
+def test_a_dispatched_roles_read_creates_its_sentinel_in_the_armed_registry(tmp_path):
+    """The hook is the sentinel's one producer (P1b goal 2): a subagent's FIRST ACTION
+    Read of <registry>/<role>.json creates it in a registry the cycle's start armed,
+    whole, right before the read; it leaves an existing sentinel as it is and
+    creates none for a main-agent read, a name that is no role, a registry nobody
+    armed or a symlinked one."""
+    root = tmp_path / ".claude" / "dev-registry"
+    armed = root / "dev-armed-sid"
+    armed.mkdir(parents=True)
+
+    def read(path, agent_id="agent-1"):
+        payload = {"tool_name": "Read", "tool_input": {"file_path": str(path)}}
+        if agent_id:
+            payload["agent_id"] = agent_id
+        _assert_no_traceback(_run_hook(tmp_path, payload), str(path))
+
+    read(armed / "qa.json")
+    assert json.loads((armed / "qa.json").read_text()) == {"agent_type": "qa", "session_id": "dev-armed-sid"}
+    (armed / "dev.json").write_text("kept\n")
+    read(armed / "dev.json")
+    assert (armed / "dev.json").read_text() == "kept\n"
+    read(armed / "ba.json", agent_id=None)
+    read(armed / "wizard.json")
+    read(root / "dev-unarmed-sid" / "qa.json")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (root / "dev-linked-sid").symlink_to(elsewhere)
+    read(root / "dev-linked-sid" / "qa.json")
+    assert sorted(p.name for p in armed.iterdir()) == ["dev.json", "qa.json"]
+    assert not (root / "dev-unarmed-sid").exists() and not list(elsewhere.iterdir())
+
+
 def test_spec_check_accepts_exactly_the_roster(tmp_path):
     """spec-check.py's agents are the roster: graphify and the analysts check
     in; a name no agent file declares is refused naming the roster."""

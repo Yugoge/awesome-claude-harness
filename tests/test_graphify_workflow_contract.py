@@ -5,12 +5,12 @@ Verifies AC5's registration through the one agent roster (hooks/lib/roster.py:
 the stems of the agents/*.md files with front matter, P1b row 18):
   1. hooks/pretool-cp-checkin.py registers a graphify sentinel read
   2. scripts/spec-check.py accepts graphify
-  3. the UserPromptSubmit hook writes one registry sentinel per roster role
+  3. graphify is a roster role, so the sentinel hook creates its registry sentinel
 Neither 1 nor 2 keeps a role list of its own.
 
-These registrations ensure the graphify.json sentinel file is created at
-UserPromptSubmit time, enabling the graphify subagent's mandatory FIRST ACTION
-Read to succeed (mirroring test-writer precedent).
+pretool-cp-checkin.py creates the graphify.json sentinel in the armed registry
+right before the graphify subagent's mandatory FIRST ACTION Read, so that Read
+succeeds (mirroring test-writer precedent).
 """
 
 import ast
@@ -51,7 +51,7 @@ class TestAllowedAgentsRegistration:
 
 
 class TestPromptWorkflowRegistration:
-    """'graphify' is a role of the agent roster the registry is written from."""
+    """'graphify' is a role of the agent roster the sentinel hook registers and creates."""
 
     def test_graphify_in_roster(self):
         import importlib.util
@@ -60,8 +60,8 @@ class TestPromptWorkflowRegistration:
         roster = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(roster)
         assert "graphify" in roster.roles(), (
-            "agents/graphify.md must carry front matter: the UserPromptSubmit hook "
-            "writes one registry sentinel per roster role, graphify.json among them"
+            "agents/graphify.md must carry front matter: pretool-cp-checkin.py creates "
+            "a registry sentinel only for a roster role, graphify.json among them"
         )
 
 

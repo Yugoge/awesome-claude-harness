@@ -571,7 +571,7 @@ def _primary_reason(reasons: list) -> str:
     return sorted(reasons, key=rank)[0]
 
 
-_ARGV_RE = re.compile(re.escape(P.L) + r"argv:(\d+)" + re.escape(P.R))
+_ARGV_RE = re.compile(re.escape(P.L) + r"argv:(\d+|--[A-Za-z0-9][\w-]*)" + re.escape(P.R))
 
 
 def _bind_argv(findings: M.Findings, md_env: dict) -> None:
@@ -594,7 +594,17 @@ def _bind_argv(findings: M.Findings, md_env: dict) -> None:
         for inv in sorted(invs, key=lambda i: (i.component, i.line)):
             env = _md_env_for(inv.component.split("#")[0], md_env)
 
-            def arg(n: int) -> list:
+            def arg(n) -> list:
+                if isinstance(n, str):
+                    # an option's value: the word after `--opt`, or the rest of `--opt=value`
+                    words = [V.as_templates(a) for a in inv.args]
+                    for i, alts_ in enumerate(words):
+                        if n in alts_ and i + 1 < len(words):
+                            return [_resolve_ph(x, env) for x in words[i + 1]]
+                        eq = [x[len(n) + 1:] for x in alts_ if x.startswith(n + "=")]
+                        if eq:
+                            return [_resolve_ph(x, env) for x in eq]
+                    return []
                 if n > len(inv.args):
                     return []
                 return [_resolve_ph(t, env) for t in V.as_templates(inv.args[n - 1])]
@@ -602,12 +612,13 @@ def _bind_argv(findings: M.Findings, md_env: dict) -> None:
             alts = []
             for t in temps:
                 cur = [t]
-                for n in sorted({int(x) for x in _ARGV_RE.findall(t)}):
+                for n in sorted({int(x) if x.isdigit() else x for x in _ARGV_RE.findall(t)}, key=str):
                     vals = arg(n)
                     if not vals:
                         cur = []
                         break
-                    cur = [c.replace(P.argv(n), v) for c in cur for v in vals]
+                    tok = P.argv(n) if isinstance(n, int) else P.tok("argv:" + n)
+                    cur = [c.replace(tok, v) for c in cur for v in vals]
                 alts += cur
             if not alts:
                 continue
@@ -716,9 +727,14 @@ def _owner_outputs(root: Path, files: list[str], findings: M.Findings, sh, py, r
                         "site": f"{f}:{line}", "shown": shown, "reaches": "command:" + ev})
     # prints of command blocks, of scripts commands run, of relayed stdout
     invoked_by: dict[str, set] = {}
+    printed_into: dict[str, set] = {}
     for inv in findings.invocations:
         if inv.component.startswith("commands/"):
             invoked_by.setdefault(inv.target, set()).add(inv.component)
+        for t in inv.into:
+            pat = P.to_pattern(t)[0]
+            if pat.startswith(("<", "/")) and pat != "/dev/null":
+                printed_into.setdefault(inv.target, set()).add((pat, inv.into_stderr))
     for comp, line, stream, shown, func, origin in sorted(py.prints + sh.prints):
         if origin == "md-block" and comp.startswith("commands/"):
             out.append({"kind": "owner_output", "channel": "command_print", "component": comp,
@@ -731,6 +747,14 @@ def _owner_outputs(root: Path, files: list[str], findings: M.Findings, sh, py, r
             out.append({"kind": "owner_output", "channel": "system_message", "component": comp,
                         "site": f"{comp}:{line}", "shown": shown, "stream": stream,
                         "reaches": "relayed:" + sorted(stdout_relays[comp])[0]})
+        for into, with_stderr in sorted(printed_into.get(comp, ())):
+            # E12: a script's output its caller writes into a file reaches the owner where an
+            # owner-facing output names that file (the landing's notice names its log); the
+            # check decides that from the file's own readers
+            if stream == "stdout" or with_stderr:
+                out.append({"kind": "owner_output", "channel": "printed_into", "component": comp,
+                            "site": f"{comp}:{line}", "shown": shown, "stream": stream,
+                            "reaches": "into:" + into})
     return out
 
 

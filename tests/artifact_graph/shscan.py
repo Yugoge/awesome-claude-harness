@@ -69,6 +69,12 @@ class ShFile:
         self.funcs: dict[str, S.FuncDef] = {}
         self.func_of: dict[int, str] = {}
         self.sourced: list[str] = []
+        # rule (1): nothing after the script's own top-level exit runs, its function
+        # definitions included (a disabled legacy installer's body)
+        for i, n in enumerate(script.body):
+            if _leaves_block(n):
+                script.body = script.body[:i + 1]
+                break
         self._build(script.body, None, None)
 
     def _build(self, body: list, owner, func: str | None, slot: str = "body") -> None:
@@ -323,6 +329,9 @@ class ShWalk:
 
     def var(self, p: S.Var, at) -> V.Val:
         base = self.var_base(p.name, at)
+        if isinstance(base, Lst) and p.index is None and not p.op:
+            # `$arr` is the array's first element (`"${arr[@]}"` stays every element)
+            return base.items[0] if base.items else V.s("")
         op = p.op
         if op == "len":
             return Unk("dynamic")
@@ -897,6 +906,8 @@ class ShWalk:
     def walk(self, body: list, cond: bool) -> None:
         for n in body:
             self.node(n, cond)
+            if _leaves_block(n):
+                break   # rule (1): what follows an unconditional exit or return in its block never runs
 
     def node(self, n, cond: bool) -> None:
         if isinstance(n, S.Simple):
@@ -1037,6 +1048,14 @@ class ShWalk:
                            for t in temps for a in V.as_templates(V.join(cwd, V.s(t)))])
 
     def emit(self, op: str, path: V.Val, mode: str, via: str, n, src=None, chain=()) -> None:
+        if isinstance(path, Lst):
+            # an array expanded as an operand (`tail -f "${logs[@]}"`) is each of its elements
+            # that names a path; option words and bare words in it (`--arg k v`) name none
+            for item in path.items:
+                alts = V.as_templates(item)
+                if alts and all("/" in a and not a.startswith("-") for a in alts):
+                    self.emit(op, item, mode, via, n, src=src, chain=chain)
+            return
         line = getattr(n, "line", 0)
         if self.f.origin != "md-block":
             path = self._rebase(path, line, n)
@@ -1407,10 +1426,28 @@ class ShWalk:
     def _invoked(self, target: str, interp: str, args, n) -> None:
         captured = bool(self.captured_stack)
         vals = tuple(self.word(w, n) for w in list(args)[:9])
+        into = self._stdout_into(n)
+        merged = any(r.fd == "2" and r.op == ">&" and r.target is not None and r.target.literal() == "1"
+                     for r in getattr(n, "redirs", None) or [])
         self.an.findings.invocations.append(M.Invocation(self.f.component, n.line, target, interp, captured,
-                                                         self.func or "", vals))
+                                                         self.func or "", vals, into, bool(into) and merged))
         if self.an.chain_basename and target.rsplit("/", 1)[-1] == self.an.chain_basename:
             self.chain.append((n, self.captured_stack[-1] if self.captured_stack else None))
+
+    def _stdout_into(self, n) -> tuple:
+        """The files a command's stdout is written into: its own `>`/`>>` redirect, or, in a
+        pipeline (`bash x 2>&1 | sed ... >> "$LOG"`), the last command's."""
+        info = self.f.parent.get(id(n))
+        cmds = info[0] if info and info[3] == "pipe" else [n]
+        last = cmds[-1]
+        out = []
+        for r in getattr(last, "redirs", None) or []:
+            if r.target is not None and r.op in (">", ">>", ">|", "&>", "&>>") and (r.fd in (None, "1")):
+                v = self.word(r.target, last)
+                if self.f.origin != "md-block":
+                    v = self._rebase(v, getattr(last, "line", 0), last)
+                out += V.as_templates(v)
+        return tuple(sorted(set(out)))
 
     def _env_for_child(self, n) -> dict:
         env = {}
@@ -1912,6 +1949,12 @@ def _direct_vars(word: S.Word) -> list:
             if p.arg is not None:
                 out += _direct_vars(p.arg)
     return out
+
+
+def _leaves_block(n) -> bool:
+    """A command that is an `exit` or a `return` of its own (not one branch of an and-or list):
+    nothing after it in the same block runs."""
+    return isinstance(n, S.Simple) and bool(n.words) and n.words[0].literal() in ("exit", "return")
 
 
 def _sh_terminates(body: list) -> bool:

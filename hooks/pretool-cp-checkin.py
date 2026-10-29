@@ -45,10 +45,12 @@ REGISTER_TIMEOUT_S = 20
 # workflows. These workflows produce no spec views, so VIEW_PATH_PATTERN never
 # fires for them. Root cause: commit e086ccb scoped enforcement to /spec only;
 # /dev sessions have no cp-state files, so the enforcement hook fails open.
-# Fix: orchestrators write .claude/dev-registry/<session_id>/<agent>.json
-# sentinels; subagents read them as FIRST ACTION; this hook extracts the agent
-# type from the path and writes the Claude-stdin agent_id -> agent_type mapping
-# to .claude/dev-registry/agent-index.json. See ba-spec-20260424-110000.md.
+# Fix: each dispatched subagent reads .claude/dev-registry/<session_id>/<agent>.json
+# as its FIRST ACTION; this hook extracts the agent type from the path, writes the
+# Claude-stdin agent_id -> agent_type mapping to .claude/dev-registry/agent-index.json,
+# and is the sentinel's one producer: it creates the sentinel in the cycle's armed
+# registry right before that read, so a sentinel exists for exactly the roles a
+# dispatch reads (P1b goal 2). See ba-spec-20260424-110000.md.
 DEV_SENTINEL_PATTERN = re.compile(
     r".*/\.claude/dev-registry/(?P<session_id>[^/]+)/(?P<agent>[^/]+)\.json$"
 )
@@ -189,8 +191,37 @@ def _handle_cp_state_direct_read(data, project_dir):
     return True
 
 
+def _ensure_dev_sentinel(file_path, agent, session_id):
+    """Create the sentinel the subagent is about to read, in a registry the cycle's
+    start armed (an existing, non-symlinked directory): its one producer, so the
+    sentinel exists for the roles a dispatch reads and for no other. An existing
+    sentinel is left as it is; the bytes appear whole (a temporary linked into
+    place). Fail-open: any error leaves the read to report the missing file."""
+    registry = Path(file_path).parent
+    if registry.is_symlink() or not registry.is_dir() or os.path.lexists(file_path):
+        return
+    payload = (json.dumps({"agent_type": agent, "session_id": session_id}) + "\n").encode("utf-8")
+    tmp = registry / f".{agent}.json.tmp-{os.getpid()}"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload)
+        try:
+            os.link(tmp, file_path)
+        except FileExistsError:
+            pass        # a parallel dispatch of the same role created it first
+    except OSError:
+        pass
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def _handle_dev_sentinel(data, project_dir):
-    """Process a DEV_SENTINEL_PATTERN Read; register UUID -> agent_type.
+    """Process a DEV_SENTINEL_PATTERN Read; create the sentinel, register UUID ->
+    agent_type.
 
     Returns True when handled, False when the Read does not target a sentinel
     or the Claude-stdin agent_id is missing (main-agent Read is ignored).
@@ -201,6 +232,7 @@ def _handle_dev_sentinel(data, project_dir):
     agent_id = data.get("agent_id")
     if not agent_id:
         return False
+    _ensure_dev_sentinel((data.get("tool_input") or {}).get("file_path") or "", agent, session_id)
     _update_dev_registry_index(project_dir, agent_id, agent, session_id)
     return True
 

@@ -482,8 +482,6 @@ check_systemctl_targets_all_dev() {
 # ${DAEMON_RESTART_GRANT_DIR}/claude-allow-daemon-restart-<target>.flag sentinel (human-run grant helper)
 # is preserved per W6 as the precise-grant alternative; the function below is still its consume mechanism.
 
-DAEMON_RESTART_AUDIT_LOG="${CLAUDE_DAEMON_RESTART_AUDIT_LOG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/claude-daemon-restart-grants.log}"
-
 # Atomic consume of ${DAEMON_RESTART_GRANT_DIR}/claude-allow-daemon-restart-<target>.flag.
 # Args: $1 = bare unit name ("<prefix>" or "<prefix>-<target>"), $2 = the verb being attempted.
 # Returns 0 if a valid grant existed and was consumed (caller may proceed);
@@ -509,8 +507,6 @@ check_and_consume_daemon_restart_grant() {
     "import json,sys,os; d=json.load(sys.stdin); print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" \
     2>/dev/null)
   [ -z "$sid" ] && sid="default"
-
-  mkdir -p "$(dirname "$DAEMON_RESTART_AUDIT_LOG")" 2>/dev/null || true
 
   local flag_file="${DAEMON_RESTART_GRANT_DIR%/}/claude-allow-daemon-restart-${target}.flag"
   local lock_file="${flag_file}.lock"
@@ -614,49 +610,8 @@ PYEOF
 
   case "$consume_result" in
     CONSUMED$'\t'*)
-      local rest grant_target expires grant_sid
-      rest="${consume_result#CONSUMED$'\t'}"
-      grant_target="${rest%%$'\t'*}"
-      rest="${rest#*$'\t'}"
-      expires="${rest%%$'\t'*}"
-      grant_sid="${rest#*$'\t'}"
-      "$PYTHON_BIN" - "$DAEMON_RESTART_AUDIT_LOG" "$sid" "$target" "$unit" "$verb" "$grant_target" "$expires" "$grant_sid" <<'PYAUDIT' >> "$DAEMON_RESTART_AUDIT_LOG"
-import json, sys
-from datetime import datetime, timezone
-log_path, sid, target, unit, verb, grant_target, expires, grant_sid = sys.argv[1:9]
-print(json.dumps({
-    "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "sid": sid,
-    "target": target,
-    "unit": unit,
-    "verb": verb,
-    "outcome": "consumed",
-    "grant_target": grant_target,
-    "grant_session_id": grant_sid,
-    "grant_expires_at": expires,
-    "source": "pretool-bash-safety",
-}, separators=(",", ":")))
-PYAUDIT
       echo "[daemon-restart-grant] consumed grant for target=$target unit=$unit verb=$verb" >&2
       return 0
-      ;;
-    EXPIRED$'\t'*|TARGET_MISMATCH$'\t'*|SESSION_MISMATCH$'\t'*|NO_FLAG|BLOCKED_LOCK|ERROR$'\t'*)
-      local outcome="${consume_result%%$'\t'*}"
-      "$PYTHON_BIN" - "$DAEMON_RESTART_AUDIT_LOG" "$sid" "$target" "$unit" "$verb" "$outcome" <<'PYAUDIT2' >> "$DAEMON_RESTART_AUDIT_LOG"
-import json, sys
-from datetime import datetime, timezone
-log_path, sid, target, unit, verb, outcome = sys.argv[1:7]
-print(json.dumps({
-    "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "sid": sid,
-    "target": target,
-    "unit": unit,
-    "verb": verb,
-    "outcome": outcome.lower(),
-    "source": "pretool-bash-safety",
-}, separators=(",", ":")))
-PYAUDIT2
-      return 1
       ;;
     *)
       return 1

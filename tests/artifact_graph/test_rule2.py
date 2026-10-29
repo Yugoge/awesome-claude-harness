@@ -566,3 +566,204 @@ def test_a_parameters_directory_or_dot_is_the_parameters_directory(tmp_path):
     ''')})
     paths = rel_paths(root, op="read")
     assert "<state>/claude-pointer.json" in paths and "<proj>/claude-pointer.json" not in paths
+
+
+# ------------------------------------------------------------------ lane K3
+
+def test_nothing_after_a_scripts_top_level_exit_runs(tmp_path):
+    """Rule (1): a disabled script's body after its own top-level `exit` (function definitions
+    included) and a block's commands after its `exit` or `return` write nothing."""
+    root = make_tree(tmp_path, {
+        "hooks/legacy.sh": (
+            'echo "disabled" >&2\nexit 0\n'
+            'main() {\n  cp ~/.claude/settings.json ~/.claude/settings.json.backup.$(date +%s)\n}\nmain\n'),
+        "hooks/fn.sh": ('f() {\n  echo x > "$HOME/.claude/claude-reached.txt"\n  return 0\n'
+                        '  echo y > "$HOME/.claude/claude-unreached.txt"\n}\nf\n'),
+    })
+    writes = rel_paths(root, op="write")
+    assert "<harness>/claude-reached.txt" in writes
+    assert not [p for p in writes if "backup" in p or "unreached" in p]
+
+
+def test_an_array_operand_is_each_path_it_holds(tmp_path):
+    """`tail -f "${logs[@]}"` reads each path the array holds (a glob element: each file it
+    matches), and `$logs` is its first element; option words in an array name no file."""
+    m, vs = check(make_tree(tmp_path, {
+        "hooks/watch.sh": ('NAME=$(basename "$1")\n'
+                           'echo x | tee -a "$HOME/.claude/logs/watch-${NAME}.log"\n'),
+        "hooks/manager.sh": ('show() {\n  local logs=("$HOME/.claude"/logs/watch-*.log)\n'
+                             '  [ -f "$logs" ] || return 1\n  tail -f "${logs[@]}"\n}\nshow\n'),
+        "hooks/opts.sh": 'ARGS=(--arg k v)\njq "${ARGS[@]}" . "$HOME/.claude/claude-x.json"\n',
+    }))
+    a = m.artifacts["<harness>/logs/watch-<*>.log"]
+    assert "hooks/manager.sh" in a.consumers()
+    assert not [k for k in m.artifacts if "--arg" in k or k.endswith("/v") or k.endswith("/k")]
+    assert not [v for v in vs if v.rule == "2-unread"]
+
+
+def test_past_a_guard_on_an_empty_path_its_empty_alternative_names_nothing(tmp_path):
+    """`p = path(key) if key else ""` then `if not p: return`: the call after the guard gets the
+    path alone, so `dirname(p) or "."` joined to `basename(p)` stays that file and never names
+    one in the working directory."""
+    root = make_tree(tmp_path, {"hooks/c.py": hook('''
+        def unlink_verified(path):
+            fd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+            os.stat(os.path.basename(path), dir_fd=fd)
+        def main(key):
+            p = harness_state_dir() + "/claude-pointer-" + key + ".json" if key else ""
+            if not p:
+                return
+            unlink_verified(p)
+        main(sys.argv[1])
+    ''')})
+    paths = rel_paths(root, op="read")
+    assert "<state>/claude-pointer-<*>.json" in paths
+    assert not [p for p in paths if p.startswith("<proj>")]
+
+
+def test_a_directory_moved_aside_is_still_a_directory(tmp_path):
+    """`mv "$VENV" "$VENV.bak-<ts>"` of a path the code tests as a directory names a directory,
+    no file artifact; a file moved aside stays a file."""
+    m, vs = check(make_tree(tmp_path, {"scripts/boot.sh": (
+        'V="$HOME/.claude/venv"\nif [ -d "$V" ]; then mv "$V" "$V.bak-$(date +%s)"; fi\n'
+        'F="$HOME/.claude/claude-conf.json"\nif [ -f "$F" ]; then mv "$F" "$F.bak-$(date +%s)"; fi\n')}))
+    assert not [k for k in m.artifacts if "venv.bak" in k]
+    assert ("2-unread", "<harness>/claude-conf.json.bak-<ts>") in rule2(vs)
+
+
+def test_a_file_installed_into_the_systems_own_tree_is_the_platforms(tmp_path):
+    """Rule (1) the other way round: a unit file copied into /etc is there for the service
+    manager that loads it; a log a script appends under /var/log stays an artifact, which
+    goal 2 judges (E12)."""
+    m, vs = check(make_tree(tmp_path, {"hooks/mgr.sh": (
+        'S="$(dirname "$0")/../systemd/w@.service"\n[ -f "$S" ] || exit 1\ncp "$S" /etc/systemd/system/\n'
+        'echo done >> /var/log/claude-mgr.log\n')}))
+    assert m.artifacts["/etc/systemd/system/w@.service"].consumers() == ["platform"]
+    assert ("2-unread", "/var/log/claude-mgr.log") in rule2(vs)
+
+
+def test_the_harness_home_is_a_projects_dot_claude_and_a_project_itself(tmp_path):
+    """Rule (1)'s root aliases: a file read only at a code site under one name of the harness
+    home that nothing writes under that name, while code writes it under the other, is that one
+    file: `<harness>/X` beside `<proj>/.claude/X` (a session whose project is the home
+    directory) and `<proj>/X` beside `<harness>/X` (a session working in the harness checkout).
+    A name no code writes under either root stays read and never written."""
+    m, vs = check(make_tree(tmp_path, {
+        "hooks/bookmark.py": '''
+            import json, os, sys
+            sid = json.load(sys.stdin)["session_id"]
+            p = os.path.join(os.environ["CLAUDE_PROJECT_DIR"], ".claude", "workflow-" + sid + ".json")
+            open(p, "w").write("{}")
+        ''',
+        "scripts/prune.sh": (
+            'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
+            'ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"\n'
+            'for f in "$ROOT"/workflow-*.json; do stat -c %Y "$f"; done\n'),
+        "scripts/seed.sh": ('umask 077\necho lit > "$HOME/.claude/claude-literals.txt"\n'
+                            'echo n > "$CLAUDE_PROJECT_DIR/claude-proj-note.txt"\n'),
+        "scripts/check.sh": ('top="$(git rev-parse --show-toplevel)"\ncat "$top/claude-literals.txt"\n'
+                             'cat "$top/claude-nobody-writes.txt"\ncat "$top/claude-proj-note.txt"\n'),
+    }))
+    assert "scripts/prune.sh" in m.artifacts["<proj>/.claude/workflow-<sid>.json"].consumers()
+    assert "scripts/check.sh" in m.artifacts["<harness>/claude-literals.txt"].consumers()
+    assert rule2(vs) == {("2-unwritten", "<proj>/claude-nobody-writes.txt")}
+
+
+def test_an_options_value_is_its_default_where_no_invocation_passes_it(tmp_path):
+    """E1's argv class for argparse options: `Path(args.dir)` of `add_argument("--dir",
+    default=X)` is X (an option passed at run time is that run's); an option with no default
+    stays the run's argument."""
+    m, vs = check(make_tree(tmp_path, {
+        "scripts/mint.py": '''
+            import argparse, os, sys
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "hooks"))
+            from lib.harness_state_dir import harness_state_dir
+            from pathlib import Path
+            DEFAULT_DIR = os.path.join(harness_state_dir(), "claude-overrides")
+            def main():
+                ap = argparse.ArgumentParser()
+                ap.add_argument("--digest", required=True)
+                ap.add_argument("--dir", default=DEFAULT_DIR, help="tests point this at scratch")
+                ap.add_argument("--out-file")
+                args = ap.parse_args()
+                (Path(args.dir) / ("override-%s.json" % args.digest)).write_text("{}")
+                open(args.out_file, "w").write("x")
+            main()
+        ''',
+        "hooks/guard.py": hook('''
+            import glob
+            for p in glob.glob(harness_state_dir() + "/claude-overrides/*.json"):
+                open(p).read()
+        '''),
+    }))
+    assert m.artifacts["<state>/claude-overrides/override-<*>.json"].producers() == ["scripts/mint.py"]
+    assert not rule2(vs)
+
+
+def test_a_walk_up_the_tree_probes_no_fixed_directory(tmp_path):
+    """Rule (1): a loop that moves a directory to its parent until it finds a name reads the
+    nearest file of that name above its start (the user's own tree), never a fixed file at the
+    start: the start is one probe among the directories above it."""
+    m, vs = check(make_tree(tmp_path, {
+        "hooks/guard.py": '''
+            import json, os
+            d = os.path.normpath(os.getcwd())
+            while True:
+                man = os.path.join(d, "package.json")
+                if os.path.isfile(man):
+                    print(json.load(open(man)).get("scripts"))
+                    break
+                parent = os.path.dirname(d)
+                if parent == d:
+                    break
+                d = parent
+        ''',
+        "hooks/w.py": 'import os\nopen(os.path.join(os.getcwd(), ".gitignore"), "a").write("x\\n")\n',
+    }))
+    assert not [k for k in m.artifacts if k.endswith("package.json")]
+    assert not rule2(vs) - {("2-unread", "<proj>/.gitignore")}
+
+
+def test_a_path_a_script_prints_into_a_log_the_owner_reads_is_the_owners(tmp_path):
+    """E12: the landing writes what its steps print (`bash step 2>&1 | sed >> "$LOG"`) into the
+    log its relayed notice names, so a path a step prints there is shown to the owner; a path
+    printed into a file no owner-facing output names is not."""
+    settings = {"env": {}, "hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": "bash ~/.claude/hooks/relay.sh"}]}]}}
+    m, vs = check(make_tree(tmp_path, {
+        "scripts/install/land": (
+            '#!/bin/bash\ncd -P "${BASH_SOURCE[0]%/*}/../.." || exit 0\nLOG=logs/landing.log\n'
+            'bash scripts/step 2>&1 | sed -e "s#$PWD#<home>#g" >> "$LOG"\n'
+            'bash scripts/other > "$HOME/.claude/claude-other-out.txt"\n'
+            'printf \'%s\\n\' "Landing done (see logs/landing.log)"\n'),
+        "hooks/relay.sh": (
+            'NOTICE="$(bash "$(dirname "${BASH_SOURCE[0]}")/../scripts/install/land")"\n'
+            'printf \'{"systemMessage": "%s"}\\n\' "$NOTICE"\n'),
+        "scripts/step": ('#!/bin/bash\nH="$HOME/.claude/claude-hook"\necho x > "$H"\nB="$H.bak-$(date +%s)"\n'
+                         'mv "$H" "$B"\necho "step: the old hook was moved to $B" >&2\n'),
+        "scripts/other": ('#!/bin/bash\nK="$HOME/.claude/claude-kept"\necho x > "$K"\nmv "$K" "$K.old-$(date +%s)"\n'
+                          'echo "moved to $K.old-$(date +%s)"\n'),
+    }, settings))
+    assert "owner" in m.artifacts["<harness>/claude-hook.bak-<ts>"].consumers()
+    assert ("2-unread", "<harness>/claude-kept.old-<ts>") in rule2(vs)
+
+
+def test_an_options_value_is_each_value_its_invocations_pass(tmp_path):
+    """E1's argv class for argparse options, as K2's rule binds sys.argv[N]: the path a
+    command block passes after `--requirement-file` is the file the script reads there."""
+    root = make_tree(tmp_path, {
+        "scripts/query.py": '''
+            import argparse
+            ap = argparse.ArgumentParser()
+            ap.add_argument("--task-id", required=True)
+            ap.add_argument("--requirement-file")
+            args = ap.parse_args()
+            print(open(args.requirement_file).read()[:10])
+        ''',
+        "commands/c.md": ("# /c\n\n```bash\nprintf '%s' x > \".claude/reg/<TASK_ID>/requirement.txt\"\n"
+                          "python3 ~/.claude/scripts/query.py --task-id \"<TASK_ID>\" "
+                          "--requirement-file \".claude/reg/<TASK_ID>/requirement.txt\"\n```\n"),
+    })
+    m, vs = check(root)
+    assert "scripts/query.py" in m.artifacts["<proj>/.claude/reg/<task>/requirement.txt"].consumers()
+    assert not rule2(vs)

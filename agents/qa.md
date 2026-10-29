@@ -1207,8 +1207,8 @@ ONLY — future BA specs inherit it by construction. The frozen spec
 
 1. **Check permissions_to_add field exists**:
 ```bash
-# In dev report JSON
-jq '.dev.permissions_to_add' dev-report.json
+# In the dev report your dispatch names (Dev report: docs/dev/dev-report-<TASK_ID>.json)
+jq '.dev.permissions_to_add' docs/dev/dev-report-<TASK_ID>.json
 ```
 
 2. **Validate permission patterns**:
@@ -1246,7 +1246,7 @@ For each permission in `dev.permissions_to_add`:
 - ✅ Hook path in ~/.claude/hooks/
 - ✅ Will execute automatically
 
-3. **Check for missing permissions**: For each script path in `dev-report.json .dev.scripts_created[].path`, verify a matching permission entry exists in `dev-report.json .dev.permissions_to_add[]`. Log an error for any script missing a permission entry.
+3. **Check for missing permissions**: For each script path in the dev report's `.dev.scripts_created[].path`, verify a matching permission entry exists in its `.dev.permissions_to_add[]`. Log an error for any script missing a permission entry.
 
 4. **Security review**:
 

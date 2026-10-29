@@ -128,7 +128,6 @@ def _scratch_env(base: Path, case: str) -> dict:
         "CHECKPOINT_LOG_DIR": str(checkpoint_logs),
         "CLAUDE_STATE_DIR": str(state),
         "CHECKPOINT_PUSH_MIN_INTERVAL": "0",
-        "CLAUDE_BACKUP_LOG": str(base / "post-commit-auto-push.log"),
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": str(global_config),
         "GIT_TERMINAL_PROMPT": "0",

@@ -81,7 +81,7 @@ def inventory_foreign_grants() -> dict:
     for p in sorted(SENTINEL_GRANT_DIR.iterdir()):
         if not p.is_file():
             continue
-        if p.name == GRANT_PATH.name or p.name.startswith(f"{RESERVED_TASK_ID}-"):
+        if p.name == GRANT_PATH.name:
             continue
         st = p.stat()
         inv[p.name] = {"sha256": sha256_file(p), "mtime_ns": st.st_mtime_ns}
@@ -89,15 +89,9 @@ def inventory_foreign_grants() -> dict:
 
 
 def reserved_grant_files() -> list[Path]:
-    """Only the two reserved-token paths. No directory glob, ever."""
-    out = []
-    if GRANT_PATH.exists():
-        out.append(GRANT_PATH)
-    if SENTINEL_GRANT_DIR.is_dir():
-        for p in sorted(SENTINEL_GRANT_DIR.glob(f"{RESERVED_TASK_ID}-*")):
-            if p.is_file():
-                out.append(p)
-    return out
+    """The reserved token's grant path, the one name write_sentinel_grant() gives it.
+    No directory glob, ever."""
+    return [GRANT_PATH] if GRANT_PATH.exists() else []
 
 
 def preflight() -> None:

@@ -2,8 +2,9 @@
 """The cycle's identity and registry have one producer (P1b Scope row 1).
 
 hooks/prompt-workflow.py mints the task id at UserPromptSubmit and arms the
-registry (one sentinel per role of the roster hooks/lib/roster.py computes from
-agents/*.md, the user-requirement document, the enforcement flags). The main
+registry (the user-requirement document, the enforcement flags; a role's
+sentinel is created by hooks/pretool-cp-checkin.py right before the dispatched
+role reads it, so none is written for a role no dispatch reads). The main
 agent that no longer holds the hook's output, or never got it, runs the same
 start through `prompt-workflow.py start`; the overnight initializer arms its
 registry through `prompt-workflow.py arm-registry`; command text that needs a
@@ -121,11 +122,8 @@ def test_start_arms_the_registry_and_names_the_task_id(env, command, prefix):
     # The task id artifacts are named with: obligation.canonical_task_id.
     assert _value(result.stdout, "Task id:") == name[len(prefix):]
     registry = project / ".claude" / "dev-registry" / name
-    sentinels = {p.stem for p in registry.glob("*.json") if not p.name.endswith("-enforce.json")}
-    assert sentinels == ROSTER.roles()
-    for role in sentinels:
-        assert json.loads((registry / f"{role}.json").read_text()) == {
-            "agent_type": role, "session_id": name}
+    # no role sentinel at the start: each is created when its dispatch reads it
+    assert not [p for p in registry.glob("*.json") if not p.name.endswith("-enforce.json")]
     flags = sorted(p.name for p in registry.glob("*-enforce.json"))
     assert flags == ["artifact-contract-enforce.json", "codex-enforce.json", "e2e-enforce.json"]
     for flag in flags:
@@ -202,8 +200,7 @@ def test_arm_registry_writes_the_handed_requirement_and_rearms_a_relaunch(env):
     armed = _cli(project, values, args, text)
     assert armed.returncode == 0, armed.stderr
     registry = project / ".claude" / "dev-registry" / "sess-over"
-    assert {p.stem for p in registry.glob("*.json") if not p.name.endswith("-enforce.json")} \
-        == ROSTER.roles()
+    assert not [p for p in registry.glob("*.json") if not p.name.endswith("-enforce.json")]
     requirement = project / "docs" / "dev" / "user-requirement-sess-over.md"
     assert requirement.read_bytes() == text
     assert sorted(p.name for p in registry.glob("*-enforce.json")) == [
@@ -245,8 +242,7 @@ def test_overnight_init_hands_the_record_to_the_registry_producer(env, tmp_path)
     assert init.stdout.splitlines()[-1] == "OVERNIGHT_INIT_OK"
     assert f"REGISTRY_DIR={project.resolve()}/.claude/dev-registry/sess-o" in init.stdout
     registry = project / ".claude" / "dev-registry" / "sess-o"
-    assert {p.stem for p in registry.glob("*.json") if not p.name.endswith("-enforce.json")} \
-        == ROSTER.roles()
+    assert not [p for p in registry.glob("*.json") if not p.name.endswith("-enforce.json")]
     assert sorted(p.name for p in registry.glob("*-enforce.json")) == [
         "codex-enforce.json", "e2e-enforce.json"]
     assert (project / "docs" / "dev" / "user-requirement-sess-o.md").read_text() == "harden the parser\n"

@@ -156,6 +156,7 @@ class PyModule:
         self.env = env or {}
         self.origin = origin
         self.injected: dict = {}
+        self.option_values: dict = {}       # argparse dest -> its value (FunctionWalk._option_value)
         self.tree = ast.parse(source)
         self.mentions_chain = bool(index.chain_basename) and index.chain_basename in source
         self.source_hint = "systemMessage" if "systemMessage" in source else ""
@@ -560,6 +561,7 @@ def _dotted(node) -> str:
 
 
 _REACH: dict = {}
+_WALK: dict = {}
 
 
 def reaching(mod: PyModule, name: str, stmt) -> list:
@@ -571,7 +573,7 @@ def reaching(mod: PyModule, name: str, stmt) -> list:
 
 
 def clear_caches() -> None:
-    for c in (_TNAMES, _DEFS, _WALRUS, _REACH):
+    for c in (_TNAMES, _DEFS, _WALRUS, _REACH, _WALK):
         c.clear()
 
 
@@ -630,6 +632,77 @@ def _reaching(mod: PyModule, name: str, stmt) -> list:
             if cur is None:
                 return out
             continue
+        cur = owner
+
+
+def _moves_to_parent(loop, name: str) -> bool:
+    """A loop that assigns NAME and takes NAME's parent directory (`os.path.dirname(NAME)`,
+    `NAME.parent`): it walks NAME up the tree."""
+    key = (id(loop), name)
+    if key not in _WALK:
+        _WALK[key] = _moves_to_parent_raw(loop, name)
+    return _WALK[key]
+
+
+def _moves_to_parent_raw(loop, name: str) -> bool:
+    assigns = parents = False
+    for n in ast.walk(loop):
+        if isinstance(n, ast.Assign) and any(_binds(t, name) for t in n.targets):
+            assigns = True
+        elif isinstance(n, ast.Call) and _dotted(n.func) == "os.path.dirname" and n.args \
+                and isinstance(n.args[0], ast.Name) and n.args[0].id == name:
+            parents = True
+        elif isinstance(n, ast.Attribute) and n.attr == "parent" and isinstance(n.value, ast.Name) \
+                and n.value.id == name:
+            parents = True
+    return assigns and parents
+
+
+def _walks_up(mod: PyModule, name: str, stmt) -> bool:
+    """`stmt` lies in a loop of its function that walks NAME up the tree."""
+    cur = stmt
+    while True:
+        info = mod.parent.get(id(cur))
+        if info is None:
+            return False
+        owner = info[0]
+        if isinstance(owner, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return False
+        if isinstance(owner, (ast.While, ast.For)) and _moves_to_parent(owner, name):
+            return True
+        cur = owner
+
+
+def _tests_empty(test, name: str) -> bool:
+    """`not NAME`, `NAME is None`, `NAME == ""`, or an `or` of tests holding one: true
+    whenever NAME is empty."""
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        return isinstance(test.operand, ast.Name) and test.operand.id == name
+    if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.left, ast.Name) \
+            and test.left.id == name and isinstance(test.ops[0], (ast.Is, ast.Eq)):
+        c = test.comparators[0]
+        return isinstance(c, ast.Constant) and c.value in (None, "")
+    if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or):
+        return any(_tests_empty(v, name) for v in test.values)
+    return False
+
+
+def _guarded_nonempty(mod: PyModule, name: str, stmt) -> bool:
+    """An `if not NAME: return` (raise, continue, break, exit) after NAME's last definition and
+    before `stmt`, in `stmt`'s block or one around it: NAME is not empty at `stmt`."""
+    cur = stmt
+    while True:
+        info = mod.parent.get(id(cur))
+        if info is None:
+            return False
+        owner, fieldname, idx = info
+        for s in reversed(getattr(owner, fieldname)[:idx]):
+            if isinstance(s, ast.If) and not s.orelse and _tests_empty(s.test, name) and _terminates(s.body):
+                return True
+            if _defs_in_stmt(s, name)[1]:
+                return False
+        if isinstance(owner, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return False
         cur = owner
 
 
@@ -830,6 +903,11 @@ class FunctionWalk:
             return self.mod.injected[name]
         if stmt is None:
             return Unk("dynamic")
+        if _walks_up(self.mod, name, stmt):
+            # rule (1): a walk up the tree (the nearest package.json above a command's working
+            # directory) probes whichever directory holds the name, no fixed one: its start is
+            # one probe among the directories above it
+            return V.s(P.WILD)
         defs = reaching(self.mod, name, stmt)
         if not defs:
             if name in ("open", "print", "str", "sorted", "list", "tuple", "set", "frozenset", "len",
@@ -840,7 +918,11 @@ class FunctionWalk:
                 return Mod(None, name)
             return Unk("dynamic")
         vals = [self._def_value(d, name) for d in defs[:6]]
-        return vals[0] if len(vals) == 1 else V.union(vals)
+        val = vals[0] if len(vals) == 1 else V.union(vals)
+        if isinstance(val, Str) and "" in val.alts and len(val.alts) > 1 and _guarded_nonempty(self.mod, name, stmt):
+            # past `if not path: return`, the empty alternative (`p if c else ""`) names nothing
+            val = V.make_str(a for a in val.alts if a != "")
+        return val
 
     def _def_value(self, d, name: str) -> V.Val:
         kind, node, extra = d
@@ -926,6 +1008,38 @@ class FunctionWalk:
             return Obj("args")
         return V.s(P.param(name))
 
+    def _option_value(self, dest: str) -> V.Val | None:
+        """E1's argv class for argparse options: `args.dir` of `add_argument("--dir",
+        default=X)` is X where an invocation passes no `--dir`, and the value each invocation
+        passes after `--dir` (the `argv:--dir` token, bound per invocation as sys.argv[N] is);
+        None when the module declares no such option."""
+        memo = self.mod.option_values
+        if dest in memo:
+            return memo[dest]
+        memo[dest] = None       # a default that names its own option evaluates to no value
+        found = None
+        for n in ast.walk(self.mod.tree):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "add_argument"):
+                continue
+            kws = {k.arg: k.value for k in n.keywords if k.arg}
+            names = [a.value for a in n.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            longs = [x for x in names if x.startswith("--")]
+            own = _const_str(kws["dest"]) if "dest" in kws else (
+                longs[0][2:].replace("-", "_") if longs else names[0].lstrip("-").replace("-", "_") if names else None)
+            if own != dest:
+                continue
+            vals = []
+            if "default" in kws:
+                v = self.ev(kws["default"], self.mod.stmt_of.get(id(kws["default"])))
+                if isinstance(v, Str):
+                    vals.append(v)
+            if longs:
+                vals.append(V.s(P.tok("argv:" + longs[0])))
+            found = V.union(vals) if vals else None
+            break
+        memo[dest] = found
+        return found
+
     def _import_value(self, node, alias) -> V.Val:
         an = self.an
         if isinstance(node, ast.Import):
@@ -981,7 +1095,8 @@ class FunctionWalk:
             return self._module_attr(base.path, attr)
         if isinstance(base, Obj):
             if base.kind == "args":
-                return Unk("data:argv", hint=attr)
+                d = self._option_value(attr)
+                return d if d is not None else Unk("data:argv", hint=attr)
             if base.kind == "proc":
                 return Unk("assembled:stdout") if attr in ("stdout", "stderr") else Unk("dynamic")
             if base.kind in ("self", "instance", "class"):

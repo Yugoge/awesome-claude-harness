@@ -287,6 +287,7 @@ def derive(tree: str, static, runs: list[Run], *, chain_script: str | None = Non
     ctx.inputs()
     ctx.declarations()
     ctx.owner_outputs()
+    ctx.platform_installs()
     ctx.deciding()
     ctx.non_file()
     m.ctx = ctx
@@ -308,6 +309,7 @@ class _Ctx:
         # writer identity per (process component, artifact): the innermost static write site's file
         self.writer_fn: dict = {}
         self.dirs: set = set()          # paths code tests to be directories (rule (3))
+        self.moved: dict = {}           # a name joined to the file it aliases (rule (1)'s roots)
 
     # ------------------------------------------------------------ runtime
     def runtime_files(self) -> None:
@@ -374,9 +376,13 @@ class _Ctx:
         # name no file either
         dirs = {r["path"] for r in rels if r["op"] == "read" and r.get("mode") == "name"
                 and _DIR_TEST.search(r.get("via") or "")}
+        # a directory moved to a new name (`mv "$VENV" "$VENV.bak-<ts>"`) is still a directory:
+        # its new name names no file either
+        dirs |= {r["path"] for r in rels if r["op"] == "rename" and r.get("from")
+                 and all(s in dirs for s in r["from"])}
         self.dirs = dirs
         for r in rels:
-            if r["op"] == "read" and r.get("mode") == "name" and r["path"] in dirs:
+            if (r["op"] == "rename" or r["op"] == "read" and r.get("mode") == "name") and r["path"] in dirs:
                 continue
             if r["path"].startswith(("<harness>/", "<home>/")):
                 root, tail = r["path"].split("/", 1)
@@ -618,8 +624,43 @@ class _Ctx:
         return hits[0] if len(hits) == 1 else None
 
     # ------------------------------------------------------------ inputs (rule 1)
+    def _home_aliases(self) -> None:
+        """Rule (1), the roots' own aliases. The harness home is a git checkout that is a
+        session's project when the harness itself is worked on (its pre-commit hook and CI run
+        there, render-settings changes into it), and it is the `.claude` directory of a session
+        whose project is the home directory. So a file code reads under one of these names, which
+        nothing writes under that name while code writes it under the other, is that one file:
+        `<proj>/X` and `<harness>/X`, `<proj>/.claude/X` and `<harness>/X` (as the rule for
+        tracked files below treats a tracked file's two names). Only code sites join this way;
+        a replay reads a file where the replay's own layout puts it."""
+        m = self.m
+        written = sorted(k for k, a in m.artifacts.items() if a.kind == "file" and a.writers)
+        for k in sorted(m.artifacts):
+            a = m.artifacts[k]
+            if a.kind != "file" or a.writers or not a.readers or a.runtime \
+                    or any(r.source != "static" for r in a.readers):
+                continue
+            root, _, tail = k.partition("/")
+            if root == "<proj>":
+                names = ["<harness>/" + (tail[len(".claude/"):] if tail.startswith(".claude/") else tail)]
+            elif root == "<harness>":
+                names = ["<proj>/.claude/" + tail, "<proj>/" + tail]
+            else:
+                continue
+            hits = [w for w in written if any(w == n or matches(n, w) for n in names)]
+            if not hits:
+                continue
+            for h in hits:
+                dest = m.artifacts[h]
+                for r in a.readers:
+                    if not any(x.who == r.who and x.evidence == r.evidence for x in dest.readers):
+                        dest.readers.append(r)
+            self.moved[k] = hits
+            del m.artifacts[k]
+
     def inputs(self) -> None:
         m = self.m
+        self._home_aliases()
         written_dirs = {directory(k) for k, a in m.artifacts.items()
                         if any(w.source == "static" or not RUNTIME_ROLE.match(w.who) or w.who == "cli"
                                for w in a.writers)}
@@ -736,35 +777,64 @@ class _Ctx:
                         a.writers.append(Rel("agent:" + d["role"], "write", d["site"], "declaration"))
 
     def owner_outputs(self) -> None:
+        """E12: a path an owner-facing output shows has the owner as a reader. A script's output
+        its caller writes into a file (`bash x | sed >> "$LOG"`) reaches the owner when that file
+        is the owner's to read: an owner-facing output names it (the landing's notice names
+        logs/landing.log, which holds what the landing's steps print)."""
+        recs = [r for r in self.recs if r["kind"] == "owner_output" and r.get("reaches")]
+        for r in recs:
+            if not r["reaches"].startswith("into:"):
+                self._owner_shown(r)
+        for r in recs:
+            into = r["reaches"][len("into:"):] if r["reaches"].startswith("into:") else None
+            if into and any(x.who == "owner" for k, a in self.m.artifacts.items()
+                            if k == into or matches(into, k) for x in a.readers):
+                self._owner_shown(r)
+
+    def _owner_shown(self, r: dict) -> None:
         m = self.m
-        for r in self.recs:
-            if r["kind"] != "owner_output" or not r.get("reaches"):
+        shown = r["shown"]
+        if shown.startswith("~/"):
+            shown = "<home>/" + shown[2:]
+        pat = shown if shown.startswith(("<", "/")) else P.to_pattern(shown)[0]
+        if pat.startswith("<home>/.claude/"):
+            pat = "<harness>" + pat[len("<home>/.claude"):]
+        if not self._specific(pat):
+            return      # a shown path with no file name of its own names no file
+        pats = [pat]
+        if not shown.startswith(("<", "/")):
+            # a relative path is relative to where the emitting code runs: the file of that
+            # path its own code writes or reads (land runs in the harness home and shows
+            # logs/landing.log)
+            comp = comp_identity(r["component"])
+            tail = "/" + pat.split("/", 1)[1]
+            own = [k for k, a in m.artifacts.items() if a.kind == "file" and k.endswith(tail)
+                   and any(comp in (x.who, x.via) for x in a.writers + a.readers)]
+            pats = own or pats
+        for k, a in m.artifacts.items():
+            if a.kind != "file":
                 continue
-            shown = r["shown"]
-            if shown.startswith("~/"):
-                shown = "<home>/" + shown[2:]
-            pat = shown if shown.startswith(("<", "/")) else P.to_pattern(shown)[0]
-            if pat.startswith("<home>/.claude/"):
-                pat = "<harness>" + pat[len("<home>/.claude"):]
-            if not self._specific(pat):
-                continue    # a shown path with no file name of its own names no file
-            pats = [pat]
-            if not shown.startswith(("<", "/")):
-                # a relative path is relative to where the emitting code runs: the file of that
-                # path its own code writes or reads (land runs in the harness home and shows
-                # logs/landing.log)
-                comp = comp_identity(r["component"])
-                tail = "/" + pat.split("/", 1)[1]
-                own = [k for k, a in m.artifacts.items() if a.kind == "file" and k.endswith(tail)
-                       and any(comp in (x.who, x.via) for x in a.writers + a.readers)]
-                pats = own or pats
-            for k, a in m.artifacts.items():
-                if a.kind != "file":
-                    continue
-                if any(k == p or matches(p, k) for p in pats):
-                    rel = Rel("owner", "read", r["site"], "owner", via=r["channel"])
-                    if not any(x.who == "owner" and x.evidence == r["site"] for x in a.readers):
-                        a.readers.append(rel)
+            if any(k == p or matches(p, k) for p in pats):
+                rel = Rel("owner", "read", r["site"], "owner", via=r["channel"])
+                if not any(x.who == "owner" and x.evidence == r["site"] for x in a.readers):
+                    a.readers.append(rel)
+
+    def platform_installs(self) -> None:
+        """Rule (1)'s platform files the other way round: a file a component installs by copying
+        it into the operating system's own tree (an absolute path under none of the roots the
+        harness works in: its home, the user's home, the project, the state and temp dirs) is
+        there for the platform that loads files from that place (a unit file in systemd's
+        directory), which is its consumer, as the CLI is the consumer of the project settings
+        the harness writes (row 16)."""
+        for r in self.recs:
+            if r["kind"] != "relation" or r["op"] != "write" or r.get("via") not in ("cp", "install"):
+                continue
+            pat = r["path"]
+            if not pat.startswith("/") or pat.startswith(_OS_TEMP_ROOTS):
+                continue
+            a = self.m.artifacts.get(pat)
+            if a is not None and a.kind == "file" and not any(x.who == "platform" for x in a.readers):
+                a.readers.append(Rel("platform", "read", r["site"], "platform"))
 
     # ------------------------------------------------------------ deciding (rules 3-6)
     def deciding(self) -> None:
@@ -814,26 +884,34 @@ class _Ctx:
             pat = d["path"]
             if d["resolution"] == "unresolved":
                 continue
-            key = self._join(pat, rt) or (pat if pat in m.artifacts else None)
-            if key is not None and key not in m.artifacts:
-                continue
-            if key is None:
-                hits = [k for k in m.artifacts if "<*>" in pat and matches(pat, k)]
-                key = hits[0] if len(hits) == 1 else None
-            if key is None:
-                continue
-            a = m.artifacts[key]
-            who = comp_identity(d["component"])
-            meas = self.measured.get((who, key))
-            if meas and meas["reproduced"]:
-                continue    # the differential measured this reader on this artifact
-            settings = "static-armed" if d["component"] in self.switched() else "static"
-            for event, matcher in self._registrations(d["component"]):
-                pos = self._position(a, event, None, None, who, "static", matcher=matcher)
-                a.decisions.append(Decision(who, pos, d["decision_site"], "static", "any", settings, event,
-                                            matcher or "", rule=self._static_rule(d)))
-            if not any(x.who == who and x.op == "read" for x in a.readers):
-                a.readers.append(Rel(who, "read", d["read_site"], "static"))
+            if pat in self.moved:
+                keys = self.moved[pat]      # a name rule (1)'s root aliases joined to its file
+            else:
+                key = self._join(pat, rt) or (pat if pat in m.artifacts else None)
+                if key is not None and key not in m.artifacts:
+                    continue
+                if key is None:
+                    hits = [k for k in m.artifacts if "<*>" in pat and matches(pat, k)]
+                    key = hits[0] if len(hits) == 1 else None
+                if key is None:
+                    continue
+                keys = [key]
+            for key in keys:
+                self._static_decision(d, key)
+
+    def _static_decision(self, d: dict, key: str) -> None:
+        a = self.m.artifacts[key]
+        who = comp_identity(d["component"])
+        meas = self.measured.get((who, key))
+        if meas and meas["reproduced"]:
+            return      # the differential measured this reader on this artifact
+        settings = "static-armed" if d["component"] in self.switched() else "static"
+        for event, matcher in self._registrations(d["component"]):
+            pos = self._position(a, event, None, None, who, "static", matcher=matcher)
+            a.decisions.append(Decision(who, pos, d["decision_site"], "static", "any", settings, event,
+                                        matcher or "", rule=self._static_rule(d)))
+        if not any(x.who == who and x.op == "read" for x in a.readers):
+            a.readers.append(Rel(who, "read", d["read_site"], "static"))
 
     def _loaded_names(self) -> set:
         """Module stems and file names some hook or script imports or sources."""
@@ -1089,6 +1167,8 @@ class _Ctx:
 
 
 _STATE_ROOTS = ("<state>/", "/tmp/", "<tmpdir>/")
+# the operating system's scratch trees, which are temp roots, not the system's own files
+_OS_TEMP_ROOTS = ("/tmp/", "/var/tmp/", "/dev/", "/proc/")
 # rule (1): a lock file folds into the file it serves; the runtime half folds the same names
 # (tests/replay/trace.py), so both halves agree on what a lock is
 _LOCK = re.compile(r"\.(?:lock|lck)$")

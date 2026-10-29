@@ -1391,26 +1391,26 @@ def _write_new_file(path: Path, payload: bytes) -> None:
         raise
 
 
-def _arm_registry(cmd_name: str, name: str, registry_dir: Path, requirement: bytes,
+def _arm_registry(cmd_name: str, name: str, requirement: bytes,
                   claude_session_id: str, project_dir: Path, flags: list, write) -> str:
-    """Write a cycle's registry: one sentinel per role of the agent roster
-    (hooks/lib/roster.py), the user-requirement document, and the enforcement
-    flags through scripts/write-enforce-flag.sh. The one producer of all three:
-    /dev, /dev-command and /redev reach it at their start (_init_dev_registry),
-    /dev-overnight through its launcher (`arm-registry`, called by
-    scripts/overnight-init.sh). ``write`` is _write_new_file for a registry
-    reserved just now and _atomic_write_bytes for an overnight one, which a
-    relaunch in the same session writes again. Returns the flag writer's error
-    output, '' when it succeeded."""
+    """Arm a cycle's registry: the user-requirement document and the
+    enforcement flags (scripts/write-enforce-flag.sh writes them into the
+    registry directory). The one producer of both: /dev, /dev-command and
+    /redev reach it at their start (_init_dev_registry), /dev-overnight through
+    its launcher (`arm-registry`, called by scripts/overnight-init.sh). A role's
+    sentinel (<registry>/<role>.json, its dispatch's FIRST ACTION read) is
+    created by hooks/pretool-cp-checkin.py right before that read, so the
+    registry holds one for each role a dispatch reads and for no other.
+    ``write`` is _write_new_file for a registry reserved just now and
+    _atomic_write_bytes for an overnight one, which a relaunch in the same
+    session writes again. Returns the flag writer's error output, '' when it
+    succeeded."""
     import roster  # hooks/lib is on sys.path (see the WS1 block above)
-    roles = roster.roles()
-    if not roles:
-        # An empty registry would let every subagent's code-write check fall
-        # open without a word; refuse instead, naming the missing input.
+    if not roster.roles():
+        # With no roster the sentinel hook registers no subagent, and every
+        # subagent's code-write check would fall open without a word; refuse
+        # instead, naming the missing input.
         raise RuntimeError(f'no agent roster under {roster.AGENTS_DIR}')
-    for agent in sorted(roles):
-        write(registry_dir / f'{agent}.json',
-              (json.dumps({'agent_type': agent, 'session_id': name}) + '\n').encode('utf-8'))
     write(project_dir / 'docs' / 'dev' / f'user-requirement-{name}.md', requirement)
     command = [str(Path(__file__).resolve().parent.parent / 'scripts' / 'write-enforce-flag.sh'),
                '--source-command', cmd_name, '--session-id', name]
@@ -1436,7 +1436,7 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     # Reserving the directory with mkdir(exist_ok=False) is the allocation
     # linearization point shared by concurrent sessions.  No existing family is
     # opened for replacement, even when the wall clock has only second precision.
-    dev_session_id, registry_dir = _reserve_dev_registry(cmd_name, project_dir)
+    dev_session_id, _ = _reserve_dev_registry(cmd_name, project_dir)
 
     # Strip --codex and --spec <path> tokens to get clean requirement
     tokens = user_input.split()
@@ -1456,7 +1456,7 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     clean_requirement = re.sub(r'(?:--|[–—])spec\s+\S+', '', ' '.join(clean_tokens)).strip()
 
     flags = ['e2e', 'artifact-contract'] + (['codex'] if '--codex' in tokens else [])
-    error = _arm_registry(cmd_name, dev_session_id, registry_dir, clean_requirement.encode('utf-8'),
+    error = _arm_registry(cmd_name, dev_session_id, clean_requirement.encode('utf-8'),
                           claude_session_id, project_dir, flags, _write_new_file)
     if error:
         print(f'_init_dev_registry: {error}', file=sys.stderr)
@@ -1832,7 +1832,7 @@ def cli(argv: list) -> int:
         # stay armed.
         for stale in registry_dir.glob('*-enforce.json'):
             stale.unlink()
-        error = _arm_registry(args.source_command, args.name, registry_dir, sys.stdin.buffer.read(),
+        error = _arm_registry(args.source_command, args.name, sys.stdin.buffer.read(),
                               os.environ.get('CLAUDE_SESSION_ID', ''), project_dir, args.flag,
                               _atomic_write_bytes)
         if error:
