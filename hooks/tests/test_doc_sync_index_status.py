@@ -151,7 +151,7 @@ EXPECTED_STATUS = {
     'M07': 'SKIPPED_MALFORMED_MARKERS', 'M08': 'SKIPPED_MALFORMED_MARKERS', 'M09': 'SKIPPED_MALFORMED_MARKERS',
     'M10': 'SKIPPED_MALFORMED_MARKERS', 'M11': 'SKIPPED_MALFORMED_MARKERS', 'M12': 'SKIPPED_MALFORMED_MARKERS',
     'M13': 'SKIPPED_MALFORMED_MARKERS', 'M14': 'SKIPPED_NO_OPENING_MARKER', 'M15': 'WRITTEN', 'M16': 'WRITTEN',
-    'M17': 'SKIPPED_MALFORMED_MARKERS', 'M18': 'WRITTEN', 'M19': 'SKIPPED_GITHUB_RESERVED', 'M20': 'WRITTEN',
+    'M17': 'SKIPPED_MALFORMED_MARKERS', 'M18': 'WRITTEN', 'M19': 'SKIPPED_GITHUB_RESERVED', 'M20': 'SKIPPED_ABSENT',
     'M21': 'SKIPPED_NO_OPENING_MARKER', 'M22': 'WRITTEN',
 }
 SKIP_CASES = ['M03', 'M04', 'M05', 'M06', 'M07', 'M08', 'M09', 'M10', 'M11', 'M12', 'M13', 'M14', 'M21']
@@ -210,7 +210,8 @@ def test_idx_status_returns_the_status_for_each_shape(tmp_path, case):
 
     assert result is regions.RegenStatus[EXPECTED_STATUS[case]], (case, result)
     if case == 'M20':
-        assert IO in index.read_text() and IC in index.read_text()
+        # doc-sync updates an INDEX that exists and creates none.
+        assert not index.exists()
 
 
 def test_idx_status_idxs_never_none_all_shapes(tmp_path):
@@ -256,7 +257,7 @@ def test_idx_zero_write_idxz_selfcheck_description_marker(tmp_path, monkeypatch)
         if variant == 'foreign_id':
             # Discriminator: the fence-aware classifier alone calls the would-be file
             # well-formed, so the refusal below can only come from the body-level scan.
-            would_be = module._build_index_content(directory, 'kebab', '')
+            would_be = module._compose_index(directory, module._build_index_block(directory, 'kebab'))
             assert regions.classify_region(would_be, 'index-stats').shape is regions.RegionShape.WELL_FORMED
         before_bytes, before_mtime = pin_mtime(index)
         with monkeypatch.context() as patched:
@@ -266,10 +267,10 @@ def test_idx_zero_write_idxz_selfcheck_description_marker(tmp_path, monkeypatch)
         assert result is regions.RegenStatus.SKIPPED_MALFORMED_MARKERS, variant
         assert spy.calls == [], variant
         assert index.read_bytes() == before_bytes and index.stat().st_mtime_ns == before_mtime, variant
-    # A directory without an INDEX yet is refused the same way and gets no file.
+    # A directory without an INDEX yet gets no file whatever its listing holds.
     project, directory, index = build_index_case(tmp_path / 'fresh', 'M20')
     write_description_marker(directory, [IC])
-    assert module.regen_index(directory, project) is regions.RegenStatus.SKIPPED_MALFORMED_MARKERS
+    assert module.regen_index(directory, project) is regions.RegenStatus.SKIPPED_ABSENT
     assert not index.exists()
 
 
@@ -289,7 +290,7 @@ def assert_single_generated_block(text):
 
 
 @pytest.mark.parametrize('case', [pytest.param(case, id=f'idxt_{case}') for case in
-                                  ['M01', 'M02', 'M15', 'M16', 'M20', 'M22']])
+                                  ['M01', 'M02', 'M15', 'M16', 'M22']])
 def test_idx_stable_rounds_are_byte_stable(tmp_path, monkeypatch, case):
     """Three consecutive rounds give identical bytes and never duplicate the generated block."""
     project, directory, index = build_index_case(tmp_path, case)
@@ -297,9 +298,7 @@ def test_idx_stable_rounds_are_byte_stable(tmp_path, monkeypatch, case):
 
     first, second, third = run_rounds(module, directory, project, index, monkeypatch)
 
-    # Without an INDEX the first round sees a directory that does not hold INDEX.md yet, and the
-    # existing convention guess counts that file: round one may differ, unchanged by this ticket.
-    assert second == third and (case == 'M20' or first == second)
+    assert first == second == third
     text = third.decode()
     assert_single_generated_block(text)
     assert text.count(IO) == (2 if case == 'M15' else 1)
@@ -371,22 +370,6 @@ def test_idx_stable_idxt_no_duplicate_blocks(tmp_path, monkeypatch):
     assert_single_generated_block(index.read_text())
 
 
-def test_idx_stable_idxt_needs_update_agrees_with_classifier(tmp_path):
-    """_index_needs_update is True exactly when the INDEX is absent or its region is well-formed."""
-    regions = load('regions')
-    module = load('regen_index')
-    absent = tmp_path / 'absent' / 'INDEX.md'
-    absent.parent.mkdir()
-    assert module._index_needs_update(absent) is True
-    for case in ['M01', 'M02', 'M03', 'M04', 'M05', 'M06', 'M07', 'M08', 'M09', 'M10', 'M11', 'M12', 'M13',
-                 'M14', 'M15', 'M16', 'M21', 'M22']:
-        path = tmp_path / case / 'INDEX.md'
-        path.parent.mkdir()
-        path.write_bytes(shape_body(case, 'index-stats').encode())
-        expected = regions.classify_region(path.read_text(), 'index-stats').shape is regions.RegionShape.WELL_FORMED
-        assert module._index_needs_update(path) is expected, case
-
-
 @pytest.mark.parametrize('case', [pytest.param(case, id=f'rdm_{case}') for case in
                                   ['M03', 'M04', 'M05', 'M06', 'M07', 'M08', 'M09', 'M10', 'M11', 'M12', 'M13',
                                    'M14', 'M15', 'M21']])
@@ -417,12 +400,12 @@ def test_readme_shapes_rdm_M17_description_newline_marker(tmp_path):
         before_bytes, before_mtime = pin_mtime(readme)
         assert module.regen_readme(directory, project) is regions.RegenStatus.SKIPPED_MALFORMED_MARKERS, variant
         assert readme.read_bytes() == before_bytes and readme.stat().st_mtime_ns == before_mtime, variant
-    # No README yet: the same refusal, and no file is created.
+    # No README yet: none is created whatever the listing holds.
     project = tmp_path / 'fresh' / 'project'
     directory = project / 'folder'
     directory.mkdir(parents=True)
     write_description_marker(directory, [RC])
-    assert module.regen_readme(directory, project) is regions.RegenStatus.SKIPPED_MALFORMED_MARKERS
+    assert module.regen_readme(directory, project) is regions.RegenStatus.SKIPPED_ABSENT
     assert not (directory / 'README.md').exists()
 
 
@@ -457,13 +440,13 @@ def test_readme_shapes_rdm_bare_standalone_skip_and_written(tmp_path):
         assert load('regen_readme').regen_readme(directory, project) is expected, case
 
 
-def test_readme_shapes_rdm_status_identity_five_members(tmp_path):
-    """The status class is one object with five members across regen_readme, regen_index and regions."""
+def test_readme_shapes_rdm_status_identity_six_members(tmp_path):
+    """The status class is one object with six members across regen_readme, regen_index and regions."""
     regions = load('regions')
     assert load('regen_readme').RegenStatus is regions.RegenStatus is load('regen_index').RegenStatus
     assert [member.name for member in regions.RegenStatus] == [
-        'WRITTEN', 'SKIPPED_GITHUB_RESERVED', 'SKIPPED_NO_OPENING_MARKER', 'SKIPPED_NO_CLOSING_MARKER',
-        'SKIPPED_MALFORMED_MARKERS']
+        'WRITTEN', 'SKIPPED_ABSENT', 'SKIPPED_GITHUB_RESERVED', 'SKIPPED_NO_OPENING_MARKER',
+        'SKIPPED_NO_CLOSING_MARKER', 'SKIPPED_MALFORMED_MARKERS']
     project, directory, _ = build_readme_case(tmp_path, 'M01')
     assert load('regen_readme').regen_readme(directory, project) is regions.RegenStatus.WRITTEN
 

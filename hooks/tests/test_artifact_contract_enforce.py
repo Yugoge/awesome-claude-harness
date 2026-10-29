@@ -5,9 +5,11 @@ The hook is the producer-side port of /close's Artifact schema gate
 (contract_runtime.validate_report_artifact): a registered dev/qa subagent in a
 session whose artifact-contract-enforce.json flag is enabled must not stop
 while its correlated report declares report_version yet violates its schema
-(exit 2). Everything else — unversioned legacy reports, missing reports,
-unregistered agents, absent flag, non-enforced agent types, ba_validation QA
-— passes through (exit 0). The hook writes no log.
+(exit 2). A report is the producer's own only when its own dispatch record
+names its task; a same-timestamp report the dispatch does not declare is not
+correlated. Everything else — unversioned legacy reports, missing reports,
+unregistered agents, absent flag, ba_validation QA — passes through (exit 0).
+The hook writes no log and no record.
 
 Models tests/test_subagentstop_e2e_enforce.py's fixture and invocation
 patterns (importlib for the hyphenated module, subprocess with
@@ -69,13 +71,11 @@ def _register_agent(
     _write(index_path, existing)
 
 
-def _enable_flag(
-    project_dir: Path, dev_session_id: str, enforced_agent_types=("dev", "qa")
-) -> None:
+def _enable_flag(project_dir: Path, dev_session_id: str) -> None:
     _write(
         project_dir / ".claude" / "dev-registry" / dev_session_id
         / "artifact-contract-enforce.json",
-        {"enabled": True, "enforced_agent_types": list(enforced_agent_types)},
+        {"enabled": True},
     )
 
 
@@ -282,6 +282,34 @@ def _standard_setup(tmp_path: Path, agent_type: str, agent_id: str, **sentinel_e
     return project, home
 
 
+LEGACY_SESSION = "harness-legacy"
+
+
+def _declare_own(project: Path, home: Path, agent_id: str, agent_type: str,
+                 task_id: str = SESSION_TS, reports: list | None = None) -> str:
+    """The stopping producer's dispatch record, naming task_id in an earlier
+    template's obligation (its required_values fail the grammar, so the
+    legacy check decides, reading the block as declared). Returns the harness
+    session to stop under: the legacy check judges the reports that dispatch
+    declares (``reports``, default the task's one report) and no other."""
+    if agent_type == "qa" and reports is None:
+        block = _pre_p1_qa_obligation(task_id, "qa-report.v1")
+    else:
+        doc = {
+            "task_id": task_id, "role": agent_type, "pipeline": "dev", "profile": "singular",
+            "dispatched_at": datetime.now(timezone.utc).isoformat(),
+            "artifacts": [{
+                "kind": "json", "path": f"docs/dev/{name}",
+                "schema": f"{agent_type}-report.v1", "identity": {"task_id": task_id},
+                "required_values": {"status": ["completed"]},
+            } for name in (reports or [f"{agent_type}-report-{task_id}.json"])],
+        }
+        block = f'<obligation v="1">\n{json.dumps(doc, indent=2)}\n</obligation>'
+    _write_obligation_transcript(home, project, LEGACY_SESSION, agent_id,
+                                 f"You are the {agent_type} subagent.\n{block}")
+    return LEGACY_SESSION
+
+
 # ---------------------------------------------------------------------------
 # Flag writer: the artifact-contract flag is a first-class write-enforce-flag
 # ---------------------------------------------------------------------------
@@ -314,7 +342,9 @@ def test_flag_writer_supports_artifact_contract(tmp_path):
     )
     data = json.loads(flag_path.read_text(encoding="utf-8"))
     assert data["enabled"] is True
-    assert data["enforced_agent_types"] == ["dev", "qa"]
+    # A flag names no agent types: which roles a gate covers is the gate's own
+    # decision, never a list in the flag.
+    assert "enforced_agent_types" not in data
     assert data["source_command"] == "dev"
 
 
@@ -361,36 +391,49 @@ def test_flag_absent_allows_even_with_invalid_report(tmp_path):
     home.mkdir()
     _register_agent(project, "agent-qa-1", SESSION, "qa")
     _write_sentinel(project, SESSION, "qa")
+    session = _declare_own(project, home, "agent-qa-1", "qa")
     _write(
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json",
         _invalid_qa_report(SESSION_TS),
     )
-    proc = _run_hook(project, home, "agent-qa-1")
+    proc = _run_hook(project, home, "agent-qa-1", session_id=session)
     assert proc.returncode == 0, proc.stderr
 
 
-def test_agent_type_outside_flag_list_allows(tmp_path):
-    project, home = _standard_setup(tmp_path, "dev", "agent-dev-1")
-    # Flag narrowed to qa only: dev stops freely even with an invalid report.
-    _enable_flag(project, SESSION, enforced_agent_types=("qa",))
-    _write(
-        project / "docs" / "dev" / f"dev-report-{SESSION_TS}.json",
-        _invalid_dev_report(SESSION_TS),
-    )
-    proc = _run_hook(project, home, "agent-dev-1")
-    assert proc.returncode == 0, proc.stderr
+def _pre_p1_qa_obligation(task_id: str, schema: str) -> str:
+    """A QA dispatch obligation from an earlier template: its required_values
+    no longer parse (invalid_obligation), so the legacy check decides, reading
+    the block as declared."""
+    report = "ba-qa-report" if schema.startswith("ba-qa-report") else "qa-report"
+    doc = {
+        "task_id": task_id, "role": "qa", "pipeline": "dev",
+        "profile": "ba_validation" if report == "ba-qa-report" else "final_verification",
+        "dispatched_at": datetime.now(timezone.utc).isoformat(),
+        "artifacts": [{
+            "kind": "json", "path": f"docs/dev/{report}-{task_id}.json", "schema": schema,
+            "identity": {"task_id": task_id}, "required_values": {"verdict": ["pass"]},
+        }],
+    }
+    return f'<obligation v="1">\n{json.dumps(doc, indent=2)}\n</obligation>'
 
 
-def test_ba_validation_qa_exempt(tmp_path):
+@pytest.mark.parametrize("schema,expected", [("ba-qa-report.v1", 0), ("qa-report.v1", 2)],
+                         ids=["owes_ba_qa_report", "owes_qa_report"])
+def test_ba_validation_qa_exempt(tmp_path, schema, expected):
+    """P1b E7: a QA whose dispatch declares the BA-QA report owes no
+    qa-report, read from its obligation; a qa_mode left in qa.json by the
+    earlier text decides nothing."""
     project, home = _standard_setup(
         tmp_path, "qa", "agent-qa-1", qa_mode="ba_validation"
     )
+    _write_obligation_transcript(home, project, "harness-ba-qa", "agent-qa-1",
+                                 "You are the QA subagent.\n" + _pre_p1_qa_obligation(SESSION_TS, schema))
     _write(
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json",
         _invalid_qa_report(SESSION_TS),
     )
-    proc = _run_hook(project, home, "agent-qa-1")
-    assert proc.returncode == 0, proc.stderr
+    proc = _run_hook(project, home, "agent-qa-1", session_id="harness-ba-qa")
+    assert proc.returncode == expected, proc.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -400,11 +443,12 @@ def test_ba_validation_qa_exempt(tmp_path):
 
 def test_qa_schema_invalid_blocks(tmp_path):
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-1")
+    session = _declare_own(project, home, "agent-qa-1", "qa")
     _write(
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json",
         _invalid_qa_report(SESSION_TS),
     )
-    proc = _run_hook(project, home, "agent-qa-1")
+    proc = _run_hook(project, home, "agent-qa-1", session_id=session)
     assert proc.returncode == 2, proc.stderr
     assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr
     assert "qa-report.v1" in proc.stderr
@@ -413,11 +457,12 @@ def test_qa_schema_invalid_blocks(tmp_path):
 
 def test_dev_schema_invalid_blocks(tmp_path):
     project, home = _standard_setup(tmp_path, "dev", "agent-dev-1")
+    session = _declare_own(project, home, "agent-dev-1", "dev")
     _write(
         project / "docs" / "dev" / f"dev-report-{SESSION_TS}.json",
         _invalid_dev_report(SESSION_TS),
     )
-    proc = _run_hook(project, home, "agent-dev-1")
+    proc = _run_hook(project, home, "agent-dev-1", session_id=session)
     assert proc.returncode == 2, proc.stderr
     assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr
     assert "dev-report.v1" in proc.stderr
@@ -425,40 +470,44 @@ def test_dev_schema_invalid_blocks(tmp_path):
 
 def test_qa_schema_valid_allows(tmp_path):
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-1")
+    session = _declare_own(project, home, "agent-qa-1", "qa")
     _write(
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json",
         _valid_qa_report(SESSION_TS),
     )
-    proc = _run_hook(project, home, "agent-qa-1")
+    proc = _run_hook(project, home, "agent-qa-1", session_id=session)
     assert proc.returncode == 0, proc.stderr
 
 
 def test_qa_unversioned_legacy_allows(tmp_path):
     # 665 of 674 real reports on disk are unversioned; they must keep passing.
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-1")
+    session = _declare_own(project, home, "agent-qa-1", "qa")
     _write(
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json",
         {"task_id": SESSION_TS, "verdict": "pass"},
     )
-    proc = _run_hook(project, home, "agent-qa-1")
+    proc = _run_hook(project, home, "agent-qa-1", session_id=session)
     assert proc.returncode == 0, proc.stderr
 
 
 def test_missing_report_allows(tmp_path):
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-1")
+    session = _declare_own(project, home, "agent-qa-1", "qa")
     (project / "docs" / "dev").mkdir(parents=True, exist_ok=True)
-    proc = _run_hook(project, home, "agent-qa-1")
+    proc = _run_hook(project, home, "agent-qa-1", session_id=session)
     assert proc.returncode == 0, proc.stderr
     assert _written_logs(home) == []
 
 
 def test_advisory_mode_never_blocks(tmp_path):
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-1")
+    session = _declare_own(project, home, "agent-qa-1", "qa")
     _write(
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json",
         _invalid_qa_report(SESSION_TS),
     )
-    proc = _run_hook(project, home, "agent-qa-1", mode="advisory")
+    proc = _run_hook(project, home, "agent-qa-1", mode="advisory", session_id=session)
     assert proc.returncode == 0, proc.stderr
     assert "ARTIFACT_CONTRACT_BLOCKED" not in proc.stderr
     assert _written_logs(home) == []
@@ -471,8 +520,11 @@ def test_advisory_mode_never_blocks(tmp_path):
 
 def test_fanout_invalid_lane_not_shadowed_by_later_valid_sibling(tmp_path):
     # Codex audit finding (HIGH): lane-a invalid must block even though
-    # lane-b sorts lexicographically later and is valid.
+    # lane-b sorts lexicographically later and is valid. The dev's own
+    # dispatch record declares both.
     project, home = _standard_setup(tmp_path, "dev", "agent-dev-1")
+    session = _declare_own(project, home, "agent-dev-1", "dev", reports=[
+        f"dev-report-{SESSION_TS}-lane-a.json", f"dev-report-{SESSION_TS}-lane-b.json"])
     _write(
         project / "docs" / "dev" / f"dev-report-{SESSION_TS}-lane-a.json",
         _invalid_dev_report(SESSION_TS),
@@ -496,13 +548,15 @@ def test_fanout_invalid_lane_not_shadowed_by_later_valid_sibling(tmp_path):
             },
         },
     )
-    proc = _run_hook(project, home, "agent-dev-1")
+    proc = _run_hook(project, home, "agent-dev-1", session_id=session)
     assert proc.returncode == 2, proc.stderr
     assert "lane-a" in proc.stderr
 
 
 def test_fanout_all_valid_lane_reports_allow(tmp_path):
     project, home = _standard_setup(tmp_path, "dev", "agent-dev-1")
+    session = _declare_own(project, home, "agent-dev-1", "dev", reports=[
+        f"dev-report-{SESSION_TS}-lane-a.json", f"dev-report-{SESSION_TS}-lane-b.json"])
     for lane in ("lane-a", "lane-b"):
         _write(
             project / "docs" / "dev" / f"dev-report-{SESSION_TS}-{lane}.json",
@@ -523,13 +577,14 @@ def test_fanout_all_valid_lane_reports_allow(tmp_path):
                 },
             },
         )
-    proc = _run_hook(project, home, "agent-dev-1")
+    proc = _run_hook(project, home, "agent-dev-1", session_id=session)
     assert proc.returncode == 0, proc.stderr
 
 
 def test_fanout_invalid_canonical_not_shadowed_by_valid_shards(tmp_path):
     # Aggregate canonical (no lane suffix) invalid, shards valid: still blocks.
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-1")
+    session = _declare_own(project, home, "agent-qa-1", "qa")
     _write(
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json",
         _invalid_qa_report(SESSION_TS),
@@ -538,15 +593,15 @@ def test_fanout_invalid_canonical_not_shadowed_by_valid_shards(tmp_path):
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}-lane-a.json",
         _valid_qa_report(SESSION_TS),
     )
-    proc = _run_hook(project, home, "agent-qa-1")
+    proc = _run_hook(project, home, "agent-qa-1", session_id=session)
     assert proc.returncode == 2, proc.stderr
     assert f"qa-report-{SESSION_TS}.json" in proc.stderr
 
 
-def test_task_id_anchor_unions_with_session_ts_matches(tmp_path):
-    # /close cross-session shape WITH a same-ts sibling present: the anchor
-    # dimension must still contribute its exact-match report to the validated
-    # set (union semantics — the old code returned early on any ts match).
+def test_task_id_anchor_not_shadowed_by_a_same_session_report(tmp_path):
+    # /close cross-session shape WITH a valid report named by the session's
+    # timestamp beside it: the anchored report (the task_id the QA's own
+    # dispatch obligation names, P1b E7) is still validated and blocks.
     task_id = "20251231-235959"
     session = "dev-20260202-020202"
     project = tmp_path / "project"
@@ -556,10 +611,12 @@ def test_task_id_anchor_unions_with_session_ts_matches(tmp_path):
     _write(
         project / ".claude" / "dev-registry" / session
         / "artifact-contract-enforce.json",
-        {"enabled": True, "enforced_agent_types": ["dev", "qa"]},
+        {"enabled": True},
     )
-    _write_sentinel(project, session, "qa", task_id=task_id)
-    # Session-ts-correlated sibling (valid) + task_id-anchored target (invalid).
+    _write_sentinel(project, session, "qa")
+    _write_obligation_transcript(home, project, "harness-anchor", "agent-qa-1",
+                                 "You are the QA subagent.\n" + _pre_p1_qa_obligation(task_id, "qa-report.v1"))
+    # Same-session sibling (valid) + task_id-anchored target (invalid).
     _write(
         project / "docs" / "dev" / "qa-report-20260202-020202.json",
         _valid_qa_report("20260202-020202"),
@@ -568,7 +625,7 @@ def test_task_id_anchor_unions_with_session_ts_matches(tmp_path):
         project / "docs" / "dev" / f"qa-report-{task_id}.json",
         _invalid_qa_report(task_id),
     )
-    proc = _run_hook(project, home, "agent-qa-1")
+    proc = _run_hook(project, home, "agent-qa-1", session_id="harness-anchor")
     assert proc.returncode == 2, proc.stderr
     assert task_id in proc.stderr
 
@@ -579,9 +636,9 @@ def test_task_id_anchor_unions_with_session_ts_matches(tmp_path):
 
 
 def test_task_id_anchor_blocks_when_session_ts_never_matches(tmp_path):
-    # /close in a fresh session binds SESSION_ID="dev-<TASK_ID>" and writes
-    # task_id into qa.json; the report filename carries the task_id, not the
-    # (different) session timestamp.
+    # The anchor is the task_id the QA's own dispatch obligation names (P1b
+    # E7; qa.json carries none): the report filename carries the task_id, not
+    # the (different) session timestamp.
     task_id = "20251231-235959"
     session = "dev-20260202-020202"
     project = tmp_path / "project"
@@ -591,28 +648,47 @@ def test_task_id_anchor_blocks_when_session_ts_never_matches(tmp_path):
     _write(
         project / ".claude" / "dev-registry" / session
         / "artifact-contract-enforce.json",
-        {"enabled": True, "enforced_agent_types": ["dev", "qa"]},
+        {"enabled": True},
     )
-    _write_sentinel(project, session, "qa", task_id=task_id)
+    _write_sentinel(project, session, "qa")
+    _write_obligation_transcript(home, project, "harness-anchor", "agent-qa-1",
+                                 "You are the QA subagent.\n" + _pre_p1_qa_obligation(task_id, "qa-report.v1"))
     _write(
         project / "docs" / "dev" / f"qa-report-{task_id}.json",
         _invalid_qa_report(task_id),
     )
-    proc = _run_hook(project, home, "agent-qa-1")
+    proc = _run_hook(project, home, "agent-qa-1", session_id="harness-anchor")
     assert proc.returncode == 2, proc.stderr
     assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr
 
 
 def test_uncorrelated_report_is_not_grabbed(tmp_path):
     # A report from an unrelated task must not be validated against this
-    # session: no correlation -> exit 0.
+    # producer's task: no correlation -> exit 0.
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-1")
+    session = _declare_own(project, home, "agent-qa-1", "qa")
     _write(
         project / "docs" / "dev" / "qa-report-20200909-090909.json",
         _invalid_qa_report("20200909-090909"),
     )
-    proc = _run_hook(project, home, "agent-qa-1")
+    proc = _run_hook(project, home, "agent-qa-1", session_id=session)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_same_timestamp_report_no_dispatch_declares_is_not_correlated(tmp_path):
+    # P1b row 3: the session's timestamp correlates nothing. A schema-invalid
+    # report named by it, which no dispatch record of the stopping producer
+    # declares, is not that producer's report.
+    project, home = _standard_setup(tmp_path, "dev", "agent-dev-1")
+    _write(
+        project / "docs" / "dev" / f"dev-report-{SESSION_TS}.json",
+        _invalid_dev_report(SESSION_TS),
+    )
+    session = _declare_own(project, home, "agent-dev-1", "dev", task_id="20260101-000001")
+    for session_id in (None, session):
+        proc = _run_hook(project, home, "agent-dev-1", session_id=session_id)
+        assert proc.returncode == 0, proc.stderr
+        assert "ARTIFACT_CONTRACT_BLOCKED" not in proc.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -623,9 +699,11 @@ def test_uncorrelated_report_is_not_grabbed(tmp_path):
 def test_ac1_legacy_path_byte_identical_without_obligation(tmp_path):
     """AC1: whether resolve_own_obligation lands on Unresolvable (no
     session_id supplied) or NoObligationInPrompt (a resolvable transcript
-    with no '<obligation' substring), the legacy path's exit code is
+    with no '<obligation' substring), the legacy path's outcome is
     identical -- the obligation branch never changes outcomes it doesn't
-    own."""
+    own. With no dispatch record naming a task, no report is the producer's
+    own: a same-timestamp schema-invalid report is not correlated (P1b row 3)
+    and the stop passes either way."""
     harness_session = "harness-ac1"
     project, home = _standard_setup(tmp_path, "qa", "agent-qa-ac1")
     _write_obligation_transcript(
@@ -641,9 +719,9 @@ def test_ac1_legacy_path_byte_identical_without_obligation(tmp_path):
     )
     no_session = _run_hook(project, home, "agent-qa-ac1")
     with_session = _run_hook(project, home, "agent-qa-ac1", session_id=harness_session)
-    assert no_session.returncode == 2, no_session.stderr
-    assert with_session.returncode == no_session.returncode == 2
-    assert "ARTIFACT_CONTRACT_BLOCKED" in with_session.stderr
+    assert no_session.returncode == 0, no_session.stderr
+    assert with_session.returncode == no_session.returncode == 0
+    assert (with_session.stdout, with_session.stderr) == (no_session.stdout, no_session.stderr) == ("", "")
 
 
 def test_ac2_resolved_obligation_missing_artifact_blocks(tmp_path):
@@ -672,9 +750,9 @@ def test_ac2_resolved_obligation_missing_artifact_blocks(tmp_path):
 
 def test_ac3_resolved_obligation_all_valid_bypasses_legacy_path(tmp_path):
     """AC3: all declared artifacts valid -> exit 0 WITHOUT the legacy
-    correlation path ever running. Proof fixture: a DIFFERENT,
-    session-ts-correlated report that IS schema-invalid; if the legacy path
-    ran, it would independently block on it."""
+    correlation path ever running. Proof fixture: a DIFFERENT report of the
+    same task that IS schema-invalid; if the legacy path ran, it would
+    independently block on it."""
     harness_session = "harness-ac3"
     agent_id = "agent-dev-ac3"
     task_id = "20260101-000003"
@@ -689,8 +767,8 @@ def test_ac3_resolved_obligation_all_valid_bypasses_legacy_path(tmp_path):
     )
     _write(project / artifact_path, _valid_dev_report_v1(task_id))
     _write(
-        project / "docs" / "dev" / f"dev-report-{SESSION_TS}.json",
-        _invalid_dev_report(SESSION_TS),
+        project / "docs" / "dev" / f"dev-report-{task_id}-stale.json",
+        _invalid_dev_report(task_id),
     )
     proc = _run_hook(
         project, home, agent_id, session_id=harness_session, stopgate_mode="block"
@@ -770,12 +848,9 @@ def test_ac6_internal_exception_falls_through_to_legacy_path(
         agent_id,
         _obligation_block(task_id, artifact_path, "dev-report.v1"),
     )
-    # Session-correlated by name, the agent's own by its declared task_id: the
-    # legacy check judges only the stopping producer's own reports.
-    _write(
-        project / "docs" / "dev" / f"dev-report-{SESSION_TS}.json",
-        _invalid_dev_report(task_id),
-    )
+    # The report the dispatch declares, at its declared path: the legacy
+    # check judges only the stopping producer's own reports.
+    _write(project / artifact_path, _invalid_dev_report(task_id))
 
     def _raise(*_args, **_kwargs):
         raise RuntimeError("forced obligation-mode failure")
@@ -811,9 +886,9 @@ def test_ac6_internal_exception_falls_through_to_legacy_path(
 def test_markdown_ac2_mixed_kinds_all_valid_bypasses_legacy_path(tmp_path):
     """This ticket's AC2: one valid kind:"json" artifact AND one valid
     kind:"markdown" artifact -> exit 0 WITHOUT the legacy correlation path
-    ever running, in block mode. Proof fixture: a DIFFERENT,
-    session-ts-correlated report that IS schema-invalid; if the legacy path
-    ran, it would independently block on it (same technique as AC3 above)."""
+    ever running, in block mode. Proof fixture: a DIFFERENT report of the
+    same task that IS schema-invalid; if the legacy path ran, it would
+    independently block on it (same technique as AC3 above)."""
     harness_session = "harness-md-ac2"
     agent_id = "agent-dev-md-ac2"
     task_id = "20260101-000102"
@@ -847,8 +922,8 @@ def test_markdown_ac2_mixed_kinds_all_valid_bypasses_legacy_path(tmp_path):
     _write(project / json_path, _valid_dev_report_v1(task_id))
     _write(project / md_path, f"# Ticket\n{anchor}\nSTATUS: ready\n")
     _write(
-        project / "docs" / "dev" / f"dev-report-{SESSION_TS}.json",
-        _invalid_dev_report(SESSION_TS),
+        project / "docs" / "dev" / f"dev-report-{task_id}-stale.json",
+        _invalid_dev_report(task_id),
     )
     proc = _run_hook(
         project, home, agent_id, session_id=harness_session, stopgate_mode="block"
@@ -1417,10 +1492,11 @@ def test_ba_context_obligation_valid_artifact_allows_when_entry_unresolved(
         {
             "task_id": task_id,
             "requirement": "x",
-            "root_cause_analysis": {},
-            "waves": [
-                {"wave_id": 1, "tasks": [{"task_id": task_id, "title": "x"}]}
-            ],
+            "root_cause_analysis": {"affected_files": ["x.py"]},
+            "development_approach": {"strategy": "x"},
+            "complexity_tier": "SMALL",
+            "risk_level": "low",
+            "test_writer_expected": False,
         },
     )
     proc = _run_hook(
@@ -1541,7 +1617,9 @@ def test_qa_report_v2_obligation_valid_artifact_allows_when_entry_unresolved(
 
 # ---------------------------------------------------------------------------
 # Lane L2 (dev-command-20261002-170011-l2): producer stop gate -- terminal
-# state, four downstream wires, progress-bounded blocking, nonce hand-off.
+# state and the dev report's downstream wires. A failing stop is a plain exit
+# 2 naming each failing artifact and check, in every round (corrections 2.27,
+# P1b row 3): no hand-off nonce, no admission, no record store.
 # Every scenario is a function taking the pytest fixtures it needs, so the
 # generated per-AC tests under tests/generated/ can call the SAME scenario.
 # Fixtures are built under tmp_path only; the gate runs as a subprocess with
@@ -1553,7 +1631,8 @@ import shutil as _shutil
 
 L2_TASK = "dev-command-20261002-170011"
 _NONCE_RE = _re.compile(r"ESCALATION_ACK ([0-9a-f]{32})")
-_FINDING_KEY_RE = _re.compile(r"^[^|\s]+\|[^|\s][^|]*$")
+# The record stores the escalation path wrote; the gate writes none of them.
+_RECORD_STORES = ("escalations", "escalation-admissions", "progress", "deferred-checks")
 
 
 def _git_init_project(project: Path) -> None:
@@ -1649,29 +1728,28 @@ def _l2_stop(s, msg=None, extra_env=None, hook_path=None, extra_payload=None):
                      extra_env=extra_env, hook_path=hook_path, extra_payload=extra_payload)
 
 
-def _l2_records(s, sub="escalations", cycle=None):
-    d = s.project / ".claude" / "dev-registry" / (cycle or s.cycle) / sub
-    if not d.is_dir():
+def _l2_stores(s) -> list:
+    """Every record-store directory under the project's dev registry."""
+    registry = s.project / ".claude" / "dev-registry"
+    if not registry.is_dir():
         return []
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(d.glob("*.json"))]
+    return sorted(str(p.relative_to(registry)) for p in registry.rglob("*")
+                  if p.is_dir() and p.name in _RECORD_STORES)
 
 
-def _l2_nonce(proc) -> str:
-    found = _NONCE_RE.findall(proc.stderr)
-    assert found, proc.stderr
-    return found[-1]
-
-
-def _l2_hook_tree(tmp_path, script_overrides=None, drop_lib=()):
-    """Copy of the hook with its lib/, a symlinked schemas/ and a scripts/ tree
-    whose named entries are replaced by test stubs (HOOK scripts dir is derived
-    from the hook's own location)."""
+def _l2_hook_tree(tmp_path, script_overrides=None):
+    """Copy of the hook with its lib/, symlinked schemas/, agents/ and
+    commands/ (the roster and the command files an obligation's role and
+    pipeline are checked against) and a scripts/ tree whose named entries are
+    replaced by test stubs (HOOK scripts dir is derived from the hook's own
+    location)."""
     root = tmp_path / "hooktree"
     (root / "hooks").mkdir(parents=True)
     _shutil.copy(HOOK_PATH, root / "hooks" / HOOK_PATH.name)
     _shutil.copytree(REPO_ROOT / "hooks" / "lib", root / "hooks" / "lib",
-                     ignore=_shutil.ignore_patterns("__pycache__", *drop_lib))
-    os.symlink(REPO_ROOT / "schemas", root / "schemas")
+                     ignore=_shutil.ignore_patterns("__pycache__"))
+    for name in ("schemas", "agents", "commands"):
+        os.symlink(REPO_ROOT / name, root / name)
     scripts = root / "scripts"
     scripts.mkdir()
     overrides = script_overrides or {}
@@ -1681,15 +1759,6 @@ def _l2_hook_tree(tmp_path, script_overrides=None, drop_lib=()):
     for name, text in overrides.items():
         (scripts / name).write_text(text, encoding="utf-8")
     return root / "hooks" / HOOK_PATH.name
-
-
-def _l2_assert_record_fields(rec, s, kind=None):
-    assert {"record_id", "nonce", "agent_id", "task_id", "finding_keys", "created_at"} <= set(rec)
-    assert "resolved" not in rec
-    assert rec["agent_id"] == s.agent_id and rec["task_id"] == s.task
-    assert rec["finding_keys"] and all(_FINDING_KEY_RE.match(k) for k in rec["finding_keys"]), rec
-    if kind:
-        assert rec["kind"] == kind
 
 
 def _l2_snapshot(project: Path) -> tuple:
@@ -1722,13 +1791,13 @@ def test_l2_ac2_terminal_state_right_passes(tmp_path):
     _l2_write(s, _l2_dev_report(s.task))
     proc = _l2_stop(s)
     assert proc.returncode == 0, proc.stderr
-    assert _l2_records(s) == []
+    assert _l2_stores(s) == []
 
 
 # AC3 -----------------------------------------------------------------------
 
 
-def test_l2_ac3_ledger_wrong_blocks_right_passes_and_infra_fault_escalates(tmp_path):
+def test_l2_ac3_ledger_without_journal_evidence_passes_wrong_or_right(tmp_path):
     """Attribution-journal consumer cutover (docs/reference/attribution-
     journal-cutover-flip-plan-20261003.md, superseded by the zero-blocking
     constraint of the follow-up consumer-cutover task): this hook no longer
@@ -1738,14 +1807,10 @@ def test_l2_ac3_ledger_wrong_blocks_right_passes_and_infra_fault_escalates(tmp_p
     plain-filesystem test write), so src.txt is deferred, not rejected.
 
     The sibling scenario this test used to carry -- a stubbed
-    check-owned-edits-ledger.py forced to exit 2, proving an infra fault
-    escalates rather than silently passing or being misread as a finding --
-    is removed rather than adapted: that script is no longer on this hook's
-    blocking path, so stubbing it exercises nothing. _wire_ledger_judgment's
-    own infra-fault handling (an unloadable/raising attribution_adjudicator)
-    is exercised by this file's existing gate_infrastructure_fault coverage
-    for the hook's OTHER wires (see AC6 below); duplicating that pattern
-    for this one is not a new property, just a new call site accordion.
+    check-owned-edits-ledger.py forced to exit 2 -- is removed rather than
+    adapted: that script is no longer on this hook's blocking path, so
+    stubbing it exercises nothing. A checker that will not load or crashes
+    judges nothing, for this wire as for the trial plan (see AC8).
     """
     s = _l2_setup(tmp_path)
     _l2_write(s, _l2_dev_report(s.task, ledger_old=""))  # empty needle violates the ledger contract
@@ -1805,6 +1870,7 @@ def test_l2_ac5_stager_replay_exclude_blocks_include_passes_index_untouched(tmp_
 
 _CHAIN_STUB = (
     "import json, os, sys\n"
+    "open(os.environ['L2_STUB_CHAIN'] + '.ran', 'w').close()\n"
     "doc = json.load(open(os.environ['L2_STUB_CHAIN']))\n"
     "print(json.dumps(doc))\n"
     "sys.exit(0 if doc.get('status') in ('pass', 'pass_with_exceptions') else 2)\n"
@@ -1820,92 +1886,60 @@ def _l2_qa(tmp_path, name, chain):
     return s, hook, {"L2_STUB_CHAIN": str(chain_file)}
 
 
-def test_l2_ac6_qa_chain_attribution(tmp_path):
-    s, hook, env = _l2_qa(tmp_path, "own", {"status": "fail", "errors": [
-        {"code": "QA_BAD", "path": f"docs/dev/qa-report-{L2_TASK}.json", "detail": "x"}]})
-    proc = _l2_stop(s, hook_path=hook, extra_env=env)
-    assert proc.returncode == 2 and "QA_BAD" in proc.stderr, proc.stderr
-
-    s, hook, env = _l2_qa(tmp_path, "valid", {"status": "pass", "errors": []})
-    assert _l2_stop(s, hook_path=hook, extra_env=env).returncode == 0
-    assert _l2_records(s) == []
-
-    s, hook, env = _l2_qa(tmp_path, "upstream", {"status": "fail", "errors": [
+def test_l2_ac6_qa_stop_judges_only_qa_own_artifacts(tmp_path):
+    """P1b row 7: QA's stop runs no artifact chain resolver. Other producers'
+    artifacts are G3's, at the next dispatch; QA's own report is judged on
+    its declared shape, schema and identity. A resolver that would reject
+    QA's report and an upstream report alike is never run, and nothing is
+    recorded."""
+    s, hook, env = _l2_qa(tmp_path, "chain", {"status": "fail", "errors": [
+        {"code": "QA_BAD", "path": f"docs/dev/qa-report-{L2_TASK}.json", "detail": "x"},
         {"code": "DEV_GAP", "path": f"docs/dev/dev-report-{L2_TASK}.json", "detail": "missing"}]})
     proc = _l2_stop(s, hook_path=hook, extra_env=env)
     assert proc.returncode == 0, proc.stderr
-    recs = _l2_records(s)
-    assert len(recs) == 1 and recs[0]["kind"] == "upstream_defect_notice"
-    _l2_assert_record_fields(recs[0], s, kind="upstream_defect_notice")
-    assert recs[0]["finding_keys"] == [f"DEV_GAP|docs/dev/dev-report-{L2_TASK}.json"]
-
-    s, hook, env = _l2_qa(tmp_path, "pathless", {"status": "fail", "errors": [
-        {"code": "NO_PATH", "path": "", "detail": "x"}]})
-    proc = _l2_stop(s, hook_path=hook, extra_env=env)
-    assert proc.returncode == 2, proc.stderr
-    recs = _l2_records(s)
-    assert len(recs) == 1 and recs[0]["reason"] == "gate_infrastructure_fault"
+    assert not Path(env["L2_STUB_CHAIN"] + ".ran").exists()
+    assert _l2_stores(s) == []
 
 
 # AC7 / AC10 ----------------------------------------------------------------
 
 
-def test_l2_ac7_progress_bounded_and_nonce_handoff(tmp_path):
+def test_l2_ac7_every_failing_round_is_a_plain_block(tmp_path):
+    """Corrections 2.27 / P1c row 7: a failing stop is a plain exit 2 naming
+    the failing artifact and its check, in every round -- bytes changing or
+    not -- with no hand-off nonce; no ESCALATION_ACK line admits it and
+    nothing is recorded. The repair alone passes."""
     s = _l2_setup(tmp_path)
-    for i in range(6):  # bytes change each stop, still failing: always exit 2, no record
+    for i in range(3):
         _l2_write(s, _l2_unattributed_report(s, note=f"attempt-{i}"))
-        proc = _l2_stop(s)
+        assert _l2_stop(s).returncode == 2
+    for msg in (None, "ESCALATION_ACK " + "0" * 32, "could not repair.\n  ESCALATION_ACK " + "a" * 32):
+        proc = _l2_stop(s, msg=msg)
         assert proc.returncode == 2, proc.stderr
-        assert _l2_records(s) == []
-    first = _l2_stop(s)  # identical bytes -> no progress -> record + nonce quoted
-    assert first.returncode == 2
-    recs = _l2_records(s)
-    assert len(recs) == 1
-    _l2_assert_record_fields(recs[0], s)
-    path = s.project / ".claude" / "dev-registry" / s.cycle / "escalations" / f"{recs[0]['record_id']}.json"
-    assert path.is_file() and recs[0]["nonce"] == _l2_nonce(first)
-    raw_first = path.read_bytes()
-
-    nonce_a = recs[0]["nonce"]
-    # Nonce only inside a longer line / stale / other payload field / fixed literal: all exit 2.
-    longer = _l2_stop(s, msg=f"please see ESCALATION_ACK {nonce_a} now")
-    assert longer.returncode == 2
-    stale = _l2_stop(s, msg=f"ESCALATION_ACK {nonce_a}")  # nonce_a is no longer the latest record
-    assert stale.returncode == 2
-    latest = _l2_nonce(stale)
-    other_field = _l2_stop(s, extra_payload={"transcript_tail": f"ESCALATION_ACK {latest}"})
-    assert other_field.returncode == 2
-    latest = _l2_nonce(other_field)
-    literal = _l2_stop(s, msg="ESCALATION_ACK\nESCALATION_ACK 00000000000000000000000000000000")
-    assert literal.returncode == 2
-    latest = _l2_nonce(literal)
-    assert path.read_bytes() == raw_first  # earlier record untouched
-
-    done = _l2_stop(s, msg=f"could not repair.\n  ESCALATION_ACK {latest}  \n")
-    assert done.returncode == 0, done.stderr
-    recs = _l2_records(s)
-    assert len({r["nonce"] for r in recs}) == len(recs) == len({r["record_id"] for r in recs})
-    assert latest in {r["nonce"] for r in recs}
-    assert path.read_bytes() == raw_first
-    assert any(a["nonce"] == latest for a in _l2_records(s, "escalation-admissions"))
+        assert s.art_path in proc.stderr and "identity_mismatch" in proc.stderr
+        assert "ESCALATION" not in proc.stderr and not _NONCE_RE.search(proc.stderr)
+    assert _l2_stores(s) == []
+    _l2_write(s, _l2_dev_report(s.task))
+    proc = _l2_stop(s)
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_l2_ac10_rejected_repair_is_no_progress_not_an_escape(tmp_path):
     s = _l2_setup(tmp_path)
     _l2_write(s, _l2_dev_report(s.task, status="needs_review"))
     assert _l2_stop(s).returncode == 2           # round 1
-    # Repair attempt rejected by a hook: bytes unchanged -> no progress -> nonce hand-off only.
+    # Repair attempt rejected by a hook: bytes unchanged -> the same plain block.
     second = _l2_stop(s)
-    assert second.returncode == 2 and _NONCE_RE.search(second.stderr)
-    # Reverting to previously seen bytes after a change is also no progress.
+    assert second.returncode == 2 and not _NONCE_RE.search(second.stderr)
+    # Reverting to previously seen bytes after a change is no release either.
     _l2_write(s, _l2_dev_report(s.task, status="needs_review", note="other"))
     assert _l2_stop(s).returncode == 2
     _l2_write(s, _l2_dev_report(s.task, status="needs_review"))
-    third = _l2_stop(s)
-    assert third.returncode == 2 and _NONCE_RE.search(third.stderr)
+    assert _l2_stop(s).returncode == 2
     # No pause text of any kind admits the stop.
     paused = _l2_stop(s, msg="PAUSED: hook rejected my repair; releasing myself\nPAUSE_RELEASE")
     assert paused.returncode == 2
+    assert _l2_stores(s) == []
 
 
 # AC8 -----------------------------------------------------------------------
@@ -1918,144 +1952,63 @@ _RAISING_PLAN_STUB = (
 )
 
 
-def test_l2_ac8_no_residual_fail_open(tmp_path):
+def test_l2_ac8_crashed_checker_judges_nothing_and_no_threshold_releases(tmp_path):
+    """A wire that crashes (here /commit's planner raising instead of
+    returning a PlanError) judges nothing: its fault is not the producer's
+    artifact, no repair of the producer's could clear it, and blocking on it
+    would leave the producer no route (D25). A failing report, though, is
+    never released by repetition."""
     s = _l2_setup(tmp_path)
     _l2_write(s, _l2_dev_report(s.task))
     hook = _l2_hook_tree(tmp_path, {"resolve-commit-repos.py": _RAISING_PLAN_STUB})
-    first = _l2_stop(s, hook_path=hook)
-    assert first.returncode == 2, first.stderr
-    recs = _l2_records(s)
-    assert len(recs) == 1 and recs[0]["reason"] == "gate_exception"
-    assert _l2_stop(s, hook_path=hook).returncode == 2
-    nonce = _l2_nonce(_l2_stop(s, hook_path=hook))
-    ok = _l2_stop(s, hook_path=hook, msg=f"ESCALATION_ACK {nonce}")
-    assert ok.returncode == 0, ok.stderr
-    assert any(r["nonce"] == nonce for r in _l2_records(s))
+    proc = _l2_stop(s, hook_path=hook)
+    assert proc.returncode == 0, proc.stderr
+    assert _l2_stores(s) == []
 
     # No counter-threshold release: identical bytes, never an ack line.
     s2 = _l2_setup(tmp_path / "loop")
     _l2_write(s2, _l2_dev_report(s2.task, status="needs_review"))
     assert all(_l2_stop(s2).returncode == 2 for _ in range(6))
 
-    # Escalation record cannot be written: a FILE occupies the escalations path.
-    s3 = _l2_setup(tmp_path / "unwritable")
-    _l2_write(s3, _l2_dev_report(s3.task))
-    reg = s3.project / ".claude" / "dev-registry" / s3.cycle
-    reg.mkdir(parents=True, exist_ok=True)
-    (reg / "escalations").write_text("not a directory", encoding="utf-8")
-    hook3 = _l2_hook_tree(tmp_path / "unwritable", {"resolve-commit-repos.py": _RAISING_PLAN_STUB})
-    for _ in range(3):
-        proc = _l2_stop(s3, hook_path=hook3, msg="ESCALATION_ACK " + "0" * 32)
-        assert proc.returncode == 2, proc.stderr
-    assert (reg / "escalations").is_file()
-
 
 # AC12 ----------------------------------------------------------------------
 
 
-def test_l2_ac12_shard_defers_plan_and_replay_single_lane_blocks(tmp_path):
-    """Attribution-journal consumer cutover (see test_l2_ac3's docstring for
-    the full citation): _wire_ledger_judgment replaces stage-owned-hunks.py
-    --dry-run's per-file replay entirely, and it does not need the full
-    trial plan (unlike build_plan/_wire_trial_plan), so it is no longer
-    deferred for a sharded lane -- it already ran, unconditionally, before
-    the shard check below (see _run_downstream_wires). Only "trial_plan"
-    remains deferred to full-cycle time. Neither the sharded nor the
-    single-lane peer-dirty scenario blocks any more: src.txt is a plain-
-    filesystem test write with no journal evidence, so both are deferred."""
-    def peer_dirty(s):
-        _l2_write(s, _l2_dev_report(s.task, lane=s.lane, lane_set=s.lane_set))
+_REJECTING_PLAN_STUB = (
+    "class PlanError(RuntimeError):\n"
+    "    code = 'stub_rejects'\n"
+    "def build_plan(**kwargs):\n"
+    "    raise PlanError('the planner rejects every report')\n"
+)
+
+
+def test_l2_ac12_shard_skips_the_trial_plan_without_a_record(tmp_path):
+    """A lane's report alone is not the cycle /commit plans: a fan-out lane's
+    stop runs no trial plan (a planner that rejects every report passes it)
+    and records no deferral; a singular report is planned and blocked by
+    the same planner. The ledger judgment runs for both: src.txt is a
+    plain-filesystem test write with no journal evidence, so it finds
+    nothing. Without the former progress helper in the hook tree, a failing
+    report still gets the plain block."""
+    def peer_dirty(s, lane=None, lane_set=None):
+        _l2_write(s, _l2_dev_report(s.task, lane=lane, lane_set=lane_set))
         (s.project / "src.txt").write_text("gamma\n", encoding="utf-8")
 
     shard = _l2_setup(tmp_path / "shard", lane="l2", lane_set=["l1", "l2"])
-    shard.lane, shard.lane_set = "l2", ["l1", "l2"]
-    peer_dirty(shard)
-    proc = _l2_stop(shard)
+    peer_dirty(shard, "l2", ["l1", "l2"])
+    hook = _l2_hook_tree(tmp_path / "shard", {"resolve-commit-repos.py": _REJECTING_PLAN_STUB})
+    proc = _l2_stop(shard, hook_path=hook)
     assert proc.returncode == 0, proc.stderr
-    deferrals = _l2_records(shard, "deferred-checks")
-    assert len(deferrals) == 1 and deferrals[0]["kind"] == "not_evaluable_at_lane_granularity"
-    assert set(deferrals[0]["checks"]) == {"trial_plan"}
+    assert _l2_stores(shard) == []
 
     single = _l2_setup(tmp_path / "single")
-    single.lane = None
-    single.lane_set = None
     peer_dirty(single)
-    proc = _l2_stop(single)
-    assert proc.returncode == 0, proc.stderr
-
-    # Shared progress helper unimportable: fail closed, never an inlined measure.
-    s = _l2_setup(tmp_path / "nohelper")
-    _l2_write(s, _l2_dev_report(s.task, status="needs_review"))
-    hook = _l2_hook_tree(tmp_path / "nohelper", drop_lib=("progress_measure.py",))
-    proc = _l2_stop(s, hook_path=hook)
+    assert _l2_stop(single).returncode == 0
+    hook = _l2_hook_tree(tmp_path / "single", {"resolve-commit-repos.py": _REJECTING_PLAN_STUB})
+    proc = _l2_stop(single, hook_path=hook)
     assert proc.returncode == 2, proc.stderr
-    recs = _l2_records(s)
-    assert len(recs) == 1 and recs[0]["reason"] == "gate_infrastructure_fault"
-
-
-# AC13 ----------------------------------------------------------------------
-
-
-def test_l2_ac13_record_lands_where_the_consumer_scans(tmp_path):
-    """P1 row 5: escalation and progress records land in the cycle's
-    registry directory, obligation.registry_dir_for(project_dir, task_id) --
-    the directory the UserPromptSubmit hook created and P3's resolver reads:
-    dev-command-<ts>/ for a /dev-command id, dev-<ts>/ for a /dev id or a
-    bare <ts> id, never a lane-id or bare <ts>/ directory."""
-    s = _l2_setup(tmp_path / "lane", lane="l2", lane_set=["l1", "l2"])
-    s.lane = "l2"
-    _l2_write(s, _l2_unattributed_report(s, lane="l2", lane_set=["l1", "l2"]))
-    _l2_stop(s)
-    proc = _l2_stop(s)
-    assert proc.returncode == 2 and _NONCE_RE.search(proc.stderr)
-    registry = s.project / ".claude" / "dev-registry"
-    assert s.cycle == L2_TASK and s.task == L2_TASK + "-l2"
-    cycle_dir = HOOK.obligation.registry_dir_for(s.project, s.task)
-    assert cycle_dir == registry / L2_TASK
-    recs = _l2_records(s)
-    assert len(recs) == 1
-    _l2_assert_record_fields(recs[0], s)
-    assert (cycle_dir / "escalations" / f"{recs[0]['record_id']}.json").is_file()
-    assert not (registry / s.task / "escalations").exists()
-    state = json.loads((cycle_dir / "progress" /
-                        f"producer-stop-{HOOK._record_safe(s.agent_id)}.json").read_text("utf-8"))
-    assert state["loop_key"] == f"producer-stop|{s.task}|{s.agent_id}"
-
-    # lane null: the registry directory is named by the task id itself.
-    n = _l2_setup(tmp_path / "nolane")
-    _l2_write(n, _l2_dev_report(n.task, status="needs_review"))
-    _l2_stop(n)
-    assert _l2_stop(n).returncode == 2
-    assert len(_l2_records(n)) == 1
-    assert HOOK.obligation.registry_dir_for(n.project, n.task) == (
-        n.project / ".claude" / "dev-registry" / n.task)
-    assert (n.project / ".claude" / "dev-registry" / n.task / "escalations").is_dir()
-
-    # A /dev cycle: its lane ids are <ts>-l<N> (or dev-<ts>-l<N>) and its
-    # registry directory is dev-<ts>/; nothing lands in a bare <ts>/.
-    stamp = "20261002-170011"
-    for base in (stamp, f"dev-{stamp}"):
-        d = _l2_setup(tmp_path / f"devcycle-{base}", lane="l1", lane_set=["l1", "l2"],
-                      base_task=base)
-        _l2_write(d, _l2_unattributed_report(d, lane="l1", lane_set=["l1", "l2"]))
-        _l2_stop(d)
-        proc = _l2_stop(d)
-        assert proc.returncode == 2 and _NONCE_RE.search(proc.stderr), proc.stderr
-        dev_registry = d.project / ".claude" / "dev-registry"
-        assert HOOK.obligation.registry_dir_for(d.project, d.task) == dev_registry / f"dev-{stamp}"
-        recs = _l2_records(d, cycle=f"dev-{stamp}")
-        assert len(recs) == 1, recs
-        _l2_assert_record_fields(recs[0], d)
-        assert (dev_registry / f"dev-{stamp}" / "progress"
-                / f"producer-stop-{HOOK._record_safe(d.agent_id)}.json").is_file()
-        assert not (dev_registry / stamp).exists()
-        assert not (dev_registry / d.task).exists()
-
-    # upstream_defect_notice carries the same fields (AC6 third case).
-    q, hook, env = _l2_qa(tmp_path, "ud", {"status": "fail", "errors": [
-        {"code": "DEV_GAP", "path": f"docs/dev/dev-report-{L2_TASK}.json", "detail": "m"}]})
-    assert _l2_stop(q, hook_path=hook, extra_env=env).returncode == 0
-    _l2_assert_record_fields(_l2_records(q)[0], q, kind="upstream_defect_notice")
+    assert single.art_path in proc.stderr and "repository_plan_error" in proc.stderr
+    assert _l2_stores(single) == []
 
 
 # ---------------------------------------------------------------------------
@@ -2338,12 +2291,52 @@ def test_g2_reply_text_without_artifact_is_a_missing_artifact(tmp_path, reply):
 
 
 def test_g2_qa_question_artifact_does_not_stand_in_for_qa_report(tmp_path):
+    """Which producers may ask is producer-question.v1's role enum (ba, dev;
+    D23), not a role list in the gate: a QA's question stands in for nothing,
+    the stop blocks on the missing report and names the question invalid."""
     report = f"docs/dev/qa-report-{G2_TASK}.json"
+    question = _g2_question_path(G2_TASK, "qa")
     s = _g2_setup(tmp_path, "qa", [_g2_json(report, "qa-report.v2")])
-    _write(s.project / _g2_question_path(G2_TASK, "qa"), _g2_question(G2_TASK, "qa"))
+    _write(s.project / question, _g2_question(G2_TASK, "qa"))
     proc = _g2_stop(s)
     _g2_assert_blocked_on(proc, report, _G2_MISSING)
-    assert "producer_question" not in proc.stderr
+    _g2_assert_blocked_on(proc, question, "producer_question_invalid")
+    assert "'qa' is not one of ['ba', 'dev']" in proc.stderr, proc.stderr
+
+
+# (g') the expected role is the type the agent registered as ---------------
+
+
+@pytest.mark.parametrize("role", ["pm", "architect", "test-writer"])
+def test_g2_registered_role_outside_any_list_is_decided_by_its_obligation(tmp_path, role):
+    """P1b row 18: no role list says whose obligation G2 resolves. A PM or a
+    specialist registered as its type, dispatched with its own obligation,
+    is judged on the artifact that obligation declares."""
+    report = f"docs/dev/{role}-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, role, [_g2_json(report, "ba-qa-report.v1")],
+                  pipeline="dev-overnight", profile="overnight")
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_MISSING)
+    _write(s.project / report, _g2_ba_qa_report(G2_TASK, "pass"))
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    _g2_assert_decided_by_obligation(s)
+
+
+def test_g2_obligation_of_another_role_than_registered_is_not_this_agents(tmp_path):
+    """An agent registered as qa whose dispatch carries a dev obligation: the
+    obligation is not the one its type declares (role_mismatch), so the
+    obligation branch decides nothing for it."""
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "qa", [])
+    doc = dict(s.obligation, role="dev", artifacts=_g2_dev_artifacts())
+    _write_obligation_transcript(s.home, s.project, s.harness, s.agent_id,
+                                 f'<obligation v="1">\n{json.dumps(doc)}\n</obligation>')
+    resolution = _resolution(s.home, s.project, s.harness, s.agent_id, "qa")
+    assert isinstance(resolution, HOOK.obligation.Unresolvable)
+    assert resolution.reason == "role_mismatch"
+    proc = _g2_stop(s)
+    assert f"  - {report}:" not in proc.stderr, proc.stderr
 
 
 # (h) close-QA: the waiver reads the reply's final non-empty line ---------

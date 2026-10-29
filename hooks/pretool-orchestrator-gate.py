@@ -38,8 +38,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.subagent import is_subagent_context  # noqa: E402
-from lib.allowlist import read_grant          # noqa: E402
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib.allowlist import (  # noqa: E402
+    has_do_consent, match_sentinel_grant_for_tool, tool_streak_path, write_tool_streak)
 
 ALWAYS_ALLOWED = {
     "Agent",
@@ -73,18 +73,6 @@ def get_session_id(data: dict) -> str:
     return "default"
 
 
-def has_consent(session_id: str) -> bool:
-    flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{session_id}.flag")
-    try:
-        return flag.exists() and flag.read_text().strip() == "true"
-    except Exception:
-        return False
-
-
-def get_streak_state_file(session_id: str) -> Path:
-    return Path(f"{harness_state_dir()}/claude-tool-streak-{session_id}.json")
-
-
 def _fresh_state() -> dict:
     return {"schema_version": 2, "per_tool_counts": {}, "bash_consecutive": {"last_tool": "", "count": 0}}
 
@@ -115,15 +103,8 @@ def read_streak_state(state_file: Path) -> dict:
     return _fresh_state()
 
 
-def write_streak_state(state_file: Path, state: dict) -> None:
-    try:
-        state_file.write_text(json.dumps(state))
-    except OSError:
-        pass
-
-
-def update_streak(state_file: Path, tool_name: str) -> int:
-    state = read_streak_state(state_file)
+def update_streak(session_id: str, tool_name: str) -> int:
+    state = read_streak_state(tool_streak_path(session_id))
 
     if tool_name in ALWAYS_ALLOWED:
         if tool_name == "Bash":
@@ -133,7 +114,7 @@ def update_streak(state_file: Path, tool_name: str) -> int:
             else:
                 bash["last_tool"] = "Bash"
                 bash["count"] = 1
-            write_streak_state(state_file, state)
+            write_tool_streak(session_id, state)
             return bash["count"]
         else:
             # Non-Bash whitelist (incl. Agent, Read, TodoWrite, Glob, Grep,
@@ -155,7 +136,7 @@ def update_streak(state_file: Path, tool_name: str) -> int:
         # increment.
         counts = state["per_tool_counts"]
         counts[tool_name] = counts.get(tool_name, 0) + 1
-        write_streak_state(state_file, state)
+        write_tool_streak(session_id, state)
         return counts[tool_name]
 
 
@@ -232,10 +213,9 @@ def main():
     # placing it ahead of the bypasses changes no allow/deny outcome.
     if tool_name == "Agent":
         try:
-            state_file = get_streak_state_file(sid)
-            state = read_streak_state(state_file)
+            state = read_streak_state(tool_streak_path(sid))
             state["bash_consecutive"] = {"last_tool": "Agent", "count": 0}
-            write_streak_state(state_file, state)
+            write_tool_streak(sid, state)
         except Exception:
             pass
         sys.exit(0)
@@ -247,7 +227,7 @@ def main():
     # Note: /allow CAN rescue even perm-blocked tools (e.g., EnterPlanMode) if
     # the user explicitly /allow-ed that tool name. This is by design.
     try:
-        if read_grant(tool_name, sid):
+        if match_sentinel_grant_for_tool(sid, tool_name) is not None:
             sys.exit(0)
     except Exception:
         pass
@@ -255,7 +235,7 @@ def main():
     if tool_name in PERMANENTLY_BLOCKED:
         block_permanent(tool_name)
 
-    if has_consent(sid):
+    if has_do_consent(data):
         sys.exit(0)
 
     # A Write that pretool-write-guard.sh will reject (overwrite of an EXISTING
@@ -282,7 +262,7 @@ def main():
         except OSError:
             pass
 
-    count = update_streak(get_streak_state_file(sid), tool_name)
+    count = update_streak(sid, tool_name)
     enforce_streak_limit(tool_name, count)
     sys.exit(0)
 

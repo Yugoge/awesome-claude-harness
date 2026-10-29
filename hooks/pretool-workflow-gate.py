@@ -2,18 +2,24 @@
 """
 PreToolUse Hook: Require TodoWrite/TodoRead acknowledgment before other tools.
 
-If an active workflow exists (bookmark present) and the agent has NOT yet
-called TodoWrite or TodoRead (todo_acknowledged == false in bookmark), block
-any other tool.
+If an active workflow exists (the transcript's active span was opened by a
+command with a canonical checklist) and the agent has NOT yet called TodoWrite,
+or its last TodoWrite broke the count or the first-call step rule, block any
+other tool. The checklist state is read from the transcript
+(lib.todo_canonical.checklist, P1b E7): nothing is written.
 
 This prevents agents from ignoring the workflow checklist while still using
 other tools freely.
 
 Logic:
-  1. If tool is TodoWrite or TodoRead → set todo_acknowledged=true → allow
-  2. No bookmark → allow (no active workflow)
-  3. todo_acknowledged == true → allow
+  1. If tool is TodoWrite or TodoRead → allow
+  2. No checklist command in the active span → allow (no active workflow)
+  3. An ok TodoWrite that broke no rule is the last one → allow
   4. Otherwise → block
+
+The Codex compatibility runtime (CLAUDE_COMPAT_RUNTIME=codex) keeps its own
+plan state in the bookmark: its update_plan calls are not in a Claude
+transcript.
 
 Exit codes:
   0: Allow tool use
@@ -29,14 +35,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+
 CODEX_PLAN_TOOLS = {'update_plan', 'UpdatePlan', 'functions.update_plan'}
 CODEX_RUNTIME_ENV = 'CLAUDE_COMPAT_RUNTIME'
 
 # /restart is documented as an orthogonal control operation that must never
-# touch another command's TodoWrite bookmark (commands/restart.md). If the
-# invoking session also happens to hold its own unacknowledged bookmark (e.g.
+# touch another command's TodoWrite checklist (commands/restart.md). If the
+# invoking session also happens to hold its own unstarted checklist (e.g.
 # a /dev cycle was invoked and interrupted before its first TodoWrite), that
-# bookmark must not be able to block /restart's own recovery script — doing
+# checklist must not be able to block /restart's own recovery script — doing
 # so would force a choice between two contradictory NON-NEGOTIABLE rules.
 # Matched structurally against the documented invocations only (no
 # --session-id: commands/restart.md never passes it, so admitting it would
@@ -122,18 +130,16 @@ def run_canonical_todos(cmd_name: str, project_dir: Path, prompt: str = '') -> l
 
 
 def build_next_todowrite_call(session_id: str, cmd_name: str = '', project_dir: Path = None) -> str:
-    """Return ready-to-use JSON for the next TodoWrite call.
+    """Return ready-to-use JSON for the next TodoWrite call (Codex runtime).
 
-    Primary source: todos file (always clean — tracker guards against bad-count writes).
-    Fallback: canonical script (when file doesn't exist, e.g. first-time count_mismatch).
+    Primary source: the todos file the Codex plan path writes.
+    Fallback: canonical script (when file doesn't exist).
     """
     try:
         todos_file = official_todos_path(session_id)
         if todos_file.exists():
             todos = json.loads(todos_file.read_text())
         elif cmd_name and project_dir:
-            # File missing (e.g. first TodoWrite had wrong count, tracker skipped write)
-            # Fall back to canonical so agent still gets a usable hint.
             # Forward stored --force/etc. arguments so the hint matches the
             # argument-aware canonical variant (e.g. close.py 2-step forced list).
             _args = ''
@@ -147,7 +153,14 @@ def build_next_todowrite_call(session_id: str, cmd_name: str = '', project_dir: 
                 return ''
         else:
             return ''
+        return next_todowrite_call(todos)
+    except Exception:
+        return ''
 
+
+def next_todowrite_call(todos: list) -> str:
+    """``todos`` with a step in progress (the first pending one when none is), as TodoWrite JSON."""
+    try:
         result = [t.copy() for t in todos]
         has_inprogress = any(t.get('status') == 'in_progress' for t in result)
         if not has_inprogress:
@@ -1058,6 +1071,42 @@ def acknowledge_codex_canonical_bootstrap(
     )
 
 
+def _codex_lock(data: dict, session_id: str, bookmark_path: Path, project_dir: Path):
+    """(command, lock reason, hint JSON) of the Codex plan state in the bookmark;
+    exits 0 when nothing holds the tool back."""
+    # No bookmark → no active workflow → allow
+    if not bookmark_path.exists():
+        sys.exit(0)
+
+    try:
+        state = json.loads(bookmark_path.read_text())
+    except Exception:
+        sys.exit(0)
+
+    lock_reason = state.get('lock_reason', '')
+
+    # Already acknowledged AND no active lock → allow
+    if state.get('todo_acknowledged', False) and not lock_reason:
+        sys.exit(0)
+
+    cmd_name = state.get('command', '?')
+    if not lock_reason:
+        lock_reason = 'not_started'
+
+    if acknowledge_codex_canonical_bootstrap(
+        data, session_id, bookmark_path, project_dir, state, lock_reason
+    ):
+        sys.exit(0)
+
+    if lock_reason == 'sequence_violation':
+        # Hint uses last_todos (pre-violation state) to show the CORRECT next call.
+        last_todos = state.get('last_todos', [])
+        next_json = build_sequence_fix_call(last_todos) if last_todos else ''
+    else:
+        next_json = build_next_todowrite_call(session_id, cmd_name, project_dir)
+    return cmd_name, lock_reason, next_json
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -1088,70 +1137,29 @@ def main():
         if acknowledge_codex_plan(data, session_id, bookmark_path, project_dir):
             sys.exit(0)
 
-    # TodoWrite → acknowledge and allow
-    # (Stop hook enforces todo count >= blocking_count, so reducing todos is caught at session end)
+    # TodoWrite → allow: the TodoWrite validators decide on it, and the
+    # checklist state below is read back from the record it leaves.
     # Note: type errors (todos as string instead of array) are caught by Claude Code's schema
     # validation BEFORE PreToolUse hooks run — no need to duplicate that check here.
-    # Tools that should always be allowed regardless of workflow state
-    ALWAYS_ALLOWED = {'TodoWrite', 'TodoRead'}
-
-    if tool_name in ALWAYS_ALLOWED and tool_name != 'TodoWrite':
+    if tool_name in ('TodoWrite', 'TodoRead'):
         sys.exit(0)
 
-    if tool_name == 'TodoWrite':
-        if bookmark_path.exists():
-            try:
-                state = json.loads(bookmark_path.read_text())
-                changed = False
-                if not state.get('todo_acknowledged', False):
-                    state['todo_acknowledged'] = True
-                    changed = True
-                # Always clear lock_reason on TodoWrite — PostToolUse hooks (count/sequence)
-                # will re-set it if the new call is still violating.
-                # This handles race condition where tracker overwrites todo_acknowledged=False.
-                if state.get('lock_reason'):
-                    state.pop('lock_reason', None)
-                    changed = True
-                if changed:
-                    bookmark_path.write_text(json.dumps(state))
-            except Exception:
-                pass
-        sys.exit(0)
-
-    # No bookmark → no active workflow → allow
-    if not bookmark_path.exists():
-        sys.exit(0)
-
-    try:
-        state = json.loads(bookmark_path.read_text())
-    except Exception:
-        sys.exit(0)
-
-    lock_reason = state.get('lock_reason', '')
-
-    # Already acknowledged AND no active lock → allow
-    # Note: lock_reason checked independently because todo_acknowledged may stay True
-    # due to a race condition between PostToolUse tracker and sequence/count hooks.
-    if state.get('todo_acknowledged', False) and not lock_reason:
-        sys.exit(0)
-
-    # Not acknowledged or locked → block with reason-specific message
-    cmd_name = state.get('command', '?')
-    if not lock_reason:
-        lock_reason = 'not_started'
-
-    if acknowledge_codex_canonical_bootstrap(
-        data, session_id, bookmark_path, project_dir, state, lock_reason
-    ):
-        sys.exit(0)
-
-    if lock_reason == 'sequence_violation':
-        # Hint uses last_todos (pre-violation state) to show the CORRECT next call,
-        # not the violating todos-file state.
-        last_todos = state.get('last_todos', [])
-        next_json = build_sequence_fix_call(last_todos) if last_todos else ''
+    if is_codex_runtime(data):
+        cmd_name, lock_reason, next_json = _codex_lock(data, session_id, bookmark_path, project_dir)
     else:
-        next_json = build_next_todowrite_call(session_id, cmd_name, project_dir)
+        # Imported here: a TodoWrite, TodoRead or Codex call never reads the checklist.
+        from lib.todo_canonical import checklist
+        state = checklist(data.get('transcript_path'))
+        lock_reason = state.lock if state else ''
+        if not lock_reason:
+            sys.exit(0)
+        cmd_name = state.command
+        if lock_reason == 'sequence_violation':
+            # Hint from the list the step rules accepted last (none yet, when
+            # the first one broke them), not from the violating one.
+            next_json = build_sequence_fix_call(state.accepted) if state.accepted else ''
+        else:
+            next_json = next_todowrite_call(state.canonical)
 
     codex_runtime = is_codex_runtime(data)
     if codex_runtime:

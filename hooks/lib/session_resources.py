@@ -1434,35 +1434,6 @@ def publish_terminal_receipt(
     return {"status": "pass", "receipt": receipt, "idempotent": False}
 
 
-def publish_workflow_receipt(
-    project_dir: Path | str,
-    *,
-    claude_session_id: str,
-    bookmark: Mapping[str, object],
-) -> dict:
-    command = bookmark.get("command")
-    if not isinstance(command, str):
-        raise ResourceError("workflow bookmark command missing")
-    resource_session_id = bookmark.get("task_id") or bookmark.get(
-        "workflow_instance_id"
-    )
-    workflow_instance_id = bookmark.get("workflow_instance_id")
-    if not isinstance(workflow_instance_id, str):
-        raise ResourceError("workflow bookmark instance missing")
-    workflow_generation = bookmark.get("workflow_generation")
-    if type(workflow_generation) is not int or workflow_generation < 1:
-        raise ResourceError("workflow bookmark generation invalid")
-    return publish_terminal_receipt(
-        project_dir,
-        claude_session_id=claude_session_id,
-        resource_session_id=_identifier(resource_session_id, "resource_session_id"),
-        command=command,
-        terminal_status="completed",
-        workflow_instance_id=workflow_instance_id,
-        workflow_generation=workflow_generation,
-    )
-
-
 def publish_overnight_receipt(
     project_dir: Path | str,
     *,
@@ -1475,9 +1446,12 @@ def publish_overnight_receipt(
     resource_session_id = _identifier(
         state.get("dev_registry_session_id"), "resource_session_id"
     )
-    cycle = state.get("cycle_id", state.get("cycle_count", 0))
-    if type(cycle) is not int or cycle < 0:
-        raise ResourceError("overnight cycle identity invalid")
+    try:
+        from . import overnight
+    except ImportError:  # pragma: no cover - loaded by path, not as lib.session_resources
+        import overnight  # type: ignore[no-redef]
+    # The cycles completed: the one in progress is the first without a retro report.
+    cycle = overnight.cycle_index(state) - 1
     return publish_terminal_receipt(
         project_dir,
         claude_session_id=claude_session_id,
@@ -2496,7 +2470,6 @@ __all__ = [
     "provision",
     "publish_overnight_receipt",
     "publish_terminal_receipt",
-    "publish_workflow_receipt",
     "resolve_current_resource_session",
     "scratch_path",
     "spawn_owned",

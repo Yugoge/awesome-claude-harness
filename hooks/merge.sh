@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 # merge.sh - wrapper for /merge slash command
 #
-# Why this exists: pretool-git-privilege-guard.py raw-greps for the literal
-# string "git" + space + "merge" in command text and rejects it unless the
-# env var CLAUDE_MERGE_COMMAND_ACTIVE=1 is set in the hook's process env.
-# main-agent shell never has that env set, so the inline checkout+merge
-# pattern in merge.md was unrunnable from agent context. This wrapper runs
-# the merge in its OWN subprocess (which does not go through main-agent
-# PreToolUse), exporting the env var locally so the privilege-guard inside
-# the subprocess admits the inner command.
+# Why this exists: pretool-git-privilege-guard.py refuses every agent
+# `git merge` it sees in a Bash command, so the inline checkout+merge pattern
+# in merge.md was unrunnable from agent context. This wrapper runs the merge in
+# its OWN subprocess, which no PreToolUse hook sees; /merge reaches it only
+# after the merge-analyst's grant passed its check on the analyst's own Write.
 #
 # 2026-10-06 (merge-source generalization). The merge source is ANY resolvable
 # commit-ish, not just a local branch head:
@@ -31,7 +28,7 @@
 #   2. Every pre-existing safety check still runs on every ref shape: the
 #      in_place clean-tree precondition, the untracked-overlap preflight, and
 #      (upstream of this wrapper) merge-analyst's conflict-marker pre-check and
-#      the merge-analyst grant that pretool-git-privilege-guard.py binds.
+#      the merge-analyst grant checked on its own Write (hooks/lib/merge_grant.py).
 #   3. The post-merge invariant is still enforced before any cleanup runs.
 set -euo pipefail
 
@@ -210,9 +207,6 @@ if [ "$RECHECK_SHA" != "$SOURCE_SHA" ]; then
 fi
 
 echo "merge.sh: merging $SOURCE_REF ($SOURCE_SHA) into $DEFAULT_BRANCH ($DEFAULT_SHA)"
-
-# Export env so the inner subprocess command passes privilege-guard
-export CLAUDE_MERGE_COMMAND_ACTIVE=1
 
 # Checkout default branch + perform the merge.
 # Disable set -e around the merge so we can capture the exit code and emit

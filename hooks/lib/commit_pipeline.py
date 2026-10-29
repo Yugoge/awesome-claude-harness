@@ -9,10 +9,12 @@ agree by construction rather than by coincidence (the failure mode that the
   MINT side  -- `verify_pipeline_dispatch()`, called by
                 `scripts/write-commit-grant.py`: is a real /commit pipeline
                 run actually standing behind this mint request?
-  CONSUME side -- `select_dispatch_attestation()` / `claim_attestation()`,
+  CONSUME side -- `caller_prompt_sha256()` / `select_dispatch_attestation()`,
                 called by `hooks/pretool-git-privilege-guard.py`: is the
                 caller presenting this grant the subagent the pipeline
-                dispatched, or merely a bearer holding the ticket?
+                dispatched, or merely a bearer holding the ticket? The
+                answer is read, never written: the attestation keeps the
+                bytes its one writer gave it.
 
 WHAT THIS CLOSES (disclosure items 1 and 2 of commit 1fdbd3767, both landed
 labelled `Not fully closed` / `Not a full closure`). Before this module the
@@ -67,8 +69,10 @@ weaker one BY CONSTRUCTION, not by oversight:
     so it raises the cost of forging one rather than making it impossible,
     and an unenumerated write verb would still get through. What the
     consume side actually requires is identity,
-    below: the artifact must be claimed by a dispatched subagent's own
-    `agent_id`, which no Bash-authored file supplies.
+    below: the artifact's `prompt_sha256` must equal the digest of the
+    prompt that dispatched the committing subagent, read from that
+    subagent's own transcript under its own `agent_id`, which no
+    Bash-authored file supplies.
 
 So: mint side raises the cost, consume side is the structural barrier. Both
 are required; neither is sufficient. Do not describe the mint side as
@@ -110,6 +114,13 @@ ATTEST_PREFIX = "claude-commit-dispatch-"
 ATTEST_ORIGIN = "pretool-agent-hook"
 
 MANIFEST_PREFIX = "claude-commit-manifest-"
+
+# /commit --bulk's multi-use capability, written by
+# hooks/userprompt-bulk-commit-capability.py through
+# scripts/write-bulk-commit-sentinel.py.
+BULK_SENTINEL_PREFIX = "claude-bulk-commit-sentinel-"
+BULK_SENTINEL_KIND = "bulk-commit"
+BULK_SENTINEL_ORIGIN = "userpromptsubmit-hook"
 
 # Stamped into every pipeline-minted grant's `minted_by.origin`. The guard
 # refuses any grant that does not carry it, which is what retires the
@@ -165,6 +176,10 @@ def attestation_path(sid: str, nonce: str) -> str:
 
 def attestation_glob(sid: str = "*") -> str:
     return str(Path(state_dir()) / f"{ATTEST_PREFIX}{sid}-*.json")
+
+
+def bulk_sentinel_glob(sid: str = "*") -> str:
+    return str(Path(state_dir()) / f"{BULK_SENTINEL_PREFIX}{sid}-*.json")
 
 
 # ---------------------------------------------------------------------------
@@ -537,9 +552,12 @@ def write_attestation(sid: str, *, task_id: str = "", dryrun=None,
     The STRUCTURAL barrier sits on the consume side, in
     `hooks/pretool-git-privilege-guard.py`: a grant must carry a pipeline
     `minted_by.origin`, the calling payload must supply a non-empty
-    `agent_id`, and that caller must be the dispatched subagent holding the
-    matching dispatch attestation. Both sides are required and neither is
-    sufficient alone -- do not describe either as unforgeable.
+    `agent_id`, and the prompt that dispatched that caller must digest to
+    this attestation's `prompt_sha256`. Both sides are required and neither
+    is sufficient alone -- do not describe either as unforgeable.
+
+    `prompt_sha256` is therefore the one field the consume side decides on;
+    the record is never rewritten after this write.
 
     `task_id` and `dryrun` are parsed from the dispatch prompt and are
     FORENSIC ONLY -- nothing gates on them. A prompt-shape parser that
@@ -560,8 +578,6 @@ def write_attestation(sid: str, *, task_id: str = "", dryrun=None,
         "nonce": nonce,
         "dispatched_at": now.isoformat(),
         "expires_at": (now + timedelta(minutes=ATTEST_TTL_MINUTES)).isoformat(),
-        "claimed_by_agent_id": None,
-        "claimed_at": None,
     }
     path = attestation_path(sid, nonce)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -592,9 +608,65 @@ def _attestation_is_live(record, path: str, now: datetime) -> bool:
     return _within(_mtime_utc(path), now, ATTEST_TTL_MINUTES)
 
 
-def select_dispatch_attestation(sids, grant_created_at: str, agent_id: str,
+def _sibling_transcript(transcript_path: str | None, agent_id: str):
+    """The subagent's own transcript beside the session transcript the payload names.
+
+    A hook payload's `transcript_path` is `<projects>/<slug>/<session>.jsonl`; the
+    store keeps each subagent at `<projects>/<slug>/<session>/subagents/agent-<id>.jsonl`.
+    Reading the directory the harness itself named avoids re-deriving the slug.
+    """
+    if not transcript_path or not agent_id:
+        return None
+    path = Path(transcript_path)
+    if path.name == f"agent-{agent_id}.jsonl":
+        return str(path)
+    candidate = path.parent / path.stem / "subagents" / f"agent-{agent_id}.jsonl"
+    return str(candidate) if candidate.is_file() else None
+
+
+def caller_prompt_sha256(session_id: str, agent_id: str, project_dir: str,
+                         transcript_hint: str | None = None,
+                         transcript_path: str | None = None):
+    """sha256 of the prompt that dispatched `agent_id`, or '' with a reason.
+
+    Returns `(digest, reason)`. The prompt is the first record of the
+    subagent's own transcript, found exactly as the producer-stop gate finds
+    it (`hooks/lib/obligation.resolve_own_obligation`, rungs L0/L1, with the
+    meta toolUseId cross-check against the parent's Agent call); the L0 path is
+    the payload's `agent_transcript_path` or the sibling of its
+    `transcript_path`. Any outcome that read a prompt counts -- whether that
+    prompt carries a valid obligation is G1's and G2's question, not this one;
+    an outcome that could not read one (no transcript, a failed cross-check)
+    yields '' and the caller refuses.
+    """
+    try:
+        from lib.obligation import resolve_own_obligation  # noqa: PLC0415 -- only the commit path pays for it
+    except Exception as exc:  # pragma: no cover -- a broken install
+        return "", f"the dispatch-record resolver could not be loaded: {exc}"
+    try:
+        resolution = resolve_own_obligation(
+            session_id=str(session_id or ""),
+            agent_id=str(agent_id or ""),
+            project_dir=project_dir,
+            payload_agent_transcript_path=(
+                transcript_hint
+                or _sibling_transcript(transcript_path, str(agent_id or ""))),
+        )
+    except Exception as exc:
+        return "", f"the caller's dispatch record could not be read: {exc}"
+    prompt = getattr(resolution, "prompt", "") or ""
+    if not prompt:
+        return "", (
+            "the caller's own dispatch prompt could not be read from its transcript "
+            f"({getattr(resolution, 'reason', 'no prompt')}"
+            f"{': ' + resolution.detail if getattr(resolution, 'detail', '') else ''})"
+        )
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest(), ""
+
+
+def select_dispatch_attestation(sids, grant_created_at: str, prompt_sha256: str,
                                 now=None):
-    """Pick the attestation that lets `agent_id` consume a grant.
+    """Pick the attestation of the dispatch that started the caller.
 
     Returns `(path, reason)`: a path on success, `(None, reason)` otherwise.
 
@@ -611,22 +683,26 @@ def select_dispatch_attestation(sids, grant_created_at: str, agent_id: str,
     about THIS pipeline run rather than about any recent one, and the happy
     path satisfies it by construction (Step 5 mints, Step 6/7 dispatch).
 
-    Prefers an attestation already claimed by this same `agent_id`, so the
-    second repository of a multi-repo plan reuses the claim its first commit
-    established instead of consuming a second attestation.
+    Requires `prompt_sha256` (the caller's own dispatch prompt, see
+    `caller_prompt_sha256`) to equal the attestation's. That is what binds
+    one dispatch to the one subagent it started, and to no other: a second
+    subagent was dispatched with another prompt. The binding is a reading of
+    two records their own writers made, so the same subagent's commit in the
+    next repository of its plan finds the same attestation, and nothing is
+    written to make that so.
     """
     now = now or datetime.now(timezone.utc)
     minted = _parse_iso(grant_created_at)
-    candidates: list[tuple[datetime, str, dict]] = []
+    candidates: list[tuple[datetime, str]] = []
     seen: set[str] = set()
     # Why live attestations were passed over, so a refusal can say which of
-    # three very different situations it is instead of reporting all of them
-    # as "none found" -- the shape of diagnostic that sends a reader looking
-    # for a missing file that is in fact present.
+    # the situations it is instead of reporting all of them as "none found"
+    # -- the shape of diagnostic that sends a reader looking for a missing
+    # file that is in fact present.
     rejected_older = 0
-    rejected_claimed = 0
+    rejected_other_dispatch = 0
+    import glob as _glob
     for sid in [s for s in (sids or []) if s]:
-        import glob as _glob
         for path in _glob.glob(attestation_glob(sid)):
             if path in seen:
                 continue
@@ -638,11 +714,10 @@ def select_dispatch_attestation(sids, grant_created_at: str, agent_id: str,
             if minted is not None and dispatched_at is not None and dispatched_at < minted:
                 rejected_older += 1
                 continue
-            claimed = record.get("claimed_by_agent_id")
-            if claimed and str(claimed) != agent_id:
-                rejected_claimed += 1
+            if not prompt_sha256 or str(record.get("prompt_sha256") or "") != prompt_sha256:
+                rejected_other_dispatch += 1
                 continue
-            candidates.append((dispatched_at or now, path, record))
+            candidates.append((dispatched_at or now, path))
     if not candidates:
         if rejected_older:
             return None, (
@@ -653,87 +728,62 @@ def select_dispatch_attestation(sids, grant_created_at: str, agent_id: str,
                 "re-minted without re-dispatching changelog-analyst -- re-dispatch it "
                 "(commands/commit.md Step 8 re-mints and re-dispatches together)"
             )
-        if rejected_claimed:
+        if rejected_other_dispatch:
             return None, (
-                f"{rejected_claimed} live changelog-analyst dispatch attestation(s) exist but "
-                f"are claimed by a different agent than {agent_id!r} -- one dispatch "
-                "authorizes one consumer"
+                f"{rejected_other_dispatch} live changelog-analyst dispatch attestation(s) "
+                "exist, but none records the prompt that dispatched this caller -- one "
+                "dispatch authorizes the one subagent it started"
             )
         return None, (
             "no live changelog-analyst dispatch attestation for "
             f"session(s) {[s for s in (sids or []) if s]!r} minted-at-or-after "
             f"{grant_created_at!r}"
         )
-    # Already-mine first, then newest: a claim this agent already holds is
-    # the strongest match available.
-    candidates.sort(
-        key=lambda item: (
-            str(item[2].get("claimed_by_agent_id") or "") == agent_id,
-            item[0],
-        ),
-        reverse=True,
-    )
+    candidates.sort(reverse=True)
     return candidates[0][1], ""
 
 
-def claim_attestation(path: str, agent_id: str):
-    """Bind this attestation to `agent_id`. Returns `(ok, reason)`.
+# ---------------------------------------------------------------------------
+# /commit --bulk sentinel
+# ---------------------------------------------------------------------------
 
-    First consumer wins and is recorded; every later consumption under the
-    same attestation must present the same `agent_id`. That is what turns
-    "some dispatched subagent" into "the one subagent this dispatch
-    produced" -- without it, one real dispatch would license commits by any
-    number of unrelated subagents.
+def bulk_commit_sentinel_live(record, now=None) -> bool:
+    """The one rule on a bulk-commit sentinel: does it authorize an
+    `auto-bulk:` commit right now?
 
-    Serialized with `flock` and re-read inside the lock, so two concurrent
-    commits cannot both observe the claim as free.
+    Its kind, its origin (the UserPromptSubmit capability hook, never a
+    command line) and its unexpired `expires_at`. The privilege guard admits
+    an auto-bulk commit on it; the Stop cleanup reaps every sentinel it
+    rejects. Neither carries a rule of its own.
     """
-    import fcntl
-    if not agent_id:
-        return False, "no agent_id to claim with"
+    if not isinstance(record, dict):
+        return False
+    if record.get("kind") != BULK_SENTINEL_KIND:
+        return False
+    if record.get("origin") != BULK_SENTINEL_ORIGIN:
+        return False
+    expires_at = _parse_iso(record.get("expires_at"))
+    now = now or datetime.now(timezone.utc)
+    return expires_at is not None and expires_at > now
+
+
+def reap_bulk_commit_sentinels(now=None) -> int:
+    """Unlink every bulk-commit sentinel `bulk_commit_sentinel_live` rejects.
+
+    Run at Stop. Returns the number removed; never raises.
+    """
+    import glob as _glob
+    reaped = 0
     try:
-        fd = os.open(path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
-    except OSError as exc:
-        return False, f"attestation {path} could not be opened to claim: {exc}"
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        paths = _glob.glob(bulk_sentinel_glob())
+    except Exception:
+        return 0
+    for path in paths:
         try:
-            raw = b""
-            while True:
-                chunk = os.read(fd, 65536)
-                if not chunk:
-                    break
-                raw += chunk
-                if len(raw) > _READ_LIMIT:
-                    return False, f"attestation {path} is oversized"
-            record = json.loads(raw.decode("utf-8"))
-            if not isinstance(record, dict):
-                return False, f"attestation {path} is not a JSON object"
-            held = record.get("claimed_by_agent_id")
-            if held and str(held) != agent_id:
-                return False, (
-                    f"attestation {path} is already claimed by agent {held!r}; "
-                    f"agent {agent_id!r} is a different consumer"
-                )
-            if not held:
-                record["claimed_by_agent_id"] = agent_id
-                record["claimed_at"] = datetime.now(timezone.utc).isoformat()
-                payload = json.dumps(record, sort_keys=True).encode("utf-8")
-                os.lseek(fd, 0, os.SEEK_SET)
-                os.write(fd, payload)
-                os.ftruncate(fd, len(payload))
-            return True, ""
-        except (UnicodeDecodeError, ValueError) as exc:
-            return False, f"attestation {path} is unparseable: {exc}"
-        except OSError as exc:
-            return False, f"attestation {path} could not be claimed: {exc}"
-        finally:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-    finally:
-        try:
-            os.close(fd)
+            if bulk_commit_sentinel_live(safe_read_json(path), now):
+                continue
+            os.unlink(path)
+            reaped += 1
         except OSError:
-            pass
+            continue
+    return reaped

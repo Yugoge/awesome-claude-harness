@@ -1,49 +1,30 @@
 #!/usr/bin/env python3
-"""PostToolUse Hook (Write|Edit|NotebookEdit|MultiEdit matcher): detect the
-instant a lane-shard dev-report write completes its declared lane_set
-roster, and attempt the aggregation then -- closing the detection-window gap
-that otherwise depends on the orchestrator's NEXT Agent/Task dispatch
-(hooks/pretool-aggregate-check.py) or a later /close invocation ever
-happening in the same session (ticket 20261001-161041-r05).
+"""PostToolUse Hook (Write|Edit|NotebookEdit|MultiEdit matcher): the one
+producer of a fan-out's canonical aggregate dev-report (P1b E5). Every write
+of a lane report runs the harness's aggregator for its task, so the canonical
+follows the lane reports as they land, without waiting for the orchestrator's
+next dispatch or a later /close (ticket 20261001-161041-r05).
 
 Trigger: tool_input.file_path's basename matches a per-worker ("lane")
 dev-report shard filename (lib.dev_report_shard_patterns.classify_filename
-returns ("worker", task_id, lane)). Canonical-aggregate writes and every
-other file path are a zero-cost no-op with zero filesystem I/O beyond
-reading stdin (AC1).
+returns ("worker", task_id, lane)) and the report's own `lane_set` declares
+the fan-out (schema v2 requires it non-null when `lane` is a string --
+schemas/dev-report.v2.json). Canonical-aggregate writes, a report without a
+lane_set (a singular cycle, an overnight pipeline's dev-report-<ts>-<N>.json)
+and every other file path are a no-op with no filesystem I/O beyond reading
+stdin and that report.
 
-M3: the just-written shard's OWN `lane_set` field (schema v2, required
-non-null when `lane` is a string -- schemas/dev-report.v2.json) is the
-authoritative expected roster. A legacy/v1 shard (`lane_set` absent/null)
-carries no authoritative roster -- this hook never guesses one; it exits
-0, attempting no completeness detection (AC4).
+This hook decides nothing about the roster: whether every lane the lane_set
+declares has reported, and whether the canonical names them all, is G3's
+collection check before QA (hooks/pretool-aggregate-check.py). A canonical
+written before the last lane lands is rewritten by that lane's write.
 
-M4: when `lane_set` is authoritative, scan docs/dev/ (via the shared
-lib.dev_report_shard_patterns module) for a shard for every declared lane.
-An incomplete roster is the normal mid-cycle state for every write before
-the last one -- exit 0, zero side effects (AC3).
-
-M5: a complete roster with no fresh canonical aggregate on disk is the only
-state that goes on to S1 below.
-"Fresh" means the canonical's own mtime is not older than the newest
-roster shard's mtime -- the same staleness notion
-hooks/pretool-aggregate-check.py / scripts/resolve-dev-artifact-chain.py
-apply when deciding whether an existing canonical still covers the current
-shard set.
-
-S1: the hook then attempts
-`python3 scripts/aggregate-dev-report.py --task-id <task_id>` (bounded
-timeout). Both of the aggregator's own legitimate outcomes -- exit 0, or
+S1: the hook runs the harness's own
+`scripts/aggregate-dev-report.py --task-id <task_id> --project-dir <project>`
+(bounded timeout). Both of the aggregator's own legitimate outcomes -- exit 0, or
 exit 1 with its own R29 blocked-canonical write -- count as "invocation
 completed," never as a hook malfunction. Any exception/timeout/non-zero
 exit is swallowed; the hook's own exit code is unaffected (AC6).
-
-lane_set trust boundary: a shard's self-declared lane_set is cross-checked
-for verbatim equality (lib.obligation.lane_sets_identical, design
-Â§1.3-G1 check 4) against every OTHER on-disk shard found for the same
-task_id. Any mismatch makes the roster non-authoritative for this event
-(exit 0) rather than risking a false-positive completeness
-signal from a malformed or adversarial lane_set.
 
 Fail-open contract (universal in this codebase): parsing failures, missing
 stdin, missing project dir, unexpected exceptions -> exit 0. This hook
@@ -57,7 +38,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import obligation as obligation_lib  # noqa: E402
 from lib.dev_report_shard_patterns import classify_filename  # noqa: E402
 
 AGGREGATOR_TIMEOUT_SECONDS = 30
@@ -92,76 +72,19 @@ def _read_json(path):
         return None
 
 
-def _canonical_filename(task_id):
-    return f"dev-report-{task_id}.json"
-
-
-def _scan_roster(dev_dir, task_id, lane_set):
-    """Scan docs/dev/ for this task_id's roster.
-
-    Returns (present_lanes: set, canonical_mtime: float|None,
-    latest_shard_mtime: float|None, sibling_lane_sets: list).
-    """
-    present = set()
-    sibling_lane_sets = []
-    latest_mtime = None
-    try:
-        children = list(dev_dir.iterdir())
-    except OSError:
-        return present, None, None, sibling_lane_sets
-    for child in children:
-        if not child.is_file():
-            continue
-        result = classify_filename(child.name)
-        if result is None or result[0] != "worker":
-            continue
-        _, c_task_id, label = result
-        if c_task_id != task_id or label not in lane_set:
-            continue
-        present.add(label)
-        try:
-            mtime = child.stat().st_mtime
-        except OSError:
-            mtime = None
-        if mtime is not None and (latest_mtime is None or mtime > latest_mtime):
-            latest_mtime = mtime
-        shard = _read_json(child)
-        if isinstance(shard, dict):
-            sibling_lane_sets.append(shard.get("lane_set"))
-    canonical_path = dev_dir / _canonical_filename(task_id)
-    canonical_mtime = None
-    try:
-        if canonical_path.exists():
-            canonical_mtime = canonical_path.stat().st_mtime
-    except OSError:
-        canonical_mtime = None
-    return present, canonical_mtime, latest_mtime, sibling_lane_sets
-
-
-def _roster_authoritative(lane_set, sibling_lane_sets):
-    """False iff any sibling shard's own lane_set diverges from the
-    just-written shard's lane_set (G1-style verbatim-equality trust
-    boundary); a sibling that is itself legacy (lane_set is None) carries
-    no opinion and is not a divergence."""
-    for other in sibling_lane_sets:
-        if other is None:
-            continue
-        if not obligation_lib.lane_sets_identical(lane_set, other):
-            return False
-    return True
-
-
 def _invoke_aggregator(project_dir, task_id):
     """S1: best-effort aggregator auto-invocation. The aggregator's own
     non-zero R29 blocked-canonical exit, a timeout, or any unexpected
     exception are all swallowed here -- never raised into this hook's own
     exit code (AC6)."""
     try:
-        script = Path(project_dir) / "scripts" / "aggregate-dev-report.py"
+        # The harness's own copy, next to this hook: a product repository has
+        # no scripts/ of its own.
+        script = Path(__file__).resolve().parent.parent / "scripts" / "aggregate-dev-report.py"
         if not script.exists():
             return
         subprocess.run(
-            ["python3", str(script), "--task-id", task_id],
+            ["python3", str(script), "--task-id", task_id, "--project-dir", str(project_dir)],
             cwd=project_dir,
             capture_output=True,
             timeout=AGGREGATOR_TIMEOUT_SECONDS,
@@ -204,27 +127,6 @@ def main():
 
     lane_set = shard.get("lane_set")
     if not isinstance(lane_set, list) or not lane_set:
-        sys.exit(0)
-
-    try:
-        present, canonical_mtime, latest_mtime, siblings = _scan_roster(
-            dev_dir, task_id, set(lane_set)
-        )
-    except Exception:
-        sys.exit(0)
-
-    if not _roster_authoritative(lane_set, siblings):
-        sys.exit(0)
-
-    missing = [member for member in lane_set if member not in present]
-    if missing:
-        sys.exit(0)
-
-    canonical_fresh = (
-        canonical_mtime is not None
-        and (latest_mtime is None or canonical_mtime >= latest_mtime)
-    )
-    if canonical_fresh:
         sys.exit(0)
 
     _invoke_aggregator(project_dir, task_id)

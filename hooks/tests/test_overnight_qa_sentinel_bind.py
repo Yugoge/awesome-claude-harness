@@ -1,23 +1,13 @@
-"""Regression suite for the qa_mode-sentinel RW bind in the overnight boundary.
+"""The overnight boundary leaves the whole dev-registry read-only, qa.json included.
 
-`_qa_mode_sentinel_rw_bind` / `_build_bwrap_argv` had ZERO test callers, so the
-two failure modes this file exists to catch were both undetectable:
-
-  ACTOR GATE (QA F1, closed here) -- the mount-layer exemption mirrored the
-  string layer's `_is_harness_state_exempt` for the SAME path but WITHOUT that
-  exemption's `_is_orchestrator_actor()` gate, while `_apply_write_boundary`
-  also runs for `overnight_child` / `worktree_context`. A subagent therefore got
-  a writable `qa.json`; `subagentstop-e2e-enforce.py` exits 0 on
-  `qa_mode == "ba_validation"`, so one write disarmed the E2E stop gate. The
-  string layer cannot backstop it: `_apply_write_boundary` leaves through
-  `_emit_command_rewrite`'s `sys.exit(0)` before `apply_global_worktree_
-  enforcement` ever runs.
-
-  WIDENING -- if the bind is ever widened back from the FILE to its DIRECTORY,
-  the sibling enforcement flags in the same session dir become writable AND
-  removable, and `subagentstop-e2e-enforce.py` fails OPEN on an absent flag.
-  That is the exact bypass an earlier adversarial round caught in this lane's
-  own draft, and nothing in the committed suite would have caught its return.
+P1b E7 removed the one RW exception the boundary had under main's
+.claude/dev-registry: the orchestrator flipped qa.json's `qa_mode` between QA
+dispatches, so `_qa_mode_sentinel_rw_bind` bound that ONE file RW. Each QA
+dispatch's obligation now declares the report it owes and the stop gates read
+that record, so nothing writes qa.json mid-session and the bind went with the
+flips. These tests pin what replaces it: no actor (orchestrator or subagent)
+gets a writable sentinel, flag or session directory, so no write can disarm a
+stop gate (subagentstop-e2e-enforce.py fails OPEN on an absent flag).
 
 MEASURED TRAP (do not undo): every lab here is built under /var/tmp, NOT /tmp.
 The boundary mounts its own `--tmpfs /tmp`, which shadows a lab placed there and
@@ -120,103 +110,30 @@ def _as(payload: dict) -> None:
     G._set_request_ctx({}, payload)
 
 
-def _bind(lab_, payload: dict, wt_real: str = "") -> list[str]:
-    _as(payload)
-    return G._qa_mode_sentinel_rw_bind(str(lab_["main"]), wt_real, str(lab_["sess"]))
+def _rw_sources(argv: list[str]) -> list[str]:
+    return [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--bind"]
 
 
 # --------------------------------------------------------------------------- #
-# ACTOR GATE -- the F1 regression
+# No RW exception under the registry, for either actor
 # --------------------------------------------------------------------------- #
-def test_orchestrator_gets_the_file_bind(lab):
-    assert _bind(lab, ORCHESTRATOR_PAYLOAD) == [
-        "--bind", str(lab["qa"]), str(lab["qa"])]
-
-
-def test_subagent_gets_no_bind(lab):
-    """The F1 gap: an ungated bind hands a subagent a writable qa_mode.
-
-    Calls the helper DIRECTLY, bypassing _build_bwrap_argv, so this also pins
-    the gate INSIDE the helper: a gate placed at the call site instead would
-    leave this refusal to a future call site to remember."""
-    assert _bind(lab, SUBAGENT_PAYLOAD) == []
-
-
 @pytest.mark.parametrize("kind", ["registered_worktree", "fresh_clone_checkout"])
-def test_build_bwrap_argv_emits_bind_only_for_orchestrator(lab, kind, standin_bwrap):
+def test_build_bwrap_argv_binds_nothing_under_the_registry(lab, kind, standin_bwrap):
     """Same input, both actors, through the real argv builder."""
-    pair = f"--bind {lab['qa']} {lab['qa']}"
-
-    _as(ORCHESTRATOR_PAYLOAD)
-    orch = G._build_bwrap_argv("true", str(lab["main"]), str(lab["wt"]), kind,
-                               str(lab["sess"]))
-    _as(SUBAGENT_PAYLOAD)
-    sub = G._build_bwrap_argv("true", str(lab["main"]), str(lab["wt"]), kind,
-                              str(lab["sess"]))
-
-    assert orch is not None and sub is not None
-    assert pair in " ".join(orch)
-    assert pair not in " ".join(sub)
-
-
-# --------------------------------------------------------------------------- #
-# WIDENING -- the bind must stay FILE-scoped, never directory-scoped
-# --------------------------------------------------------------------------- #
-def test_bind_target_is_the_file_never_its_directory(lab):
-    args = _bind(lab, ORCHESTRATOR_PAYLOAD)
-    assert args[0] == "--bind"
-    for target in args[1:]:
-        assert Path(target).is_file(), f"bind target must be a FILE, got {target}"
-        assert Path(target).name == "qa.json"
-        assert target != str(lab["sess"]), "session DIRECTORY must never be bound"
+    registry = str(lab["main"] / ".claude" / "dev-registry")
+    for payload in (ORCHESTRATOR_PAYLOAD, SUBAGENT_PAYLOAD):
+        _as(payload)
+        argv = G._build_bwrap_argv("true", str(lab["main"]), str(lab["wt"]), kind)
+        assert argv is not None
+        assert not [src for src in _rw_sources(argv) if src.startswith(registry)], argv
 
 
 def test_session_dir_never_appears_as_a_bind_source(lab, standin_bwrap):
     _as(ORCHESTRATOR_PAYLOAD)
     argv = G._build_bwrap_argv("true", str(lab["main"]), str(lab["wt"]),
-                               "fresh_clone_checkout", str(lab["sess"]))
+                               "fresh_clone_checkout")
     sess = str(lab["sess"])
-    rw_sources = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--bind"]
-    assert sess not in rw_sources, "a directory bind re-ships the sibling-flag bypass"
-
-
-# --------------------------------------------------------------------------- #
-# PATH DEFENCES that must keep rejecting (no bind -> the write fails loudly)
-# --------------------------------------------------------------------------- #
-def test_symlinked_sentinel_is_refused(lab):
-    lab["qa"].unlink()
-    lab["qa"].symlink_to("/etc/hostname")
-    assert _bind(lab, ORCHESTRATOR_PAYLOAD) == []
-
-
-def test_multiply_linked_sentinel_is_refused(lab):
-    """st_nlink != 1 stops a planted hardlink aliasing a main-tree inode."""
-    os.link(lab["qa"], lab["sess"] / "alias.json")
-    assert _bind(lab, ORCHESTRATOR_PAYLOAD) == []
-
-
-def test_registry_root_itself_is_refused(lab):
-    _as(ORCHESTRATOR_PAYLOAD)
-    reg_root = lab["main"] / ".claude" / "dev-registry"
-    assert G._qa_mode_sentinel_rw_bind(str(lab["main"]), "", str(reg_root)) == []
-
-
-def test_non_direct_child_session_dir_is_refused(lab):
-    _as(ORCHESTRATOR_PAYLOAD)
-    nested = lab["main"] / ".claude" / "dev-registry" / SID / "deeper"
-    nested.mkdir()
-    assert G._qa_mode_sentinel_rw_bind(str(lab["main"]), "", str(nested)) == []
-
-
-def test_in_place_emits_no_second_bind(lab):
-    """worktree == main root is already RW via step 5; a second bind is wrong."""
-    assert _bind(lab, ORCHESTRATOR_PAYLOAD, wt_real=str(lab["main"])) == []
-
-
-@pytest.mark.parametrize("registry_dir", ["", None, 1234, {}])
-def test_malformed_registry_dir_degrades_to_no_bind(lab, registry_dir):
-    _as(ORCHESTRATOR_PAYLOAD)
-    assert G._qa_mode_sentinel_rw_bind(str(lab["main"]), "", registry_dir) == []
+    assert sess not in _rw_sources(argv), "a directory bind re-ships the sibling-flag bypass"
 
 
 # --------------------------------------------------------------------------- #
@@ -270,35 +187,22 @@ def _qa_mode(lab_) -> str:
 
 @requires_bwrap
 @pytest.mark.parametrize("kind", ["registered_worktree", "fresh_clone_checkout"])
-def test_e2e_subagent_cannot_rewrite_the_sentinel(lab, kind):
-    """The exploit, end-to-end: pre-fix this rewrote qa_mode on the HOST and
-    disarmed subagentstop-e2e-enforce.py (which exits 0 on 'ba_validation')."""
+@pytest.mark.parametrize("payload", [SUBAGENT_PAYLOAD, ORCHESTRATOR_PAYLOAD], ids=["subagent", "orchestrator"])
+def test_e2e_no_actor_can_rewrite_the_sentinel(lab, kind, payload):
+    """End-to-end: neither actor's write reaches qa.json on the HOST."""
     _write_state(lab, kind)
-    rewritten = _drive_hook(lab, _tamper_cmd(lab["qa"]), SUBAGENT_PAYLOAD)
-    assert rewritten, "boundary should still rewrite the command for a subagent"
+    rewritten = _drive_hook(lab, _tamper_cmd(lab["qa"]), payload)
+    assert rewritten, "boundary should still rewrite the command"
     proc = subprocess.run(["/bin/bash", "-c", rewritten],
                           capture_output=True, text=True)
-    assert proc.returncode != 0, "subagent write must FAIL"
+    assert proc.returncode != 0, "the write must FAIL"
     assert "Read-only file system" in proc.stderr
     assert _qa_mode(lab) == "final_verification", "sentinel must be untouched"
 
 
 @requires_bwrap
-@pytest.mark.parametrize("kind", ["registered_worktree", "fresh_clone_checkout"])
-def test_e2e_orchestrator_mid_session_change_still_works(lab, kind):
-    """The capability the bind exists for must survive the actor gate."""
-    _write_state(lab, kind)
-    rewritten = _drive_hook(lab, _tamper_cmd(lab["qa"]), ORCHESTRATOR_PAYLOAD)
-    assert rewritten
-    proc = subprocess.run(["/bin/bash", "-c", rewritten],
-                          capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stderr[-400:]
-    assert _qa_mode(lab) == "ba_validation", "value must persist on the HOST"
-
-
-@requires_bwrap
 def test_e2e_sibling_enforcement_flag_stays_non_removable(lab):
-    """Widening the bind to the session DIRECTORY would make this pass-through;
+    """A writable session DIRECTORY would make this pass-through;
     subagentstop-e2e-enforce.py fails OPEN on an absent flag."""
     _write_state(lab, "fresh_clone_checkout")
     flag = lab["sess"] / "e2e-enforce.json"
@@ -314,7 +218,7 @@ def test_e2e_sibling_enforcement_flag_stays_non_removable(lab):
 
 @requires_bwrap
 def test_e2e_new_file_in_session_dir_is_refused(lab):
-    """Direct proof the bind is file-scoped: the enclosing dir stays RO."""
+    """The session directory stays RO for the orchestrator too."""
     _write_state(lab, "fresh_clone_checkout")
     newf = lab["sess"] / "planted.json"
     rewritten = _drive_hook(

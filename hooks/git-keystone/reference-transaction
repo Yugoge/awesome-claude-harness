@@ -110,11 +110,12 @@ fi
 # No branch-name literal and no fixed enumeration of branch names appears
 # anywhere on this path. The operand is read from the record, at decision time.
 #
-# Deliberately INLINED rather than sourced from a shared library: the keystone
-# is installed as a SINGLE file copy into <common>/keystone-hooks by
+# The root walk is INLINED rather than sourced from a shared library: the
+# keystone is installed as a SINGLE file copy into <common>/keystone-hooks by
 # install-git-keystone.sh, so a sibling library would not exist at the install
 # location. scripts/overnight-git/git-policy-shim (installed the same way by
-# overnight-git-env.sh) carries the same resolution for the same reason.
+# overnight-git-env.sh) carries the same walk for the same reason. Both read
+# each record through the harness's own hooks/lib/overnight.py.
 
 _OBP_RESOLVED=0        # memo guard: resolve at most ONCE per hook invocation
 _OBP_SET=""            # newline-delimited protected names
@@ -128,39 +129,29 @@ _obp_subdirs() {
   fi
 }
 
-# A record is EXCLUDED only when it declares a NON-NULL isolation_released_at.
-# A record whose field is absent, or explicitly null, is live and is scanned.
-_obp_is_released() {
-  # Anchored to a TOP-LEVEL key (preceded by line start, '{' or ','), so a
-  # nested string that merely mentions the field name cannot make a live record
-  # look released. That direction matters: it is the only SUBTRACTIVE operator
-  # in the resolution, so a false positive here would silently fail OPEN.
-  grep -qE '(^|[{,])[[:space:]]*"isolation_released_at"[[:space:]]*:[[:space:]]*null' "$1" 2>/dev/null && return 1
-  grep -qE '(^|[{,])[[:space:]]*"isolation_released_at"[[:space:]]*:' "$1" 2>/dev/null && return 0
-  return 1
-}
-
-# Emit the record's protected_branch value, or NOTHING when the field is absent
-# (a v8 / un-upgraded record — M6 consumer-table case (ii)). Contributing
-# nothing keeps the protected set empty, so the caller reaches the identical
-# fail-closed path as the no-record case; they are not two code paths.
-# Minimal line-oriented parse: this runs on EVERY reference transaction, so no
-# jq dependency is assumed inside the hook path (Edge Case 3).
-_obp_field() {
-  # The value is a JSON string, so it may carry escapes. A naive [^"]* stops at
-  # the first ESCAPED quote and yields a truncated name — which would leave the
-  # real branch unprotected. Match escaped pairs explicitly, then unescape.
-  # (git permits '"' and '\' in a ref name; control-char escapes cannot occur.)
-  sed -n 's/.*"protected_branch"[[:space:]]*:[[:space:]]*"\(\([^"\\]\|\\.\)*\)".*/\1/p' "$1" 2>/dev/null \
-    | head -n1 | sed 's/\\\(.\)/\1/g'
+# Each record is read by its one function, hooks/lib/overnight.py, run as a
+# script: a record contributes its protected_branch unless the function's
+# `released` verdict (a non-null isolation_released_at) excludes it. That
+# exclusion is the only subtractive operator in the resolution; no other
+# filter may be added (each would be a subtraction an actor could influence).
+# A record without the field contributes NOTHING (M6 case (ii)), so the set
+# stays empty and the caller reaches the same fail-closed path as the
+# no-record case. The harness home resolves as settings.json's hook commands
+# resolve it; when the function cannot run (no python3, no lib) nothing is
+# contributed either, which fails closed the same way.
+_obp_record_names() {
+  local lib="${CLAUDE_HOME:-${HOME:-}/.claude}/hooks/lib/overnight.py"
+  [ -f "$lib" ] || return 0
+  python3 -I "$lib" protected-branches "$@" 2>/dev/null
 }
 
 # Collect from one candidate root. Returns 0 iff at least one record was FOUND
 # (found, not necessarily contributing — that distinction is what makes an
 # un-upgraded record fail closed instead of falling through to another root).
 _obp_scan_root() {
-  local root="$1" sub f val
+  local root="$1" sub f names
   local found=1
+  local records=()
   [ -n "$root" ] && [ -d "$root" ] || return 1
   while IFS= read -r sub; do
     [ -n "$sub" ] || continue
@@ -168,16 +159,16 @@ _obp_scan_root() {
     for f in "$root/$sub"/overnight-state-*.json; do
       [ -f "$f" ] || continue
       found=0
-      _obp_is_released "$f" && continue
-      val="$(_obp_field "$f")"
-      if [ -n "$val" ]; then
-        _OBP_SET="$_OBP_SET$val
-"
-      fi
+      records+=("$f")
     done
   done <<EOF
 $(_obp_subdirs)
 EOF
+  if [ "${#records[@]}" -gt 0 ]; then
+    names="$(_obp_record_names "${records[@]}")"
+    [ -n "$names" ] && _OBP_SET="$_OBP_SET$names
+"
+  fi
   return $found
 }
 

@@ -169,6 +169,31 @@ class SessionEndScratchSweepTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertTrue(target.exists())
 
+    def test_doc_sync_notice_keeps_state_only_where_the_sweep_would_remove(self):
+        # One ownership rule (hooks/lib/scratch_owner.py): the notice keeps its dedupe
+        # state in exactly the session directories the sweep removes, so it never writes
+        # into a directory the sweep leaves behind (an .owner of another session, or none).
+        import sys
+        sys.path.insert(0, str(REPO_ROOT))
+        from hooks.doc_sync import notice
+        owners = {"same": json.dumps({"sid": "s-x"}), "other": json.dumps({"sid": "s-y"}),
+                  "no-sid": "{}", "malformed": "{", "missing": None}
+        for case, text in owners.items():
+            root = self.sandbox / case
+            target = root / "s-x"
+            target.mkdir(parents=True)
+            if text is not None:
+                (target / ".owner").write_text(text)
+            os.environ[notice.STATE_ROOT_ENV] = str(root)
+            try:
+                keeps_state = notice.state_path_for({"session_id": "s-x"}) is not None
+            finally:
+                del os.environ[notice.STATE_ROOT_ENV]
+            result = _run_hook(SESSION_SWEEP_HOOK, {"TMPDIR": str(root), "CLAUDE_CODE_SESSION_ID": "s-x"})
+            self.assertEqual(result.returncode, 0, case)
+            self.assertEqual(keeps_state, not target.exists(), case)
+            self.assertEqual(keeps_state, case == "same", case)
+
 
 @unittest.skipUnless(SYSTEMD_TMPFILES, "systemd-tmpfiles binary not available")
 class TmpfilesAgeByTests(unittest.TestCase):

@@ -68,26 +68,12 @@ if [ "$TARGET_PARENT_REAL" != "$ROOT_REAL" ]; then
   exit 0
 fi
 
-# Ownership guard: .owner.sid MUST equal our own session id before we ever
-# remove anything — mirrors the "undecidable means leave alone" discipline
-# of hooks/stop-cleanup-allowlist.sh, applied to a directory instead of a
-# single sentinel file.
-OWNER_FILE="$TARGET/.owner"
-if [ ! -f "$OWNER_FILE" ]; then
-  echo "sessionend-scratch-sweep: $TARGET has no .owner record — skipping (undecidable)"
-  exit 0
-fi
-OWNER_SID=$(python3 -c "
-import json, sys
-try:
-    with open(sys.argv[1]) as fh:
-        d = json.load(fh)
-    print(d.get('sid') or '')
-except Exception:
-    print('')
-" "$OWNER_FILE" 2>/dev/null || true)
-if [ "$OWNER_SID" != "$SID" ]; then
-  echo "sessionend-scratch-sweep: $TARGET .owner sid mismatch ('$OWNER_SID' != '$SID') — skipping"
+# Ownership guard: the directory must belong to our own session (its .owner
+# record names this exact session id) before we ever remove anything — the
+# one rule hooks/lib/scratch_owner.py holds, which doc-sync's notice applies
+# too; an undecidable directory is left alone.
+if ! python3 "$(dirname "${BASH_SOURCE[0]}")/lib/scratch_owner.py" "$TARGET" "$SID" 2>/dev/null; then
+  echo "sessionend-scratch-sweep: $TARGET does not belong to session $SID — skipping"
   exit 0
 fi
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Stop hook: enforce the /do do-report completion contract at session stop.
 
-A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) and a
-pending do-report skeleton (docs/dev/do-report-<task_id>.json) at consent time
-(hooks/prompt-workflow.py::handle_do_consent). commands/do.md obliges the agent
-to rewrite that skeleton to a terminal status BEFORE stopping. Historically the
+A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) at
+consent time (hooks/prompt-workflow.py::handle_do_consent). commands/do.md Step 5
+obliges the agent to write the do-report (docs/dev/do-report-<task_id>.json)
+with a terminal status BEFORE stopping. Historically the
 obligation was instruction-only — nothing compared declared vs. actual at
 runtime, so omissions surfaced only when /close later failed to find the report.
 This gate is the runtime binder.
@@ -20,17 +20,17 @@ MAX_BLOCKS deadlock guard below still prevents a true deadlock.
 Compliance (all required to allow stop in block mode):
   1. docs/dev/do-report-<task_id>.json exists and parses as a JSON object.
   2. Top-level task_id equals the sidecar task_id, and source == "do".
-  3. do.status is a TERMINAL status: "completed" or "blocked" ("blocked" is the
-     honest terminal branch — a gate that only accepts "completed" would press
-     the agent to misreport abandoned work; /close still accepts only
-     "completed").
+  3. do.status is a terminal status: lib/obligation.terminal_status, the one
+     decision on the do-report schema's vocabulary. Any terminal status lets
+     the session stop: a gate that accepted only "completed" (the one /close
+     takes) would press the agent to misreport abandoned work.
   4. do.summary is a non-empty string; do.files_modified and do.files_created
      are arrays.
   5. contract_runtime.validate_report_artifact() does not FAIL (schema-infra
      problems and unversioned records skip — never fail-closed).
 The gate checks SHAPE only. It never derives or verifies files_modified against
 git diff (forbidden by commands/do.md — git is session-unaware), and it never
-writes the report itself.
+writes the report.
 
 DEADLOCK GUARD (block mode): per-session attempt counter
 <state dir>/claude-do-report-gate-<sid>.json; after MAX_BLOCKS blocks for the same
@@ -54,7 +54,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 MAX_BLOCKS = 2
-TERMINAL_STATUSES = {"completed", "blocked"}
 
 # Identifier-safety pattern reused from subagentstop-e2e-enforce.py: an unsafe/
 # path-shaped sidecar task_id degrades silently to "no enforcement" rather than
@@ -84,11 +83,12 @@ def _compliance_problems(report_path: Path, task_id: str) -> list[str]:
     if not isinstance(do, dict):
         problems.append("missing/invalid \"do\" object")
         return problems
-    status = do.get("status")
-    if status not in TERMINAL_STATUSES:
+    from lib import obligation  # lazy: only a /do session's stop pays the import
+    if obligation.terminal_status("do-report.v1", record) is None:
+        legal = obligation.TERMINAL_VOCABULARY["do-report.v1"]["do.status"]
         problems.append(
-            f"do.status is {status!r} — must be a terminal status "
-            f"({'/'.join(sorted(TERMINAL_STATUSES))}); \"pending\" means the skeleton was never completed")
+            f"do.status is {do.get('status')!r} — must be a terminal status the do-report "
+            f"schema declares ({'/'.join(sorted(legal)) or 'none: schema unreadable'})")
     summary = do.get("summary")
     if not isinstance(summary, str) or not summary.strip():
         problems.append("do.summary must be a non-empty string")
@@ -131,26 +131,6 @@ def _write_blocks(sid: str, task_id: str, blocks: int) -> None:
             json.dumps({"task_id": task_id, "blocks": blocks}), encoding="utf-8")
     except Exception:
         pass
-
-
-def _rewrite_pending_to_blocked(report_path: Path, task_id: str) -> bool:
-    """Best-effort: when the deadlock guard gives up and the do-report's own
-    status is still 'pending', rewrite it to an honest terminal 'blocked'
-    state instead of leaving it silently pending forever. Never raises."""
-    try:
-        record = json.loads(report_path.read_text(encoding="utf-8"))
-        if not isinstance(record, dict):
-            return False
-        do = record.get("do")
-        if not isinstance(do, dict) or do.get("status") != "pending":
-            return False
-        do["status"] = "blocked"
-        do["summary"] = "session ended without completing the do-report"
-        report_path.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True
-    except Exception:
-        return False
 
 
 def main() -> int:
@@ -199,13 +179,10 @@ def main() -> int:
 
     blocks = _read_blocks(sid, task_id)
     if blocks >= MAX_BLOCKS:
-        rewritten = _rewrite_pending_to_blocked(report_path, task_id)
         sys.stderr.write(
             f"[do-report-gate] FORCED ALLOW after {blocks} blocks — do-report for task "
             f"{task_id} is STILL non-compliant ({'; '.join(problems)})."
-            + (" Status was rewritten from pending to blocked."
-               if rewritten else "")
-            + " /close will reject this task until the report is completed.\n")
+            " /close will reject this task until the report is completed.\n")
         return 0
 
     _write_blocks(sid, task_id, blocks + 1)
@@ -214,10 +191,10 @@ def main() -> int:
         f"do-report before this session may stop.\n"
         f"Report: {report_path}\n"
         f"Violations:\n" + "".join(f"  - {p}\n" for p in problems) +
-        "Rewrite the report now: fill do.summary and do.files_modified/files_created from "
+        "Write the report now: fill do.summary and do.files_modified/files_created from "
         "your OWN knowledge of what you changed (do NOT derive from git diff — it is "
-        "session-unaware), and set do.status to \"completed\" (or \"blocked\" with an honest "
-        "summary if the task could not be finished). Then stop again.\n")
+        "session-unaware), and set do.status to the terminal status that is true (with an "
+        "honest summary if the task could not be finished). Then stop again.\n")
     return 2
 
 

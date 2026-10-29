@@ -4,10 +4,10 @@ Stop Hook: Block conversation termination until overnight end-time.
 
 Logic:
   1. Read JSON from stdin (session_id)
-  2. Load only .claude/overnight-state-<session_id>.json
+  2. Load only the session's own record (lib.overnight.session_state)
   3. If no state file: exit 0 (allow stop)
-  4. If current time < end_time: exit 2 (block stop)
-  5. If current time >= end_time: exit 0 (allow stop)
+  4. If the record's window is live (lib.overnight.state_verdicts): exit 2
+  5. Otherwise: exit 0 (allow stop)
 
 Exit codes:
   0: Allow stop
@@ -17,20 +17,20 @@ Exit codes:
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-# Make sibling lib importable for closeout integration.
+# Make sibling lib importable.
 _HOOKS_DIR = Path(__file__).resolve().parent
 if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
+from lib import overnight  # noqa: E402
+
 try:
     from lib import session_resources
-    from lib.closeout import has_pending_required_calls
 except Exception:  # pragma: no cover - fail-soft if lib missing
     session_resources = None  # type: ignore[assignment]
-    has_pending_required_calls = None  # type: ignore[assignment]
 
 
 def read_stdin_context() -> dict:
@@ -43,41 +43,9 @@ def read_stdin_context() -> dict:
     return {}
 
 
-def _try_load_json(path: Path) -> dict | None:
-    """Attempt to load JSON from a file path. Returns None on failure."""
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
 def load_state(project_dir: Path, session_id: str) -> dict | None:
     """Load only the exact session state; global/newest scans are unauthorized."""
-    if not session_id:
-        return None
-    exact = project_dir / '.claude' / f'overnight-state-{session_id}.json'
-    state = _try_load_json(exact)
-    if not state or state.get('session_id') != session_id:
-        return None
-    return state
-
-
-def parse_end_time(state: dict) -> datetime | None:
-    """Extract and parse end_time from state dict.
-
-    Returns naive datetime for local-time comparison with datetime.now().
-    """
-    end_time_str = state.get('end_time')
-    if not end_time_str:
-        return None
-    try:
-        dt = datetime.fromisoformat(end_time_str)
-        # Strip timezone if present — all comparisons use naive local time
-        if dt.tzinfo is not None:
-            dt = dt.replace(tzinfo=None)
-        return dt
-    except (ValueError, TypeError):
-        return None
+    return overnight.session_state(session_id, project_dir)
 
 
 def is_session_mismatch(current_id: str, state: dict) -> bool:
@@ -88,37 +56,6 @@ def is_session_mismatch(current_id: str, state: dict) -> bool:
     if not state_id:
         return False  # Fail-open: state has no session_id -> don't skip
     return current_id != state_id
-
-
-def _coerce_cycle_id(state: dict) -> int | None:
-    raw = state.get("cycle_count")
-    try:
-        return int(raw) if raw is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _invoke_closeout(session_id: str, state: dict) -> bool:
-    """Returns True if pending required_calls remain."""
-    if has_pending_required_calls is None:
-        return False
-    cycle_id = _coerce_cycle_id(state)
-    if not session_id or cycle_id is None:
-        return False
-    try:
-        return bool(has_pending_required_calls(session_id, cycle_id))
-    except Exception as exc:  # pragma: no cover - fail-soft
-        sys.stderr.write(f"[stop-overnight-timelock] closeout error: {exc}\n")
-        return False
-
-
-def _block_pending(session_id: str, cycle_id_str: str) -> None:
-    sys.stderr.write(
-        "\n CLOSEOUT GATE: cycle still has unresolved required_calls.\n"
-        f" session={session_id} cycle={cycle_id_str}\n"
-        " Complete or waive the missing entries before terminating.\n"
-    )
-    sys.exit(2)
 
 
 def _path_exists(value: object) -> bool:
@@ -154,19 +91,20 @@ def _block_closeout_artifacts(session_id: str, cycle_id_str: str, blockers: list
 
 def block_with_message(end_time: datetime, state: dict) -> None:
     """Write time-lock message to stderr and exit 2."""
-    remaining = end_time - datetime.now()
+    now = datetime.now(timezone.utc) if end_time.tzinfo else datetime.now()
+    remaining = end_time - now
     total_seconds = int(remaining.total_seconds())
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
     phase = state.get('current_phase', 'unknown')
-    cycle_count = state.get('cycle_count', 0)
+    cycles_done = overnight.cycle_index(state) - 1
     issues_fixed = state.get('issues_fixed', 0)
 
     sys.stderr.write(
         f'\n TIME-LOCK ACTIVE: Overnight session runs until '
         f'{end_time.strftime("%Y-%m-%d %H:%M")}.\n'
         f'Time remaining: {hours}h {minutes}m\n'
-        f'Current phase: {phase} | Cycles: {cycle_count} | '
+        f'Current phase: {phase} | Cycles: {cycles_done} | '
         f'Fixed: {issues_fixed}\n'
         f'The session cannot end until the end-time is reached.\n'
         f'Continue working on the current cycle.\n'
@@ -197,26 +135,24 @@ def _publish_terminal_receipt(
     return result.get('status') == 'pass'
 
 def _enforce_timelock(session_id: str, state: dict, project_dir: Path | None = None) -> None:
-    """Run closeout + apply blocking rules. Exits 0 or 2 directly."""
+    """Apply the time-lock and the closeout-artifact rules. Exits 0 or 2 directly."""
     project_dir = project_dir or Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
     terminal_hint = state.get('terminal_status') or state.get('status')
     if terminal_hint in {'cancelled_by_user', 'user_cancelled', 'cancelled'}:
         _publish_terminal_receipt(project_dir, session_id, state, 'cancelled_by_user')
         sys.exit(0)
-    end_time = parse_end_time(state)
-    end_time_expired = end_time is not None and datetime.now() >= end_time
-    # HARD CUTOVER: with no cycle-contract.json (legacy session) nothing is
-    # pending.
-    pending = _invoke_closeout(session_id, state)
-    if pending and not end_time_expired:
-        _block_pending(session_id, str(state.get('cycle_count', '?')))
+    verdicts = overnight.state_verdicts(state)
+    end_time = verdicts.end_time
+    end_time_expired = end_time is not None and not verdicts.window_live
+    # A subagent's report is checked at that subagent's own stop (G2) and at
+    # its collection (posttool-overnight-file-check.py), never again here.
     if end_time_expired:
         blockers = _closeout_artifact_blockers(state)
         if blockers:
-            _block_closeout_artifacts(session_id, str(state.get('cycle_count', '?')), blockers)
+            _block_closeout_artifacts(session_id, str(overnight.cycle_index(state)), blockers)
     if end_time is None:
         sys.exit(0)
-    if datetime.now() < end_time:
+    if verdicts.window_live:
         block_with_message(end_time, state)
     _publish_terminal_receipt(project_dir, session_id, state, 'completed_by_deadline')
     sys.exit(0)
@@ -235,8 +171,7 @@ def main():
         _sid = context.get('session_id', '')
         _pdir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
         _st = load_state(_pdir, _sid)
-        _et = parse_end_time(_st) if _st else None
-        if _et is None:
+        if _st is None or overnight.state_verdicts(_st).end_time is None:
             sys.exit(0)
 
     session_id = context.get('session_id', '')

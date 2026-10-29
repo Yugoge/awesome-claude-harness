@@ -6,7 +6,8 @@ Prevents sequence violations by checking the proposed todos array against
 the last known state. This is the enforcement counterpart to
 posttool-todo-sequence.py (which can only warn after the fact).
 
-State: reads last_todos from .claude/workflow-{session_id}.json
+State: the transcript records every TodoWrite and Agent call (P1b E7); the
+last accepted list and the dispatches come from lib.todo_canonical.checklist.
 
 Rules enforced:
   1. Max 1 step completed per call
@@ -23,13 +24,12 @@ Exit codes:
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
 # Import shared canonical validation
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.todo_canonical import validate_against_canonical, run_todo_script
+from lib.todo_canonical import checklist, validate_against_canonical, run_todo_script
 
 
 def _check_field_changed(old_val, new_val):
@@ -145,18 +145,6 @@ def build_correct_call(last):
     return json.dumps(result, ensure_ascii=False, separators=(',', ': '))
 
 
-def load_state(session_id):
-    """Load workflow bookmark, return state dict or None."""
-    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    path = project_dir / '.claude' / f'workflow-{session_id}.json'
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return None
-
-
 def validate(last, new):
     """Run all validation rules, return list of violations."""
     violations = []
@@ -224,8 +212,51 @@ def validate_against_canonical_if_needed(cmd, new_todos, prompt=''):
     return True
 
 
+def _subagent_types(step):
+    """The subagent types a canonical step's subagent_call names, lower-cased."""
+    call = step.get('subagent_call') if isinstance(step, dict) else None
+    entries = call if isinstance(call, list) else [call]
+    return {str(e.get('subagent_type') or '').strip().lower() for e in entries if isinstance(e, dict)}
+
+
+def _in_progress(todos):
+    """The one in_progress step's index, or None (none, or several)."""
+    found = [i for i, t in enumerate(todos) if t.get('status') == 'in_progress']
+    return found[0] if len(found) == 1 else None
+
+
+def _dispatched_steps(state, canonical):
+    """The subagent steps a dispatch has been made for, read from the record:
+    each Agent call that came back pairs with a step. With step ip in progress,
+    a typed call counts for the first step of ip..ip+2 that names its type and
+    has no call yet (the window covers a TodoWrite and its Agent sent
+    together), an untyped call for ip itself. A step set back to pending (a new
+    overnight cycle) needs a new call."""
+    events = sorted([(w.result_line, 0, w) for w in state.writes]
+                    + [(c.result_line, 1, c) for c in state.span.calls('Agent', 'Task') if c.ok],
+                    key=lambda e: (e[0], e[1]))
+    current, counted = [], set()
+    for _, is_dispatch, call in events:
+        if not is_dispatch:
+            current = call.input['todos']
+            counted -= {i for i, t in enumerate(current) if t.get('status') == 'pending'}
+            continue
+        ip = _in_progress(current)
+        if ip is None:
+            continue
+        kind = str(call.input.get('subagent_type') or '').strip().lower()
+        window = range(ip, min(len(canonical), ip + 3)) if kind else [ip]
+        for i in window:
+            types = _subagent_types(canonical[i]) if i < len(canonical) else set()
+            if types and i not in counted and (not kind or kind in types):
+                counted.add(i)
+                break
+    return counted
+
+
 def _find_completing_subagent_step(state, last, new_todos, canonical):
     """Find a step transitioning to completed that needs subagent guard."""
+    dispatched = None
     for i, (old, new) in enumerate(zip(last, new_todos)):
         needs_guard = (
             old.get('status') == 'in_progress'
@@ -235,8 +266,9 @@ def _find_completing_subagent_step(state, last, new_todos, canonical):
         )
         if not needs_guard:
             continue
-        called = state.get('subagent_calls', {}).get(str(i), False)
-        if not called:
+        if dispatched is None:
+            dispatched = _dispatched_steps(state, canonical)
+        if i not in dispatched:
             return i, new, canonical[i].get('subagent_call')
     return None, None, None
 
@@ -252,9 +284,7 @@ def check_subagent_completion_guard(state, last, new_todos, cmd):
     """Gate 4: block completing a subagent step without calling Agent."""
     if not last or not cmd:
         return
-    canonical = run_todo_script(cmd, state.get('arguments', ''))
-    if not canonical:
-        return
+    canonical = state.canonical
     idx, step_todo, sa_call = _find_completing_subagent_step(
         state, last, new_todos, canonical
     )
@@ -290,13 +320,13 @@ def main():
     new_todos = data.get('tool_input', {}).get('todos', [])
     if not new_todos:
         sys.exit(0)
-    state = load_state(data.get('session_id', 'default'))
+    state = checklist(data.get('transcript_path'))
     if not state:
         sys.exit(0)
-    last = state.get('last_todos')
-    cmd = state.get('command', '')
+    last = state.accepted
+    cmd = state.command
     if last is None or len(last) != len(new_todos):
-        validate_against_canonical_if_needed(cmd, new_todos, state.get('arguments', '') if state else '')
+        validate_against_canonical_if_needed(cmd, new_todos, state.arguments)
         sys.exit(0)
     violations = validate(last, new_todos)
     if violations:

@@ -183,7 +183,7 @@ def test_hook_notice_closing_marker_reason_covers_a_reversed_pair(tmp_path):
     pytest.param('S7github', id='silent_S7github'),
 ])
 def test_hook_notice_regenerated_or_reserved_paths_stay_silent(tmp_path, scenario):
-    """First generation, a well-formed README and the reserved .github tree print nothing."""
+    """No README (none is created), a well-formed README and the reserved .github tree print nothing."""
     parts = ('.github',) if scenario == 'S7github' else ('sub',)
     world = World(tmp_path, folder_parts=parts)
     if scenario == 'S2':
@@ -192,9 +192,7 @@ def test_hook_notice_regenerated_or_reserved_paths_stay_silent(tmp_path, scenari
     completed = run_hook(world)
 
     assert_silent(completed)
-    if scenario == 'S1':
-        assert OPEN in world.readme.read_text()
-    if scenario == 'S7github':
+    if scenario in ('S1', 'S7github'):
         assert not world.readme.exists()
 
 
@@ -205,11 +203,13 @@ def test_hook_notice_single_notice_when_dirs_coincide(tmp_path):
     global_commands = world.home / '.claude' / 'commands'
     global_commands.mkdir(parents=True)
     (global_commands / 'README.md').symlink_to(world.readme)
+    global_index = global_commands / 'INDEX.md'
+    global_index.write_text('# commands\n\n<!-- AUTO:index-stats -->\n<!-- /AUTO:index-stats -->\n')
 
     text = parse_single_notice(run_hook(world))
 
-    # The global branch really ran (it wrote its INDEX.md), yet both READMEs are one file.
-    assert (global_commands / 'INDEX.md').exists()
+    # The global branch really ran (it updated its marked INDEX.md), yet both READMEs are one file.
+    assert '**Total entries**' in global_index.read_text()
     assert text.count('SKIPPED_NO_CLOSING_MARKER') == 1
     assert text.count(os.path.realpath(world.readme)) == 1
 

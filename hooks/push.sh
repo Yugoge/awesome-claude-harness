@@ -22,9 +22,9 @@
 #             refs/checkpoints/<branch> and must NOT be promoted to HEAD.)
 
 # ─── Invocation gate ─────────────────────────────────────────────────────────
-# /push writes no user-intent sentinel. A Bash call that runs this script is
-# gated by pretool-push-analyst-grant-guard.py (PreToolUse hook), which needs a
-# live push-analyst grant for this repo/branch/HEAD.
+# /push writes no user-intent sentinel. This script runs only after
+# scripts/execute-push.py validated and spent the push-analyst grant: the
+# chain-B sentinel gate below refuses any other caller.
 
 # WS1: resolve the harness home from this script's own location, so the
 # git-toplevel fallbacks below default to the resolved home (used only to key a

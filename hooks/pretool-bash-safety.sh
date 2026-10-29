@@ -85,7 +85,7 @@ ARTIFACT_VAR_WRITE_RE="(>>?[&|]?[[:space:]]*['\"]?\\\$\{?[A-Za-z_]|${ARTIFACT_WR
 
 # IS_SUBAGENT: set once here at the top of the script (after PYTHON_BIN resolution).
 # $INPUT is assigned once at line 6 and never reassigned, so this read is safe regardless of position.
-# Used by check_and_consume_allowlist (subagent firewall) and the /do bypass block below.
+# Used by the /do bypass block below and by the subagent-only blocks further down.
 IS_SUBAGENT=$(echo "$INPUT" | "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.stdin); print('1' if d.get('agent_id') else '0')" 2>/dev/null)
 
 # Codex compatibility: hook payloads may pass a multi-line shell snippet with
@@ -296,7 +296,7 @@ _CG_STRIP="${COMMAND//[\'\"\\]/}"; _CG_GITRE='(^|[^[:alnum:]_])git'
 if [[ ( "$_CG_STRIP" == *commit* || "$_CG_STRIP" == *config* ) && "$_CG_STRIP" =~ $_CG_GITRE ]]; then
   _CG=$(CG_INPUT="$INPUT" "$PYTHON_BIN" - "$CLAUDE_HOME/hooks" 2>/dev/null <<'PYEOF'
 import contextlib, importlib.util as iu, itertools, json, os, re, shlex, subprocess as sp, sys; H = sys.argv[1]; sys.path.insert(0, H)
-from lib.bash_context_strip import _process_heredocs; from lib.git_command_classifier import _command_token_index, _git_subcommand
+from lib.bash_context_strip import _process_heredocs; from lib.git_command_classifier import _command_token_index, _git_subcommand; from lib.claude_home import load_settings
 s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py'); og = iu.module_from_spec(s); s.loader.exec_module(og)
 d = json.loads(os.environ['CG_INPUT']); cur = [d.get('cwd') or os.getcwd()]; dirs = cur[:]; commits, why, cfg, loc, ex = [], [], [], [], {}
 LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer'); GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
@@ -359,12 +359,12 @@ def git(r, *a): return sp.run(['git', *r, *a], capture_output=True, text=True, t
 def cdir(r): return (o := git(r, 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip()) and os.path.realpath(o)  # '' = no repo
 if cfg := cfg + [k for k, ds, r in loc if not (c := cdir(r)) or (hc := cdir(('-C', os.path.dirname(H)))) and hc in {c, *(cdir(('-C', x)) for x in ds)}]: sys.exit(print('CONFIG', cfg[0]))
 if commits and why: sys.exit(print('HOOKS', why[0]))
-for r in dict.fromkeys([('-C', x) for x in dirs] + commits if commits else []):
+for r in dict.fromkeys([('-C', x) for x in dirs] + commits if commits else []):  # settings.json unusable (the one load's verdict) or changed vs HEAD
     top = git(r, 'rev-parse', '--show-toplevel').stdout.strip(); r += ('-C', top)
     if top and git(r, 'check-attr', 'filter', '--', 'settings.json').stdout.strip().endswith(': claude-settings') \
-       and git(r, 'config', '--local', '--get', 'filter.claude-settings.clean').returncode and any(git(r, 'diff', \
-       '--quiet', '--no-ext-diff', '--no-textconv', *c, 'HEAD', '--', 'settings.json').returncode for c in ((), ('--cached',))):
-        sys.exit(print('FILTER', top))
+       and git(r, 'config', '--local', '--get', 'filter.claude-settings.clean').returncode and ((bad := load_settings(os.path.join(top, 'settings.json'))[1]) \
+       or any(git(r, 'diff', '--quiet', '--no-ext-diff', '--no-textconv', *c, 'HEAD', '--', 'settings.json').returncode for c in ((), ('--cached',)))):
+        sys.exit(print('FILTER', top + ('\t' + bad if bad else '')))
 print('OK')
 PYEOF
 )
@@ -372,7 +372,8 @@ PYEOF
     OK) ;;
     "HOOKS "*) printf 'BLOCKED: commit-hook-bypass — git commit with %s would skip the commit hooks; FORBIDDEN for every caller\nCommand: %s\n' "${_CG#HOOKS }" "$COMMAND" >&2; exit 2 ;;
     "CONFIG "*) printf 'BLOCKED: config-keystone-write — git config write to %s (core.hooksPath / alias.* / filter.claude-settings.* / include(.path) / includeIf.*.path) that can reach the harness (global/system config, a named file, the harness repository %s or an unresolved one, a nested or wrapper-flagged call) is FORBIDDEN for every caller; a plain local write in another repository is not\nCommand: %s\n' "${_CG#CONFIG }" "$CLAUDE_HOME" "$COMMAND" >&2; exit 2 ;;
-    "FILTER "*) printf 'BLOCKED: unregistered-settings-filter — settings.json has local changes and the settings filter is not registered in %s\nCommand: %s\nRun scripts/bootstrap in %s first, then retry.\n' "${_CG#FILTER }" "$COMMAND" "${_CG#FILTER }" >&2; exit 2 ;;
+    "FILTER "*) _CG="${_CG#FILTER }"; printf 'BLOCKED: unregistered-settings-filter — settings.json has local changes and the settings filter is not registered in %s\nCommand: %s\nRun scripts/bootstrap in %s first, then retry.\n' "${_CG%%$'\t'*}" "$COMMAND" "${_CG%%$'\t'*}" >&2
+      [ "${_CG#*$'\t'}" = "$_CG" ] || printf 'settings.json is unusable: %s\n' "${_CG#*$'\t'}" >&2; exit 2 ;;
     *) printf 'BLOCKED: commit-guard FAIL-CLOSED — the commit-hook-bypass / config-keystone-write / unregistered-settings-filter guard returned no verdict\nCommand: %s\n' "$COMMAND" >&2; exit 2 ;;
   esac
   unset _CG _CG_STRIP _CG_GITRE
@@ -472,106 +473,6 @@ check_systemctl_targets_all_dev() {
   done
 }
 
-# ── One-shot allowlist bypass (single-shot /allow consume) ────────────────────
-# Reads <state dir>/claude-bash-allowlist-<sid>.json (written by userprompt-consent-allowlist.sh).
-# On match: atomically deletes the flag (single-use), audit-logs, emits canonical
-# Claude Code PreToolUse approval JSON to stdout, returns 0.
-# Per task-id 20260509-113838 (R11 relaxation): this helper is invoked from the
-# global /allow short-circuit at line 555, which runs BEFORE all four absolute-ban
-# categories (Layer 1.A daemon-restart prohibition + session_dirs/hard-banned
-# scripts). The user-binding directive (verbatim text preserved in
-# docs/dev/ticket-20260509-113838.md) authorizes /allow to bypass any command
-# including dangerous ones when the user explicitly grants the pattern; consume
-# covers ANY safety block when the user-granted pattern matches.
-# NEVER bypasses subagent calls (checked via IS_SUBAGENT script-global set at top of script).
-check_and_consume_allowlist() {
-  local cmd="$1"
-
-  # IS_SUBAGENT check: references the script-global IS_SUBAGENT variable set at the top
-  # of the script (after PYTHON_BIN resolution). $INPUT is assigned once at line 6 and
-  # never reassigned, so IS_SUBAGENT is valid for the entire script lifetime.
-  if [ "$IS_SUBAGENT" = "1" ]; then
-    return 1
-  fi
-
-  local sid
-  sid=$(echo "$INPUT" | "$PYTHON_BIN" -c \
-    "import json,sys,os; d=json.load(sys.stdin); print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" \
-    2>/dev/null)
-  [ -z "$sid" ] && sid="default"
-
-  local flag_file; flag_file="$(harness_state_dir)/claude-bash-allowlist-${sid}.json"
-  [ ! -f "$flag_file" ] && return 1
-
-  # Consolidated consume path: V1 (SIGALRM regex timeout) + V2 (flock atomic read-match-unlink) +
-  # V3 (compound-command split on && || ; | with per-subcommand match + block-rule cross-check).
-  # Pattern and command passed via environment variables — never shell-interpolated into Python.
-  local lock_file="${flag_file}.lock"
-  local consume_result
-  # Compute hooks directory in bash context (BASH_SOURCE is valid here; NOT exported to Python).
-  HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  export HOOKS_DIR
-  consume_result=$(CMD_INPUT="$cmd" SID_VAL="$sid" "$PYTHON_BIN" - <<'PYEOF'
-# Shim: delegate grant-read/match to lib/allowlist.py (allow-6, task 20260518-155948).
-# All grant-file I/O, lock strategy, SIGALRM regex timeout, and subcommand splitting
-# now live in hooks/lib/allowlist.py:match_grant_for_bash_command.
-import os, sys
-sys.path.insert(0, os.environ["HOOKS_DIR"])
-from lib.allowlist import match_grant_for_bash_command
-
-cmd = os.environ["CMD_INPUT"]
-sid = os.environ["SID_VAL"]
-result = match_grant_for_bash_command(cmd, sid)
-if result is not None:
-    print("CONSUMED\t{}\t{}\t{}".format(
-        result.pattern,
-        "1" if result.is_regex else "0",
-        result.matched_sub,
-    ))
-PYEOF
-)
-
-  # Parse structured result.
-  case "$consume_result" in
-    CONSUMED$'\t'*)
-      local rest pattern is_regex matched_sub
-      rest="${consume_result#CONSUMED$'\t'}"
-      pattern="${rest%%$'\t'*}"
-      rest="${rest#*$'\t'}"
-      is_regex="${rest%%$'\t'*}"
-      matched_sub="${rest#*$'\t'}"
-      echo "[allow] Grant matched for pattern='$pattern' (matched subcommand: '$matched_sub'). consume deferred to PostToolUse. Command will proceed." >&2
-      # DEFECT 3a fix iter-2 (task-id 20260509-113838): emit the canonical Claude
-      # Code PreToolUse approval JSON to stdout. Field shape verified against the
-      # Anthropic Claude Code release notes; cross-verified by codex consultation
-      # of https://code.claude.com/docs/en/hooks. This produces a valid permissions-
-      # ledger entry for every consumed /allow. NOTE per D3b refutation: this
-      # canonical "allow" does NOT cross-block-short-circuit a sibling project-local
-      # deny — the docs specify "All matching hooks run in parallel" and PreToolUse
-      # precedence is "deny > defer > ask > allow". Cross-block override of a
-      # project's own .claude/settings.json deny rules requires a separate cycle
-      # (Plan B/C/D/E per dev-report plan_a_blocker_d3b).
-      #
-      # iter-2 fix per qa-report finding 1: pass pattern + matched_sub via env vars
-      # so the Python source itself is static. Shell-interpolating user-supplied
-      # patterns (which may contain literal single quotes, backslashes, or newlines)
-      # into a Python source string causes SyntaxError. json.dumps escapes any
-      # internal quote/backslash/newline correctly. This mirrors the env-var passing
-      # idiom used at userprompt-consent-allowlist.sh:140-148 for the same class of
-      # user-supplied strings.
-      PATTERN_VAL="$pattern" SUBCMD_VAL="$matched_sub" "$PYTHON_BIN" -c '
-import json, os
-reason = "/allow consumed for pattern=" + repr(os.environ["PATTERN_VAL"]) + " matched_subcmd=" + repr(os.environ["SUBCMD_VAL"])
-print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": reason}}))
-'
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 # ── C3: daemon-restart prohibition helper (consume_daemon_restart_grant) ───
 # TASK-ID: c3-20260504-223115 (introduced) + 20260509-113838 (R11 relaxed). BA specs:
 # docs/dev/ticket-c3-20260504-223115.md + docs/dev/ticket-20260509-113838.md.
@@ -584,7 +485,6 @@ print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permiss
 DAEMON_RESTART_AUDIT_LOG="${CLAUDE_DAEMON_RESTART_AUDIT_LOG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/claude-daemon-restart-grants.log}"
 
 # Atomic consume of ${DAEMON_RESTART_GRANT_DIR}/claude-allow-daemon-restart-<target>.flag.
-# Reuses the same flock+SIGALRM atomic-consume design as check_and_consume_allowlist.
 # Args: $1 = bare unit name ("<prefix>" or "<prefix>-<target>"), $2 = the verb being attempted.
 # Returns 0 if a valid grant existed and was consumed (caller may proceed);
 # returns 1 otherwise (caller must block).
@@ -620,7 +520,6 @@ check_and_consume_daemon_restart_grant() {
   local consume_result
   consume_result=$(FLAG_FILE="$flag_file" LOCK_FILE="$lock_file" UNIT_VAL="$unit" SID_VAL="$sid" TARGET_VAL="$target" "$PYTHON_BIN" - <<'PYEOF'
 # Atomic flock+SIGALRM consume for daemon-restart grant.
-# Reuses the design from check_and_consume_allowlist (lines 114-298).
 import fcntl, json, os, signal, sys, time
 from datetime import datetime, timezone
 
@@ -769,11 +668,11 @@ PYAUDIT2
 # Safety net on the HUMAN-GRANT RESIDUAL of the `git clean` deny: once a human
 # has explicitly granted a destructive clean it WILL proceed, so take a
 # recoverable snapshot of untracked-non-ignored work FIRST. Root cause: the
-# checkpoint mechanism only ever fired on PostToolUse/Stop, and the four
-# grant/consent `exit 0` escapes below (main /do, structured sentinel, legacy
-# /allow, subagent /do) bypass every downstream block — so a granted clean
+# checkpoint mechanism only ever fired on PostToolUse/Stop, and the two
+# grant/consent `exit 0` escapes below (main /do, structured sentinel)
+# bypass every downstream block — so a granted clean
 # destroyed untracked WIP with no git trace (the 07-10 run_distribution.py
-# incident). Defined HERE because the first three grant exits run before
+# incident). Defined HERE because both grant exits run before
 # COMMAND_CONTEXT_STRIPPED / CLASSIFIER_JSON / GIT_CMD_RE exist.
 #
 # Fail-closed contract: only a clean whose target is PROVABLY this hook's own
@@ -885,28 +784,22 @@ _preclean_snapshot_guard() {
 # grant-helper channel and its check_and_consume_daemon_restart_grant
 # function are UNTOUCHED (W6) and remain the precise-grant alternative for
 # users who prefer R11's tighter band.
-# Single-shot consume semantics, V1 SIGALRM regex timeout, V1b structural
-# rejection, flock atomic-unlink, and the IS_SUBAGENT firewall (inside
-# check_and_consume_allowlist) are all preserved unchanged.
+# Single-shot consume (posttool-allowlist-consume.py), the SIGALRM regex
+# timeout and V1b structural rejection belong to the one grant file
+# (hooks/lib/allowlist.py, userprompt-consent-allowlist.sh).
 # On consume-match: emits canonical Claude Code PreToolUse approval JSON to
 # stdout (DEFECT 3a) for permissions-ledger value; sibling project-local
 # settings.json hooks still run in parallel and a project-local deny still
 # wins per documented "deny > defer > ask > allow" precedence (D3b is a
 # Plan-A-blocker; see dev-report plan_a_blocker_d3b for alternatives).
 # ── Main-agent /do bypass ────────────────────────────────────────────────────
-# IS_SUBAGENT is set at the top of the script — no inline parse needed here.
-if [ "$IS_SUBAGENT" != "1" ]; then
-  _DO_SID=$(echo "$INPUT" | "$PYTHON_BIN" -c \
-    "import json,sys,os; d=json.load(sys.stdin); \
-print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" \
-    2>/dev/null)
-  [ -z "$_DO_SID" ] && _DO_SID="default"
-  _DO_FLAG="$(harness_state_dir)/claude-orchestrator-consent-${_DO_SID}.flag"
-  if [ -f "$_DO_FLAG" ] && [ "$(cat "$_DO_FLAG" 2>/dev/null)" = "true" ]; then
-    # Grant exit 1 of 4 — snapshot-or-deny a destructive `git clean` first.
-    _preclean_snapshot_guard
-    exit 0
-  fi
+# hooks/lib/allowlist.py has_do_consent decides; a subagent never holds /do
+# consent, so its call skips the interpreter start.
+if [ "$IS_SUBAGENT" != "1" ] \
+   && printf '%s' "$INPUT" | "$PYTHON_BIN" "$(dirname "${BASH_SOURCE[0]}")/lib/allowlist.py" consent 2>/dev/null; then
+  # Grant exit 1 of 2 — snapshot-or-deny a destructive `git clean` first.
+  _preclean_snapshot_guard
+  exit 0
 fi
 # ────────────────────────────────────────────────────────────────────────────
 # Sentinel-grant short-circuit (task 20260519-211515 R2 / AC2).
@@ -917,16 +810,15 @@ fi
 # match. Substring matching against the raw command line is forbidden.
 # This is the consume-on-any-terminal-result entry point; PostToolUse
 # performs the unlink for all four terminal cases (success, non_zero,
-# malformed, comment_only).
-SENTINEL_EXISTS_FOR_TASK=0
+# malformed, comment_only). It is the only /allow short-circuit: the grant
+# file is the one /allow writes, and a command it does not match falls
+# through to the block rules below.
 # M2 (task 20260521-090200): sentinel check extended to IS_SUBAGENT=1 so user-created
-# structured grants are honored in subagent context. The IS_SUBAGENT guard at line 145
-# (legacy pattern-string grants) REMAINS UNCHANGED — only structured sentinel grants
-# (user-created via /allow, written by userprompt-consent-allowlist.sh) are extended here.
+# structured grants are honored in subagent context.
 TASK_ID_FOR_SENTINEL="${CLAUDE_TASK_ID:-}"
 if [ -z "$TASK_ID_FOR_SENTINEL" ]; then
   # M3 (task 20260521-090200): align reader fallback to session_id (same as writer).
-  # Writer (userprompt-consent-allowlist.sh:176) uses CLAUDE_TASK_ID:-SID where SID=session_id.
+  # Writer (userprompt-consent-allowlist.sh) uses CLAUDE_TASK_ID:-SID where SID=session_id.
   # Previously reader fell back to task_id field first, causing mismatch when task_id != session_id.
   TASK_ID_FOR_SENTINEL=$(echo "$INPUT" | "$PYTHON_BIN" -c \
     "import json,sys,os; d=json.load(sys.stdin); print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" \
@@ -937,67 +829,17 @@ if [ -n "$TASK_ID_FOR_SENTINEL" ]; then
   SENTINEL_QUERY=$(HOOKS_DIR="$HOOKS_DIR" CMD_INPUT="$COMMAND" TASK_ID="$TASK_ID_FOR_SENTINEL" "$PYTHON_BIN" - <<'PYEOF' 2>/dev/null
 import os, sys
 sys.path.insert(0, os.environ['HOOKS_DIR'])
-from lib.allowlist import load_sentinel_grant_for_task, match_sentinel_grant_for_bash_command
-task_id = os.environ['TASK_ID']
-cmd = os.environ['CMD_INPUT']
-grant = load_sentinel_grant_for_task(task_id)
-if grant is None:
-    print('SENTINEL_NONE')
-else:
-    m = match_sentinel_grant_for_bash_command(task_id, cmd)
-    if m is not None:
-        print('SENTINEL_OK')
-    else:
-        print('SENTINEL_EXISTS_NO_MATCH')
+from lib.allowlist import match_sentinel_grant_for_bash_command
+if match_sentinel_grant_for_bash_command(os.environ['TASK_ID'], os.environ['CMD_INPUT']) is not None:
+    print('SENTINEL_OK')
 PYEOF
 )
-  case "$SENTINEL_QUERY" in
-    SENTINEL_OK)
-      # Grant exit 2 of 4 — snapshot-or-deny BEFORE the approval JSON is emitted,
-      # so a denied clean never advertises an "allow" decision.
-      _preclean_snapshot_guard
-      echo "[allow-sentinel] structured grant matched for task=$TASK_ID_FOR_SENTINEL. consume-on-any-terminal-result deferred to PostToolUse." >&2
-      "$PYTHON_BIN" -c 'import json; print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "/allow sentinel grant consumed (structured allowed_operations[] match)"}}))'
-      exit 0
-      ;;
-    SENTINEL_EXISTS_NO_MATCH)
-      # AC2 invariant (CF-1, codex iter-1 adversarial review): when a
-      # structured sentinel exists for this task but does NOT match the
-      # current bash command structurally, the legacy /allow short-circuit
-      # MUST NOT be consulted. Substring-matching the comment-only attack
-      # (e.g. `echo hi # rm -rf /` against a legacy `rm` pattern) would
-      # otherwise succeed via the legacy path. We mark this and skip the
-      # legacy short-circuit below.
-      SENTINEL_EXISTS_FOR_TASK=1
-      echo "[allow-sentinel] sentinel exists for task=$TASK_ID_FOR_SENTINEL but command did not match allowed_operations[] — legacy /allow path suppressed for this Bash call (AC2 invariant)." >&2
-      ;;
-    SENTINEL_NONE|*)
-      # No sentinel: legacy /allow short-circuit may proceed.
-      :
-      ;;
-  esac
-fi
-
-# ────────────────────────────────────────────────────────────────────────────
-# Global /allow short-circuit — sole PreToolUse allowlist match/approval call site in
-# pretool-bash-safety.sh. Fires unconditionally after the /do bypass and before all
-# block rules. Actual grant deletion is deferred to posttool-allowlist-consume.py
-# (PostToolUse). Per-rule secondary calls were removed in task 20260518-094616 because
-# the global short-circuit at this location covers all paths unconditionally.
-#
-# CF-1 gating (task 20260519-211515 codex iter-1 BLOCKER): when a structured
-# sentinel exists for the current task but did NOT match the bash command's
-# allowed_operations[] structurally, the legacy substring-match short-circuit
-# is SUPPRESSED — otherwise the comment-only bypass attack (e.g. `echo hi
-# # rm -rf /` against a legacy `rm` pattern) defeats AC2's "predicate never
-# substring-matches against the command line" invariant. If no sentinel exists
-# (SENTINEL_EXISTS_FOR_TASK=0) we still run the legacy short-circuit for
-# back-compat with pre-migration grants.
-if [ "$SENTINEL_EXISTS_FOR_TASK" != "1" ]; then
-  # Grant exit 3 of 4. The guard runs only AFTER the allowlist actually matched,
-  # so an UNGRANTED clean still falls through to the normal block rules below.
-  if check_and_consume_allowlist "$COMMAND"; then
+  if [ "$SENTINEL_QUERY" = "SENTINEL_OK" ]; then
+    # Grant exit 2 of 2 — snapshot-or-deny BEFORE the approval JSON is emitted,
+    # so a denied clean never advertises an "allow" decision.
     _preclean_snapshot_guard
+    echo "[allow-sentinel] structured grant matched for task=$TASK_ID_FOR_SENTINEL. consume-on-any-terminal-result deferred to PostToolUse." >&2
+    "$PYTHON_BIN" -c 'import json; print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "/allow sentinel grant consumed (structured allowed_operations[] match)"}}))'
     exit 0
   fi
 fi
@@ -2715,35 +2557,10 @@ if [ "$_GIT_CLEAN_HAS_INV" != "1" ] && \
      | grep -qE "$_GIT_CLEAN_FALLBACK_RE"; then
   _GIT_CLEAN_FAIL_CLOSED=1
 fi
-# Grant channel 4 of 4 — the subagent side of /do consent — is the ONLY one of
-# the four that sits DOWNSTREAM of this deny (the subagent-history block below,
-# where lane r03-c's pre-clean WIP snapshot guard runs). Denying here would
-# preempt that snapshot and make an explicit human grant weaker on this channel
-# than on the other three, contrary to the rule's contract.
 _GIT_CLEAN_WOULD_BLOCK=0
 if { [ "$_GIT_CLEAN_HAS_INV" = "1" ] && [ "$_GIT_CLEAN_VERDICT" != "ALLOW" ]; } || \
    [ "$_GIT_CLEAN_FAIL_CLOSED" = "1" ]; then
   _GIT_CLEAN_WOULD_BLOCK=1
-fi
-# Consulted ONLY on the verge of denying, so the ordinary subagent command pays
-# no extra subprocess for a grant lookup it will never use.
-#
-# SINGLE READ (authorized 2026-08-09; closes codex 2026-08-08 finding 4). The
-# marker is mutable — stop-cleanup-allowlist.sh unlinks it — so it is observed
-# ONCE and acted on at that observation. This branch used to set a flag and
-# fall through to the subagent-history block, which re-read the marker; a clean
-# that passed the first read and lost the second reached the terminal
-# default-allow having passed NO snapshot guard and no deny. Acting here does
-# not shorten that interval, it removes it: the downstream re-read is now
-# unreachable for a destructive clean. Same destination — grant exit 4 of 4
-# runs this identical guard and exits 0, and nothing executes in between.
-if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ] && [ "$IS_SUBAGENT" = "1" ]; then
-  _GC_SID=$(echo "$INPUT" | "$PYTHON_BIN" -c \
-    "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
-  if [ -n "$_GC_SID" ] && [ -e "$(harness_state_dir)/claude-orchestrator-consent-${_GC_SID}.flag" ]; then
-    _preclean_snapshot_guard
-    exit 0
-  fi
 fi
 if [ "$_GIT_CLEAN_WOULD_BLOCK" = "1" ]; then
   echo "BLOCKED: destructive 'git clean' is forbidden in agent flow" >&2
@@ -2780,19 +2597,9 @@ fi
 # All git history changes by subagents must be surfaced to the user instead.
 # IS_SUBAGENT is set at the top of the script (after PYTHON_BIN resolution); no re-parse needed.
 if [ "$IS_SUBAGENT" = "1" ]; then
-  # /do bypass (2026-04-25): user has explicitly consented via /do — allow subagent history mutation
-  SID=$(echo "$INPUT" | "$PYTHON_BIN" -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
-  if [ -n "$SID" ] && [ -e "$(harness_state_dir)/claude-orchestrator-consent-${SID}.flag" ]; then
-    # Grant exit 4 of 4 — the subagent side of the /do channel. A subagent with
-    # /do and no matching sentinel is filtered out of the main /do exit, misses
-    # the sentinel exit and is firewalled out of legacy /allow, so it lands here
-    # and previously reached exit 0 with a destructive clean UNSNAPSHOTTED. The
-    # guard intercepts ONLY destructive `git clean`; every other subagent-/do
-    # command still exits 0 unchanged (the revert/cherry-pick/rebase bypass this
-    # exit was built for is untouched).
-    _preclean_snapshot_guard
-    exit 0
-  fi
+  # A subagent never holds /do consent (hooks/lib/allowlist.py has_do_consent);
+  # a human releases its command with an /allow grant, which the sentinel
+  # short-circuit above honours in subagent context.
   # Narrowed (2026-05-14): commit|merge|push are fully covered by
   # pretool-git-privilege-guard.py (canonical layer). revert|cherry-pick|rebase
   # are NOT covered there, so they remain in this layer.

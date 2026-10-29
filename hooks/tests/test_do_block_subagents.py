@@ -29,6 +29,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -97,17 +98,19 @@ def _consent_flag(sid, content="true"):
 
 @contextmanager
 def _allow_agent_grant(sid):
-    """Create the /allow grant file read_grant('Agent', sid) matches on
-    (exact_only literal pattern, same file pretool-subagent-enforce reads)."""
-    path = Path(harness_state_dir()) / f"claude-bash-allowlist-{sid}.json"
+    """Create the grant `/allow Agent` writes, the one /allow grant file that
+    match_sentinel_grant_for_tool reads (as pretool-subagent-enforce does)."""
+    path = Path(harness_state_dir()) / "claude-grants" / f"{sid}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"pattern": "Agent", "is_regex": False}))
-    lock = Path(f"{path}.lock")
+    now = time.time()
+    path.write_text(json.dumps({
+        "task_id": sid, "session_id": sid, "allowed_operations": [{"op": "Agent"}],
+        "created_at": now, "expires_at": now + 300,
+    }))
     try:
         yield path
     finally:
         path.unlink(missing_ok=True)
-        lock.unlink(missing_ok=True)
 
 
 def test_a_consent_main_agent_agent_call_blocked():
@@ -155,7 +158,7 @@ def test_d_no_consent_flag_allowed():
 
 def test_e_flag_content_not_true_allowed():
     """(e) flag exists but content is not the string "true" -> exit 0
-    (same content check as _has_consent in pretool-subagent-enforce.py)."""
+    (lib.allowlist.has_do_consent, the content check every consent reader takes)."""
     sid = _unique_sid()
     with _consent_flag(sid, content="1"):
         result = _run_hook({"tool_name": "Agent", "session_id": sid,
@@ -166,7 +169,7 @@ def test_e_flag_content_not_true_allowed():
 
 def test_f_allow_agent_grant_overrides_block():
     """(f) /allow Agent grant present + consent present -> exit 0
-    (human escape hatch, same read_grant('Agent', sid) lookup)."""
+    (human escape hatch, same match_sentinel_grant_for_tool lookup)."""
     sid = _unique_sid()
     with _consent_flag(sid), _allow_agent_grant(sid):
         result = _run_hook({"tool_name": "Agent", "session_id": sid,

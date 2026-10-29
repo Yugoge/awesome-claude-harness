@@ -2,7 +2,8 @@
 
 `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 that opened findings. It must classify `no` (never `yes`) even when an earlier,
-append-only section of the same close-report ended with a landed `CLOSE: YES`.
+append-only section of the same close-report ended with a landed `CLOSE: YES`:
+every reader classifies the report's last non-empty line, and nothing else.
 """
 import json
 import re
@@ -42,9 +43,13 @@ def test_round_open_line_classifies_no():
     assert cv.classify_line("CLOSE_FINDINGS: 1 item") == "no"
 
 
+def _classify_report(text):
+    return cv.classify_line(cv.last_nonempty(text))
+
+
 def test_round_open_report_never_reads_yes(tmp_path):
     report = _report("CLOSE_FINDINGS: 2 items")
-    assert cv.classify_text(report) == "no"
+    assert _classify_report(report) == "no"
     f = tmp_path / "close-report-x.md"
     f.write_text(report, encoding="utf-8")
     out = subprocess.run(
@@ -55,13 +60,20 @@ def test_round_open_report_never_reads_yes(tmp_path):
 
 
 def test_later_landed_yes_after_round_open_reads_yes():
-    assert cv.classify_text(_report("CLOSE_FINDINGS: 2 items", trailing_yes=True)) == "yes"
+    assert _classify_report(_report("CLOSE_FINDINGS: 2 items", trailing_yes=True)) == "yes"
 
 
-def test_non_numeric_is_not_round_open():
+def test_non_numeric_is_not_round_open(tmp_path):
     assert cv.classify_line("CLOSE_FINDINGS: x items") == "unknown"
-    # strict path unknown -> tolerant fallback still scans the whole text
-    assert cv.classify_text(_report("CLOSE_FINDINGS: x items")) == "yes"
+    # An unknown last line fails closed: the landed `CLOSE: YES` of an earlier
+    # section is never read in its place.
+    f = tmp_path / "close-report-x.md"
+    f.write_text(_report("CLOSE_FINDINGS: x items"), encoding="utf-8")
+    out = subprocess.run(
+        [sys.executable, str(VERDICT_PY), "classify-file", str(f)],
+        capture_output=True, text=True,
+    )
+    assert out.stdout.strip() == "unknown"
 
 
 def test_legacy_classifications_unchanged():
@@ -69,8 +81,10 @@ def test_legacy_classifications_unchanged():
     assert cv.classify_line("CLOSE: YES (FORCED)") == "yes"
     assert cv.classify_line("CLOSE: YES - degraded codex consultation: codex_status=failed_parse") == "yes"
     assert cv.classify_line("CLOSE: NO - r") == "no"
-    assert cv.classify_text("**CLOSE: YES**") == "yes"
-    assert cv.classify_text("") == "unknown"
+    assert cv.classify_line("CLOSE: YES — FORCED (bulk mode, autonomous batch 1 of 3)") == "yes"
+    # A decorated line is not a verdict line: it fails closed, never read as YES.
+    assert cv.classify_line("**CLOSE: YES**") == "unknown"
+    assert _classify_report("") == "unknown"
     assert cv.classify_line("") == "unknown"
 
 

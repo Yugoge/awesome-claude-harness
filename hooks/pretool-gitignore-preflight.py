@@ -22,14 +22,20 @@
 #      close-report the SAME dispatch declares as its deliverable, AND every
 #      path it would otherwise block was already recorded by an on-disk lane
 #      shard of that same cycle. See discriminator E4 below.
-#   9. The dispatch carries a live, unexpired /commit Step 5 commit-grant file
-#      for the exact same task-id as the harvested report. See discriminator
-#      E5 below.
+#   9. The dispatch is /commit's changelog-analyst landing of the report's own
+#      task: its obligation (profile commit-landing) names that task as its
+#      task_id. See discriminator E5 below.
 #
 # Blocking condition (exits 2):
 #   Any path in dev.files_modified or dev.files_created is matched by .gitignore
 #   (git check-ignore --no-index --quiet exits 0 for that path) AND no valid
 #   gitignore_waiver is present at the top level of the dev-report JSON.
+#
+# One rule, two callers: gitignored_deliverables() is also G3's rule on a dev
+# report a dispatch names (hooks/pretool-aggregate-check.py applies it under
+# CLAUDE_OBLIGATION_BARRIER). While G3 is advisory in the tracked settings.json
+# this hook keeps blocking on it, the copy P1b's E4 keeps until P2's arming
+# commit retires it.
 #
 # gitignore_waiver bypass:
 #   Add "gitignore_waiver": "<reason>" at the top level of the dev-report JSON.
@@ -111,10 +117,9 @@
 #   DISCRIMINATOR E3 (lane matrix cited as reading material) — a THREE-WAY
 #   CONJUNCTION, strictly narrower than E1 alone. All three must hold:
 #     (1) DELIVERABLE ANCHOR. The prompt declares, outside every lane-matrix
-#         span, exactly ONE `docs/dev/close-report-<P>.md`. That basename is a
-#         member of E2's already-closed CONTRACT_DELIVERABLE_PREFIXES set, in
-#         the mandated directory. Zero or two-or-more distinct <P> disables E3
-#         (ambiguity fails CLOSED).
+#         span, exactly ONE `docs/dev/close-report-<P>.md`, close QA's report
+#         in the mandated directory. Zero or two-or-more distinct <P> disables
+#         E3 (ambiguity fails CLOSED).
 #     (2) STRUCTURAL SPAN. The citation sits inside a lane-matrix span: the
 #         JSON value of one of the resolver's own schema keys, located by
 #         real JSON decoding (json.JSONDecoder().raw_decode) — not by prose
@@ -333,46 +338,48 @@
 #       docs/dev/salvage-preservation-proposal-20260808-035658-laner1salvage.md,
 #       docs/dev/dev-report-20260808-035658-laner1salvage.json
 #
-#   DISCRIMINATOR E5 (commit-phase classification read, backstopped by a live
-#   commit grant) — deliberately anchored on a DIFFERENT unforgeable artifact
-#   than E1/E3/E4, because this dispatch shape has no close-report deliverable
-#   to anchor a lane-matrix or canonical-parent conjunct on. ALL of the
-#   following must hold, fail CLOSED on any:
+#   DISCRIMINATOR E5 (commit-phase classification read). As first written it
+#   admitted the dispatch when the prompt cited a live commit grant for the
+#   report's task. That made this hook a second decider of the grant, which the
+#   privilege guard already decides at the commit (P1b row 11), and it missed
+#   dispatches it was written for: with CLAUDE_STATE_DIR set it looked for the
+#   grant in the state directory while the grant's writer used /tmp, and an
+#   effective report's name gives the task `<task>.effective`, which no grant
+#   names. It now reads the
+#   dispatch's own obligation instead (2026-10-28, P1b rows 6 and 11; P3 row
+#   13's exemption of this profile, delivered early). BOTH must hold, fail
+#   CLOSED on either:
 #     (1) Every path this report would otherwise block was found via THIS
-#         report's OWN dev.files_modified/files_created parse — structurally
-#         guaranteed by this file's existing control flow: report_blocked is
-#         built ONLY from the currently-opened report's own declared arrays,
-#         nothing else in this hook ever independently harvests a gitignored
-#         path from prompt prose. E5 therefore cannot enlarge what E1-E4
-#         already harvest; it only re-examines the same per-report set.
-#     (2) The prompt cites a /tmp/claude-commit-grant-*.json path.
-#     (3) That path exists on disk right now, parses as JSON, and its own
-#         task_id field equals this report's src_task_id exactly.
-#     (4) Its expires_at (ISO-8601) has not passed as of now.
-#   A commit-grant file can only be minted by /commit's own Step 5
-#   (scripts/write-commit-grant.py), which itself requires a prior CLOSE: YES
-#   verdict for that exact task-id (commands/commit.md Step 3's close-gate) —
-#   so E5 cannot be satisfied by prompt text alone; it requires an independent,
-#   time-bounded, task-id-bound artifact the dispatched subagent did not write
-#   and cannot forge from inside its own prompt.
+#         report's OWN dev.files_modified/files_created parse (unchanged:
+#         report_blocked is built only from the currently-opened report's
+#         declared arrays), so E5 never enlarges what E1-E4 harvest.
+#     (2) The dispatch's obligation, parsed through obligation.py as G1 parses
+#         it, has profile commit-landing and names the report's task as its
+#         task_id. The report's task is the one its name gives, except for a
+#         verified late repair's effective report, whose task is the one
+#         scripts/late-repair-controller.py resolve_effective_report_state
+#         returns that path for in state `verified`, as the changelog-analyst
+#         accepts it.
+#   A report of any other task named in the same prompt keeps its verdict.
 #
-#   WHY E5 CANNOT BE FORGED BY THE DISPATCHED SUBAGENT: conjunct (3) reads the
-#   grant's task_id off disk, not off the prompt — a prompt cannot claim a
-#   grant for a task-id it does not hold one for. Conjunct (4) bounds the
-#   window to the grant's own 30-minute TTL, so a stale or already-consumed
-#   grant does not exempt. And per (1), E5 never widens the admissible path
-#   set beyond what the report itself already declares — it cannot be used to
-#   smuggle an unrelated deliverable through, only to re-permit a genuine
-#   commit-phase read of a report /commit's own gate already vouched for.
+# 2026-10-28 — P1b E3: E2 READS THE DECLARATION, NOT A LIST OF NAMES.
 #
-#   NOT changed: E1, E2, E3 and E4 keep their exact predicates and ordering;
-#   the BLOCKED message and exit codes are byte-identical when E5 does not
-#   apply. This step can only REFUSE-then-ADMIT a dispatch shape E1-E4 never
-#   admitted at all — it does not widen any existing exemption's own criteria.
+#   E2's closed set of four basenames (each with its mandated extension) was a
+#   table from file names to one command's deliverables, beside the obligations
+#   that already declare them: close.md's inspector and close-QA dispatches
+#   declare exactly those paths for the cycle's task. E2 now asks
+#   obligation.declaring_dispatch whether a dispatch of the report's task, or
+#   of its one parent (parent_task_id, unchanged), declares the path, or the
+#   canonical todo step of a command the task ran declares it: such a path is a
+#   harness artifact, not a work product. A product file a dispatch merely
+#   wrote (the reader's `writer` answer) is no declaration and stays refused,
+#   as does every name no declaration covers: a foreign extension, a foreign or
+#   ancestor task-id, a caller-chosen name. Only a gitignored path asks.
+#
 # ---------------------------------------------------------------------------
 
-import datetime
 import glob
+import importlib.util
 import json
 import os
 import re
@@ -380,7 +387,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib import obligation, schema_registry  # noqa: E402
 
 DEV_REPORT_PATTERN = re.compile(r'docs/dev/dev-report-[A-Za-z0-9._-]+\.json')
 
@@ -388,19 +395,7 @@ DEV_REPORT_PATTERN = re.compile(r'docs/dev/dev-report-[A-Za-z0-9._-]+\.json')
 # list (commands/close.md:348-356). Positional, not name-based.
 AUDIT_INPUT_FLAG = '--changed-files'
 
-# E2: the closed set of deliverable basenames mandated by commands/close.md,
-# each mapped to the extension that command mandates for it — the inspector
-# reports as JSON (:348-350, :354-356, :364-366, :427-429), the close-report as
-# Markdown (:78, :518, :528, :540, :543). The extension is part of the mandated
-# shape, not decoration: `close-report-<TID>.py` is a different file and the
-# contract does not mandate it. Caller-chosen names and caller-chosen extensions
-# are NOT members of this set.
-CONTRACT_DELIVERABLE_PREFIXES = {
-    'style-inspector-report-': '.json',
-    'cleanliness-inspector-report-': '.json',
-    'prompt-inspector-report-': '.json',
-    'close-report-': '.md',
-}
+# The directory the cycle's reports live in.
 CONTRACT_DELIVERABLE_DIR = 'docs/dev'
 
 _TOKEN_RE = re.compile(r'\S+')
@@ -624,78 +619,81 @@ def parent_task_id(src_task_id, repo_root):
     return '-'.join(segments[:-1]) if len(segments) > 1 else None
 
 
-def is_contract_deliverable(path, src_task_id, repo_root=None):
-    """E2: True only for a commands/close.md-mandated path bound to src_task_id.
-
-    Requires all three: the mandated directory, one of the four mandated
-    basenames COMPLETE WITH the extension commands/close.md mandates for it, and
-    a task-id that either IS src_task_id or is the one parent task-id src_task_id
-    is a lane of (close artifacts are written under the parent TASK_ID). A
-    mandated-looking name carrying an unrelated task-id, a foreign extension, or
-    an ancestor that is not the parent, is not exempt.
+def is_contract_deliverable(path, src_task_id, repo_root=None, project_dir=None):
+    """E2: True only for a harness artifact the cycle declares: a path that a
+    dispatch of src_task_id, or of the one parent task-id it is a lane of
+    (close artifacts are written under the parent TASK_ID), declares, or that
+    the canonical todo step of a command that task ran declares
+    (obligation.declaring_dispatch, read from the project's dispatch records).
+    A file a dispatch merely wrote is a work product, and a name no
+    declaration covers (an unrelated task-id, a foreign extension, an ancestor
+    that is not the parent) is not exempt.
     """
-    if os.path.dirname(path) != CONTRACT_DELIVERABLE_DIR:
-        return False
-    base = os.path.basename(path)
-    for prefix, ext in CONTRACT_DELIVERABLE_PREFIXES.items():
-        if not (base.startswith(prefix) and base.endswith(ext)):
-            continue
-        tid = base[len(prefix):-len(ext)]
-        if not tid:
-            return False
-        if tid == src_task_id:
-            return True
-        return tid == parent_task_id(src_task_id, repo_root or get_repo_root())
-    return False
-
-
-# E5: a live /commit Step 5 commit-grant reference. Minted only by
-# scripts/write-commit-grant.py after a passing close-gate check for the
-# exact task-id, so its presence and content are not prompt-controlled.
-COMMIT_GRANT_PATTERN = re.compile(
-    re.escape(harness_state_dir()) + r'/claude-commit-grant-[A-Za-z0-9._-]+\.json')
-
-
-def _parse_iso8601(value):
-    """Best-effort ISO-8601 datetime parse. None on any failure (fails CLOSED)."""
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        return datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
-    except ValueError:
-        return None
-
-
-def has_live_commit_grant(prompt, src_task_id):
-    """E5 conjuncts (2)-(4): a live, unexpired /commit Step 5 grant for src_task_id.
-
-    Reads the grant's task_id and expires_at OFF DISK, never off the prompt, so
-    a dispatch cannot claim a grant for a task-id it does not hold one for, and
-    cannot extend its own admission window past the grant's own TTL. Conjunct
-    (1) -- that every otherwise-blocked path came from THIS report's own
-    declared arrays -- is a structural property of main()'s existing control
-    flow (report_blocked is built solely from the currently-opened report),
-    not something this function re-checks.
-    """
-    now = datetime.datetime.now(datetime.timezone.utc)
-    for hit in COMMIT_GRANT_PATTERN.finditer(prompt):
-        grant_path = hit.group(0)
-        if not os.path.isfile(grant_path):
+    project = project_dir or os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()
+    for task in (src_task_id, parent_task_id(src_task_id, repo_root or get_repo_root())):
+        if not task:
             continue
         try:
-            with open(grant_path) as f:
-                grant = json.load(f)
+            owner = obligation.declaring_dispatch(task, path, project)
         except Exception:
-            continue
-        if not isinstance(grant, dict):
-            continue
-        if grant.get('task_id') != src_task_id:
-            continue
-        expires_at = _parse_iso8601(grant.get('expires_at'))
-        if expires_at is None or expires_at <= now:
-            continue
-        return True
+            owner = None
+        if owner and owner.get('source') != 'writer':
+            return True
     return False
+
+
+# E5: the profile of /commit's changelog-analyst dispatch (Steps 6 and 7),
+# which names the report of the task it lands.
+COMMIT_LANDING_PROFILE = 'commit-landing'
+
+
+def commit_landing_task_id(prompt):
+    """E5 (2): the task a commit-landing dispatch lands, or None.
+
+    Read from the dispatch's own obligation, parsed as G1 parses it; a block
+    that does not parse is G1's finding and admits nothing here.
+    """
+    try:
+        parsed = obligation.parse_obligation(
+            prompt, known_schema_ids=frozenset(schema_registry.load_registry()))
+    except Exception:
+        return None
+    if not isinstance(parsed, obligation.ParsedObligation):
+        return None
+    doc = parsed.obligation
+    task_id = doc.get('task_id')
+    if doc.get('profile') != COMMIT_LANDING_PROFILE or not isinstance(task_id, str):
+        return None
+    return task_id
+
+
+def _effective_report_state(repo_root, task_id):
+    """resolve_effective_report_state's (state, path) for task_id, the one
+    function /commit and the changelog-analyst take an effective report from;
+    ('invalid', None) when it cannot be run, which admits nothing."""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            'late_repair_controller',
+            os.path.join(repo_root, 'scripts', 'late-repair-controller.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.resolve_effective_report_state(repo_root, task_id)
+    except Exception:
+        return 'invalid', None
+
+
+def is_report_of_task(report_rel, task_id, repo_root):
+    """E5 (2): True when report_rel is task_id's dev report.
+
+    Its name gives its task, except a late repair's effective report
+    (`dev-report-<task>.effective.json`), which belongs to the task
+    resolve_effective_report_state returns that path for in state `verified`.
+    """
+    if source_task_id(report_rel) == task_id:
+        return True
+    state, path = _effective_report_state(repo_root, task_id)
+    return (state == 'verified' and path is not None
+            and os.path.realpath(path) == os.path.realpath(os.path.join(repo_root, report_rel)))
 
 
 def get_repo_root():
@@ -714,21 +712,21 @@ def is_gitignored(path, repo_root):
     return result.returncode == 0
 
 
-def main():
-    try:
-        data = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+def gitignored_deliverables(prompt):
+    """[(report_rel, [path, ...])] per dev-report citation this dispatch's
+    prompt makes whose declared files git ignores, after E1-E5; [] admits it.
 
-    tool_input = data.get('tool_input') or data.get('toolInput') or {}
-    prompt = tool_input.get('prompt', '')
-
+    One finding per occurrence, in prompt order, so a report cited twice
+    outside every span is listed twice, as this hook always reported it.
+    """
+    if not isinstance(prompt, str):
+        return []
     # Use findall to capture ALL dev-report paths in prompt (not just the first).
     # If the prompt contains prior context mentioning an older clean report
     # before the current dirty one, .search() would miss the dirty report.
     matches = list(DEV_REPORT_PATTERN.finditer(prompt))
     if not matches:
-        sys.exit(0)
+        return []
 
     # E1: a dev-report cited inside a declared audit-input list is something the
     # dispatch READS, not a manifest of what it WRITES. Do not harvest it.
@@ -740,7 +738,8 @@ def main():
     cycle_task_id = close_cycle_task_id(prompt, lane_spans)
 
     repo_root = get_repo_root()
-    blocked = []
+    landed_task_id = None
+    findings = []
 
     for match in matches:
         if _in_any_span(match.start(), audit_spans):
@@ -785,12 +784,13 @@ def main():
         for path in all_paths:
             if not (isinstance(path, str) and path):
                 continue
-            # E2: the close contract's own mandated output paths, bound to this
-            # report's task-id. Refusing these made the contract unsatisfiable.
+            if not is_gitignored(path, repo_root):
+                continue
+            # E2: a harness artifact the cycle declares, bound to this report's
+            # task-id. Refusing these made the contract unsatisfiable.
             if is_contract_deliverable(path, src_task_id, repo_root):
                 continue
-            if is_gitignored(path, repo_root):
-                report_blocked.append(path)
+            report_blocked.append(path)
 
         # E4: /close Step 2 must hand the QA gatekeeper this cycle's canonical
         # parent dev-report (commands/close.md:393-395) — a declared audit
@@ -804,14 +804,27 @@ def main():
                     report_blocked, cycle_task_id, repo_root)):
             continue
 
-        # E5: a commit-phase classification read (e.g. changelog-analyst's own
-        # Step 6 dispatch), backstopped by a live /commit Step 5 grant for the
-        # exact same task-id. See REVISION TRAIL 2026-09-17 above.
-        if report_blocked and has_live_commit_grant(prompt, src_task_id):
-            continue
+        # E5: /commit's changelog-analyst reads the report of the task it
+        # lands to classify what it stages. See REVISION TRAIL above.
+        if report_blocked:
+            if landed_task_id is None:
+                landed_task_id = commit_landing_task_id(prompt) or ''
+            if landed_task_id and is_report_of_task(report_rel, landed_task_id, repo_root):
+                continue
+            findings.append((report_rel, report_blocked))
 
-        blocked.extend(report_blocked)
+    return findings
 
+
+def main():
+    try:
+        data = json.load(sys.stdin)
+    except Exception:
+        sys.exit(0)
+
+    tool_input = data.get('tool_input') or data.get('toolInput') or {}
+    blocked = [path for _, paths in gitignored_deliverables(tool_input.get('prompt', ''))
+               for path in paths]
     if blocked:
         msg = 'BLOCKED: gitignored deliverables detected: ' + ', '.join(blocked)
         print(msg, file=sys.stderr)

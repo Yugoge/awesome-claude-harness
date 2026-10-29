@@ -14,7 +14,8 @@
 # subagent.
 #
 # Detection: scans $CLAUDE_PROJECT_DIR/.claude/specs/*/cp-state-*.json for files
-# with is_running=true AND >=1 checkpoint still in state "pending".
+# that are running (hooks/lib/agent_resolver.py cp_state_running, the one rule
+# role resolution also takes) AND have >=1 checkpoint still in state "pending".
 from __future__ import annotations
 
 import glob
@@ -22,8 +23,12 @@ import json
 import os
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+
 
 def main() -> int:
+    from agent_resolver import cp_state_running  # inside main: an import error fails safe
+
     mode = (os.environ.get("CP_ENFORCE_MODE", "advisory") or "advisory").strip().lower()
 
     project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
@@ -37,7 +42,7 @@ def main() -> int:
                     st = json.load(fh)
             except Exception:
                 continue
-            if not st.get("is_running"):
+            if not cp_state_running(st):
                 continue
             cps = st.get("checkpoints") or []
             pend = [c.get("id") for c in cps if (c.get("state") or "pending") == "pending"]

@@ -35,6 +35,8 @@ def marker_close(marker_id: str) -> str:
 class RegenStatus(str, Enum):
     """Outcome of a regeneration; every path returns one so a caller can tell a skip from a write."""
     WRITTEN = 'WRITTEN'
+    # No such file: doc-sync updates a file that already exists and creates none.
+    SKIPPED_ABSENT = 'SKIPPED_ABSENT'
     SKIPPED_GITHUB_RESERVED = 'SKIPPED_GITHUB_RESERVED'
     SKIPPED_NO_OPENING_MARKER = 'SKIPPED_NO_OPENING_MARKER'
     SKIPPED_NO_CLOSING_MARKER = 'SKIPPED_NO_CLOSING_MARKER'

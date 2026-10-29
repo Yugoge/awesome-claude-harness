@@ -35,10 +35,16 @@
 # ── Structural sentinel check ────────────────────────────────────────────────
 # A directory is the harness home iff it contains ALL of: settings.json (file),
 # hooks/ scripts/ policies/ (dirs). NEVER keyed on basename ".claude".
+# settings.json is judged by the one load of a settings file (claude_home.py
+# load_settings, exit 1 = unusable, else its object or nothing when absent): only
+# "absent" fails the set; a file it finds unusable still marks the home.
+_CLAUDE_HOME_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/claude_home.py" || true
 _claude_home_is_sentinel() {
-  local d="$1"
-  [ -f "$d/settings.json" ] && [ -d "$d/hooks" ] \
-    && [ -d "$d/policies" ] && [ -d "$d/scripts" ]
+  local d="$1" settings rc=0
+  [ -d "$d/hooks" ] && [ -d "$d/policies" ] && [ -d "$d/scripts" ] || return 1
+  settings="$("${CLAUDE_PYTHON_BIN:-python3}" "$_CLAUDE_HOME_PY" settings "$d/settings.json" \
+    2>/dev/null)" || rc=$?
+  [ "$rc" -eq 1 ] || { [ "$rc" -eq 0 ] && [ -n "$settings" ]; }
 }
 
 # Walk upward from a starting directory to the first sentinel-matching ancestor.
@@ -80,13 +86,13 @@ claude_home_resolve() {
     walk_root="$(_claude_home_walk_up "$self_dir")" || walk_root=""
   fi
 
-  # If a validated env hint realpath-equals the walk root, honor it (it may be
-  # the user-facing symlinked form, e.g. ~/.claude -> the real tmpfs root).
+  # If an env hint realpath-equals the walk root, honor it (it may be the
+  # user-facing symlinked form, e.g. ~/.claude -> the real tmpfs root). It is
+  # then the walk root itself, so the sentinel set is not probed a second time.
   if [ -n "$walk_root" ]; then
     walk_real="$(_claude_home_realpath "$walk_root")"
     for hint in "${CLAUDE_HOME:-}" "${HOME:+${HOME}/.claude}"; do
       [ -n "$hint" ] || continue
-      _claude_home_is_sentinel "$hint" || continue
       hint_real="$(_claude_home_realpath "$hint")"
       if [ -n "$hint_real" ] && [ "$hint_real" = "$walk_real" ]; then
         printf '%s\n' "$hint"

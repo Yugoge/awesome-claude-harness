@@ -46,13 +46,14 @@ def _env(state, **extra):
 
 def test_do_consent_written_by_the_prompt_hook_is_read_by_the_guard(state):
     workflow = _load(HOOKS / "prompt-workflow.py", "prompt_workflow_path_rule")
-    workflow.handle_do_consent("sid-path-rule", "/do fix the typo")
+    workflow.handle_do_consent("sid-path-rule")
     assert (state / "claude-orchestrator-consent-sid-path-rule.flag").read_text().strip() == "true"
     sidecar = state / "claude-do-task-sid-path-rule.json"
     assert json.loads(sidecar.read_text())["task_id"]
     guard = _load(HOOKS / "pretool-git-privilege-guard.py", "privilege_guard_path_rule_consent")
-    assert guard._has_do_consent({"session_id": "sid-path-rule"})
-    assert not guard._has_do_consent({"session_id": "sid-path-rule", "agent_id": "a1"})
+    # The guard decides through lib/allowlist.py has_do_consent, every consent reader's one rule.
+    assert guard.has_do_consent({"session_id": "sid-path-rule"})
+    assert not guard.has_do_consent({"session_id": "sid-path-rule", "agent_id": "a1"})
 
 
 def test_bulk_sentinel_writer_and_guard_share_the_state_dir(state):
@@ -95,22 +96,27 @@ def _prose_state_dir(agent: str, state: Path, tmp_path: Path) -> str:
                           text=True, env=_env(state, HOME=str(home)), check=True).stdout
 
 
-def test_push_analyst_prose_writes_where_its_readers_look(state, tmp_path):
+def test_push_analyst_prose_writes_where_its_validator_looks(state, tmp_path):
     prose = _prose_state_dir("push-analyst", state, tmp_path)
     assert prose == str(state)
     executor = _load(SCRIPTS / "execute-push.py", "execute_push_path_rule")
-    grant_guard = _load(HOOKS / "pretool-push-analyst-grant-guard.py", "push_grant_guard_path_rule")
-    assert executor._SENTINEL_BASE == grant_guard._SENTINEL_BASE == f"{prose}/agentic-commit/push-analyst"
+    assert executor._SENTINEL_BASE == f"{prose}/agentic-commit/push-analyst"
 
 
-def test_merge_analyst_prose_writes_where_the_guard_looks(state, tmp_path, monkeypatch):
+def test_merge_analyst_prose_writes_where_its_check_looks(state, tmp_path):
     prose = _prose_state_dir("merge-analyst", state, tmp_path)
-    guard = _load(HOOKS / "pretool-git-privilege-guard.py", "privilege_guard_path_rule_merge")
-    monkeypatch.setattr(guard, "_merge_repo_hash", lambda: "0123456789abcdef")
+    merge_grant = _load(HOOKS / "lib" / "merge_grant.py", "merge_grant_path_rule")
     grant = Path(prose) / "agentic-commit" / "merge-analyst" / "0123456789abcdef" / "sid-merge" / "nonce.json"
-    grant.parent.mkdir(parents=True)
-    grant.write_text(json.dumps({"verdict": "approved", "nonce": "nonce"}))
-    assert guard._find_merge_grant("sid-merge")[0] == str(grant)
+    assert merge_grant.grant_root() == str(Path(prose) / "agentic-commit" / "merge-analyst")
+    assert merge_grant.is_grant_path(str(grant))
+
+
+def test_push_gate_token_writer_writes_where_push_sh_reads(state, tmp_path):
+    writer = _load(SCRIPTS / "write-push-gate-token.py", "push_gate_token_path_rule")
+    path = writer.token_path(str(tmp_path), "main", "sid-token")
+    assert path.parents[2] == state / "agentic-commit" / "push"
+    assert '_TOKEN_BASE_DIR="$(harness_state_dir)/agentic-commit/push/${_REPO_HASH}"' in (
+        HOOKS / "push.sh").read_text()
 
 
 @pytest.mark.parametrize("command,expected", [

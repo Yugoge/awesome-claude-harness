@@ -38,11 +38,12 @@ exactly which candidates the actor can influence, and when.
 
 An entry is appended only when the commit was authorized by a single-use commit grant (see
 `scripts/write-commit-grant.py`), so it witnesses grant-authorized `/commit` commits only.
-Bulk/auto-bulk commits carry a multi-use sentinel instead: `_evaluate_commit`
-(hooks/pretool-git-privilege-guard.py) accepts them and RETURNS before
-`_lock_grant_for_posttool`, so no grant and no pointer of their own is ever minted; and the
-finalizer resolves the pointer for THIS TOOL EVENT only. They are therefore never journaled,
-and consequently never reconcilable.
+The guard spends the grant by deleting it and, in the same step, writes this event's
+pointer carrying the grant's fields (`write_event_pointer`); the finalizer appends from
+that pointer. Bulk/auto-bulk commits carry a multi-use sentinel instead: `_evaluate_commit`
+(hooks/pretool-git-privilege-guard.py) accepts them and RETURNS before any grant is spent,
+so no pointer of their own is ever written; and the finalizer resolves the pointer for THIS
+TOOL EVENT only. They are therefore never journaled, and consequently never reconcilable.
 
 RULE: the pointer binding is PER-EVENT, not per-session. The finalizer — registered under
 BOTH PostToolUse and PostToolUseFailure, whose payloads for one tool call carry the same
@@ -88,10 +89,13 @@ unreadable repository, a commit the repository does not contain, git timeout, a 
 non-sha `parent_head`, a root commit. An entry that cannot be checked attributes nothing.
 """
 
+import glob
 import hashlib
 import json
 import os
+import re
 import select
+import stat
 import subprocess
 import sys
 import time
@@ -392,13 +396,312 @@ def _prune(path):
         pass
 
 
+# ---------------------------------------------------------------------------
+# Per-event pointer: the guard's hand-over of one spent grant to this journal
+# ---------------------------------------------------------------------------
+#
+# The privilege guard spends a commit grant by deleting it (single use), so by the time
+# the commit's PostToolUse fires there is no grant left to read. In the spending step the
+# guard writes one pointer, named for THIS tool event, holding the fields the journal entry
+# takes from the grant; the finalizer (hooks/posttool-allowlist-consume.py) reads it,
+# appends the entry and removes it. Guard and finalizer call the functions below, so the
+# name, the key derivation and the stale reading exist once.
+#
+# The name keeps out of every grant reader's glob (`claude-commit-grant-*`): a pointer
+# carries a grant's repo/branch/head/task fields and must never be taken for one.
+POINTER_PREFIX = "claude-commit-event-"
+POINTER_TEMPLATE = harness_state_dir() + "/" + POINTER_PREFIX + "{key}.json"
+POINTER_GLOB = harness_state_dir() + "/" + POINTER_PREFIX + "*.json"
+POINTER_GRANT_FIELDS = ("task_id", "repo_root", "branch", "expected_head", "sid")
+
+# A pointer older than the commit grant's own TTL (30 min --
+# scripts/write-commit-grant.py::GRANT_TTL_MINUTES) belongs to an event that never reached
+# PostToolUse, unless a commit is still running in its repository.
+POINTER_STALE_SECONDS = 1800
+
+# Characters kept verbatim from a tool_use_id when it becomes a filename. Everything else
+# folds to '-', so a payload value can neither escape the pointer namespace (path
+# separators, `..`) nor smuggle a glob metacharacter into the reaper's scan.
+_EVENT_KEY_UNSAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+# Upper bound for any read out of the world-writable pointer namespace. Real pointers are
+# a few hundred bytes; anything larger is not ours.
+_UNTRUSTED_READ_LIMIT = 65536
+
+
+def raw_tool_use_id(payload):
+    """The UNSANITIZED tool_use_id from a hook payload, or '' when unavailable.
+
+    claude-code hands the SAME `tool_use_id` (the API-assigned `toolu_...` id of the
+    assistant's tool_use block) to the PreToolUse and the PostToolUse/PostToolUseFailure
+    payloads of one tool call, so it names the EVENT. The derived filename below is lossy,
+    so the pointer records this raw value and the finalizer compares raw-for-raw.
+    """
+    try:
+        return str(payload.get("tool_use_id") or "").strip()
+    except Exception:
+        return ""
+
+
+def event_key(payload):
+    """Per-event pointer key for one tool invocation, or '' when unavailable.
+
+    A session id is not a substitute: it proves only that two things share a session, so
+    a later unrelated commit under the same session could reach an earlier event's
+    pointer. The fold and the cap may map two distinct raw ids to one name; the no-clobber
+    write and the raw-id comparison make that a refused write, never a cross-finalization.
+    """
+    raw = raw_tool_use_id(payload)
+    if not raw:
+        return ""
+    safe = _EVENT_KEY_UNSAFE_RE.sub("-", raw)[:96]
+    return "tu-" + safe if safe.strip("-") else ""
+
+
+def pointer_path(key):
+    return POINTER_TEMPLATE.format(key=key)
+
+
+def write_event_pointer(key, raw_id, grant):
+    """Publish this event's pointer; True iff it was written. Called by the guard only.
+
+    Content first, under a private temp name, then link(2) into the final name: the
+    complete inode appears at once and a taken name fails EEXIST, so no writer ever
+    overwrites another event's pointer (a taken name is a duplicate PreToolUse for one
+    tool_use_id, or a lossy-name collision between two raw ids). A False return leaves the
+    commit authorized and unjournaled -- the same outcome as an event with no key.
+    """
+    if not key or not isinstance(grant, dict):
+        return False
+    path = pointer_path(key)
+    tmp_path = "%s.wip.%d.%s" % (path, os.getpid(), os.urandom(4).hex())
+    record = {"event_key": key, "tool_use_id": raw_id}
+    for field in POINTER_GRANT_FIELDS:
+        record[field] = str(grant.get(field) or "")
+    try:
+        handle = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError:
+        return False
+    written = False
+    try:
+        with os.fdopen(handle, "w") as fp:
+            json.dump(record, fp)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.link(tmp_path, path)
+        written = True
+    except (OSError, ValueError, TypeError):
+        written = False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    return written
+
+
+def read_untrusted_json_ident(path, limit=_UNTRUSTED_READ_LIMIT):
+    """Parse JSON from an untrusted world-writable path, WITH the read inode's identity.
+
+    The namespace lives in a shared state directory where any local user can plant a FIFO
+    (open blocks until a writer appears) or a symlink to a blocking device. Discipline:
+    lstat first and require a regular non-symlink file no larger than `limit`; open with
+    O_NOFOLLOW|O_NONBLOCK; fstat the open descriptor to close the lstat/open race; bound
+    the read.
+
+    Returns `(parsed_or_None, identity_or_None)`. The identity is `(st_dev, st_ino)` of
+    the inode the decision is about -- from the fstat of the descriptor the bytes came
+    from, or from the lstat when the file could not be opened (the decision is then about
+    the entry itself). Only a failed lstat yields None, which forbids acting. Never raises.
+    """
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None, None
+    ident = (st.st_dev, st.st_ino)
+    if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
+        return None, ident
+    flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0))
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None, ident
+    try:
+        fst = os.fstat(fd)
+        if not stat.S_ISREG(fst.st_mode):
+            return None, ident
+        ident = (fst.st_dev, fst.st_ino)
+        raw = b""
+        while len(raw) <= limit:
+            chunk = os.read(fd, limit + 1 - len(raw))
+            if not chunk:
+                break
+            raw += chunk
+        if len(raw) > limit:
+            return None, ident
+    except OSError:
+        return None, ident
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    try:
+        return json.loads(raw.decode("utf-8")), ident
+    except (UnicodeDecodeError, ValueError):
+        return None, ident
+
+
+def unlink_verified(path, ident):
+    """Unlink `path` ONLY while that name still resolves to the validated inode `ident`.
+
+    A decision made about one file instance acts on that instance only: if the validated
+    entry was removed and a colliding live event re-created the same name in between, the
+    replacement is left alone. Directory-relative (fstatat + unlinkat) where the platform
+    has both, so no path component above the final name can be swapped either. POSIX has
+    no unlink-by-inode, so the two adjacent syscalls remain the irreducible window.
+    Returns True iff the unlink happened. Never raises.
+    """
+    if not ident or not os.path.basename(path):
+        return False
+    supported = getattr(os, "supports_dir_fd", frozenset())
+    dir_fd = None
+    if os.unlink in supported and os.stat in supported:
+        try:
+            dir_fd = os.open(os.path.dirname(path) or ".",
+                             os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError:
+            dir_fd = None
+    try:
+        try:
+            if dir_fd is None:
+                current = os.lstat(path)
+            else:
+                current = os.stat(os.path.basename(path), dir_fd=dir_fd,
+                                  follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != ident:
+                return False
+            if dir_fd is None:
+                os.unlink(path)
+            else:
+                os.unlink(os.path.basename(path), dir_fd=dir_fd)
+        except OSError:
+            return False
+        return True
+    finally:
+        if dir_fd is not None:
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
+
+
+def live_commit_repos():
+    """Repositories a `git ... commit` is running in RIGHT NOW, or None.
+
+    Age alone does not prove an event has terminated: a commit that runs past the bound
+    (repository hooks, signing, a large tree) is ordinary. A `git` process with `commit`
+    in its argv, running as this user, whose working directory -- or `-C` target -- is
+    inside a repository, is a commit that has not terminated. None means the process table
+    could not be read at all (undecidable), which the reaper treats as "leave it". Never
+    raises.
+    """
+    try:
+        pids = [name for name in os.listdir("/proc") if name.isdigit()]
+    except OSError:
+        return None
+    repos = set()
+    for pid in pids:
+        try:
+            with open("/proc/%s/cmdline" % pid, "rb") as fp:
+                argv = fp.read(_UNTRUSTED_READ_LIMIT).split(b"\0")
+        except (OSError, ValueError):
+            continue
+        argv = [part.decode("utf-8", "replace") for part in argv if part]
+        if len(argv) < 2 or os.path.basename(argv[0]) != "git":
+            continue
+        if "commit" not in argv[1:]:
+            continue
+        try:
+            # A foreign-uid process's cwd is unreadable, and a foreign-uid commit can
+            # never be the owner of one of these pointers.
+            cwd = os.readlink("/proc/%s/cwd" % pid)
+        except OSError:
+            continue
+        target = cwd
+        for index, token in enumerate(argv[:-1]):
+            if token == "-C":
+                target = os.path.join(cwd, argv[index + 1])
+                break
+        try:
+            repos.add(os.path.realpath(target))
+        except OSError:
+            continue
+    return repos
+
+
+def repo_is_committing(repo_root, live_repos):
+    """True iff a live commit runs inside `repo_root` (or below it).
+
+    An empty repo_root is never protected: there is nothing for a commit to be live
+    about. `live_repos` of None (undecidable) protects everything else.
+    """
+    if not repo_root:
+        return False
+    if live_repos is None:
+        return True
+    try:
+        root = os.path.realpath(repo_root)
+    except OSError:
+        return False
+    return any(cwd == root or cwd.startswith(root + os.sep) for cwd in live_repos)
+
+
+def reap_stale_pointers(keep_path="", now=None):
+    """Unlink the pointers no event will finalize; returns how many. Never raises.
+
+    The one reading on a pointer's staleness, taken by the finalizer on every terminal
+    commit event and by the Stop cleanup: at least POINTER_STALE_SECONDS old (by lstat, so
+    a symlink cannot proxy an old target's age) and no commit running in the repository it
+    records. `keep_path` (the caller's own pointer) is never touched.
+    """
+    now = time.time() if now is None else now
+    try:
+        paths = glob.glob(POINTER_GLOB)
+    except Exception:
+        return 0
+    live = None
+    probed = False
+    reaped = 0
+    for path in paths:
+        if path == keep_path:
+            continue
+        try:
+            if now - os.lstat(path).st_mtime < POINTER_STALE_SECONDS:
+                continue
+        except OSError:
+            continue
+        pointer, ident = read_untrusted_json_ident(path)
+        repo_root = str(pointer.get("repo_root") or "") if isinstance(pointer, dict) else ""
+        if repo_root:
+            if not probed:
+                live, probed = live_commit_repos(), True
+            if repo_is_committing(repo_root, live):
+                continue
+        if unlink_verified(path, ident):
+            reaped += 1
+    return reaped
+
+
 def append_commit_event(grant, payload_session_id):
     """Record one grant-authorized commit. Returns the entry dict, or None if not recorded.
 
-    `grant` is the parsed single-use commit grant that the privilege guard validated for
-    this `git commit` (it supplies task_id, repo_root, branch and the pre-commit
-    expected_head). `payload_session_id` is the session id the calling hook resolved for
-    this PostToolUse event — see below for exactly what that resolution is.
+    `grant` holds the fields of the single-use commit grant the privilege guard spent for
+    this `git commit` (task_id, repo_root, branch, the pre-commit expected_head and sid),
+    as the guard's per-event pointer recorded them (`POINTER_GRANT_FIELDS`).
+    `payload_session_id` is the session id the calling hook resolved for this PostToolUse
+    event — see below for exactly what that resolution is.
 
     PRECISION ON WHAT IS AUTHORED, because `session_ids[]` — not `payload_session_id` alone
     — is what the matcher below searches, and the candidates do not have the same
@@ -414,7 +717,8 @@ def append_commit_event(grant, payload_session_id):
         environment-derived as the next two.
       - `CLAUDE_CODE_SESSION_ID` / `CLAUDE_SESSION_ID` are read from the agent's own
         environment.
-      - `grant["sid"]` originates from the grant, whose `--sid` is CLI-supplied at mint time.
+      - `grant["sid"]` originates from the grant (through the pointer), whose `--sid` is
+        CLI-supplied at mint time.
 
     All four are CANDIDATES, considered because an orchestrator and its subagent
     legitimately carry different ids for one logical session, and keying on a single one

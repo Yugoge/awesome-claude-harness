@@ -37,12 +37,12 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 try:  # imported as hooks.lib.obligation (tests) or lib.obligation (hooks)
+    from . import roster
     from .subagent_restart import (
         AGENT_RE,
         SESSION_RE,
@@ -52,6 +52,7 @@ try:  # imported as hooks.lib.obligation (tests) or lib.obligation (hooks)
         project_slug,
     )
 except ImportError:  # hooks/lib placed directly on sys.path
+    import roster  # type: ignore[no-redef]
     from subagent_restart import (  # type: ignore[no-redef]
         AGENT_RE,
         SESSION_RE,
@@ -63,29 +64,76 @@ except ImportError:  # hooks/lib placed directly on sys.path
 
 
 # --------------------------------------------------------------------------
-# Grammar constants -- enums, markers and field names copied VERBATIM from
-# design §1.2 (:83-113); versioned, immutable per release.
+# Grammar constants -- markers and field names from design §1.2 (:83-113).
+# Every value set is read from the file that declares it, never copied here:
+# a role is an agent file (roster.roles()), a pipeline a command file with
+# front matter, a profile and an artifact kind the schema's enums.
 # --------------------------------------------------------------------------
 
 OBLIGATION_VERSION = "1"
 OBLIGATION_OPEN_TOKEN = "<obligation"
 OBLIGATION_CLOSE_TAG = "</obligation>"
 
-ROLES = frozenset({
-    "ba", "dev", "qa", "graphify", "spec", "test-writer", "changelog-analyst",
-    # 20261001-161041-r11: the three /close-dispatched inspectors (G1+G2
-    # producer-role enforcement extension; additive-only, mirrors the
-    # existing five-role pattern).
-    "style-inspector", "cleanliness-inspector", "prompt-inspector",
-})  # design :90
-PIPELINES = frozenset({
-    "dev", "redev", "dev-command", "dev-overnight", "do", "close", "commit",
-})  # design :91
-PROFILES = frozenset({
-    "singular", "fanout-lane", "ba_validation", "final_verification",
-    "overnight", "do-close", "commit-qa", "commit-landing", "commit-bulk",
-    "ad_hoc",
-})  # design :92-93
+_HARNESS_DIR = Path(__file__).resolve().parent.parent.parent
+_SCHEMAS_DIR = _HARNESS_DIR / "schemas"
+_COMMANDS_DIR = _HARNESS_DIR / "commands"
+
+
+def _schema(schema_id: str) -> Any:
+    return json.loads((_SCHEMAS_DIR / f"{schema_id}.json").read_text(encoding="utf-8"))
+
+
+def _schema_enum(schema_id: str, dotted: str) -> frozenset[str]:
+    """The enum ``schemas/<schema_id>.json`` declares at ``dotted`` (walked
+    through ``properties``), read at import so no copy here can drift from the
+    schema. An unreadable schema or a missing path yields the empty set:
+    nothing is legal, so the gate that reads the value refuses it, and
+    importing this module never fails over a schema file."""
+    try:
+        node = _schema(schema_id)
+        for part in dotted.split("."):
+            node = node["properties"][part]
+        return frozenset(value for value in node["enum"] if isinstance(value, str))
+    except (OSError, ValueError, KeyError, TypeError):
+        return frozenset()
+
+
+def _artifact_fields_by_kind() -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]]:
+    """Exact per-kind field sets (design :95-107), as schemas/obligation.v1.json
+    declares them: each kind of its ``kind`` enum, with ``kind`` and the fields
+    the kind's then-clause requires, and as optional the other fields it names
+    (markdown's terminal_line_regex and waived_by_response: the sentinel
+    waiver exists only for the close-QA bundle, design §1.4.5). Read at import
+    like PROFILES; an unreadable schema declares no kind, so every block is
+    refused by the gate that reads it."""
+    try:
+        items = _schema("obligation.v1")["properties"]["artifacts"]["items"]
+        fields = {kind: (("kind",), ()) for kind in items["properties"]["kind"]["enum"]}
+        for rule in items.get("allOf", []):
+            kind = rule.get("if", {}).get("properties", {}).get("kind", {}).get("const")
+            if kind in fields:
+                required = tuple(rule["then"].get("required", []))
+                named = rule["then"].get("properties", {})
+                fields[kind] = (("kind",) + required, tuple(k for k in named if k not in required))
+        return fields
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
+
+
+def _null_task_id_profiles() -> frozenset[str]:
+    """The profiles schemas/obligation.v1.json exempts from its string task_id
+    rule (the allOf entry whose then-clause makes task_id a string), read at
+    import like PROFILES; an unreadable schema exempts none."""
+    try:
+        for rule in _schema("obligation.v1")["allOf"]:
+            if rule.get("then", {}).get("properties", {}).get("task_id", {}).get("type") == "string":
+                return frozenset(rule["if"]["properties"]["profile"]["not"]["enum"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return frozenset()
+
+
+PROFILES = _schema_enum("obligation.v1", "profile")  # design :92-93
 RESPONSE_BLOCK_FORMATS = frozenset({"json"})  # design :104
 CONSISTENCY_VERDICT_CLASS = "verdict_class"  # design :108
 
@@ -98,24 +146,12 @@ REQUIRED_TOP_LEVEL_FIELDS = frozenset({
 })
 IDENTITY_KEYS = frozenset({"task_id", "request_id"})  # design :98
 
-# Exact per-kind field sets (design :95-107): (required, optional).
-# waived_by_response is OPTIONAL -- the sentinel waiver exists only for the
-# close-QA bundle (design §1.4.5); requiring it would reject the design's own
-# dev-report markdown obligations.
-ARTIFACT_FIELDS_BY_KIND: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "json": (("kind", "path", "schema", "identity"), ()),
-    "markdown": (
-        ("kind", "path", "identity_anchor"),
-        ("terminal_line_regex", "waived_by_response"),
-    ),
-    "response_block": (("kind", "begin", "end", "format", "schema"), ()),
-    "response_line": (("kind", "terminal_line_regex"), ()),
-}
+ARTIFACT_FIELDS_BY_KIND = _artifact_fields_by_kind()  # (required, optional) per kind
 ARTIFACT_KINDS = frozenset(ARTIFACT_FIELDS_BY_KIND)
 
-# task_id shape: the _TASK_ID_ANCHOR_RE precedent
-# (hooks/subagentstop-artifact-contract-enforce.py:114) further pinned to the
-# \d{8}-\d{6} prefix convention (ticket M3).
+# task_id shape: an identifier-safe id (no path separator), pinned to the
+# \d{8}-\d{6} prefix convention (ticket M3); G2's legacy report correlation
+# anchors on this same shape.
 # Also accepts the ids /dev and /dev-command mint (hooks/prompt-workflow.py
 # _reserve_dev_registry) and their lane form (commands/dev.md fan-out):
 # ``dev[-command]-<yyyymmdd-hhmmss>[-lN]``. The pattern string is identical to
@@ -127,37 +163,56 @@ _MINTED_PREFIX_RE = re.compile(r"^dev-(?:command-)?(?=\d{8}-\d{6})")
 _LANE_SUFFIX_RE = re.compile(r"-l\d+$")
 
 # Closed terminal vocabulary (design D1/R2): schema id -> dotted path -> legal
-# terminal values. Equal to each registered schema's enum (drift-tested);
-# templates and gates import this constant, they never declare their own.
+# terminal values. Only which field of which schema is terminal is stated
+# here; the values are that field's enum, read from the schema itself.
+# Readers decide through terminal_status() and never declare a set of their own.
 TERMINAL_VOCABULARY: dict[str, dict[str, frozenset[str]]] = {
-    "dev-report.v2": {"dev.status": frozenset({"completed"})},
-    "dev-report.v1": {"status": frozenset({"completed"})},
-    "ba-qa-report.v1": {"verdict": frozenset({"pass", "fail"})},
-    "qa-report.v2": {"qa.status": frozenset({"pass", "warning", "fail"})},
-    "qa-report.v1": {"verdict": frozenset({"pass", "warning", "fail"})},
-    "do-report.v1": {"do.status": frozenset({"pending", "completed", "blocked"})},
+    schema_id: {dotted: _schema_enum(schema_id, dotted)}
+    for schema_id, dotted in (
+        ("dev-report.v2", "dev.status"),
+        ("dev-report.v1", "status"),
+        ("ba-qa-report.v1", "verdict"),
+        ("qa-report.v2", "qa.status"),
+        ("qa-report.v1", "verdict"),
+        ("do-report.v1", "do.status"),
+    )
 }
 
-# task_id null legality (design :85-86 + ticket M3): unconditional for
-# ad_hoc / commit-bulk; conditional for commit-qa (the /commit --bulk context
-# is transcript-derived, G1 check 3 -- invisible to a pure parser, so the
-# validator ACCEPTS and returns an undischarged-condition flag for the gate
-# cycle to discharge).
-NULL_TASK_ID_PROFILES = frozenset({"ad_hoc", "commit-bulk"})
+
+def terminal_status(schema_id: str, record: Any) -> str | None:
+    """The value ``record`` carries at ``schema_id``'s terminal field when that
+    value is in the field's vocabulary, else None (absent, malformed or not
+    terminal). The one decision on a report's terminal status: a reader that
+    needs more than "terminal" compares the value returned (only
+    ``completed`` lets /close and dev-lifecycle.py take /do work as done)."""
+    for dotted, legal in TERMINAL_VOCABULARY.get(schema_id, {}).items():
+        value = record
+        for part in dotted.split("."):
+            value = value.get(part) if isinstance(value, Mapping) else None
+        if isinstance(value, str) and value in legal:
+            return value
+    return None
+
+
+# task_id null legality (design :85-86 + ticket M3): legal under the profiles
+# the schema exempts, unconditionally except for commit-qa (the /commit --bulk
+# context is transcript-derived, G1 check 3 -- invisible to a pure parser, so
+# the validator ACCEPTS and returns an undischarged-condition flag for the
+# gate cycle to discharge).
 CONDITIONAL_NULL_TASK_ID_PROFILE = "commit-qa"
+NULL_TASK_ID_PROFILES = _null_task_id_profiles() - {CONDITIONAL_NULL_TASK_ID_PROFILE}
 UNDISCHARGED_TASK_ID_NULL = "task_id_null_requires_bulk_context"
 
 # Dispatch-clock bound (design §1.3-G1 check 2: |dispatched_at - now| <= 300s).
 DISPATCH_CLOCK_BOUND_SECONDS = 300
 # File-kind freshness slack (design §1.2 freshness: mtime >= dispatched_at - 2s
 # covers filesystem timestamp granularity only; response kinds carry none --
-# inherently produced by this run).
+# inherently produced by this run). A file kind is one whose fields require a
+# path, as the schema declares each kind's fields.
 FILE_FRESHNESS_SLACK_SECONDS = 2
 FRESHNESS_SLACK_SECONDS_BY_KIND: dict[str, int | None] = {
-    "json": FILE_FRESHNESS_SLACK_SECONDS,
-    "markdown": FILE_FRESHNESS_SLACK_SECONDS,
-    "response_block": None,
-    "response_line": None,
+    kind: FILE_FRESHNESS_SLACK_SECONDS if "path" in required else None
+    for kind, (required, _optional) in ARTIFACT_FIELDS_BY_KIND.items()
 }
 
 # Resolver cross-check statuses.
@@ -168,102 +223,130 @@ CROSS_CHECK_SKIPPED_NO_META = "skipped_no_meta"
 _OPEN_TAG_RE = re.compile(r"<obligation\b([^>]*)>")
 _VERSION_ONLY_ATTRS_RE = re.compile(r'\s*v="([^"]*)"\s*')
 
-# Dev-family classification marker (ticket 20260930-132644-l4 item 3): a
-# dispatch prompt that references a dev-registry directory. The captured
-# token is cross-checked against the filesystem by the caller -- a textual
-# match alone is never sufficient (a prompt can quote the path without this
-# session having actually minted that directory).
-_DEV_REGISTRY_TOKEN_RE = re.compile(r"\.claude/dev-registry/([A-Za-z0-9_-]+)/")
-
 
 # --------------------------------------------------------------------------
 # Typed outcomes (grammar layer)
 # --------------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class NoBlock:
+class _Outcome:
+    """What ``@dataclass(frozen=True)`` gave the outcomes below, written out
+    so that loading this module does not import dataclasses (and the inspect
+    it loads), a cost every hook that loads it paid at each call. Fields are
+    set once in ``__init__``; equality, hash and repr go over ``_fields``."""
+
+    _fields: tuple[str, ...] = ()
+
+    def _set(self, **fields: Any) -> None:
+        self.__dict__.update(fields)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(f"cannot assign to field {name!r}")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"cannot delete field {name!r}")
+
+    def __eq__(self, other: Any) -> Any:
+        if self is other:
+            return True
+        if other.__class__ is self.__class__:
+            return all(getattr(self, name) == getattr(other, name) for name in self._fields)
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(tuple(getattr(self, name) for name in self._fields))
+
+    def __repr__(self) -> str:
+        fields = ", ".join(f"{name}={getattr(self, name)!r}" for name in self._fields)
+        return f"{self.__class__.__qualname__}({fields})"
+
+
+class NoBlock(_Outcome):
     """The prompt carries no obligation block (design M5 zero-block case)."""
 
-    outcome: str = "no_block"
+    _fields = ("outcome",)
+
+    def __init__(self, outcome: str = "no_block") -> None:
+        self._set(outcome=outcome)
 
 
-@dataclass(frozen=True)
-class Rejection:
+class Rejection(_Outcome):
     """Fail-closed rejection with a machine-readable named reason."""
 
-    reason: str
-    field: str = ""
-    detail: str = ""
-    outcome: str = "rejected"
+    _fields = ("reason", "field", "detail", "outcome")
+
+    def __init__(self, reason: str, field: str = "", detail: str = "", outcome: str = "rejected") -> None:
+        self._set(reason=reason, field=field, detail=detail, outcome=outcome)
 
 
-@dataclass(frozen=True)
-class ExtractedBlock:
+class ExtractedBlock(_Outcome):
     """Raw body text of the single well-versioned obligation block."""
 
-    body: str
+    _fields = ("body",)
+
+    def __init__(self, body: str) -> None:
+        self._set(body=body)
 
 
-@dataclass(frozen=True)
-class Validated:
+class Validated(_Outcome):
     """Document accepted; ``undischarged`` lists conditions a later gate
     cycle must discharge (e.g. ``task_id_null_requires_bulk_context``)."""
 
-    undischarged: tuple[str, ...] = ()
+    _fields = ("undischarged",)
+
+    def __init__(self, undischarged: tuple[str, ...] = ()) -> None:
+        self._set(undischarged=undischarged)
 
 
-@dataclass(frozen=True)
-class ParsedObligation:
+class ParsedObligation(_Outcome):
     """Extraction + parse + validation all succeeded."""
 
-    obligation: Mapping[str, Any]
-    undischarged: tuple[str, ...] = ()
+    _fields = ("obligation", "undischarged")
+
+    def __init__(self, obligation: Mapping[str, Any], undischarged: tuple[str, ...] = ()) -> None:
+        self._set(obligation=obligation, undischarged=undischarged)
 
 
 # --------------------------------------------------------------------------
 # Typed outcomes (resolver layer, design §1.3-G2)
 # --------------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class Resolved:
+class Resolved(_Outcome):
     """A well-formed obligation was resolved from this agent's own dispatch
     prompt at ladder rung L0 (payload-supplied path) or L1 (session-scoped
     store construction)."""
 
-    obligation: Mapping[str, Any]
-    rung: str
-    prompt: str
-    transcript_path: str
-    cross_check: str
-    undischarged: tuple[str, ...] = ()
-    outcome: str = "resolved"
+    _fields = ("obligation", "rung", "prompt", "transcript_path", "cross_check", "undischarged", "outcome")
+
+    def __init__(self, obligation: Mapping[str, Any], rung: str, prompt: str, transcript_path: str,
+                 cross_check: str, undischarged: tuple[str, ...] = (), outcome: str = "resolved") -> None:
+        self._set(obligation=obligation, rung=rung, prompt=prompt, transcript_path=transcript_path,
+                  cross_check=cross_check, undischarged=undischarged, outcome=outcome)
 
 
-@dataclass(frozen=True)
-class NoObligationInPrompt:
+class NoObligationInPrompt(_Outcome):
     """The dispatch prompt was resolved but carries no obligation block --
     the honest result for every pre-rollout dispatch. DISTINCT from
     ``Unresolvable`` (no correlation) by binding contract."""
 
-    prompt: str
-    rung: str
-    transcript_path: str
-    cross_check: str
-    outcome: str = "no_obligation_in_prompt"
+    _fields = ("prompt", "rung", "transcript_path", "cross_check", "outcome")
+
+    def __init__(self, prompt: str, rung: str, transcript_path: str, cross_check: str,
+                 outcome: str = "no_obligation_in_prompt") -> None:
+        self._set(prompt=prompt, rung=rung, transcript_path=transcript_path, cross_check=cross_check,
+                  outcome=outcome)
 
 
-@dataclass(frozen=True)
-class Unresolvable:
+class Unresolvable(_Outcome):
     """No correlation exists (missing transcript, unreadable store, meta
     mismatch, role mismatch, invalid embedded obligation) -- fail-closed,
-    never a guess, never a fallback to an unrelated transcript."""
+    never a guess, never a fallback to an unrelated transcript. ``prompt`` is
+    the dispatch prompt when it was read and correlated but its obligation
+    failed (invalid_obligation, role_mismatch); empty otherwise."""
 
-    reason: str
-    detail: str = ""
-    outcome: str = "unresolvable"
-    # The dispatch prompt when it was read and correlated but its obligation
-    # failed (invalid_obligation, role_mismatch); empty otherwise.
-    prompt: str = ""
+    _fields = ("reason", "detail", "outcome", "prompt")
+
+    def __init__(self, reason: str, detail: str = "", outcome: str = "unresolvable", prompt: str = "") -> None:
+        self._set(reason=reason, detail=detail, outcome=outcome, prompt=prompt)
 
 
 # --------------------------------------------------------------------------
@@ -311,41 +394,6 @@ def _legal_repo_relative_path(value: Any) -> bool:
     return ".." not in value.split("/")
 
 
-def evaluate_required_values(
-    record: Any, required_values: Mapping[str, Iterable[str]]
-) -> list[dict]:
-    """Pure terminal-state evaluator: return the violations of
-    ``required_values`` against a parsed artifact ``record`` (empty list =
-    satisfied). Dotted paths hop through dicts only (a list on the path is
-    not walkable). No filesystem, clock or environment access.
-
-    Violation shapes: ``{"reason": "terminal_value_unmet", "path", "actual",
-    "allowed"}`` and ``{"reason": "missing_terminal_path", "path",
-    "allowed"}``.
-    """
-    violations: list[dict] = []
-    for dotted, allowed in required_values.items():
-        allowed_list = list(allowed)
-        node: Any = record
-        found = True
-        for part in dotted.split("."):
-            if isinstance(node, Mapping) and part in node:
-                node = node[part]
-            else:
-                found = False
-                break
-        if not found:
-            violations.append({
-                "reason": "missing_terminal_path", "path": dotted, "allowed": allowed_list,
-            })
-        elif not isinstance(node, str) or node not in allowed_list:
-            violations.append({
-                "reason": "terminal_value_unmet", "path": dotted,
-                "actual": node, "allowed": allowed_list,
-            })
-    return violations
-
-
 def _validate_artifact_entry(
     entry: Any,
     label: str,
@@ -366,8 +414,9 @@ def _validate_artifact_entry(
     for key in required:
         if key not in entry:
             return Rejection(reason="missing_field", field=f"{label}.{key}")
-    if "path" in entry and not _legal_repo_relative_path(entry["path"]):
-        return Rejection(reason="illegal_path", field=f"{label}.path")
+    for path_key in ("path", "monolith"):
+        if path_key in entry and not _legal_repo_relative_path(entry[path_key]):
+            return Rejection(reason="illegal_path", field=f"{label}.{path_key}")
     if "schema" in entry:
         schema = entry["schema"]
         if not isinstance(schema, str) or not schema:
@@ -444,7 +493,15 @@ def validate_obligation(
     for key in sorted(REQUIRED_TOP_LEVEL_FIELDS):
         if key not in doc:
             return Rejection(reason="missing_field", field=key)
-    for key, allowed in (("role", ROLES), ("pipeline", PIPELINES), ("profile", PROFILES)):
+    # Roles and pipelines are read when a block is validated, from the files
+    # that declare them: the roster, and the command files by the same
+    # front-matter rule. An unreadable directory makes none legal, so the
+    # gate refuses the block.
+    for key, allowed in (
+        ("role", roster.roles()),
+        ("pipeline", roster.roles(_COMMANDS_DIR)),
+        ("profile", PROFILES),
+    ):
         value = doc[key]
         if not isinstance(value, str) or value not in allowed:
             return Rejection(reason="unknown_enum_value", field=key, detail=repr(value))
@@ -876,161 +933,456 @@ def resolve_own_obligation(
 
 
 # --------------------------------------------------------------------------
-# Shared scan-and-check (design G4, ticket 20260930-132644-l4 item 7): the
-# ONE algorithm reused verbatim by hooks/stop-obligation-gate.py (session-
-# terminal check) and hooks/posttool-overnight-loop.py (cycle-reset check).
-# Do not duplicate this scan in either caller.
+# Dispatch records: what a session's own dispatches declared
 # --------------------------------------------------------------------------
 
-def _validate_artifact_status(path: Path, schema_id: str) -> str:
-    """Lazy, fail-safe reuse of contract_runtime.validate_artifact_for_obligation.
-
-    Lazy-imported (not at module top) so this module's grammar/resolver
-    layers above stay free of a hard ``contract_runtime`` dependency (the
-    binding-contract note in the module docstring: "never imports
-    contract_runtime"); only this additive function -- the one this ticket
-    explicitly authorizes to cross that boundary (BA component_chain,
-    ticket-20260930-132644-l4.md item 4/7) -- reuses the obligation-
-    authority schema gate instead of re-implementing per-artifact
-    validation a second time. Any import or validation failure returns
-    ``"skip"`` (never ``"fail"``) -- an infra problem here must never be
-    reported as an unresolved obligation.
-    """
-    try:
-        import sys as _sys
-
-        lib_dir = str(Path(__file__).resolve().parent)
-        if lib_dir not in _sys.path:
-            _sys.path.insert(0, lib_dir)
-        try:
-            from . import contract_runtime as _cr  # type: ignore
-        except ImportError:
-            import contract_runtime as _cr  # type: ignore[no-redef]
-        result = _cr.validate_artifact_for_obligation(path, schema_id)
-        return result.get("status", "skip") if isinstance(result, Mapping) else "skip"
-    except Exception:
-        return "skip"
-
-
-def find_unresolved_dispatch_obligations(
+def dispatch_obligations(
     transcript_path: str | Path,
-    project_dir: str | Path,
     known_schema_ids: Iterable[str] | None = None,
 ) -> list[dict]:
-    """Classify dev-family dispatches in a top-level session transcript and
-    re-check their declared ``json``-kind artifacts' current on-disk state.
+    """The obligation blocks a top-level session transcript's own Agent/Task
+    dispatch records carry, in record order: one ``{"tool_use_id", "line",
+    "subagent_type", "obligation", "prompt"}`` per dispatch whose prompt parses as a
+    well-formed obligation (:func:`parse_obligation`).
 
-    Reused verbatim by BOTH ``hooks/stop-obligation-gate.py`` (session-
-    terminal check) and ``hooks/posttool-overnight-loop.py`` (cycle-reset
-    check) -- neither caller duplicates this scan.
-
-    Dev-family classification (ticket item 3): walks THIS transcript's own
-    Agent/Task ``tool_use`` dispatch records (reusing
-    ``subagent_restart._read_parent_calls`` -- the same parent-transcript
-    scanner the resolver layer above already depends on) for a dispatch
-    prompt containing a ``.claude/dev-registry/<token>/`` reference whose
-    directory actually exists under ``project_dir``. A dispatch that does
-    not match is simply not this gate's concern (not dev-family, or not yet
-    reflected on disk) -- never an error.
-
-    For each dev-family-qualifying dispatch whose prompt also parses as a
-    well-formed obligation (:func:`parse_obligation`), every declared
-    ``json``-kind artifact is re-checked via
-    :func:`_validate_artifact_status` (``contract_runtime
-    .validate_artifact_for_obligation``). Non-``json`` kinds (``markdown``,
-    ``response_block``, ``response_line``) carry no schema-validatable
-    path+schema pair here and are skipped -- their resolution is a separate,
-    already-existing SubagentStop-level concern (out of this lane's scope;
-    mirrors the identical kind-split already live in
-    ``hooks/subagentstop-artifact-contract-enforce.py``).
-
-    Read-only; never raises. A malformed transcript, an unparseable
-    dispatch, or a validation failure is swallowed per-item (fail-open) so
-    one bad record never hides another dispatch's genuinely unresolved
-    obligation. Returns one dict per unresolved artifact:
-    ``{"task_id", "lane", "role", "artifact_path", "reason"}``.
+    The record walk a reader of "the dispatch that declared this artifact"
+    builds on (it keys the records by each obligation's own task_id). It
+    reuses ``subagent_restart._read_parent_calls``, the scanner the resolver
+    layer above reads parent transcripts with, and judges nothing: no
+    artifact on disk is read (each is decided at its producer's stop, G2, and
+    at the next dispatch, G3). Read-only; never raises: an unreadable
+    transcript, or a dispatch whose prompt carries no well-formed block,
+    contributes nothing.
     """
-    results: list[dict] = []
     try:
-        path = Path(transcript_path)
-        if not path.is_file():
-            return results
-        calls, _results, _notifications = _read_parent_calls(path)
+        calls, _results, _notifications = _read_parent_calls(Path(transcript_path))
     except Exception:
-        return results
-
-    try:
-        project_root = Path(project_dir)
-    except TypeError:
-        return results
-
-    seen: set[tuple[Any, str]] = set()
-    for call in calls.values():
-        if not isinstance(call, Mapping):
-            continue
+        return []
+    found: list[dict] = []
+    for call in sorted(calls.values(), key=lambda c: c.get("line", 0)):
         tool_input = call.get("input")
         prompt = tool_input.get("prompt") if isinstance(tool_input, Mapping) else None
         if not isinstance(prompt, str) or not prompt:
             continue
-        token_match = _DEV_REGISTRY_TOKEN_RE.search(prompt)
-        if token_match is None:
-            continue
-        token = token_match.group(1)
-        try:
-            if not (project_root / ".claude" / "dev-registry" / token).is_dir():
-                continue
-        except Exception:
-            continue
         parsed = parse_obligation(prompt, known_schema_ids=known_schema_ids)
-        if not isinstance(parsed, ParsedObligation):
+        if isinstance(parsed, ParsedObligation):
+            found.append({
+                "tool_use_id": call.get("tool_use_id"),
+                "line": call.get("line"),
+                "subagent_type": tool_input.get("subagent_type"),
+                "obligation": parsed.obligation,
+                "prompt": prompt,
+            })
+    return found
+
+
+# --------------------------------------------------------------------------
+# Declaring dispatch (P1b E3): who owes an artifact of a task. The one reader
+# every route and every role question about an artifact takes its answer
+# from, in place of a table from file names to roles (D21).
+# --------------------------------------------------------------------------
+
+# A placeholder of a command file's template path: <task_id>, {pipeline.x}.
+_TEMPLATE_PLACEHOLDER_RE = re.compile(r"<[^<>/\n]+>|\{[^{}/\s]+\}")
+# A worked example: the block's JSON written out in the template.
+_TEMPLATE_BLOCK_RE = re.compile(r'<obligation v="1">\s*(\{.*?\})\s*</obligation>', re.S)
+# The sentence form: "embed `<obligation v="1">{...}</obligation>` here with role="qa", ..., artifacts=[...]".
+_TEMPLATE_SENTENCE_RE = re.compile(r'<obligation v="1">\{\.\.\.\}</obligation>`[^\n]*?\bwith\b([^\n]*)')
+_TEMPLATE_FIELD_RE = re.compile(r'\b(role|pipeline|profile)="([^"]*)"')
+_STEP_LABEL_RE = re.compile(r"\bStep (\d+[A-Za-z]?)\b")
+_STEP_HEADING_RE = re.compile(r"^#{1,6}[^\n]*?\bStep (\d+[A-Za-z]?)\b", re.M)
+
+
+def _lib_module(name: str):
+    """A sibling module of hooks/lib, imported when first needed so the
+    grammar and resolver layers above load nothing more."""
+    import importlib
+    try:
+        return importlib.import_module(f".{name}", __package__) if __package__ else importlib.import_module(name)
+    except ImportError:
+        return importlib.import_module(name)
+
+
+def _session_transcripts(project_dir: str | Path, roots: Iterable[str | Path] | None) -> list[Path]:
+    """Every top-level session transcript the CLI keeps for the project, in
+    every account root (the store candidate_transcript_paths walks)."""
+    slug = project_slug(project_dir)
+    found: list[Path] = []
+    for root in (list(roots) if roots is not None else account_project_roots()):
+        try:
+            found.extend(sorted((Path(root) / slug).glob("*.jsonl")))
+        except OSError:
             continue
-        obligation_doc = parsed.obligation
-        task_id = obligation_doc.get("task_id")
-        lane = obligation_doc.get("lane")
-        role = obligation_doc.get("role")
-        artifacts = obligation_doc.get("artifacts")
-        if not isinstance(artifacts, list):
+    return found
+
+
+def _span_openers(transcript: Path, commands: frozenset) -> list[tuple[int, str, str]]:
+    """(line, command, arguments) of each human-typed harness command."""
+    stop_contract = _lib_module("stop_contract")
+    openers = []
+    try:
+        with transcript.open(encoding="utf-8", errors="replace") as handle:
+            for number, line in enumerate(handle, 1):
+                if '"user"' not in line:
+                    continue
+                try:
+                    found = stop_contract.span_opener(json.loads(line), commands)
+                except ValueError:
+                    continue
+                if found:
+                    openers.append((number, found[0], found[1]))
+    except OSError:
+        return []
+    return openers
+
+
+def _task_records(task_id: str, project_dir: str | Path,
+                  roots: Iterable[str | Path] | None) -> list[dict]:
+    """Every dispatch record of the task in every session of the project:
+    dispatch_obligations' records whose obligation's task_id is of the task's
+    family (lanes -l1, -l2 and the minted dev- prefix included), each with its
+    session transcript and the harness command whose span holds it. The scan
+    reads only the transcripts whose bytes name the family."""
+    family = task_family(task_id)
+    if not family:
+        return []
+    commands = _lib_module("stop_contract").harness_commands()
+    # A dispatch of the task is appended to its transcript after the task id
+    # was minted, so a transcript last written a day or more before the id's
+    # timestamp (local or UTC) holds none of them.
+    stamp = re.search(r"\d{8}-\d{6}", family)
+    try:
+        cutoff = datetime.strptime(stamp.group(), "%Y%m%d-%H%M%S").timestamp() - 86400 if stamp else None
+    except ValueError:
+        cutoff = None
+    seen: set[tuple[str, str]] = set()
+    records: list[dict] = []
+    for transcript in _session_transcripts(project_dir, roots):
+        try:
+            if cutoff is not None and transcript.stat().st_mtime < cutoff:
+                continue
+            if family.encode() not in transcript.read_bytes():
+                continue
+        except OSError:
             continue
-        for artifact in artifacts:
-            if not isinstance(artifact, Mapping) or artifact.get("kind") != "json":
+        openers = _span_openers(transcript, commands)
+        for record in dispatch_obligations(transcript):
+            if task_family(record["obligation"].get("task_id")) != family:
                 continue
-            artifact_path = artifact.get("path")
-            schema_id = artifact.get("schema")
-            if not isinstance(artifact_path, str) or not artifact_path:
+            key = (transcript.stem, str(record["tool_use_id"]))
+            if key in seen:  # the same session's copy in another account root
                 continue
-            if not isinstance(schema_id, str) or not schema_id:
+            seen.add(key)
+            span = None
+            for line, command, args in openers:
+                if line < (record.get("line") or 0):
+                    span = (command, args)
+            records.append(dict(record, transcript=transcript, span=span))
+    return records
+
+
+def _latest(records: list[dict]) -> dict | None:
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    return max(records, default=None, key=lambda r: (
+        parse_iso8601(r["obligation"].get("dispatched_at")) or epoch, r.get("line") or 0))
+
+
+def _dispatch_answer(source: str, record: dict) -> dict:
+    ob = record["obligation"]
+    return {"source": source, "task_id": ob.get("task_id"), "lane": ob.get("lane"),
+            "role": ob.get("role"), "subagent_type": record.get("subagent_type"),
+            "obligation": ob, "prompt": record.get("prompt"),
+            "session_id": record["transcript"].stem, "tool_use_id": record.get("tool_use_id")}
+
+
+def _bind_template_path(pattern: Any, path: str, family: str) -> dict[str, str] | None:
+    """The placeholder values under which ``pattern`` names ``path``, when one
+    of them names the task (its family); else None."""
+    if not isinstance(pattern, str):
+        return None
+    parts, names, pos = [], [], 0
+    for match in _TEMPLATE_PLACEHOLDER_RE.finditer(pattern):
+        parts.append(re.escape(pattern[pos:match.start()]) + "([^/]+?)")
+        names.append(match.group())
+        pos = match.end()
+    if not names:
+        return None
+    matched = re.fullmatch("".join(parts) + re.escape(pattern[pos:]), path)
+    if matched is None:
+        return None
+    values: dict[str, str] = {}
+    for name, value in zip(names, matched.groups()):
+        if values.setdefault(name, value) != value:
+            return None
+    if not any(task_family(value) == family for value in values.values()):
+        return None
+    return values
+
+
+def _bound(value: Any, values: Mapping[str, str]) -> Any:
+    if isinstance(value, str):
+        return _TEMPLATE_PLACEHOLDER_RE.sub(lambda m: values.get(m.group(), m.group()), value)
+    if isinstance(value, list):
+        return [_bound(v, values) for v in value]
+    if isinstance(value, Mapping):
+        return {k: _bound(v, values) for k, v in value.items()}
+    return value
+
+
+def _bracketed(text: str, start: int) -> str | None:
+    """The JSON array or object opening at ``start``, by bracket depth outside
+    strings; None when it never closes."""
+    depth, quoted, escaped = 0, False, False
+    for index in range(start, len(text)):
+        char = text[index]
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return None
+
+
+def _template_json(body: str) -> Any:
+    """A worked example's JSON; a value the template leaves to the
+    orchestrator as a bare <...> (outside every string) reads as null."""
+    try:
+        return json.loads(body)
+    except ValueError:
+        pass
+    out, quoted, escaped, index = [], False, False, 0
+    while index < len(body):
+        char = body[index]
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char == "<":
+            end = body.find(">", index)
+            if end > index:
+                out.append("null")
+                index = end + 1
                 continue
-            dedup_key = (task_id, artifact_path)
-            if dedup_key in seen:
-                continue
-            seen.add(dedup_key)
-            status = _validate_artifact_status(project_root / artifact_path, schema_id)
-            if status == "fail":
-                results.append({
-                    "task_id": task_id,
-                    "lane": lane,
-                    "role": role,
-                    "artifact_path": artifact_path,
-                    "reason": "artifact_unresolved",
-                })
-                continue
-            required_values = artifact.get("required_values")
-            if status == "skip" or not isinstance(required_values, Mapping):
-                continue
-            try:
-                record = json.loads(
-                    (project_root / artifact_path).read_text(encoding="utf-8")
-                )
-            except (OSError, ValueError):
-                continue  # vanished/unreadable between reads: fail-open
-            for violation in evaluate_required_values(record, required_values):
-                results.append({
-                    "task_id": task_id,
-                    "lane": lane,
-                    "role": role,
-                    "artifact_path": artifact_path,
-                    "reason": violation["reason"],
-                    "path": violation["path"],
-                    "actual": violation.get("actual"),
-                })
-    return results
+        out.append(char)
+        index += 1
+    try:
+        return json.loads("".join(out))
+    except ValueError:
+        return None
+
+
+def command_templates(command: str, commands_dir: str | Path | None = None) -> list[dict]:
+    """The obligation templates commands/<command>.md writes, in text order:
+    each worked example and each "embed ... here with role=..., artifacts=[...]"
+    sentence, as ``{"role", "pipeline", "profile", "artifacts", "step"}``,
+    ``step`` being the label of the "Step N" heading the template sits under."""
+    try:
+        text = (Path(commands_dir) if commands_dir else _COMMANDS_DIR).joinpath(f"{command}.md").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    headings = [(m.start(), m.group(1)) for m in _STEP_HEADING_RE.finditer(text)]
+    found: list[tuple[int, dict]] = []
+    for match in _TEMPLATE_BLOCK_RE.finditer(text):
+        doc = _template_json(match.group(1))
+        if isinstance(doc, dict):
+            found.append((match.start(), doc))
+    for match in _TEMPLATE_SENTENCE_RE.finditer(text):
+        tail = match.group(1)
+        at = tail.find("artifacts=[")
+        body = _bracketed(tail, at + len("artifacts=")) if at >= 0 else None
+        try:
+            artifacts = json.loads(body) if body else None
+        except ValueError:
+            continue
+        doc = {k: v for k, v in reversed(_TEMPLATE_FIELD_RE.findall(tail[:at]))}
+        found.append((match.start(), dict(doc, artifacts=artifacts)))
+    templates = []
+    for offset, doc in sorted(found, key=lambda pair: pair[0]):
+        if not isinstance(doc.get("artifacts"), list):
+            continue
+        step = None
+        for at, label in headings:
+            if at < offset:
+                step = label
+        templates.append({"role": doc.get("role"), "pipeline": doc.get("pipeline"),
+                          "profile": doc.get("profile"), "artifacts": doc["artifacts"], "step": step})
+    return templates
+
+
+def _step_label(step: Mapping) -> str | None:
+    match = _STEP_LABEL_RE.match(str(step.get("content") or ""))
+    return match.group(1) if match else None
+
+
+def _canonical_step(family: str, path: str, spans: list[tuple[str, str]],
+                    template_sources: list[str]) -> dict | None:
+    """The canonical todo step of a command the task ran that owes ``path``:
+    a step that declares it itself (the main agent's own, as /close's
+    late-repair Step 0 declares finalize's effective report), else the step
+    whose dispatch template declares it (the step under whose heading the
+    template sits, else the step whose subagent_call names the template's
+    role). Each step is returned with what its entry names."""
+    todo_canonical = _lib_module("todo_canonical")
+    for command, args in spans:
+        steps = todo_canonical.run_todo_script(command, args) or []
+        for step in steps:
+            for artifact in step.get("artifacts") or []:
+                if isinstance(artifact, Mapping) and _bind_template_path(artifact.get("path"), path, family):
+                    return {"source": "todo_step", "command": command, "arguments": args,
+                            "step": step.get("content"), "subagent_call": step.get("subagent_call"),
+                            "template": None}
+        for source in [command] + [s for s in template_sources if s != command]:
+            for template in command_templates(source):
+                for artifact in template["artifacts"]:
+                    values = _bind_template_path(artifact.get("path") if isinstance(artifact, Mapping) else None,
+                                                 path, family)
+                    if values is None:
+                        continue
+                    owner = next((s for s in steps if _step_label(s) == template["step"]), None)
+                    call = owner.get("subagent_call") if owner else None
+                    if owner is None or (call and call.get("subagent_type") != template["role"]):
+                        owner = next((s for s in steps if (s.get("subagent_call") or {}).get("subagent_type")
+                                      == template["role"]), owner)
+                    if owner is None:
+                        continue
+                    return {"source": "todo_step", "command": command, "arguments": args,
+                            "step": owner.get("content"), "subagent_call": owner.get("subagent_call"),
+                            "template": dict(_bound({k: template[k] for k in ("role", "pipeline", "profile")},
+                                                    values),
+                                             artifacts=_bound(template["artifacts"], values))}
+    return None
+
+
+def _lane_dispatch(family: str, path: str, records: list[dict], spans: list[tuple[str, str]],
+                   template_sources: list[str]) -> dict | None:
+    """A path a template declares for the cycle itself (its placeholder bound
+    to the task's own id, not a lane's), in a cycle whose dispatches of that
+    template's role ran per lane: what the lanes produce together, as the
+    fan-out's canonical aggregate, which the lane-completeness hook writes
+    whenever a lane's dev writes its report. Its owner is the latest of those
+    lane dispatches; None otherwise."""
+    for source in dict.fromkeys([command for command, _args in spans] + template_sources):
+        for template in command_templates(source):
+            for artifact in template["artifacts"]:
+                values = _bind_template_path(artifact.get("path") if isinstance(artifact, Mapping) else None,
+                                             path, family)
+                if values is None or family not in {canonical_task_id(v) for v in values.values()}:
+                    continue
+                lanes = [r for r in records
+                         if r["obligation"].get("role") == template["role"] and r["obligation"].get("lane")]
+                if lanes:
+                    return _dispatch_answer("lane", _latest(lanes))
+    return None
+
+
+def _writer(records: list[dict], path: str, project_dir: str | Path) -> dict | None:
+    """The latest dispatch of the task whose own tool calls wrote ``path``
+    (TC-46's write set, command_span.write_set: E6's producer of "which files
+    this agent wrote"): a Write or Edit of it counts first; only when none did
+    does the latest whose own Bash commands name it (a verifier's read names
+    the file too, so a mention never outranks a write)."""
+    command_span = _lib_module("command_span")
+    subagent_restart = _lib_module("subagent_restart")
+    written, named, metadata = [], [], {}
+    for record in records:
+        transcript = record["transcript"]
+        if transcript not in metadata:
+            metadata[transcript] = subagent_restart._metadata_by_tool_use(transcript)
+        meta = metadata[transcript].get(record.get("tool_use_id"))
+        found = command_span.write_set(meta["agent_transcript_path"], project_dir) if meta else None
+        if found is not None and path in found.written:
+            written.append(record)
+        elif found is not None and path in found.named:
+            named.append(record)
+    owner = _latest(written) or _latest(named)
+    return _dispatch_answer("writer", owner) if owner else None
+
+
+def declaring_dispatch(
+    task_id: str,
+    path: str | Path,
+    project_dir: str | Path,
+    roots: Iterable[str | Path] | None = None,
+) -> dict | None:
+    """Who owes ``path`` for the task ``task_id``, read from the task's
+    dispatch records in every session the project's transcript store holds
+    (a /close or /commit often runs in a later session than its /dev):
+
+    - ``{"source": "dispatch", ...}``: the latest dispatch whose obligation
+      declares the path (task_id, lane, role, subagent_type, the whole
+      obligation, its prompt, session and tool_use id);
+    - ``{"source": "lane", ...}``: a path a template declares for the cycle
+      itself, whose dispatches of that role ran per lane (the fan-out's
+      canonical aggregate): the latest of those lane dispatches, whose write of
+      its own report runs the hook that writes the aggregate;
+    - ``{"source": "todo_step", "command", "arguments", "step",
+      "subagent_call", "template"}``: no dispatch has declared it yet; the
+      canonical step of scripts/todo/<command>.py, for a command the task
+      ran, that owes it, with the entry's own subagent_call (None for the
+      main agent's own step) and the template that declares the path, bound
+      to its values (None when the step declares the path itself);
+    - ``{"source": "writer", ...}``: a file no declaration names (a product
+      file): the dispatch whose own tool calls wrote it;
+    - None: nothing names an owner.
+
+    Read-only; judges nothing on disk."""
+    root = Path(project_dir)
+    rel = Path(path)
+    if rel.is_absolute():
+        try:
+            rel = rel.resolve().relative_to(root.resolve())
+        except (OSError, ValueError):
+            return None
+    wanted = rel.as_posix()
+    family = task_family(task_id)
+    records = _task_records(task_id, project_dir, roots)
+    declaring = [r for r in records
+                 if any(isinstance(a, Mapping) and isinstance(a.get("path"), str)
+                        and Path(a["path"]).as_posix() == wanted
+                        for a in r["obligation"].get("artifacts") or [])]
+    found = _latest(declaring)
+    if found is not None:
+        return _dispatch_answer("dispatch", found)
+    spans = list(dict.fromkeys(r["span"] for r in records if r["span"]))
+    pipelines = list(dict.fromkeys(str(r["obligation"].get("pipeline")) for r in records))
+    lane = _lane_dispatch(family, wanted, records, spans, pipelines) if family else None
+    if lane is not None:
+        return lane
+    step = _canonical_step(family, wanted, spans, pipelines) if family else None
+    if step is not None:
+        return step
+    return _writer(records, wanted, project_dir)
+
+
+def _main(argv: list[str]) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(prog="obligation.py")
+    sub = parser.add_subparsers(dest="command", required=True)
+    owing = sub.add_parser("declaring-dispatch", help="who owes an artifact path of a task (JSON, or null)")
+    owing.add_argument("--task-id", required=True)
+    owing.add_argument("--path", required=True)
+    owing.add_argument("--project-dir", default="")
+    ns = parser.parse_args(argv)
+    answer = declaring_dispatch(ns.task_id, ns.path, ns.project_dir or Path.cwd())
+    print(json.dumps(answer, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(_main(sys.argv[1:]))

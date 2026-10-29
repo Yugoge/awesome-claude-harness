@@ -531,8 +531,11 @@ def test_obligation_example_payload_passes():
 def test_obligation_variants_fail_named():
     cases = []
     v = _obligation_example()
-    v["role"] = "wizard"
+    v["role"] = ""
     cases.append((v, "role"))
+    v = _obligation_example()
+    v["pipeline"] = 7
+    cases.append((v, "pipeline"))
     v = _obligation_example()
     v["profile"] = "unrecognized"
     cases.append((v, "profile"))
@@ -549,6 +552,23 @@ def test_obligation_variants_fail_named():
         result = cr.validate(copy.deepcopy(record), "obligation.v1")
         assert not result["ok"], offender
         assert offender in _joined_errors(result), offender
+
+
+def test_obligation_schema_lists_no_role_or_pipeline():
+    """P1b row 18: the schema states that role and pipeline are names, and the
+    grammar library checks them against the roster and the command files; a
+    role no agent file declares passes the schema and is refused there."""
+    from lib import obligation
+
+    v = _obligation_example()
+    v["role"] = "wizard"
+    v["pipeline"] = "ship"
+    assert cr.validate(copy.deepcopy(v), "obligation.v1")["ok"]
+    schema = schema_registry.get_schema("obligation.v1")
+    assert "enum" not in schema["properties"]["role"]
+    assert "enum" not in schema["properties"]["pipeline"]
+    refused = obligation.validate_obligation(v)
+    assert isinstance(refused, obligation.Rejection) and refused.field == "role"
 
 
 def test_obligation_null_task_id_gate():

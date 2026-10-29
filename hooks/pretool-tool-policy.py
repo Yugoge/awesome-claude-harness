@@ -1,13 +1,34 @@
 #!/usr/bin/env python3
-"""PreToolUse:* hook — enforce tool-policy.v1.json for all subagents.
+"""PreToolUse:* hook — the write permission dispatch records derive, then
+tool-policy.v1.json for all subagents.
 
 Single hook that consumes the harness ``policies/tool-policy.v1.json`` (resolved
 via the shared hooks/lib/claude_home resolver) through
 lib.policy_registry.is_allowed() and lib.agent_resolver.resolve_agent_type().
 
+Derived write permission (P1b E3, TC-20 as corrected; D8, D21, D24), run first,
+for every caller, the main agent included, on the Write / Edit / MultiEdit /
+NotebookEdit target and every Bash write target:
+  - A path a dispatch of this session declares may be written only by that
+    dispatch. What a dispatch declares is read from its own record in the
+    session transcript: the artifacts[].path of its obligation, the producer
+    question that obligation names when schemas/producer-question.v1.json lets
+    its role write one, and what the template it was dispatched from declares
+    in the current command files (lib/dispatch_template; the template of its
+    obligation's pipeline, role and profile, or, for a dispatch that carries
+    none, of its subagent_type in the command whose span holds it), each
+    placeholder bound to that dispatch's own values. A declared directory
+    covers what lies beneath it.
+  - The declaring dispatch's write skips the role's allow prefixes; its deny
+    prefixes, tool lists and the scratch rule below still apply.
+  - Any other caller's write of a declared path -> exit 2 naming the path and
+    the declaring obligation's role, whatever an allow prefix (dev's '*',
+    general-purpose's '*/docs/dev/*') says. No prefix table names an artifact.
+  - An undeclared path keeps the role policy rows below.
+
 Behavior:
-  - Main agent (no agent_id, no subagent_type) -> exit 0 (orchestrator
-    gate handles main agent).
+  - Main agent (no agent_id, no subagent_type) -> exit 0 after the derived
+    permission (the orchestrator gate handles the rest of the main agent).
   - Subagent role unresolvable -> exit 0 (defer to the backstop shim). An
     unresolved role is a NORMAL state (a subagent may write before any sentinel-
     creating tool runs; agent_resolver LOW-10: callers MUST NOT hard-block on
@@ -307,20 +328,287 @@ def _note_bash_write_target(data: dict, target) -> None:
         pass
 
 
-def _check_targets(role: str, tool_name: str, targets: list, data: dict) -> None:
+# -- derived write permission ------------------------------------------------
+
+_HARNESS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_SUBAGENT_TYPE = "general-purpose"  # the CLI's type for an Agent call that names none
+_AGENT_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+
+
+def _write_targets(tool_name: str, targets: list) -> list:
+    if tool_name == "Bash":
+        found = targets[1:]
+    elif tool_name in WRITE_TOOLS:
+        found = targets[:1]
+    else:
+        return []
+    # An unexpanded word cannot name a declared path, and the device tree (a
+    # redirect's /dev/null) holds no artifact; the role rows judge both.
+    return [t for t in found if isinstance(t, str) and t and not any(c in t for c in "$`\x00")
+            and not t.startswith("/dev/")]
+
+
+def _session_transcript(data: dict):
+    from pathlib import Path
+
+    raw = data.get("transcript_path")
+    if not isinstance(raw, str) or not raw:
+        return None
+    path = Path(raw)
+    if path.parent.name == "subagents":  # <sid>/subagents/agent-x.jsonl -> <sid>.jsonl
+        session_dir = path.parent.parent
+        path = session_dir.parent / f"{session_dir.name}.jsonl"
+    return path
+
+
+def _parts(path: str) -> tuple:
+    return tuple(p for p in os.path.normpath(path).split(os.sep) if p and p != ".")
+
+
+def _question_roles() -> frozenset:
+    """Roles schemas/producer-question.v1.json lets write a producer question."""
+    try:
+        with open(os.path.join(_HARNESS_ROOT, "schemas", "producer-question.v1.json")) as fh:
+            values = json.load(fh)["properties"]["role"]["enum"]
+        return frozenset(v for v in values if isinstance(v, str))
+    except (OSError, ValueError, KeyError, TypeError):
+        return frozenset()
+
+
+def _declared_paths(obligation_doc: dict) -> list:
+    return [a["path"] for a in obligation_doc.get("artifacts") or []
+            if isinstance(a, dict) and isinstance(a.get("path"), str) and a["path"]]
+
+
+def _agent_files(transcript, agent_id: str):
+    """(transcript, meta) paths the CLI keeps for one subagent of the session."""
+    if not isinstance(agent_id, str) or not 0 < len(agent_id) <= 128 or not set(agent_id) <= _AGENT_ID_CHARS:
+        return None, None
+    sub = transcript.parent / transcript.stem / "subagents"
+    return sub / f"agent-{agent_id}.jsonl", sub / f"agent-{agent_id}.meta.json"
+
+
+def _dispatch_calls(record_bytes: bytes) -> list:
+    """The session's Agent/Task calls, read as command_span's Span.calls reads
+    them (its line reader, the main session's own records only), without the
+    search for each call's result that this rule does not use."""
+    from lib import command_span
+
+    calls = []
+    for number, _end, raw in command_span._Lines(record_bytes).having((b'"Agent"', b'"Task"')):
+        for block in command_span._blocks(command_span._decode(raw)):
+            if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+                    and isinstance(block.get("input"), dict)):
+                calls.append(command_span.Call(id=block.get("id") or "", name=block["name"], input=block["input"],
+                                               line=number, result_line=0, ok=False))
+    return calls
+
+
+def _span_commands(record_bytes: bytes, until: int) -> list:
+    """(line, command) of each human-typed harness command of the session
+    before line ``until`` (the last dispatch: no later command opens a
+    dispatch's span), read as command_span.active_span reads them (its line
+    reader, the stop_contract span rule); a dispatch's span is the last one
+    before it."""
+    from lib import command_span, stop_contract
+
+    commands, openers = stop_contract.harness_commands(), []
+    for number, _end, raw in command_span._Lines(record_bytes).having(command_span._USER_RECORD,
+                                                              unless=command_span._RESULT_BLOCK):
+        if number >= until:
+            break
+        record = command_span._decode(raw)
+        opener = stop_contract.span_opener(record, commands) if record else None
+        if opener:
+            openers.append((number, opener[0]))
+    return openers
+
+
+def _declarations(record_bytes: bytes, calls: list) -> list:
+    """(path parts, role, task_id, dispatch id) for every path a dispatch of
+    the session declares, in record order."""
+    from lib import dispatch_template, obligation
+
+    question_roles = None
+    openers = None
+    out = []
+    for call in calls:
+        prompt = call.input.get("prompt")
+        if not isinstance(prompt, str) or not prompt:
+            continue
+        subagent_type = call.input.get("subagent_type") or _DEFAULT_SUBAGENT_TYPE
+        parsed = obligation.parse_obligation(prompt)
+        own = parsed.obligation if isinstance(parsed, obligation.ParsedObligation) else None
+        paths, role, task_id = [], subagent_type, None
+        if own is not None:
+            role, task_id = own.get("role"), own.get("task_id")
+            paths += _declared_paths(own)
+            template = dispatch_template.template_obligation(own.get("pipeline"), subagent_type, prompt)
+            # Only the template this dispatch was made from: same role and profile.
+            if template and all(template.get(k) == own.get(k) for k in ("role", "profile")):
+                paths += _declared_paths(template)
+            if question_roles is None:
+                question_roles = _question_roles()
+            if role in question_roles and isinstance(task_id, str) and task_id:
+                # The question G2 takes in place of the declared artifacts
+                # (subagentstop-artifact-contract-enforce.py _producer_question).
+                paths.append(f"docs/dev/producer-question-{task_id}-{role}.json")
+        else:
+            if openers is None:
+                openers = _span_commands(record_bytes, calls[-1].line)
+            command = next((name for number, name in reversed(openers) if number < call.line), None)
+            template = dispatch_template.template_obligation(command, subagent_type, prompt) if command else None
+            if template:
+                role, task_id = template.get("role") or role, template.get("task_id")
+                paths += _declared_paths(template)
+        for path in dict.fromkeys(paths):
+            parts = _parts(path)
+            if parts and ".." not in parts and not path.startswith("/"):
+                out.append((parts, role, task_id, call.id))
+    return out
+
+
+def _caller_dispatches(data: dict, transcript, calls: list) -> set:
+    """The dispatch record(s) the calling subagent was started from: the one
+    its CLI meta names when that call's prompt is the agent's own first
+    record, else the calls carrying that prompt. The main agent has none."""
+    from lib import obligation
+
+    agent_id = data.get("agent_id")
+    if not agent_id:
+        return set()
+    agent_transcript, meta = _agent_files(transcript, agent_id)
+    if agent_transcript is None:
+        return set()
+    prompt = obligation.read_first_record_prompt(agent_transcript)
+    if prompt is None:
+        return set()
+    try:
+        with open(meta) as fh:
+            named = json.load(fh).get("toolUseId")
+    except (OSError, ValueError, AttributeError):
+        named = None
+    if named:
+        return {c.id for c in calls if c.id == named and c.input.get("prompt") == prompt}
+    return {c.id for c in calls if c.input.get("prompt") == prompt}
+
+
+def _covers(declared: tuple, target: tuple) -> bool:
+    n = len(declared)
+    return any(target[i:i + n] == declared for i in range(len(target) - n + 1))
+
+
+def _target_forms(target: str, data: dict) -> list:
+    base = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    path = os.path.expanduser(target)
+    if not os.path.isabs(path):
+        path = os.path.join(base, path)
+    forms = {os.path.normpath(path)}
+    try:
+        forms.add(os.path.realpath(path))
+    except OSError:
+        pass
+    return [_parts(f) for f in forms]
+
+
+def _caller_label(role, data: dict) -> str:
+    if role:
+        return role
+    if not data.get("agent_id"):
+        return "main"
+    return data.get("agent_type") or "unresolved"
+
+
+def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> set:
+    """Apply the derived write permission; exit 2 on another caller's write of
+    a declared path. Returns the targets the caller itself declared."""
+    writes = _write_targets(tool_name, targets)
+    if not writes:
+        return set()
+    transcript = _session_transcript(data)
+    if transcript is None:
+        return set()
+    # Loaded only for a write (a read-only call pays nothing), and FAIL CLOSED
+    # like _bootstrap_security: a broken reader must never let a write through.
+    try:
+        from lib import command_span, dispatch_template, obligation, stop_contract  # noqa: F401
+    except Exception as e:
+        sys.stderr.write(
+            "BLOCKED by tool-policy.v1: derived write permission bootstrap FAILED — "
+            f"the dispatch-record readers could not be imported ({e}). Failing CLOSED "
+            "(exit 2) rather than allowing; repair the harness install.\n"
+        )
+        sys.exit(2)
+
+    try:
+        record_bytes = command_span._read(transcript)
+    except (OSError, TypeError, ValueError):
+        return set()
+    calls = _dispatch_calls(record_bytes)
+    if not calls:
+        return set()
+    declarations = _declarations(record_bytes, calls)
+    if not declarations:
+        return set()
+    mine = None
+    own = set()
+    for target in writes:
+        forms = _target_forms(target, data)
+        covering = [d for d in declarations if any(_covers(d[0], f) for f in forms)]
+        if not covering:
+            continue
+        if mine is None:
+            mine = _caller_dispatches(data, transcript, calls)
+        if any(d[3] in mine for d in covering):
+            own.add(target)
+            continue
+        roles = sorted({str(d[1]) for d in covering})
+        tasks = sorted({str(d[2]) for d in covering if d[2]})
+        reason = (f"write target {target} is declared by the obligation of the "
+                  f"{', '.join(roles)} dispatch" + (f" for task {', '.join(tasks)}" if tasks else "")
+                  + "; only that dispatch writes it")
+        check_tool = "Write" if tool_name == "Bash" else tool_name
+        _emit_block(_caller_label(role, data), check_tool, target, reason)
+        sys.exit(2)
+    return own
+
+
+def _declared_write_allowed(role: str, tool: str, target):
+    """The role's denials on the declaring dispatch's own write: its tool
+    lists, deny prefixes and an unreadable policy, never its allow prefixes."""
+    from lib import policy_registry
+
+    if policy_registry.load_policy() is None:
+        return is_allowed(role, tool, target)
+    role_pol = policy_registry.get_role_policy(role)
+    if role_pol.get("_unknown_role"):
+        return is_allowed(role, tool, target)
+    tool_check = policy_registry._check_tool_lists(role_pol, tool)
+    if tool_check is not None:
+        return tool_check
+    if policy_registry._path_in_prefixes(target, role_pol.get("denied_write_path_prefixes", [])):
+        return (False, f"write target {target} matches denied_write_path_prefixes")
+    return (True, "ok")
+
+
+def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: set = frozenset()) -> None:
     """Iterate targets, exit 2 on first deny. For Bash, treat each
     extracted write target (idx > 0) as a Write authorization request.
 
     A write target that the prefix layer admits is then put through the
     actor-exact scratch gate, because a JSON prefix cannot distinguish an
     owner's scratch directory from a sibling's and cannot deny a role holding
-    a bare '*' grant.
+    a bare '*' grant. A target in ``own`` is a path the caller's own dispatch
+    declared: the prefix layer applies only its denials to it.
     """
     for idx, target in enumerate(targets):
         check_tool = tool_name
         if tool_name == "Bash" and idx > 0:
             check_tool = "Write"
-        allowed, reason = is_allowed(role, check_tool, target)
+        if check_tool in WRITE_TOOLS and target in own:
+            allowed, reason = _declared_write_allowed(role, check_tool, target)
+        else:
+            allowed, reason = is_allowed(role, check_tool, target)
         if not allowed:
             _emit_block(role, check_tool, target, reason)
             if tool_name == "Bash" and idx > 0:
@@ -346,6 +634,8 @@ def main() -> None:
         sys.exit(0)
     tool_input = data.get("tool_input") or {}
     role = resolve_agent_type(data)
+    targets = _extract_targets(tool_name, tool_input)
+    own = _check_declared_writes(role, tool_name, targets, data)
     if not role:
         # An unresolved role is a NORMAL state, not an error: Claude Code may
         # dispatch a subagent before any sentinel-creating tool runs, so the
@@ -353,9 +643,10 @@ def main() -> None:
         # Per the agent_resolver LOW-10 contract, callers MUST NOT hard-block on
         # None — defer to the backstop shim (exit 0). (Reverted: the prior
         # unresolved-role fail-closed broke every subagent lacking a registry.)
+        # The main agent has no role rows either; the derived permission above
+        # is all that applies to it.
         sys.exit(0)
-    targets = _extract_targets(tool_name, tool_input)
-    _check_targets(role, tool_name, targets, data)
+    _check_targets(role, tool_name, targets, data, own)
     sys.exit(0)
 
 

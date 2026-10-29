@@ -20,7 +20,6 @@ import json
 import os
 import re
 import shutil
-import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -33,6 +32,7 @@ from lib.bash_write_targets import (  # noqa: E402
     extract_bash_write_paths,
 )
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib import overnight  # noqa: E402
 
 try:  # T2.4: optional contract runtime + agent resolver for self_repair grant.
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -190,16 +190,11 @@ def _load_active_contract(state: dict) -> dict | None:
     """Load cycle-contract for the active overnight session, if available."""
     if _contract_runtime is None or not isinstance(state, dict):
         return None
-    sid = state.get('session_id') or state.get('sid') or ''
-    cycle_id = state.get('cycle_id') or state.get('current_cycle')
-    if not sid or cycle_id is None:
+    sid = state.get('session_id') or ''
+    if not sid:
         return None
     try:
-        cid_int = int(cycle_id)
-    except (TypeError, ValueError):
-        return None
-    try:
-        return _contract_runtime.load_contract(sid, cid_int)
+        return _contract_runtime.load_contract(sid, overnight.cycle_index(state), state)
     except Exception:
         return None
 
@@ -284,35 +279,16 @@ def _grant_skips_block(target: str) -> bool:
     return is_self_repair_allowed(target, state, payload)
 
 
-def _end_time_passed(end_time_str: str) -> bool:
-    """Return True when the ISO end_time has passed (mixed naive/aware)."""
-    if not end_time_str:
-        return False
-    try:
-        end_time = datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
-    except (ValueError, OSError):
-        return False
-    if end_time.tzinfo is None:
-        return datetime.now() > end_time
-    return datetime.now(timezone.utc) > end_time
-
-
 def _is_session_live(state: dict) -> bool:
-    """Check if the overnight session is still live (M9 liveness fix).
+    """Check if the overnight session's isolation still binds (M9 liveness fix).
 
-    Liveness is keyed on the isolation window (`isolation_active_until`, falling
-    back to `end_time`) and an explicit `isolation_released_at` — NOT on
-    `current_phase`. Previously `current_phase in (complete, completed)` stood
-    isolation down, which let a state write release isolation prematurely
-    (round-3 §5). `current_phase=complete` may be stored but MUST NOT release
-    isolation; only the user `/stop` path sets `isolation_released_at`.
+    The verdict is lib/overnight.py's `isolation_held`: keyed on the isolation
+    window (`isolation_active_until`, falling back to `end_time`) and an
+    explicit `isolation_released_at` — NOT on `current_phase`, so a state write
+    that marks the phase complete cannot release isolation prematurely
+    (round-3 §5); only the user `/stop` path sets `isolation_released_at`.
     """
-    if state.get("isolation_released_at"):
-        return False
-    window = state.get("isolation_active_until") or state.get("end_time", "")
-    if _end_time_passed(window):
-        return False
-    return True
+    return overnight.state_verdicts(state).isolation_held
 
 
 def _cleanup_expired_state(sf: Path, state: dict) -> None:
@@ -345,13 +321,8 @@ def _is_orphaned_state(sf: Path, state: dict) -> bool:
 
 
 def _load_state(sf: Path) -> dict | None:
-    """Read and JSON-parse a state file; return None on any failure."""
-    try:
-        if sf.stat().st_size == 0:
-            return None
-        return json.loads(sf.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
+    """The record in a state file, or None (lib/overnight.py `read_state`)."""
+    return overnight.read_state(sf)
 
 
 def _extract_live_worktree_path(sf: Path) -> str:
@@ -402,7 +373,8 @@ def _get_protected_branches() -> list[str]:
     is not one of them and must not be turned into a blanket blocker.
 
     Union is additive only; the sole subtractive operator is the non-released
-    filter, admissible because `isolation_released_at` is immutable.
+    filter (lib/overnight.py's `released` verdict), admissible because
+    `isolation_released_at` is immutable.
     """
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
     names: list[str] = []
@@ -412,9 +384,7 @@ def _get_protected_branches() -> list[str]:
         return names
     for sf in state_files:
         state = _load_state(sf)
-        if state is None:
-            continue
-        if state.get("isolation_released_at") is not None:
+        if state is None or overnight.state_verdicts(state).released:
             continue
         val = state.get("protected_branch")
         if isinstance(val, str) and val and val not in names:
@@ -585,13 +555,7 @@ def get_overnight_state_for_session(project_dir: Path, session_id: str) -> dict 
     """Load overnight state file for the specific session."""
     if not session_id:
         return None
-    state_path = project_dir / '.claude' / f'overnight-state-{session_id}.json'
-    if not state_path.exists():
-        return None
-    try:
-        return json.loads(state_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
+    return _load_state(project_dir / '.claude' / f'overnight-state-{session_id}.json')
 
 
 def is_hooks_path(file_path: str) -> bool:
@@ -1900,80 +1864,8 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
     return args
 
 
-def _state_str(state: dict, key: str) -> str:
-    """A state field as a non-empty str, else ''. A record field is JSON and may be
-    any type; feeding a non-str to os.path.join raises out of the hook."""
-    v = state.get(key) if isinstance(state, dict) else None
-    return v if isinstance(v, str) and v else ''
-
-
-def _qa_mode_sentinel_rw_bind(main_real: str, wt_real: str, registry_dir: str) -> list[str]:
-    """MID-SESSION harness-state closure (task 20260809-013317). `qa.json`'s
-    `qa_mode` is the ONE sentinel the orchestrator must UPDATE while the session
-    runs — `scripts/write-qa-mode.sh` flips it before each QA dispatch. It lives
-    under the RO-bound main root, so that write hits EROFS under
-    `registered_worktree` / `fresh_clone_checkout` while the same path stays
-    READABLE (measured, not theoretical). The launcher's pre-create ORDERING escape
-    (`scripts/overnight-init.sh`, run harness-side before the boundary is armed)
-    cannot cover it: pre-creation cannot carry a value that changes mid-session.
-    Return `--bind` args RW-exposing exactly that ONE FILE, nested over the RO main
-    bind — the same shape as the worktree exception (step 5).
-
-    Scope is the SINGLE FILE, never its directory. A directory bind would also make
-    `e2e-enforce.json` / `codex-enforce.json` writable AND removable, and
-    `subagentstop-e2e-enforce.py` fails OPEN on an absent flag — a directory bind
-    therefore hands the actor a one-`rm` enforcement bypass. The file bind is also
-    why `write-qa-mode.sh` must keep writing IN PLACE (`open(path,'w')`): a
-    temp-file + `rename()` would hit EBUSY on a bind mountpoint.
-
-    Every rejection yields NO bind, leaving the write to fail LOUDLY (EROFS, rc=1,
-    caller aborts) — the correct signal. Refused: a symlinked or redirected
-    `.claude/dev-registry` root; a session dir that is not a DIRECT child of that
-    root, not a directory, or outside main; a symlinked `qa.json` (lstat, no
-    follow); a non-regular `qa.json`; and `st_nlink != 1`, which is what stops a
-    hardlink planted in the session dir from aliasing a tracked main-tree or `.git`
-    inode through the RW bind (gitignore status does not prevent that).
-
-    ACTOR GATE (QA F1): granted ONLY to the orchestrator, mirroring
-    `_is_harness_state_exempt`, whose string-layer exemption for THIS SAME path is
-    itself gated on `_is_orchestrator_actor()`. `_apply_write_boundary` also runs
-    for `overnight_child` / `worktree_context` — i.e. for SUBAGENTS — so an ungated
-    bind lets a subagent rewrite `qa_mode`, and `subagentstop-e2e-enforce.py` exits
-    0 when it reads `ba_validation`: a one-write stop-gate bypass (reproduced
-    end-to-end, pre-fix). The string layer cannot backstop it — `_apply_write_
-    boundary` leaves via `_emit_command_rewrite`'s `sys.exit(0)` BEFORE
-    `apply_global_worktree_enforcement` runs. The gate lives INSIDE this helper
-    rather than at the call site so any future call site inherits it. `_REQUEST_CTX`
-    is populated at `main()` before the boundary is applied (verified by execution:
-    an unpopulated context would make this gate fail OPEN, since `not {}.get(...)`
-    is True)."""
-    if not _is_orchestrator_actor():
-        return []
-    if not isinstance(registry_dir, str) or not registry_dir or not main_real:
-        return []
-    try:
-        reg_root_lit = os.path.join(main_real, '.claude', 'dev-registry')
-        if os.path.islink(reg_root_lit) or not os.path.isdir(reg_root_lit):
-            return []  # a redirected registry root could aim the bind into .git
-        reg_root = os.path.realpath(reg_root_lit)
-        reg_real = os.path.realpath(registry_dir)
-        if os.path.dirname(reg_real) != reg_root or not os.path.isdir(reg_real):
-            return []  # must be a DIRECT child session dir, never the root itself
-        if not _path_under_prefix(reg_real, main_real):
-            return []
-        if wt_real and _path_under_prefix(reg_real, wt_real):
-            return []  # already RW via the worktree bind (in_place): no second bind
-        target = os.path.join(reg_real, 'qa.json')
-        st = os.lstat(target)  # no-follow: a symlinked sentinel is refused
-        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-            return []
-    except (OSError, ValueError, TypeError):
-        return []
-    return ['--bind', target, target]
-
-
 def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
-                      isolation_kind: str, registry_dir: str = '') -> list[str] | None:
+                      isolation_kind: str) -> list[str] | None:
     """Build the bwrap argv that re-execs `command` with the PROTECTED MAIN tree
     RO and the overnight worktree RW. Returns None if the layout cannot be built.
 
@@ -1995,12 +1887,6 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
                                   a keystone-disabling `git config --unset
                                   core.hooksPath` / hook drop hits EROFS while
                                   objects/refs/logs stay RW for commits
-      8. --bind <dev-registry>/<session>/qa.json   that ONE harness-state FILE, RW
-                                  so the MID-SESSION qa_mode update works in every
-                                  isolation mode; the enclosing dir and every other
-                                  sentinel stay RO, and the bind is emitted ONLY for
-                                  the ORCHESTRATOR — a subagent gets no bind and its
-                                  write hits EROFS (_qa_mode_sentinel_rw_bind)
     Because every RW bind is applied AFTER the RO binds, and each RW bind targets
     a path UNDER main that is itself an approved exception, no mount exposes a RW
     source/root covering the protected main tree except the worktree + git paths.
@@ -2042,9 +1928,6 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
         # drops hit EROFS, while <common>/objects + <common>/refs + logs stay RW so
         # the legitimate keystone-guarded commit / ref-update path is unaffected.
         argv += _shared_common_dir_ro_rebinds(wt_real)
-    # (8) MID-SESSION harness-state closure: RW-bind the qa_mode sentinel FILE,
-    # orchestrator-only (the helper self-gates; subagents get no bind).
-    argv += _qa_mode_sentinel_rw_bind(main_real, wt_real, registry_dir)
     argv += ['--', '/bin/bash', '-c', command]
     return argv
 
@@ -2160,19 +2043,7 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str) -> N
             'keystone and the RO-bind). Use git inside the worktree instead.\n'
         )
     if _bwrap_boundary_available():
-        # dev_registry_dir is schema-v9 authoritative; derive it for older records
-        # so an in-flight session still gets the mid-session sentinel exception.
-        # Only STRING values are used: a malformed record must degrade to "no
-        # registry bind" (write then fails loudly through the writer), never raise
-        # out of the hook — that would skip the bwrap rewrite itself.
-        registry_dir = _state_str(gov_state, 'dev_registry_dir')
-        if not registry_dir:
-            sid = (_state_str(gov_state, 'dev_registry_session_id')
-                   or _state_str(gov_state, 'session_id'))
-            registry_dir = os.path.join(
-                main_root, '.claude', 'dev-registry', sid) if sid else ''
-        argv = _build_bwrap_argv(command, main_root, worktree_path, isolation_kind,
-                                 registry_dir)
+        argv = _build_bwrap_argv(command, main_root, worktree_path, isolation_kind)
         if argv:
             # shlex-quote the argv into a single re-exec command string.
             import shlex

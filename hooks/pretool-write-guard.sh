@@ -3,10 +3,6 @@
 # Forces agents to use Edit for modifying existing files.
 # Reads tool input from stdin as JSON (Claude Code hook protocol)
 
-# Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-  || harness_state_dir() { printf '%s\n' /tmp; }
-
 # Read full JSON from stdin
 INPUT=$(cat)
 
@@ -47,7 +43,11 @@ _WG_TASK_ID=$(echo "$INPUT" | python3 -c \
   2>/dev/null)
 _WG_ENV_TASK_ID="${CLAUDE_TASK_ID:-}"
 
-# /do bypass (main-agent only)
+_WG_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# /do bypass: hooks/lib/allowlist.py has_do_consent (main agent only).
+if printf '%s' "$INPUT" | python3 "$_WG_HOOKS_DIR/lib/allowlist.py" consent 2>/dev/null; then
+  exit 0
+fi
 _WG_IS_SUB=$(echo "$INPUT" | python3 -c \
   "import json,sys; d=json.load(sys.stdin); print('1' if d.get('agent_id') else '0')" \
   2>/dev/null)
@@ -57,16 +57,11 @@ if [ "$_WG_IS_SUB" != "1" ]; then
 print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" \
     2>/dev/null)
   [ -z "$_WG_SID" ] && _WG_SID="default"
-  _WG_DO_FLAG="$(harness_state_dir)/claude-orchestrator-consent-${_WG_SID}.flag"
-  if [ -f "$_WG_DO_FLAG" ] && [ "$(cat "$_WG_DO_FLAG" 2>/dev/null)" = "true" ]; then
-    exit 0
-  fi
-  # Sentinel-grant bypass (main-agent only) — must check BEFORE legacy /allow grant.
+  # Sentinel-grant bypass (main-agent only), the /allow grant for Write.
   # CF-1 invariant: if a valid (unexpired, correct-session) sentinel exists for
-  # this task but does NOT match the target file, suppress the legacy
-  # read_grant("Write") fallback entirely. CF-1 only applies to overwrite
-  # attempts (existing files); new-file creation bypasses CF-1 denial.
-  _WG_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # this task but does NOT match the target file, it confers no overwrite.
+  # CF-1 only applies to overwrite attempts (existing files); new-file
+  # creation bypasses CF-1 denial.
   _WG_SENTINEL_RESULT=$(HOOKS_DIR="$_WG_HOOKS_DIR" WG_SID="$_WG_SID" WG_TASK_ID="$_WG_TASK_ID" WG_ENV_TASK_ID="$_WG_ENV_TASK_ID" WG_FILE_PATH="$FILE_PATH" python3 - <<'WGEOF'
 import os, sys
 sys.path.insert(0, os.environ["HOOKS_DIR"])
@@ -112,9 +107,9 @@ WGEOF
   if [ "$_WG_SENTINEL_RESULT" = "match" ]; then
     exit 0
   fi
-  # CF-1: valid same-session sentinel exists but does not match this target.
-  # Suppress legacy grant — but ONLY for overwrite attempts (existing files).
-  # New-file creation (non-existing file) must not be blocked by an unrelated sentinel.
+  # CF-1: valid same-session sentinel exists but does not match this target —
+  # block ONLY overwrite attempts (existing files). New-file creation
+  # (non-existing file) must not be blocked by an unrelated sentinel.
   if [ "$_WG_SENTINEL_RESULT" = "valid_no_match" ] && [ -f "$FILE_PATH" ]; then
     echo "[Write Guard] BLOCKED: sentinel grant does not cover this target." >&2
     echo "Target: $FILE_PATH" >&2
@@ -125,22 +120,6 @@ WGEOF
     echo "  1. Re-issue the grant naming this exact path, if overwriting it is genuinely intended." >&2
     echo "  2. Modify the existing file in place (Edit) instead of replacing it wholesale." >&2
     exit 2
-  fi
-  # /allow bypass (main-agent only) — delegates to lib/allowlist.read_grant("Write", sid)
-  _WG_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  _WG_ALLOW_FILE="$(harness_state_dir)/claude-bash-allowlist-${_WG_SID}.json"
-  if [ -f "$_WG_ALLOW_FILE" ]; then
-    _WG_MATCHED=$(HOOKS_DIR="$_WG_HOOKS_DIR" WG_SID="$_WG_SID" python3 - <<'WGEOF'
-import os, sys
-sys.path.insert(0, os.environ["HOOKS_DIR"])
-from lib.allowlist import read_grant
-if read_grant("Write", os.environ["WG_SID"]):
-    print("1")
-WGEOF
-)
-    if [ "$_WG_MATCHED" = "1" ]; then
-      exit 0
-    fi
   fi
 fi
 
