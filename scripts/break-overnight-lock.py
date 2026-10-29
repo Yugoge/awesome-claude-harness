@@ -21,15 +21,12 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# WS1: resolve the project dir via the shared claude_home resolver (this script
-# lives at <harness home>/scripts/break-overnight-lock.py, so the resolver is at
+# WS1: the state's locator and write path are the shared lib (this script
+# lives at <harness home>/scripts/break-overnight-lock.py, so the lib is at
 # ../hooks/lib). Never default to the author literal /root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
-import claude_home  # noqa: E402
 from harness_state_dir import harness_state_dir  # noqa: E402
 import overnight  # noqa: E402
-
-CLAUDE_DIR = claude_home.project_dir() / ".claude"
 
 # Where the PreTool user-intent guard mints the helper-auth token
 # (claude-stop-helper-auth-<sid>.json). Overridable for sandbox tests.
@@ -106,7 +103,12 @@ def _backdate(sf: Path, past: str, release_isolation: bool) -> str:
 
 
 def main() -> int:
-    states = sorted(CLAUDE_DIR.glob("overnight-state-*.json"))
+    # Every session's record, where the launcher writes it (overnight.state_path:
+    # CLAUDE_PROJECT_DIR, else the cwd). /stop runs in the CLI's Bash, which does
+    # not export CLAUDE_PROJECT_DIR; its cwd is the session's project directory,
+    # the one the launching hook was given.
+    records = overnight.state_path("*")
+    states = sorted(records.parent.glob(records.name))
     if not states:
         print("no overnight state files found — nothing to unlock")
         return 0

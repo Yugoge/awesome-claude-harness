@@ -1497,7 +1497,7 @@ Use Agent tool with:
   <For each pipeline in current_issues: {pipeline.spec_path}>
 
   For each UNRESOLVED pipeline, record in your retro report's unresolved_issues
-  (the next cycle's PLAN reads it):
+  (PM reads it when it plans the next cycle):
   - What Must Be Done: Prescriptive next step with exact file, line, action
   - Attention Notes: Issue-specific traps and warnings for next cycle
 
