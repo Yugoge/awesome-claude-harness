@@ -39,13 +39,14 @@ def _tri_state_guard(candidate_root, task_id):
     _FAIL_CLOSED (State C -- a run record/effective report exists but
     corroboration fails; caller MUST NOT fall back to stale canonical), or
     None (State A -- no late-repair state at all; caller's existing
-    canonical/fallback resolution is unaffected).
+    canonical/fallback resolution is unaffected).  The controller's state
+    and path are taken verbatim.
     """
     controller = _load_late_repair_controller()
     state, effective_path = controller.resolve_effective_report_state(
         Path(candidate_root), task_id
     )
-    if state == "verified" and effective_path is not None and effective_path.is_file():
+    if state == "verified":
         return str(effective_path)
     if state == "invalid":
         return _FAIL_CLOSED

@@ -31,6 +31,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Where one /clean request's files live (commands/clean.md: docs/clean/).
+clean_output_dir() {
+  echo "${ORCHESTRATOR_CLEAN_OUTPUT_DIR:-$(jq -r '.orchestrator.analysis.clean_output_dir // "docs/clean"' "$CONTEXT_FILE")}"
+}
+
 # Mode: dev-workflow
 # Coordinates dev subagent execution
 dev_workflow() {
@@ -193,7 +198,7 @@ clean_inspect() {
 
   # Extract request ID for rule-context verification
   REQUEST_ID=$(jq -r '.request_id // ""' "$CONTEXT_FILE")
-  CLEAN_OUTPUT_DIR="${ORCHESTRATOR_CLEAN_OUTPUT_DIR:-$(jq -r '.orchestrator.analysis.clean_output_dir // "docs/clean"' "$CONTEXT_FILE")}"
+  CLEAN_OUTPUT_DIR=$(clean_output_dir)
   RULE_CONTEXT_FILE="${CLEAN_OUTPUT_DIR}/rule-context-${REQUEST_ID}.json"
 
   # CRITICAL PREREQUISITE CHECK: Verify rule-inspector was executed
@@ -259,63 +264,65 @@ clean_inspect() {
 }
 
 # Mode: clean-merge-reports
-# Merges cleanliness, style, and prompt inspection reports
+# Merges the cleanliness, style, and prompt inspection reports of the request the /clean
+# context names into the combined report /clean's later steps and the cleaner read.
 clean_merge_reports() {
   echo "=== Clean Merge Reports Orchestration ===" >&2
   echo "Context: $CONTEXT_FILE" >&2
 
-  # Validate all three reports exist in context -- prompt-inspector is
-  # MANDATORY on every /clean run (commands/clean.md Step 10A), so its
-  # report is required here on the same footing as the other two, not an
-  # optional post-merge patch the orchestrator might forget to apply.
-  if ! jq -e '.cleanliness_report' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Error: Missing cleanliness_report in context" >&2
-    exit 1
-  fi
+  REQUEST_ID=$(jq -r '.request_id // ""' "$CONTEXT_FILE")
+  CLEAN_OUTPUT_DIR=$(clean_output_dir)
+  CLEANLINESS_REPORT="${CLEAN_OUTPUT_DIR}/cleanliness-report-${REQUEST_ID}.json"
+  STYLE_REPORT="${CLEAN_OUTPUT_DIR}/style-report-${REQUEST_ID}.json"
+  PROMPT_REPORT="${CLEAN_OUTPUT_DIR}/prompt-report-${REQUEST_ID}.json"
 
-  if ! jq -e '.style_report' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Error: Missing style_report in context" >&2
-    exit 1
-  fi
-
-  if ! jq -e '.prompt_report' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Error: Missing prompt_report in context" >&2
-    exit 1
-  fi
+  # All three reports are required -- prompt-inspector is MANDATORY on every
+  # /clean run (commands/clean.md Step 10A), so its report is required here on
+  # the same footing as the other two.
+  for report in "$CLEANLINESS_REPORT" "$STYLE_REPORT" "$PROMPT_REPORT"; do
+    if ! jq empty "$report" 2>/dev/null; then
+      echo "Error: Missing or invalid report: $report" >&2
+      exit 1
+    fi
+  done
 
   # Merge reports
-  COMBINED_OUTPUT="/tmp/combined-report-$(date +%s).json"
+  COMBINED_OUTPUT="${CLEAN_OUTPUT_DIR}/combined-report-${REQUEST_ID}.json"
 
-  jq \
-    '{
-      request_id: .request_id,
+  jq -n \
+    --arg request_id "$REQUEST_ID" \
+    --slurpfile cleanliness "$CLEANLINESS_REPORT" \
+    --slurpfile style "$STYLE_REPORT" \
+    --slurpfile prompt "$PROMPT_REPORT" \
+    '$cleanliness[0] as $c | $style[0] as $s | $prompt[0] as $p | {
+      request_id: $request_id,
       timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
-      cleanliness_report: .cleanliness_report,
-      style_report: .style_report,
-      prompt_report: .prompt_report,
+      cleanliness_report: $c,
+      style_report: $s,
+      prompt_report: $p,
       combined_summary: {
         total_issues: (
-          (.cleanliness_report.summary.total_issues // 0) +
-          (.style_report.summary.violations_found // 0) +
-          (.prompt_report.findings // [] | length)
+          ($c.summary.total_issues // 0) +
+          ($s.summary.violations_found // 0) +
+          ($p.findings // [] | length)
         ),
         critical: (
-          (.cleanliness_report.summary.critical // 0) +
-          (.style_report.summary.critical // 0) +
-          (.prompt_report.summary.critical // 0)
+          ($c.summary.critical // 0) +
+          ($s.summary.critical // 0) +
+          ($p.summary.critical // 0)
         ),
         major: (
-          (.cleanliness_report.summary.major // 0) +
-          (.style_report.summary.major // 0) +
-          (.prompt_report.summary.major // 0)
+          ($c.summary.major // 0) +
+          ($s.summary.major // 0) +
+          ($p.summary.major // 0)
         ),
         minor: (
-          (.cleanliness_report.summary.minor // 0) +
-          (.style_report.summary.minor // 0) +
-          (.prompt_report.summary.minor // 0)
+          ($c.summary.minor // 0) +
+          ($s.summary.minor // 0) +
+          ($p.summary.minor // 0)
         )
       }
-    }' "$CONTEXT_FILE" > "$COMBINED_OUTPUT"
+    }' > "$COMBINED_OUTPUT"
 
   echo "Combined report: $COMBINED_OUTPUT" >&2
 
@@ -365,7 +372,8 @@ clean_execute() {
 }
 
 # Mode: record-checkpoint
-# Records git checkpoint commit hash in context file
+# Prints the git checkpoint record the cleaner's context carries (commands/clean.md Step 16
+# merges it into context-with-approvals); it rewrites no file, the context it reads included.
 record_checkpoint() {
   echo "=== Record Checkpoint Orchestration ===" >&2
   echo "Context: $CONTEXT_FILE" >&2
@@ -377,26 +385,14 @@ record_checkpoint() {
     exit 1
   fi
 
-  # Update context file with checkpoint information
-  TMP_FILE="/tmp/context-checkpoint-$(date +%s).json"
-  jq \
-    --arg commit "$CHECKPOINT_COMMIT" \
-    '.orchestrator.analysis.safety_checkpoint_created = true |
-     .orchestrator.analysis.checkpoint_commit = $commit' \
-    "$CONTEXT_FILE" > "$TMP_FILE"
-
-  # Replace original context file
-  mv "$TMP_FILE" "$CONTEXT_FILE"
-
   echo "Checkpoint recorded: $CHECKPOINT_COMMIT" >&2
 
   jq -n \
     --arg commit "$CHECKPOINT_COMMIT" \
-    --arg context "$CONTEXT_FILE" \
     '{
       status: "recorded",
-      checkpoint_commit: $commit,
-      updated_context: $context
+      safety_checkpoint_created: true,
+      checkpoint_commit: $commit
     }'
 
   return 0

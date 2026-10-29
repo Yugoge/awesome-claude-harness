@@ -20,12 +20,13 @@
 #   {"events": ["close_success_qa_pass" | "close_success_qa_fail_fixed"] OR [],
 #    "skip_reason": "<string>" OR null}
 #
-# Decision matrix (per ticket-20260529-210616.md M4 / AC-4):
+# Decision matrix (per ticket-20260529-210616.md M4 / AC-4); the verdict is the
+# class hooks/lib/close-verdict.py gives the report's last non-empty line, used
+# as it is:
 #   close-report missing     -> events=[],                              skip_reason contains "missing"
-#   last-line "CLOSE: NO"    -> events=[],                              skip_reason non-null
-#   last-line CLOSE: YES (FORCED) -> events=[],                         skip_reason contains "FORCED"
-#   last-line "CLOSE: YES" + qa_ever_rejected=false -> events=["close_success_qa_pass"], skip_reason=null
-#   last-line "CLOSE: YES" + qa_ever_rejected=true  -> events=["close_success_qa_fail_fixed"], skip_reason=null
+#   last line not class yes  -> events=[],                              skip_reason non-null
+#   last line class yes + qa_ever_rejected=false -> events=["close_success_qa_pass"], skip_reason=null
+#   last line class yes + qa_ever_rejected=true  -> events=["close_success_qa_fail_fixed"], skip_reason=null
 #
 # Exit codes:
 #   0 = decision emitted (events may be empty if blocked by gate)
@@ -183,14 +184,6 @@ def decide(close_report_path: Path, qa_ever_rejected: bool, repo_root: Path) -> 
     cv = _load_close_verdict_module(repo_root)
     last_line = cv.last_nonempty(text)
     verdict = cv.classify_line(last_line)
-
-    # FORCED check FIRST (excluded per codex F9 — even though classify_line
-    # returns "yes" for "CLOSE: YES (FORCED)"). Use case-insensitive.
-    if "FORCED" in last_line.upper():
-        return (
-            {"events": [], "skip_reason": f"verdict is CLOSE: YES (FORCED) — scoring excluded"},
-            0,
-        )
 
     if verdict != "yes":
         return (

@@ -11,7 +11,7 @@ the invariant half made the recurring cost unbounded in prompts-per-cycle.
 After the fix the light half rides every prompt (withholding it would strand a
 resuming orchestrator on the phase that was current at the last cycle boundary)
 and the heavy half is gated on a delivery marker keyed by
-(session_id, cycle_count, context epoch, spec fingerprint).
+(session_id, cycle index, context epoch, spec fingerprint).
 
 Structured after ``tests/test_prompt_workflow_liveness_tz.py``.
 
@@ -96,9 +96,11 @@ LIGHT_FLOOR_CHARS = 1500
 LIGHT_CEILING_CHARS = 3000
 # The same block measured against the state create-overnight-state.sh actually
 # writes: main_root and actor_git_env populated, registered_worktree isolation.
-# Measured 3,595 chars (2,880 cadence payload + a 715-char sibling-owned
-# enforcement-registry warning), so the ceiling is the measured value plus
-# roughly 11% headroom for the path-length-dependent terms. Asserted TOGETHER
+# Measured 3,595 chars while every prompt also carried a 715-char
+# enforcement-registry verification notice; that per-prompt re-check of the
+# registry is gone (its one producer writes it at launch), and the block now
+# measures 2,879, inside the fixture ceiling too. The ceiling stays the
+# production figure the sibling publishes. Asserted TOGETHER
 # with the relational bound below, because an absolute cap alone would drift
 # loose as the command document grows and a ratio alone would drift loose in
 # absolute chars for the same reason.
@@ -142,7 +144,7 @@ def load_hook_module(path: Path = HOOK_PATH):
 class Fixture:
     """A hermetic project + HOME + transcript, never touching the repo."""
 
-    def __init__(self, tmp: str, session_id: str = SID, cycle_count: int = 0,
+    def __init__(self, tmp: str, session_id: str = SID, cycles_done: int = 0,
                  isolation_kind: str = 'registered_worktree',
                  with_transcript: bool = True, with_spec: bool = True,
                  with_todo: bool = True):
@@ -171,17 +173,31 @@ class Fixture:
         if with_transcript:
             self.transcript.write_text(json.dumps({'type': 'user', 'uuid': 'u0'}) + '\n')
         self.state_path = self.project / '.claude' / f'overnight-state-{session_id}.json'
-        self.write_state(cycle_count=cycle_count, isolation_kind=isolation_kind)
+        self.worktree = self.root / 'wt'
+        self.write_state(cycles_done=cycles_done, isolation_kind=isolation_kind)
 
-    def write_state(self, cycle_count: int = 0, phase: str = 'exploring',
+    def write_state(self, cycles_done: int = 0, phase: str = 'exploring',
                     isolation_kind: str = 'registered_worktree') -> None:
+        """The record, and the cycles the session has completed.
+
+        The record holds no cycle count: hooks/lib/overnight.py cycle_index
+        reads the cycle in progress from the retro reports in the session's
+        directory under its working root, so the completed cycles are written
+        there.
+        """
+        self.cycles_done = cycles_done
+        session_dir = self.worktree / 'docs' / 'dev' / 'overnight' / self.session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        for report in session_dir.glob('retro-report-cycle*.json'):
+            report.unlink()
+        for cycle in range(1, cycles_done + 1):
+            (session_dir / f'retro-report-cycle{cycle}.json').write_text('{}')
         self.state_path.write_text(json.dumps({
             'session_id': self.session_id,
             'end_time': '2099-01-01T00:00:00Z',
-            'cycle_count': cycle_count,
             'current_phase': phase,
             'isolation_kind': isolation_kind,
-            'worktree_path': '/tmp/wt',
+            'worktree_path': str(self.worktree),
             'worktree_branch': 'wt-branch',
             'protected_branch': 'master',
             'issues_fixed': 0,
@@ -405,10 +421,6 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
                 with self.subTest(prompt=index):
                     size = measured_len(out, fixture)
                     self.assertNotIn(SPEC_HEADER, out)
-                    self.assertGreater(size, LIGHT_CEILING_CHARS,
-                                       'production shape no longer exceeds the '
-                                       'fixture ceiling; the two bounds have '
-                                       'converged and this case is now vacuous')
                     self.assertLessEqual(size, PRODUCTION_LIGHT_CEILING_CHARS)
                     self.assertLessEqual(
                         size, boundary * PRODUCTION_LIGHT_MAX_RATIO_OF_BOUNDARY)
@@ -446,7 +458,7 @@ class TestAC2FailSafePolarity(unittest.TestCase):
             ('2.2', 'zero-length', '', 'heavy'),
             ('2.3', 'malformed JSON', '{not json', 'heavy'),
             ('2.4', 'not an object', [], 'heavy'),
-            ('2.5', 'missing session_id', {'cycle_count': 0}, 'heavy'),
+            ('2.5', 'missing session_id', {'cycle_index': 1}, 'heavy'),
             ('2.6', 'foreign session_id', {'session_id': OTHER_SID}, 'heavy'),
             ('2.7', 'cycle lower', 'CYCLE:-1', 'heavy'),
             ('2.8', 'cycle higher', 'CYCLE:+1', 'heavy'),
@@ -461,11 +473,11 @@ class TestAC2FailSafePolarity(unittest.TestCase):
                     if payload in ('VALID', 'CYCLE:-1', 'CYCLE:+1', 'CYCLE:str'):
                         marker = self._valid_marker(fixture)
                         if payload == 'CYCLE:-1':
-                            marker['cycle_count'] = marker['cycle_count'] - 1
+                            marker['cycle_index'] = marker['cycle_index'] - 1
                         elif payload == 'CYCLE:+1':
-                            marker['cycle_count'] = marker['cycle_count'] + 1
+                            marker['cycle_index'] = marker['cycle_index'] + 1
                         elif payload == 'CYCLE:str':
-                            marker['cycle_count'] = 'zero'
+                            marker['cycle_index'] = 'one'
                         fixture.marker_path().write_text(json.dumps(marker))
                     elif payload == 'UNREADABLE':
                         # DISCREPANCY -- AC-2 row 2.10 specifies mode 0o000, but
@@ -490,7 +502,7 @@ class TestAC2FailSafePolarity(unittest.TestCase):
     def test_no_exception_escapes_the_decision(self):
         """Direct in-process call: any raise fails here, unlike a subprocess."""
         for label, payload in (('malformed', '{not json'), ('non-object', '[]'),
-                               ('zero-length', ''), ('wrong types', '{"cycle_count": {}}')):
+                               ('zero-length', ''), ('wrong types', '{"cycle_index": {}}')):
             with self.subTest(marker=label):
                 with tempfile.TemporaryDirectory() as tmp:
                     fixture = Fixture(tmp)
@@ -513,7 +525,7 @@ class TestAC3ValidityKeyDiscrimination(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp)
             deliver(fixture)
-            fixture.write_state(cycle_count=fixture.state()['cycle_count'] + 1)
+            fixture.write_state(cycles_done=fixture.cycles_done + 1)
             self.assertIn(SPEC_HEADER, deliver(fixture))
 
     def test_3_2_session_change_redelivers(self):
@@ -530,7 +542,7 @@ class TestAC3ValidityKeyDiscrimination(unittest.TestCase):
 
         Here the other session gets a live state in the SAME project and a
         byte-identical copy of the first session's marker, so every other term
-        of the key (cycle_count, spec fingerprint, transcript path / inode /
+        of the key (cycle index, spec fingerprint, transcript path / inode /
         offset, epoch reading) matches and only the session term can decide.
         """
         with tempfile.TemporaryDirectory() as tmp:
@@ -648,12 +660,12 @@ class TestAC5CycleBoundaryStillDelivers(unittest.TestCase):
 
     def test_advance_redelivers_and_rearms(self):
         with tempfile.TemporaryDirectory() as tmp:
-            fixture = Fixture(tmp, cycle_count=4)
+            fixture = Fixture(tmp, cycles_done=4)
             deliver(fixture)
             self.assertNotIn(SPEC_HEADER, deliver(fixture))
 
-            # posttool-overnight-loop.py:100-101 -- cycle_count +1, phase reset.
-            fixture.write_state(cycle_count=5, phase='exploring')
+            # Cycle 5's PM retrospective lands (Step 20), then the loop reset.
+            fixture.write_state(cycles_done=5, phase='exploring')
             out = deliver(fixture)
 
             self.assertIn(SPEC_HEADER, out)
@@ -663,15 +675,15 @@ class TestAC5CycleBoundaryStillDelivers(unittest.TestCase):
             self.assertIn('Phase mapping:', out)
 
             marker = json.loads(fixture.marker_path().read_text())
-            self.assertEqual(5, marker['cycle_count'])
+            self.assertEqual(6, marker['cycle_index'])
             self.assertNotIn(SPEC_HEADER, deliver(fixture))
 
     def test_phase_advance_within_a_cycle_updates_routing(self):
         """The light half must track current_phase, which moves mid-cycle."""
         with tempfile.TemporaryDirectory() as tmp:
-            fixture = Fixture(tmp, cycle_count=2)
+            fixture = Fixture(tmp, cycles_done=2)
             deliver(fixture)
-            fixture.write_state(cycle_count=2, phase='implementing')
+            fixture.write_state(cycles_done=2, phase='implementing')
             out = deliver(fixture)
             self.assertNotIn(SPEC_HEADER, out)
             self.assertIn('resume from phase="implementing"', out)
@@ -1184,7 +1196,8 @@ class TestScopeConfinement(unittest.TestCase):
         # No project-wide scan survives (a prose mention in the docstring
         # explaining the removed glob is not a call site).
         self.assertNotIn('.glob(', bodies['find_any_overnight_state'])
-        self.assertIn("replace('Z', '+00:00')", bodies['_is_active_state'])
+        # The liveness verdict is lib/overnight.py's window rule (P1b row 13).
+        self.assertIn('state_verdicts(state).window_live', bodies['_is_active_state'])
 
     def test_handle_phase_b_still_threads_the_session_id(self):
         """tz asserts this literal; the cadence fix must not break it."""

@@ -48,25 +48,24 @@ def test_close_resolves_explicit_and_bare_before_singular_assumptions() -> None:
     ]
     flat = _squash(resolution)
 
-    assert FIXED_ENTRYPOINT in resolution
+    # /close's one chain call is Step 0's selector call, from the harness home.
+    assert 'python3 ~/.claude/scripts/close-route-select.py "${ROUTE_SELECT_ARGS[@]}"' in resolution
     assert "both explicit `/close <task-id-or-path>` and bare `/close`" in resolution
     assert "before any parent ticket/context/QA assumption" in resolution
     assert 'PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"' in resolution
-    aggregate = resolution.index("scripts/aggregate-dev-report.py")
-    resolver = resolution.index("scripts/resolve-dev-artifact-chain.py")
-    assert aggregate < resolver
-    assert "creates a missing canonical aggregate" in resolution
-    assert "sole permitted close-time artifact repair" in resolution
+    # P1b E5 / ruling 1: the canonical aggregate's one producer is the
+    # lane-completeness hook; /close runs no aggregator of its own.
+    assert "aggregate-dev-report.py" not in resolution
+    assert "runs no aggregator" in flat
     assert "Parent ticket/context/QA are optional" in flat
 
 
-def test_close_reuses_resolver_for_schema_qa_and_workflow_integrity() -> None:
+def test_close_reuses_resolver_for_qa_and_workflow_integrity() -> None:
     text = _read("commands/close.md")
-    schema = text[text.index("### Artifact schema gate") : text.index("### Step 1:")]
     qa_prompt = text[text.index("### Step 2:") : text.index("### Step 3:")]
 
-    assert "ARTIFACT_CHAIN.report_paths[]" in schema
-    assert '"report_paths"' in schema
+    # Report schemas are checked at each producer's stop (G2), not re-run here.
+    assert "### Artifact schema gate" not in text
     assert "Lane matrix: <ARTIFACT_CHAIN.lanes" in qa_prompt
     assert "QA inputs: <ARTIFACT_CHAIN.qa_inputs" in qa_prompt
     assert "commit_whitelist_artifacts" in qa_prompt
@@ -80,9 +79,9 @@ def test_normal_commit_and_changelog_share_resolver_whitelist() -> None:
     analyst = _read("agents/changelog-analyst.md")
 
     assert FIXED_ENTRYPOINT in command
-    assert command.count('ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py') == 1
+    assert command.count('ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py') == 1
     assert command.index('TASK_PROJECT_ROOT="') < command.index(
-        'ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py'
+        'ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py'
     )
     assert "ARTIFACT_CHAIN=<exact resolver JSON" in command
     assert "ARTIFACT_CHAIN.commit_whitelist_artifacts" in command

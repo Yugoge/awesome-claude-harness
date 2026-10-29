@@ -9,6 +9,8 @@ broader/standalone suite named in the BA ticket's files_to_create list.
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,7 +19,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _dev_lifecycle_fixtures import (  # noqa: E402
+    REPO_ROOT,
     close_report_text,
+    completion_md,
     dev_dir,
     dev_report,
     dlc,
@@ -28,7 +32,20 @@ from _dev_lifecycle_fixtures import (  # noqa: E402
     qa_report,
     write_json,
     write_text,
+    write_ticket_fixture,
 )
+
+
+def _chain(project, task_id):
+    """The chain function's own result, called directly."""
+    return dlc._load_resolver_module().resolve_chain(project, task_id)
+
+
+def _passing_singular(project, task_id):
+    write_ticket_fixture(project, task_id)
+    write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id))
+    write_json(dev_dir(project) / f"qa-report-{task_id}.json", qa_report(task_id))
+    write_text(dev_dir(project) / f"completion-{task_id}.md", completion_md(task_id))
 
 
 # --------------------------------------------------------------------------
@@ -58,41 +75,15 @@ def test_do_report_lite_preflight_valid():
         ({"source": "not-do", "do": {"status": "completed", "files_modified": []}}, "source"),
         ({"source": "do", "do": "not-a-dict"}, "do"),
         ({"source": "do", "do": {"status": "in_progress", "files_modified": []}}, "do.status"),
+        # Terminal but not done, and the status no schema declares any more (E8):
+        # only "completed" lets the do track treat the work as done.
+        ({"source": "do", "do": {"status": "blocked", "files_modified": []}}, "do.status"),
+        ({"source": "do", "do": {"status": "pending", "files_modified": []}}, "do.status"),
         ({"source": "do", "do": {"status": "completed", "files_modified": "not-a-list"}}, "do.files_modified"),
     ],
 )
 def test_do_report_lite_preflight_rejects_malformed(doc, expected_field):
     assert dlc.do_report_lite_preflight(doc) == expected_field
-
-
-# --------------------------------------------------------------------------
-# validate_resolver_contract_shape (AC-L20)
-# --------------------------------------------------------------------------
-
-
-def test_resolver_contract_shape_accepts_current_shape():
-    assert dlc.validate_resolver_contract_shape(
-        {"schema_version": 2, "status": "pass", "mode": "singular"}
-    )
-
-
-def test_resolver_contract_shape_rejects_declarative_rewrite_shape():
-    declarative = {
-        "schema_version": "2.0",
-        "artifact_chain_declaration": {},
-        "PHASE_STATES": [],
-        "allowed_edges": [],
-        "mode": "singular",
-    }
-    assert not dlc.validate_resolver_contract_shape(declarative)
-
-
-def test_resolver_contract_shape_rejects_bad_mode():
-    assert not dlc.validate_resolver_contract_shape({"schema_version": 2, "mode": "weird"})
-
-
-def test_resolver_contract_shape_rejects_non_dict():
-    assert not dlc.validate_resolver_contract_shape(["not", "a", "dict"])
 
 
 # --------------------------------------------------------------------------
@@ -107,6 +98,11 @@ def test_classify_walk_outcome_hook_deny():
 
 def test_classify_walk_outcome_success_close():
     assert dlc.classify_walk_outcome("...\nCLOSE: YES\n") == "success"
+
+
+def test_classify_walk_outcome_reads_the_close_verdict_of_the_last_line_only():
+    # A round-open last line is not landed, whatever an earlier line quotes.
+    assert dlc.classify_walk_outcome("CLOSE: YES (prior attempt)\nCLOSE_FINDINGS: 2 items\n") == "ordinary_reject"
 
 
 def test_classify_walk_outcome_success_commit():
@@ -166,7 +162,7 @@ def test_render_table_includes_header_and_rows():
 
 
 # --------------------------------------------------------------------------
-# derive_state integration smoke tests (Stage 0 -> Stage 3, a few key paths)
+# derive_state integration smoke tests (a few key paths)
 # --------------------------------------------------------------------------
 
 
@@ -177,33 +173,38 @@ def test_derive_state_analyzed_when_nothing_exists(tmp_path):
     assert row["next_action"] == "develop"
 
 
-def test_derive_state_developing_when_dev_report_incomplete(tmp_path):
+def test_derive_state_a_passing_chain_is_close_pending_with_the_chain_verbatim(tmp_path):
     project = make_project(tmp_path)
-    dd = dev_dir(project)
     task_id = "20260101-000002"
-    write_json(dd / f"dev-report-{task_id}.json", dev_report(task_id, status="blocked"))
+    _passing_singular(project, task_id)
     row = dlc.derive_state(project, task_id)
-    assert row["state"] == "developing"
-    assert row["terminal_evidence"] == "unavailable"
+    assert (row["state"], row["next_action"], row["invoke_resolver"]) == ("close_pending", "close", True)
+    assert row["artifact_chain"] == _chain(project, task_id)
+    assert row["artifact_chain"]["status"] == "pass"
 
 
-def test_derive_state_qa_pending(tmp_path):
+@pytest.mark.parametrize(
+    "dev_status,qa_status",
+    [("blocked", "pass"), ("completed", None), ("completed", "fail")],
+    ids=["dev-blocked", "qa-missing", "qa-fail"],
+)
+def test_derive_state_an_unfinished_chain_is_the_chain_s_own_failure(tmp_path, dev_status, qa_status):
+    # The lifecycle derives no stage of its own: dev and QA status reach the
+    # row only as the chain's errors, used verbatim.
     project = make_project(tmp_path)
-    dd = dev_dir(project)
     task_id = "20260101-000003"
-    write_json(dd / f"dev-report-{task_id}.json", dev_report(task_id))
+    _passing_singular(project, task_id)
+    write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id, status=dev_status))
+    qa_path = dev_dir(project) / f"qa-report-{task_id}.json"
+    if qa_status is None:
+        qa_path.unlink()
+    else:
+        write_json(qa_path, qa_report(task_id, status=qa_status))
     row = dlc.derive_state(project, task_id)
-    assert row["state"] == "qa_pending"
-
-
-def test_derive_state_qa_failed(tmp_path):
-    project = make_project(tmp_path)
-    dd = dev_dir(project)
-    task_id = "20260101-000004"
-    write_json(dd / f"dev-report-{task_id}.json", dev_report(task_id))
-    write_json(dd / f"qa-report-{task_id}.json", qa_report(task_id, status="fail"))
-    row = dlc.derive_state(project, task_id)
-    assert row["state"] == "qa_failed"
+    assert (row["state"], row["next_action"], row["blocker"]) == ("blocked", "inspect", "RESOLVER_FAIL")
+    assert row["artifact_chain"] == _chain(project, task_id)
+    assert row["artifact_chain"]["status"] == "fail"
+    assert row["artifact_chain"]["errors"] != []
 
 
 def test_derive_state_never_crashes_on_garbage(tmp_path):
@@ -260,37 +261,15 @@ def test_scan_marks_lane_rows_non_actionable(tmp_path):
     rows = dlc.scan(project)
     by_id = {r["task_id"]: r for r in rows}
     parent_row = by_id[parent]
-    assert parent_row["state"] == "close_pending"
-    assert parent_row["next_action"] == "close"
+    # The lanes are the ones the parent's chain lists; its state is the chain's.
+    assert parent_row["artifact_chain"] == _chain(project, parent)
+    assert parent_row["artifact_chain"]["mode"] == "fanout"
+    assert [lane["task_id"] for lane in parent_row["lanes"]] == [f"{parent}-a", f"{parent}-b"]
     for worker in ("a", "b"):
         lane_row = by_id[f"{parent}-{worker}"]
         assert lane_row["kind"] == "lane"
         assert lane_row["next_action"] == "none"
         assert lane_row["parent_task_id"] == parent
-
-
-# --------------------------------------------------------------------------
-# roster_preview() failure-path regression (R29, AC-07, task dev-20260914-035503)
-# --------------------------------------------------------------------------
-
-
-def test_roster_preview_malformed_shard_stays_complete_false_no_exception(tmp_path):
-    """_load_shard()'s dict|None return contract is unchanged by R29's new
-    _load_shard_with_diagnostic() helper (used only by aggregate-dev-report.py's
-    own main()) -- roster_preview()'s FAILURE-path handling of a malformed
-    shard must keep working exactly as before, with no exception raised."""
-    project = make_project(tmp_path)
-    dd = dev_dir(project)
-    task_id = "20260101-010109"
-    write_json(dd / f"dev-report-A-{task_id}.json", dev_report(task_id))
-    write_text(dd / f"dev-report-B-{task_id}.json", "{not valid json")
-
-    aggregate_mod = dlc._load_aggregate_module()
-    result = dlc.roster_preview(dd, task_id, aggregate_mod)
-    assert result["complete"] is False
-    assert "unreadable/malformed" in result["reason"]
-    assert "B" in result["reason"]
-    assert sorted(result["lane_labels"]) == ["A", "B"]
 
 
 def test_actionable_parents_excludes_lanes_and_specs():
@@ -302,3 +281,52 @@ def test_actionable_parents_excludes_lanes_and_specs():
     ]
     assert dlc.actionable_parents(rows, "close") == ["p1"]
     assert dlc.actionable_parents(rows, "commit") == ["p2"]
+
+
+# --------------------------------------------------------------------------
+# list-actionable: the --auto discovery and the walked task's step share one
+# chain call (the step takes the discovery's result)
+# --------------------------------------------------------------------------
+
+
+def _list_actionable(project, next_action):
+    done = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "dev-lifecycle.py"), "list-actionable",
+         "--next-action", next_action, "--project-dir", str(project)],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout.splitlines()
+
+
+def test_list_actionable_close_hands_each_dev_parent_its_chain_result(tmp_path):
+    project = make_project(tmp_path)
+    task_id = "20260101-000011"
+    _passing_singular(project, task_id)
+    write_json(dev_dir(project) / "do-report-20260101-000012.json", do_report("20260101-000012"))
+    lines = _list_actionable(project, "close")
+    assert [line.split(" ", 1)[0] for line in lines] == [task_id, "20260101-000012"]
+    head, chain = lines[0].split(" ", 1)
+    resolver_cli = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "resolve-dev-artifact-chain.py"),
+         "--task-id", task_id, "--project-dir", str(project)],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert chain == resolver_cli.stdout.strip()
+    assert json.loads(chain)["status"] == "pass"
+    assert lines[1] == "20260101-000012"  # a /do parent: no chain
+
+
+def test_list_actionable_commit_selects_without_the_chain(tmp_path):
+    project = make_project(tmp_path)
+    init_git_repo(project)
+    (project / "owned.txt").write_text("hello\n", encoding="utf-8")
+    task_id = "20260101-000013"
+    write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id, files_modified=["owned.txt"]))
+    write_text(dev_dir(project) / f"close-report-{task_id}.md", close_report_text(task_id, "CLOSE: YES"))
+    git_commit_all(project, "chore: unrelated work, no task trailer\n")
+    row = dlc.derive_state(project, task_id)
+    assert (row["state"], row["next_action"]) == ("commit_pending", "commit")
+    assert row["invoke_resolver"] is False
+    assert "artifact_chain" not in row
+    assert _list_actionable(project, "commit") == [task_id]

@@ -19,14 +19,21 @@ resolve_project_dir() {
 PERMS="${1:?Missing permissions JSON path}"
 PROJECT_DIR="$(resolve_project_dir)"
 SETTINGS="${2:-$PROJECT_DIR/.claude/settings.json}"
-[ -f "$SETTINGS" ] || { echo "settings.json not found: $SETTINGS" >&2; exit 1; }
-[ -f "$PERMS" ]    || { echo "perms file not found: $PERMS" >&2; exit 1; }
+# Readable, not regular: /dev/stdin takes the list from a pipe (/dev and /dev-command).
+[ -r "$PERMS" ]    || { echo "perms file not found: $PERMS" >&2; exit 1; }
+# The file is read through the one load of a settings file (hooks/lib/claude_home.py): an
+# unusable one refuses the merge with its reason and stays as it is; a missing one is an empty
+# object to the merge, so the file is created when the merge adds an entry; a merge that adds
+# nothing writes nothing.
+CURRENT="$(python3 "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib/claude_home.py" settings "$SETTINGS")" \
+  || { echo "apply-permissions: nothing merged; $SETTINGS stays as it is" >&2; exit 1; }
 TMP="$(mktemp)"
-jq --slurpfile p "$PERMS" '
-  .permissions //= {allow:[], ask:[], deny:[]} |
+jq -n --slurpfile p "$PERMS" --argjson in "${CURRENT:-"{}"}" '
+  $in |
   reduce $p[0][] as $entry (.;
-    .permissions[$entry.section] //= [] |
-    if (.permissions[$entry.section] | index($entry.pattern)) then .
-    else .permissions[$entry.section] += [$entry.pattern] end)
-' "$SETTINGS" > "$TMP"
-mv "$TMP" "$SETTINGS"
+    if (.permissions[$entry.section] // [] | index($entry.pattern)) then .
+    else .permissions //= {allow:[], ask:[], deny:[]} |
+      .permissions[$entry.section] += [$entry.pattern] end) |
+  if . == $in then empty else . end
+' > "$TMP"
+if [ -s "$TMP" ]; then mkdir -p "$(dirname "$SETTINGS")"; mv "$TMP" "$SETTINGS"; else rm -f "$TMP"; fi

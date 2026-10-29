@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -70,6 +71,31 @@ def _write(path: Path, value) -> None:
     path.write_text(value, encoding="utf-8")
 
 
+def _declare_stage_dispatches(root: Path, task_id: str) -> None:
+    """The task's BA, dev and QA dispatch records in a session transcript of
+    the store CLAUDE_CONFIG_DIR names: record-stage takes a stage report's
+    role from the dispatch that declared it."""
+    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / str(root.resolve()).replace("/", "-")
+    store.mkdir(parents=True, exist_ok=True)
+    records = [{"type": "user", "message": {"role": "user", "content": f"/close --late-repair {task_id}"}}]
+    for role, artifacts in (
+        ("ba", [{"kind": "json", "path": f"docs/dev/context-{task_id}.json", "schema": "context.v1",
+                 "identity": {"task_id": task_id}},
+                {"kind": "markdown", "path": f"docs/dev/ticket-{task_id}.md", "identity_anchor": task_id}]),
+        ("dev", [{"kind": "json", "path": f"docs/dev/dev-report-{task_id}.json", "schema": "dev-report.v2",
+                  "identity": {"task_id": task_id}}]),
+        ("qa", [{"kind": "json", "path": f"docs/dev/qa-report-{task_id}.json", "schema": "qa-report.v2",
+                 "identity": {"task_id": task_id}}]),
+    ):
+        block = {"task_id": task_id, "lane": None, "lane_set": None, "role": role, "pipeline": "dev",
+                 "profile": "singular", "dispatched_at": "2026-01-01T00:00:00Z", "artifacts": artifacts}
+        records.append({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": f"toolu_{role}", "name": "Agent", "input": {
+                "subagent_type": role, "prompt": f'<obligation v="1">\n{json.dumps(block)}\n</obligation>'}}]}})
+    (store / f"late-repair-{task_id}.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+
 def _build_beyond_qa_chain_with_one_current_file(
     root: Path, task_id: str, *, with_cycle_date: bool = True
 ) -> dict[str, Path]:
@@ -88,6 +114,7 @@ def _build_beyond_qa_chain_with_one_current_file(
     at init time), leaving original_cycle_at None -- the precondition for
     finalize's fail_closed branch.
     """
+    _declare_stage_dispatches(root, task_id)
     dev_dir = root / "docs" / "dev"
     source_rel = "src/current_thing.py"
     source_body = "def current():\n    return 'unchanged since the original cycle'\n"
@@ -211,10 +238,12 @@ def test_corroborated_drift_free_run_is_state_none_not_invalid(tmp_path: Path) -
     assert payload["path"] is None
 
 
+def _record_path(root: Path) -> Path:
+    return root.resolve() / "docs" / "dev" / f"late-repair-run-{TASK_ID}.json"
+
+
 def _record(root: Path) -> dict:
-    return json.loads(
-        (root / "docs" / "dev" / f"late-repair-run-{TASK_ID}.json").read_text(encoding="utf-8")
-    )
+    return json.loads(_record_path(root).read_text(encoding="utf-8"))
 
 
 def _assert_corroboration_admitted(root: Path) -> None:
@@ -269,12 +298,13 @@ def test_unroutable_drift_run_is_state_invalid(tmp_path: Path) -> None:
         "'nothing to prefer', so /commit would fall back to canonical provenance "
         "that same finalize had just found stale"
     )
-    assert path is None
+    # The path to route the finding on: the run record, whose outcome is not finalize's.
+    assert path == _record_path(root)
 
     resolved = _run_controller(
         "resolve-effective-report", "--task-id", TASK_ID, "--project-dir", str(root),
     )
-    assert _last_json(resolved)["state"] == "invalid"
+    assert _last_json(resolved) == {"state": "invalid", "path": str(_record_path(root))}
 
 
 def test_not_yet_finalized_run_is_state_invalid(tmp_path: Path) -> None:
@@ -301,7 +331,7 @@ def test_not_yet_finalized_run_is_state_invalid(tmp_path: Path) -> None:
         "a repair run that had not yet run drift detection was reported as having "
         "found nothing to reconcile"
     )
-    assert path is None
+    assert path == _record_path(root)
 
 
 def test_fail_closed_run_is_state_invalid(tmp_path: Path) -> None:
@@ -319,7 +349,7 @@ def test_fail_closed_run_is_state_invalid(tmp_path: Path) -> None:
     run_id = _repair_run_through_controller_phases(root, TASK_ID, paths)
     assert _record(root)["original_cycle_at"] is None, "precondition for the fail_closed branch"
 
-    recorded_bytes = paths["dev_report"].read_bytes()  # post-disclosure, as the record hashed it
+    recorded_bytes = paths["dev_report"].read_bytes()  # as the record hashed it
     paths["dev_report"].unlink()
     finalize = _run_controller(
         "finalize", "--task-id", TASK_ID, "--project-dir", str(root), "--repair-run-id", run_id,
@@ -338,4 +368,4 @@ def test_fail_closed_run_is_state_invalid(tmp_path: Path) -> None:
     assert state == "invalid", (
         "a run that failed closed was reported as a clean, drift-free run"
     )
-    assert path is None
+    assert path == _record_path(root)

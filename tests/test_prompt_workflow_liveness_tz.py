@@ -78,19 +78,21 @@ def load_hook_module():
     return module
 
 
-def build_state(session_id: str, end_time: str | None, cycle_count: int = 3,
-                phase: str = 'implementing', worktree: str = '/tmp/wt',
+def build_state(session_id: str, end_time: str | None, cycles_done: int = 3,
+                phase: str = 'implementing', worktree: str | None = None,
                 omit_end_time: bool = False, omit_session_id: bool = False) -> dict:
+    """A record, plus the cycles its session has completed under the
+    test-only key `_cycles_done`, which write_state turns into retro reports."""
     state = {
         'session_id': session_id,
         'end_time': end_time,
-        'cycle_count': cycle_count,
         'current_phase': phase,
         'issues_fixed': 0,
         'worktree_path': worktree,
         'focus': 'none',
         'cycle_log': [],
         'current_issues': [],
+        '_cycles_done': cycles_done,
     }
     if omit_end_time:
         del state['end_time']
@@ -100,6 +102,22 @@ def build_state(session_id: str, end_time: str | None, cycle_count: int = 3,
 
 
 def write_state(claude_dir: Path, file_key: str, state: dict) -> Path:
+    """Write the record, and its completed cycles where the hook reads them.
+
+    The record holds no cycle count: hooks/lib/overnight.py cycle_index reads
+    the cycle in progress from the retro reports in the session's directory
+    under its working root, so a record whose worktree_path is unset gets one
+    inside the project.
+    """
+    state = dict(state)
+    cycles_done = state.pop('_cycles_done', 0)
+    if state.get('worktree_path') is None:
+        state['worktree_path'] = str(claude_dir.parent / 'wt')
+    session_dir = (Path(state['worktree_path']) / 'docs' / 'dev' / 'overnight'
+                   / (state.get('session_id') or 'unknown'))
+    for cycle in range(1, cycles_done + 1):
+        session_dir.mkdir(parents=True, exist_ok=True)
+        (session_dir / f'retro-report-cycle{cycle}.json').write_text('{}')
     claude_dir.mkdir(parents=True, exist_ok=True)
     path = claude_dir / f'overnight-state-{file_key}.json'
     path.write_text(json.dumps(state, indent=2))
@@ -295,7 +313,7 @@ class TestAC2Continuation(unittest.TestCase):
             module.PROJECT_DIR = project
             sid = 'AAAA-owner'
             write_state(project / '.claude', sid,
-                        build_state(sid, future_z(1), cycle_count=3))
+                        build_state(sid, future_z(1), cycles_done=3))
             os.environ['HOME'] = str(home)
             try:
                 block = module.check_overnight_continuation(sid)
@@ -323,7 +341,7 @@ class TestAC3BlockComposition(unittest.TestCase):
                 module.PROJECT_DIR = project
                 sid = 'AAAA-owner'
                 write_state(project / '.claude', sid,
-                            build_state(sid, future_z(1), cycle_count=3,
+                            build_state(sid, future_z(1), cycles_done=3,
                                         worktree=str(project / 'wt')))
                 spec = module.read_command_spec('dev-overnight')
                 todos = module._load_overnight_todos()
@@ -399,10 +417,10 @@ class TestAC5SessionBinding(unittest.TestCase):
             payload = prompt_payload(submitting, prompt)
             return run_hook(project, home, payload)
 
-    def _assert_block(self, result, owner_sid, cycle_count):
+    def _assert_block(self, result, owner_sid, cycles_done):
         self.assertEqual(0, result.returncode)
         self.assertIn('OVERNIGHT CONTINUATION', result.stdout)
-        self.assertIn(f'OVERNIGHT CONTINUATION - Cycle {cycle_count + 1}', result.stdout)
+        self.assertIn(f'OVERNIGHT CONTINUATION - Cycle {cycles_done + 1}', result.stdout)
         self.assertIn(f'overnight-state-{owner_sid}.json', result.stdout)
 
     def _assert_zero(self, result):
@@ -412,16 +430,16 @@ class TestAC5SessionBinding(unittest.TestCase):
                          'a non-owning session must receive zero injected characters')
 
     def test_row_5_1_owner_receives_own_block(self):
-        state = build_state('AAAA', future_z(1), cycle_count=1)
+        state = build_state('AAAA', future_z(1), cycles_done=1)
         self._assert_block(self._run_row([('AAAA', state)], 'AAAA'), 'AAAA', 1)
 
     def test_row_5_2_stranger_receives_nothing(self):
-        state = build_state('AAAA', future_z(1), cycle_count=1)
+        state = build_state('AAAA', future_z(1), cycles_done=1)
         self._assert_zero(self._run_row([('AAAA', state)], 'ZZZZ-stranger'))
 
     def test_row_5_3_and_5_4_two_live_records_each_gets_its_own(self):
-        a = build_state('AAAA', future_z(1), cycle_count=3)
-        b = build_state('BBBB', future_z(1), cycle_count=9)
+        a = build_state('AAAA', future_z(1), cycles_done=3)
+        b = build_state('BBBB', future_z(1), cycles_done=9)
         records = [('AAAA', a), ('BBBB', b)]
         self._assert_block(self._run_row(records, 'AAAA'), 'AAAA', 3)
         result_b = self._run_row(records, 'BBBB')
@@ -430,11 +448,11 @@ class TestAC5SessionBinding(unittest.TestCase):
                          'BBBB must not be served AAAA state')
 
     def test_row_5_5_payload_omits_session_id(self):
-        state = build_state('AAAA', future_z(1), cycle_count=1)
+        state = build_state('AAAA', future_z(1), cycles_done=1)
         self._assert_zero(self._run_row([('AAAA', state)], None))
 
     def test_row_5_6_submitter_is_default(self):
-        state = build_state('AAAA', future_z(1), cycle_count=1)
+        state = build_state('AAAA', future_z(1), cycles_done=1)
         self._assert_zero(self._run_row([('AAAA', state)], 'default'))
 
     def test_row_5_7_record_has_no_session_id_field(self):
@@ -444,44 +462,44 @@ class TestAC5SessionBinding(unittest.TestCase):
         `if state_session_id and ...`, so mirroring it literally would still
         deliver this record to every session. Strict binding delivers nothing.
         """
-        state = build_state('CCCC', future_z(1), cycle_count=1, omit_session_id=True)
+        state = build_state('CCCC', future_z(1), cycles_done=1, omit_session_id=True)
         self._assert_zero(self._run_row([('CCCC', state)], 'CCCC'))
         self._assert_zero(self._run_row([('CCCC', state)], 'ZZZZ-stranger'))
-        blank = build_state('', future_z(1), cycle_count=1)
+        blank = build_state('', future_z(1), cycles_done=1)
         blank['session_id'] = ''
         self._assert_zero(self._run_row([('DDDD', blank)], 'DDDD'))
 
     def test_row_5_8_expired_sorts_first_live_owner_still_served(self):
-        expired = build_state('AAAA', PAST_Z, cycle_count=1)
-        live = build_state('ZZZZ', future_z(1), cycle_count=5)
+        expired = build_state('AAAA', PAST_Z, cycles_done=1)
+        live = build_state('ZZZZ', future_z(1), cycles_done=5)
         self._assert_block(self._run_row([('AAAA', expired), ('ZZZZ', live)], 'ZZZZ'),
                            'ZZZZ', 5)
 
     def test_row_5_9_only_expired_record(self):
-        expired = build_state('AAAA', PAST_Z, cycle_count=1)
+        expired = build_state('AAAA', PAST_Z, cycles_done=1)
         self._assert_zero(self._run_row([('AAAA', expired)], 'AAAA'))
 
     def test_row_5_10_abandoned_far_future_record(self):
-        abandoned = build_state('AAAA', FAR_FUTURE_Z, cycle_count=1)
+        abandoned = build_state('AAAA', FAR_FUTURE_Z, cycles_done=1)
         self._assert_zero(self._run_row([('AAAA', abandoned)], 'ZZZZ-stranger'))
 
     def test_row_5_11_file_key_versus_record_identity_mismatch(self):
         """DISCRIMINATING: a filename-keyed weak predicate passes every other row."""
-        mismatched = build_state('AAAA', future_z(1), cycle_count=7)
+        mismatched = build_state('AAAA', future_z(1), cycles_done=7)
         self._assert_zero(self._run_row([('BBBB', mismatched)], 'BBBB'))
 
     def test_row_5_11b_identity_comparison_is_case_sensitive(self):
         """Mutation lock: a case-insensitive identity comparison would accept
         'aaaa' as the owner of 'AAAA' and pass every other row unchanged."""
-        variant = build_state('aaaa', future_z(1), cycle_count=7)
+        variant = build_state('aaaa', future_z(1), cycles_done=7)
         self._assert_zero(self._run_row([('AAAA', variant)], 'AAAA'))
-        owned = build_state('AAAA', future_z(1), cycle_count=7)
+        owned = build_state('AAAA', future_z(1), cycles_done=7)
         self._assert_zero(self._run_row([('AAAA', owned)], 'aaaa'))
 
     def test_row_5_12_rejected_record_must_not_trigger_fallback_scan(self):
         """DISCRIMINATING: rejection must not be followed by a scan onto another record."""
-        mismatched = build_state('AAAA', future_z(1), cycle_count=7)
-        competing = build_state('AAAA', future_z(1), cycle_count=42)
+        mismatched = build_state('AAAA', future_z(1), cycles_done=7)
+        competing = build_state('AAAA', future_z(1), cycles_done=42)
         result = self._run_row([('BBBB', mismatched), ('AAAA', competing)], 'BBBB')
         self._assert_zero(result)
         self.assertNotIn('Cycle 43', result.stdout)
@@ -507,7 +525,7 @@ class TestAC6ProcessBoundary(unittest.TestCase):
         with temp_project(fixture_command_doc=True) as (project, home):
             sid = 'AAAA-owner'
             write_state(project / '.claude', sid,
-                        build_state(sid, future_z(1), cycle_count=3))
+                        build_state(sid, future_z(1), cycles_done=3))
             result = run_hook(project, home, prompt_payload(sid))
         self.assertEqual(0, result.returncode)
         # Collect whole banner LINES rather than counting the bare phrase: the
@@ -550,32 +568,22 @@ class TestAC6ProcessBoundary(unittest.TestCase):
         self.assertNotIn('OVERNIGHT CONTINUATION', result.stdout)
 
 
-class TestAC7ExceptSetEquality(unittest.TestCase):
-    """AC7 -- the caught set must EQUAL {ValueError, TypeError}, not merely subset it."""
+class TestAC7OneWindowRule(unittest.TestCase):
+    """AC7 -- the predicate parses nothing itself. Whether the window is live is
+    lib/overnight.py's state_verdicts verdict, the one rule every overnight
+    reader decides by, so there is no except clause here that could widen."""
 
-    def _caught_names(self):
+    def test_predicate_delegates_to_the_one_window_rule(self):
         tree = ast.parse(HOOK_PATH.read_text())
-        target = None
-        for node in tree.body:
-            if isinstance(node, ast.FunctionDef) and node.name == '_is_active_state':
-                target = node
+        target = next((node for node in tree.body
+                       if isinstance(node, ast.FunctionDef) and node.name == '_is_active_state'),
+                      None)
         self.assertIsNotNone(target, '_is_active_state not found at module top level')
-        names: set[str] = set()
-        for handler in [n for n in ast.walk(target) if isinstance(n, ast.ExceptHandler)]:
-            self.assertIsNotNone(handler.type, 'bare except is forbidden')
-            captured = handler.type
-            parts = captured.elts if isinstance(captured, ast.Tuple) else [captured]
-            for part in parts:
-                self.assertIsInstance(part, ast.Name, 'only plain exception names permitted')
-                names.add(part.id)
-        return names
-
-    def test_caught_set_equals_value_error_and_type_error(self):
-        names = self._caught_names()
-        self.assertEqual({'ValueError', 'TypeError'}, names,
-                         'the caught set must be EQUAL to the pre-fix set, not a superset')
-        self.assertNotIn('Exception', names)
-        self.assertNotIn('BaseException', names)
+        self.assertEqual([], [n for n in ast.walk(target) if isinstance(n, ast.ExceptHandler)])
+        called = {n.func.attr for n in ast.walk(target)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        self.assertIn('state_verdicts', called)
+        self.assertNotIn('fromisoformat', called)
 
 
 class TestAC8PatchScope(unittest.TestCase):
@@ -643,11 +651,11 @@ class TestF10IdentityLessFailClosed(unittest.TestCase):
 
     The consumption half is a subtraction ('' is already rejected). The creation
     half is NOT: with '' forwarded, the launcher mints an id it does not return,
-    so ``verify_overnight_state`` resolves ``overnight-state-.json``, aborts the
-    launch, and ``_cleanup_overnight_partials`` -- keyed on the same '' -- leaves
-    the freshly published record live. The boundary guard globs
-    ``overnight-state-*.json`` project-wide, so that orphan would arm isolation
-    for an aborted launch. Hence the id is minted in the hook.
+    so the hook's own reads and ``_cleanup_overnight_partials`` -- keyed on the
+    same '' -- resolve ``overnight-state-.json`` and miss the record the launcher
+    published. The boundary guard globs ``overnight-state-*.json`` project-wide,
+    so an orphan left by a failed launch would arm isolation for it. Hence the
+    id is minted in the hook.
     """
 
     SHARED_LITERALS = ('default', '', 'None', 'null')
@@ -680,7 +688,7 @@ class TestF10IdentityLessFailClosed(unittest.TestCase):
 
     def test_absent_identity_with_live_default_record_receives_nothing(self):
         """The F-10 regression: the row AC5 never seeded."""
-        state = build_state('default', future_z(1), cycle_count=3)
+        state = build_state('default', future_z(1), cycles_done=3)
         result = self._run_phase_b([('default', state)], self.OMIT)
         self.assertEqual(0, result.returncode)
         self.assertNotIn('OVERNIGHT CONTINUATION', result.stdout)
@@ -690,7 +698,7 @@ class TestF10IdentityLessFailClosed(unittest.TestCase):
 
     def test_null_and_empty_identities_stay_closed_against_a_default_record(self):
         """The record AC5 never seeded, probed with every identity-less shape."""
-        state = build_state('default', future_z(1), cycle_count=3)
+        state = build_state('default', future_z(1), cycles_done=3)
         for label, submitting in (('json null', None), ('empty string', ''),
                                   ('stranger', 'ZZZZ-stranger')):
             with self.subTest(submitting=label):
@@ -698,7 +706,7 @@ class TestF10IdentityLessFailClosed(unittest.TestCase):
                 self.assertEqual('', result.stdout)
 
     def test_owner_is_unaffected(self):
-        state = build_state('AAAA', future_z(1), cycle_count=1)
+        state = build_state('AAAA', future_z(1), cycles_done=1)
         result = self._run_phase_b([('AAAA', state)], 'AAAA')
         self.assertIn('OVERNIGHT CONTINUATION - Cycle 2', result.stdout)
         self.assertIn('overnight-state-AAAA.json', result.stdout)
@@ -873,8 +881,10 @@ class TestAC10G1BoundsUnderOptionR(unittest.TestCase):
     G1_PER_PROMPT_MAX_CHARS = 3000
     # PRODUCTION-SHAPED ceiling: the sibling's own `production_shaped_per_prompt
     # _max_chars`, for the state create-overnight-state.sh actually writes.
-    # Populating main_root + actor_git_env selects the long worktree branch and
-    # the light payload measures 3,554 -- above the fixture ceiling by design.
+    # Populating main_root + actor_git_env selects the long worktree branch. The
+    # light payload measured 3,554 while every prompt carried the
+    # enforcement-registry verification notice; with that per-prompt re-check
+    # gone (the registry's one producer writes it at launch) it measures 2,723.
     G1_PRODUCTION_PER_PROMPT_MAX_CHARS = 4000
     G1_PRODUCTION_MAX_RATIO_OF_BOUNDARY = 0.05
     G1_BOUNDARY_OVERHEAD_MAX_CHARS = 4000   # ABSOLUTE, the lane-owned block share
@@ -887,7 +897,7 @@ class TestAC10G1BoundsUnderOptionR(unittest.TestCase):
         sid = 'AAAA-owner'
         with temp_project(fixture_command_doc=True) as (project, home):
             write_state(project / '.claude', sid,
-                        build_state(sid, future_z(6), cycle_count=3,
+                        build_state(sid, future_z(6), cycles_done=3,
                                     worktree=str(project / 'wt')))
             cls.outputs = [at_measured_root(
                                run_hook(project, home, prompt_payload(sid, p)).stdout,
@@ -941,15 +951,16 @@ class TestAC10G1BoundsUnderOptionR(unittest.TestCase):
         payload measures 2,767. That is the shape sibling inject AC-1 scopes its
         3,000 ceiling to, and the sibling explicitly forbids quoting that number
         as a production figure. The launcher-written state populates both fields,
-        selects the long branch, and measures 3,554 -- which BREACHES 3,000. The
-        production-facing bound is therefore the sibling's own production figure,
+        selects the long branch (it measured 3,554 while each prompt carried the
+        registry verification notice, now gone). The production-facing bound is
+        the sibling's own production figure,
         asserted here against a production-shaped state rather than merely
         caveated, together with its ratio-of-boundary companion so an absolute
         cap alone cannot drift loose as the command document grows.
         """
         sid = 'AAAA-owner'
         with temp_project(fixture_command_doc=True) as (project, home):
-            state = build_state(sid, future_z(6), cycle_count=3,
+            state = build_state(sid, future_z(6), cycles_done=3,
                                 worktree=str(project / 'wt'))
             # The shape create-overnight-state.sh writes. Every path derives from
             # the fixture's own temp root; nothing here is a live-tree literal.
@@ -979,10 +990,6 @@ class TestAC10G1BoundsUnderOptionR(unittest.TestCase):
         self.assertIn('source the actor git-env', light[0])
         for index, output in enumerate(light):
             with self.subTest(prompt=index, chars=len(output)):
-                self.assertGreater(
-                    len(output), self.G1_PER_PROMPT_MAX_CHARS,
-                    'production shape no longer exceeds the fixture ceiling; the '
-                    'two shapes have converged and this case is now vacuous')
                 self.assertLessEqual(len(output),
                                      self.G1_PRODUCTION_PER_PROMPT_MAX_CHARS)
                 self.assertLessEqual(

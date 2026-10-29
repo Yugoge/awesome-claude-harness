@@ -15,6 +15,7 @@ golden comparison).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 TASK_ID = "20260101-000000"
@@ -74,6 +75,7 @@ def _completion(identity: str, references: list[str]) -> str:
 
 def _parent_paths(root: Path, task_id: str = TASK_ID) -> dict[str, Path]:
     dev_dir = _dev_dir(root)
+    declare_stage_dispatches(root, task_id)
     return {
         "ticket": dev_dir / f"ticket-{task_id}.md",
         "context": dev_dir / f"context-{task_id}.json",
@@ -81,6 +83,35 @@ def _parent_paths(root: Path, task_id: str = TASK_ID) -> dict[str, Path]:
         "qa_report": dev_dir / f"qa-report-{task_id}.json",
         "completion": dev_dir / f"completion-{task_id}.md",
     }
+
+
+def declare_stage_dispatches(root: Path, task_id: str) -> None:
+    """The BA, dev and QA dispatch records of the task, in a session transcript
+    of the store the test's CLAUDE_CONFIG_DIR names: record-stage takes a
+    stage report's role from the dispatch that declared it."""
+    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / str(Path(root).resolve()).replace("/", "-")
+    store.mkdir(parents=True, exist_ok=True)
+
+    def dispatch(role: str, artifacts: list) -> dict:
+        block = {"task_id": task_id, "lane": None, "lane_set": None, "role": role, "pipeline": "dev",
+                 "profile": "singular", "dispatched_at": "2026-01-01T00:00:00Z", "artifacts": artifacts}
+        prompt = f'<obligation v="1">\n{json.dumps(block)}\n</obligation>'
+        return {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": f"toolu_{role}_{task_id}", "name": "Agent",
+             "input": {"subagent_type": role, "prompt": prompt}}]}}
+
+    def json_artifact(name: str, schema: str) -> dict:
+        return {"kind": "json", "path": f"docs/dev/{name}", "schema": schema, "identity": {"task_id": task_id}}
+
+    records = [
+        {"type": "user", "message": {"role": "user", "content": f"/close --late-repair {task_id}"}},
+        dispatch("ba", [json_artifact(f"context-{task_id}.json", "context.v1"),
+                        {"kind": "markdown", "path": f"docs/dev/ticket-{task_id}.md", "identity_anchor": task_id}]),
+        dispatch("dev", [json_artifact(f"dev-report-{task_id}.json", "dev-report.v2")]),
+        dispatch("qa", [json_artifact(f"qa-report-{task_id}.json", "qa-report.v2")]),
+    ]
+    (store / f"late-repair-{task_id}.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
 
 
 def build_complete(root: Path, task_id: str = TASK_ID) -> dict[str, Path]:

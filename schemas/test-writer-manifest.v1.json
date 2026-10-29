@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "test-writer-manifest.v1",
   "title": "Test-Writer Per-Task Active Manifest v1",
-  "description": "Per-task active test manifest (tests/generated/<task_id>/manifest.json). Field shapes pinned verbatim to agents/test-writer.md:90-112 (ticket 20261001-161041-r07). This is the PER-TASK active manifest, distinct from the global index file tests/generated/manifest.json (shape {kind:'index', tasks:[...]}), which this schema does NOT cover. Registered so the test-writer obligation block can name this artifact and the generic SubagentStop obligation-mode loop in hooks/subagentstop-artifact-contract-enforce.py enforces its presence/shape -- no enforcement code changed by this registration.",
+  "description": "Per-task active test manifest (tests/generated/<task_id>/manifest.json). Field shapes pinned verbatim to agents/test-writer.md:90-112 (ticket 20261001-161041-r07). Registered so the test-writer obligation block can name this artifact and the generic SubagentStop obligation-mode loop in hooks/subagentstop-artifact-contract-enforce.py enforces its presence/shape -- no enforcement code changed by this registration.",
   "type": "object",
   "additionalProperties": true,
   "required": [

@@ -50,10 +50,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # has to be normalized away, which would weaken the byte-diff linkage.
 RESERVED_TASK_ID = "readme-hero-demo-reserved"
 sys.path.insert(0, str(REPO_ROOT / "hooks" / "lib"))
-from harness_state_dir import harness_state_dir  # noqa: E402
+# /allow's own writer: the demo's grant is the grant /allow would write.
+from allowlist import sentinel_grant_path, write_sentinel_grant  # noqa: E402
 
-SENTINEL_GRANT_DIR = Path(harness_state_dir()) / "claude-grants"
-GRANT_PATH = SENTINEL_GRANT_DIR / f"{RESERVED_TASK_ID}.json"
+GRANT_PATH = sentinel_grant_path(RESERVED_TASK_ID)
+SENTINEL_GRANT_DIR = GRANT_PATH.parent
 
 DEFAULT_CAPTURE = REPO_ROOT / ".github/assets/hero-capture.txt"
 DEFAULT_EVIDENCE = REPO_ROOT / ".github/assets/hero-capture-evidence.json"
@@ -175,24 +176,16 @@ def build_fixture(fixture: Path) -> None:
 
 
 def install_grant() -> None:
-    """One grant, one operation. args_contain is prefix-matched by allowlist.py."""
-    SENTINEL_GRANT_DIR.mkdir(parents=True, exist_ok=True)
-    now = time.time()
-    grant = {
-        "task_id": RESERVED_TASK_ID,
-        "session_id": RESERVED_TASK_ID,
-        "allowed_operations": [
-            {"op": "git", "target": "push", "args_contain": ["push hero-remote main"]}
-        ],
-        "created_at": now,
-        "expires_at": now + 300,
-    }
-    # O_EXCL: preflight is only a snapshot taken seconds earlier, so creation must itself
-    # be the exclusivity check. If a live session's grant appeared in the interim we fail
-    # rather than clobber it. 0o600 so foreign readers cannot see our grant either.
-    fd = os.open(GRANT_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(grant, indent=2, sort_keys=True) + "\n")
+    """One grant, one operation. args_contain is prefix-matched by allowlist.py.
+
+    exclusive: preflight is only a snapshot taken seconds earlier, so creation must
+    itself be the exclusivity check. If a live session's grant appeared in the interim
+    we fail rather than clobber it."""
+    write_sentinel_grant(
+        RESERVED_TASK_ID, RESERVED_TASK_ID,
+        [{"op": "git", "target": "push", "args_contain": ["push hero-remote main"]}],
+        exclusive=True,
+    )
 
 
 class GrantWatcher(threading.Thread):

@@ -66,9 +66,18 @@ RECLASSIFIABLE_CODES = frozenset(
 # divergent enum.  Only "environment" ever excuses a blocking finding here.
 QA_ENVIRONMENT_PRIMARY_CAUSE = "environment"
 
-QA_DISCLOSED_EXCEPTION_CLASSIFICATIONS = frozenset(
-    {"shared_working_tree_concurrency", "infrastructure_unavailability", "other_environmental"}
-)
+
+def _qa_disclosed_classifications() -> frozenset:
+    """The disclosed_exception classifications schemas/qa-report.v1.json
+    declares; none (the finding stays a hard error) when it cannot be read."""
+    try:
+        schema = json.loads((Path(__file__).resolve().parent.parent / "schemas" / "qa-report.v1.json")
+                            .read_text(encoding="utf-8"))
+        return frozenset(schema["properties"]["disclosed_exception"]["properties"]["classification"]["enum"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return frozenset()
+
+
 DEV_STATUS_RATIONALE_CLASSIFICATIONS = frozenset(
     {"pending_commit_handoff", "pending_external_authorization", "other_disclosed_handoff"}
 )
@@ -415,7 +424,7 @@ def _qa_environmental_eligible(value: dict[str, Any] | None) -> bool:
     disclosed = qa.get("disclosed_exception")
     if not isinstance(disclosed, dict):
         return False
-    if disclosed.get("classification") not in QA_DISCLOSED_EXCEPTION_CLASSIFICATIONS:
+    if disclosed.get("classification") not in _qa_disclosed_classifications():
         return False
     evidence = disclosed.get("evidence")
     if not isinstance(evidence, list) or not evidence:

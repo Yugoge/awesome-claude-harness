@@ -10,6 +10,10 @@ Standard 4):
 For --force path, returns a 2-step list (no QA dispatch — spec: "the primary
 protection is that the todo list never contains a QA dispatch step").
 
+For --late-repair, the three steps follow Step 0, finalize: the main agent's
+own step, which writes the effective report it declares, so a gap on that
+report routes back to finalize.
+
 Flag handling (--codex / --force) and task-id resolution still happen in
 commands/close.md body but are no longer TodoSteps — they are script
 plumbing, not user-visible work.
@@ -29,6 +33,12 @@ _STEPS_FORCED = [
     ("2", "Write audit log + temp update + clean up sentinel", "Writing audit log + temp update + cleaning up sentinel", None),
 ]
 
+_STEPS_LATE_REPAIR = [
+    ("0", "Finalize the late repair", "Finalizing the late repair",
+     {"artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<task>.effective.json"}]}),
+    *_STEPS,
+]
+
 
 def _build_step(label, desc, active, meta):
     item = {
@@ -41,13 +51,17 @@ def _build_step(label, desc, active, meta):
     return item
 
 
-def _is_forced():
-    prompt = os.environ.get("CLAUDE_TODO_PROMPT", "")
-    return "--force" in prompt.split()
+def _prompt_has(flag):
+    return flag in os.environ.get("CLAUDE_TODO_PROMPT", "").split()
 
 
 def get_todos():
-    steps = _STEPS_FORCED if _is_forced() else _STEPS
+    if _prompt_has("--force"):
+        steps = _STEPS_FORCED
+    elif _prompt_has("--late-repair"):
+        steps = _STEPS_LATE_REPAIR
+    else:
+        steps = _STEPS
     return [_build_step(label, desc, active, meta) for label, desc, active, meta in steps]
 
 

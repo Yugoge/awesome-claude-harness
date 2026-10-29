@@ -16,6 +16,19 @@ cd "$PROJECT_ROOT"
 CLAUDE_DIR="${PROJECT_ROOT}/.claude"
 GLOBAL_CLAUDE_DIR="$HARNESS_HOME"
 
+# The settings files a script can be named in, each through the one load of a settings file
+# (hooks/lib/claude_home.py), once: an absent file holds no reference; an unusable one (its
+# reason on stderr) cannot show a script is unreferenced, so every script counts as named in it.
+SETTINGS_FILES=()
+SETTINGS_UNUSABLE=false
+for settings_file in "${CLAUDE_DIR}/settings.json" "${GLOBAL_CLAUDE_DIR}/settings.json"; do
+    if ! settings=$(python3 "$HARNESS_HOME/hooks/lib/claude_home.py" settings "$settings_file"); then
+        SETTINGS_UNUSABLE=true
+    elif [[ -n "$settings" ]]; then
+        SETTINGS_FILES+=("$settings_file")
+    fi
+done
+
 # Patterns indicating one-time fix scripts
 ONE_TIME_PATTERNS=("-fix" "-v2" "-patch" "-migration" "-cleanup" "-repair" "-reextract" "-batch")
 
@@ -81,15 +94,13 @@ check_script_references() {
     fi
 
     # Check in .claude/settings.json (local and global)
-    if [[ -f "${CLAUDE_DIR}/settings.json" ]]; then
-        if grep -q "$script_name" "${CLAUDE_DIR}/settings.json" 2>/dev/null; then
+    for settings_file in ${SETTINGS_FILES[@]+"${SETTINGS_FILES[@]}"}; do
+        if grep -q "$script_name" "$settings_file" 2>/dev/null; then
             referenced=true
         fi
-    fi
-    if [[ -f "${GLOBAL_CLAUDE_DIR}/settings.json" ]]; then
-        if grep -q "$script_name" "${GLOBAL_CLAUDE_DIR}/settings.json" 2>/dev/null; then
-            referenced=true
-        fi
+    done
+    if [[ "$SETTINGS_UNUSABLE" == "true" ]]; then
+        referenced=true
     fi
 
     # Check Python import references (for .py scripts)

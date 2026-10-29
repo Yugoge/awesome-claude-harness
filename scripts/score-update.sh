@@ -9,7 +9,7 @@
 #   2 = file/IO error or malformed JSONL in existing log
 #   3 = CAS conflict (--expected-prev-score supplied but does not match latest score)
 #   4 = --undo target not found OR ambiguous (no modification made)
-#   5 = close_success_* precondition unmet (close-report missing/NO/FORCED, or --note invalid)
+#   5 = close_success_* precondition unmet (close-report missing or its last line not class yes, or --note invalid)
 #
 # Root cause addressed (M1/M1b/M2 — task 20260529-210616): orchestrator
 #   attempted to reverse a premature close_success_qa_fail_fixed score in
@@ -24,8 +24,8 @@
 #   orchestrator issued close_success_qa_fail_fixed scoring BEFORE QA finalized
 #   verdict. M3 adds a script-side precondition: close_success_* events require
 #   --note matching ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$ (no / \ . traversal),
-#   docs/dev/close-report-<note>.md must exist, last non-empty line must
-#   classify as 'yes' per hooks/lib/close-verdict.py, and NOT contain FORCED.
+#   docs/dev/close-report-<note>.md must exist and its last non-empty line must
+#   classify as 'yes' per hooks/lib/close-verdict.py, the one classifier.
 #   Decision logic delegated to scripts/close-scoring-decide.py.
 #
 # Root cause addressed: arch-7 phase 2 (task 20260525-050824) — replace
@@ -68,7 +68,7 @@ Reversal modes (M1/M2 — task 20260529-210616):
 close_success_* precondition (M3 — both qa_pass and qa_fail_fixed):
   --note REQUIRED matching ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}\$ (no /, \\, ., ..).
   <repo>/docs/dev/close-report-<note>.md MUST exist.
-  Last non-empty line MUST classify as 'yes' (excludes FORCED).
+  Last non-empty line MUST classify as 'yes' (hooks/lib/close-verdict.py).
   Decision delegated to scripts/close-scoring-decide.py.
 
 Score has no lower bound (negative scores accumulate), upper bound 100.
@@ -182,8 +182,9 @@ if [[ "${EVENT}" == "close_success_qa_pass" || "${EVENT}" == "close_success_qa_f
     exit 5
   fi
 
-  # 2/3/4/5) Delegate to scripts/close-scoring-decide.py for verdict classification.
-  # Returns events=[] with non-null skip_reason when the gate blocks. We pass
+  # 2/3/4/5) Delegate to scripts/close-scoring-decide.py, which applies the one
+  # classifier to the report's last line and returns events=[] with a non-null
+  # skip_reason when that class is not yes. We pass
   # qa_ever_rejected=false arbitrarily — the gate decision is identical for both
   # close_success_qa_pass and close_success_qa_fail_fixed (both go through the
   # same close-report YES check); we only inspect WHETHER events[] is non-empty.
@@ -218,7 +219,7 @@ fi
 # 4 on --undo not-found/ambiguous (M2).
 # venv activation is co-located on the same line as python3 per /dev Standard 3 — spec-20260518-225715 Cycle 2 P3.6.
 ( source "${REPO_ROOT}/venv/bin/activate" && python3 - \
-    "${LIFECYCLE_FILE}" "${AGENT}" "${EVENT}" "${NOTE}" "${EXPECTED_PREV_SCORE}" "${DELTA}" "${UNDO_TS}" "${REASON}" <<'PYEOF'
+    "${LIFECYCLE_FILE}" "${AGENT}" "${EVENT}" "${NOTE}" "${EXPECTED_PREV_SCORE}" "${DELTA}" "${UNDO_TS}" "${REASON}" "${SCRIPT_DIR}/lib" "${REPO_ROOT}/hooks/lib" <<'PYEOF'
 import json
 import os
 import sys
@@ -226,6 +227,10 @@ import datetime
 
 (lifecycle_file, agent, event, note, expected_prev_score_str,
  delta_str, undo_ts, reason) = sys.argv[1:9]
+sys.path.insert(0, sys.argv[9])
+from score_log import ScoreLogError, read_lines
+sys.path.insert(0, sys.argv[10])
+from roster import roles
 
 # Canonical event delta table (spec 5.1).
 # Path A rebalance (task 20260524-205206 M1, cycle-total <= +5 across {dev,ba,qa}):
@@ -255,19 +260,13 @@ EVENT_DELTAS = {
     "manual_reversal":             {"dev": 0,  "ba": 0,  "qa": 0},
 }
 
-CANONICAL_AGENTS = {
-    "ba", "dev", "qa",
-    "ui-specialist", "architect", "product-owner", "user", "pm",
-    "changelog-analyst", "push-analyst", "merge-analyst", "pull-analyst",
-    "cleanliness-inspector", "style-inspector", "prompt-inspector",
-    "rule-inspector", "git-edge-case-analyst", "cleaner",
-    "test-validator", "test-executor", "spec",
-}
-
-if agent not in CANONICAL_AGENTS:
+# An agent is one of the roster (agents/*.md with front matter), read here;
+# no list of agent names is kept in this script.
+agents = roles()
+if agent not in agents:
     sys.stderr.write(
         f"score-update.sh: unknown agent '{agent}'. "
-        f"Allowed agents: {', '.join(sorted(CANONICAL_AGENTS))}\n"
+        f"Allowed agents: {', '.join(sorted(agents))}\n"
     )
     sys.exit(1)
 
@@ -293,30 +292,10 @@ if mode == "event":
 
 # Read lifecycle.jsonl entries (under existing exclusive flock).
 try:
-    with open(lifecycle_file, "r", encoding="utf-8") as f:
-        raw_lines = f.readlines()
-except OSError as e:
-    sys.stderr.write(f"score-update.sh: cannot read {lifecycle_file}: {e}\n")
+    parsed_entries = read_lines(lifecycle_file)  # list of (line_number, entry_dict)
+except ScoreLogError as e:
+    sys.stderr.write(f"score-update.sh: {e}\n")
     sys.exit(2)
-
-# Parse every line; collect (idx, entry) for parseable ones.
-# Non-final malformed line -> exit 2. Final malformed line -> silently skip (crash-recovery).
-parsed_entries = []  # list of (line_index, entry_dict)
-for i, raw_line in enumerate(raw_lines):
-    stripped = raw_line.rstrip("\n")
-    if not stripped:
-        continue
-    is_final = (i == len(raw_lines) - 1)
-    try:
-        entry = json.loads(stripped)
-    except json.JSONDecodeError:
-        if is_final:
-            continue
-        sys.stderr.write(
-            f"score-update.sh: malformed JSONL at line {i+1} of {lifecycle_file} (not final line)\n"
-        )
-        sys.exit(2)
-    parsed_entries.append((i, entry))
 
 # Find latest prior entry for this agent (for prev_score baseline 50 if none).
 prev_score = 50
@@ -375,14 +354,14 @@ else:  # mode == "undo"
             f"score-update.sh: --undo target ambiguous — {len(matches)} entries match (ts={undo_ts}, agent={agent})\n"
         )
         sys.exit(4)
-    target_idx, target_entry = matches[0]
+    target_line, target_entry = matches[0]
     target_delta_raw = target_entry.get("delta")
     try:
         target_delta = int(target_delta_raw)
     except (TypeError, ValueError):
         sys.stderr.write(
             f"score-update.sh: --undo target row has non-numeric delta '{target_delta_raw}' "
-            f"(ts={undo_ts}, agent={agent}, line={target_idx+1})\n"
+            f"(ts={undo_ts}, agent={agent}, line={target_line})\n"
         )
         sys.exit(2)
     delta = -target_delta

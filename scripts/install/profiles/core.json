@@ -14,7 +14,9 @@
       "role": "safety_hook",
       "files": [
         "hooks/pretool-block-background-tasks.py",
-        "hooks/pretool-block-enterworktree.sh"
+        "hooks/pretool-block-enterworktree.sh",
+        "hooks/lib/allowlist.py",
+        "hooks/lib/subagent.py"
       ]
     },
     {
@@ -48,6 +50,8 @@
       { "src": "hooks/lib/harness_state_dir.py", "dest": "hooks/lib/harness_state_dir.py", "mode": "0644" },
       { "src": "hooks/lib/harness_state_dir.sh", "dest": "hooks/lib/harness_state_dir.sh", "mode": "0644" },
       { "src": "hooks/lib/capability_state.py", "dest": "hooks/lib/capability_state.py", "mode": "0644" },
+      { "src": "hooks/lib/allowlist.py", "dest": "hooks/lib/allowlist.py", "mode": "0644" },
+      { "src": "hooks/lib/subagent.py", "dest": "hooks/lib/subagent.py", "mode": "0644" },
       { "src": "hooks/pretool-block-background-tasks.py", "dest": "hooks/pretool-block-background-tasks.py", "mode": "0755" },
       { "src": "hooks/pretool-block-enterworktree.sh", "dest": "hooks/pretool-block-enterworktree.sh", "mode": "0755" },
       { "src": "hooks/pretool-capability-gate.py", "dest": "hooks/pretool-capability-gate.py", "mode": "0755" },

@@ -89,10 +89,8 @@ WORKTREE_CHOICE=""
 # unverified. It is NOT a second implementation: it is the same lines, with
 # the isolation-creating region skipped.
 EMIT_RECORD_ONLY=0
-# Override state and cycle directories via env vars or CLI
+# Override the state directory via env var or CLI
 STATE_SUBDIR="${OVERNIGHT_STATE_SUBDIR:-.claude}"
-CYCLE_SUBDIR="${OVERNIGHT_CYCLE_SUBDIR:-docs/dev/overnight}"
-SPECS_SUBDIR="${OVERNIGHT_SPECS_SUBDIR:-docs/dev/specs}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --end-time)  END_TIME="$2"; shift 2 ;;
@@ -101,15 +99,13 @@ while [[ $# -gt 0 ]]; do
         --session-id) SESSION_ID="$2"; shift 2 ;;
         --project-dir) PROJECT_DIR="$2"; shift 2 ;;
         --state-subdir) STATE_SUBDIR="$2"; shift 2 ;;
-        --cycle-subdir) CYCLE_SUBDIR="$2"; shift 2 ;;
-        --specs-subdir) SPECS_SUBDIR="$2"; shift 2 ;;
         --codex)     CODEX_REQUIRED=true; shift ;;
         --worktree)    WORKTREE_FLAG_SEEN=1; shift ;;
         --no-worktree) NO_WORKTREE_FLAG_SEEN=1; shift ;;
         --emit-record-only) EMIT_RECORD_ONLY=1; shift ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--state-subdir <dir>] [--cycle-subdir <dir>] [--specs-subdir <dir>] [--codex] [--worktree|--no-worktree] [--emit-record-only]" >&2
+            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--state-subdir <dir>] [--codex] [--worktree|--no-worktree] [--emit-record-only]" >&2
             exit 1
             ;;
     esac
@@ -325,7 +321,6 @@ ISOLATION_ACTIVE_UNTIL=""
 SPEC_MODE="autonomous"
 USER_SPEC_PATH="null"
 VIEW_PATHS="{}"
-RESOLVED_SPEC_ID=""
 DEV_REGISTRY_DIR=""
 GUARANTEE_LEVEL=""
 STRUCTURAL_CLAIM_ALLOWED=false
@@ -337,9 +332,6 @@ ACTOR_GIT_SHIM=""
 ACTOR_GIT_BINDIR=""
 ACTOR_GIT_SHIMDIR=""
 ACTOR_ENV_HELPER_PATH=""
-CONTRACT_FILE=""
-TRACE_LOG_PATH=""
-MONOLITH_SHA="null"
 
 # M1-SEAM pre-seed for in-place mode. Same reads the real launch performs, via
 # the same function — so the seam emits the isolation shape a real in-place
@@ -478,18 +470,15 @@ fi
 
 fi  # end of the --worktree isolation branch
 
-# --- Spec mode detection (AFTER worktree exists; mismatch DEGRADES, never aborts) ---
+# --- Spec mode (AFTER worktree exists) ---------------------------------------
+# The spec is decided once, by prompt-workflow.py at UserPromptSubmit (the
+# explicit --spec, else the spec the session last wrote), and arrives here as
+# --spec; nothing here chooses one.
 SPEC_MODE="autonomous"
 USER_SPEC_PATH="null"
 
-spec_matches_focus() {
-    local detected="$1"
-    [[ -n "$FOCUS" ]] || return 1
-    grep -Fq -- "$FOCUS" "$detected"
-}
-
 if [[ -n "$SPEC_PATH" ]]; then
-    # Explicit --spec missing/invalid is fatal (round-3 §2) — but the worktree
+    # A --spec that is missing is fatal (round-3 §2) — but the worktree
     # already exists, so this is a clean refuse-to-launch, not in-place fallback.
     if [[ ! -f "$SPEC_PATH" ]]; then
         echo "Error: Spec file not found: $SPEC_PATH" >&2
@@ -497,25 +486,6 @@ if [[ -n "$SPEC_PATH" ]]; then
     fi
     SPEC_MODE="user-provided"
     USER_SPEC_PATH="$SPEC_PATH"
-elif [[ -d "$PROJECT_DIR/$SPECS_SUBDIR" ]]; then
-    # Auto-detect: newest .md in the specs directory, excluding INDEX.md and README.md
-    DETECTED=$(find "$PROJECT_DIR/$SPECS_SUBDIR" -maxdepth 1 -name '*.md' \
-        ! -name 'INDEX.md' ! -name 'README.md' \
-        -printf '%T@ %p\n' 2>/dev/null \
-        | sort -rn | head -1 | cut -d' ' -f2-)
-    if [[ -n "$DETECTED" && -f "$DETECTED" ]]; then
-        if spec_matches_focus "$DETECTED"; then
-            SPEC_MODE="user-provided"
-            USER_SPEC_PATH="$DETECTED"
-            echo "Auto-detected spec: $USER_SPEC_PATH" >&2
-        else
-            # M2/AC2: recoverable spec/focus mismatch DEGRADES to autonomous;
-            # never abort, never work in-place. The worktree is already valid.
-            echo "Auto-detected spec did not match focus; degrading to spec_mode=autonomous (worktree already created)." >&2
-            SPEC_MODE="autonomous"
-            USER_SPEC_PATH="null"
-        fi
-    fi
 fi
 
 # --- Install the git-native keystone (M7) into the main repo (idempotent) -----
@@ -619,10 +589,6 @@ elif [[ -x "$GITENV_HELPER" ]]; then
         echo "Error: overnight git-env provisioning returned no resolved shim/bin markers; refusing the launch (no state published)." >&2
         exit 1
     fi
-    if [[ ! -x "$ACTOR_GIT_SHIM" ]]; then
-        echo "Error: overnight git policy shim is not executable at $ACTOR_GIT_SHIM; refusing the launch (no state published)." >&2
-        exit 1
-    fi
 else
     # FAIL CLOSED — the same fail-open one level out. A missing or non-executable
     # helper skipped this whole branch, leaving every ACTOR_GIT_* field empty
@@ -672,16 +638,16 @@ ISOLATION_ACTIVE_UNTIL="$END_TIME"
 # (/spec) emits DE-prefixed split dirs (docs/dev/specs/<ts>/) while the monolith
 # filename keeps the spec- prefix, so "${USER_SPEC_PATH%.md}" misses the manifest.  # spec-id-lint: allow
 # resolve-spec-artifacts.py tolerates both conventions and fails loud on a
-# present-but-invalid split. RESOLVED_SPEC_ID is reused for the contract's spec_id.
+# present-but-invalid split.
 VIEW_PATHS="{}"
-RESOLVED_SPEC_ID=""
 RESOLVER="$(dirname "$0")/resolve-spec-artifacts.py"
 if [[ "$USER_SPEC_PATH" != "null" && -n "$USER_SPEC_PATH" ]]; then
     if RESOLVED_JSON=$("$RESOLVER" --spec-path "$USER_SPEC_PATH" --project-dir "$PROJECT_DIR" 2>/dev/null); then
-        RESOLVED_SPEC_ID=$(jq -r '.artifact_id // empty' <<<"$RESOLVED_JSON")
         VIEWS_AVAILABLE=$(jq -r '.views_available // false' <<<"$RESOLVED_JSON")
         MANIFEST=$(jq -r '.manifest_path // empty' <<<"$RESOLVED_JSON")
-        if [[ "$VIEWS_AVAILABLE" == "true" && -n "$MANIFEST" && -f "$PROJECT_DIR/$MANIFEST" ]]; then
+        # views_available=true is the resolver's conclusion that the manifest
+        # exists and validates; nothing here tests the manifest again.
+        if [[ "$VIEWS_AVAILABLE" == "true" ]]; then
             VIEW_PATHS=$(jq -c '.views // {}' "$PROJECT_DIR/$MANIFEST" 2>/dev/null || echo '{}')
             echo "Loaded view_paths from manifest ($MANIFEST)" >&2
         fi
@@ -696,7 +662,6 @@ if [[ "$USER_SPEC_PATH" != "null" && -n "$USER_SPEC_PATH" ]]; then
         SPEC_MODE="autonomous"
         USER_SPEC_PATH="null"
         VIEW_PATHS="{}"
-        RESOLVED_SPEC_ID=""
     fi
 fi
 
@@ -706,14 +671,6 @@ mkdir -p "$STATE_DIR"
 
 STATE_FILE="$STATE_DIR/overnight-state-${SESSION_ID}.json"
 TMP_FILE="${STATE_FILE}.tmp"
-CYCLE_ID=1
-CYCLE_DIR="$PROJECT_DIR/$CYCLE_SUBDIR/$SESSION_ID/cycle-$CYCLE_ID"
-CONTRACT_FILE="$CYCLE_DIR/cycle-contract.json"
-TRACE_LOG_PATH="$CYCLE_DIR/trace.jsonl"
-MONOLITH_SHA="null"
-if [[ "$USER_SPEC_PATH" != "null" && -n "$USER_SPEC_PATH" && -f "$USER_SPEC_PATH" ]]; then
-    MONOLITH_SHA="$(sha256sum "$USER_SPEC_PATH" | awk '{print $1}')"
-fi
 
 fi   # end of the side-effect-creating region (M1-SEAM skips it wholesale)
 
@@ -737,7 +694,6 @@ jq -n \
     --arg user_spec_path "$USER_SPEC_PATH" \
     --arg worktree_path "$WORKTREE_PATH" \
     --arg worktree_branch "$WORKTREE_BRANCH" \
-    --arg cycle_contract_path "$CONTRACT_FILE" \
     --arg main_root "$MAIN_ROOT" \
     --arg main_git_dir "$MAIN_GIT_DIR" \
     --arg main_branch_at_start "$MAIN_BRANCH_AT_START" \
@@ -771,9 +727,6 @@ jq -n \
         focus: $focus,
         spec_mode: $spec_mode,
         user_spec_path: (if $user_spec_path == "null" then null else $user_spec_path end),
-        cycle_id: 1,
-        cycle_contract_path: $cycle_contract_path,
-        cycle_count: 0,
         issues_found: 0,
         issues_fixed: 0,
         issues_skipped: 0,
@@ -866,197 +819,25 @@ if [[ "$INIT_RC" -ne 0 || "$INIT_LAST_LINE" != "OVERNIGHT_INIT_OK" ]]; then
     exit 1
 fi
 
-# The success token is a CLAIM made by the initializer. The launcher checks the
-# claim itself, against the filesystem, before publishing: a zero exit that
-# prints OVERNIGHT_INIT_OK while no artifact exists would otherwise publish a
-# session whose enforcement chain is empty. Validating only inside the
-# initializer makes the gate trust the thing it is gating.
+# The interpreter the publish below runs.
 INIT_PY="${CLAUDE_HOME:-$SCRIPT_DIR_ABS/..}/venv/bin/python3"
 [[ -x "$INIT_PY" ]] || INIT_PY="$(command -v python3 || true)"
-if [[ -z "$INIT_PY" ]]; then
-    rm -f "$TMP_FILE"
-    echo "Error: no python3 available to validate the initialized registry; refusing the launch (no state published)." >&2
-    exit 1
-fi
-if ! VALIDATE_ERR="$("$INIT_PY" - "$DEV_REGISTRY_DIR" "$SESSION_ID" \
-        "$SCRIPT_DIR_ABS/../hooks/pretool-cp-checkin.py" "$CODEX_REQUIRED" \
-        "$MAIN_ROOT/docs/dev/user-requirement-$SESSION_ID.md" \
-        "$TMP_FILE" "$MAIN_ROOT" <<'PYEOF'
-import ast, json, os, re, sys
-reg, sid, cp_src, codex_required, req_doc, record, main_root = sys.argv[1:8]
-def die(m): print(m); sys.exit(1)
-try:
-    tree = ast.parse(open(cp_src, encoding='utf-8').read())
-except Exception as exc:
-    die(f'cannot parse {cp_src}: {exc}')
-agents = None
-for node in tree.body:
-    if isinstance(node, ast.Assign):
-        for t in node.targets:
-            if isinstance(t, ast.Name) and t.id == 'CP_AGENTS':
-                agents = sorted(str(a) for a in ast.literal_eval(node.value))
-if not agents:
-    die('could not read CP_AGENTS; refusing to validate against a guessed list')
-for a in agents:
-    p = os.path.join(reg, a + '.json')
-    if os.path.islink(p) or not os.path.isfile(p):
-        die(f'missing or non-regular sentinel: {p}')
-    try:
-        d = json.load(open(p, encoding='utf-8'))
-    except Exception:
-        die(f'malformed sentinel JSON: {p}')
-    if d.get('agent_type') != a or d.get('session_id') != sid:
-        die(f'sentinel field mismatch: {p}')
-want = {'e2e-enforce.json': ['qa']}
-if codex_required == 'true':
-    want['codex-enforce.json'] = ['ba', 'dev', 'qa']
-elif os.path.lexists(os.path.join(reg, 'codex-enforce.json')):
-    die('codex-enforce.json present but the record does not set codex_required')
-for name, types in want.items():
-    p = os.path.join(reg, name)
-    # Mirrors ENFORCEMENT_FLAG_VALID: both consumers fail OPEN on absence and on
-    # a falsy `enabled`, and degrade any malformed or non-dict file to {}. A flag
-    # that merely EXISTS is indistinguishable from no flag at all.
-    if os.path.islink(p) or not os.path.isfile(p):
-        die(f'missing, non-regular or symlinked enforcement flag: {p}')
-    try:
-        d = json.load(open(p, encoding='utf-8'))
-    except Exception:
-        die(f'malformed enforcement flag (consumer would fail OPEN): {p}')
-    if not isinstance(d, dict) or d.get('enabled') is not True:
-        die(f'enforcement flag not enabled (consumer would fail OPEN): {p}')
-    if (d.get('schema_version') != 1 or d.get('source_command') != 'dev-overnight'
-            or d.get('dev_session_id') != sid or d.get('enforced_agent_types') != types):
-        die(f'enforcement flag failed writer-conformance: {p}')
-if os.path.islink(req_doc) or not os.path.isfile(req_doc):
-    die(f'missing, non-regular or symlinked requirement document: {req_doc}')
-# CONTENT, not existence. Sentinels and flags above are re-validated on content
-# while this clause used to stop at "the file is there", so an initializer that
-# produced a perfect registry and then wrote a WRONG requirement document still
-# published (rc=0). The document is the source-of-truth anchor every subagent
-# reads before any derived context, and A1.5's defining property is that the
-# FULL artifact set validates AT THE PUBLICATION EVENT -- "valid at end of
-# launch" leaves a window in which a subagent is dispatched against unvalidated
-# state, which is the publish-then-detect shape A1.5 was chosen over.
-#
-# The oracle is RECOMPUTED here from the record itself (focus / user_spec_path)
-# and the spec file, never read back from something the initializer recorded --
-# a bad renderer would otherwise write wrong bytes and record their matching
-# hash. It is deliberately a SECOND implementation of
-# scripts/overnight-init.sh::_render_requirement_doc rather than a re-invocation
-# of that script: this validator exists precisely because the launcher must not
-# trust the component it is gating, and a stubbed initializer would fake its own
-# oracle too. Agreement between the two renderers is pinned by a differential
-# test, so drift surfaces as a test failure rather than as a refused launch.
-def jq_raw(field, v):
-    # Mirrors `jq -r '<f> // empty'` CAPTURED IN "$(...)": null/false/absent give
-    # '', a string comes through raw, and command substitution then strips every
-    # trailing newline. A NON-string is refused rather than emulated: jq and
-    # json.dumps format objects, arrays and some numbers differently, so
-    # emulating them would let a record shape exist that this oracle accepts and
-    # the initializer's own renderer rejects. Refusing is the fail-closed half of
-    # the same argument that makes this a second implementation at all.
-    if v is None or v is False:
-        return ''
-    if not isinstance(v, str):
-        die(f'record field {field!r} is {type(v).__name__}, not a string; refusing to '
-            f'publish a record whose requirement document cannot be verified')
-    if '\x00' in v:
-        die(f'record field {field!r} contains NUL, which the shell renderer cannot carry')
-    return v.rstrip('\n')
-try:
-    st = json.load(open(record, encoding='utf-8'))
-except Exception as exc:
-    die(f'cannot read the record being published ({record}): {exc}')
-focus = jq_raw('focus', st.get('focus'))
-usp = jq_raw('user_spec_path', st.get('user_spec_path'))
-if usp == 'null':
-    usp = ''
-expected = focus.encode('utf-8') + b'\n'
-if usp:
-    expected += b'\nUser spec path: ' + usp.encode('utf-8') + b'\n'
-    spec_abs = usp if usp.startswith('/') else os.path.join(main_root, usp)
-    if os.path.isfile(spec_abs):
-        expected += b'\nSection 5 (User Acceptance Criterion):\n'
-        # Byte-faithful port of the awk slice: from the Section-5 level-2
-        # heading up to the NEXT level-2 heading, '###' excluded so the 5.x
-        # subsections stay in. [[:space:]] is spelled out because awk's class
-        # includes \r\f\v, which \s would widen and [ \t] would narrow; the awk
-        # side runs under LC_ALL=C so neither renderer accepts locale-dependent
-        # Unicode whitespace the other would reject. The terminator is
-        # (?:[:. \t\r\f\v]|$) -- the ':' and '.' of awk's [:.[:space:]] plus the
-        # space class, and NOT a literal '[', which an earlier spelling admitted
-        # by accident so that '## 5[x' matched here and not in awk.
-        h2 = re.compile(rb'^##[ \t\r\f\v]')
-        h3 = re.compile(rb'^###')
-        s5 = re.compile(rb'^##[ \t\r\f\v]+(Section[ \t\r\f\v]+)?5(?:[:. \t\r\f\v]|$)')
-        lines = open(spec_abs, 'rb').read().split(b'\n')
-        if lines and lines[-1] == b'':
-            lines.pop()  # a trailing newline does not make an extra awk record
-        inside = False
-        for line in lines:
-            if h2.match(line) and not h3.match(line):
-                if inside:
-                    break
-                if s5.match(line):
-                    inside = True
-            if inside:
-                expected += line + b'\n'
-actual = open(req_doc, 'rb').read()
-if actual != expected:
-    die(f'requirement document does not match the recomputed oracle '
-        f'({len(actual)} bytes on disk, {len(expected)} expected): {req_doc}')
-PYEOF
-    )"; then
-    rm -f "$TMP_FILE"
-    echo "Error: the initialized registry FAILED validation: $VALIDATE_ERR" >&2
-    echo "       Refusing the launch; NO session state was published." >&2
-    if [[ "$ISOLATION_KIND" == "in_place" ]]; then
-        echo "       Residue: none — in-place mode created no worktree and no branch." >&2
-    else
-        echo "       Residue retained for inspection: worktree $WORKTREE_PATH (branch $WORKTREE_BRANCH, isolation $ISOLATION_KIND)." >&2
-    fi
-    exit 1
-fi
 printf '%s\n' "$INIT_OUT" >&2
 
-# Atomic move — reached ONLY after initialization succeeded and validated.
-mv "$TMP_FILE" "$STATE_FILE"
-
-# --- Create minimal cycle contract at session creation ---
-mkdir -p "$CYCLE_DIR"
-CONTRACT_TMP="${CONTRACT_FILE}.tmp"
-jq -n \
-    --arg session_id "$SESSION_ID" \
-    --arg spec_mode "$SPEC_MODE" \
-    --arg spec_path "$USER_SPEC_PATH" \
-    --arg created_at "$START_TIME" \
-    --arg monolith_sha "$MONOLITH_SHA" \
-    --arg trace_log_path "$TRACE_LOG_PATH" \
-    --arg resolved_spec_id "$RESOLVED_SPEC_ID" \
-    '{
-        schema_version: 1,
-        # spec_id is the resolver-canonical artifact id (de-prefixed/prefixed per disk),
-        # NOT the raw monolith basename — keeps producer & consumers byte-for-byte in agreement.
-        spec_id: (if $spec_path == "null" then "autonomous-" + $session_id
-                  elif ($resolved_spec_id | length) > 0 then $resolved_spec_id
-                  else ($spec_path | split("/")[-1] | sub("\\.md$"; "")) end),
-        session_id: $session_id,
-        cycle_id: 1,
-        spec_mode: $spec_mode,
-        spec_path: (if $spec_path == "null" then null else $spec_path end),
-        created_at: $created_at,
-        monolith_sha256: (if $monolith_sha == "null" then null else $monolith_sha end),
-        trace_log_path: $trace_log_path,
-        required_calls: [],
-        pipelines: {},
-        specialist_selection: {}
-    }' > "$CONTRACT_TMP"
-jq empty "$CONTRACT_TMP" >/dev/null
-mv "$CONTRACT_TMP" "$CONTRACT_FILE"
+# Publish — reached ONLY after initialization succeeded and validated — through
+# the record's one write path (hooks/lib/overnight.py write_state), the same
+# function the owner's /stop writes through (scripts/break-overnight-lock.py).
+# No seed contract is written: before PM TRIAGE returns, the dispatch hook
+# derives the cycle's allowed steps from the canonical todo, and the PM TRIAGE
+# handler (hooks/posttool-subagent-track.py) is the cycle contract's only writer.
+if ! "$INIT_PY" -I "$SCRIPT_DIR_ABS/../hooks/lib/overnight.py" write-state "$STATE_FILE" "$TMP_FILE"; then
+    rm -f "$TMP_FILE"
+    echo "Error: the session state could not be published at $STATE_FILE; refusing the launch." >&2
+    exit 1
+fi
+rm -f "$TMP_FILE"
 
 echo "Created overnight state v9: $STATE_FILE" >&2
-echo "Created minimal cycle contract: $CONTRACT_FILE" >&2
 echo "  Session: $SESSION_ID" >&2
 echo "  End time: $END_TIME" >&2
 echo "  Spec mode: $SPEC_MODE" >&2

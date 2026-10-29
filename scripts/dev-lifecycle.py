@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Read-only lifecycle-state scanner for docs/dev/ tickets, specs, and lanes.
 
-Derives, per on-disk task-id, a state using the TOTAL REDUCTION ORDER from
-docs/dev/ticket-20260808-035658-lanel.md (revision 3):
+Derives, per on-disk task-id, a state (docs/dev/ticket-20260808-035658-lanel.md):
 
-  Stage 0 -- BA-QA-awareness (only when no dev-report-<id>.json exists yet)
-  Stage 1 -- early states from direct file reads (developing/qa_pending/
-             qa_failed on the dev-chain track; close_pending/blocked on the
-             do-report track); resolver NOT invoked
-  Stage 2 -- once close-eligible: resolver (singular) or read-only lane-roster
-             preview (fan-out), invoked for the first time
-  Stage 3 -- close-report exists: verdict classification, then commit
-             detection
+  BA-QA     -- only when no dev-report-<id>.json exists yet: the ba-qa-report's
+               verdict
+  do track  -- a do-report: its terminal status through the one decision
+               (hooks/lib/obligation.terminal_status)
+  dev chain -- a dev-report and no close-report: ONE call of the chain function
+               (resolve-dev-artifact-chain.py resolve_chain), its result used
+               verbatim; the --auto close discovery hands that same result to
+               the walked task's own step, so the task's chain is called once
+  close     -- a close-report exists: the one classifier's class of its last
+               line (hooks/lib/close-verdict.py), then commit detection; the
+               chain is not called
 
 Never mutates docs/dev/, .git refs/index/worktree, or /tmp grant/sentinel
 files.
@@ -31,8 +33,12 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from hooks.lib.obligation import terminal_status  # noqa: E402  (the one terminal decision)
 
-TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# A docs/dev/ file names a task only when its id part passes the one task-id
+# rule (hooks/lib/obligation.py).
+from hooks.lib.obligation import TASK_ID_RE  # noqa: E402
 
 _HOOK_DENY_RE = re.compile(
     r"(?:PreToolUse|PostToolUse|Stop):[^\n]*hook error:[^\n]*BLOCKED",
@@ -69,59 +75,16 @@ def _cached_module(path: Path, name: str) -> ModuleType:
     return module
 
 
-def _load_aggregate_module() -> ModuleType:
-    return _cached_module(_scripts_dir() / "aggregate-dev-report.py", "_dlc_aggregate")
-
-
 def _load_resolver_module() -> ModuleType:
     return _cached_module(_scripts_dir() / "resolve-dev-artifact-chain.py", "_dlc_resolver")
-
-
-def _resolver_provider(resolver_mod: Any) -> Any:
-    """The AC-deviation provider a resolver module exposes, or None.
-
-    Fails closed: a stub module without `ac_deviation_provider`, or one whose
-    provider raises, yields None and the callers keep the pre-provider
-    behavior.  The lifecycle holds no copy of the record's shape.
-    """
-    factory = getattr(resolver_mod, "ac_deviation_provider", None)
-    if not callable(factory):
-        return None
-    try:
-        return factory()
-    except Exception:
-        return None
-
-
-def _deviation_provider() -> Any:
-    try:
-        return _resolver_provider(_load_resolver_module())
-    except Exception:
-        return None
 
 
 def _load_commit_repos_module() -> ModuleType:
     return _cached_module(_scripts_dir() / "resolve-commit-repos.py", "_dlc_commit_repos")
 
 
-def _load_close_verdict_module(project_root: Path) -> ModuleType:
-    candidates = [
-        project_root / "hooks" / "lib" / "close-verdict.py",
-        _scripts_dir().parent / "hooks" / "lib" / "close-verdict.py",
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return _cached_module(candidate, "_dlc_close_verdict")
-    raise FileNotFoundError("hooks/lib/close-verdict.py not found in project or ~/.claude")
-
-
-def _load_modules(project_root: Path) -> dict[str, ModuleType]:
-    return {
-        "aggregate": _load_aggregate_module(),
-        "resolver": _load_resolver_module(),
-        "commit_repos": _load_commit_repos_module(),
-        "close_verdict": _load_close_verdict_module(project_root),
-    }
+def _load_close_verdict_module() -> ModuleType:
+    return _cached_module(_scripts_dir().parent / "hooks" / "lib" / "close-verdict.py", "_dlc_close_verdict")
 
 
 # --------------------------------------------------------------------------
@@ -149,7 +112,7 @@ def _read_text(path: Path) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------
-# Stage 0 -- BA-QA-awareness (Must-Have #0, objection 6/9)
+# BA-QA-awareness (Must-Have #0, objection 6/9)
 # --------------------------------------------------------------------------
 
 
@@ -183,7 +146,7 @@ def do_report_lite_preflight(doc: dict) -> Optional[str]:
     do = doc.get("do")
     if not isinstance(do, dict):
         return "do"
-    if do.get("status") != "completed":
+    if terminal_status("do-report.v1", doc) != "completed":
         return "do.status"
     files_modified = do.get("files_modified")
     if not isinstance(files_modified, list):
@@ -192,243 +155,33 @@ def do_report_lite_preflight(doc: dict) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------
-# Stage 1 (dev-chain track): developing / qa_pending / qa_failed
+# dev chain -- one call of the chain function, its result used verbatim
 # --------------------------------------------------------------------------
 
 
-def _blocked_report_is_released(dev_doc: dict, dev_status: Any, provider_loader: Any) -> bool:
-    """A blocked dev report is still "being developed" unless the resolver's
-    single validator accepts its AC-deviation record (harness backlog #92
-    residual): only then may it fall through, so the resolver -- not this stage
-    -- judges it.  The provider is fetched only for blocked reports, so a
-    resolver load problem cannot affect any other row; every other blocked
-    report (no flag, malformed record, no provider) stays "developing".
+def chain_state(task_id: str, result: dict) -> dict:
+    """The row a dev-chain task takes from its one chain call.
+
+    The chain's own status decides; its result is carried whole
+    (`artifact_chain`), and a fan-out's lanes are the ones it lists.
     """
-    if dev_status != "blocked" or provider_loader is None:
-        return False
-    provider = provider_loader()
-    return provider is not None and provider.violations(dev_doc) == []
-
-
-def stage1_dev_chain(
-    dev_dir: Path, task_id: str, dev_doc: dict, provider_loader: Any = None
-) -> Optional[dict]:
-    """Returns a terminal row dict, or None when close-eligible (fall through).
-
-    A declared fan-out canonical (non-empty `parallel_workers`) has its own
-    "QA pass" gate satisfied PER LANE inside Stage 2's roster preview, not by
-    a parent-level qa-report-<task_id>.json (which a fan-out parent is not
-    required to have -- only the optional aggregate). The qa_pending/qa_failed
-    sub-states therefore apply to the singular track only; a fan-out canonical
-    proceeds directly from "dev completed" to Stage 2 once its own dev.status
-    is completed.  A blocked report carrying a legitimate AC-deviation record
-    (accepted by `provider_loader()`'s single validator) proceeds the same way.
-    """
-    dev = dev_doc.get("dev")
-    dev_status = dev.get("status") if isinstance(dev, dict) else None
-    if dev_status != "completed" and not _blocked_report_is_released(
-        dev_doc, dev_status, provider_loader
-    ):
-        return {
-            "state": "developing",
-            "next_action": "wait",
-            "invoke_resolver": False,
-            "terminal_evidence": "unavailable",
-        }
-    workers = dev_doc.get("parallel_workers")
-    if isinstance(workers, list) and len(workers) > 0:
-        return None  # fan-out canonical: per-lane QA is checked in Stage 2's roster preview
-
-    qa_report_path = dev_dir / f"qa-report-{task_id}.json"
-    if not qa_report_path.is_file():
-        return {"state": "qa_pending", "next_action": "resume_qa", "invoke_resolver": False}
-    qa_doc = _read_json(qa_report_path)
-    qa_status = None
-    if isinstance(qa_doc, dict):
-        qa = qa_doc.get("qa")
-        qa_status = qa.get("status") if isinstance(qa, dict) else None
-    if qa_status != "pass":
-        return {"state": "qa_failed", "next_action": "resume_dev", "invoke_resolver": False}
-    return None  # dev completed + qa pass -> close-eligible
-
-
-# --------------------------------------------------------------------------
-# Stage 2 -- resolver contract-shape guard (AC-L20) + roster preview (objection 3)
-# --------------------------------------------------------------------------
-
-
-def validate_resolver_contract_shape(result: Any) -> bool:
-    """True iff `result` matches the CURRENT resolver contract this module
-    builds against (integer schema_version==2; mode in {singular,fanout,unknown}).
-
-    Explicitly rejects the unlanded declarative-model rewrite's shape (string
-    schema_version, artifact_chain_declaration/PHASE_STATES/allowed_edges
-    keys) -- AC-L20's negative fixture.
-    """
-    if not isinstance(result, dict):
-        return False
-    schema_version = result.get("schema_version")
-    if not isinstance(schema_version, int) or isinstance(schema_version, bool):
-        return False
-    if schema_version != 2:
-        return False
-    if any(key in result for key in ("artifact_chain_declaration", "PHASE_STATES", "allowed_edges")):
-        return False
-    if result.get("mode") not in ("singular", "fanout", "unknown"):
-        return False
-    return True
-
-
-def roster_preview(
-    dev_dir: Path, task_id: str, aggregate_mod: ModuleType, deviation: Any = None
-) -> dict:
-    """Read-only lane-roster completeness preview (objection 3).
-
-    Reuses aggregate-dev-report.py's _scan_shards / _load_shard / _validate_shards
-    -- the same pure primitives resolve-dev-artifact-chain.py itself calls via
-    _load_aggregate_module(). Never writes the canonical aggregate.  `deviation`
-    is the resolver's optional AC-deviation provider, forwarded to the shard
-    check exactly as the resolver forwards it, so the preview and the resolver
-    cannot disagree about a lane that carries a legitimate record; None keeps
-    the shard check unchanged.
-    """
-    bare_tid = aggregate_mod._bare_task_id(task_id)
-    shards = aggregate_mod._scan_shards(dev_dir, bare_tid, task_id)
-    lane_labels = [label for label, _ in shards]
-    if len(shards) < 2:
-        return {"complete": False, "reason": f"fewer than 2 shards found ({len(shards)})", "lane_labels": lane_labels}
-    loaded: list[tuple[str, dict]] = []
-    for label, path in shards:
-        data = aggregate_mod._load_shard(path)
-        if data is None:
-            return {"complete": False, "reason": f"shard '{label}' unreadable/malformed", "lane_labels": lane_labels}
-        loaded.append((label, data))
-    errors = (
-        aggregate_mod._validate_shards(loaded, task_id)
-        if deviation is None
-        else aggregate_mod._validate_shards(loaded, task_id, deviation=deviation)
-    )
-    if errors:
-        return {"complete": False, "reason": "; ".join(errors), "lane_labels": lane_labels}
-    for label, _ in shards:
-        qa_path = dev_dir / f"qa-report-{task_id}-{label}.json"
-        qa_doc = _read_json(qa_path) if qa_path.is_file() else None
-        qa_status = None
-        if isinstance(qa_doc, dict):
-            qa = qa_doc.get("qa")
-            qa_status = qa.get("status") if isinstance(qa, dict) else None
-        if qa_status != "pass":
-            return {
-                "complete": False,
-                "reason": f"lane '{label}' qa-report missing or qa.status != pass",
-                "lane_labels": lane_labels,
-            }
-    return {"complete": True, "reason": None, "lane_labels": lane_labels}
-
-
-def stage2_close_eligibility(
-    project_root: Path,
-    dev_dir: Path,
-    task_id: str,
-    dev_doc: dict,
-    aggregate_mod: ModuleType,
-    resolver_mod: ModuleType,
-) -> dict:
-    ticket_path = dev_dir / f"ticket-{task_id}.md"
-    ba_spec_path = dev_dir / f"ba-spec-{task_id}.md"
-    if ticket_path.is_file() and ba_spec_path.is_file():
-        return {
-            "state": "blocked",
-            "next_action": "inspect",
-            "invoke_resolver": False,
-            "blocker": "DUPLICATE_TICKET_AND_BA_SPEC_NAMING",
-        }
-
-    workers = dev_doc.get("parallel_workers")
-    is_fanout_candidate = isinstance(workers, list) and len(workers) > 0
-
-    if is_fanout_candidate:
-        preview = roster_preview(
-            dev_dir, task_id, aggregate_mod, deviation=_resolver_provider(resolver_mod)
-        )
-        lanes = [
-            {"task_id": f"{task_id}-{label}", "kind": "lane", "next_action": "none", "parent_task_id": task_id}
-            for label in preview["lane_labels"]
-        ]
-        if preview["complete"]:
-            return {
-                "state": "close_pending",
-                "next_action": "close",
-                "invoke_resolver": False,
-                "roster_preview": True,
-                "lanes": lanes,
-            }
-        return {
-            "state": "blocked",
-            "next_action": "inspect",
-            "invoke_resolver": False,
-            "roster_preview": True,
-            "blocker": f"ROSTER_INCOMPLETE:{preview['reason']}",
-            "lanes": lanes,
-        }
-
-    result = resolver_mod.resolve_chain(project_root, task_id)
-    if not validate_resolver_contract_shape(result):
-        return {
-            "state": "blocked",
-            "next_action": "inspect",
-            "invoke_resolver": True,
-            "blocker": "RESOLVER_CONTRACT_MISMATCH",
-        }
-    status = result.get("status")
-    mode = result.get("mode")
-    errors = result.get("errors", [])
-    if status == "pass" and mode == "singular":
-        return {
-            "state": "close_pending",
-            "next_action": "close",
-            "invoke_resolver": True,
-            "resolver_schema_version": result.get("schema_version"),
-            "resolver_mode": result.get("mode"),
-        }
-    if status == "pass_with_exceptions" and mode == "singular" and not errors:
-        # Released, not passed: still close-eligible (close is where release is
-        # judged), with the status and a summary of every disclosed exception
-        # carried as additive fields so a consumer never reads it as a plain pass.
-        return {
-            "state": "close_pending",
-            "next_action": "close",
-            "invoke_resolver": True,
-            "resolver_schema_version": result.get("schema_version"),
-            "resolver_mode": result.get("mode"),
-            "resolver_status": status,
-            "disclosed_exceptions": [
-                {key: entry.get(key) for key in ("code", "path", "kind", "classification")}
-                for entry in result.get("disclosed_exceptions", [])
-                if isinstance(entry, dict)
-            ],
-        }
-    return {
-        "state": "blocked",
-        "next_action": "inspect",
+    row: dict[str, Any] = {
         "invoke_resolver": True,
-        "blocker": "RESOLVER_FAIL",
-        # Never an empty reason: a status this mapping does not recognise, with
-        # no error to show, is reported by name instead of as `[]`.
-        "resolver_errors": errors
-        or [
-            {
-                "code": "RESOLVER_STATUS_UNMAPPED",
-                "path": "",
-                "detail": f"resolver status {status!r} in mode {mode!r} has no "
-                "lifecycle mapping and carried no errors",
-            }
+        "artifact_chain": result,
+        "lanes": [
+            {"task_id": lane["task_id"], "kind": "lane", "next_action": "none", "parent_task_id": task_id}
+            for lane in result["lanes"]
         ],
     }
+    if result["status"] in ("pass", "pass_with_exceptions"):
+        row.update(state="close_pending", next_action="close")
+    else:
+        row.update(state="blocked", next_action="inspect", blocker="RESOLVER_FAIL")
+    return row
 
 
 # --------------------------------------------------------------------------
-# Stage 3 -- close-report verdict + sound commit detection (objections 4, 5)
+# close-report verdict + sound commit detection (objections 4, 5)
 # --------------------------------------------------------------------------
 
 
@@ -532,7 +285,7 @@ def commit_detection(
     return _combine_commit_repo_statuses(per_repo)
 
 
-def stage3_close_and_commit(
+def close_and_commit(
     project_root: Path,
     task_id: str,
     close_report_path: Path,
@@ -543,7 +296,6 @@ def stage3_close_and_commit(
     text = _read_text(close_report_path)
     if text is None:
         return {"state": "blocked", "next_action": "inspect", "blocker": "UNREADABLE_CLOSE_REPORT"}
-    # Objection 4: classify_line ONLY -- never classify_text's tolerant fallback.
     verdict = close_verdict_mod.classify_line(close_verdict_mod.last_nonempty(text))
     if verdict in ("no", "unknown"):
         return {"state": "close_failed", "next_action": "resume_close"}
@@ -551,15 +303,15 @@ def stage3_close_and_commit(
 
 
 # --------------------------------------------------------------------------
-# Top-level total reduction order
+# Top-level derivation
 # --------------------------------------------------------------------------
 
 
 def derive_state(project_root: Path, task_id: str) -> dict:
-    """Derive one task-id's lifecycle row via the Stage 0->3 total reduction order.
+    """Derive one task-id's lifecycle row.
 
     Precedence resolution (dev implementation decision, documented in the dev
-    report): Stage 0's ba-qa-report check and the do-report branch are both
+    report): the ba-qa-report check and the do-report branch are both
     reached only when no canonical dev-report exists; between them, a
     ba-qa-report's PRESENCE takes precedence over a do-report's presence,
     because a ba-qa-report is direct evidence of an in-progress /dev-track
@@ -587,26 +339,15 @@ def derive_state(project_root: Path, task_id: str) -> dict:
         do_report_path = dev_dir / f"do-report-{task_id}.json"
 
         if dev_report_path.is_file():
-            dev_doc = _read_json(dev_report_path)
-            if dev_doc is None:
-                row.update(state="blocked", next_action="inspect", invoke_resolver=False, blocker="MALFORMED_DEV_REPORT")
-                return row
-            sub = stage1_dev_chain(dev_dir, task_id, dev_doc, provider_loader=_deviation_provider)
-            if sub is not None:
-                row.update(sub)
-                return row
             close_report_path = dev_dir / f"close-report-{task_id}.md"
             if close_report_path.is_file():
-                mods = _load_modules(project_root)
-                sub = stage3_close_and_commit(
+                row.update(invoke_resolver=False)
+                row.update(close_and_commit(
                     project_root, task_id, close_report_path, dev_report_path,
-                    mods["close_verdict"], mods["commit_repos"],
-                )
-                row.update(sub)
+                    _load_close_verdict_module(), _load_commit_repos_module(),
+                ))
                 return row
-            mods = _load_modules(project_root)
-            sub = stage2_close_eligibility(project_root, dev_dir, task_id, dev_doc, mods["aggregate"], mods["resolver"])
-            row.update(sub)
+            row.update(chain_state(task_id, _load_resolver_module().resolve_chain(project_root, task_id)))
             return row
 
         if ba_qa_path.is_file():
@@ -637,12 +378,11 @@ def derive_state(project_root: Path, task_id: str) -> dict:
                 return row
             close_report_path = dev_dir / f"close-report-{task_id}.md"
             if close_report_path.is_file():
-                mods = _load_modules(project_root)
-                sub = stage3_close_and_commit(
+                row.update(invoke_resolver=False)
+                row.update(close_and_commit(
                     project_root, task_id, close_report_path, do_report_path,
-                    mods["close_verdict"], mods["commit_repos"],
-                )
-                row.update(sub)
+                    _load_close_verdict_module(), _load_commit_repos_module(),
+                ))
                 return row
             row.update(state="close_pending", next_action="close", invoke_resolver=False, chain_origin="do_report")
             return row
@@ -779,16 +519,19 @@ def classify_walk_outcome(tool_result_text: str, *, partial_multi_repo_commit: b
       hook_deny        -- a PreToolUse/PostToolUse/Stop hook literally
                            blocked a tool call ("hook error: ... BLOCKED")
       partial_abort     -- a partial multi-repository commit (commit.md only)
-      success            -- CLOSE: YES / COMMIT: APPROVE observed
+      success            -- the last line's close verdict classifies yes
+                             (hooks/lib/close-verdict.py), or COMMIT: APPROVE
+                             observed
       ordinary_reject    -- everything else (a script's own exit 1/2,
-                             CLOSE: NO, COMMIT: REJECT, ...)
+                             CLOSE_FINDINGS, COMMIT: REJECT, ...)
     """
     if partial_multi_repo_commit:
         return "partial_abort"
     text = tool_result_text or ""
     if _HOOK_DENY_RE.search(text):
         return "hook_deny"
-    if re.search(r"CLOSE:\s*YES", text, re.IGNORECASE):
+    verdict = _load_close_verdict_module()
+    if verdict.classify_line(verdict.last_nonempty(text)) == "yes":
         return "success"
     if re.search(r"COMMIT:\s*APPROVE", text, re.IGNORECASE) or re.search(r"\bcommitted\b", text, re.IGNORECASE):
         return "success"
@@ -850,9 +593,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     if args.command == "list-actionable":
+        # One line per parent: its task-id, then, for a dev-chain parent, its
+        # chain result as the chain's own CLI prints it -- the walked task's
+        # step takes it from here instead of calling the chain again.
         rows = scan(project_root)
+        by_id = {row["task_id"]: row for row in rows if row.get("kind") == "ticket"}
         for task_id in actionable_parents(rows, args.next_action):
-            print(task_id)
+            chain = by_id[task_id].get("artifact_chain")
+            if chain is None:
+                print(task_id)
+            else:
+                print(task_id, json.dumps(chain, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
         return 0
 
     return 2

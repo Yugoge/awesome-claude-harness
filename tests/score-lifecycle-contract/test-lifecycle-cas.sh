@@ -36,6 +36,14 @@ trap 'rm -rf "$WORK_DIR"' EXIT INT TERM
 LIFECYCLE="$WORK_DIR/lifecycle.jsonl"
 FAKE_SCORES="$WORK_DIR/agent-scores.json"
 
+# score-update.sh's close_success_* events need --note to name a CLOSE: YES report in
+# the project (its M3 precondition), so the project is a scratch one that has them.
+export CLAUDE_PROJECT_DIR="$WORK_DIR/project"
+mkdir -p "$CLAUDE_PROJECT_DIR/docs/dev"
+for note in cas-test-a cas-test-b preserve-test; do
+  printf '# close report\n\nCLOSE: YES\n' > "$CLAUDE_PROJECT_DIR/docs/dev/close-report-$note.md"
+done
+
 PASS_COUNT=0
 FAIL_COUNT=0
 
@@ -109,7 +117,7 @@ fi
 seed_dev_score_50
 before_count=$(line_count)
 exit_code=0
-bash "$SCORE_UPDATE" --agent dev --event close_success_qa_pass \
+bash "$SCORE_UPDATE" --agent dev --event close_success_qa_pass --note "cas-test-b" \
   --expected-prev-score 99 \
   --lifecycle-file "$LIFECYCLE" >/dev/null 2>/dev/null || exit_code=$?
 after_count=$(line_count)

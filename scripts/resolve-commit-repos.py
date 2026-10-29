@@ -424,15 +424,15 @@ def _load_report(path: Path, task_id: str, control_root: Path) -> tuple[dict[str
         section_name = "do"
     elif path.name == f"dev-report-{task_id}.effective.json":
         # R4 tri-state guard (Architect (f) v2, QA round-2 objection 3): a
-        # provenance-refresh artifact is accepted ONLY when this function
-        # independently re-derives corroboration itself -- never trusted
-        # from the caller's filename alone. State A (no run record at all)
-        # never reaches this branch. State C (present but uncorroborated,
-        # e.g. drift/corruption discovered after finalize) MUST fail closed
-        # here, never silently fall back to the canonical dev-report.
+        # provenance-refresh artifact is accepted ONLY as the path the
+        # controller's resolve_effective_report_state returns in state
+        # "verified" -- never trusted from the caller's filename alone. State
+        # A (no run record at all) never reaches this branch. State C (e.g. a
+        # stage report changed after finalize) MUST fail closed here, never
+        # silently fall back to the canonical dev-report.
         controller = _load_late_repair_controller()
         state, resolved_path = controller.resolve_effective_report_state(control_root, task_id)
-        if state != "verified" or resolved_path is None or resolved_path.resolve() != path.resolve():
+        if state != "verified" or resolved_path.resolve() != path.resolve():
             raise PlanError(
                 f"effective report present but not independently corroborated: {path}"
             )
@@ -452,13 +452,14 @@ def _resolve_report(control_root: Path, task_id: str, explicit: str | None) -> P
             raise PlanError(f"explicit report does not exist: {report}")
         return report
     docs = control_root / "docs" / "dev"
-    # R4 tri-state guard: prefer a corroborated effective report ONLY when
-    # verify-disclosure independently admits it for this task-id (State B).
-    # No run record at all (State A) or an uncorroborated one (State C) both
-    # fall through to the unchanged canonical/do-report glob below.
+    # R4 tri-state guard: prefer the effective report finalize recorded ONLY
+    # when the controller returns it in state "verified" (State B), its path
+    # taken verbatim. No run record at all (State A) or an uncorroborated one
+    # (State C) both fall through to the unchanged canonical/do-report glob
+    # below.
     controller = _load_late_repair_controller()
     state, effective_path = controller.resolve_effective_report_state(control_root, task_id)
-    if state == "verified" and effective_path is not None and effective_path.is_file():
+    if state == "verified":
         return effective_path.resolve()
     for name in (f"dev-report-{task_id}.json", f"do-report-{task_id}.json"):
         candidate = docs / name

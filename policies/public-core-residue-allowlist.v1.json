@@ -372,20 +372,6 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# WS1: resolve via the shared claude_home resolver, never the literal <author-path>.\""
     },
     {
-      "path": "hooks/lib/contract_runtime.py",
-      "fingerprint": "4f32b24eaf3859e0",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "def _candidate_contract_paths() — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/lib/contract_runtime.py",
-      "fingerprint": "897ba78576f81922",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "def _candidate_contract_paths() — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
       "path": "hooks/lib/policy_registry.py",
       "fingerprint": "4ad2cf1d12440999",
       "ordinal": 1,
@@ -622,27 +608,6 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "module docstring — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-cp-checkin.py",
-      "fingerprint": "6c82b4e562b56bd5",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "def _handle_cp_state_direct_read() — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
-      "path": "hooks/pretool-cp-checkin.py",
-      "fingerprint": "a51355040ee30cf6",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "hooks/pretool-cp-checkin.py",
-      "fingerprint": "d87cccbb7ec61f4e",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "def _all_cp_files() — illustrative literal inside documentation/usage text; not executed as a path."
     },
     {
       "path": "hooks/pretool-cp-checkin.py",
@@ -1240,13 +1205,6 @@
       "rationale": "usage() — illustrative literal inside documentation/usage text; not executed as a path."
     },
     {
-      "path": "scripts/check-overnight-reports.sh",
-      "fingerprint": "869abf9b30a81dce",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "script preamble — prose/comment text; never read as a path at runtime."
-    },
-    {
       "path": "scripts/close-scoring-decide.py",
       "fingerprint": "924a6cf6f5aeb156",
       "ordinal": 1,
@@ -1507,42 +1465,7 @@
     },
     {
       "path": "tests/verify-stop-spec-session-isolation.sh",
-      "fingerprint": "5518922a31202969",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
-    },
-    {
-      "path": "tests/verify-stop-spec-session-isolation.sh",
-      "fingerprint": "5a12f9973bef1196",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
-    },
-    {
-      "path": "tests/verify-stop-spec-session-isolation.sh",
       "fingerprint": "6b597526c99b735d",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
-    },
-    {
-      "path": "tests/verify-stop-spec-session-isolation.sh",
-      "fingerprint": "afddaf4d95d117f7",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
-    },
-    {
-      "path": "tests/verify-stop-spec-session-isolation.sh",
-      "fingerprint": "b6b5ed1c2a58dd15",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
-    },
-    {
-      "path": "tests/verify-stop-spec-session-isolation.sh",
-      "fingerprint": "ca869b18f2c8aafe",
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."

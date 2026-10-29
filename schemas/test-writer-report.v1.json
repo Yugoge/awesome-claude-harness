@@ -9,8 +9,6 @@
     "task_id",
     "timestamp",
     "manifest_path",
-    "global_index_path",
-    "global_index_kind",
     "trigger_gate",
     "tests_created",
     "tests_archived",
@@ -24,16 +22,6 @@
       "type": "string",
       "minLength": 1,
       "description": "Per-task active manifest path (agents/test-writer.md:210): tests/generated/<task_id>/manifest.json."
-    },
-    "global_index_path": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Global index path (agents/test-writer.md:211): tests/generated/manifest.json."
-    },
-    "global_index_kind": {
-      "type": "string",
-      "const": "index",
-      "description": "The global index file's own shape is {kind: 'index', ...} -- this field just names that kind (agents/test-writer.md:212)."
     },
     "trigger_gate": {
       "type": "object",
