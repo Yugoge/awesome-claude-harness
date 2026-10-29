@@ -139,7 +139,7 @@ Run rule-inspector to update folder documentation with recent changes:
 - Updates stale READMEs (> 7 days old: full update, 3-7 days: incremental)
 - **Special handling for root documentation files (README.md and ARCHITECTURE.md)**: Checks against structural changes, updates project-level overview (not folder rules)
 - Creates README for folders that lack one
-- Regenerates INDEX.md with current file inventory
+- Regenerates INDEX.md with current file inventory in the folders Step 5's clean-inspect checks
 - Applies recency weighting (recent commits weighted 3x higher)
 
 **Root documentation special processing** (ref: commit 590881d5 fix):
@@ -330,12 +330,10 @@ Coverage gate: every `commands/*.md` and `agents/*.md` file MUST appear in the r
 
 ### Step 11: Merge Inspection Reports
 
-Combine the cleanliness and style reports using orchestrator: `~/.claude/scripts/orchestrator.sh clean-merge-reports docs/clean/context-with-reports-{REQUEST_ID}.json`
+Combine the cleanliness, style and prompt reports using orchestrator: `~/.claude/scripts/orchestrator.sh clean-merge-reports docs/clean/context-{REQUEST_ID}.json`
 
-Orchestrator merges and writes:
+Orchestrator reads `docs/clean/{cleanliness,style,prompt}-report-{REQUEST_ID}.json` and writes:
 - `docs/clean/combined-report-{REQUEST_ID}.json`
-
-The merge helper carries only the cleanliness and style reports. After it returns, the orchestrator MUST add the prompt report to the combined JSON as top-level `prompt_report` (copied verbatim from `docs/clean/prompt-report-{REQUEST_ID}.json`) and add the prompt finding count to the summary `total_issues`. A combined report without `prompt_report` is incomplete; do not proceed to Step 12.
 
 ### Step 12: Present Combined Report to User
 
@@ -479,7 +477,7 @@ Before execution, create a safety checkpoint on `refs/checkpoints/<branch>`
 handles the no-changes case (exit 0) and uses an isolated temp index so
 your real staged area is untouched.
 
-Run `bash ~/.claude/hooks/checkpoint.sh "Before /clean aggressive cleanup"`. Then read `refs/checkpoints/<branch>` and record the checkpoint commit via `~/.claude/scripts/orchestrator.sh record-checkpoint docs/clean/context-with-reports-{REQUEST_ID}.json "$CHECKPOINT_COMMIT"`.
+Run `bash ~/.claude/hooks/checkpoint.sh "Before /clean aggressive cleanup"`. Then read `refs/checkpoints/<branch>` and record the checkpoint commit via `~/.claude/scripts/orchestrator.sh record-checkpoint docs/clean/context-{REQUEST_ID}.json "$CHECKPOINT_COMMIT"`, which prints the `checkpoint_commit` Step 16 carries into the cleaner's context.
 
 **Rollback**: The checkpoint lives on a detached ref, not as a HEAD
 ancestor. To recover individual files:
@@ -503,8 +501,9 @@ The orchestrator may use Bash to prepare the context JSON (merging approvals), b
 Prepare context for the cleaner subagent:
 
 ```bash
-jq -s '.[0] * {user_approvals: .[1].user_approvals}' \
-  docs/clean/context-with-reports-{REQUEST_ID}.json \
+jq -s --arg commit "<checkpoint_commit from Step 15>" \
+  '.[0] * {user_approvals: .[1].user_approvals} * {orchestrator: {analysis: {safety_checkpoint_created: true, checkpoint_commit: $commit}}}' \
+  docs/clean/context-{REQUEST_ID}.json \
   docs/clean/user-approvals-{REQUEST_ID}.json \
   > docs/clean/context-with-approvals-{REQUEST_ID}.json
 ```

@@ -61,10 +61,12 @@ gate proves only that a real `/commit` produced something still part of HEAD's h
 check proves that as well as equality does, and there is no cross-tenant boundary to enforce (one
 machine, one user, many cooperating sessions).
 
-Token base directory: `/tmp/agentic-commit/push/<repo-hash>/`
+Token base directory: `<state dir>/agentic-commit/push/<repo-hash>/`, where `<state dir>` is
+`$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp` (`hooks/lib/harness_state_dir`),
+for the token's one writer (`scripts/write-push-gate-token.py`) and for `push.sh` alike.
 
 - `repo-hash` = `sha256(os.path.realpath(repo_root)).hexdigest()[:16]`
-- `/commit` still WRITES its token to a session-scoped path under that base,
+- The writer puts each token at a session-scoped path under that base,
   `<repo-hash>/<session-digest>/<branch-encoded>.json`, where `session-digest` =
   `sha256(<raw session id>).hexdigest()[:16]` (raw session id: `CLAUDE_CODE_SESSION_ID`, else
   `CLAUDE_SESSION_ID`, else the literal `unknown`; digested because it becomes a path segment and
@@ -96,7 +98,8 @@ Token base directory: `/tmp/agentic-commit/push/<repo-hash>/`
   that files did exist and parse; they just don't name anything still reachable from HEAD).
 
 **Resolution**: run `/commit [<task-id>]` — in ANY session on this branch, not necessarily this
-one. The `changelog-analyst` subagent writes the token after a successful real-branch commit; as
+one. The `changelog-analyst` subagent (or, under `/clean`, the cleaner) runs the token's writer
+after a successful real-branch commit; as
 long as that commit is still reachable from HEAD (not reset/rebased away), its token remains
 usable by any session's `/push` indefinitely, not just the session that minted it. The token is
 consumed (deleted) after a successful push.
@@ -117,6 +120,7 @@ consumed (deleted) after a successful push.
 | 0    | Push succeeded, or nothing to push |
 | 1    | Detached HEAD, missing remote, or normal push failure |
 | 2    | Blocked option such as force/delete/ref-rewrite mode |
+| 3    | No push-gate token names an ancestor of HEAD (see Session commit prerequisite) |
 
 ## Agentic dispatch protocol (pre-execution)
 
@@ -136,16 +140,11 @@ fi
 # Explicit user-provided remote argument overrides the above
 ```
 
-**Step 1: Validate push-gate token (Chain A — cross-session, ancestor-based)**
+**Step 1: Push-gate token (Chain A)**
 
-This is the existing session commit prerequisite check, now cross-session and ancestor-based
-(see Session commit prerequisite above for the full rationale). Scan every `<branch-encoded>.json`
-candidate under `/tmp/agentic-commit/push/<repo-hash>/` (own session slot, every other session's
-slot, and the legacy session-less path — all equal candidates now, no ownership test), and accept
-the first one (newest-mtime-first) whose `commit_sha` passes `git merge-base --is-ancestor
-<commit_sha> HEAD`. Abort and instruct the user to run `/commit` (in any session) first only when
-NO candidate anywhere validates — either none exist, or every one that parses names a commit that
-is not an ancestor of current HEAD.
+`push.sh` is the push-gate token's one decider (see Session commit prerequisite above): it scans
+the candidates and refuses the push (exit 3) when none names an ancestor of HEAD. This step
+reads nothing; go on to Step 2.
 
 **Step 2: Compute pre-push snapshot**
 
@@ -174,7 +173,13 @@ REMOTE_URL=<REMOTE_URL>
 REQUEST_ID=<REQUEST_ID>
 SESSION_ID=<SESSION_ID>
 REPO_HASH=<REPO_HASH>
+
+<obligation v="1">
+{"task_id": null, "lane": null, "lane_set": null, "role": "push-analyst", "pipeline": "push", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^push-analyst grant written: \\S+\\.json$"}]}
+</obligation>
 ```
+
+The obligation names this dispatch's role and command. The grant itself lives in the state dir, outside the repository, where no obligation path can name it, so the artifact it declares is the push-analyst's closing `push-analyst grant written: <GRANT_PATH>` line (agents/push-analyst.md Phase 7).
 
 Wait for the subagent to complete before proceeding.
 

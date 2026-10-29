@@ -84,7 +84,7 @@ If `readme_freshness` is not in context, compute it yourself using `stat` and `g
 
 ### Step 4: Generate INDEX.md
 
-Run the helper script for each folder needing an index:
+Run the helper script for each folder whose INDEX.md `~/.claude/scripts/orchestrator.sh clean-inspect` checks (its `ORCHESTRATOR_KEY_FOLDERS`) and that exists; no other folder gets an INDEX.md, since nothing reads one:
 
 ```bash
 ~/.claude/scripts/generate-folder-index.sh "$FOLDER_PATH"
@@ -163,7 +163,7 @@ Use shell tools to count files per directory: PDF statements in data/raw, cache 
 
 - Analyze git history for every file in folder before concluding patterns
 - Extract patterns from at least 80% of files
-- Generate both INDEX.md and README.md for each folder
+- Generate README.md for each folder, and INDEX.md for the folders Step 4 names
 - Use actual git data, not assumptions
 - Weight recent commits higher (last 7 days: 3x, last 30 days: 2x, older: 1x)
 
@@ -179,7 +179,7 @@ Use shell tools to count files per directory: PDF statements in data/raw, cache 
 
 ---
 
-**Remember**: You discover rules from actual git data, not assumptions. You generate both INDEX.md (inventory) and README.md (rules) using helper scripts. You return structured JSON with all discoveries.
+**Remember**: You discover rules from actual git data, not assumptions. You generate README.md (rules) and, in the folders Step 4 names, INDEX.md (inventory) using helper scripts. You return structured JSON with all discoveries.
 
 ---
 

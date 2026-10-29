@@ -56,7 +56,7 @@ Worktree-shape condition table -- each condition is read-only; none creates a br
 | `IS_IN_PLACE` is false (cwd is not `git worktree list`'s first entry) | Yes -- `scripts/create-worktree.sh::validate_worktree` requires `rp_wt != rp_main` at creation time, so a linked worktree is never the main one | No -- cwd IS the main worktree |
 | An `.claude/overnight-state-*.json` exists with a matching `worktree_branch` | Yes, normally | Not required -- /merge classifies by git topology, not by reading overnight state |
 | The directory is exclusive to one session while the merge runs | Yes, by construction -- created fresh per cycle, deleted right after | No -- other sessions may hold uncommitted edits here concurrently |
-| `pretool-git-privilege-guard.py::_evaluate_merge` / `_enforce_merge_grant_binding` gate on worktree shape | No -- `_is_overnight_active()` is unreferenced by `_evaluate_merge`, `_enforce_merge_grant`, and `_enforce_merge_grant_binding`; the grant check validates only repo_root/branch/tips/session | Same -- already shape-agnostic, no change needed |
+| `pretool-git-privilege-guard.py::_evaluate_merge` or the merge-analyst grant's check (`hooks/lib/merge_grant.py`) gate on worktree shape | No -- `_evaluate_merge` refuses every agent `git merge` alike, and the grant check validates only repo_root/branch/tips/session | Same -- already shape-agnostic, no change needed |
 | `merge-analyst`'s 8 phases depend on worktree shape | No -- Phase 5's overnight-state check is informational-only and already no-ops when no matching state file exists; every other phase works on refs, not paths | Same -- already shape-agnostic, no change needed |
 | Safe to `git checkout $DEFAULT_BRANCH` in place with no precondition | Yes -- exclusivity (row 3) makes this safe for free | No -- merge.sh now requires a clean tree (`git status --porcelain` empty) before checkout, as the equivalent of that exclusivity guarantee |
 | Safe to auto-delete the branch after a clean merge | Yes -- the branch is single-purpose and disposable | No -- the branch may be a long-lived shared branch; merge.sh skips deletion and leaves it on disk |
@@ -120,19 +120,17 @@ REQUEST_ID=<REQUEST_ID>
 SESSION_ID=<SESSION_ID>
 REPO_HASH=<REPO_HASH>
 REPO_ROOT=<REPO_ROOT>
+
+<obligation v="1">
+{"task_id": null, "lane": null, "lane_set": null, "role": "merge-analyst", "pipeline": "merge", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^merge-analyst grant written: \\S+\\.json$"}]}
+</obligation>
 ```
+
+The obligation names this dispatch's role and command. The grant itself lives in the state dir, outside the repository, where no obligation path can name it, so the artifact it declares is the merge-analyst's closing `merge-analyst grant written: <GRANT_PATH>` line (agents/merge-analyst.md Phase 7).
 
 Wait for the subagent to complete before proceeding.
 
-### Step 3: Read and validate merge-analyst grant
-
-`pretool-git-privilege-guard.py::_evaluate_merge` ALSO requires and
-validates this same grant (repo_root/branch/source_tip/default_branch/default_tip,
-verdict=approved, unexpired, single-use) before it will admit the wrapper's inner
-`git merge`. The steps below remain required anyway — they are defense-in-depth,
-not replaced by the hook-level check, and they fail fast with a clear message
-instead of letting the orchestrator discover the grant is bad only when merge.sh's
-subprocess gets blocked.
+### Step 3: Read the merge-analyst grant
 
 Read the grant at:
 ```
@@ -140,33 +138,15 @@ Read the grant at:
 ```
 (the state dir is `$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`)
 
-Validate the following fields:
-- File exists (if absent: abort with "merge-analyst did not write a grant — aborting merge")
-- Grant is valid JSON (if not: abort with "merge-analyst grant is not valid JSON — aborting merge")
-- `nonce` field matches `REQUEST_ID`
-- `repo_root` field matches `REPO_ROOT`
-- `branch` field matches `RESOLVED_REF` (the grant field is still named `branch` for
-  backward compatibility with `pretool-git-privilege-guard.py`'s reader; it carries whatever
-  ref shape was resolved, not necessarily a branch name)
-- `source_tip` field matches `SOURCE_TIP`
-- `default_tip` field matches `DEFAULT_TIP`
-- `default_branch` field matches `DEFAULT_BRANCH`
-- `session_id` field matches `SESSION_ID`
-- `verdict` field is one of: `"approved"`, `"blocked"` (reject unknown verdicts)
-- `risks` field is a JSON array (even if empty)
-- `expires_at` is in the future (60s expiry — parse ISO-8601, compare to current UTC time)
+and act on its `verdict` and `risks` as written. The grant was checked once, on the
+merge-analyst's own Write of it (`hooks/lib/merge_grant.py`, run by the PostToolUse hook
+`hooks/posttool-allowlist-consume.py`, which removes a faulty grant and returns the fault to the
+merge-analyst before it stops); this step re-checks none of it.
 
-If expired: re-dispatch merge-analyst (return to Step 2 with a fresh REQUEST_ID). Report
-to the user that the grant expired and a fresh analysis is running.
-
-If any non-expiry field mismatches, is absent, or has wrong type: abort with a descriptive error naming the failing field.
-
-Consume (unlink) the grant:
-```bash
-rm -f "$(. ~/.claude/hooks/lib/harness_state_dir.sh && harness_state_dir)/agentic-commit/merge-analyst/${REPO_HASH}/${SESSION_ID}/${REQUEST_ID}.json"
-```
-
-If verdict=blocked: display `risks[]` to the user and abort. Do NOT call merge.sh.
+- No grant at that path: the merge-analyst wrote none; abort with "merge-analyst did not write
+  a grant — aborting merge".
+- `verdict` = `blocked`: display `risks[]` to the user and abort. Do NOT call merge.sh.
+- `verdict` = `approved`: continue to Step 4.
 
 ### Step 4: Revalidate branch tips
 

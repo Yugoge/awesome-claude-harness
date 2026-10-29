@@ -63,9 +63,9 @@ Parse `--auto` from `$ARGUMENTS` BEFORE evaluating the forced-override path or t
 
 ```bash
 python3 -c "
-import sys; sys.path.insert(0, 'scripts')
+import os, sys; sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
 import importlib.util
-spec = importlib.util.spec_from_file_location('dlc', 'scripts/dev-lifecycle.py')
+spec = importlib.util.spec_from_file_location('dlc', os.path.expanduser('~/.claude/scripts/dev-lifecycle.py'))
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 err = m.validate_auto_flag_combination(True, '<explicit-task-id-or-empty>', <force_bool>, False)
 print(err or 'OK')
@@ -91,7 +91,7 @@ below, same as a bare invocation):
 2. **Append a best-effort audit log entry** to `~/.claude/logs/close-overrides.log`: a line with ISO timestamp, task-id (once resolved), mode=force (deprecated-no-op), and the reason string. Create `~/.claude/logs/` if needed. If the append fails, proceed anyway — the audit log is best-effort and never blocks closure.
 3. **Continue to Task-id resolution below exactly as a bare `/close` would** — the SAME artifact preflight, the SAME Step 1 inspector dispatch, the SAME Step 2 QA debate (with `codex_required` still controlled solely by `--codex`, per the note above), and the SAME Step 3 close-report write. `FORCE=true` carries no further effect beyond the audit-log line in step 2 above.
 
-`--force` is kept only so existing `/close --force` invocations do not error. The debate and all gates always run; every finding raised by a gate is handled by the routing helpers and routing loop (below): it is routed to its producing role, fixed, and re-judged.
+`--force` is kept only so existing `/close --force` invocations do not error. The debate and all gates always run; every finding raised by a gate is handled by the routing helpers and routing loop (below): it is routed to the dispatch that owes its artifact, fixed, and re-judged.
 
 ### Task-id resolution
 
@@ -101,11 +101,10 @@ Resolve the spec to evaluate (in priority order):
 - If `$ARGUMENTS` is an explicit path (ends in `.md`/`.json` or contains `/`): use that path. Verify it exists; if not, that is awaiting-input cause (iii) naming the missing path. Derive the task-id by stripping the `ticket-` prefix (or legacy `ba-spec-` prefix) and `.md`/`.json` suffix from the basename (e.g. `docs/dev/ticket-X.md` → task-id `X`; `docs/dev/ba-spec-X.md` → task-id `X`). If the basename starts with `do-report-`, also strip that prefix and set `DO_REPORT=$ARGUMENTS` (e.g. `docs/dev/do-report-X.json` → task-id `X`, `DO_REPORT` set, proceeds to do-report lite preflight).
 - Elif `$ARGUMENTS` matches a timestamp pattern (e.g. `20260424-103044`):
   - **Non-force path**: bind `TASK_ID=$ARGUMENTS` without first requiring a
-    parent ticket or parent QA-report. Immediately run Step 0's canonical
-    aggregate + shared artifact-chain resolver sequence. This ordering is
-    mandatory: those parent artifacts are optional for a valid fan-out cycle,
-    so a singular-shaped existence check before aggregation/resolution would
-    reject N > 1.
+    parent ticket or parent QA-report. Immediately run Step 0's chain call.
+    This ordering is mandatory: those parent artifacts are optional for a
+    valid fan-out cycle, so a singular-shaped existence check before the chain
+    call would reject N > 1.
   - **do-report path**: when no canonical
     `docs/dev/dev-report-${ARGUMENTS}.json` exists but
     `docs/dev/do-report-${ARGUMENTS}.json` exists with top-level
@@ -116,8 +115,8 @@ Resolve the spec to evaluate (in priority order):
   The task-id IS `$ARGUMENTS` directly (timestamp form is a valid task-id; this preserves backwards compatibility for `/close <ts>` invocations and works for both ticket- and ba-spec- artifact name conventions).
 - Else (no argument): the orchestrator invoking /close MUST already know this
   conversation's parent task-id from the active `/dev` or `/do` cycle. For
-  `/dev`, bind that parent task-id and immediately run Step 0's same aggregate
-  + resolver sequence; do not select a parent ticket/QA-report from context
+  `/dev`, bind that parent task-id and immediately run Step 0's chain call;
+  do not select a parent ticket/QA-report from context
   first. The resolver's `mode` identifies singular versus fan-out and its lane
   matrix supplies the paths. For `/do`, infer `TASK_ID` and `DO_REPORT` from the do-report path in
   context. There is NO filesystem scan and NO default-to-newest. If the
@@ -134,60 +133,36 @@ Parse `--late-repair` from `$ARGUMENTS` BEFORE Step 0's resolver-failure handlin
 
 - If `$ARGUMENTS` contains the literal token `--late-repair`, strip it and set `LATE_REPAIR=true`. Otherwise `LATE_REPAIR=false` (default — every rule below is inert).
 - **`--late-repair` combined with `--force` is a usage error**, held before any eligibility check, run-record creation, or dispatch: `--force` is never widened by R4. It is awaiting-input cause (iii): `close_awaiting_input "drop --force or --late-repair" "--late-repair combined with --force is not permitted" human`; nothing lands, and the attempt resumes in place with the corrected arguments.
-- When `LATE_REPAIR=true`, Step 0's `python3 scripts/close-route-select.py` invocation (below) additionally passes `--late-repair`. `close-route-select.py` calls `scripts/late-repair-controller.py init` exactly once, which independently re-derives `late_repair_eligible` from the resolver's own output (the single source of truth — this section never recomputes it) and:
-  - **Declines immediately** (zero run records, zero dispatch) when the chain is not late-repair eligible (`gap_classification` in `{qa_only, complete}`, or `beyond_qa` with `late_repair_eligible == false` because a `non_gap_errors` entry co-occurs with a real `stage_gaps` entry). The refusal names the reason `not a beyond-QA gap; use R1's route`. This is NOT a verdict: record the reason in the transcript and continue on the ordinary route by re-invoking the selector without `--late-repair`.
+- When `LATE_REPAIR=true`, Step 0's `python3 ~/.claude/scripts/close-route-select.py` invocation (below) additionally passes `--late-repair`. `close-route-select.py` calls `scripts/late-repair-controller.py init` exactly once, which independently re-derives `late_repair_eligible` from the resolver's own output (the single source of truth — this section never recomputes it) and:
+  - **Declines immediately** (zero run records, zero dispatch) when the chain is not late-repair eligible (`gap_classification` in `{qa_only, complete}`, or `beyond_qa` with `late_repair_eligible == false` because a `non_gap_errors` entry co-occurs with a real `stage_gaps` entry). The selector then prints the ordinary route's payload (`outcome: not_selected`, `artifact_chain` the chain result init decided on, and the ordinary exit status) with init's refusal under `late_repair`, reason `not a beyond-QA gap; use R1's route`. This is NOT a verdict: record the reason in the transcript and continue on the ordinary route with that same call's `ARTIFACT_CHAIN` and `ROUTE_SELECT_RC`, used verbatim (Step 0 sets `LATE_REPAIR=false`); the selector is not invoked again.
   - **Creates a controller-owned run record** (`docs/dev/late-repair-run-<task-id>.json`) the moment it observes a genuinely eligible chain — binding `repair_run_id`, the live eligibility snapshot, pre-route file hashes, `original_cycle_at`, and `repair_started_at` — before any BA/Dev/QA dispatch.
 - Precompute the extra selector array Step 0 appends verbatim: `LATE_REPAIR_SELECTOR_ARGS=(); [ "$LATE_REPAIR" = "true" ] && LATE_REPAIR_SELECTOR_ARGS+=(--late-repair)`. Step 0's own invocation of `close-route-select.py` (below) appends `"${LATE_REPAIR_SELECTOR_ARGS[@]}"` — this keeps the literal flag spelling confined to this section rather than duplicated into Step 0's own text.
-- On a genuinely eligible chain, dispatch BA, then Dev, then QA against the CURRENT state of the work (a measured no-change Dev result is acceptable; being skipped is not). After each stage genuinely completes, call `scripts/late-repair-controller.py record-stage --stage <ba|dev|qa> --report-path <path> --repair-run-id <id>` — this independently recomputes the artifact's hash from its on-disk bytes and embeds a `retrospective_disclosure` block (`route`, `repair_run_id`, `original_cycle_at`, `produced_at`, artifact identity) into it. Stage order (ba → dev → qa) is enforced; an out-of-order or duplicate call is refused.
-- After all three stages are recorded, call `scripts/late-repair-controller.py finalize --repair-run-id <id>`. This runs an explicit drift-detection phase (comparing each declared file's recorded provenance against current live bytes) and, if drift is found, routes each drifted file through the correct provenance mechanism, producing a non-destructive `docs/dev/dev-report-<task-id>.effective.json` refresh (never overwriting the original dev-report) when reconcilable, or an honest refusal when not. `finalize`'s `finalized_pending_verification` outcome is PROVISIONAL — it does NOT by itself make the chain commit-eligible.
-- Only a separate, subsequent call to `scripts/late-repair-controller.py verify-disclosure` returning `outcome: admitted` makes the chain eligible to proceed toward `/commit`. This is the SAME independent re-derivation `/commit`'s own guarded resolution chain (see `commands/commit.md`) re-invokes before ever preferring `dev-report-<task-id>.effective.json` over the canonical report — a `repair_run_id` naming no matching run record, a hash mismatch, or a missing/malformed disclosure block on any expected artifact is refused (not admitted), regardless of how well-formed the disclosure otherwise looks. R4 does not grandfather work completed before R4 existed: a chain's only lawful path via this route requires a run record created while the resolver actually reported the eligible shape, never a label added afterward.
-- When `verify-disclosure` returns `admitted`, proceed to Step 1 exactly as the normal path does. When it refuses (or `finalize` reports unreconcilable drift), that is a finding on the artifact the refusal names: `close_route_finding` with that path, routed by the mapping; the producing role re-records it (`record-stage` / `finalize`), and `verify-disclosure` (the verifier, unchanged) re-judges. A late-repair attempt stays on the late-repair route until admitted and never reports a negative verdict; it does not get a second, silent try via the ordinary route.
+- On a genuinely eligible chain, dispatch BA, then Dev, then QA against the CURRENT state of the work (a measured no-change Dev result is acceptable; being skipped is not). After each stage genuinely completes, run `python3 ~/.claude/scripts/late-repair-controller.py record-stage --task-id "$TASK_ID" --project-dir "$PROJECT_ROOT" --stage <ba|dev|qa> --report-path <path> --repair-run-id <id>` — this independently recomputes the artifact's hash from its on-disk bytes and records it in the run record; it writes nothing into the artifact. Stage order (ba → dev → qa) is enforced; an out-of-order or duplicate call is refused.
+- After all three stages are recorded, the canonical todo list's Step 0 (`scripts/todo/close.py` under `--late-repair`, the main agent's own step) runs `python3 ~/.claude/scripts/late-repair-controller.py finalize --task-id "$TASK_ID" --project-dir "$PROJECT_ROOT" --repair-run-id <id>`. This runs an explicit drift-detection phase (comparing each declared file's recorded provenance against current live bytes) and, if drift is found, routes each drifted file through the correct provenance mechanism, writing a non-destructive `docs/dev/dev-report-<task-id>.effective.json` refresh afresh on every run (never overwriting the original dev-report) when reconcilable, or an honest refusal when not; it checks the file it wrote (it exists, parses and carries the block it embedded) before it records its outcome and the path, and otherwise refuses, naming that path. `finalize`'s `finalized_pending_verification` outcome is PROVISIONAL — it does NOT by itself make the chain commit-eligible.
+- Only a separate, subsequent `python3 ~/.claude/scripts/late-repair-controller.py verify-disclosure --task-id "$TASK_ID" --project-dir "$PROJECT_ROOT"` returning `outcome: admitted` makes the chain eligible to proceed toward `/commit`. It compares each recorded stage report with the path and hash the run record holds: no matching run record, a missing stage report or a hash mismatch is refused (not admitted), and each refusal names the artifact's `path`. `/commit` (see `commands/commit.md`) runs this same verify-disclosure through `resolve-effective-report` and takes the effective report only from the outcome and path finalize recorded. R4 does not grandfather work completed before R4 existed: a chain's only lawful path via this route requires a run record created while the resolver actually reported the eligible shape, never a label added afterward.
+- When `verify-disclosure` returns `admitted`, proceed to Step 1 exactly as the normal path does. When it or `finalize` refuses (or `finalize` reports unreconcilable drift), that is a finding on the artifact the refusal's `path` names: `close_route_finding` with that path, routed to that path's producer (a step of the main agent's own, as finalize's Step 0, runs again under the run record's `repair_run_id`), and `verify-disclosure` (the verifier, unchanged) re-judges. A late-repair attempt stays on the late-repair route until admitted and never reports a negative verdict; it does not get a second, silent try via the ordinary route.
 
 ### Routing helpers (R1 / R4 / R12 / R13 / R15 — the only non-landing state is a defined wait)
 
 **State machine.** A close attempt is always in exactly one of three states:
-**routing** (a finding is being fixed by its producing role), **awaiting-input**
-(the defined wait below), or **landed** (a `CLOSE: YES*` verdict is the last
-line of the close-report). Nothing in this file ends an attempt any other way.
-Every finding follows ONE loop: finding -> mapped to its producing role -> that
-role fixes -> the verifier re-judges independently. The verifier never edits the
-artifact it judges. A negative judgment is a finding, never an exit.
+**routing** (a finding is being fixed by the dispatch that owes its artifact),
+**awaiting-input** (the defined wait below), or **landed** (a `CLOSE: YES*`
+verdict is the last line of the close-report). Nothing in this file ends an
+attempt any other way. Every finding follows ONE loop: finding -> the dispatch
+that owes its artifact -> that dispatch runs again and fixes -> the verifier
+re-judges independently. The verifier never edits the artifact it judges. A
+negative judgment is a finding, never an exit.
 
 Define these functions once (bash; `jq` and `python3` already assumed available
-by the rest of this file). Bind `CLOSE_CANONICAL_REPORT` right after Step 0
-resolves `ARTIFACT_CHAIN`: the chain's `canonical_dev_report` when
-`mode == "fanout"`, otherwise empty.
+by the rest of this file).
 
 ```bash
-# Artifact path -> producing role. Eight rows, first match wins, evaluated on the
-# basename. The canonical aggregate row MUST stay first, or aggregate findings
-# would route to dev. The last row is the fail-closed default (R12): any other
-# or future kind, an empty or unknown path, is the orchestrator's own work.
-close_artifact_role() {
-  local path="${1:-}" base
-  base="${path##*/}"
-  if [ -n "$path" ] && [ -n "${CLOSE_CANONICAL_REPORT:-}" ] && [ "$path" = "$CLOSE_CANONICAL_REPORT" ]; then
-    echo orchestrator; return 0
-  fi
-  case "$base" in
-    dev-report*) echo dev ;;
-    *qa-report*) echo qa ;;
-    ticket*|ba-spec*|context*|acceptance-criteria*) echo ba ;;
-    test-writer-report*|*manifest*) echo test-writer ;;
-    close-report*) echo qa ;;
-    changelog-status*) echo changelog-analyst ;;
-    *) echo orchestrator ;;
-  esac
-}
-
-# Required-action entry: {path, detail, source_check, producer_role}. A finding
-# with no artifact path binds path=$TASK_ID (which lands on the last row).
-# source_check names the ONE check that produced the finding.
+# Required-action entry: {path, detail, source_check}. path is the artifact the
+# finding concerns; source_check names the ONE check that produced the finding.
 close_required_action() {
   local path="${1:-}" detail="${2:-}" source_check="${3:-}"
   jq -nc --arg path "$path" --arg detail "$detail" --arg sc "$source_check" \
-    --arg role "$(close_artifact_role "$path")" \
-    '{path:$path, detail:$detail, source_check:$sc, producer_role:$role}'
+    '{path:$path, detail:$detail, source_check:$sc}'
 }
 
 # Record a finding: append its entry to REQUIRED_ACTIONS_JSON for the routing loop.
@@ -203,7 +178,7 @@ close_route_finding() {
 # CLOSE_PROGRESS_RESULT (also printed) to progress or no_progress. A round is
 # progress iff the producer artifact bytes changed, or the unresolved set became
 # strictly smaller; a (bytes, set) state seen in any earlier round never counts
-# as progress again (the revisit rule, same semantics as hooks/lib/progress_measure.py).
+# as progress again (the revisit rule).
 close_progress() {
   local bh="${1:-}" ah="${2:-}" bset="${3:-}" aset="${4:-}" bkey akey nb na
   bset="$(printf '%s\n' "$bset" | sed '/^$/d' | sort -u)"
@@ -241,64 +216,55 @@ close_awaiting_input() {
 
 ```
 
-**QA-arming rule (M7 bootstrap).** Before Step 2 dispatches QA, the
-orchestrator arms the three idempotent QA enforcement scripts for the bound
-session/task id, in this fixed order: `scripts/write-qa-mode.sh --session-id
-"$SESSION_ID" --mode final_verification --task-id "$TASK_ID"
---init-if-missing`, `scripts/write-e2e-enforce.sh --source-command close
---session-id "$SESSION_ID"`, `scripts/write-enforce-flag.sh --source-command
-close --session-id "$SESSION_ID" --flag artifact-contract` (this is the
-implementation; the rule below only states what each attempt's outcome
-means). For each script, in order:
+**`source_check` values** (the one check that produced the finding): the route-select / resolver run or a QA bullet. The command builds each entry itself with `close_required_action`.
 
-1. Run it. Exit 0 moves to the next script; once all three have exited 0 this
-   way, every script is armed and Step 2 may dispatch QA.
-2. A non-zero exit's combined stdout+stderr is that attempt's cause. A cause
-   matching an environment-class pattern (R14: `no space left`, `read-only
-   file system`, `permission denied`, `disk quota`, `ENOSPC`, `EROFS`,
-   `EACCES`, case-insensitive) is the defined wait: call `close_awaiting_input`
-   naming "free space or restore write access to the QA session state
-   directory" and this script's failure plus cause, addressee human. This is
-   never retried or routed around.
-3. A non-environment cause identical to this SAME script's immediately
-   preceding attempt is `no_progress`: print `ARBITRATION: source_check=<this
-   script>; cause=<cause>; owner=orchestrator` and stop -- the orchestrator
-   diagnoses and repairs itself (R5/R13), exactly as the Routing loop's step 5
-   above.
-4. Any other cause (changed from the previous attempt on this script, still
-   non-environment) re-runs the same script and re-evaluates from step 2.
+**Awaiting-input (R1-b / R6) — closed cause set.** The ONLY causes that wait are: (i) a human-only authorized operation (deletion, `/allow`, freeing `/tmp`, a rule-conflict ruling, or a hook rejection, which pauses per Subagent Hook Discipline and is never retried or worked around); (ii) an environment fault (R14) that needs a human action; (iii) pre-cycle argument or usage input the human must correct or supply (an invalid flag combination, `--auto` with a task-id / `--force` / `--reason`, `--late-repair` with `--force`, no resolvable task-id). Any other cause is routed (the loop below), never waited on. While waiting, NOTHING lands as complete: no `CLOSE:` line of any kind, no `CLOSE_FINDINGS:` line, and no close-report section is written; the wait is signalled by the single `AWAITING_INPUT:` line, and a consumer tells a wait from a landed verdict by the absence of any `CLOSE:` line. When the awaited input arrives, the loop resumes at the same step in place.
 
-QA MUST NOT be dispatched unless every one of the three scripts reached exit 0
-this way, or the producer-side gate is defeated. This rule never ends the
-shell; an awaiting-input or arbitration outcome means Step 2 is not reached
-yet, not that the attempt is abandoned.
-
-Mapping rows: `dev-report*` -> dev; `*qa-report*` -> qa; `ticket*|ba-spec*|context*|acceptance-criteria*` -> ba; `test-writer-report*|*manifest*` -> test-writer; `close-report*` -> qa; changelog status -> changelog-analyst; everything else -> orchestrator. A missing lane artifact is just a missing artifact whose row names its role (for a whole missing lane: ba, then dev, then qa).
-
-**`source_check` values** (the one check that produced the finding): the aggregate writer run, the route-select / resolver run, the artifact schema gate, `resolve-spec-artifacts`, an inspector report validation, or a QA bullet. The command builds each entry itself with `close_required_action`; there is no engine output and no code table.
-
-**Awaiting-input (R1-b / R6) — closed cause set.** The ONLY causes that wait are: (i) a human-only authorized operation (deletion, `/allow`, freeing `/tmp`, a rule-conflict ruling, or a hook rejection, which pauses per Subagent Hook Discipline and is never retried or worked around); (ii) an environment fault (R14) that needs a human action; (iii) pre-cycle argument or usage input the human must correct or supply (an invalid flag combination, `--auto` with a task-id / `--force` / `--reason`, `--late-repair` with `--force`, no resolvable task-id). Any other cause is routed (mapping + loop), never waited on. While waiting, NOTHING lands as complete: no `CLOSE:` line of any kind, no `CLOSE_FINDINGS:` line, and no close-report section is written; the wait is signalled by the single `AWAITING_INPUT:` line, and a consumer tells a wait from a landed verdict by the absence of any `CLOSE:` line. When the awaited input arrives, the loop resumes at the same step in place.
-
-### Routing loop (finding -> role -> fix -> same check re-run)
+### Routing loop (finding -> owing dispatch -> fix -> same check re-run)
 
 Applies identically at EVERY site that records a finding with
-`close_route_finding` (Step 0, the do-report lite preflight, the artifact schema
-gate, the cp-state handoff, Step 1's missing-report check, and every Step 2
+`close_route_finding` (Step 0, the do-report lite preflight, the cp-state
+handoff, and every Step 2
 verdict branch below), whenever `REQUIRED_ACTIONS_JSON` is a non-empty array.
-There is no repair engine, no code table, and no repetition bound: the loop is
-bounded only by the R15 progress measure.
+There is no repair engine and no repetition bound: the loop is bounded only by
+the R15 progress measure.
 
-For each `{path, detail, source_check, producer_role}` entry:
+For each `{path, detail, source_check}` entry:
 
-1. **Role = `producer_role`** (the mapping's output for `path`). A role other
-   than `orchestrator` means: dispatch that role, scoped to exactly this
-   finding. `orchestrator` means the orchestrator does the work itself (re-run
-   the aggregate writer, diagnose its own script, undo and redo a bypass through
-   the lawful channel). A missing lane artifact is just a missing artifact whose
-   row names its role; a wholly missing lane is rebuilt in ba -> dev -> qa order.
+1. **Owing dispatch** = the JSON answer (or `null`) of the declaring-dispatch
+   reader on the entry's path, run as its own Bash call:
+
+   ```bash
+   python3 ~/.claude/hooks/lib/obligation.py declaring-dispatch --task-id "$TASK_ID" --project-dir "$PROJECT_ROOT" --path "<path>"
+   ```
+
+   It reads this task's dispatch records in every session the project's
+   transcript store holds (a `/dev` of an earlier session included):
+   - `source` `dispatch` (its obligation declares `path`), `lane` (an
+     artifact of the whole fan-out, as its canonical aggregate, which the
+     lane-completeness hook writes when a lane's dev writes its report; the
+     main agent runs no aggregator) or `writer` (a product file: the dispatch
+     whose own tool calls wrote it): dispatch it again, the same
+     `subagent_type`, `task_id`, `lane` and obligation with a fresh
+     `dispatched_at`.
+   - `source` `todo_step` (no dispatch has declared `path` yet): with a
+     `template`, make a fresh dispatch of its role under the same task id from
+     that template of the answer's `step` in `commands/<command>.md`; with
+     none, the step is the main agent's own (as finalize's Step 0 under
+     `--late-repair`): run it yourself under the same task id.
+   - For a `/do`-origin task (`DO_REPORT` set), the do-report and a file the
+     answer names no owner for (`null`: the /do main agent wrote it) take the
+     do-report lite preflight's own step: dispatch dev again under the same
+     task id to complete the /do work.
+   - `null` otherwise, and a close-QA finding that cites no artifact: the
+     entry's path becomes that round's own report,
+     `docs/dev/close-report-$TASK_ID.md`, with the finding's path and detail as
+     its detail; that round's QA dispatch runs again and names an artifact.
+   A wholly missing lane is rebuilt in ba -> dev -> qa order.
 2. **Dispatch** — one real `Agent` tool call, `run_in_background: false`
-   (CLAUDE.md Orchestrator-Only Rule), carrying that role's normal FIRST ACTION
-   line and `<obligation v="1">` block, scoped to the entry's `path` / `detail`.
+   (CLAUDE.md Orchestrator-Only Rule), carrying the FIRST ACTION line and the
+   `<obligation v="1">` block of the dispatch it repeats, scoped to the entry's
+   `path` / `detail` (a step of the main agent's own runs in its place).
 3. **Re-check** — re-run ONLY the entry's `source_check` (never the whole
    `/close` flow from scratch), as an independent verifier. A verifier never
    edits the artifact it judges; it reports a finding and the producer fixes it.
@@ -310,9 +276,9 @@ For each `{path, detail, source_check, producer_role}` entry:
    revisits a state already seen, is `no_progress`.
 5. **No progress -> orchestrator arbitration (R5 / R13).** The orchestrator
    personally re-runs the single `source_check` and decides who is right.
-   Producer right -> the verifier's report is itself a bad artifact: map it
-   (its report path is an artifact) and route it back to the verifier's role to
-   fix its report. Verifier right -> the producer continues, and its next round
+   Producer right -> the verifier's report is itself a bad artifact: its
+   report path is an entry like any other, and the verifier's own dispatch, which
+   the reader returns for it, runs again to fix its report. Verifier right -> the producer continues, and its next round
    must change world state. There is no third role, no retry in place, no
    fall-back to a disclosure, and no fail-open.
 
@@ -320,44 +286,34 @@ A fault whose cause is environmental (R14: no space, read-only filesystem,
 permission on a state directory) that persists across rounds is a defined wait:
 `close_awaiting_input` with that cause. Everything else keeps routing.
 
-### Step 0: Refresh the canonical aggregate, then resolve the artifact chain
+### Step 0: Resolve the artifact chain
 (non-force, normal `/dev` path)
 
 For both explicit `/close <task-id-or-path>` and bare `/close`, fan-out
 recognition MUST happen before any parent ticket/context/QA assumption. Resolve
-the project root that owns the selected `docs/dev/` directory. First invoke the
-existing aggregate writer, whose shared shard classifier is scoped to
-`TASK_ID`. It returns `action == "skipped"` for N == 1; for 2+ valid lanes it
-creates a missing canonical aggregate, validates an identical one, or refreshes
-a stale projection from the current lane reports:
+the project root that owns the selected `docs/dev/` directory, then the chain.
+`/close` runs no aggregator: a fan-out's canonical aggregate has one producer,
+the lane-completeness hook (`commands/dev.md` Step 11), and a resolver finding
+on it goes back to that producer like any other finding:
 
 ```bash
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-source ~/.claude/venv/bin/activate 2>/dev/null || true
-if ! AGGREGATE_RESULT="$(cd "$PROJECT_ROOT" && \
-  python3 scripts/aggregate-dev-report.py --task-id "$TASK_ID")"; then
-  # An aggregation failure is a finding: no artifact path, so it binds
-  # path=$TASK_ID and lands on the orchestrator row, which re-runs the
-  # aggregate writer itself and re-checks it before the resolver runs.
-  close_route_finding "$TASK_ID" "aggregate-dev-report.py failed during Step 0" "aggregate-dev-report.py --task-id"
-fi
 ROUTE_SELECT_ARGS=(--task-id "$TASK_ID" --project-dir "$PROJECT_ROOT" "${LATE_REPAIR_SELECTOR_ARGS[@]}")
-ROUTE_SELECT_RESULT="$(python3 scripts/close-route-select.py "${ROUTE_SELECT_ARGS[@]}")"; ROUTE_SELECT_RC=$?
+ROUTE_SELECT_RESULT="$(python3 ~/.claude/scripts/close-route-select.py "${ROUTE_SELECT_ARGS[@]}")"; ROUTE_SELECT_RC=$?
+[ "$(jq -r '.outcome' <<<"$ROUTE_SELECT_RESULT")" = "not_selected" ] && LATE_REPAIR=false   # init declined: the ordinary route goes on with the chain of this call
 ARTIFACT_CHAIN="$(jq -c '.artifact_chain // {}' <<<"$ROUTE_SELECT_RESULT")"
-CLOSE_CANONICAL_REPORT=""
-[ "$(jq -r '.mode // empty' <<<"$ARTIFACT_CHAIN")" = "fanout" ] && CLOSE_CANONICAL_REPORT="$(jq -r '.canonical_dev_report // empty' <<<"$ARTIFACT_CHAIN")"
 ```
 
 **Resolver-error routing rule.** Applies only when `LATE_REPAIR != true` and
 `ROUTE_SELECT_RC != 0`. `ARTIFACT_CHAIN.errors[]` (`jq -c '.errors[]?'`) is the
 resolver's own error list; this is the implementation this rule reads, not a
 separate mechanism. Each element of that array becomes one `close_route_finding`
-call: path = that element's `.path // .artifact`, defaulting to `$TASK_ID` when
-the element names neither; detail = "resolver reported `<.code, default "an
+call: path = that element's `.path // .artifact`, or, when the element names
+neither, the chain's dev report `docs/dev/dev-report-$TASK_ID.json`; detail = "resolver reported `<.code, default "an
 error">` (rc=$ROUTE_SELECT_RC)"; `source_check` = `close-route-select.py` --
 the same `{path, detail, source_check}` shape `close_route_finding` takes
 everywhere else in this document. When `errors[]` is empty or unparseable,
-there is exactly one such finding instead, on path `$TASK_ID`, with detail
+there is exactly one such finding instead, on that same dev report, with detail
 "close-route-select.py returned non-zero (rc=$ROUTE_SELECT_RC) with no
 parseable errors[] and LATE_REPAIR=false", same `source_check`.
 
@@ -373,19 +329,10 @@ paths exercise the SAME entrypoint, not two divergent implementations. With
 byte-for-byte pass-through: `ARTIFACT_CHAIN` is the identical resolver JSON
 the bare invocation always produced, and the script never touches the
 late-repair controller. This order is mandatory for explicit and bare close alike: bind the parent
-task-id, let the aggregate writer's canonical shard classifier perform the
-recoverable write/refresh, and only then invoke the read-only resolver. Do not
-put a singular parent ticket/QA existence gate before either command. If
-aggregation fails, that is a finding (above): the orchestrator row re-runs the
-aggregate writer itself, and the resolver runs once that re-check passes.
+task-id, then invoke the read-only resolver. Do not put a singular parent
+ticket/QA existence gate before it.
 
-The fixed entrypoint is
-`scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
-Require exit 0 and top-level `status in {"pass", "pass_with_exceptions"}`;
-a non-zero return or `status == "fail"` is a set of findings, one per entry of
-the resolver's exact `errors[]`: each is routed to its producing role by the
-mapping, the producer fixes it, and the resolver is re-run as the same
-`source_check`; Step 1 starts only once it passes. `pass_with_exceptions` (ticket 20260911-011232)
+`pass_with_exceptions` (ticket 20260911-011232)
 means every hard error is resolved but one or more disclosed, evidenced,
 non-defect conditions remain — retain `disclosed_exceptions[]` from the result
 verbatim; it MUST be surfaced into the Step 2 QA dispatch prompt below (never
@@ -401,9 +348,8 @@ singular check.
 - `mode == "fanout"` requires each lane ticket/context/dev-report/passing
   QA-report plus the parent canonical aggregate and parent completion. Parent
   ticket/context/QA are optional, not missing prerequisites.
-- The aggregate writer is the sole permitted close-time artifact repair and may
-  write only the canonical aggregate. `/close` MUST NOT copy lane data into, or
-  fabricate, a parent ticket/context/QA-report or completion. A missing
+- `/close` MUST NOT copy lane data into, or fabricate, a parent
+  ticket/context/QA-report, canonical aggregate or completion. A missing
   completion remains a resolver failure that the originating `/dev` cycle must
   fix.
 
@@ -411,113 +357,25 @@ singular check.
 
 If `DO_REPORT` was set during task-id resolution, skip the normal-path artifact preflight entirely and run this lite check instead:
 
-- Read `$DO_REPORT`. Verify top-level `task_id == TASK_ID`, `source == "do"`, `do.status == "completed"`, `do.files_modified` is a non-null array. `do.status` of `"pending"` (a consent-hook skeleton the /do session never completed — see `commands/do.md` Step 5) or `"blocked"` fails this check. A status of `pending` or `blocked`, or any other failed check here, is a finding on `$DO_REPORT`: `close_route_finding "$DO_REPORT" "do-report status is '<observed>', not 'completed'" "do-report lite preflight"`. The /do work it describes is unfinished, so the finding is worked by the orchestrator row (a do-report is none of the named artifact kinds): it re-dispatches dev to complete the /do work, re-reads the do-report as the same `source_check`, and the preflight passes only once the status is `completed`.
+- Read `$DO_REPORT`. Verify top-level `task_id == TASK_ID`, `source == "do"`, `do.files_modified` is a non-null array, and `DO_STATUS == "completed"`, where `DO_STATUS` is the one decision on `do.status` (`lib/obligation.terminal_status`: the terminal status the report carries, or empty):
+
+  ```bash
+  DO_STATUS="$(python3 -c 'import json, os, sys; sys.path.insert(0, os.path.expanduser("~/.claude/hooks")); from lib.obligation import terminal_status; print(terminal_status("do-report.v1", json.load(open(sys.argv[1]))) or "")' "$DO_REPORT")"
+  ```
+
+  Any other `DO_STATUS`, or any other failed check here, is a finding on `$DO_REPORT`: `close_route_finding "$DO_REPORT" "do-report status is '<observed>', not 'completed'" "do-report lite preflight"`. The /do work it describes is unfinished, so this preflight's own step works the finding: dispatch dev again under the same task id to complete the /do work (no /close orchestrator writes the do-report), re-read the do-report as the same `source_check`, and the preflight passes only once the status is `completed`.
 - No ticket, context, dev-report, qa-report, or completion existence checks apply.
-- Run the Artifact schema gate (below) over `$DO_REPORT` — a versioned do-report (`report_version: 1`) is validated against the registered `schemas/do-report.v1.json`; an unversioned legacy do-report returns `SKIP`. This keeps the gate invocation uniform across paths.
 - Set `SPEC_ID=""` (no cp-state for /do work). Skip the cp-state resolver entirely.
 - Set `ARTIFACT_CHAIN=""`; a do-report is not a `/dev` artifact chain. Proceed
-  directly to the schema gate and inspector dispatch without shard inference.
+  directly to inspector dispatch without shard inference.
 
 ### Normal-path artifact preflight (non-force)
 
-After `TASK_ID` is resolved and before Step 1 dispatches inspectors, `/close` MUST run the same Codex-native artifact contract used by `/dev` completion. This preflight applies to `/close <task-id>`, `/close <task-id> --claude-code`, and bare `/close` only when active workflow state/context already resolved `<task-id>`. Bare `/close` with no active task-id keeps the `No spec identified...` failure and MUST NOT scan/default-to-newest.
+Resolve the optional cp-state handoff for the QA close gate. `/close` runs no
+spec-split resolver: a split is checked at its producer's stop (G2, the spec
+subagent's) and taken at `/dev*`'s entry, never re-checked here.
 
-Step 0's successful `ARTIFACT_CHAIN` is the structural preflight; do not repeat
-it. For singular mode it validates the same five parent artifacts as before. For
-fan-out mode it validates the lane matrix plus parent canonical/completion and
-does not require optional parent ticket/context/QA artifacts. Any missing,
-malformed, mismatched, stale, status-only, or non-passing required artifact is
-already a resolver error. `--force` is deprecated and no longer short-circuits
-anything (see "Forced-override path" above) — it runs through this
-normal-path preflight exactly like a bare invocation.
-
-### Artifact schema gate (interactive schema validation — closes the §13 asymmetry)
-
-The structural preflight above is a hand-rolled shape check. It does NOT run the JSON-Schema validators (`schemas/dev-report.v1.json` / `schemas/qa-report.v1.json`) that the `/dev-overnight` contract path applies via `hooks/lib/contract_runtime.py`. Historically that made interactive `/dev` artifacts categorically exempt from schema validation (ARCHITECTURE.md §13). This gate removes that exemption using the SAME `contract_runtime` engine (Draft7Validator) — it does NOT touch the overnight contract machinery.
-
-Run the gate over the exact normal-path `ARTIFACT_CHAIN.report_paths[]`; this is
-the canonical dev + QA pair for singular mode and the canonical aggregate plus
-every lane dev/QA report for
-fan-out mode. Do not synthesize a parent QA input. On the do-report path pass
-`$DO_REPORT` as before. Paths are relative to the resolver's `--project-dir`;
-the harness code + schemas live under `~/.claude`. Populate
-`REPORT_PATHS` directly from the retained JSON, preserving order:
-
-```bash
-mapfile -t REPORT_PATHS < <(python3 -c \
-  'import json,sys; print(*json.loads(sys.argv[1])["report_paths"], sep="\n")' \
-  "$ARTIFACT_CHAIN")
-source ~/.claude/venv/bin/activate 2>/dev/null || true
-SCHEMA_GATE_OUT="$(python3 -c '
-import sys, os
-sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))
-from lib import contract_runtime as cr
-rc = 0
-for p in sys.argv[1:]:
-    r = cr.validate_report_artifact(p)
-    if r["status"] == "fail":
-        rc = 2
-        print("SCHEMA-GATE FAIL:", p, "->", r["schema"])
-        for e in r["errors"]:
-            print("   -", e)
-    else:
-        print("SCHEMA-GATE " + r["status"].upper() + ":", p, "(" + (r.get("reason") or r.get("schema") or "") + ")")
-sys.exit(rc)
-' "${REPORT_PATHS[@]}")"
-SCHEMA_GATE_RC=$?
-printf '%s\n' "$SCHEMA_GATE_OUT"
-```
-
-Blocking semantics:
-- **Non-zero (`SCHEMA-GATE FAIL`)**: a report DECLARED a schema version (`report_version`) but VIOLATED its schema. Each `SCHEMA-GATE FAIL:` line names the offending report path; each is a finding on that path, routed by the mapping to the role that produced the report, which fixes the named field(s):
-
-  ```bash
-  if [ "$SCHEMA_GATE_RC" -ne 0 ]; then
-    while IFS= read -r FAILED_REPORT; do
-      close_route_finding "${FAILED_REPORT:-$TASK_ID}" "artifact schema gate reported SCHEMA-GATE FAIL for this report" "artifact schema gate (contract_runtime.validate_report_artifact)"
-    done < <(sed -n 's/^SCHEMA-GATE FAIL: \([^ ]*\) ->.*/\1/p' <<<"$SCHEMA_GATE_OUT")
-  fi
-  ```
-
-  Inspector dispatch (Step 1) proceeds once the routing loop has re-run the gate and it passes.
-- **Exit 0 (`SCHEMA-GATE PASS` / `SKIP`)**: proceed.
-  `validate_report_artifact()` is version-gated and no-ops (never fail-closed)
-  for an artifact kind with no registered schema, unparseable JSON
-  already rejected by the structural resolver, or an unversioned legacy record.
-  Every required dev/QA report in a fan-out chain is nevertheless presented to
-  this gate through `report_paths`.
-
-`/close --force` is deprecated and no longer short-circuits before this gate (see "Forced-override path" above) — this gate always runs. On the do-report path, run the same command with `$DO_REPORT` as the sole argument — a versioned do-report is validated against `do-report.v1` (schema violations block exactly like dev/qa reports); an unversioned legacy do-report still returns `SKIP`.
-
-Resolve optional cp-state handoff for the QA close gate. Do NOT derive `SPEC_ID`
-from the spec filename by hand — route the monolith path through the centralized
-resolver so the close gate uses the SAME `cp_dir` the producer and `/dev` use:
-
-- Determine the monolith `spec_path` from the resolved input. Otherwise, in
-  singular mode read the resolved parent context from `artifact_paths`; in
-  fan-out mode inspect the contexts named by `lanes[].context` and use a
-  `spec_path` / `spec_file` / `user_spec_path` only when the populated values
-  agree. Parent context is optional in fan-out mode and MUST NOT be created for
-  this handoff. Conflicting lane spec paths disable the optional cp-state
-  handoff with a recorded reason; they never justify inventing a parent context.
-- If a `spec_path` is found, call the resolver and take its `cp_dir`:
-
-  ```bash
-  if RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
-      --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR"); then
-    SPEC_ID=$(jq -r .artifact_id <<<"$RESOLVED_JSON")
-    CP_DIR=$(jq -r '.cp_dir // empty' <<<"$RESOLVED_JSON")
-    [ -f "$CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-qa.json" ] || { SPEC_ID=""; CP_DIR=""; }
-  else
-    # A cp-state resolution failure is a finding (path=$TASK_ID, orchestrator
-    # row); the optional handoff is bound empty meanwhile, the SAME
-    # "else bind SPEC_ID=''" shape the surrounding logic uses below.
-    close_route_finding "$TASK_ID" "resolve-spec-artifacts.py failed during the optional cp-state handoff resolution (path mismatch / present-but-invalid split)" "resolve-spec-artifacts.py"
-    SPEC_ID=""
-    CP_DIR=""
-  fi
-  ```
-- Else if `.claude/specs/<TASK_ID>/cp-state-qa.json` exists, bind `SPEC_ID="$TASK_ID"`,
+- If `.claude/specs/<TASK_ID>/cp-state-qa.json` exists, bind `SPEC_ID="$TASK_ID"`,
   `CP_DIR=".claude/specs/$TASK_ID"`.
 - Else bind `SPEC_ID=""` and skip the QA cp-state `SECOND ACTION`.
 
@@ -547,23 +405,23 @@ result: a parallel cycle is detected exactly when
 `ARTIFACT_CHAIN.mode == "fanout"`. Do not re-scan filenames or reinterpret
 `parallel_workers`; that would create a second, divergent fan-out authority.
 
+**Registry name** — `<SESSION_ID>` in the inspectors' FIRST ACTION lines below is the registry directory of `$TASK_ID`, printed by `python3 ~/.claude/hooks/prompt-workflow.py registry-dir "$TASK_ID"` (the value Step 2 binds as `$SESSION_ID`).
+
 **If a parallel cycle is detected** — dispatch inspectors SEQUENTIALLY (one Agent call at a time, wait for each to return before the next). **Obligation wiring (20261001-161041-r11, G1/G2 producer-role coverage):** each Agent call's prompt MUST begin with that inspector's own `FIRST ACTION` dev-registry sentinel-read line, followed by a well-formed `<obligation v="1">` block (docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2 — instantiated per-dispatch from the already-bound `<TASK_ID>`, never hand-invented) naming that inspector's own report path/schema/identity:
 
-- Agent call 1: `subagent_type: style-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/dev-<TASK_ID>/style-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "style-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/style-inspector-report-<TASK_ID>.json", "schema": "style-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/style-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`. Wait for completion.
-- Agent call 2: `subagent_type: cleanliness-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/dev-<TASK_ID>/cleanliness-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "cleanliness-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/cleanliness-inspector-report-<TASK_ID>.json", "schema": "cleanliness-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/cleanliness-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`. Wait for completion.
-- Agent call 3: `subagent_type: prompt-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/dev-<TASK_ID>/prompt-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "prompt-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/prompt-inspector-report-<TASK_ID>.json", "schema": "prompt-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/prompt-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`. Wait for completion.
+- Agent call 1: `subagent_type: style-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<SESSION_ID>/style-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "style-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/style-inspector-report-<TASK_ID>.json", "schema": "style-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/style-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`. Wait for completion.
+- Agent call 2: `subagent_type: cleanliness-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<SESSION_ID>/cleanliness-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "cleanliness-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/cleanliness-inspector-report-<TASK_ID>.json", "schema": "cleanliness-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/cleanliness-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`. Wait for completion.
+- Agent call 3: `subagent_type: prompt-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<SESSION_ID>/prompt-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "prompt-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/prompt-inspector-report-<TASK_ID>.json", "schema": "prompt-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/prompt-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`. Wait for completion.
 
 **If no parallel cycle is detected** — dispatch all three inspectors in parallel (original behavior): emit ONE message containing THREE Agent tool calls (concurrent, not sequential). **Obligation wiring (20261001-161041-r11)** — identical FIRST ACTION + `<obligation v="1">` prefix as the sequential branch above, per inspector:
 
-- Agent tool call 1: `subagent_type: style-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/dev-<TASK_ID>/style-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "style-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/style-inspector-report-<TASK_ID>.json", "schema": "style-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/style-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`.
-- Agent tool call 2: `subagent_type: cleanliness-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/dev-<TASK_ID>/cleanliness-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "cleanliness-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/cleanliness-inspector-report-<TASK_ID>.json", "schema": "cleanliness-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/cleanliness-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`.
-- Agent tool call 3: `subagent_type: prompt-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/dev-<TASK_ID>/prompt-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "prompt-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/prompt-inspector-report-<TASK_ID>.json", "schema": "prompt-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/prompt-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`.
+- Agent tool call 1: `subagent_type: style-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<SESSION_ID>/style-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "style-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/style-inspector-report-<TASK_ID>.json", "schema": "style-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/style-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`.
+- Agent tool call 2: `subagent_type: cleanliness-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<SESSION_ID>/cleanliness-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "cleanliness-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/cleanliness-inspector-report-<TASK_ID>.json", "schema": "cleanliness-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/cleanliness-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`.
+- Agent tool call 3: `subagent_type: prompt-inspector`, prompt begins with the literal line `FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<SESSION_ID>/prompt-inspector.json to register with the enforcement system. Do this BEFORE any other tool call.` followed by `<obligation v="1">{"task_id": "<TASK_ID>", "lane": null, "lane_set": null, "role": "prompt-inspector", "pipeline": "close", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/dev/prompt-inspector-report-<TASK_ID>.json", "schema": "prompt-inspector-report.v1", "identity": {"request_id": "<TASK_ID>"}}]}</obligation>`, then includes `--changed-files <cycle-diff-file-list>`, instructs the inspector to write its report to `docs/dev/prompt-inspector-report-<TASK_ID>.json`, and (if `codex_required = true`) includes the literal line `codex_required: true`.
 
 **Wait** for all three Agent tool calls to return. Each inspector writes its findings JSON to its assigned report path; the orchestrator does not re-interpret or re-aggregate those findings here — Step 2's QA dispatch passes the three concrete report paths as inputs and QA applies the AC-2.6 verdict-plumbing logic against them.
 
-**Transient-failure retry (both dispatch branches).** Inspector dispatch over the API can hit transient infrastructure errors — `529 Overloaded`, `Server is temporarily limiting requests` / rate-limited, or a subagent that returns with 0 tokens and no report written. These are NOT inspection results. When an inspector returns such a transient error, RE-DISPATCH that ONE inspector (same prompt — not the others) up to 3 times with escalating backoff (~5s, ~15s, ~30s) before giving up. If the 3 retries still fail transiently, that inspector's report is simply still missing and is handled by the missing/invalid-report check immediately below — performed by the orchestrator, before Step 2 ever dispatches QA — never silently treated as advisory. A substantive (non-transient) inspector result — including one that reports findings or returns a clean verdict — is NEVER retried. Sequential branch: retry the current inspector before moving to the next. Parallel branch: after the initial batch returns, re-dispatch only the inspector(s) that failed transiently.
-
-**Missing/invalid-report re-dispatch (orchestrator-owned, before Step 2 — 20261001-161041-r11 / AC5).** After the dispatch above (including the Transient-failure retry) completes for all three inspectors, the orchestrator — never QA, which has no inspector-dispatch authority per the Authority note at the top of this Step — checks each inspector's own report path for existence and schema-validity, reusing `hooks/lib/contract_runtime.validate_artifact_for_obligation()`'s existing fail/pass semantics under that inspector's own obligation-named path + registered schema id (`style-inspector-report.v1`, `cleanliness-inspector-report.v1`, `prompt-inspector-report.v1` respectively — `fail` on a missing or schema-invalid report, `pass` on a present, shape-matching one). For any inspector whose report fails that check, the orchestrator records an unresolved finding on that inspector's own report path (`close_route_finding "<inspector report path>" "report missing or schema-invalid" "inspector report validation"`; an inspector report is not one of the named artifact kinds, so it lands on the orchestrator row) and re-dispatches that SAME inspector (same prompt template, same `<obligation v="1">` block, a fresh `dispatched_at`) before Step 2 ever dispatches QA, then re-runs the same validation. A re-dispatch whose report bytes and unresolved set are unchanged is `no_progress`: the orchestrator arbitrates by diagnosing why the inspector keeps producing no valid report, and a persistent environment-class cause (R14) is the defined wait (`close_awaiting_input`). QA is not dispatched while an inspector report is still unresolved — never a silent advisory downgrade. This re-dispatch is entirely a Step 1 / orchestrator action; it does not loosen QA's documented lack of inspector-dispatch authority (preserved verbatim below and at this Step's Authority note), and it does not require flipping either `CLAUDE_OBLIGATION_GATE` or `CLAUDE_OBLIGATION_STOPGATE` out of their advisory-first defaults.
+**Transient-failure retry (both dispatch branches).** Inspector dispatch over the API can hit transient infrastructure errors — `529 Overloaded`, `Server is temporarily limiting requests` / rate-limited, or a subagent that returns with 0 tokens and no report written. These are NOT inspection results. When an inspector returns such a transient error, RE-DISPATCH that ONE inspector (same prompt — not the others) up to 3 times with escalating backoff (~5s, ~15s, ~30s) before giving up. If the 3 retries still fail transiently, that is an environment fault (R14): the defined wait (`close_awaiting_input`), never a silent advisory. A substantive (non-transient) inspector result — including one that reports findings or returns a clean verdict — is NEVER retried. Sequential branch: retry the current inspector before moving to the next. Parallel branch: after the initial batch returns, re-dispatch only the inspector(s) that failed transiently.
 
 The three concrete inspector report paths produced by Step 1 — for verbatim cross-reference by Step 2's QA dispatch prompt — are:
 
@@ -575,25 +433,11 @@ These exact path strings (with `<TASK_ID>` substituted) MUST appear verbatim ins
 
 ### Step 2: Delegate close debate to QA subagent
 
-**Bind this dispatch's own QA sentinel session** (M7 — this is close.md's OWN deterministic session binding, computed entirely from the already-bound `$TASK_ID`; it is NOT a recovery of the original `/dev` cycle's `DEV_SESSION_ID`, which close.md's non-force mainline has no mechanism to recover — see "Why not X" in the widen-QA-correlation ticket). This makes the QA-report correlation the SubagentStop hook performs (`hooks/subagentstop-e2e-enforce.py`) resolvable via its task_id-anchored branch even when this `/close` runs in a different session than the originating `/dev` cycle:
+**Bind this dispatch's own QA sentinel session** (M7 — close.md's OWN deterministic session binding, computed entirely from the already-bound `$TASK_ID` by the one task-id rule, `obligation.registry_dir_for`: the source cycle's `dev-<timestamp>` or `dev-command-<timestamp>` registry when it exists). This makes the QA-report correlation the SubagentStop hook performs (`hooks/subagentstop-e2e-enforce.py`) resolvable via its task_id-anchored branch even when this `/close` runs in a different session than the originating `/dev` cycle:
 
 ```bash
-SESSION_ID="dev-${TASK_ID}"
+SESSION_ID="$(python3 ~/.claude/hooks/prompt-workflow.py registry-dir "$TASK_ID")"
 ```
-
-Apply the QA-arming rule (Routing helpers above) to this `$SESSION_ID` /
-`$TASK_ID` now, for THIS dispatch's own QA enforcement-session bootstrap (M7
-binding). Dispatch QA below ONLY once that rule reports every script armed: an
-unarmed session silently defeats the producer-side enforcement gate. An
-awaiting-input outcome means an environment-class cause (R14) was found and
-the `AWAITING_INPUT:` line was printed: nothing lands and QA is not dispatched
-until the human acts, then this step is re-applied in place. An arbitration
-outcome means the same cause repeated with no progress and an `ARBITRATION:`
-line was printed: the arming scripts are the orchestrator's own calls (the
-last mapping row), so the orchestrator diagnoses and repairs the cause itself,
-then re-applies this step.
-
-This block is a no-op past its existence checks when `$TASK_ID`'s timestamp happens to coincide with the original cycle's `DEV_SESSION_ID` (the common case) — the registry directory and its `qa.json` already exist from that cycle's own Step 1 init, and the script calls simply refresh `qa_mode`/`task_id`/`e2e-enforce.json`/`artifact-contract-enforce.json` in place. The third call arms `hooks/subagentstop-artifact-contract-enforce.py` — the producer-side port of this command's own "Artifact schema gate" section — so the QA subagent dispatched below cannot stop with a versioned-but-schema-invalid qa-report that a later cycle's schema gate would reject anyway.
 
 Use the Agent tool with `subagent_type: qa` ONCE per independent judging round (a re-judge after producers fixed findings is a NEW round, dispatched fresh; QA never fixes what it judges). The entire debate of a round happens inside that single subagent call. Pass this prompt (substitute paths and $TS):
 
@@ -664,7 +508,7 @@ Round 1:
       - `docs/dev/style-inspector-report-<TASK_ID>.json`
       - `docs/dev/cleanliness-inspector-report-<TASK_ID>.json`
       - `docs/dev/prompt-inspector-report-<TASK_ID>.json`
-      **DO NOT attempt to dispatch inspector subagents — you do not have that authority; the orchestrator already did Step 4.** Inspector dispatch is `/close`-orchestrator-only by design (`agents/style-inspector.md` etc. are auditors invoked at the orchestrator layer). Treat the JSON contents of the three report files above as input to the AC-2.6 verdict-plumbing rules below. Inspector findings DO NOT directly decide the verdict — `close.md`'s finding-routing rules at AC-2.6 govern when an inspector finding becomes a routed finding. If any of the three report files is still missing or unreadable when you read it here, that is not something for you to resolve: Step 1's own missing/invalid-report re-dispatch (see "Missing/invalid-report re-dispatch" above) already performed one bounded re-dispatch of that specific inspector — by the orchestrator, before QA's debate in this Step 2 dispatch began. You still have NO authority to invoke the inspector yourself (this Step's Authority note, close.md:420, preserved verbatim). Report the still-missing/unreadable report as an unresolved finding (path = that report's path; its producer is the orchestrator, by the mapping) so the orchestrator resolves it and a fresh round re-judges — instead of treating it as empty/advisory input to the AC-2.6 finding-routing rules.
+      **DO NOT attempt to dispatch inspector subagents — you do not have that authority; the orchestrator already did Step 4.** Inspector dispatch is `/close`-orchestrator-only by design (`agents/style-inspector.md` etc. are auditors invoked at the orchestrator layer). Treat the JSON contents of the three report files above as input to the AC-2.6 verdict-plumbing rules below. Inspector findings DO NOT directly decide the verdict — `close.md`'s finding-routing rules at AC-2.6 govern when an inspector finding becomes a routed finding.
 
   1b'. Invoke the Skill tool with skill=codex. Pass codex a prompt that includes:
       - The same input artifact paths
@@ -676,7 +520,7 @@ Round 1:
   **Inspector-finding → routed-finding plumbing** (AC-2.6 — encodes Section 5.4 rule 3: cleanliness scope = only violations newly introduced in this diff become findings; pre-existing historical dirt is entirely ignored):
 
   - **(a) Diff-scoped invocation**: close passes `--changed-files <cycle-diff-changed-files>` (e.g., derived from `git diff --name-only $BASE..HEAD` or token-equivalent cycle-diff source — changed-line metadata for line-level inspectors / file list for file-level inspectors) to all three inspectors at Round-1.
-  - **(b) NEW-violation → routed finding** (only **provably-new** findings; pre-existing/ambiguous/untagged default to **ignore**): an inspector finding becomes a routed finding ONLY when it is explicitly proven NEW (introduced by THIS cycle's diff). It is routed to the dev lane whose dev-report claims the file (the dev-report row of the mapping; no claim -> the orchestrator row), that dev fixes it, the inspectors are re-run on the new diff (verifiers, independent), and a fresh QA round re-judges; the round that found it returns `CLOSE_FINDINGS: <n> items`. Findings that are pre-existing, untagged, ambiguous, or from non-diff-aware inspector runs default to **ignore** (cannot become a routed finding):
+  - **(b) NEW-violation → routed finding** (only **provably-new** findings; pre-existing/ambiguous/untagged default to **ignore**): an inspector finding becomes a routed finding ONLY when it is explicitly proven NEW (introduced by THIS cycle's diff). It is a finding on that file, routed by the Routing loop (the dispatch whose own tool calls wrote the file; none -> that round's own report), that dispatch fixes it, the inspectors are re-run on the new diff (verifiers, independent), and a fresh QA round re-judges; the round that found it returns `CLOSE_FINDINGS: <n> items`. Findings that are pre-existing, untagged, ambiguous, or from non-diff-aware inspector runs default to **ignore** (cannot become a routed finding):
     - **Line-level inspectors** (e.g., `style-inspector` emitting `file:line`): a finding is provably NEW when **(i) its line falls within the cycle diff's changed-line range / diff-hunk overlap for that file AND (ii) the finding is also absent from the pre-diff baseline of the same file** (the violation did not exist on the corresponding pre-diff line content). Overlap alone is **necessary but NOT sufficient** — a pre-existing violation preserved on a modified line is still pre-existing. Soft fallback when pre-diff baseline comparison is impractical: dev/inspector documents the proxy used (e.g., "overlap-only used because <reason>") and close treats overlap-only findings as **advisory** unless the proxy explicitly stipulates newness.
     - **File-level inspectors** (`cleanliness-inspector`, `prompt-inspector` — granularity = `file`, not `file:line`): the inspector's output MUST distinguish NEW vs pre-existing. Two acceptable mechanisms (dev's discretion; **may be implemented individually OR combined**):
       - **(i) Inspector-side filtering**: the inspector itself emits findings only for NEW violations (e.g., comparing its analysis against a pre-diff baseline of the same file, or analyzing diff hunks directly). Findings emitted under mechanism (i) in `--changed-files` mode count as NEW **only when the inspector's documentation explicitly declares the filtering contract** (per AC-12.1 documentation requirement); absent that explicit contract, untagged file-level findings fall under the default-safe ignore rule below.
@@ -714,7 +558,7 @@ Track a single field about the codex consultation across all rounds:
 - `failed_timeout` — every round attempted hung past the round's deadline.
 - `failed_parse` — every round attempted returned content that could not be parsed into `CODEX: YES` / `CODEX: NO`. Unlike `failed_quota` / `failed_timeout`, the round produced output -- it just did not match the required format. QA MUST preserve the verbatim raw output and perform a manual dissent scan before branch 7 can grant CLOSE: YES (FINDING-4).
 
-**Findings and return forms**: branches 3, 4, 5, 7's two fail-overs, 8, 9's two sub-branches, and 10's fall-through below never end in a negative verdict. Each one is a **finding**: QA records it in the close-report with the artifact path it concerns (path = `$TASK_ID` when it names none) and counts it. A round that opened at least one finding ends with the round-open return `CLOSE_FINDINGS: <n> items` (`<n>` = number of open findings): it is NON-LANDING (it grants nothing, lands nothing, and `/commit` reads it as not landed). The orchestrator then routes each finding through the Routing loop above — `close_route_finding` maps its path to the producing role, that role fixes, and QA is re-dispatched as a fresh independent judging round that re-judges from the artifacts (QA is a verifier; it NEVER edits the artifact it judges and never fixes a finding itself). No sentence in this command grants YES on a disclosure while a finding is unresolved: `CLOSE: YES*` is returned only by a round that opened no finding. The two legal returns are therefore exactly: landed (one of the five `CLOSE: YES` forms) or round-open (`CLOSE_FINDINGS: <n> items`). Findings routed by the branches: codex dissent items and QA dissent items go to the producer of the cited artifact (dev work -> dev; spec / acceptance criteria, including an unsatisfiable AC -> ba; QA's own report defects -> qa); a Workflow Integrity FAIL goes to the producer of the failing artifact (bullets 1, 2, 4i: the artifact's row; bullet 3: the dev lane; bullet 4iii bypass: the orchestrator row, which undoes and redoes it through the lawful channel). A completed repair is attached to the close-report as one `## Disclosures` line (below) — a record of the fix, never a substitute for it.
+**Findings and return forms**: branches 3, 4, 5, 7's two fail-overs, 8, 9's two sub-branches, and 10's fall-through below never end in a negative verdict. Each one is a **finding**: QA records it in the close-report with the artifact path it concerns (that round's own report, `docs/dev/close-report-<TASK_ID>.md`, when it names none) and counts it. A round that opened at least one finding ends with the round-open return `CLOSE_FINDINGS: <n> items` (`<n>` = number of open findings): it is NON-LANDING (it grants nothing, lands nothing, and `/commit` reads it as not landed). The orchestrator then routes each finding through the Routing loop above — the dispatch that owes its path runs again and fixes, and QA is re-dispatched as a fresh independent judging round that re-judges from the artifacts (QA is a verifier; it NEVER edits the artifact it judges and never fixes a finding itself). No sentence in this command grants YES on a disclosure while a finding is unresolved: `CLOSE: YES*` is returned only by a round that opened no finding. The two legal returns are therefore exactly: landed (one of the five `CLOSE: YES` forms) or round-open (`CLOSE_FINDINGS: <n> items`). Findings routed by the branches: codex dissent items and QA dissent items go to the dispatch that owes the cited artifact (an unsatisfiable AC cites the acceptance criteria); a Workflow Integrity FAIL goes to the dispatch that owes the failing artifact (bullets 1, 2, 4i: the artifact itself; bullet 3: the dev lane's artifact; bullet 4iii bypass: the files the bypass wrote, else that round's own report). A completed repair is attached to the close-report as one `## Disclosures` line (below) — a record of the fix, never a substitute for it.
 
 Verdict branches:
 
@@ -727,11 +571,11 @@ Verdict branches:
     - **(d)** **QA SHALL reject this branch if the deviated AC directly encodes user-need / security / THIS-diff-cleanliness — for those, AC-deviation is plain AC-FAIL, NOT AC-deviation-PASS.** This prevents the branch becoming a downgrade vector. If the deviated AC's text encodes the user-need test itself, or a security check, or a cleanliness-of-THIS-diff check, deviation collapses back to AC-FAIL and the result follows branch 5 (QA dissent → routed finding, round-open return).
     - When (a)–(c) hold and (d) does not trigger, the verdict is **CLOSE: YES** and the close-report records the deviation rationale verbatim.
 
-3. **Substantive Codex dissent**: codex_status = ok AND any round ended with `CODEX: NO` AND the disagreement was not resolved by a later round → codex's dissent is a finding set: codex MUST have listed 2-5 actionable flip items, and each item is a finding against the artifact it cites (path = `$TASK_ID` when it cites none), routed per "Findings and return forms" (dev work -> dev; spec / AC -> ba; QA's own report -> qa). The round returns `CLOSE_FINDINGS: <n> items`; the producers fix; a fresh round re-judges. A codex NO without a flip list is an observation, not a finding. Trigger condition is unchanged.
+3. **Substantive Codex dissent**: codex_status = ok AND any round ended with `CODEX: NO` AND the disagreement was not resolved by a later round → codex's dissent is a finding set: codex MUST have listed 2-5 actionable flip items, and each item is a finding against the artifact it cites (that round's own report when it cites none), routed per "Findings and return forms". The round returns `CLOSE_FINDINGS: <n> items`; the producers fix; a fresh round re-judges. A codex NO without a flip list is an observation, not a finding. Trigger condition is unchanged.
 
-4. **Workflow Integrity FAIL**: any of the four bullets evaluates to FAIL (not N/A-with-reason) → each failing bullet is a finding on the artifact it concerns (bullets 1, 2, 4i: the defective artifact's own path, routed by its row; bullet 3: the dev lane's artifact; bullet 4iii: path `$TASK_ID`, the orchestrator row, which undoes and redoes the bypass through the lawful channel), regardless of QA / codex positions; the round returns `CLOSE_FINDINGS: <n> items`. Trigger condition is unchanged.
+4. **Workflow Integrity FAIL**: any of the four bullets evaluates to FAIL (not N/A-with-reason) → each failing bullet is a finding on the artifact it concerns (bullets 1, 2, 4i: the defective artifact's own path; bullet 3: the dev lane's artifact; bullet 4iii: the files the bypass wrote, else that round's own report), regardless of QA / codex positions; the round returns `CLOSE_FINDINGS: <n> items`. Trigger condition is unchanged.
 
-5. **QA dissent**: QA position = NO at end of final round → QA MUST name concrete items; each is a finding against the artifact it cites (path = `$TASK_ID` when none), routed per "Findings and return forms"; the round returns `CLOSE_FINDINGS: <n> items`. Trigger condition is unchanged.
+5. **QA dissent**: QA position = NO at end of final round → QA MUST name concrete items; each is a finding against the artifact it cites (that round's own report when none), routed per "Findings and return forms"; the round returns `CLOSE_FINDINGS: <n> items`. Trigger condition is unchanged.
 
 6. **Codex infrastructure failure (BUG-CLOSE-2 escape valve)**: codex_status ∈ {`failed_quota`, `failed_timeout`} AND QA position = YES AND all four Workflow Integrity Dimension bullets PASS → **CLOSE: YES (degraded codex consultation)**. The verdict is granted on QA's substantive YES alone because codex never produced a substantive opinion to disagree with. Document the codex_status value verbatim in the close-report transcript under a new "Degraded codex consultation" section. The dissent line is replaced by an annotation: `degraded codex consultation: codex_status=<value>, codex contributed no substantive position`. This branch ONLY applies when the failure mode is unambiguous mechanical / infrastructural transport failure (the request never produced any output at all); a successful CODEX: NO still falls under branch 3. `failed_quota` and `failed_timeout` are unambiguous (the round produced no body to inspect). `failed_parse` is NOT in this branch -- see branch 7.
 
@@ -740,9 +584,9 @@ Verdict branches:
     - **(b)** QA performed a manual scan of that verbatim output for substantive dissent signals -- including but not limited to: `CODEX: NO`, `Codex: NO`, the literal substring `NO`, the words `bug`, `defect`, `regression`, `wrong`, `incorrect`, `must not`, `should not`, `does not work`, `fails`, `broken`, or any prose explicitly objecting to the proposed close;
     - **(c)** QA explicitly states the determination: `manual parse: NO substantive dissent signal found in failed_parse output` (verbatim wording required).
 
-    `failed_parse` differs from `failed_quota`/`failed_timeout` because the request DID complete and the codex CLI DID emit content -- the parser merely could not map it to the `CODEX: YES` / `CODEX: NO` format. Skipping the manual scan would create a downgrade vector: a substantive `NO` could ride a malformed response into a YES verdict. If the manual parse finds ANY dissent signal, treat it as substantive Codex dissent (branch 3): a finding carrying the verbatim signal as its detail, routed per "Findings and return forms". If QA omits the verbatim attestation, the close-report is defective: a finding on `docs/dev/close-report-<TASK_ID>.md` (the close-report row: qa), and qa repairs the report and re-attests in the next round (branch 8's target).
+    `failed_parse` differs from `failed_quota`/`failed_timeout` because the request DID complete and the codex CLI DID emit content -- the parser merely could not map it to the `CODEX: YES` / `CODEX: NO` format. Skipping the manual scan would create a downgrade vector: a substantive `NO` could ride a malformed response into a YES verdict. If the manual parse finds ANY dissent signal, treat it as substantive Codex dissent (branch 3): a finding carrying the verbatim signal as its detail, routed per "Findings and return forms". If QA omits the verbatim attestation, the close-report is defective: a finding on `docs/dev/close-report-<TASK_ID>.md`, whose declaring QA dispatch repairs the report and re-attests in the next round (branch 8's target).
 
-8. **Other ambiguity / parse failure on QA's side / unresolved disagreement after final round**: a defective close-report is a finding on `docs/dev/close-report-<TASK_ID>.md` (the close-report row: qa), detail = a one-sentence description of the ambiguity / parse-failure / unresolved disagreement; qa repairs the report and the next round re-judges (conservative default — never silently absorbed). Distinct from branch 6: the failure is on QA's reasoning side, not codex's transport.
+8. **Other ambiguity / parse failure on QA's side / unresolved disagreement after final round**: a defective close-report is a finding on `docs/dev/close-report-<TASK_ID>.md`, detail = a one-sentence description of the ambiguity / parse-failure / unresolved disagreement; its declaring QA dispatch repairs the report and the next round re-judges (conservative default — never silently absorbed). Distinct from branch 6: the failure is on QA's reasoning side, not codex's transport.
 
 9. **Codex disabled by user (no `--codex` flag)** — `codex_required = false` from Step 1 → QA runs **single-round QA-only assessment** of the 4 Workflow Integrity bullets + 1b cleanliness preconditions; no `Skill(codex)` invocations attempted; `codex_status` is set to the literal sentinel `disabled_by_user`. Verdict logic collapses to:
    - QA position = YES AND all four Workflow Integrity bullets PASS (or N/A-with-reason; never FAIL) AND no NEW-violation cleanliness inspector finding → **CLOSE: YES** (annotation: `codex_disabled_by_user: codex consultation skipped because --codex flag was not passed; verdict granted on QA's substantive YES + 4 bullets PASS alone`).
@@ -766,25 +610,19 @@ Transcript file: write the full debate to `docs/dev/close-report-<task-id>.md` (
   include the supplied `lanes[]` matrix and `qa_inputs[]` paths so the report
   records which independently-passed lanes were rolled into the parent decision.
   Workflow Integrity Dimension: explicit per-bullet status (1. Downstream consumability: PASS/FAIL/N/A; 2. task-id chain consistency: PASS/FAIL/N/A; 3. Pre-existing-defect rule: PASS/FAIL/N/A; 4. Self-deployability: PASS/FAIL/N/A) — with one-sentence reason for each FAIL or N/A.
-  Codex consultation: explicit `codex_status` value (`ok` | `failed_quota` | `failed_timeout` | `failed_parse`). When the value is one of the failure modes, include a "Degraded codex consultation" section that records: which rounds failed, the verbatim error / timeout / parse-issue from each attempt, and the explicit acknowledgement that the verdict was granted on QA's substantive YES alone (per Verdict rule branch 6). For `failed_parse` specifically (FINDING-4), the section MUST additionally include: (i) the verbatim raw codex output text from EACH failed_parse round, (ii) QA's explicit per-round manual scan note, and (iii) the verbatim attestation `manual parse: NO substantive dissent signal found in failed_parse output`. Without all three, branch 7 is not satisfied and the result falls to branch 8 (a defective close-report: finding routed to qa).
+  Codex consultation: explicit `codex_status` value (`ok` | `failed_quota` | `failed_timeout` | `failed_parse`). When the value is one of the failure modes, include a "Degraded codex consultation" section that records: which rounds failed, the verbatim error / timeout / parse-issue from each attempt, and the explicit acknowledgement that the verdict was granted on QA's substantive YES alone (per Verdict rule branch 6). For `failed_parse` specifically (FINDING-4), the section MUST additionally include: (i) the verbatim raw codex output text from EACH failed_parse round, (ii) QA's explicit per-round manual scan note, and (iii) the verbatim attestation `manual parse: NO substantive dissent signal found in failed_parse output`. Without all three, branch 7 is not satisfied and the result falls to branch 8 (a defective close-report: a finding on it, routed to its declaring QA dispatch).
   For each round: [QA] position + rationale; [Codex] position + rationale (or "consultation failed: <reason>" when codex_status was failed-* in that round).
   **`## Disclosures` (present whenever the routing loop completed at least one repair this cycle):** one line per completed repair, as an attached record only, in the exact format `path: problem | 归因: role(lane) | 修复: fix evidence` (field labels stay in Chinese; no code prefix). The final line's `<n>` count (in the `CLOSE: YES - with disclosures: <n> items` form below) MUST equal the number of disclosure lines in this section. Omit the section entirely when no repair was completed.
-  At bottom: the LAST non-empty line of the file MUST be EXACTLY one of the legal forms listed in the Return value section below (a landed `CLOSE: YES*` form such as a bare line `CLOSE: YES`, or the round-open line `CLOSE_FINDINGS: <n> items`). A round-open section is appended like any other (append-only) and never lands anything. Do NOT prefix it with `Final verdict:`, `Verdict:`, or any other label — the runtime parser (`hooks/lib/close-verdict.py`) reads the last non-empty line and requires it to start literally with `CLOSE: `; any prefix breaks `/commit`'s admission check.
+  At bottom: the LAST non-empty line of the file MUST be EXACTLY this attempt's verdict line (Return value below: a landed `CLOSE: YES*` form such as a bare line `CLOSE: YES`, or the round-open line `CLOSE_FINDINGS: <n> items`). A round-open section is appended like any other (append-only) and never lands anything. Do NOT prefix it with `Final verdict:`, `Verdict:`, or any other label — the runtime parser (`hooks/lib/close-verdict.py`) reads the last non-empty line and requires it to start literally with `CLOSE: `; any prefix breaks `/commit`'s admission check.
 
 Overwrite policy: if `docs/dev/close-report-<task-id>.md` already exists with a `CLOSE:` line in it (a prior closure attempt for the same task-id), do NOT silently overwrite: always preserve the existing bytes and append a fresh debate as a new section dated by ISO timestamp, then require the file's LAST non-empty line to be exactly THIS new attempt's own legal `CLOSE:` verdict line (see Return value below). Perform this append via the deterministic helper — write the new dated section's full text (ending in this attempt's own legal `CLOSE:` line) to a temp file, then invoke it with ABSOLUTE paths rooted at `$PROJECT_ROOT` (resolved in Step 0 above) so the helper can never target the wrong project's `docs/dev` tree regardless of QA's own working directory:
-  `source ~/.claude/venv/bin/activate 2>/dev/null || true && python3 "$PROJECT_ROOT/scripts/close-report-append.py" --report-path "$PROJECT_ROOT/docs/dev/close-report-<task-id>.md" --section-file "<absolute-temp-section-path>" --task-id "<task-id>"`
+  `source ~/.claude/venv/bin/activate 2>/dev/null || true && python3 ~/.claude/scripts/close-report-append.py --report-path "$PROJECT_ROOT/docs/dev/close-report-<task-id>.md" --section-file "<absolute-temp-section-path>" --task-id "<task-id>"`
   (activates the venv first, matching Step 0's own invocation pattern above). The helper performs an atomic, verified append and never mutates a byte of the file's existing content — see its own module docstring for the full read-append-readback-verification and atomicity design. Branch explicitly on its exit code:
   - **exit 0**: stdout is one line of JSON `{"status":"ok","report_path":...,"verdict_line":...}` — validate `status == "ok"`, then use `verdict_line` (NOT the raw JSON) as QA's own Return-value line.
   - **exit non-zero**: stdout is exactly the sentinel line below; propagate that exact line as QA's own Return-value output. Any other stdout shape (missing/malformed JSON on exit 0, or a non-sentinel line on exit non-zero) is a bug in the invocation itself — treat it as a verification failure and fail closed rather than guessing a verdict.
-  Such a failure is NEVER a basis for falling back to treating the prior closure's verdict as authoritative for this new attempt: print the single non-`CLOSE:`-prefixed line `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` as this attempt's not-landed signal, and run no Step 3 verdict echo, scoring, session summary, or workflow update for it — the pre-existing report's prior verdict is never reused as this attempt's result. The command then retries the atomic append under the R15 progress measure (progress = the section is now appended): a persistent environment-class cause (R14) is the defined wait (`close_awaiting_input`); a defective section text is a finding on `docs/dev/close-report-<task-id>.md` (the close-report row: qa), which repairs the section text.
+  Such a failure is NEVER a basis for falling back to treating the prior closure's verdict as authoritative for this new attempt: print the single non-`CLOSE:`-prefixed line `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` as this attempt's not-landed signal, and run no Step 3 verdict echo, scoring, session summary, or workflow update for it — the pre-existing report's prior verdict is never reused as this attempt's result. The command then retries the atomic append under the R15 progress measure (progress = the section is now appended): a persistent environment-class cause (R14) is the defined wait (`close_awaiting_input`); a defective section text is a finding on `docs/dev/close-report-<task-id>.md`, whose declaring QA dispatch repairs the section text.
 
-Return value: print to stdout exactly ONE of these lines as the final line of your response. The landed forms are exactly the five `CLOSE: YES*` lines listed below; the only other legal return is the round-open line `CLOSE_FINDINGS: <n> items`, which is NON-LANDING (findings are open and routed; nothing is granted). Runtime consumers classify the last non-empty line through the shared close-verdict helper: `YES`, `YES` with a suffix (including degraded consultation or codex-disabled annotations), and `YES (FORCED)` map to `yes`; the round-open line maps to the not-landed class; anything else maps to `unknown` and fails closed. `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` (see Overwrite policy above) is a deliberate, sanctioned exception to this "exactly ONE of these lines" list, not an oversight: it is a per-attempt not-landed signal emitted before Step 2 ever reaches a verdict at all, is by design none of the forms below, and is classified `unknown`/fail-closed by the same helper because no legitimate verdict was reached for this attempt. This exception does not weaken the contract for the normal case — the last non-empty line of a report that DID reach a verdict must still be exactly one of the five landed forms or the round-open form below.
-  CLOSE: YES
-  CLOSE: YES - with disclosures: <n> items
-  CLOSE: YES - degraded codex consultation: codex_status=<failed_quota|failed_timeout|failed_parse>
-  CLOSE: YES — codex disabled by user
-  CLOSE: YES (FORCED)
-  CLOSE_FINDINGS: <n> items        (round-open, non-landing)
+Return value: print to stdout, as the final line of your response, the verdict line your verdict branch names — a landed `CLOSE: YES` form, or the round-open line `CLOSE_FINDINGS: <n> items` (NON-LANDING: findings are open and routed; nothing is granted); your obligation's `terminal_line_regex` declares the legal set — or the `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` line of the Overwrite policy above. Every reader classifies the last non-empty line through `hooks/lib/close-verdict.py`: a landed form reads `yes`, the round-open line `no`, anything else `unknown` (fail closed).
 ```
 
 ### Step 3: Generate close-report + workflow update
@@ -792,8 +630,8 @@ Return value: print to stdout exactly ONE of these lines as the final line of yo
 Take the final line QA returned — either a landed `CLOSE: YES*` form or the round-open `CLOSE_FINDINGS: <n> items` — and echo whichever one QA returned in the orchestrator's text message to the user. A round-open echo is followed by routing (the Routing loop, then a fresh QA round), never by this step's scoring, session summary, rating, or workflow-update branches. The close-report itself is written by QA inside Step 2; this step is the echo + ensures the report file exists at `docs/dev/close-report-<task-id>.md`.
 
 **Two distinct final-line contracts — DO NOT confuse**:
-- **Close-report FILE** (`docs/dev/close-report-<task-id>.md`): the LAST non-empty line of the FILE must be EXACTLY one of the legal `CLOSE:` forms listed in Step 2's Return value section. This is the runtime-parser contract consumed by `hooks/lib/close-verdict.py` and `/commit`'s admission check. This contract is enforced INSIDE the file QA wrote in Step 2; nothing in Step 3 alters it.
-- **Orchestrator's stdout text message to the user**: the orchestrator's response stream in Step 3 begins with the `CLOSE:` verdict echo, continues with the Session Summary (CLOSE:YES branch only — see below), and ends with the rating `<options>` XML block (CLOSE:YES branch only — see below). On the round-open and CLOSE:YES (FORCED) paths there is no Session Summary and no `<options>` block, so the echo is itself the last line of the orchestrator's message. The `<options>` block being the literal final stdout content on CLOSE:YES does NOT violate the close-report FILE contract — they are two different output channels.
+- **Close-report FILE** (`docs/dev/close-report-<task-id>.md`): the LAST non-empty line of the FILE must be EXACTLY the verdict line Step 2's Return value names. This is the runtime-parser contract consumed by `hooks/lib/close-verdict.py` and `/commit`'s admission check. This contract is enforced INSIDE the file QA wrote in Step 2; nothing in Step 3 alters it.
+- **Orchestrator's stdout text message to the user**: the orchestrator's response stream in Step 3 begins with the `CLOSE:` verdict echo, continues with the Session Summary (CLOSE:YES branch only — see below), and ends with the rating `<options>` XML block (CLOSE:YES branch only — see below). On the round-open path there is no Session Summary and no `<options>` block, so the echo is itself the last line of the orchestrator's message. The `<options>` block being the literal final stdout content on CLOSE:YES does NOT violate the close-report FILE contract — they are two different output channels.
 
 **Mascot scoring — close outcome (spec-20260518-225715 §5.1; M4 — task 20260529-210616)**:
 
@@ -817,7 +655,6 @@ Procedure:
    The helper reads the close-report at `docs/dev/close-report-<task-id>.md`, classifies its last non-empty line via `hooks/lib/close-verdict.py`, and emits stdout JSON `{"events": [...], "skip_reason": "<string|null>"}`:
    - missing close-report → `events=[]`, `skip_reason` contains "missing"
    - last-line `CLOSE: NO` → `events=[]`, `skip_reason` non-null
-   - last-line `CLOSE: YES (FORCED)` → `events=[]`, `skip_reason` contains "FORCED"
    - last-line `CLOSE: YES` + qa_ever_rejected=false → `events=["close_success_qa_pass"]`, `skip_reason=null`
    - last-line `CLOSE: YES` + qa_ever_rejected=true → `events=["close_success_qa_fail_fixed"]`, `skip_reason=null`
 
@@ -839,13 +676,11 @@ Procedure:
    - `CLOSE: NO` AND QA had passed (PM/inspector or codex caught issue post-QA) → `score-update.sh --event close_fail_qa_pass` for ba/dev/qa. (dev -10, ba -5, qa -12.)
    - `CLOSE: NO` AND QA had failed (rejection upstream) → `score-update.sh --event close_fail_qa_fail` for ba/dev/qa. (dev -10, ba -5, qa 0.)
 
-6. `CLOSE: YES (FORCED)` (the `--force` short-circuit path) → SKIP close-event score updates entirely; --force bypasses scoring just as it bypasses QA debate. The helper enforces this by returning `events=[]` for FORCED lines, so even if the orchestrator forgets, the script-side gate (`scripts/score-update.sh` M3 precondition) and the helper-side gate are defense-in-depth.
-
 Defense-in-depth: `scripts/score-update.sh` itself enforces the same precondition (M3 — task 20260529-210616). Any `close_success_*` call without a legal `CLOSE: YES` last-line in `docs/dev/close-report-<note>.md` exits 5 ("precondition unmet"), so even if the orchestrator skips the helper or the helper is bypassed, the lifecycle log cannot be polluted with premature success entries.
 
 **Session Summary — CLOSE:YES branch only (mandatory before rating)**:
 
-- If the verdict is **`CLOSE: YES`** (non-forced YES forms) AND `--force` was NOT passed in `$ARGUMENTS`:
+- If the verdict is **`CLOSE: YES`** (class `yes`) AND `--force` was NOT passed in `$ARGUMENTS`:
   - The orchestrator MUST produce a `## Session Summary` section in its text output to the user.
   - Format: chronological order, 6 buckets, each entry CONCISE (1–2 sentences max per bullet):
     - **Accomplished**: what was done this session
@@ -864,11 +699,11 @@ Defense-in-depth: `scripts/score-update.sh` itself enforces the same preconditio
     artifacts. The user-requirement document remains primary for the user-needs
     buckets.
   - This summary appears in the orchestrator's text message to the user, AFTER the `CLOSE:` verdict echo and BEFORE the rating `<options>` block below.
-- If the last line is the round-open `CLOSE_FINDINGS:` line (read-side class `no`/`unknown`, i.e. any non-YES) or **`CLOSE: YES (FORCED)`**: SKIP the session summary.
+- If the last line is the round-open `CLOSE_FINDINGS:` line (read-side class `no`/`unknown`, i.e. any non-YES): SKIP the session summary.
 
 **User rating prompt — CLOSE:YES branch only (spec-20260518-225715 §5.1 line 136 verbatim: "Only fires after CLOSE:YES; CLOSE:NO does NOT prompt." (translated from spec))**:
 
-- If the verdict is **`CLOSE: YES`** (the non-forced YES forms — `YES`, `YES - degraded ...`, `YES — codex disabled ...`) AND `--force` was NOT passed in `$ARGUMENTS`:
+- If the verdict is **`CLOSE: YES`** (class `yes`) AND `--force` was NOT passed in `$ARGUMENTS`:
   - Output the following `<options>` XML block at the VERY END of the orchestrator's text message to the user (after the verdict echo and session summary above). This block is in the orchestrator's text output only — NOT in the close-report file, which retains its `CLOSE:` final-line contract:
 
     ```
@@ -888,7 +723,6 @@ Defense-in-depth: `scripts/score-update.sh` itself enforces the same preconditio
     - `bash ~/.claude/scripts/score-update.sh --agent qa --event user_rating_<N> --note "<task-id>"`
   - When the user selects "Skip rating": NO score-update calls are made. (Skip does NOT produce a separate event — spec 5.1.)
 - If the last line is any non-YES form (the round-open `CLOSE_FINDINGS:` line, class `no`/`unknown`): SKIP the rating entirely. Per spec 5.1 line 136 verbatim, the rating prompt fires only after CLOSE:YES, NOT after CLOSE:NO.
-- If the verdict is **`CLOSE: YES (FORCED)`** (`--force` was passed): SKIP the rating entirely. The --force short-circuit at Step 2 line 54 means no QA debate occurred, so no user rating is collected and no score is updated.
 
 Then branch the workflow update:
 
@@ -913,12 +747,13 @@ Then branch the workflow update:
     `ARTIFACT_CHAIN` — never fabricate a parent-level ticket/context/QA
     artifact the fan-out shape doesn't have. Once the resumed lane(s) or
     singular cycle pass QA, re-invoke `/close <task-id>` (the SAME parent
-    `<task-id>`, so Step 0's aggregate refresh picks up the correction) —
+    `<task-id>`, so Step 0's chain call reads the correction) —
     the route by which `<task-id>`'s OWN close-report reaches `CLOSE: YES`.
   - **Fresh continuation spec** (fallback, when the dissent requires
     reopening a materially different scope, or when the original
     `DEV_SESSION_ID` cannot be recovered): create or update a continuation
-    spec using `/spec-update` default continuation-spec mode. If the dev
+    spec using `/spec-update` default continuation-spec mode, handing it the
+    `ARTIFACT_CHAIN` Step 0 holds (it does not call the chain again). If the dev
     context has a source spec, append the close dissent and unresolved gaps
     to that spec; otherwise create a new spec. Next action:
     `/dev --spec <spec_path>`. No longer the only documented route.
@@ -941,22 +776,24 @@ never around it.
    ```bash
    PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
    source ~/.claude/venv/bin/activate 2>/dev/null || true
-   mapfile -t CLOSE_PENDING_PARENTS < <(python3 scripts/dev-lifecycle.py list-actionable --next-action close --project-dir "$PROJECT_ROOT")
+   mapfile -t CLOSE_PENDING_PARENTS < <(python3 ~/.claude/scripts/dev-lifecycle.py list-actionable --next-action close --project-dir "$PROJECT_ROOT")
    ```
 
    `list-actionable` already returns a deterministically sorted list of
    `kind == "ticket"` parent task-ids only — lane rows and spec rows never
    appear (Must-Have #3). A `blocked` task is never included and is never
-   force-closed by `--auto`.
+   force-closed by `--auto`. Each line is the parent's task-id, followed, for
+   a `/dev` parent, by its chain result from the discovery's one chain call.
 
 2. **Walk each parent sequentially** — no two parents run concurrently, and
    parent N+1's walk does not begin until parent N's walk has been classified
-   (step 3 below). For each `TASK_ID` in `CLOSE_PENDING_PARENTS`, in order,
-   bind `TASK_ID` and re-enter this file at **Task-id resolution**'s
+   (step 3 below). For each element `LINE` of `CLOSE_PENDING_PARENTS`, in order,
+   bind `read -r TASK_ID ARTIFACT_CHAIN <<<"$LINE"` and re-enter this file at **Task-id resolution**'s
    `$ARGUMENTS` matches a timestamp pattern → non-force path branch, then run
-   **Step 0** through **Step 3** exactly as written — same aggregate refresh,
-   same resolver invocation (or do-report lite preflight), same artifact
-   schema gate, same Step 1 inspector dispatch, same Step 2 QA debate
+   **Step 0** through **Step 3** exactly as written — Step 0 takes the line's
+   `ARTIFACT_CHAIN` with `ROUTE_SELECT_RC=0` in place of its selector call (the
+   discovery's call is this parent's one chain call; a `/do` parent's line has
+   none and takes the do-report lite preflight), same Step 1 inspector dispatch, same Step 2 QA debate
    (`codex_required` from the `--codex` parsing above, shared across every
    parent in the batch), same Step 3 close-report write. Nothing in Steps 0-3
    is aware `--auto` is driving it.
@@ -1005,5 +842,5 @@ AC-L21: a separate human-operator-executed transcript at
 - /close does NOT evaluate verdict. QA does, internally.
 - QA is invoked once per independent judging round, regardless of `--force` (deprecated, never skips QA — see "Forced-override path"). A re-judge after producers fixed findings is a new round; QA never fixes what it judges. `--auto` does not change this invariant — it drives multiple SEQUENTIAL parent close decisions, each judged in its own rounds, never concurrently.
 - `--auto` never bypasses Steps 0-3; it is structurally distinct from `--bulk` (documented in `commands/commit.md`), which skips the close gate entirely. `--auto` walks every discovered parent THROUGH the unmodified gate.
-- **Scoped findings** (per spec-20260503-091826 Section 5.1: if something does not impede user experience, security, or the overall cleanliness of the repository, it is not necessarily a finding): a finding that would once have ended the attempt negatively is instead routed through the Routing loop above — mapped to its producing role, fixed, and re-judged by a fresh independent round — and the only non-landing state is the defined AWAITING_INPUT wait; never a silent, undocumented pass. Recoverable transient infrastructure failures (e.g., Codex quota / timeout) follow the existing branch-6/7 graceful-degradation logic — this clause does NOT override branches 6/7. `--force` is deprecated and no longer produces an unconditional override of this logic (see "Forced-override path" above) — it is a no-op alias of the normal path.
+- **Scoped findings** (per spec-20260503-091826 Section 5.1: if something does not impede user experience, security, or the overall cleanliness of the repository, it is not necessarily a finding): a finding that would once have ended the attempt negatively is instead routed through the Routing loop above — to the dispatch that owes its artifact, fixed, and re-judged by a fresh independent round — and the only non-landing state is the defined AWAITING_INPUT wait; never a silent, undocumented pass. Recoverable transient infrastructure failures (e.g., Codex quota / timeout) follow the existing branch-6/7 graceful-degradation logic — this clause does NOT override branches 6/7. `--force` is deprecated and no longer produces an unconditional override of this logic (see "Forced-override path" above) — it is a no-op alias of the normal path.
 - `disable-model-invocation: true` (frontmatter) means the model cannot self-invoke /close via SlashCommand — this applies equally to the forced path. Only a human can trigger `--force`.

@@ -121,12 +121,16 @@ If `User requirement document:` is present in your dispatch prompt and non-null,
 
 **First action**: Read the context JSON and BA spec (and the requirement document if present) completely before implementing anything.
 
-**graph_context consumption (spec-20260527-061433)**: When the context JSON contains a `graph_context` field (patched in-place by the graphify subagent between Step 7 and Step 8), DEV MUST read and incorporate it:
-- `graph_context.status` determines trustworthiness: `ok` = full data; `degraded` = partial; anything else = ignore.
-- `graph_context.summary.high_centrality_nodes` — check if any of these files are in your diff; if so, note them as high-impact in `implementation_notes`.
-- `graph_context.focused_subgraph_path` — consult the focused subgraph for import/dependency edges if you need to understand module boundaries.
+**Graph context consumption (spec-20260527-061433)**: When your dispatch names a `Graph context file:` (the focused subgraph the graphify subagent wrote between Step 7 and Step 8; the orchestrator names it only when graphify's run reported `ok` or `degraded`), DEV MUST read and incorporate it:
+- `status` `degraded` marks a partial graph.
+- `summary.high_centrality_nodes` — check if any of these files are in your diff; if so, note them as high-impact in `implementation_notes`.
+- `nodes`, `edges` and `impact_files` — consult them for import/dependency edges if you need to understand module boundaries.
 
-**PROHIBITION — DEV must NEVER run Graphify**: DEV must not invoke `graphify-query.py`, `graphify-enrich.py`, `graphify-maintain.py`, or the `graphify` binary directly. Only the orchestrator (the pre-BA Bash call between Step 1 and Step 2) and the graphify subagent (between Step 7 and Step 8) run Graphify. DEV only consumes the pre-computed `graph_context` from context.json.
+When your dispatch names no graph context file, work without one.
+
+**QA report consumption (QA-fail iteration)**: When your dispatch names a `QA report file:`, QA rejected the previous attempt at this same context: read that report's findings and its `refined_context` before you change anything, and make this attempt address them. The context file stays as BA wrote it.
+
+**PROHIBITION — DEV must NEVER run Graphify**: DEV must not invoke `graphify-query.py`, `graphify-enrich.py`, `graphify-maintain.py`, or the `graphify` binary directly. Only the orchestrator (the pre-BA Bash call between Step 1 and Step 2) and the graphify subagent (between Step 7 and Step 8) run Graphify. DEV only reads the graph context file its dispatch names.
 
 ---
 
@@ -1049,23 +1053,16 @@ When an `Overnight spec file:` path is provided in your prompt, you are operatin
 - Section 3 (What Was Changed): Exact file:line changes from previous cycles -- know what was already tried
 - Section 4 (Current State): QA-measured values -- use these as concrete starting points
 - Section 6 (Why Not Met): Specific gaps -- address these directly
-- Section 7 (What Must Be Done): Prescriptive next steps from PM-Retro -- follow these if present
+- Section 7 (What Must Be Done): Prescriptive next steps -- follow these if present
+
+Within this overnight session, earlier rounds' attempts, changes and measurements are in their own dev and QA reports (the QA report file your prompt names), not in the spec.
 
 ### After Implementation
 
-Append to the spec file using the Edit tool:
+Do not write the spec file. A `/spec` spec has one writer, `scripts/spec-write.py` (run by `/spec`, `/spec-update` and `/commit` Step 8's continuation, which read your report); a pipeline spec has one writer, the orchestrator's copy of the template. Record in your report's `dev.tasks_completed` entries what used to go into Sections 2 and 3:
 
-**Section 2 (What Was Attempted)**: Under the current cycle header (e.g., `### Cycle 2`), describe:
-- What approach you took and why
-- What your rationale was (referencing previous cycle data if applicable)
-- If you deviated from Section 7 recommendations, explain why
-
-**Section 3 (What Was Changed)**: Under the current cycle header, list every change with exact file:line and old->new values:
-- Format: `- **file.tsx:42** -- `property: oldValue` -> `property: newValue``
-- Include ALL changes, not just the "main" fix
-- If a file was created (not modified), note: `- **new-file.tsx** -- Created (purpose: description)`
-
-**Cycle header**: If the cycle subsection header does not exist yet, add it (e.g., `### Cycle 2`) before writing content. Append after any existing cycle content in the section.
+- **What Was Attempted** (`description`, `rationale`): what approach you took and why, referencing previous cycle data if applicable; if you deviated from Section 7 recommendations, explain why
+- **What Was Changed** (`changes`, `files_modified`, `files_created`): every change with exact file:line and old->new values, for example `file.tsx:42 -- property: oldValue -> property: newValue`; include ALL changes, not just the "main" fix; a created file names its purpose
 
 ---
 

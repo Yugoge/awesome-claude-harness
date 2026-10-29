@@ -84,15 +84,7 @@ Requirement: "$ARGUMENTS"
 
 **Codex suppression guardrail**: When `codex_required: true` is included in any subagent dispatch prompt, the orchestrator MUST NOT include any pre-populated `codex_consult` field or object in that same prompt. Setting `codex_required: true` and simultaneously pre-answering `codex_consult` contradicts the flag and silently suppresses Codex consultation.
 
-**Parse `--spec`**: If `$ARGUMENTS` contains `--spec <path>`, extract the path and remove the flag from the requirement text. Store as `spec_path`.
-
-**Auto-detect spec**: If `--spec` is NOT provided, scan `docs/dev/specs/*.md` sorted by modification time (newest first). If a file exists, set `spec_path` to that path and announce:
-```
-Auto-detected spec: <path>
-(Created by /spec — pass --spec <other-path> to override.)
-```
-
-If no spec found, set `spec_path = null`. All downstream behavior is unchanged when `spec_path` is null.
+**Spec**: The `UserPromptSubmit` hook decided this run's spec once and printed it in its output above as `Spec: <path>` or `Spec: none`: the `--spec <path>` of `$ARGUMENTS` when given, else the spec this session last wrote (a `/spec` earlier in this session). Store that path as `spec_path` (`null` for `Spec: none`) and remove a `--spec <path>` flag from the requirement text. Nothing else chooses a spec: no directory listing and no modification time; a spec written in another session reaches `/dev-command` only through `--spec`. When `spec_path` is set, announce `Spec: <path>`. All downstream behavior is unchanged when `spec_path` is null.
 
 **Detect views folder (via the centralized resolver — do NOT re-derive paths inline)**:
 
@@ -124,45 +116,33 @@ Pass per-agent view paths alongside (not in place of) `spec_path` to subagents s
 
 **Initialize dev-registry for hard subagent enforcement** (MANDATORY — do this before ANY Agent launch):
 
-The hook `pretool-subagent-code-block.py` blocks non-`dev` subagents from writing code files, but it needs the Claude-internal subagent UUID to be registered against an `agent_type`. Root cause of the /dev gap (see commit `e086ccb`): /dev-command sessions produce no `.claude/specs/` cp-state files, so the hook falls open and every subagent can write code. The fix is an orchestrator-provided sentinel file that the subagent reads as its FIRST ACTION; `pretool-cp-checkin.py` then writes the UUID→agent_type mapping into `.claude/dev-registry/agent-index.json`.
+The hook `pretool-subagent-code-block.py` blocks non-`dev` subagents from writing code files, but it needs the Claude-internal subagent UUID to be registered against an `agent_type`. Root cause of the /dev gap (see commit `e086ccb`): /dev-command sessions produce no `.claude/specs/` cp-state files, so the hook falls open and every subagent can write code. The fix is a registry sentinel file that the subagent reads as its FIRST ACTION; `pretool-cp-checkin.py` then writes the UUID→agent_type mapping into `.claude/dev-registry/agent-index.json`.
 
 **Initialize dev-registry (hook pre-done)**:
 
-The `UserPromptSubmit` hook has already:
-1. Generated `DEV_SESSION_ID` (shown in hook output as `DEV_SESSION_ID pre-initialized by hook: …`)
-2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with per-agent sentinel files
-3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement
-4. Run `write-e2e-enforce.sh` — E2E enforcement is ACTIVE
-5. Run `write-codex-enforce.sh` (if `--codex` was passed)
-6. Run `write-enforce-flag.sh --flag artifact-contract` — producer-side report schema gate ACTIVE (see `commands/dev.md` item 6)
+The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) has already, for this command:
+1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name, `dev-command-<timestamp>`) and `Task id: …` (the id this cycle's artifacts are named with, `<timestamp>` and `$TASK_ID` below)
+2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
+3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
+4. Armed the enforcement flags: E2E, Codex when `--codex` was passed, and the producer-side report schema gate (see `commands/dev.md` Step 1)
 
-**Read `DEV_SESSION_ID` from the hook output above.** Store it for use in every Agent launch prompt below.
+**Read `DEV_SESSION_ID` and `TASK_ID` from the hook output above.** Store them for use in every Agent launch prompt below.
 
-**Fallback** (if hook output absent):
+**When those lines are not in your context** (a compaction removed the hook output, or the hook failed and printed none), run the hook's own start function in this session with this command's text exactly as typed, and read the same lines from what it prints:
+
 ```bash
-DEV_SESSION_ID="dev-command-$(date +%Y%m%d-%H%M%S)"
+python3 ~/.claude/hooks/prompt-workflow.py start <<'CMDEOF'
+<the command exactly as typed: /dev-command, then $ARGUMENTS>
+CMDEOF
+```
+
+It prints what the hook printed at this command's start, found through this session's bookmark (`$CLAUDE_CODE_SESSION_ID`); when the hook recorded no start of this command, it starts the cycle there exactly as the hook does, under a task id of its own. Never mint an id, pick a registry by name or age, or write a registry, requirement or flag file yourself.
+
+```bash
 REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
-mkdir -p "$REGISTRY_DIR"
-for agent in \
-    architect ba cleaner cleanliness-inspector dev git-edge-case-analyst \
-    pm product-owner prompt-inspector qa rule-inspector style-inspector \
-    test-executor test-validator ui-specialist user; do
-  printf '{"agent_type": "%s", "session_id": "%s"}\n' "$agent" "$DEV_SESSION_ID" \
-    > "$REGISTRY_DIR/$agent.json"
-done
 ```
 
-**Write verbatim user requirement document** (hook pre-done): The hook has already written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement. Read `User requirement document:` from the hook output to get the path. **Fallback** (if hook absent): write the file manually per the bash heredoc pattern in the dev.md fallback block.
-
-**E2E and Codex enforcement** (hook pre-done): The hook has already called `write-e2e-enforce.sh` and (if `--codex`) `write-codex-enforce.sh`. Both enforce flags are active. **Fallback** (if hook absent): call the scripts manually:
-```bash
-scripts/write-e2e-enforce.sh --source-command dev-command --session-id $DEV_SESSION_ID
-scripts/write-enforce-flag.sh --source-command dev-command --session-id $DEV_SESSION_ID --flag artifact-contract
-# Only when --codex:
-# scripts/write-codex-enforce.sh --source-command dev-command --session-id $DEV_SESSION_ID
-```
-
-Store `$DEV_SESSION_ID` for use in every Agent launch prompt below. Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
+Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
 
 **Initialize cp-state handoff when a `/spec` view exists** (MANDATORY when `views_available=true`):
 
@@ -346,6 +326,9 @@ Use Task tool with:
   }
   </obligation>
 
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
+
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -391,6 +374,9 @@ Use Task tool with:
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
+
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -401,6 +387,7 @@ Use Task tool with:
   Previous answers: <JSON array of {question, answer} pairs>
   Codebase hints: <accumulated hints>
   Timestamp: <same timestamp>
+  Spec file: <spec_path or null>
 
   Continue analysis with user's answers. Generate output if clarity sufficient.
   "
@@ -431,13 +418,6 @@ Read BA output files:
 
 **Purpose**: Verify BA's analysis quality BEFORE Dev starts implementation. Catches unproven claims, scope mismatches, and missing investigation evidence early -- saving a wasted Dev+QA cycle.
 
-**Before dispatching QA, write qa_mode sentinel**:
-
-```bash
-bash ~/.claude/scripts/write-qa-mode.sh --session-id "$DEV_SESSION_ID" --mode ba_validation \
-  || { echo 'ERROR: Failed to set qa_mode=ba_validation in qa.json — aborting' >&2; exit 1; }
-```
-
 **Invoke QA in BA-validation mode**:
 
 ```
@@ -449,6 +429,9 @@ Use Agent tool with:
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="ba_validation", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1","identity":{"task_id":"<timestamp>"}}] (ba-qa-report.v1 is registered in schemas/registry.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
+
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
 
   You are the QA subagent in BA-VALIDATION MODE. This is NOT code verification.
   You are verifying the QUALITY OF BA's ANALYSIS, not any implementation.
@@ -532,6 +515,9 @@ Use Agent tool with:
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
+
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
 
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -568,7 +554,7 @@ Use Agent tool with:
 
 ### Step 9: Graphify enrichment (mirrors commands/dev.md)
 
-After BA-QA validation passes, dispatch the graphify subagent (mode=enrich) to extract a focused subgraph and patch the context JSON with `graph_context`. Advisory — if graphify is unavailable or returns status=skipped, proceed to Step 10 without delay. See `commands/dev.md` graphify enrichment block for the canonical dispatch prompt template.
+After BA-QA validation passes, dispatch the graphify subagent (mode=enrich) to extract a focused subgraph into its own files; it never writes the context JSON. Advisory — if graphify is unavailable or returns status=skipped, proceed to Step 10 without delay. See `commands/dev.md` graphify enrichment block for the canonical dispatch prompt template and for the `Graph context file:` line its run record's status puts into the dev (Step 10) and QA (Step 12) dispatches.
 
 ### Step 10: Delegate to Dev Subagent
 
@@ -583,6 +569,9 @@ Use Task tool with:
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
+
   You are the dev subagent. Follow agents/dev.md instructions precisely.
 
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -594,7 +583,7 @@ Use Task tool with:
   View file: <view_paths[this-agent] or null — sibling views/<agent>.md if present>
   Write your implementation report to: docs/dev/dev-report-<timestamp>.json
 
-  If Spec file is not null: Read the spec file FIRST for context. After implementation, update the spec: Section 2 (What Was Attempted) with your approach and rationale. Section 3 (What Was Changed) with exact file:line edits.
+  If Spec file is not null: Read the spec file FIRST for context; do not write it. Your approach, its rationale and your exact file:line changes go in your report's dev.tasks_completed entries (description, rationale, changes), where the spec's continuation (/spec-update, /commit Step 8) reads them.
   "
 ```
 
@@ -615,18 +604,11 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 
 **If dev wrote its question artifact** (`docs/dev/producer-question-<timestamp>-dev.json` instead of its report): relay it as in Step 5 and re-dispatch dev fresh with the answer (Step 10's template, a fresh dispatched_at).
 
-**If a sanity check finds a gap**: refine the context JSON with what is missing and re-dispatch dev (a fresh dispatched_at) until the checks pass.
+**If a sanity check finds a gap**: re-dispatch dev (Step 10's template, a fresh dispatched_at) with the gap named in its prompt, until the checks pass. The context stays BA's: the orchestrator never writes it.
 
 **If dev completed**: Proceed to Step 12
 
 ### Step 12: Delegate to QA Subagent
-
-**Before dispatching QA, write qa_mode sentinel**:
-
-```bash
-bash ~/.claude/scripts/write-qa-mode.sh --session-id "$DEV_SESSION_ID" --mode final_verification \
-  || { echo 'ERROR: Failed to set qa_mode=final_verification in qa.json — aborting' >&2; exit 1; }
-```
 
 **Use Task tool to invoke QA subagent with file paths only**:
 
@@ -637,7 +619,10 @@ Use Task tool with:
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
-  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="final_verification", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
+  Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="final_verification", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
+
+  <If codex_required = true, include the literal next line; otherwise omit it>
+  codex_required: true
 
   You are the QA subagent. Follow agents/qa.md instructions precisely.
 
@@ -651,7 +636,7 @@ Use Task tool with:
   View file: <view_paths[this-agent] or null — sibling views/<agent>.md if present>
   Write your verification report to: docs/dev/qa-report-<timestamp>.json
 
-  If Spec file is not null: Read the spec file FIRST. After verification, update the spec: Section 4 (Current State) with measured values. If verdict is fail, also update Section 6 (Why Not Met) and Section 7 (What Must Be Done) with prescriptive next steps.
+  If Spec file is not null: Read the spec file FIRST; do not write it. Report Section 4 (Current State) measured values, and on a fail verdict Section 6 (Why Not Met) and Section 7 (What Must Be Done) prescriptive next steps, in your report's qa.spec_section_updates (section_4, section_6, section_7; agents/qa.md Output Format), where the spec's continuation (/spec-update, /commit Step 8) reads them.
   "
 ```
 
@@ -675,20 +660,7 @@ ELIF qa.status == "warning" or "fail":
 
 **CRITICAL**: Auto-update permissions for new functionality.
 
-**Extract validated permissions from QA report**:
-
-```bash
-jq '.qa.permissions_verification.validated_permissions' docs/dev/qa-report-<timestamp>.json
-```
-
-**Update settings.json**:
-
-Read current settings:
-```bash
-cat .claude/settings.json
-```
-
-For each validated permission:
+**Apply the permissions QA validated** (`qa.permissions_verification.validated_permissions[]`) to the project's `.claude/settings.json` through the harness's one writer of that file, as `/dev-overnight` does. Each validated permission:
 
 ```json
 {
@@ -698,13 +670,11 @@ For each validated permission:
 }
 ```
 
-**Add to appropriate section in settings.json**:
-
 ```bash
-# Use jq to add permission
-jq '.permissions.allow += ["Bash(scripts/new-script.sh:*)"]' .claude/settings.json > .claude/settings.json.tmp
-mv .claude/settings.json.tmp .claude/settings.json
+python3 ~/.claude/scripts/aggregate-permissions.py docs/dev/qa-report-<timestamp>.json | bash ~/.claude/scripts/apply-permissions.sh /dev/stdin .claude/settings.json
 ```
+
+The aggregator reads the validated list from the QA report; the applier merges each entry into `.permissions.<section>` (allow/ask/deny), skipping patterns already present. A missing `.claude/settings.json` is an empty object to the merge, so the applier creates it when it adds an entry; a file it cannot parse fails the merge (non-zero exit) and stays unchanged.
 
 **Permission update rules**:
 
@@ -734,14 +704,7 @@ Total permissions added: 2
 You can now use these scripts without permission prompts.
 ```
 
-**Validation**:
-- Check JSON syntax after modification
-- Verify no duplicate permissions
-- Confirm permissions follow patterns
-
 **Error handling**:
-- If settings.json has syntax error → Ask user to fix manually
-- If permission already exists → Skip, don't duplicate
 - If user denies update → Log to completion report
 
 ### Step 15: Iteration Loop (QA warning or fail)
@@ -757,10 +720,15 @@ each attempt. Rules:
    and BOTH fail QA, iteration 3 MUST target a DIFFERENT layer. The
    orchestrator passes `layer_escalation_required: true` to BA and the BA
    MUST produce a new root-cause hypothesis at a DIFFERENT layer.
-3. The orchestrator MUST record every attempt's layer in the context JSON
-   under `attempts[i].target_layer`. Before iteration N, the orchestrator
-   checks the last N-1 layers; if they are all equal and QA has rejected
-   them all, escalation is mandatory.
+3. Each attempt's layer is recorded by its own producer, never by the
+   orchestrator: dev's report carries `fix_layer`, which equals BA's
+   `diagnosis_layer` (agents/dev.md), and a BA re-dispatched with
+   `layer_escalation_required: true` lists the rejected attempts with their
+   layers under `prior_attempts.attempts[].target_layer` of its new context.
+   The orchestrator notes each attempt's `fix_layer` beside the iteration
+   number in its todo list; before iteration N it compares the last N-1
+   layers, and if they are all equal and QA has rejected them all,
+   escalation is mandatory.
 4. BA's Contract D novelty-check MUST include `differs_from_all_prior_layers`
    in addition to `differs_from_all_priors`. A fix that changes L1 wording
    but stays in L1 is NOT novel under this rule.
@@ -771,31 +739,7 @@ each attempt. Rules:
 
 Dev iterates and QA re-checks until QA's status is `pass`; pass is the only exit.
 
-**Refine context for next iteration**:
-
-```bash
-# Extract refined context from QA report
-jq '.qa.refined_context' docs/dev/qa-report-<timestamp>.json \
-  > docs/dev/refined-context-<timestamp>.json
-
-# Merge with original context
-jq -s '.[0] * {
-  iteration: (.[0].iteration // 0) + 1,
-  previous_attempts: [.[0].previous_attempts // [], {
-    iteration: (.[0].iteration // 0),
-    dev: .[1].dev,
-    qa: .[1].qa,
-    timestamp: now | strftime("%Y-%m-%dT%H:%M:%SZ")
-  }] | flatten,
-  refined_requirements: .[2]
-}' \
-  docs/dev/context-<timestamp>.json \
-  docs/dev/qa-input-<timestamp>.json \
-  docs/dev/refined-context-<timestamp>.json \
-  > docs/dev/context-iter<N>-<timestamp>.json
-```
-
-**Return to Step 10** with new context JSON
+**Next iteration**: return to Step 10 and re-dispatch dev with Step 10's template (a fresh `dispatched_at`) and the same context file, adding the line `QA report file: docs/dev/qa-report-<timestamp>.json`, so dev works from QA's findings and `refined_context` (agents/dev.md). No new context is built: the context stays BA's and the QA report stays QA's (D2).
 
 **Iteration tracking**: Update TodoWrite with iteration number
 
@@ -881,13 +825,13 @@ Development completed successfully!
 
 **Save report to**: `docs/dev/completion-<timestamp>.md`
 
-**Codex-native artifact postcondition (hard check before completion)** — mirrors `commands/dev.md` Step 17's postcondition. The resolver builds the file names it reads from the task id as given (for example `dev-report-<task_id>.json`), and this command's artifacts are named `<timestamp>`, so it receives the bare timestamp: `$DEV_SESSION_ID` without its `dev-command-` prefix, which only the registry directory and the user-requirement document carry.
+**Codex-native artifact postcondition (hard check before completion)** — mirrors `commands/dev.md` Step 17's postcondition. The resolver builds the file names it reads from the task id as given (for example `dev-report-<task_id>.json`), and this command's artifacts are named `<timestamp>`, so it receives `$TASK_ID`, the hook's `Task id:` (only the registry directory and the user-requirement document carry `$DEV_SESSION_ID`).
 
 Before `/dev-command` may be treated as complete, invoke the shared read-only resolver from the project root and retain its JSON as `ARTIFACT_CHAIN`:
 
 ```bash
-ARTIFACT_CHAIN="$(python3 scripts/resolve-dev-artifact-chain.py \
-  --task-id "${DEV_SESSION_ID#dev-command-}" --project-dir "$CLAUDE_PROJECT_DIR")" || exit 2
+ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py \
+  --task-id "$TASK_ID" --project-dir "$CLAUDE_PROJECT_DIR")" || exit 2
 ```
 
 The fixed entrypoint contract is `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`. Completion requires process exit 0 and top-level `status == "pass"`; exit 2 or any other status blocks with the resolver's exact `errors[]`. Do not reproduce the validator with ad-hoc file tests.
@@ -896,7 +840,8 @@ The fixed entrypoint contract is `scripts/resolve-dev-artifact-chain.py --task-i
 
 - If there is any unfinished development work (non-empty follow-up work in
   "Next Steps" or known unmet acceptance criteria), use
-  `/spec-update` default continuation-spec mode. If a source spec exists, update it;
+  `/spec-update` default continuation-spec mode with the `ARTIFACT_CHAIN` held
+  above (it does not call the chain again). If a source spec exists, update it;
   otherwise create a new spec. The next command is `/dev --spec <spec_path>`.
   Do NOT hand unfinished work to `/close` or `/commit`.
 - If all requested development is complete and only closure/shipping remains,
@@ -911,10 +856,9 @@ The fixed entrypoint contract is `scripts/resolve-dev-artifact-chain.py --task-i
 **All JSON files stored in**: `docs/dev/`
 
 **File naming convention**:
-- Context: `context-<timestamp>.json` or `context-iter<N>-<timestamp>.json`
+- Context: `context-<timestamp>.json`
 - Dev report: `dev-report-<timestamp>.json`
 - QA report: `qa-report-<timestamp>.json`
-- QA input: `qa-input-<timestamp>.json`
 - Completion: `completion-<timestamp>.md`
 
 **Timestamp format**: `YYYYMMDD-HHMMSS`

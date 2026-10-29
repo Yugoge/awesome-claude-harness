@@ -329,20 +329,7 @@ For each relevant agent:
 
    **R3.2 cross-contamination prevention (per-agent scoped buffers)**: When assembling agent X's Role Mandate, the subagent MUST work in an agent-scoped buffer. NEVER read another agent's pending Role Mandate output, NEVER copy text between agent buffers, and NEVER reuse a basis range across two views (each view's marker MUST cite a range whose annotation is specific to THAT view's agent). Two views with byte-equal Role Mandate sections are a hard fail per R3.6.
 
-   **R3.4 OMIT path (active on all monoliths — scope-neutral)**: If no monolith range satisfies R3.3 for this agent (no `## Role: {agent}` heading, no `consumers:` annotation listing the agent, OR — under `guide_version < 1` — no monolith block whose role-defining content is unambiguous), then OMIT the Role Mandate section entirely. Do NOT fabricate role content. Record the omission so the verifier can reconcile it:
-
-   Append a record to `views/mandate-omissions.json`:
-
-   ```json
-   {"omissions": [{"view": "<agent>.md", "agent": "<agent>", "reason": "<closed-enum>"}]}
-   ```
-
-   `reason` is a CLOSED ENUM — exactly one of:
-   - `"no_role_definition_in_monolith"` — no `## Role:` heading AND no `consumers:` annotation names this agent
-   - `"role_definition_ambiguous"` — multiple candidate blocks conflict; user decision required
-   - `"guide_version_not_declared"` — monolith is legacy and the subagent could not produce a confident verbatim quote
-
-   No free-form reasons are permitted. The verifier reads this file to confirm OMITted views are accounted for.
+   **R3.4 OMIT path (active on all monoliths — scope-neutral)**: If no monolith range satisfies R3.3 for this agent (no `## Role: {agent}` heading, no `consumers:` annotation listing the agent, OR — under `guide_version < 1` — no monolith block whose role-defining content is unambiguous), then OMIT the Role Mandate section entirely. Do NOT fabricate role content. A `## Role: {agent}` / `### Role: {agent}` heading or a `consumers:` annotation naming the agent is the author's own role definition, never ambiguous (ambiguity the author marks is R3.5's), while `[all]` names no agent (M7); so the structural check of `spec-verify.py --strict` (Step 7, and G2 at your stop) accepts a view without `## Role Mandate` exactly when the monolith has neither for the view's agent, and otherwise names the view and the missing section.
 
    **R3.5 AMBIGUOUS escalation (active on all monoliths — scope-neutral)**: If the monolith author marked a paragraph with the literal token `AMBIGUOUS:` (per R6.4) AND that paragraph would otherwise be cited as the Role Mandate basis, propagate the ambiguity verbatim. Emit, in place of the INFERRED marker:
 
@@ -366,7 +353,7 @@ For each relevant agent:
 
    - Every `>` blockquote MUST be a verbatim substring from the monolith.
    - The section heading `## Role Mandate` is the only non-verbatim structural line.
-   - If the spec defines no explicit role responsibilities for any agent, OMIT the Role Mandate per R3.4 with `reason: "guide_version_not_declared"`.
+   - If the spec defines no explicit role responsibilities for any agent, OMIT the Role Mandate per R3.4.
    - **ui-specialist special constraint** (design-spec scenarios where the spec defines a design → implement pipeline): quote the spec's verbatim role-split lines that constrain ui-specialist. Do NOT synthesize a "NEVER write application code" clause — locate the spec's own wording and quote it.
 
 3. Append the assigned content blocks in their ORIGINAL order from the monolith. Preserve blank lines between blocks exactly as they appear in the monolith.
@@ -485,8 +472,11 @@ Activate the venv and run a Python verbatim-check: read the monolith and view fi
 
 ### Step 7: Coverage verification
 
-NOTE: A stop hook (`stop-spec-coverage-enforce.py`) will BLOCK you from
-exiting if coverage < 100%. You cannot skip this -- fix the coverage first.
+NOTE: your dispatch's obligation declares your split (`spec_views`), and G2
+(`hooks/subagentstop-artifact-contract-enforce.py`) runs `spec-verify.py --strict`
+on it at your stop: coverage below 100%, or an overlap or uniqueness threshold
+missed, returns the split to you before you can exit. You cannot skip this --
+fix the split first.
 
 After ALL views are written, run the coverage verification script:
 
@@ -588,7 +578,7 @@ For each agent selected in Phase 0 (excluding orchestrator), read the view file 
 
 ### Writing cp-state files
 
-Write cp-state files via `.claude/scripts/spec-check.py`. Do not write cp-state JSON directly.
+Write cp-state files only through `~/.claude/scripts/spec-check.py`, their one writer. Do not write cp-state JSON directly (no Write, Edit or Python stanza).
 
 ```bash
 # 1. Register agent (creates cp-state file). spec-check.py AUTO-ALLOCATES
@@ -608,7 +598,16 @@ source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py ch
     --artifact docs/dev/<agent>-report-<ts>.json
 ```
 
-Then write checkpoints via a Python stanza (activate venv first: `source ~/.claude/venv/bin/activate`) that preserves flock discipline. The stanza resolves the cp-state path by enumerating all slots for this agent type (primary first, then numbered), filtering for the slot where `agent_id` matches this invocation's agent-id AND `is_running` is true. Matching by `is_running` alone is wrong — concurrent same-type instances would race. Once the correct slot is found, load the JSON, set the `checkpoints` array with Gawande-style verb-first entries, and write back with fcntl.LOCK_EX. Exit with an error if no matching running slot is found.
+Then set the slot's checklist with the same script: one `--action` per Gawande-style verb-first checkpoint, in order (they become `cp-01`, `cp-02`, ... in state `pending`). The script finds the slot by `--agent-id` (pass `--instance-id N` from the `cp-state-path:` line when the id holds more than one slot) and refuses with exit 1 when that id holds none:
+
+```bash
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py checkpoints \
+    --spec-id <spec-id> \
+    --agent <agent> \
+    --agent-id <agent-id> \
+    --action "<first checkpoint action>" \
+    --action "<second checkpoint action>"
+```
 
 ### Checkpoint rules (Gawande-style)
 

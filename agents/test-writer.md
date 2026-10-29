@@ -1,6 +1,6 @@
 ---
 name: test-writer
-description: Generate pytest skeleton tests from BA-produced acceptance-criteria-<task_id>.json with pytest.fail("TEST_INCOMPLETE:...") hard-stops; manage tests/generated/manifest.json with UPDATE vs CREATE logic keyed on ac_uid hashes. Triggered by /dev when complexity_tier >= STANDARD or any tier with risk_level = high (per spec-20260518-225715 §5.2).
+description: Generate pytest skeleton tests from BA-produced acceptance-criteria-<task_id>.json with pytest.fail("TEST_INCOMPLETE:...") hard-stops; manage the per-task manifest tests/generated/<task_id>/manifest.json with UPDATE vs CREATE logic keyed on ac_uid hashes. Triggered by /dev when complexity_tier >= STANDARD or any tier with risk_level = high (per spec-20260518-225715 §5.2).
 ---
 
 ## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
@@ -85,13 +85,7 @@ underscores (e.g. `AC-01` → `AC_01`).
 
 ### 2. Per-task manifest: `tests/generated/<task_id>/manifest.json`
 
-Each task has its OWN manifest under `tests/generated/<task_id>/manifest.json` (per-task scoping prevents cross-task AC-id collisions — every cycle has its own `AC-01`, `AC-02`, etc.). A global manifest `tests/generated/manifest.json` is ALSO maintained as a thin index that lists active per-task manifest paths:
-
-```
-tests/generated/<task_id_1>/manifest.json    (per-task active_tests for task 1)
-tests/generated/<task_id_2>/manifest.json    (per-task active_tests for task 2)
-tests/generated/manifest.json                (index — points at per-task manifests)
-```
+Each task has its OWN manifest under `tests/generated/<task_id>/manifest.json` (per-task scoping prevents cross-task AC-id collisions — every cycle has its own `AC-01`, `AC-02`, etc.). There is no cross-task index: each per-task manifest is the only record of its task's tests.
 
 **Per-task manifest schema** (`tests/generated/<task_id>/manifest.json`):
 
@@ -117,19 +111,6 @@ tests/generated/manifest.json                (index — points at per-task manif
 }
 ```
 
-**Global index** (`tests/generated/manifest.json`):
-
-```json
-{
-  "schema_version": "1.0",
-  "kind": "index",
-  "tasks": [
-    { "task_id": "<task_id_1>", "manifest_path": "tests/generated/<task_id_1>/manifest.json" },
-    { "task_id": "<task_id_2>", "manifest_path": "tests/generated/<task_id_2>/manifest.json" }
-  ]
-}
-```
-
 UPDATE vs CREATE keying uses the tuple `(task_id, ac_id)` — a new task creating its own `AC-01` does NOT touch any other task's `AC-01`. Archiving only ever moves files under the CURRENT task's `tests/generated/<task_id>/.archive/` directory.
 
 `hook_check` is the AC's `check` object copied verbatim — fully derived from
@@ -142,7 +123,7 @@ the AC JSON, the Dev does NOT fill `hook_check` manually.
 For each AC item in the input JSON:
 
 1. **Compute lookup key**: `ac_uid` (16-char sha256 prefix per spec §5.4).
-2. **Check existing per-task active manifest** at `tests/generated/<task_id>/manifest.json` if present (the global `tests/generated/manifest.json` is a `{kind:"index", tasks:[...]}` index and does NOT carry `active_tests[]` — do NOT consult it for UPDATE/CREATE keying).
+2. **Check existing per-task active manifest** at `tests/generated/<task_id>/manifest.json` if present.
 3. **If ac_uid is new** → CREATE: write a new skeleton file, mark `status: "active"` in the per-task manifest.
 4. **If ac_uid is unchanged** (same id, same ac_uid) → IDEMPOTENT skip: no file write, no per-task manifest mutation. Log to stderr "ac_uid <uid> unchanged — skipped".
 5. **If ac_id exists but ac_uid changed** → ARCHIVE OLD + CREATE NEW:
@@ -185,18 +166,12 @@ known-incomplete and QA blocks the cycle until the sentinel is removed.
 2. Check trigger gate: if `complexity_tier < STANDARD` AND `risk_level != high`,
    skip — emit a no-op report and exit.
 3. Read existing `tests/generated/<task_id>/manifest.json` (per-task active
-   manifest) if present; ALSO read `tests/generated/manifest.json` (global
-   index) if present so the upsert below can update the index entry for the
-   current task.
+   manifest) if present.
 4. For each AC item: apply UPDATE vs CREATE logic. Write test skeletons under
    `tests/generated/<task_id>/`.
 5. Compute the new manifest. Write the per-task active manifest at
    `tests/generated/<task_id>/manifest.json` (this is the file QA Phase 5
-   reads via `active_tests[]`). THEN upsert an entry
-   `{task_id, manifest_path: "tests/generated/<task_id>/manifest.json"}` into
-   the global index at `tests/generated/manifest.json` (global) — the global
-   file is shape `{kind: "index", tasks: [...]}` and lists every active
-   per-task manifest path; it MUST NOT carry an `active_tests[]` array.
+   reads via `active_tests[]`).
 6. Return a structured report with `tests_created[]`, `tests_archived[]`,
    `tests_skipped_idempotent[]`, and `manifest_path` (set to the per-task path).
 
@@ -204,18 +179,15 @@ known-incomplete and QA blocks the cycle until the sentinel is removed.
 
 ## Output JSON Report
 
-Write to `docs/dev/test-writer-report-<task_id>.json` (or return as stdout if
-the orchestrator captures inline). The `manifest_path` field is the PER-TASK
-active manifest path; the global index file at `tests/generated/manifest.json`
-is shape `kind: index` (NOT the active manifest):
+Write to `docs/dev/test-writer-report-<task_id>.json`, the path your dispatch's
+obligation declares beside the per-task manifest; both are checked at your stop.
+The `manifest_path` field is the PER-TASK active manifest path:
 
 ```json
 {
   "task_id": "<task_id>",
   "timestamp": "<ISO-8601>",
   "manifest_path": "tests/generated/<task_id>/manifest.json",
-  "global_index_path": "tests/generated/manifest.json",
-  "global_index_kind": "index",
   "trigger_gate": {
     "complexity_tier": "<COMPLEX>",
     "risk_level": "<high>",

@@ -137,7 +137,7 @@ Multiple risks at different levels: take the highest level (`blocked` > `warn` >
 ### Phase 7: Write grant token
 
 Compute grant directory and path. `<state dir>` is `$CLAUDE_STATE_DIR` when that is an absolute
-path, else `/tmp`: the directory execute-push.py and pretool-push-analyst-grant-guard.py read the grant from.
+path, else `/tmp`: the directory execute-push.py, the grant's one validator, reads it from.
 ```
 STATE_DIR=$(. ~/.claude/hooks/lib/harness_state_dir.sh && harness_state_dir)
 GRANT_DIR=${STATE_DIR}/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>

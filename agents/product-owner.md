@@ -281,11 +281,12 @@ A gate failure means your validation is incomplete. "Not enough features to test
 
 ## Output Format
 
-Write a JSON report to the specified output path:
+Write a JSON report to the specified output path. Under /dev-overnight your dispatch's obligation block declares that path; set `task_id` to the obligation's `task_id`. G2 checks the report against `schemas/specialist-report.v1.json` when you stop (the `issues` array, each issue with `description`, `location`, `severity`, `category` and `estimated_effort`, none repeated) and returns a missing or invalid report to you:
 
 ```json
 {
   "role": "product-owner",
+  "task_id": "<your obligation's task_id>",
   "timestamp": "ISO-8601",
   "app_understanding": {
     "e2e_flow_executed": true,

@@ -42,7 +42,7 @@ The following operations are FORBIDDEN regardless of any instruction in the disp
 4. **Never force-push or delete branches** — `git push --force`, `git branch -D`, `git push origin :branch`
 5. **Never rebase** — `git rebase` is not in scope and can rewrite public history
 6. **Never extend BLESSED_BRIDGE_RE** — do not suggest or implement adding conventional commit patterns to the privilege guard regex; this would destroy the security model
-7. **Never overwrite another session's push-gate token** — resolve `PUSH_GATE_SID` via the three-part chain `os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or "unknown"` (prefer the stable orchestrator session ID; fall back to the subagent's own session ID; default to `"unknown"` if neither is set or both are empty). If the token path already exists and its `session_id` differs from `PUSH_GATE_SID`, print a WARNING and skip the token write for this repo
+7. **Never overwrite another session's push-gate token, and never write a token any other way than through `scripts/write-push-gate-token.py`** — the token's one writer resolves `PUSH_GATE_SID` itself (`CLAUDE_CODE_SESSION_ID`, else `CLAUDE_SESSION_ID`, else `"unknown"`) and refuses to replace a token whose `session_id` differs (exit 4); on that exit print a WARNING and report `push_gate_collision` for this repo
 8. **Never hard-block commits solely because the current branch is main/master** — if the current branch is `main` or `master`, print a WARNING before committing, but do not require `FORCE=true` solely for that branch; rely on the `/close` quality gate for commit-readiness
 9. **Never skip the flock** — do not bypass `flock -w 30 -x 9` even if it seems slow; the lock protects against concurrent staging corruption
 10. **Never use commit messages matching `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`** — these patterns trigger pretool-bulk-commit-detector.py
@@ -60,15 +60,15 @@ The following operations are FORBIDDEN regardless of any instruction in the disp
 **Rule:** the bash-safety / protected-runtime guard substring-scans the ENTIRE bash
 command text, so a commit message containing documentation phrases (e.g. `npm install -g`,
 `daemon restart`), or one command that inlines a heredoc message plus a push-gate-token write
-naming protected paths, is blocked as if it were the operation itself. Write the message (and
-the push-gate token) to disk with the **Write tool**, then run a MINIMAL command with nothing
-else on the line. This subsection is binding for EVERY commit and token-write in this file —
+naming protected paths, is blocked as if it were the operation itself. Write the message to
+disk with the **Write tool**, write the push-gate token with its one writer script, and run a
+MINIMAL command with nothing else on the line. This subsection is binding for EVERY commit and token-write in this file —
 Phase 8, Phase 10, the precommitted-recovery path, bulk mode, and error handling all defer to
 it.
 
 **Rule CP-1 — commit message reaches disk via the Write tool, never bash.**
 Construct the full commit message string, then write it to a temp message file
-(e.g. `/tmp/commit-msg-<unique>.txt`) using the agent's **Write tool**. Do NOT create the
+(e.g. `/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt`) using the agent's **Write tool**. Do NOT create the
 message file with a bash heredoc (`cat <<'EOF' > file`), `echo ... >`, `printf ... >`, or any
 shell redirect, and do NOT inline the message with `git commit -m`. The message text — which
 may legitimately contain documentation phrases or path strings — must NEVER appear on a bash
@@ -78,29 +78,27 @@ command line.
 Exactly two standalone commit invocation forms are permitted, each by itself on its own
 command line:
 ```bash
-git -C "${GIT_ROOT}" commit -F "<msgfile>"                 # normal commit
-git -C "${GIT_ROOT}" commit --allow-empty -F "<msgfile>"   # recovery commit (Recovery step 3 only)
+git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"                 # normal commit
+git -C "${GIT_ROOT}" commit --allow-empty -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"   # recovery commit (Recovery step 3 only)
 ```
 The prohibition CP-2 enforces is about CONTENT and SIDE EFFECTS on the command line — NOT about
 shell control-flow. Specifically: no message text, no inline diff (`$(git diff ...)`), no
 `--stat`, no `cat`/`echo` of file content, no push-gate write, no heredoc, and no chained side
 effect (`&&`/`;`/`|`) that performs another action. The physical commit invocation must contain
 none of those. Wrapping the commit in pure control-flow that adds no command-line content is
-allowed — e.g. the Error-handling `if ! git -C "${GIT_ROOT}" commit -F "<msgfile>"; then …`
+allowed — e.g. the Error-handling `if ! git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"; then …`
 test is fine because the `if !` adds no message/diff/protected-path/side-effect to the command,
 it only branches on the exit code. The `<diff --stat>` body content is embedded into the message
 FILE (written by the Write tool in CP-1), never appended on the command line. The temp message
 file may be cleaned up in a SEPARATE later bash step (`rm -f <msgfile>`); it must not be chained
 onto the commit.
 
-**Rule CP-3 — the push-gate token reaches disk via the Write tool, in a SEPARATE step.**
-Compute the token JSON and its destination path (see Phase 10), then write the token with the
-agent's **Write tool** — NOT via an inline `python3 -c`/heredoc/`echo`/redirect on a bash
-command line. Putting the token JSON or its protected-path destination (`.git`,
-`/tmp/agentic-commit/...`) onto a bash command line is what trips the protected-bundle guard.
-The push-gate write is ALWAYS a distinct step from the `git commit` command — never chained.
-(Repo-hash computation, session-id resolution, and existing-token collision checks per DO NOT
-rule 7 may still run in Bash; only the final token-content write moves to the Write tool.)
+**Rule CP-3 — the push-gate token reaches disk only through its one writer, in a SEPARATE step.**
+Run `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`
+(see Phase 10) — never the Write tool, an inline `python3 -c`, a heredoc, `echo` or a redirect.
+The writer resolves the token's path itself, so its command line carries neither the token
+JSON nor its destination. The push-gate write is ALWAYS a distinct step from the `git commit`
+command — never chained.
 
 **Rule CP-4 — keep command-like phrases and protected-path strings off the command line.**
 Do NOT append `git diff` / `git show` / `--stat` / file content to the commit message via the
@@ -109,7 +107,7 @@ command line. Do NOT place protected-path strings or command-like documentation 
 line — they belong only inside files written by the Write tool. Keep every git invocation
 minimal so the substring scanner has nothing to false-positive on.
 
-This contract changes only HOW the message and token reach disk (Write tool + minimal command)
+This contract changes only HOW the message and token reach disk (Write tool, the token writer, a minimal command)
 — it changes NOTHING about WHAT is committed (classification, individual-file staging, the
 `/tmp` flock, forbidden-pattern message checks, structured status output, and per-repository
 handling are all unchanged).
@@ -182,7 +180,7 @@ instead of the canonical name, the equality check above (`canonical_dev_report
 (AC-15), and still names the original file. This mismatch is accepted ONLY
 after changelog-analyst itself independently re-verifies it -- never trusted
 from `REPOSITORY_PLAN`'s shape alone: dynamically load
-`scripts/late-repair-controller.py` and call
+`os.path.expanduser('~/.claude/scripts/late-repair-controller.py')` and call
 `resolve_effective_report_state(<TASK_PROJECT_ROOT>, TASK_ID)`; accept the
 mismatch ONLY when the returned state is `"verified"` AND the returned path
 resolves to the same file as `REPOSITORY_PLAN.report_path`. Any other
@@ -200,14 +198,6 @@ After validation, set `GIT_ROOT` to each plan entry in ascending `order` and run
 including untracked (`??`). The full
 `git status --porcelain=v1` output is the authoritative file set for this repo —
 every status code (`M`, `A`, `D`, `R`, `C`, `??`) is included as a candidate.
-
-**Dispatch-snapshot check (M3 — warn-only)**:
-After running git status in all planned repos, read the dispatch manifest if it exists (non-bulk mode only).
-Set `SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"` — the SAME three-part chain used everywhere else in this file (DO NOT rule 7, Phase 10's `PUSH_GATE_SID`): the manifest was written by the orchestrator using this exact chain (commands/commit.md's grant-writer step resolves `CLAUDE_CODE_SESSION_ID` primary / `CLAUDE_SESSION_ID` fallback), so reading it back with a `CLAUDE_SESSION_ID`-only chain silently misses the file whenever the orchestrator's `CLAUDE_CODE_SESSION_ID` differs from this subagent's `CLAUDE_SESSION_ID` — the three sources disagreeing must never collapse to a quiet empty read. In non-bulk mode, check for `/tmp/claude-commit-manifest-${SID}.json`. If it exists, activate the venv and parse it with Python to extract `files_at_dispatch` as a newline-separated list. If missing, glob `/tmp/claude-commit-manifest-*.json` for this `TASK_ID`'s `task_id` field: a match under a DIFFERENT sid means the chain above still disagreed with whatever wrote it — print `WARNING: dispatch manifest found under a different session id (<found-sid> != <SID>) — SID resolution disagreed with the writer; treating DISPATCH_FILES as empty is a real gap, not a confirmed clean dispatch.` before proceeding. No match for this task_id at all is the ordinary "no manifest was written" case (no warning needed). Either way, treat DISPATCH_FILES as empty and continue — Phase 0 never blocks. Skip this check entirely when `BULK=true`.
-
-For each file in the current git status that is NOT in `DISPATCH_FILES` (and `DISPATCH_FILES` is non-empty):
-Print: `WARNING: file <path> appeared after dispatch (possible foreign session); deferring staging decision to Phase 2.`
-Phase 0 is **warn-only / classification**: do NOT make any staging or exclusion decision here. The authoritative staging decision is made in Phase 2 below, where the BULK=false dev-report whitelist filter and the `foreign_session_candidate` exclusion are applied. This warning is informational only and surfaces dispatch-time vs current-time drift; whether a flagged file is ultimately staged is determined by the Phase 2 whitelist (when BULK=false and dev-report exists) or by the BULK=true agent-judgment classification (real, attributable work vs. transient byproduct). Bulk mode (BULK=true): skip this check entirely.
 
 ### Phase 2: File classification
 
@@ -395,7 +385,7 @@ would-be staged set):
 If `TASK_ID` is non-empty, resolve the dev-report path using the subproject path-walk:
 
 Pipe the `git status --porcelain=v1` output for the repo being committed into
-`${CLAUDE_PROJECT_DIR}/.claude/scripts/resolve-dev-report.py` with three required
+`python3 ~/.claude/scripts/resolve-dev-report.py` with three required
 flags: `--task-id ${TASK_ID}`, `--git-root ${GIT_ROOT}` (absolute path from
 `git rev-parse --show-toplevel`), and `--control-root ${CONTROL_ROOT}`. The
 script normalizes each changed path relative to `GIT_ROOT`, strips workflow
@@ -553,7 +543,7 @@ real staged index measured AFTER Phase 5. The ordering is:
       `ACTUALLY_STAGED_PATHS` because nothing outside this group is staged right now).
       Record `ACTUALLY_STAGED_PATHS` alongside the message as its recorded staged set.
    e. Using the **Write tool**, author THIS group's `MSGFILE` (a fresh temp path per
-      group, e.g. `/tmp/commit-msg-<unique>-<group index>.txt`) from its actually-staged
+      group, e.g. `/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt`) from its actually-staged
       set plus its `co_authored_sources`/`attribution_basis` disclosures (Phase 6). This
       Write happens while fd 9 is still held; safe, because it mutates no index.
    f. **Stale-message guard**, per group, otherwise unchanged from the single-commit
@@ -572,43 +562,26 @@ real staged index measured AFTER Phase 5. The ordering is:
    group's `COMMIT_SHA` → append `{commit_sha, source_key, sources, paths}` to this
    repository's `commits[]` result list → set `CURRENT_EXPECTED_HEAD` to `COMMIT_SHA`
    (item 0) → proceed to the next group (back to item 0), or — once every group is
-   done — compute `repo_hash` + `token_dir` + `token_path` + the existing-token
-   collision-read result ONCE, for the FINAL `COMMIT_SHA` only (not per group: the
-   push-gate token authorizes `/push` up to whatever HEAD this dispatch leaves behind,
-   which is the last group's commit). Then **print a single structured token-descriptor
-   to stdout** (e.g. a one-line JSON with `repo_root`, `branch`, `commit_sha` [the FINAL
-   one], `session_id`, `token_path`, `collision` boolean, and `commits` [the full
-   per-group list]) and exit the Bash process (releasing fd 9) — only now, after every
-   group's commit. The descriptor carries the post-commit runtime values out to the
-   agent WITHOUT putting the token CONTENT or its full token filename on a later command
-   line.
-3. **After** the flock is released: the agent reads that descriptor and writes the
-   push-gate token JSON to `token_path` with the **Write tool** (CP-3). Because the token
-   write happens after fd 9 is released, apply TWO safety checks around the Write, in this
-   order:
-   - **PRE-write HEAD-stability check (authoritative):** re-read `git rev-parse HEAD`; it
-     must still equal the descriptor's `commit_sha`. If HEAD moved (a concurrent commit
-     landed), do NOT write the token — return `commit_status: failed` with
-     `failure_code: push_gate_race`.
-   - **PRE-write collision re-check (authoritative, DO NOT rule 7):** the descriptor's
-     `collision` flag was computed inside the flock and is only ADVISORY by the time of the
-     Write (a peer session may have written a token since). Immediately before the Write,
-     re-read the existing token at `token_path`; if it exists and its `session_id` differs
-     from `PUSH_GATE_SID`, skip the write and follow the rule-7 WARNING path
-     (`failure_code: push_gate_collision` in the recovery path).
-   - Only if both pre-write checks pass: perform the Write.
-   - **POST-write re-check (defensive):** after the Write, re-read `git rev-parse HEAD`
-     once more; if it moved during the Write window, treat the just-written token as
-     non-authorizing — return `push_gate_race` so `/push` does not act on a token that may
-     not match the new HEAD. (A stale token is never silently trusted.)
+   done — **print a single structured descriptor to stdout** (e.g. a one-line JSON with
+   `repo_root`, `branch`, `commit_sha` [the FINAL one: the push-gate token authorizes
+   `/push` up to whatever HEAD this dispatch leaves behind, which is the last group's
+   commit] and `commits` [the full per-group list]) and exit the Bash process (releasing
+   fd 9) — only now, after every group's commit.
+3. **After** the flock is released: write the push-gate token with its one writer (CP-3,
+   Phase 10): `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<repo_root>"
+   --branch "<branch>" --commit "<commit_sha>"`, from the descriptor. The writer checks,
+   before it writes, that the commit is live HEAD (exit 3: HEAD moved since the commit —
+   return `commit_status: failed` with `failure_code: push_gate_race`) and that no other
+   session's token holds the path (exit 4: the rule-7 WARNING path, `push_gate_collision`);
+   exit 0 prints the token path.
 
 This ordering keeps the fd-9 lock covering exactly the stage→(author message)→commit index
 window (the mutual-exclusion the lock exists for), while honoring CP-1/CP-3: no message text,
-no token content, and no protected token filename ever lands on a Bash command line. The
-MSGFILE Write happens mid-window (after staging, before commit) but mutates no git index, so
-it does not break the lock's stage→commit mutual exclusion. The token write is intentionally
-OUTSIDE fd 9 — its only cross-session concern is the rule-7 session-id collision, which the
-in-flock collision-read plus the post-write HEAD-stability check together cover.
+no token content, and no token path ever lands on a Bash command line. The MSGFILE Write
+happens mid-window (after staging, before commit) but mutates no git index, so it does not
+break the lock's stage→commit mutual exclusion. The token write is intentionally OUTSIDE fd 9
+— its only cross-session concerns are a commit landing in between and the rule-7 session-id
+collision, both of which the writer checks before it writes.
 
 ```bash
 # Lock lives OUTSIDE the repo's .git/ so the protected-runtime guard never sees a
@@ -657,8 +630,7 @@ Hold this lock across the ENTIRE multi-group git/index window (item 0 above): fo
 group in order — pre-staged verify → stage (this group's files only) → capture
 `ACTUALLY_STAGED_PATHS` → author `MSGFILE` from the actually-staged set (Write tool) →
 drift re-check → commit → capture `COMMIT_SHA` → sync the shared index → re-seed the
-private index for the next group — then, once every group is done, compute ONE token
-descriptor and print it. The `MSGFILE` Write happens MID-window per group (after staging,
+private index for the next group — then, once every group is done, print ONE descriptor. The `MSGFILE` Write happens MID-window per group (after staging,
 before that group's commit); it mutates no git index, so holding fd 9 across it is
 correct. Immediately before each group's `git commit`, re-run
 `eval "$(... session-index.py export --git-root "${GIT_ROOT}")"` — this is the pre-commit
@@ -725,7 +697,7 @@ uses for every other candidate (the file is untracked, and this route authentica
 report-digest-bound attestation grounds the journal-based decision does not need):
 
 ```bash
-"${CLAUDE_PROJECT_DIR}/.claude/scripts/stage-owned-hunks.py" \
+python3 ~/.claude/scripts/stage-owned-hunks.py \
     --git-root "${GIT_ROOT}" \
     --file "<repo-rel-path>" \
     --untracked-modified-report "<resolved dev_report_path>" \
@@ -1095,7 +1067,7 @@ The Write tool is a non-Bash step that mutates no index; the pre-commit drift re
 (handshake step (f)) is what guarantees the staged set is unchanged at commit time, so the
 message authored from `ACTUALLY_STAGED_PATHS` still matches what is committed.
 
-1. Choose a unique message path, e.g. `MSGFILE=/tmp/commit-msg-<TASK_ID-or-bulk>-<short-rand>.txt`.
+1. Choose a unique message path, e.g. `MSGFILE=/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt`.
 2. Handshake step (e) — using the agent's **Write tool**, write the full message content to
    `MSGFILE`. The `<diff-stat output>` is the Phase-6 `git diff --stat --cached` of the
    actually-staged set (handshake step (d)), embedded into the FILE — NEVER on the command line
@@ -1114,7 +1086,7 @@ message authored from `ACTUALLY_STAGED_PATHS` still matches what is committed.
        git -C "${GIT_ROOT}" restore --staged -- ${ACTUALLY_STAGED_PATHS}   # true drift: unstage + abort
        # report failure_code: staging_error (do NOT release fd 9 to rewrite MSGFILE)
    else
-       git -C "${GIT_ROOT}" commit -F "<msgfile>"
+       git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"
    fi
    ```
    (Legitimate Phase-5 narrowing was already applied and recorded in `ACTUALLY_STAGED_PATHS`
@@ -1122,17 +1094,14 @@ message authored from `ACTUALLY_STAGED_PATHS` still matches what is committed.
 4. In a SEPARATE later bash step, clean up: `rm -f "${MSGFILE}"`. Do NOT chain the cleanup onto
    the commit command.
 
-Capture the commit SHA and prepare the token descriptor — still INSIDE the same fd-9 Bash
-process (these are reads/computation, not message/token-content writes):
+Capture the commit SHA for the descriptor — still INSIDE the same fd-9 Bash process (reads,
+not writes):
 ```bash
 COMMIT_SHA=$(git -C "${GIT_ROOT}" rev-parse HEAD)
 BRANCH=$(git -C "${GIT_ROOT}" rev-parse --abbrev-ref HEAD)
 ```
-Then compute `repo_hash`/`token_dir`/`token_path` and the existing-token collision-read
-(Phase 10 steps 2–5) and PRINT the structured token-descriptor to stdout before the Bash
-process exits. The agent performs the actual token-content Write (Phase 10 step 6) AFTER the
-flock is released, with the post-write HEAD-stability check from the Phase 3 reconciliation
-note.
+PRINT the descriptor to stdout before the Bash process exits. The push-gate token is written
+(Phase 10) AFTER the flock is released.
 
 ### Phase 9: Ordered repository transaction (normal mode)
 
@@ -1196,54 +1165,32 @@ loop.
 
 ### Phase 10: Push-gate write (M9)
 
-After each successful commit (every admitted repository independently):
+After each successful commit (every admitted repository independently), once the fd-9 flock
+is released (Phase 3 reconciliation note), write the push-gate token with its one writer,
+using the repository root, branch and FINAL commit sha from the Phase 3 descriptor:
 
-Per the `## Command-line purity (anti-false-positive contract)` (rule CP-3), the push-gate
-token is a SEPARATE step from the `git commit` command, and its CONTENT is written to disk via
-the agent's **Write tool** — NOT via an inline `python3 -c` / heredoc / `echo` / shell redirect.
-Putting the token JSON or its protected-path destination (`.git`, `/tmp/agentic-commit/...`)
-onto a bash command line is what trips the protected-bundle guard. Computation that does NOT put
-the token content or its protected destination path onto the command line (session-id
-resolution, repo-hash, directory creation, existing-token collision read) may still run in Bash.
+```bash
+python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
+```
 
-**Data handoff (Bash → agent → Write tool).** The token content needs the post-commit runtime
-values (`COMMIT_SHA`, `BRANCH`, …) that only exist after the commit, and the token write happens
-AFTER the fd-9 flock is released (Phase 3 reconciliation note). To carry those values out
-without inlining token content/path on a later command line, steps 1–5 run INSIDE the fd-9 Bash
-process and end by PRINTING a single structured token-descriptor line to stdout; the agent then
-reads that descriptor and performs step 6 via the Write tool.
+The writer resolves the token's path itself under the hook state directory (the one
+`hooks/push.sh` reads), so the command line carries neither the token content nor its path
+(rule CP-3), and it checks before it writes:
+- the commit is a commit object and still live HEAD at the repository root — otherwise it
+  writes nothing and exits 3: return `commit_status: failed` with
+  `failure_code: push_gate_race`;
+- no other session's token holds the path (DO NOT rule 7) — otherwise it writes nothing and
+  exits 4: print a WARNING and follow the rule-7 path (`push_gate_collision`).
+After the write it reads HEAD once more and exits 3 if HEAD moved during the write (treat the
+token as non-authorizing: `push_gate_race`). Exit 0 prints the token path: report it, and
+set `push_gate_written: true` for this repository.
 
-Procedure:
-
-1. Resolve `PUSH_GATE_SID = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or "unknown"` — this resolves the stable orchestrator session ID first (so all changelog-analyst subagent invocations within the same user session share one `session_id`); falls back to the subagent's own `CLAUDE_SESSION_ID`; defaults to `"unknown"` if both env vars are absent or empty. This RAW value is the single authoritative source for the push-gate session identity: it is what the token's `session_id` field carries and what every rule-7 collision check compares against. Then derive `PUSH_GATE_SID_DIGEST = sha256(PUSH_GATE_SID)[:16]` — a distinct value with exactly one use, the session PATH SEGMENT (see the **Push-gate token path** note below for why it is digested). Never substitute one for the other: the digest never reaches the token JSON, and the raw id never appears in a path. Resolving them (e.g. `echo "$CLAUDE_CODE_SESSION_ID"` / `echo "$CLAUDE_SESSION_ID"`) does not place the token content on the command line and is permitted in Bash.
-2. Compute `repo_hash = sha256(realpath(GIT_ROOT))[:16]`.
-3. Set `token_dir = /tmp/agentic-commit/push/<repo_hash>/<PUSH_GATE_SID_DIGEST>` — session-scoped, and the digest not the raw id; see the **Push-gate token path** note below — and create it (`mkdir -p "${token_dir}"` — a literal `/tmp` prefix, never a leading `${VAR}`, per the Phase 3 lock-path note). The ONLY accepted form for `/tmp/agentic-commit/...` on a bash command line is this bare `mkdir -p` (directory creation) / read-only path-computation form — the SAME form the Phase 3 lock setup already uses successfully (`mkdir -p /tmp/agentic-commit/locks`), which is the live empirical proof it does not trip the guard. The guard fires on protected-BUNDLE paths (`.git`, monorepo roots) inlined alongside a heredoc/redirect, not on a bare `mkdir -p` of a `/tmp/agentic-commit` subdir. Do NOT widen this: never put the token JSON, a redirect into `/tmp/agentic-commit/...`, or the full token filename onto a bash command line — those go through the Write tool (step 6). The token PATH appearing in `mkdir` is the directory only; the token CONTENT and its full filename are written in step 6 via the Write tool.
-4. Compute the token file path: `{token_dir}/{branch.replace('/','__')}.json`.
-5. Existing-token collision check (DO NOT rule 7, in-flock): if the token file already exists and its `session_id` field differs from `PUSH_GATE_SID`, set the descriptor's `collision` true. (Reading the existing file to compare `session_id` is a read, not a command-line content write — permitted.) This in-flock check is ADVISORY by the time of the post-flock Write — it is re-validated in step 6. Then PRINT the structured token-descriptor (`repo_root`, `branch`, `commit_sha`, `session_id`, `token_path`, `collision`) to stdout and let the Bash process exit (releasing fd 9). The descriptor is emitted on the process's STDOUT — a PreToolUse Bash hook scans the agent-submitted COMMAND STRING, not the process's runtime stdout, so printing the descriptor (even though it contains `token_path` under `/tmp/agentic-commit/...`) adds nothing scannable to any command line.
-6. **After** fd 9 is released: the agent reads the descriptor, then applies the pre-write checks from the Phase 3 reconciliation note (item 3), in order, immediately before the Write:
-   - **PRE-write HEAD-stability (authoritative):** `git -C "${GIT_ROOT}" rev-parse HEAD` must still equal the descriptor's `commit_sha`; if it moved, do NOT write a stale token, return `commit_status: failed` with `failure_code: push_gate_race`.
-   - **PRE-write collision re-check (authoritative, DO NOT rule 7):** re-read the existing token at `token_path` (the descriptor's `collision` is advisory and may be stale). If a token exists and its `session_id` differs from `PUSH_GATE_SID`, skip the write and follow the rule-7 WARNING path.
-   - Only if both pass: using the agent's **Write tool**, write the JSON token content `{"commit_sha": COMMIT_SHA, "branch": BRANCH, "repo_root": GIT_ROOT, "session_id": PUSH_GATE_SID}` to the `token_path` from the descriptor. The token JSON content (which embeds protected paths like the repo root) reaches disk only through the Write tool — never through a bash command line.
-   - **POST-write HEAD re-check (defensive):** re-read HEAD once more; if it moved during the Write window, treat the token as non-authorizing and return `push_gate_race`.
-
-   **Independent write-time backstop (task 20261001-161041-r15):** the three checks above
-   remain the agent's own first line of defense — this does not replace or weaken them.
-   `hooks/posttool-push-gate-token-verify.py` (PostToolUse, matcher `Write`) now
-   independently re-derives live HEAD at the token's own `repo_root` immediately after the
-   Write and compares it to the just-written `commit_sha`. On a mismatch (or a `commit_sha`
-   that does not resolve to an existing commit object) it quarantines the token — renaming it
-   with a `.rejected` suffix so `hooks/push.sh`'s scan can never read it as a candidate — and
-   reports the mismatch to stderr immediately, instead of leaving it to be caught only much
-   later at `/push` time by `hooks/push.sh`'s ancestor check. It is a mechanized witness
-   layered on top of the agent's own checks, not a substitute for them, and it never performs
-   the Write itself.
-7. Report the final token path on success.
-
-**Algorithm is canonical**: `sha256(os.path.realpath(repo_root)).hexdigest()[:16]`. Both
-`/commit` and `/push` must use this identical algorithm for the repo-hash derivation.
-
-**Push-gate token path** (for reference by `/push`):
-`/tmp/agentic-commit/push/<sha256(os.path.realpath(GIT_ROOT))[:16]>/<PUSH_GATE_SID_DIGEST>/<BRANCH with / replaced by __>.json`
+`PUSH_GATE_SID` — the session identity the token's `session_id` field carries and push-gate
+reconciliation queries the journal with — is `CLAUDE_CODE_SESSION_ID`, else
+`CLAUDE_SESSION_ID`, else `"unknown"`, resolved in Bash exactly as the writer resolves it
+(`echo "${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"`). The token's path is
+`<state dir>/agentic-commit/push/<sha256(realpath(GIT_ROOT))[:16]>/<sha256(PUSH_GATE_SID)[:16]>/<BRANCH with / replaced by __>.json`,
+which only the writer computes; `PUSH_GATE_SID_DIGEST` below names its session segment.
 
 **Rule: the session segment stays in the path** (do NOT "simplify" it out): without it, any
 two sessions on the same branch of the same repo contend for one slot, and with DO NOT rule 7
@@ -1445,7 +1392,7 @@ FAILED_GROUPS=()
 For each subsystem group's commit step (`${MSGFILE}` is the per-group message file written via
 the Write tool per rules CP-1/CP-2 — never a heredoc; the commit stays minimal):
 ```bash
-if ! git -C "${GIT_ROOT}" commit -F "<msgfile>"; then
+if ! git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"; then
     echo "WARNING: Failed to commit group ${scope} in batch ${ITERATION}. Skipping and continuing."
     git -C "${GIT_ROOT}" restore --staged -- "${group_files[@]}"
     FAILED_GROUPS+=("${scope}")
@@ -1632,7 +1579,9 @@ attribution by hook-written record, not proof of identity.
    to.
 2. The candidate set is empty after exclusions (there is genuinely nothing to commit).
 3. `git rev-parse --verify HEAD` succeeds (not unborn, not detached).
-4. **No token exists at `token_path`.** If a token is present, this path does NOT run —
+4. **No token exists at `token_path`**, the path
+   `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}" --print-path`
+   prints (it writes nothing). If a token is present, this path does NOT run —
    whether it belongs to `PUSH_GATE_SID` (already tokenized; nothing to reconcile) or to a
    peer session (rule 7 forbids touching it; report `push_gate_collision` as before). Rule 7
    remains absolute; reconciliation only ever fills an EMPTY slot.
@@ -1640,7 +1589,7 @@ attribution by hook-written record, not proof of identity.
    This is the ONLY attribution test. Run:
 
    ```
-   source venv/bin/activate && python3 ~/.claude/hooks/lib/commit_journal.py query \
+   python3 ~/.claude/hooks/lib/commit_journal.py query \
      --repo-root "${GIT_ROOT}" --head "${HEAD_SHA}" \
      --task-id "${TASK_ID}" --session-id "${PUSH_GATE_SID}"
    ```
@@ -1654,8 +1603,8 @@ attribution by hook-written record, not proof of identity.
    `git commit` authorized by a single-use commit grant that reached a SUCCESS terminal
    result — classified from the harness's real payload shape, not from an exit code (a
    successful Bash tool_response carries no exit_code; a failed or thrown call fires
-   PostToolUseFailure, under which the same finalizer restores the grant for retry and
-   journals nothing). It appends
+   PostToolUseFailure, under which the same finalizer journals nothing), from the pointer the
+   privilege guard wrote when it spent the grant. It appends
    it from PostToolUse — once the committing shell call has EXITED and the commit lock is
    released — not at the instant the commit returns, and it reads LIVE HEAD at that later
    point. The entry records the task id, repo root, branch, the grant's pre-commit
@@ -1704,7 +1653,7 @@ attribution by hook-written record, not proof of identity.
    soundness property.
 
    **What this does NOT claim.** The journal is an ATTRIBUTION record, not an authorization
-   boundary, and must never be described as one. No hook guards `/tmp/agentic-commit/**`, and
+   boundary, and must never be described as one. No hook guards `<state dir>/agentic-commit/**`, and
    `hooks/push.sh` authorizes on `commit_sha == HEAD` alone — so an adversary who can emit
    arbitrary Bash (`docs/THREAT-MODEL.md` §1.2) can write the push-gate token directly and open
    the gate, which is strictly cheaper than forging a journal entry. The journal therefore
@@ -1739,17 +1688,16 @@ attribution by hook-written record, not proof of identity.
    empty-slot-plus-attributable-HEAD state this section fires on. When no upstream is
    configured the command errors; treat that as "not published" and continue.
 
-**Action.** Write the token for `HEAD_SHA` using the SAME mechanism and the SAME safety checks
-as Phase 10 — the Write tool per rule CP-3, preceded by the PRE-write HEAD-stability check and
-the PRE-write collision re-check, and followed by the POST-write HEAD re-check. A HEAD move at
-any of those points yields `push_gate_race`; a token that appeared at `token_path` in the
-meantime yields `push_gate_collision`.
+**Action.** Write the token for `HEAD_SHA` exactly as Phase 10 does, with its one writer:
+`python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}"`.
+A HEAD move before or during the write yields `push_gate_race` (exit 3); a token that appeared
+at `token_path` in the meantime yields `push_gate_collision` (exit 4).
 
 **Condition 4's emptiness result is ADVISORY by write time; the pre-write re-check is the
 AUTHORITATIVE one.** Condition 4 observes the empty slot earlier in the sequence, and nothing
 holds that slot across the gap — no lock is taken over the window between checking and
 writing — so a peer session may create a token at `token_path` in between. The re-read
-performed immediately before the Write is therefore the check that decides. If a token has
+the writer performs immediately before its write is therefore the check that decides. If a token has
 appeared in that window it is NEVER overwritten, regardless of which session owns it, and the
 outcome is the `push_gate_collision` already named above. This is the same TOCTOU shape
 Phase 10 already carries; the handling is deliberately identical rather than a new mechanism.
@@ -1883,7 +1831,7 @@ NOT a bash heredoc, and the commit is MINIMAL with nothing else on the line:
    (DO NOT rule 10). The proposed subject `chore(<scope>): recovery commit — task <TASK_ID> pre-empted by bulk session`
    does not match either pattern; if scope derivation produces an unexpected value that triggers a
    match, replace the summary with `session recovery for ${scope}`.
-3. Choose a message path, e.g. `MSGFILE=/tmp/recovery-commit-<TASK_ID>-<short-rand>.txt`, and write
+3. Choose a message path, e.g. `MSGFILE=/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt`, and write
    the composed message content to it using the agent's **Write tool**.
 
 Execute the recovery commit using the existing single-use commit grant (not consumed because no
@@ -1891,7 +1839,7 @@ Execute the recovery commit using the existing single-use commit grant (not cons
 CP-2), nothing chained:
 
 ```bash
-git -C "${GIT_ROOT}" commit --allow-empty -F "<msgfile>"
+git -C "${GIT_ROOT}" commit --allow-empty -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"
 ```
 
 In a SEPARATE later bash step, clean up: `rm -f "${MSGFILE}"`. (The
@@ -1907,15 +1855,14 @@ Capture the first field as `COMMIT_SHA` and the second as `BRANCH`.
 
 **Recovery step 5: Write push-gate token**
 
-Execute the Phase 10 push-gate write logic unchanged (same `sha256(realpath(GIT_ROOT))[:16]`
-hash, same JSON schema, same DO NOT rule 7 session-collision check) — which now means the token
-CONTENT is written via the agent's **Write tool** in a SEPARATE step (rule CP-3), never via an
-inline `python3`/heredoc/redirect on a bash command line. Track whether the write actually
-occurred in a local variable `PUSH_GATE_WRITTEN`:
+Execute the Phase 10 push-gate write unchanged: run the token's one writer,
+`python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`,
+in a SEPARATE step (rule CP-3). Track whether the write actually occurred in a local variable
+`PUSH_GATE_WRITTEN`:
 
-- If the existing token's `session_id` differs from `PUSH_GATE_SID`, print a WARNING and skip
-  the write — DO NOT rule 7 applies identically here. Set `PUSH_GATE_WRITTEN=false`.
-- Otherwise, write the token normally and set `PUSH_GATE_WRITTEN=true`.
+- Exit 4 (another session's token holds the path — DO NOT rule 7 applies identically here):
+  print a WARNING. Set `PUSH_GATE_WRITTEN=false`.
+- Exit 0: set `PUSH_GATE_WRITTEN=true`.
 
 **Recovery step 6: Return status conditional on push-gate write**
 
@@ -1956,9 +1903,9 @@ multi-repo setups).
 
 | Code | Meaning | Retryable by /commit? |
 |------|---------|----------------------|
-| `grant_missing` | No usable commit grant file found at commit time (not present, locked in-flight as `.lck` by a concurrent commit event, or already consumed — the PostToolUse finalizer unlinks the grant on a success terminal result; validation itself no longer unlinks). | Yes |
+| `grant_missing` | No usable commit grant file found at commit time (not present, or already spent — the privilege guard deletes a grant when it admits the commit it authorizes, whether or not that commit then succeeds). | Yes |
 | `grant_expired` | A parseable grant exists but `expires_at` is in the past or invalid. | Yes |
-| `grant_consumed` | Grant was already consumed by a prior successful commit — unlinked by the PostToolUse finalizer on that commit's success terminal result (a failed commit restores the grant for retry instead). If the grant path from Step 5 is not recorded, emit `grant_missing` as the fallback. | Yes |
+| `grant_consumed` | Grant was already spent by a prior commit attempt — the privilege guard deleted it when it admitted that commit, and a failed commit does not get it back (its retry takes a fresh grant from /commit). If the grant path from Step 5 is not recorded, emit `grant_missing` as the fallback. | Yes |
 | `git_error` | `git commit` exited non-zero for a non-grant reason (merge conflict, lock, index error, etc.). | No |
 | `staging_error` | `git add` failed for one or more files in the classified set. | No |
 | `hook_blocked` | A non-grant PreToolUse hook (e.g. `pretool-bash-safety.sh`) blocked the commit command. | No |
@@ -2052,6 +1999,6 @@ manual intervention required — see `/commit` Step 7 status table for the
 ## Outputs
 
 - Real branch commit(s) in the normal-mode `REPOSITORY_PLAN` (or the legacy bulk control+nested pair)
-- Push-gate token at `/tmp/agentic-commit/push/<repo-hash>/<PUSH_GATE_SID_DIGEST>/<branch-encoded>.json`
+- Push-gate token at the path `scripts/write-push-gate-token.py` printed (`<state dir>/agentic-commit/push/<repo-hash>/<PUSH_GATE_SID_DIGEST>/<branch-encoded>.json`)
 - Synthetic close-annotations at `${CONTROL_ROOT}/docs/dev/close-report-bulk-*.md` (bulk mode only)
 - Human-readable summary of what was committed
