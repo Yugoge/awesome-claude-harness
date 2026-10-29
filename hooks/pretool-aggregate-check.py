@@ -3,15 +3,17 @@
 existence before allowing the orchestrator to dispatch the QA subagent in
 parallel-dev cycles. G3, the collection check at the next dispatch.
 
-Fan-out collection check (QA dispatches only; blocks in every mode). A lane
-report declares a fan-out by its own `lane_set` naming two or more lanes. For
-each fan-out in the dispatch's scope it BLOCKS (exit 2) while:
+Fan-out collection check (QA dispatches only). A lane report declares a
+fan-out by its own `lane_set` naming two or more lanes. For each fan-out in the
+dispatch's scope it BLOCKS (exit 2), in every mode as on master, while every
+lane has reported and the canonical aggregate dev-report-<task-id>.json is
+missing. Two more rules block only when CLAUDE_OBLIGATION_BARRIER=block, since
+G3 stays advisory until P2 arms it:
   (a) a lane its lane_set declares has no lane report (the roster check that
-      hooks/posttool-lane-completeness-watch.py used to make before it ran
-      the aggregator), or, once every lane has reported,
-  (b) the canonical aggregate dev-report-<task-id>.json is missing, or its
-      parallel_workers does not name every declared lane (it predates the
-      last lane report).
+      hooks/posttool-lane-completeness-watch.py used to make, which never
+      blocked);
+  (b) the canonical's parallel_workers does not name every declared lane (it
+      predates the last lane report).
 A report without a lane_set declares no fan-out: a singular cycle, or one of
 the overnight pipelines' dev-report-<ts>-<N>.json, which the filenames alone
 would read as lanes of task <ts>. The canonical's one producer is the lane
@@ -559,6 +561,9 @@ def main():
         dev_dir = _resolve_dev_dir()
         lane_reports, canonicals = _scan_dev_dir(dev_dir)
         violations = _find_violations(lane_reports, canonicals, dev_dir, _scope_task_id(data))
+        if os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower() != "block":
+            # Advisory G3 keeps master's one always-on block; (a) and (b) wait for P2's arming.
+            violations = [v for v in violations if v[0] == "canonical_missing"]
         if violations:
             _emit_block(violations)
 

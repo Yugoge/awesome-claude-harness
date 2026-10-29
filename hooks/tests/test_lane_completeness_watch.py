@@ -82,8 +82,8 @@ def _qa_dispatch(project, task_id):
     })
     payload = {"tool_name": "Agent", "agent_id": "qa-dispatch-test",
                "tool_input": {"subagent_type": "qa", "prompt": f'<obligation v="1">{block}</obligation>'}}
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project)}
-    env.pop("CLAUDE_OBLIGATION_BARRIER", None)
+    # G3's roster rule blocks only once it is armed (P2); armed here to see it.
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_OBLIGATION_BARRIER": "block"}
     return subprocess.run([sys.executable, str(G3)], input=json.dumps(payload), text=True,
                           capture_output=True, env=env, cwd=str(project), timeout=60)
 

@@ -2769,8 +2769,9 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
 class TestFanoutCollectionCheck:
     """P1b row 6: G3 demands a fan-out's lane reports and its canonical only
     when a lane report's own lane_set declares the fan-out, and names each
-    failing artifact's path, its check and its producer. It blocks the QA
-    dispatch in shipped settings and armed alike."""
+    failing artifact's path, its check and its producer. A missing canonical
+    blocks the QA dispatch in shipped settings and armed alike, as on master;
+    the lane roster and parallel_workers rules block only when armed."""
 
     def _lane(self, dev_dir, task, lane, lanes):
         _write(dev_dir, f"dev-report-{task}-{lane}.json",
@@ -2795,11 +2796,10 @@ class TestFanoutCollectionCheck:
         result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-1", mode)
         assert result.returncode == 0, result.stderr
 
-    @pytest.mark.parametrize("mode", [None, "block"])
-    def test_missing_lane_report_names_its_path_and_lane(self, project_dir, tmp_path, mode):
+    def test_missing_lane_report_names_its_path_and_lane(self, project_dir, tmp_path):
         dev_dir = project_dir / "docs" / "dev"
         self._lane(dev_dir, BARE_TID, "l1", ["l1", "l2"])
-        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l1", mode)
+        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l1", "block")
         assert result.returncode == 2
         assert (f"[lane_report_missing] {dev_dir / f'dev-report-{BARE_TID}-l2.json'}: lane l2, "
                 f"which the lane_set of dev-report-{BARE_TID}-l1.json declares, has no report "
@@ -2824,10 +2824,25 @@ class TestFanoutCollectionCheck:
             self._lane(dev_dir, BARE_TID, lane, ["l1", "l2", "l3"])
         _write(dev_dir, f"dev-report-{BARE_TID}.json",
                {**_good_shard(), "parallel_workers": ["l1", "l2"]})
-        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l1", None)
+        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l1", "block")
         assert result.returncode == 2
         assert (f"[canonical_stale] {dev_dir / f'dev-report-{BARE_TID}.json'}: its "
                 "parallel_workers ['l1', 'l2'] do not name lane(s) l3") in result.stderr
+
+    def test_advisory_g3_blocks_only_a_missing_canonical(self, project_dir, tmp_path):
+        # Until P2 arms G3 a missing lane report and a stale canonical pass,
+        # as they did on master; the canonical's absence still blocks.
+        dev_dir = project_dir / "docs" / "dev"
+        self._lane(dev_dir, BARE_TID, "l1", ["l1", "l2"])
+        assert self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l1", None).returncode == 0
+        for lane in ("l1", "l2", "l3"):
+            self._lane(dev_dir, OTHER_TID, lane, ["l1", "l2", "l3"])
+        _write(dev_dir, f"dev-report-{OTHER_TID}.json", {**_good_shard(), "parallel_workers": ["l1", "l2"]})
+        assert self._qa(project_dir, tmp_path / "home", f"{OTHER_TID}-l1", None).returncode == 0
+        (dev_dir / f"dev-report-{OTHER_TID}.json").unlink()
+        result = self._qa(project_dir, tmp_path / "home", f"{OTHER_TID}-l1", None)
+        assert result.returncode == 2
+        assert "[canonical_missing]" in result.stderr
 
     def test_global_scan_demands_only_a_complete_fanouts_canonical(self, project_dir):
         # Without an obligation no cycle is named: another cycle's abandoned
