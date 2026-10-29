@@ -550,21 +550,25 @@ That line is your verdict; nothing else carries it.
 `docs/dev/commit-qa-report-<TASK_ID or "bulk">.md`, read verbatim: the producer-stop gate
 (G2) checked that file and that line at the QA subagent's own stop.
 
-**Grant hygiene (`BULK=false`, at every unstage pause — REJECT routing — and at the `--dry-run` preview end):** in addition to unstaging, when `BULK=false` REVOKE the Step 5 commit grant so a gate under repair never leaves live commit authorization lingering (30-min TTL; never hold a live grant across a producer repair — re-mint by re-entering Step 5 after the fix, because bytes and plan changed):
+**Grant hygiene (`BULK=false`, at every unstage pause — REJECT routing, bad verifier report, unparseable verdict — and at the `--dry-run` preview end):** in addition to unstaging, when `BULK=false` REVOKE the Step 5 commit grant so a gate under repair never leaves live commit authorization lingering (30-min TTL; never hold a live grant across a producer repair — re-mint by re-entering Step 5 after the fix, because bytes and plan changed):
 ```bash
 python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID" --revoke-only
 ```
 **Skip this revoke entirely when `BULK=true`**: bulk wrote NO per-task commit grant (Step 5 minted the multi-use bulk-commit sentinel, which self-expires on its own 30-min TTL) and `TASK_ID` is empty, so calling the writer with an empty `--task-id` would error (exit 2). (Only the `COMMIT: APPROVE` + real-commit path keeps the grant — it is consumed by Step 7.)
 
+- **File cross-check (fail-closed)**: before honoring either verdict below, read `docs/dev/commit-qa-report-<TASK_ID or "bulk">.md`'s last non-empty line:
+    - File does not exist → sub-case `missing_file`: the verifier's own report is a bad artifact, not a REJECT of the product. Run the SAME unstage-and-revoke cleanup as the `COMMIT: REJECT` branch below, print a message naming the `missing_file` sub-case, do NOT proceed to Step 7, do NOT commit, and route it as an entry on that report through the dispatch-and-recheck loop (`owing_dispatch` names the commit-QA dispatch that declared it, which runs again as a new dispatch; the prior verdict is not in its prompt) to produce a valid report from the actual changes, rerunning this cross-check on its output (R15 bound as above).
+    - File exists → its last non-empty line is the verdict; continue below with the branch it matches (`COMMIT: REJECT`, `COMMIT: APPROVE`, or an unparseable / missing `COMMIT:` final line).
 - `COMMIT: REJECT`: this is a verdict on the product, not a broken artifact. Print the verdict + offending files; **unstage the dry-run-staged set so the tree is left clean** — per repo, unstage ONLY currently-staged paths, computed rename-aware. Run `git -C <repo> diff --cached --name-status -z -M` and build the unstage set from its entries: a plain (non-rename) staged path → include it if it is in `PLAN_FILES`; a staged `R`/`C` entry → include BOTH its old and new paths if EITHER endpoint is in `PLAN_FILES` (the analyst may list only the new path, yet `--name-only` / a single-endpoint unstage leaves the other endpoint — e.g. `D old` — staged). Unstage that set via `git -C <repo> restore --staged -- <those>` (unborn repo: `git -C <repo> rm --cached -- <those>`). Do NOT pass planned files that are not currently staged — in multi-group bulk Phase 4 already unstaged the earlier groups, and `restore --staged` / `rm --cached` on an unstaged/untracked pathspec errors out and leaves the last group staged. Then revoke the grant (Grant hygiene above). Do NOT proceed to Step 7; do NOT commit (`--force` does not override this gate — it is a no-op alias of the normal path). Route the REJECT through the verdict loop:
     1. **Findings to the owing dispatch.** Each offending file and its reason (from the `commit-qa-report` and its verdict line) is an entry of the dispatch-and-recheck loop: `owing_dispatch` names the dispatch that declared the file or, for a product file, the dispatch whose own tool calls wrote it; a finding that names no file, or a file no dispatch of the task wrote, is an entry on that round's own report. QA never edits the subject, and "fix until APPROVE" as a formality is not a path.
-    2. **Fresh independent re-verification.** After the producer's fix, rebuild the plan (Step 5), rerun the planning dry-run, and dispatch a NEW QA subagent (a fresh dispatch; the prior verdict, the findings and any ruling are NOT in its prompt) that re-judges the actual changes against HEAD. The loop ends only on that fresh verdict being `COMMIT: APPROVE`; a further `COMMIT: REJECT` repeats this routing.
+    2. **Fresh independent re-verification.** After the producer's fix, rebuild the plan (Step 5), rerun the planning dry-run, and dispatch a NEW QA subagent (a fresh dispatch; the prior verdict, the findings and any ruling are NOT in its prompt) that re-judges the actual changes against HEAD. The loop ends only on that fresh verdict being `COMMIT: APPROVE` (with the file cross-check above unchanged); a further `COMMIT: REJECT` repeats this routing.
     3. **Dispute.** If the producer contends a finding is wrong, the orchestrator reruns the check itself (re-reads the diff and contents of the cited path) and arbitrates. Producer right → the `commit-qa-report` is a bad artifact: dispatch a FRESH QA subagent (same fresh-dispatch rule) to re-judge from the actual changes; the old report is never edited or re-emitted by the verifier that wrote it. Verifier right → the producer continues. No third role judges, and QA's prompt never contains the orchestrator's ruling, the producer's dispute or any prior verdict.
     4. **R15 bound (definition above).** A round whose flagged files have identical bytes and whose finding set is unchanged is no progress: it escalates to orchestrator arbitration, never a further identical dispatch and never an acceptance after a number of rounds.
 - `COMMIT: APPROVE`:
   - Record `QA_APPROVED_FILES` = `PLAN_FILES` (the exact reviewed set, per repo). This is passed to Step 7 as the commit **ceiling** (TOCTOU guard — Step 7 must not commit anything outside it).
   - If the user passed `--dry-run` (`DRYRUN=true`): print the plan + `QA: APPROVE`, unstage the dry-run-staged set (clean tree, as in the REJECT branch), revoke the grant, and end the invocation with the preview delivered — the requested end state; no real commit.
   - Otherwise proceed to Step 7 for the real commit.
+- Unparseable / missing `COMMIT:` final line: the verifier's report is a bad artifact (fail-closed: it is not an APPROVE); unstage (as above), revoke the grant, print the file's actual last line, and route it as an entry on that report through the dispatch-and-recheck loop (`owing_dispatch` names the commit-QA dispatch that declared it, which runs again as a new dispatch; the prior verdict is not in its prompt) to produce a valid verdict, rerunning the cross-check on it.
 
 ### Step 7: Dispatch changelog-analyst
 
@@ -651,11 +655,14 @@ Wait for changelog-analyst to complete. Echo its final status to the user.
 
 #### Changelog-analyst result handling and retry protocol
 
-Read changelog-analyst's structured status block verbatim (see `agents/changelog-analyst.md`
-§Structured Final Status Output): the producer-stop gate (G2) validated it against
-`changelog-status.v1` at the analyst's own stop. It carries `commit_status`,
-`repository_results[]`, and, when applicable, `failure_code`, `failure_reason`, and
-`auto_bulk_commits[]`.
+Parse changelog-analyst's structured status output (see `agents/changelog-analyst.md`
+§Structured Final Status Output). The machine-readable JSON block contains
+`commit_status`, `repository_results[]`, and, when applicable, `failure_code`,
+`failure_reason`, and `auto_bulk_commits[]`. In normal mode a result whose
+repository roots/order do not exactly equal `REPOSITORY_PLAN` is not accepted as a
+landing: it is a finding on the analyst's status block (it names no file: the
+changelog-analyst dispatch whose status block it is runs again), routed through the
+dispatch-and-recheck loop and re-read.
 
 **Handle each commit_status value:**
 
@@ -818,6 +825,11 @@ after QA reviewed it: rebuild the plan and dispatch a fresh QA over the actual s
 Discipline with
 `AWAITING_INPUT: need=authorization or a ruling for the rejected operation; why=<hook output verbatim>; addressee=human`
 and the rejected operation is never retried, wrapped or bypassed.
+
+#### status unknown / unparseable
+The status artifact is bad (the analyst's status block, which names no file). Print the raw
+changelog-analyst output; the changelog-analyst dispatch whose status block it is runs again
+to emit a valid structured status for the same plan, re-reading it under the R15 progress test.
 
 ### Step 8: Spec-update dispatch (post-commit, deterministic fail-closed)
 

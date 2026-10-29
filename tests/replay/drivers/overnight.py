@@ -92,7 +92,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 
-from .. import agents, cmdtext, roles, schemagen
+from .. import agents, cmdtext, roles
 from ..pipeline import Deviations, Orchestrator, Respelling, utc_now
 from ..replay import Deviation
 from . import dev as devdrv
@@ -117,6 +117,12 @@ DEVIATIONS = Deviations([
     ("C* Step 1[05] Bash qa_mode *", Deviation(
         "hooks/pretool-bash-safety.sh", "UNRESOLVED census_fatal:unbalanced:single_quote",
         "the base text's qa_mode flip as it spells it")),
+    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_obligation_undischarged:substitution@143"
+    # The same hook refuses the base text's Step 15 qa_mode flip (its `|| { echo ... >&2; exit 1; }`
+    # after the flip's line continuation).
+    ("C* Step 15 Bash qa_mode *", Deviation(
+        "hooks/pretool-bash-safety.sh", "UNRESOLVED census_obligation_undischarged:substitution",
+        "the base text's Step 15 qa_mode flip as it spells it")),
     # DEVIATION: "CONTRACT BLOCK (pretool-subagent-enforce): ... no required_calls entry for step '2'"
     # The launcher's seed contract (required_calls: []) switches the hook into enforce mode, so the
     # dispatches the text makes before its own contract exists (PM PLAN, the specialists, PM TRIAGE)
@@ -1300,9 +1306,10 @@ class Night:
         cc = self.bash(self.git(o.bind(commit)), "End-of-cycle commit", "Step 19 Bash end-of-cycle commit")
         if not cc.ok:  # "log the failure to the cycle log and continue"
             path = os.path.join(self.project, self.log_rel)
-            old = agents.peek(self.rp, "main", path)
-            self.write(self.log_rel, old.rstrip("\n") + f"\n\n**End-of-cycle commit**: failed ({cc.error.splitlines()[0][:200]}); "
-                       "refs/checkpoints/* snapshots remain.\n", "Step 19 Write cycle log (commit failure)")
+            old = agents.peek(self.rp, "main", path) if os.path.exists(path) else ""  # (its Write refused)
+            line = f"**End-of-cycle commit**: failed ({cc.error.splitlines()[0][:200]}); refs/checkpoints/* snapshots remain.\n"
+            self.write(self.log_rel, (old.rstrip("\n") + "\n\n" if old else "") + line,
+                       "Step 19 Write cycle log (commit failure)")
 
     def step20(self) -> None:
         o = self.o
