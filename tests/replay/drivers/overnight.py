@@ -143,6 +143,14 @@ DEVIATIONS = Deviations([
     ("C* Step 15 Agent(qa) *", Deviation(
         "hooks/pretool-aggregate-check.py", "canonical aggregate dev-report missing",
         "Step 15's QA dispatch of an overnight pipeline")),
+    # DEVIATION: "E2E_ENFORCE_BLOCKED: agent <agent> (type=qa) has no qa-report-*.json in
+    # <project>/docs/dev/ under session <sid>." subagentstop-e2e-enforce.py, once the base text's Step 15
+    # qa_mode flip has set final_verification, finds the QA report by a YYYYMMDD-HHMMSS timestamp in
+    # the registry's session id; an overnight registry is named by the session's UUID, so the report
+    # the QA's obligation declares (and it wrote) is never found and its stop is refused.
+    ("C* Step 15 Agent(qa) *", Deviation(
+        "hooks/subagentstop-e2e-enforce.py", "E2E_ENFORCE_BLOCKED",
+        "the stop of a final-verification QA that wrote the report its obligation declares")),
     # DEVIATION: "OVERNIGHT WRITE-BOUNDARY FAIL-CLOSED: the per-command bwrap RO-bind boundary that
     # guarantees the main working tree is never written in place is UNAVAILABLE (bubblewrap / user
     # namespace missing) ..." pretool-overnight-hook-guard.py refuses every Bash call of the session
