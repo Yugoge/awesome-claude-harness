@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 100
+- **Total files**: 119
 - **Subdirectories**: 5
 - **Naming convention**: kebab
 
@@ -10,6 +10,7 @@
 - `QUICKSTART.md` - Quick Start — the hooks layer
 - `README-TODO-INJECTION.md` - Global Todo Injection Hook
 - `auto-commit.sh` - auto-commit.sh - Stop hook: snapshot on conversation end
+- `capability-canary.py` - Registered once per relied-upon lifecycle event, each registration carrying its
 - `check-todo-md-sync.py` - check-todo-md-sync.py — Session-start drift detector for todo scripts
 - `checkpoint.sh` - checkpoint.sh - Manual /checkpoint command
 - `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
@@ -21,18 +22,21 @@
 - `install-protection-all.sh` - LEGACY / DO NOT USE — describes an obsolete auto-push protection model.
 - `install.sh` - LEGACY / DO NOT USE — describes an obsolete auto-commit model.
 - `merge.sh` - merge.sh - wrapper for /merge slash command
-- `notification-idle-overnight.py` - Notification hook: Observe overnight idle events
+- `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
 - `post-commit-warn.sh` - post-commit-warn.sh - Warn about untracked files after commit
 - `post_tool_use.sh` - PostToolUse Hook - Code quality hints after file modifications
 - `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
+- `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
 - `posttool-codex-skill-ledger.py` - Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
 - `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
-- `posttool-doc-sync.py` - PostToolUse Hook: Auto-sync INDEX.md and CLAUDE.md when structural files change
+- `posttool-doc-sync.py` - PostToolUse Hook: keep the marked INDEX.md, README.md and CLAUDE.md sections in sync
 - `posttool-git-checkpoint.sh` - posttool-git-checkpoint.sh - PostToolUse checkpoint trigger
 - `posttool-git-warn.sh` - post-commit-warn.sh - Warn about untracked files after commit
-- `posttool-overnight-file-check.py` - PostToolUse:Agent Hook — Contract-driven overnight file check
+- `posttool-lane-completeness-watch.py` - producer of a fan-out's canonical aggregate dev-report (P1b E5). Every write
+- `posttool-overnight-file-check.py` - PostToolUse:Agent Hook — Contract-driven overnight file check (G3)
 - `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
 - `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
+- `posttool-push-gate-token-verify.py` - PostToolUse (matcher Write): exit-0 stub kept at its registered path (D15).
 - `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
 - `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 - `posttool-subagent-track.py` - PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark
@@ -43,6 +47,8 @@
 - `pre_slashcommand_validate.sh` - pre_slashcommand_validate.sh
 - `pre_tool_use_safety.sh` - PreToolUse Safety Hook - Warn before dangerous operations
 - `pretool-aggregate-check.py` - existence before allowing the orchestrator to dispatch the QA subagent in
+- `pretool-attribution-pre.py` - Phase 0 of the write-time attribution journal (see hooks/lib/attribution_journal.py)
+- `pretool-baseline-snapshot-preflight.py` - pretool-baseline-snapshot-preflight.py — PreToolUse hook (matcher: Agent)
 - `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
 - `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 - `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
@@ -50,25 +56,31 @@
 - `pretool-block-branch-pr-worktree.py` - Policy (user directive 2026-06-04; the verbatim user directive is preserved in
 - `pretool-block-enterworktree.sh` - PreToolUse hook: Block EnterWorktree tool
 - `pretool-bulk-commit-detector.py` - PreToolUse Hook: Bulk-commit detector
+- `pretool-capability-gate.py` - Blocks (exit 2) any protected-workflow activation route unless the host-capability
 - `pretool-claude-config-guard.py` - PreToolUse Hook: Claude config (.claude/hooks + .claude/commands) protection
-- `pretool-cp-checkin.py` - cp-state file read
+- `pretool-commit-dispatch-attest.py` - Writes `<state-dir>/claude-commit-dispatch-<sid>-<nonce>.json` when, and only
+- `pretool-cp-checkin.py` - cp-state file read (the write is scripts/spec-check.py's `register`)
 - `pretool-cp-state-write-guard.py` - Cycle-3 slim form (2026-05-14): Bash-extractor removed — 22-form adversarial
+- `pretool-do-block-subagents.py` - PreToolUse hook: block Agent/Task dispatch from the MAIN agent while a /do
 - `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 - `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
 - `pretool-grep-backtrack-guard.py` - ROOT-CAUSE BACKGROUND (verified ground truth, 2026-06-15 host OOM)
 - `pretool-layer-escalation-check.sh` - pretool-layer-escalation-check.sh
 - `pretool-layer-match-gate.sh` - pretool-layer-match-gate.sh
+- `pretool-obligation-gate.py` - WHY THIS HOOK EXISTS:
 - `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
 - `pretool-orchestrator-prompt-purity.py` - PreToolUse hook: Orchestrator Prompt Purity
 - `pretool-overnight-hook-guard.py` - PreToolUse Hook: Overnight session file modification guard
+- `pretool-overwrite-guard.py` - REGISTRATION: matcher ``Bash`` ONLY. This hook registers against no other tool
+- `pretool-push-analyst-grant-guard.py` - PreToolUse (matcher Bash): exit-0 stub kept at its registered path (D15).
 - `pretool-quality-gate.py` - PreToolUse Hook: Quality gate for Write/Edit operations
 - `pretool-read-size-guard.py` - PreToolUse Hook: Read Size Guard
 - `pretool-runcode-watchdog.py` - PreToolUse Hook: Start timeout watchdog for browser_run_code
 - `pretool-spec-block-foreground-agent.py` - PreToolUse Hook: Block foreground Agent during an active /spec Interview
 - `pretool-subagent-code-block.py` - Canonical enforcement: pretool-tool-policy.py + lib/policy_registry — this
-- `pretool-subagent-enforce.py` - PreToolUse:Agent Hook — Contract-driven role/pipeline enforcement
+- `pretool-subagent-enforce.py` - PreToolUse:Agent Hook — Contract-driven role/pipeline enforcement (G1)
 - `pretool-todo-validate.py` - PreToolUse Hook: Validate TodoWrite input BEFORE execution
-- `pretool-tool-policy.py` - Single hook that consumes the harness ``policies/tool-policy.v1.json`` (resolved
+- `pretool-tool-policy.py` - tool-policy.v1.json for all subagents
 - `pretool-workflow-gate.py` - PreToolUse Hook: Require TodoWrite/TodoRead acknowledgment before other tools
 - `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
 - `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
@@ -83,15 +95,22 @@
 - `session-gitignore-propagate.sh` - SessionStart hook: append missing standard harness gitignore rules to project repo
 - `session-info.sh` - s-info.sh — SessionStart: display environment info + tool quick reference
 - `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.
+- `session-scratch-init.sh` - session-scratch-init.sh — SessionStart hook (Scratch Lifecycle Contract
 - `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 - `session_start.sh` - SessionStart Hook - Display working environment info
+- `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
 - `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
-- `stop-cleanup-allowlist.sh` - Stop Hook: Wipe any unconsumed /allow grant at turn end.
+- `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
+- `stop-completion-gate.py` - blocked compliant /dev Stops with GATE_ERROR and its only release was a
+- `stop-do-report-gate.py` - A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) at
+- `stop-obligation-gate.py` - It re-validated, at the orchestrating session's Stop, the json artifacts its
 - `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
 - `stop-spec-coverage-enforce.py` - Stop Hook: Block spec agent from exiting with < 100% monolith coverage
+- `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7: the registered Stop hook, running the four former Stop
 - `stop.sh` - stop.sh - wrapper for /stop slash command
 - `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 - `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
+- `subagentstop-artifact-contract-enforce.py` - Ports the /close "Artifact schema gate" (commands/close.md §"Artifact schema gate" — the
 - `subagentstop-codex-enforce.py` - Activation logic:
 - `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
 - `subagentstop-e2e-enforce.py` - Activation logic:
@@ -101,6 +120,7 @@
 - `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync
 - `userprompt-restart-authorize.py` - UserPromptSubmit: mint a session-bound capability for a human /restart invocation.
 - `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
+- `userprompt-usage-snapshot.py` - Passively injects a per-account usage snapshot (available/exhausted status,
 
 ## Subdirectories
 - `doc_sync/`

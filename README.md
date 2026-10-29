@@ -433,7 +433,7 @@ Run the guard demo: `bash examples/guard-demo/run-demo.sh`
 
 ```mermaid
 graph TD
-    U([Human]) --> CMD[Slash commands<br/>20 entry points]
+    U([Human]) --> CMD[Slash commands<br/>21 entry points]
     CMD --> ORC{{Main Agent / Orchestrator<br/>think + route — no direct writes}}
 
     ORC -.->|PreToolUse gate| HL
@@ -528,12 +528,12 @@ flowchart TD
     H4 --> C{which verb?}
     C -->|commit| G1{"grant file present + unexpired (ISO expiry),<br/>single-use unlink?"}
     C -->|push| G2{grant file: branch + expected-head<br/>+ remote bound?}
-    C -->|merge| G3{"env=1 + merge-analyst grant:<br/>repo_root+branch+source/default tip?"}
+    C -->|merge| G3{"matching /allow grant?<br/>(/merge merges inside hooks/merge.sh)"}
     C -->|reset --hard| G4[blocked by default in agent flow]
 
-    G1 -->|yes| OK[(allow, then unlink commit grant)]
+    G1 -->|yes| OK[(allow — the guard spends the commit grant,<br/>unlinking it as it authorizes)]
     G2 -->|yes| OK2[(allow — push.sh manages lifecycle<br/>unlink on success, retain on failure)]
-    G3 -->|yes| OK
+    G3 -->|yes| OK3[(allow — the /allow grant is consumed<br/>on the call's result)]
     G1 & G2 & G3 -->|no grant/env| NO[BLOCKED / exit 2]
     G4 --> NO
 
@@ -551,9 +551,9 @@ Note: `pretool-bulk-commit-detector.py` is warn-only — it exits 0 and never bl
 |---|---|---|---|---|
 | `pretool-bash-safety.sh` | PreToolUse Bash | stash-buffer, wide checkout (-- . / -- *), git restore --source -- ., reset --hard | BLOCK (exit 2) | /do or matching /allow |
 | `pretool-bulk-commit-detector.py` | PreToolUse Bash | 93-file 'sync all uncommitted' shape (3+ subsystems + sync subject) | WARN only (exits 0) | N/A — warn-only per current policy |
-| `pretool-git-privilege-guard.py` | PreToolUse Bash | commit, push (any form), merge, reset --hard, direct ref mutation | BLOCK (exit 2) | /commit, /push, or /merge grant, or /allow (subagents); /do (main agent only) |
+| `pretool-git-privilege-guard.py` | PreToolUse Bash | commit, push (any form), merge, reset --hard, direct ref mutation | BLOCK (exit 2) | /commit or /push grant, or /allow (subagents too); /do (main agent only). An agent's own `git merge` has no grant: `/merge` merges inside `hooks/merge.sh` |
 | `pretool-orchestrator-gate.py` | PreToolUse (all tools) | Non-whitelisted tools in main-agent context; streak rate-limit | BLOCK (rate-limited) | /do |
-| `pretool-tool-policy.py` | PreToolUse Write | Role-scoped deny rules from policies/tool-policy.v1.json | FAIL CLOSED (non-dev roles); fail-safe ALLOW (dev role when policy missing) | N/A |
+| `pretool-tool-policy.py` | PreToolUse (all tools) | A write (Write/Edit/MultiEdit/NotebookEdit or a Bash write target) to a path another dispatch's obligation declares, for every caller including the main agent; then a subagent's role-scoped deny rules from policies/tool-policy.v1.json | BLOCK (exit 2); for the role rules FAIL CLOSED (non-dev roles), fail-safe ALLOW (dev role when policy missing) | N/A |
 | `stop-overnight-timelock.py` | Stop | Early session termination before declared end-time | BLOCK (exit 2) | /stop at or after end-time; defaults to 8h if no end-time set |
 | `posttool-doc-sync.py` | PostToolUse | INDEX.md / README / CLAUDE stat block regeneration | UPDATE (idempotent) | N/A |
 
@@ -563,11 +563,11 @@ Read-only git (`status`, `log`, `show`, `diff`, `blame`, `ls-files`, `branch` li
 
 | Grant type | Written by | Key fields | Expiry | Consumed on | Honored for |
 |---|---|---|---|---|---|
-| Commit grant `/tmp/claude-commit-grant-<sid>-<nonce>.json` | /commit command | nonce, expires_at (ISO-8601 UTC) | Time-boxed ISO expiry | Consumed on success (exit 0) only — renamed to `.lck` at PreToolUse validation, unlinked by `posttool-allowlist-consume.py` on exit 0; validation failures do NOT consume the grant | Main agent + subagents |
+| Commit grant `/tmp/claude-commit-grant-<sid>-<nonce>.json` | /commit command (`scripts/write-commit-grant.py`) | task_id, nonce, repo_root, branch, expected_head, expires_at (ISO-8601 UTC), minted_by | Time-boxed ISO expiry | Spent by the privilege guard when it authorizes the commit: it unlinks the grant (only one event can win) and leaves a per-event pointer from which `posttool-allowlist-consume.py` writes the commit journal entry; a failed commit does not get it back (its retry takes a fresh grant); validation failures do NOT consume the grant | The changelog-analyst dispatch /commit made (a live dispatch attestation carrying the digest of its dispatching prompt) |
 | Push grant `/tmp/claude-push-grant-<sid>-<nonce>.json` | /push command | nonce, branch, expected-head SHA, remote | None — branch/head/remote-bound | Unlinked by `push.sh` after a successful `git push`; left in place on failure (for retry). The privilege guard does not fire on `push.sh` subprocesses — `push.sh` manages the lifecycle directly. | Main agent + subagents |
 | /allow sentinel `/tmp/claude-grants/<task_id>.json` | /allow command | task_id, session_id, allowed_operations[] ({op, target?, args_contain?}), expires_at | ISO expiry | Any terminal result (posttool-allowlist-consume.py) | Main agent + subagents |
 
-Match channel for /allow: structural (`op` = first token of sub-command; `args_contain` = leading argument sequence prefix). Command-text substring grep is not the match channel. Refuse-by-default is the rule — the match-all hole was closed; the grant is single-use and consumed on any terminal result. Legacy git-allowlist grants are main-agent only.
+Match channel for /allow: structural (`op` = first token of sub-command; `args_contain` = leading argument sequence prefix). Command-text substring grep is not the match channel. Refuse-by-default is the rule — the match-all hole was closed; the grant is single-use and consumed on any terminal result. The structured sentinel is the only `/allow` grant: no pattern-string grant is written or read.
 
 ---
 
@@ -604,7 +604,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **`dev`** | after BA validated by QA | /dev pipeline step 2 dispatch | context-*.json | implementation + dev-report-*.md |
 | **`qa`** | always-on | BA spec or dev report delivered (twice per /dev cycle) | BA spec or dev report | pass/fail + structured objections |
 | **`test-writer`** | complexity ≥ STANDARD or risk_level = high | acceptance-criteria-*.json generated | acceptance-criteria-*.json | pytest skeletons with TEST_INCOMPLETE hard-stops |
-| **`graphify`** | GRAPHIFY_ENABLED=auto and binary present | blast-radius-map.json generated | blast-radius-map.json | graph_context patch injected into context JSON |
+| **`graphify`** | GRAPHIFY_ENABLED=auto and binary present | blast-radius-map.json generated | blast-radius-map.json | run record + focused subgraph under the dev-registry (Dev and QA dispatches name it); the context is read, never written |
 | **`spec`** | /spec invocation | monolithic spec file provided | monolithic spec file | per-agent view files + Gawande-style checkpoints |
 | **`architect`** | overnight + on-demand | /dev-overnight or PM PLAN dispatch | live app URL | structured JSON report per specialist |
 | **`product-owner`** | overnight + on-demand | /dev-overnight or PM PLAN dispatch | live app URL | structured JSON report per specialist |
@@ -628,7 +628,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 
 ---
 
-## The command surface: 20 slash commands
+## The command surface: 21 slash commands
 
 | Group | Command | What it does | When to use |
 |---|---|---|---|
@@ -650,6 +650,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Control** | `/allow` | Structured single-use break-glass grant for one specific operation. | Green-light one specific blocked operation, a single time. |
 | **Control** | `/restart` | Resume every quota-interrupted subagent from its original transcript and ID; with no recoverable subagent, continue the invoking session's own main agent. Optional trailing text is carried verbatim as guidance for the next phase. | A session/usage limit interrupted running subagents — or interrupted a session that had none, leaving only the main agent to continue. |
 | **Control** | `/stop` | Cancel an overnight session. | Mid-overnight, to abort a running session. |
+| **Control** | `/tickets` | Read-only lifecycle table: the state and next action of every ticket, spec and lane. | Before `/close` or `/commit`, to see where every task stands. |
 | **Control** | `/codex` | OpenAI Codex adversarial delegation. | You want an adversarial second opinion from an outside model. |
 | **Control** | `/paseo-daemon` | Multi-session monitoring and three-account scheduling control plane. | Bootstrapping or advancing the persistent scheduling state machine. |
 
@@ -698,7 +699,7 @@ The model is *encouraged* toward the right path and *physically prevented* from 
 | Main Agent | via /do | /commit grant (time-boxed ISO expiry) | /push grant (branch+head+remote-bound) | via /do or matching /allow | ✓ | /do — breaks all gates for one turn |
 | Subagent | role-restricted | /commit grant | /push grant | matching /allow only — /do never applies to subagents | ✗ (subagents never get /do) | /allow only |
 
-Commit grant = time-boxed ISO expiry, single-use (unlinked by posttool hook on success). Push grant = branch+head+remote-bound, no expiry, wrapper-managed lifecycle (push.sh unlinks on success; left in place on failure for retry). /allow sentinel = structured match (op+target+args_contain), ISO expiry, single-use (consumed on any terminal result), honored for subagents. For git reset --hard: subagents can use /allow; they cannot use /do.
+Commit grant = time-boxed ISO expiry, single-use (spent by the privilege guard, which unlinks it as it authorizes the commit). Push grant = branch+head+remote-bound, no expiry, wrapper-managed lifecycle (push.sh unlinks on success; left in place on failure for retry). /allow sentinel = structured match (op+target+args_contain), ISO expiry, single-use (consumed on any terminal result), honored for subagents. For git reset --hard: subagents can use /allow; they cannot use /do.
 
 ---
 
@@ -841,7 +842,7 @@ Each row maps to a capability in the dependency table above.
 ├── settings.json      # clean form: hook wiring and permissions (paseo module off)
 ├── settings.machine.example.json  # documented example of the untracked machine overlay
 ├── agents/            # 23 subagent definitions (BA, dev, QA, architect, …)
-├── commands/          # 20 slash-command workflows (/spec, /dev, /close, /commit, …)
+├── commands/          # 21 slash-command workflows (/spec, /dev, /close, /commit, …)
 ├── hooks/             # SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Notification / Stop / SubagentStop gates
 │   ├── lib/           #   shared libs: allowlist (structured sentinel grants), checkpoint-core
 │   ├── doc_sync/      #   self-updating INDEX/README/CLAUDE regeneration
@@ -886,7 +887,7 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 | PostToolUse | 18 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | PostToolUseFailure | 1 | Allowlist grant consumption on a failed tool result |
 | Notification | 1 | User-facing notification routing |
-| Stop | 3 | Workflow coordinator (overnight time-lock, spec coverage, auto-commit, allowlist cleanup phases), `/do` report gate, obligation gate |
+| Stop | 3 | Workflow coordinator (overnight time-lock, spec coverage, auto-commit, allowlist cleanup phases), `/do` report gate, obligation gate (an exit-0 stub: artifacts are decided at each producer's stop) |
 | SessionEnd | 1 | Scratch-directory sweep |
 | SubagentStop | 8 | cp-state enforcement, artifact contract, subagent output capture |
 

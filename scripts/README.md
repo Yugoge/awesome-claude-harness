@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 125
+- **Total files**: 114
 - **Subdirectories**: 6
 - **Naming convention**: kebab
 
@@ -28,14 +28,12 @@ Organization and usage documentation for `scripts/`.
 - `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 - `check-file-references.sh` - File reference detection script - used by /clean command
 - `check-late-repair-provenance.py` - Takes ONLY ``--task-id`` and ``--project-dir`` (never a caller-supplied file
-- `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
-- `check-overnight-reports.sh` - DEPRECATED — replaced by check-overnight-reports.py per spec-20260426-090235 P0/M5.
-- `check-public-core.sh` - Description: Public/private boundary gate. Recomputes the top-level tracked-path set from
+- `check-overnight-reports.sh` - STUB: each specialist's dispatch obligation declares its report and schema, and G2
+- `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 - `check-readme-freshness.sh` - Check README.md freshness for all major folders
 - `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 - `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
-- `close-commit-repair-orchestrate.py` - Consumes schemas/repair-map.v1.json; given a findings list, looks up each
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 - `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
 - `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
@@ -49,7 +47,7 @@ Organization and usage documentation for `scripts/`.
 - `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 - `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
 - `detect-orphan-scripts.sh` - Description: Detect scripts not referenced by any command/agent/other script
-- `dev-lifecycle.py` - Derives, per on-disk task-id, a state using the TOTAL REDUCTION ORDER from
+- `dev-lifecycle.py` - Derives, per on-disk task-id, a state (docs/dev/ticket-20260808-035658-lanel.md):
 - `discover-folders.sh` - Description: Dynamically discover project folders excluding system directories
 - `doctor` - doctor file
 - `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
@@ -57,7 +55,6 @@ Organization and usage documentation for `scripts/`.
 - `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 - `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
 - `generate-hero-status.py` - Description: One source of truth emits THREE marker-delimited canonical regions -- the
-- `generate-repair-map.py` - Part A of ticket-20260930-132644-l8 (spec-20260930-092323 lane L8). Joins:
 - `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
 - `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 - `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
@@ -85,7 +82,7 @@ Organization and usage documentation for `scripts/`.
 - `prune-orphaned-workflow-bookmarks.sh` - scripts/prune-orphaned-workflow-bookmarks.sh
 - `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 - `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
-- `refine-context.sh` - refine-context.sh — merge QA-refined context with original context
+- `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
 - `regen-index-dirs.py` - hand-written prose outside the generated stats+tree block), then regenerate the
 - `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 - `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
@@ -101,14 +98,15 @@ Organization and usage documentation for `scripts/`.
 - `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 - `session-index.py` - Subcommands (all take --git-root):
 - `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
-- `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
+- `spec-check.py` - Subcommands: check-in, register, checkpoints, mark, waive, status, check-out, unlock
+- `spec-write.py` - Every write of a spec file runs through this script: /spec's own writes (the
 - `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 - `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
 - `test` - test file
 - `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 - `verify-attribution-chain.py` - Folds each file's events across ALL session journals into a hash chain and
-- `verify-claims-extended.sh` - Description: Extended headline-claims gate. Closes the four documented coverage gaps in
-- `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
+- `verify-claims-extended.sh` - Description: Extended headline-claims gate. Binds the slash-command count and the
+- `verify-claims.sh` - Description: Self-verifying headline-claims gate. Runs ALL THREE hero-provenance audits in
 - `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
 - `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
 - `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
@@ -117,7 +115,8 @@ Organization and usage documentation for `scripts/`.
 - `write-e2e-enforce.sh` - Writes e2e-enforce.json into the dev-registry for the given session.
 - `write-enforce-flag.sh` - Write one or more enforcement-flag sentinels into a dev-registry session dir.
 - `write-git-residual-override.py` - Answers the "could not be statically classified" refusal emitted by
-- `write-qa-mode.sh` - Write or update qa_mode field in the QA sentinel file for a dev-registry session.
+- `write-push-gate-token.py` - Run after its own commit by both of the token's callers: changelog-analyst under
+- `write-qa-mode.sh` - STUB: P1b E7 replaced the qa_mode switch with the record: each QA dispatch's
 
 ## Subdirectories
 - `install/`
