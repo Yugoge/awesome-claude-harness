@@ -149,7 +149,8 @@ def _enforce_timelock(session_id: str, state: dict, project_dir: Path | None = N
     if end_time_expired:
         blockers = _closeout_artifact_blockers(state)
         if blockers:
-            _block_closeout_artifacts(session_id, str(overnight.cycle_index(state)), blockers)
+            # The completed cycles, as master's cycle_count was (cycle_index is the one in progress).
+            _block_closeout_artifacts(session_id, str(overnight.cycle_index(state) - 1), blockers)
     if end_time is None:
         sys.exit(0)
     if verdicts.window_live:
