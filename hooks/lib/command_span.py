@@ -59,6 +59,7 @@ _RESULT_BLOCK = b'"tool_result"'
 # spelling; each line it finds is then held to _USER_RECORD.
 _USER_WORD = b'"user"'
 _TAIL_CHUNK = 1 << 20  # the first read from the end; each further read doubles
+_TAIL_LIMIT = 4 << 20  # the largest chunk read; a longer span is searched in a read of the whole file
 
 
 def _read(transcript_path) -> bytes:
@@ -385,19 +386,22 @@ def _last_opener(data: bytes, lo: int, hi: int, commands: frozenset):
     """(begin, end, (command, args)) of the last human-typed harness command
     among the whole lines of data[lo:hi], or None. Lines are read from the end
     and decoded only when they hold a user record and no tool result (a tool
-    result is never typed)."""
+    result is never typed). A tool result's line is told by the result token
+    near its start, so the search for its end is left out: in a long span
+    most lines are read once, by the search for the next user record."""
     pos = data.rfind(_USER_WORD, lo, hi)
     while pos >= 0:
         newline = data.rfind(b"\n", lo, pos)
         begin = newline + 1 if newline >= 0 else lo
-        end = data.find(b"\n", pos, hi)
-        end = hi if end < 0 else end
-        if (any(data.find(needle, begin, end) >= 0 for needle in _USER_RECORD)
-                and data.find(_RESULT_BLOCK, begin, end) < 0):
-            record = _decode(data[begin:end])
-            opener = stop_contract.span_opener(record, commands) if record else None
-            if opener:
-                return begin, end, opener
+        result = data.find(_RESULT_BLOCK, begin, hi)
+        if result < 0 or data.find(b"\n", begin, result) >= 0:  # no tool result on this line
+            end = data.find(b"\n", pos, hi)
+            end = hi if end < 0 else end
+            if any(data.find(needle, begin, end) >= 0 for needle in _USER_RECORD):
+                record = _decode(data[begin:end])
+                opener = stop_contract.span_opener(record, commands) if record else None
+                if opener:
+                    return begin, end, opener
         pos = data.rfind(_USER_WORD, lo, begin)
     return None
 
@@ -418,8 +422,11 @@ def active_span(transcript_path: str | Path, commands: frozenset | None = None) 
     commands/*.md stems.
 
     The last opener is the first one a reader from the end meets, so the
-    transcript is read from its end, in chunks that double, until a chunk
-    holds it: the lines before the span are neither read nor decoded."""
+    transcript is read from its end, in chunks that double up to
+    _TAIL_LIMIT, and searched back until it is met: the lines before the span
+    are neither read nor decoded. A span longer than those chunks is searched
+    in one read of the whole file, as copying ever larger chunks together
+    would cost more than reading the file once."""
     commands = stop_contract.harness_commands() if commands is None else commands
     try:
         handle = open(transcript_path, "rb")
@@ -428,31 +435,33 @@ def active_span(transcript_path: str | Path, commands: frozenset | None = None) 
         data, base = (b"", info.st_size) if stat.S_ISREG(info.st_mode) else (handle.read(), 0)
     except (OSError, TypeError, ValueError):
         return None
-    found, chunk, scanned = None, _TAIL_CHUNK, len(data)  # data[scanned:] holds no opener
+    size, chunk = base + len(data), _TAIL_CHUNK
+    top = size  # the lines from offset top on hold no opener
     while True:
         if base == 0:
-            found = _last_opener(data, 0, scanned, commands)
+            found = _last_opener(data, 0, top, commands)
             break
         try:
-            piece = _piece(handle, base, chunk)
-            if piece is None:  # read it whole, as one read of it would have
+            piece = _piece(handle, base, chunk) if chunk <= _TAIL_LIMIT else None
+            if piece is None:  # the whole file as it was sized, in one read
                 handle.seek(0)
-                data = handle.read()
-                base, scanned = 0, len(data)
+                data, base = handle.read(size), 0
+                if len(data) < size:  # it shrank since: search all of it, as one read of it would
+                    top = len(data)
                 continue
         except (OSError, ValueError):
             handle.close()
             return None
-        data, base, scanned, chunk = piece + data, base - len(piece), scanned + len(piece), chunk * 2
+        data, base, chunk = piece + data, base - len(piece), chunk * 2
         if base == 0:
             continue
-        newline = data.find(b"\n", 0, scanned)  # the line before it may start in an earlier chunk
+        newline = data.find(b"\n", 0, top - base)  # the line before it may start in an earlier chunk
         if newline < 0:
             continue
-        found = _last_opener(data, newline + 1, scanned, commands)
+        found = _last_opener(data, newline + 1, top - base, commands)
         if found:
             break
-        scanned = newline + 1
+        top = base + newline + 1
     if not found:
         handle.close()
         return None

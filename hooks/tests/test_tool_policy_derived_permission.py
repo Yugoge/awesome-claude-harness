@@ -267,3 +267,116 @@ def test_dispatch_records_are_ordered_by_their_offsets_and_no_line_is_numbered(t
     assert [c.line for c in calls] == [starts[1], starts[3]]
     assert policy._span_commands(data, calls[-1].line) == [(starts[0], "do"), (starts[2], "dev")]
     assert policy._span_commands(data, calls[0].line) == [(starts[0], "do")]
+
+
+# -- a target no template can declare: no transcript read (review item 2) ----------------------------
+
+def _policy(name="tool_policy_shapes"):
+    spec = importlib.util.spec_from_file_location(name, HOOK)
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    policy._bootstrap_security()
+    return policy
+
+
+def _payload(s: "Session", tool: str, tool_input: dict, agent: tuple | None = None) -> dict:
+    data = {"session_id": s.sid, "transcript_path": str(s.transcript), "cwd": str(PROJECT),
+            "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tool_input}
+    if agent:
+        data.update(agent_id=agent[0], agent_type=agent[1], subagent_type=agent[1])
+    return data
+
+
+def test_a_write_no_template_can_declare_reads_no_transcript(tmp_path, cycle, monkeypatch):
+    # The session's dispatch records grow with the session; a target that no path of the current
+    # command files' templates (nor the producer question) can name costs the same in any session.
+    policy = _policy()
+    from lib import command_span
+
+    read = []
+    real = command_span._read
+    monkeypatch.setattr(command_span, "_read", lambda path: read.append(path) or real(path))
+    undeclarable = [("Write", _write("toy/__init__.py")), ("Edit", {"file_path": str(PROJECT / "toy/util.py")}),
+                    ("Bash", {"command": "echo a > file"}), ("Bash", {"command": "printf x > toy/x.txt 2>&1"})]
+    for tool, tool_input in undeclarable:
+        targets = policy._extract_targets(tool, tool_input)
+        assert policy._check_declared_writes("dev", tool, targets, _payload(cycle, tool, tool_input)) == set()
+    assert read == [], "a write no template can declare read the session transcript"
+    # A target a template can declare keeps the check, and its read.
+    with pytest.raises(SystemExit) as stop:
+        policy._check_declared_writes("dev", "Write", [str(PROJECT / CONTEXT)],
+                                      _payload(cycle, "Write", _write(CONTEXT), (cycle.dev, "dev")))
+    assert stop.value.code == 2 and read == [cycle.transcript]
+
+
+def test_the_hook_never_opens_the_transcript_for_such_a_write(tmp_path):
+    # Process-level: the session transcript is a FIFO nobody writes, so opening it would block.
+    s = Session(tmp_path / "projects")
+    s.transcript.unlink()
+    os.mkfifo(s.transcript)
+    for tool, tool_input in (("Write", _write("toy/__init__.py")), ("Bash", {"command": "echo a > file"})):
+        assert s.run(tmp_path, tool, tool_input, None).returncode == 0
+
+
+def test_the_declarable_shapes_are_read_from_the_command_files(tmp_path, monkeypatch):
+    policy = _policy()
+    from lib import stop_contract
+
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+    forms = lambda target: policy._target_forms(target, {"cwd": str(PROJECT)})  # noqa: E731
+    # No command file: only the producer question's shape (G2's rule) remains.
+    shapes = policy._declarable_shapes()
+    assert policy._could_be_declared(shapes, forms("docs/dev/producer-question-x-ba.json"))
+    assert not policy._could_be_declared(shapes, forms("out/1.weird"))
+    (commands / "x.md").write_text('```\n{"artifacts": [{"kind": "markdown", "path": "out/<task_id>.weird"},\n'
+                                   ' {"kind": "spec_views", "path": "trees/{x.y}/leaf"}]}\n```\n')
+    shapes = policy._declarable_shapes()
+    for declarable in ("out/1.weird", "a/b/2.weird/child", "trees/z/leaf", "leaf/below.py"):
+        assert policy._could_be_declared(shapes, forms(declarable)), declarable
+    for undeclarable in ("out/1.weirdo", "src/leafy.py", "a.md"):
+        assert not policy._could_be_declared(shapes, forms(undeclarable)), undeclarable
+    # A command file that cannot be read: any target may be declared, so every write keeps the check.
+    (commands / "broken.md").mkdir()
+    assert policy._could_be_declared(policy._declarable_shapes(), forms("src/a.py"))
+
+
+@pytest.mark.parametrize("value", ["20261028-101010", "a/b", "x/../../y", "/../../../z/w", "q/", "."])
+def test_every_path_a_current_template_declares_is_declarable(value):
+    # Whatever a dispatch binds a placeholder to ("/" and ".." included), the path it declares is one
+    # the filter keeps the check for, in place and as the directory above a target.
+    policy = _policy()
+    shapes = policy._declarable_shapes()
+    seen = 0
+    for file in sorted((ROOT / "commands").glob("*.md")):
+        for raw in policy._TEMPLATE_PATH_RE.findall(file.read_text(encoding="utf-8")):
+            path = policy._SHAPE_PLACEHOLDER_RE.sub(value, json.loads(f'"{raw}"'))
+            parts = policy._parts(path)
+            if not parts or ".." in parts or path.startswith("/"):
+                continue  # a path tool-policy never takes as declared
+            seen += 1
+            for target in ("/".join(parts), "/".join(parts) + "/below.txt", "nested/" + "/".join(parts)):
+                assert policy._could_be_declared(shapes, policy._target_forms(target, {"cwd": str(PROJECT)})), \
+                    (file.name, raw, value, target)
+    assert seen
+
+
+def test_a_subagents_own_declared_write_is_decided_by_its_own_dispatch(tmp_path, cycle, monkeypatch):
+    # Whatever another dispatch declares, a path the caller's own dispatch declares is its own: that
+    # dispatch's declarations decide it, not every dispatch's of a long session.
+    policy = _policy()
+    seen = []
+    real = policy._declarations
+    monkeypatch.setattr(policy, "_declarations", lambda data, calls: seen.append([c.id for c in calls]) or real(data, calls))
+    ba_call = json.loads((cycle.subagents / f"agent-{cycle.ba}.meta.json").read_text())["toolUseId"]
+    dev_call = json.loads((cycle.subagents / f"agent-{cycle.dev}.meta.json").read_text())["toolUseId"]
+    own = policy._check_declared_writes("ba", "Write", [str(PROJECT / CONTEXT)],
+                                        _payload(cycle, "Write", _write(CONTEXT), (cycle.ba, "ba")))
+    assert own == {str(PROJECT / CONTEXT)} and seen == [[ba_call]]
+    # Another caller's write of it still reads every dispatch, and is refused as before.
+    seen.clear()
+    with pytest.raises(SystemExit) as stop:
+        policy._check_declared_writes("dev", "Write", [str(PROJECT / CONTEXT)],
+                                      _payload(cycle, "Write", _write(CONTEXT), (cycle.dev, "dev")))
+    assert stop.value.code == 2 and seen[0] == [dev_call] and len(seen[-1]) == 3

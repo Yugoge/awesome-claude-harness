@@ -25,6 +25,13 @@ NotebookEdit target and every Bash write target:
     the declaring obligation's role, whatever an allow prefix (dev's '*',
     general-purpose's '*/docs/dev/*') says. No prefix table names an artifact.
   - An undeclared path keeps the role policy rows below.
+  - What a dispatch can declare has the shapes of the paths the current
+    command files' templates write ("path" in their JSON, any bracketed text
+    a placeholder) and the producer question's: a target with no part such a
+    path can end on is undeclared without reading the transcript, so its
+    cost does not grow with the session (P1b review item 2). A path a
+    dispatch's own obligation names outside every template's shape is not
+    held for it.
 
 Behavior:
   - Main agent (no agent_id, no subagent_type) -> exit 0 after the derived
@@ -64,6 +71,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -375,6 +383,77 @@ def _question_roles() -> frozenset:
         return frozenset()
 
 
+# The question G2 takes in place of the declared artifacts
+# (subagentstop-artifact-contract-enforce.py _producer_question).
+_QUESTION_PATH = "docs/dev/producer-question-{task_id}-{role}.json"
+# A path a command file's template declares, as its JSON writes it, and a
+# placeholder in one: <task_id>, <TASK_ID or "bulk">, {pipeline.x}. Any text
+# in brackets counts as one, so no template path is read narrower than the
+# dispatch that fills it in may write it.
+_TEMPLATE_PATH_RE = re.compile(r'"path"\s*:\s*"((?:[^"\\\n]|\\.)*)"')
+_SHAPE_PLACEHOLDER_RE = re.compile(r"<[^<>]*>|\{[^{}]*\}")
+_ANY = None  # a shape whose declared path may end in any name
+
+
+def _shape(path: str):
+    """What the last part of a declared path made from template path ``path``
+    is: ("parts", the parts) for a path without placeholders, ("last", name)
+    or ("ends", text) after the last placeholder, or _ANY. A placeholder's
+    value may hold "/" and "..", and the declared path is normalised, so only
+    the text after the last placeholder is certain, and only while no ".."
+    in it can take a part back."""
+    pieces = _SHAPE_PLACEHOLDER_RE.split(path)
+    if len(pieces) == 1:
+        return ("parts", _parts(path))
+    tail = pieces[-1]
+    head, slash, rest = tail.partition("/")
+    if slash:
+        names = rest.split("/")
+        if ".." in names:
+            return _ANY
+        names = [n for n in names if n not in ("", ".")]
+        if names:
+            return ("last", names[-1])
+    return _ANY if head in ("", ".", "..") else ("ends", head)
+
+
+def _declarable_shapes():
+    """The shapes (_shape) of every path a dispatch can declare from a
+    template: each "path" the current command files write, read at run time,
+    and the producer question's. _ANY when a command file cannot be read:
+    then any target may be declared."""
+    from lib import stop_contract
+
+    shapes = {_shape(_QUESTION_PATH)}
+    try:
+        files = sorted(stop_contract.COMMANDS_DIR.glob("*.md"))
+        for file in files:
+            for raw in _TEMPLATE_PATH_RE.findall(file.read_text(encoding="utf-8")):
+                try:
+                    value = json.loads(f'"{raw}"')
+                except ValueError:
+                    value = raw
+                shapes.add(_shape(value))
+    except (OSError, UnicodeDecodeError):
+        return _ANY
+    return _ANY if _ANY in shapes else shapes
+
+
+def _could_be_declared(shapes, forms: list) -> bool:
+    """Whether a path of one of ``shapes`` may cover a target of these forms:
+    a declared path covers a run of the target's parts that ends with its own
+    last part, so some part of the target must be that last part."""
+    if shapes is _ANY:
+        return True
+    for kind, value in shapes:
+        for form in forms:
+            if (kind == "parts" and value and _covers(value, form)
+                    or kind == "last" and value in form
+                    or kind == "ends" and any(part.endswith(value) for part in form)):
+                return True
+    return False
+
+
 def _declared_paths(obligation_doc: dict) -> list:
     return [a["path"] for a in obligation_doc.get("artifacts") or []
             if isinstance(a, dict) and isinstance(a.get("path"), str) and a["path"]]
@@ -453,9 +532,7 @@ def _declarations(record_bytes: bytes, calls: list) -> list:
             if question_roles is None:
                 question_roles = _question_roles()
             if role in question_roles and isinstance(task_id, str) and task_id:
-                # The question G2 takes in place of the declared artifacts
-                # (subagentstop-artifact-contract-enforce.py _producer_question).
-                paths.append(f"docs/dev/producer-question-{task_id}-{role}.json")
+                paths.append(_QUESTION_PATH.format(task_id=task_id, role=role))
         else:
             if openers is None:
                 openers = _span_commands(record_bytes, calls[-1].line)
@@ -543,6 +620,16 @@ def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> s
         )
         sys.exit(2)
 
+    # What a dispatch declares is read from the session transcript, which
+    # grows with the session; a target no template's path can name is
+    # undeclared without reading it.
+    try:
+        shapes = _declarable_shapes()
+        undeclared = not any(_could_be_declared(shapes, _target_forms(target, data)) for target in writes)
+    except Exception:  # the check below decides, as it always did
+        undeclared = False
+    if undeclared:
+        return set()
     try:
         record_bytes = command_span._read(transcript)
     except (OSError, TypeError, ValueError):
@@ -550,12 +637,25 @@ def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> s
     calls = _dispatch_calls(record_bytes)
     if not calls:
         return set()
+    # A subagent's write of a path its own dispatch declares is its own,
+    # whatever any other dispatch declares: its dispatch's declarations
+    # decide that, without every dispatch's of a long session. Should this
+    # shortcut fail, the full reading below meets the failure where it did.
+    mine, own = None, set()
+    if data.get("agent_id"):
+        try:
+            mine = _caller_dispatches(data, transcript, calls)
+            declared = _declarations(record_bytes, [c for c in calls if c.id in mine]) if mine else []
+            own = {t for t in writes if any(_covers(d[0], f) for f in _target_forms(t, data) for d in declared)}
+        except Exception:
+            mine, own = None, set()
+    rest = [t for t in writes if t not in own]
+    if not rest:
+        return own
     declarations = _declarations(record_bytes, calls)
     if not declarations:
-        return set()
-    mine = None
-    own = set()
-    for target in writes:
+        return own
+    for target in rest:
         forms = _target_forms(target, data)
         covering = [d for d in declarations if any(_covers(d[0], f) for f in forms)]
         if not covering:

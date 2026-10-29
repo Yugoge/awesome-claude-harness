@@ -16,11 +16,9 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import hashlib
 import json
 import os
 import re
-import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -184,6 +182,10 @@ def capability_token(session_id: str, grant: Any) -> str:
     if not isinstance(issued_at, str) or not issued_at:
         raise RestartError("restart grant carries no issue time to bind guidance to")
     material = "\n".join([str(SCHEMA_VERSION), GRANT_ISSUER, session_id, issued_at])
+    # Imported here, as tempfile is in _atomic_write_json: obligation imports
+    # this module in hooks that run at every tool call and use neither.
+    import hashlib
+
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
 
 
@@ -292,6 +294,8 @@ def _load_json(path: Path) -> dict[str, Any] | None:
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        import tempfile
+
         fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
         tmp = Path(tmp_name)
         try:

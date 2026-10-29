@@ -44,13 +44,31 @@ _WG_TASK_ID=$(echo "$INPUT" | python3 -c \
 _WG_ENV_TASK_ID="${CLAUDE_TASK_ID:-}"
 
 _WG_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# /do bypass: hooks/lib/allowlist.py has_do_consent (main agent only).
-if printf '%s' "$INPUT" | python3 "$_WG_HOOKS_DIR/lib/allowlist.py" consent 2>/dev/null; then
+# One interpreter takes two decisions in turn, so a Write starts python3 once
+# less: the /do bypass, hooks/lib/allowlist.py has_do_consent (main agent
+# only), imported on the path that file has when run as a script, and then
+# whether a subagent calls. It prints "consent", else 1 (subagent) or 0, and
+# nothing when the payload is unreadable.
+_WG_IS_SUB=$(printf '%s' "$INPUT" | _WG_LIB="$_WG_HOOKS_DIR/lib" python3 -c '
+import os, sys
+raw = sys.stdin.read()
+if not getattr(sys.flags, "safe_path", False):  # where -c put "", a script run puts its directory
+    sys.path[0] = os.environ["_WG_LIB"]
+import json
+try:
+    from allowlist import has_do_consent
+    consent = has_do_consent(json.loads(raw))
+except BaseException:
+    consent = False
+if consent:
+    print("consent")
+else:
+    d = json.loads(raw)
+    print("1" if d.get("agent_id") else "0")
+' 2>/dev/null)
+if [ "$_WG_IS_SUB" = "consent" ]; then
   exit 0
 fi
-_WG_IS_SUB=$(echo "$INPUT" | python3 -c \
-  "import json,sys; d=json.load(sys.stdin); print('1' if d.get('agent_id') else '0')" \
-  2>/dev/null)
 if [ "$_WG_IS_SUB" != "1" ]; then
   _WG_SID=$(echo "$INPUT" | python3 -c \
     "import json,sys,os; d=json.load(sys.stdin); \
