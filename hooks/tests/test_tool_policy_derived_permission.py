@@ -15,6 +15,7 @@ never created; only paths are judged.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -241,3 +242,28 @@ def test_a_dispatch_carrying_none_gets_what_its_current_template_declares(tmp_pa
     ba = other.dispatch(prompt)
     assert other.run(tmp_path, "Write", _write(context), (ba, "general-purpose")).returncode == 0
     assert other.run(tmp_path, "Write", _write(context), None).returncode == 0
+
+
+def test_dispatch_records_are_ordered_by_their_offsets_and_no_line_is_numbered(tmp_path, monkeypatch):
+    # Only the order of dispatches and span openers decides which command's template applies, so the
+    # long-transcript reader compares offsets and never counts lines (P1b latency lane).
+    s = Session(tmp_path / "projects")
+    s.command("do")
+    s.dispatch("Describe the toy package.")
+    s.command("dev")
+    s.dispatch("You are the dev subagent.\n" + _block(_obligation("dev", "singular", REPORT)))
+    spec = importlib.util.spec_from_file_location("tool_policy_offsets", HOOK)
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    from lib import command_span
+
+    def numbered(self, pos):
+        raise AssertionError("a line was numbered")
+
+    monkeypatch.setattr(command_span._Lines, "_number", numbered)
+    data = s.transcript.read_bytes()
+    starts = [0] + [i + 1 for i, b in enumerate(data) if b == 10][:-1]
+    calls = policy._dispatch_calls(data)
+    assert [c.line for c in calls] == [starts[1], starts[3]]
+    assert policy._span_commands(data, calls[-1].line) == [(starts[0], "do"), (starts[2], "dev")]
+    assert policy._span_commands(data, calls[0].line) == [(starts[0], "do")]

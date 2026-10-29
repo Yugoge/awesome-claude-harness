@@ -263,19 +263,34 @@ def _accepted_writes(lists):
     return todos, tuple(writes)
 
 
+_UNREAD = object()
+
+
 class Checklist:
     """The active command's checklist as the transcript records it. A plain
     class: importing dataclasses would cost the workflow gate, which reads the
     checklist at every tool call, more than the rest of its reading."""
-    __slots__ = ('span', 'canonical', 'todos', '_accepted', '_writes', '_before')
+    __slots__ = ('span', 'canonical', '_todos', '_accepted', '_writes', '_before')
 
     def __init__(self, span, canonical, todos, accepted, writes=None, before=None):
         self.span = span              # command_span.Span of the command
         self.canonical = canonical    # its canonical steps (scripts/todo/<command>.py)
-        self.todos = todos            # the last ok TodoWrite's list: the checklist the CLI holds; None before the first
+        self._todos = todos           # todos, once read (_UNREAD before)
         self._accepted = accepted     # the step rules accepted an ok TodoWrite of the span
         self._writes = writes         # writes, once read
         self._before = before         # the tool use the checklist stops ahead of, if any
+
+    @property
+    def todos(self):
+        """The last ok TodoWrite's list: the checklist the CLI holds; None
+        before the first. Read from the end of the span when first asked: the
+        readers that need only the command and its canonical steps (the count
+        and progress hooks) leave it unread. No step rule runs on it, so
+        reading it later raises nothing checklist() would have raised."""
+        if self._todos is _UNREAD:
+            self._todos = next((new for _call, new in _ok_lists(
+                self.span.iter_calls('TodoWrite', newest_first=True, before=self._before))), None)
+        return self._todos
 
     @property
     def writes(self):
@@ -322,11 +337,11 @@ def checklist(transcript_path, before=None):
     initial_status_violations is not accepted, and the next is a first call
     again.
 
-    Only the lists that decide are decoded: the newest ok list from the end
-    (with ``before``, back from the call that has that id), and from the start
-    the lists up to the first the step rules accept. Every later ok list is
-    accepted too, so the last accepted list is the newest and needs no
-    reading of its own."""
+    Only the lists that decide are decoded: from the start the lists up to
+    the first the step rules accept, and, when a reader asks for it, the
+    newest ok list from the end (with ``before``, back from the call that has
+    that id). Every later ok list is accepted too, so the last accepted list
+    is the newest and needs no reading of its own."""
     try:  # imported as hooks.lib.todo_canonical (tests) or lib.todo_canonical (hooks)
         from . import command_span
     except ImportError:  # loaded by path, with hooks/ or hooks/lib on sys.path
@@ -340,8 +355,9 @@ def checklist(transcript_path, before=None):
     canonical = run_todo_script(span.command, span.args)
     if not canonical:
         return None
-    todos = next((new for _call, new in _ok_lists(
-        span.iter_calls('TodoWrite', newest_first=True, before=before))), None)
-    accepted = todos is not None and any(
+    # Read here, not when asked: the step rules may raise on a list, and a
+    # caller that guards checklist() must see that inside the call. With no ok
+    # list the rules run on nothing, as when the newest list is None.
+    accepted = any(
         not initial_status_violations(new) for _call, new in _ok_lists(span.iter_calls('TodoWrite', before=before)))
-    return Checklist(span, canonical, todos, accepted, before=before)
+    return Checklist(span, canonical, _UNREAD, accepted, before=before)

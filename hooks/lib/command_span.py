@@ -68,10 +68,12 @@ class _Lines:
         end = self.data.find(b"\n", pos)
         return self.data.rfind(b"\n", 0, pos) + 1, end if end >= 0 else len(self.data)
 
-    def having(self, needles, after: int = 0, start: int = 0, unless: bytes = b""):
-        """(number, end offset, line) of each line from offset ``start`` and
-        after line ``after`` that holds a needle and not ``unless``, once per
-        line, in order, found only as far as the caller reads."""
+    def offsets(self, needles, start: int = 0, unless: bytes = b""):
+        """(begin, end) offsets of each line from offset ``start`` that holds a
+        needle and not ``unless``, once per line, in order, found only as far as
+        the caller reads. Not numbered: a reader that only orders lines
+        compares offsets, and numbering the lines of a long transcript is a
+        pass of its own."""
         found = {needle: self.data.find(needle, start) for needle in needles}
         while True:
             live = [pos for pos in found.values() if pos >= 0]
@@ -79,12 +81,19 @@ class _Lines:
                 return
             begin, end = self._bounds(min(live))
             if not (unless and self.data.find(unless, begin, end) >= 0):
-                number = self._number(begin)
-                if number > after:
-                    yield number, end, self.data[begin:end]
+                yield begin, end
             for needle, pos in found.items():  # past this line, once the caller reads on
                 if 0 <= pos < end:
                     found[needle] = self.data.find(needle, end)
+
+    def having(self, needles, after: int = 0, start: int = 0, unless: bytes = b""):
+        """(number, end offset, line) of each line from offset ``start`` and
+        after line ``after`` that holds a needle and not ``unless``, once per
+        line, in order, found only as far as the caller reads."""
+        for begin, end in self.offsets(needles, start, unless):
+            number = self._number(begin)
+            if number > after:
+                yield number, end, self.data[begin:end]
 
     def having_back(self, needles, floor: int = 0, top: int | None = None):
         """(begin, end, line) of each line that starts at offset ``floor`` or

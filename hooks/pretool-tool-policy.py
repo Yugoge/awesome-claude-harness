@@ -391,36 +391,39 @@ def _agent_files(transcript, agent_id: str):
 def _dispatch_calls(record_bytes: bytes) -> list:
     """The session's Agent/Task calls, read as command_span's Span.calls reads
     them (its line reader, the main session's own records only), without the
-    search for each call's result that this rule does not use."""
+    search for each call's result that this rule does not use. A call's line
+    is its record's offset in the transcript: it is only ordered against the
+    commands that open spans (_span_commands), and numbering every line of a
+    long transcript would be a pass of its own."""
     from lib import command_span
 
     calls = []
-    for number, _end, raw in command_span._Lines(record_bytes).having((b'"Agent"', b'"Task"')):
-        for block in command_span._blocks(command_span._decode(raw)):
+    for begin, end in command_span._Lines(record_bytes).offsets((b'"Agent"', b'"Task"')):
+        for block in command_span._blocks(command_span._decode(record_bytes[begin:end])):
             if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
                     and isinstance(block.get("input"), dict)):
                 calls.append(command_span.Call(id=block.get("id") or "", name=block["name"], input=block["input"],
-                                               line=number, result_line=0, ok=False))
+                                               line=begin, result_line=0, ok=False))
     return calls
 
 
 def _span_commands(record_bytes: bytes, until: int) -> list:
-    """(line, command) of each human-typed harness command of the session
-    before line ``until`` (the last dispatch: no later command opens a
-    dispatch's span), read as command_span.active_span reads them (its line
-    reader, the stop_contract span rule); a dispatch's span is the last one
-    before it."""
+    """(offset, command) of each human-typed harness command of the session
+    before offset ``until`` (the last dispatch's record: no later command
+    opens a dispatch's span), read as command_span.active_span reads them (its
+    line reader, the stop_contract span rule); a dispatch's span is the last
+    one before it."""
     from lib import command_span, stop_contract
 
     commands, openers = stop_contract.harness_commands(), []
-    for number, _end, raw in command_span._Lines(record_bytes).having(command_span._USER_RECORD,
-                                                              unless=command_span._RESULT_BLOCK):
-        if number >= until:
+    for begin, end in command_span._Lines(record_bytes).offsets(command_span._USER_RECORD,
+                                                                unless=command_span._RESULT_BLOCK):
+        if begin >= until:
             break
-        record = command_span._decode(raw)
+        record = command_span._decode(record_bytes[begin:end])
         opener = stop_contract.span_opener(record, commands) if record else None
         if opener:
-            openers.append((number, opener[0]))
+            openers.append((begin, opener[0]))
     return openers
 
 
@@ -456,7 +459,7 @@ def _declarations(record_bytes: bytes, calls: list) -> list:
         else:
             if openers is None:
                 openers = _span_commands(record_bytes, calls[-1].line)
-            command = next((name for number, name in reversed(openers) if number < call.line), None)
+            command = next((name for offset, name in reversed(openers) if offset < call.line), None)
             template = dispatch_template.template_obligation(command, subagent_type, prompt) if command else None
             if template:
                 role, task_id = template.get("role") or role, template.get("task_id")

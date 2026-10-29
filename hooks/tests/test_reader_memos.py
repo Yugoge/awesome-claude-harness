@@ -3,12 +3,14 @@
 A hook that reads every dispatch of a long session asks for the same roster and
 the same command file at each one. lib/roster.py remembers a directory's roster
 until the directory changes; lib/dispatch_template.py parses a command file's
-fences once per text and skips, without compiling it, a template line no prompt
-line can match. Each answer here is held to the reading it replaces.
+fences once per text, skips a template line no prompt line can match, and reads
+the values of the others by hand, compiling no pattern (P1b latency lane). Each
+answer here is held to the reading it replaces.
 """
 from __future__ import annotations
 
 import os
+import random
 import re
 import sys
 from pathlib import Path
@@ -120,3 +122,52 @@ def test_template_lines_skipped_uncompiled_are_lines_no_prompt_line_matches():
                 assert dispatch_template._matched_lines(body, prompt) == _matched_by_pattern(body, prompt), path.name
                 checked += 1
     assert checked > 100
+
+
+def _fuzz_cases(seed=19, count=4000):
+    """Template lines and prompt lines built to stress the shortest-value
+    reading: adjacent placeholders, empty and repeated separators, separators
+    inside values, a tail that also occurs earlier, lines cut short."""
+    rng = random.Random(seed)
+    pieces = ["", "a", "-", "ab", " x ", ":", "/", "--", "a-b"]
+    cases = []
+    for _ in range(count):
+        parts = ["w"]
+        for _ in range(rng.randint(1, 4)):
+            parts.append(rng.choice(pieces))
+            parts.append(f"<p{rng.randint(0, 3)}>")
+        parts.append(rng.choice(pieces + [".", "z."]))
+        template = "".join(parts)
+        if rng.random() < 0.6:  # the template filled in, values holding its separators
+            line = _PLACEHOLDER.sub(lambda m: "".join(rng.choice(pieces + ["b", "x"]) for _ in range(rng.randint(0, 3))),
+                                    template)
+        else:
+            line = "w" + "".join(rng.choice(pieces + ["b", "x", ".", "z."]) for _ in range(rng.randint(0, 12)))
+        if rng.random() < 0.2:
+            line = line[:rng.randrange(len(line) + 1)]
+        cases.append((template, line))
+    return cases
+
+
+def test_the_hand_reading_binds_what_the_full_pattern_binds():
+    checked = bound = 0
+    for template, line in _fuzz_cases():
+        for prompt in (line, line + "\n" + line[::-1], "  " + line + "  "):
+            got = dispatch_template._matched_lines(template, prompt)
+            assert got == _matched_by_pattern(template, prompt), (template, prompt)
+            checked += 1
+            bound += bool(got)
+    assert checked == 12000 and bound > 1000
+
+
+def test_matching_a_prompt_against_every_template_compiles_no_pattern(monkeypatch):
+    compiled = []
+    real = re.compile
+    monkeypatch.setattr(re, "compile", lambda *a, **k: compiled.append(a) or real(*a, **k))
+    matched = 0
+    for path in sorted((REPO / "commands").glob("*.md")):
+        bodies = [fence[0] for fence in dispatch_template._parsed_fences(path.read_text(encoding="utf-8"))]
+        for prompt in _prompts(bodies):
+            for body in bodies:
+                matched += bool(dispatch_template._matched_lines(body, prompt))
+    assert matched > 100 and compiled == []
