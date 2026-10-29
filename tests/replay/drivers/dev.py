@@ -29,7 +29,8 @@ QA), its placeholders bound per lane (`<timestamp>` / `<task_id>` / `$TASK_ID` b
 obligation the lane, the lane set and the profile the template's adapter line names; validation
 and retry steps run per lane, retries on the affected lane only. Taken from the text at run time:
 the lane suffix form (the adapter line's example), the lane id's base (the placeholder the adapter
-line names), the fan-out profile, the three field names. The canonical aggregate's producer is
+line names), the fan-out profile, the three field names, the steps the section runs as ONE Bash call
+for every lane (its lanes' commands one per line). The canonical aggregate's producer is
 the one the tree's Step 11 names: where Step 11 has the orchestrator run the aggregator (the base
 text), the driver runs that call (respelled, R3); where it names the lane-completeness hook, the
 orchestrator runs none and marks the step completed. Step 17 indexes every lane's artifacts and the
@@ -50,7 +51,8 @@ Driver arguments (cli.py --arg K=V):
                        that lane's dev only and its QA passes; the other lanes are untouched
   lanes=N              fan-out lane count (2 or 3)
   lane_id=text|task    fan-out lane id base: `text` (default) the placeholder the adapter line
-                       names (`<DEV_SESSION_ID>-<lane-suffix>` at 2acc29b and in the working tree);
+                       names (`<DEV_SESSION_ID>-<lane-suffix>` at 2acc29b, `<TASK_ID>-<lane-suffix>` on
+                       the P1b branch);
                        `task` the cycle's task id where the tree's Step 1 names one apart from
                        DEV_SESSION_ID (`Task id:`), the id Step 17's resolver call takes. The two are
                        one id on the base text; where they differ the default follows the adapter line
@@ -865,6 +867,14 @@ class FanoutCycle(DevCycle):
         self.lane_fields = re.findall(r"`([^`]+)`", fields)
         if len(self.lane_fields) != 3:
             raise cmdtext.TextNotFound(f"the fan-out section names {self.lane_fields} as the lane fields")
+        # The steps the section has run as ONE Bash call for every lane that reaches them (none at 2acc29b).
+        self.one_call_steps = set()
+        for l in sec.split("\n"):
+            m = re.match(r"\s*- \*\*Steps? ([^*(]+)", l)
+            if m and "ONE Bash call" in l:
+                if "one per line" not in l:
+                    raise cmdtext.TextNotFound(f"the fan-out section's one-call stage names no joining: {l!r}")
+                self.one_call_steps |= {int(n) for n in re.findall(r"\d+", m.group(1))}
 
     # ------------------------------------------------------------ lanes
     @contextmanager
@@ -891,6 +901,24 @@ class FanoutCycle(DevCycle):
             with self.on(lane):
                 out[lane.name] = fn()
         return out
+
+    @contextmanager
+    def one_call(self, step: int, description: str):
+        """A step the fan-out section runs as ONE Bash call for every lane that reaches it: each lane's
+        commands, bound to its lane, are collected and then run together, one per line."""
+        if step not in self.one_call_steps:
+            yield
+            return
+        calls = []
+        self.o.run = lambda command, _description, label, **_kw: calls.append((command, label))
+        try:
+            yield
+        finally:
+            del self.o.run
+        if calls:
+            lanes = list(dict.fromkeys(re.search(r"\[(\w+)\]", label).group(1) for _, label in calls))
+            name = re.sub(r"\s+\d+$", "", calls[0][1].split(" Bash ", 1)[1])
+            self.o.run("\n".join(c for c, _ in calls), description, f"Step {step} [{'+'.join(lanes)}] Bash {name}")
 
     @property
     def lane_set(self) -> list:
@@ -1009,9 +1037,11 @@ class FanoutCycle(DevCycle):
                                  else "pass")
         self.each(qa)
         self.to(14)
-        status = self.each(lambda: self.step14(self.L("Step 14")))
+        with self.one_call(14, "Mascot score updates, every lane"):
+            status = self.each(lambda: self.step14(self.L("Step 14")))
         self.to(15)
-        self.each(lambda: self.step15(self.L("Step 15")), [l for l in self.lanes if status[l.name] == "pass"])
+        with self.one_call(15, "Apply the validated permissions, every passing lane"):
+            self.each(lambda: self.step15(self.L("Step 15")), [l for l in self.lanes if status[l.name] == "pass"])
         self.to(16)
         self.each(self.step16, [l for l in self.lanes if status[l.name] != "pass"])  # the failed lanes only
         self.to(17); self.step17()
