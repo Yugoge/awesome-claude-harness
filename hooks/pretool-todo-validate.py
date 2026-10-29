@@ -232,8 +232,10 @@ def _dispatched_steps(state, canonical):
     has no call yet (the window covers a TodoWrite and its Agent sent
     together), an untyped call for ip itself. A step set back to pending (a new
     overnight cycle) needs a new call."""
-    events = sorted([(w.result_line, 0, w) for w in state.writes]
-                    + [(c.result_line, 1, c) for c in state.span.calls('Agent', 'Task') if c.ok],
+    # Ordered by where each result is recorded (the offset of its line, which
+    # orders as its line number does), so no line before the span is counted.
+    events = sorted([(w.result_at, 0, w) for w in state.write_uses]
+                    + [(c.result_at, 1, c) for c in state.span.uses('Agent', 'Task') if c.ok],
                     key=lambda e: (e[0], e[1]))
     current, counted = [], set()
     for _, is_dispatch, call in events:

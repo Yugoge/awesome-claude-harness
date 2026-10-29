@@ -65,7 +65,7 @@ def get_workflow_command(transcript_path) -> str:
     span = command_span.active_span(transcript_path) if transcript_path else None
     if span is None:
         return ""
-    for call in span.calls("TodoWrite"):
+    for call in span.uses("TodoWrite"):
         todos = call.input.get("todos")
         if call.ok and isinstance(todos, list) and todos \
                 and all(isinstance(t, dict) and t.get("status") == "completed" for t in todos):

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 from collections import namedtuple
 from pathlib import Path
 
@@ -38,12 +39,26 @@ class Call(namedtuple("Call", "id name input line result_line ok")):
     __slots__ = ()
 
 
+class Use(namedtuple("Use", "id name input ok result_at")):
+    """A Call without line numbers: result_at is the offset in the transcript
+    of the line holding its tool_result (None while none came back). The
+    checklist readers order and filter calls but never name a line, and a
+    span read from the end of a long transcript has not counted the lines
+    before it."""
+    __slots__ = ()
+
+
 # A record is decoded only when it can matter, so a long session's transcript
 # is not decoded whole at every tool call: its lines are picked by byte search.
 # Quotes inside a JSON string are escaped, so text that merely mentions a
 # needle never matches it.
 _USER_RECORD = (b'"type":"user"', b'"type": "user"')
 _RESULT_BLOCK = b'"tool_result"'
+# Both spellings of a user record hold this one needle (its "type" and its
+# message's "role"), so a reader from the end searches once, not once per
+# spelling; each line it finds is then held to _USER_RECORD.
+_USER_WORD = b'"user"'
+_TAIL_CHUNK = 1 << 20  # the first read from the end; each further read doubles
 
 
 def _read(transcript_path) -> bytes:
@@ -148,18 +163,26 @@ def _uses(raw: bytes, names) -> list:
             and (not names or block.get("name") in names)]
 
 
+def _result(lines: _Lines, end: int, ident: str) -> tuple:
+    """(offset of the line holding the tool_result of call ``ident``, ok) for
+    a use whose line ends at offset ``end``; (None, False) while none came
+    back. Its result comes later: a reader from the end of the use's line."""
+    for begin, stop in (lines.offsets((json.dumps(ident).encode(),), start=end) if ident else ()):
+        found, ok = None, False
+        for result in _blocks(_decode(lines.data[begin:stop])):
+            if result.get("type") == "tool_result" and result.get("tool_use_id") == ident:
+                found, ok = begin, not result.get("is_error")
+        if found is not None:
+            return found, ok
+    return None, False
+
+
 def _call(lines: _Lines, number: int, end: int, block: dict) -> Call:
     """The Call of a tool_use block on line ``number``, which ends at offset
     ``end``, and how it came back."""
-    ident, result_line, ok = block.get("id") or "", 0, False
-    # Its result comes later: a reader from the end of the use's line.
-    after = _Lines(lines.data, end, number)
-    for later, _end, line in (after.having((json.dumps(ident).encode(),), start=end) if ident else ()):
-        for result in _blocks(_decode(line)):
-            if result.get("type") == "tool_result" and result.get("tool_use_id") == ident:
-                result_line, ok = later, not result.get("is_error")
-        if result_line:
-            break
+    ident = block.get("id") or ""
+    found, ok = _result(lines, end, ident)
+    result_line = 0 if found is None else number + lines.data.count(b"\n", end, found)
     return Call(id=ident, name=block.get("name") or "", input=block["input"],
                 line=number, result_line=result_line, ok=ok)
 
@@ -196,15 +219,37 @@ class Span:
     It keeps the bytes active_span read, so its calls come from that one read
     of a transcript the CLI keeps appending to. Compared and shown by command,
     args and start_line only; a plain class for the reason Call is not a
-    dataclass."""
-    __slots__ = ("command", "args", "start_line", "transcript_path", "_data", "_floor")
+    dataclass.
 
-    def __init__(self, command: str, args: str, start_line: int, transcript_path: str = "",
-                 data: bytes | None = None, floor: int | None = None):
-        self.command, self.args, self.start_line = command, args, start_line
+    active_span reads a long transcript from its end and keeps only the bytes
+    from the last chunk it read on (``base`` is their offset in the file), so
+    a span costs what the span costs, not what the session costs. Its
+    start_line then counts the lines before those bytes when first asked:
+    only a reader that numbers lines pays for the lines before the span."""
+    __slots__ = ("command", "args", "_start_line", "transcript_path", "_data", "_floor", "_base", "_ahead")
+
+    def __init__(self, command: str, args: str, start_line: int | None, transcript_path: str = "",
+                 data: bytes | None = None, floor: int | None = None, base: int = 0, ahead=None):
+        self.command, self.args, self._start_line = command, args, start_line
         self.transcript_path = transcript_path
         self._data = data  # None: read transcript_path when asked
         self._floor = floor  # offset of the line after start_line in data; None: found when asked
+        self._base = base  # offset of data in the transcript
+        self._ahead = ahead  # (open transcript, offset of the opener in data) while start_line is None
+
+    @property
+    def start_line(self) -> int:
+        if self._start_line is None:
+            handle, opener = self._ahead
+            with handle:  # the file the span was read from, so the count is of the same bytes
+                self._start_line = 1 + _newlines(handle, self._base) + self._data.count(b"\n", 0, opener)
+            self._ahead = None
+        return self._start_line
+
+    def __del__(self):  # a span whose lines nobody numbered closes the file it kept for that
+        ahead = getattr(self, "_ahead", None)
+        if ahead is not None:
+            ahead[0].close()
 
     def __repr__(self):
         return (f"{self.__class__.__qualname__}(command={self.command!r}, args={self.args!r}, "
@@ -225,6 +270,13 @@ class Span:
         are not the session's calls."""
         return list(self.iter_calls(*names))
 
+    def _lines(self):
+        """(_Lines over the span's bytes, offset of the line after the opener)."""
+        lines = _Lines(self._data if self._data is not None else _read(self.transcript_path))
+        if self._data is not None and self._floor is not None:
+            return lines, self._floor
+        return lines, lines.start_of(self.start_line)
+
     def iter_calls(self, *names: str, newest_first: bool = False, before: str | None = None):
         """calls() one at a time, newest first on request; with ``before`` (a
         tool use id) only the calls ahead of the first call that has it. A
@@ -233,39 +285,35 @@ class Span:
         and a reader from the end finds its lines from the end: the newest
         call of a long session costs no pass over the lines before it."""
         try:
-            lines = _Lines(self._data if self._data is not None else _read(self.transcript_path))
+            lines, floor = self._lines()
         except (OSError, TypeError, ValueError):
             return
-        needles = [f'"{n}"'.encode() for n in names] if names else [b'"tool_use"']
-        if not newest_first:
-            for number, end, raw in lines.having(needles, self.start_line):
-                for block in _uses(raw, names):
-                    if before and (block.get("id") or "") == before:
-                        return
-                    yield _call(lines, number, end, block)
+        # A line's number counts the newlines before it, once: from the
+        # span's first line to the first line read, then on from there.
+        pos = number = None
+        for begin, end, block in _found(lines, floor, names, newest_first, before):
+            if number is None:
+                number = self.start_line + 1 + lines.data.count(b"\n", floor, begin)
+            elif begin >= pos:
+                number += lines.data.count(b"\n", pos, begin)
+            else:
+                number -= lines.data.count(b"\n", begin, pos)
+            pos = begin
+            yield _call(lines, number, end, block)
+
+    def uses(self, *names: str, newest_first: bool = False, before: str | None = None):
+        """iter_calls() as Use records: the same calls in the same order, with
+        their results' offsets in place of line numbers, so a reader that
+        orders and filters calls never counts the lines before the span."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
             return
-        floor = self._floor if self._data is not None and self._floor is not None else lines.start_of(self.start_line)
-        top, cut = None, None
-        if before:
-            first = _first_use(lines, needles, names, floor, before)
-            if first is _UNREAD:  # the record may spell the id otherwise: read it as calls() does
-                yield from reversed(list(self.iter_calls(*names, before=before)))
-                return
-            if first is not None:
-                cut = first  # the first call with the id: its line's calls ahead of it are the newest
-                top = cut[1]
-        number = prev = None
-        for begin, end, raw in lines.having_back(needles, floor, top):
-            uses = cut[2] if cut is not None and begin == cut[0] else _uses(raw, names)
-            if not uses:
-                continue
-            # A line's number counts the newlines before it, once: from the
-            # span's first line to the newest line read, then back from there.
-            number = (self.start_line + 1 + lines.data.count(b"\n", floor, begin) if number is None
-                      else number - lines.data.count(b"\n", begin, prev))
-            prev = begin
-            for block in reversed(uses):
-                yield _call(lines, number, end, block)
+        for _begin, end, block in _found(lines, floor, names, newest_first, before):
+            ident = block.get("id") or ""
+            found, ok = _result(lines, end, ident)
+            yield Use(id=ident, name=block.get("name") or "", input=block["input"], ok=ok,
+                      result_at=None if found is None else self._base + found)
 
     def last_todos(self, before: str | None = None) -> list | None:
         """The todos of the span's last ok TodoWrite, or None before the
@@ -278,6 +326,46 @@ class Span:
             if call.ok and isinstance(call.input.get("todos"), list):
                 todos = call.input["todos"]
         return todos
+
+
+def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):
+    """(begin, end, block) of each main-session tool_use block from offset
+    ``floor`` on (only ``names`` when given), in the order Span.iter_calls
+    yields them; with ``before`` only those ahead of the first that has it."""
+    needles = [f'"{n}"'.encode() for n in names] if names else [b'"tool_use"']
+    if not newest_first:
+        for begin, end in lines.offsets(needles, floor):
+            for block in _uses(lines.data[begin:end], names):
+                if before and (block.get("id") or "") == before:
+                    return
+                yield begin, end, block
+        return
+    top, cut = None, None
+    if before:
+        first = _first_use(lines, needles, names, floor, before)
+        if first is _UNREAD:  # the record may spell the id otherwise: read it as calls() does
+            yield from reversed(list(_found(lines, floor, names, False, before)))
+            return
+        if first is not None:
+            cut = first  # the first call with the id: its line's calls ahead of it are the newest
+            top = cut[1]
+    for begin, end, raw in lines.having_back(needles, floor, top):
+        uses = cut[2] if cut is not None and begin == cut[0] else _uses(raw, names)
+        for block in reversed(uses):
+            yield begin, end, block
+
+
+def _newlines(handle, stop: int) -> int:
+    """The newlines in the first ``stop`` bytes of an open file."""
+    handle.seek(0)
+    count, left = 0, stop
+    while left > 0:
+        piece = handle.read(min(left, 8 * _TAIL_CHUNK))
+        if not piece:
+            break
+        count += piece.count(b"\n")
+        left -= len(piece)
+    return count
 
 
 def _records(transcript_path: str | Path) -> list[tuple[int, dict]]:
@@ -293,24 +381,88 @@ def _records(transcript_path: str | Path) -> list[tuple[int, dict]]:
     return records
 
 
+def _last_opener(data: bytes, lo: int, hi: int, commands: frozenset):
+    """(begin, end, (command, args)) of the last human-typed harness command
+    among the whole lines of data[lo:hi], or None. Lines are read from the end
+    and decoded only when they hold a user record and no tool result (a tool
+    result is never typed)."""
+    pos = data.rfind(_USER_WORD, lo, hi)
+    while pos >= 0:
+        newline = data.rfind(b"\n", lo, pos)
+        begin = newline + 1 if newline >= 0 else lo
+        end = data.find(b"\n", pos, hi)
+        end = hi if end < 0 else end
+        if (any(data.find(needle, begin, end) >= 0 for needle in _USER_RECORD)
+                and data.find(_RESULT_BLOCK, begin, end) < 0):
+            record = _decode(data[begin:end])
+            opener = stop_contract.span_opener(record, commands) if record else None
+            if opener:
+                return begin, end, opener
+        pos = data.rfind(_USER_WORD, lo, begin)
+    return None
+
+
+def _piece(handle, base: int, chunk: int) -> bytes | None:
+    """The ``chunk`` bytes before offset ``base`` (fewer at the start of the
+    file); None when the file no longer holds them (it shrank since it was
+    sized)."""
+    start = max(0, base - chunk)
+    handle.seek(start)
+    piece = handle.read(base - start)
+    return piece if len(piece) == base - start else None
+
+
 def active_span(transcript_path: str | Path, commands: frozenset | None = None) -> Span | None:
     """The active span, or None when no human-typed harness command opened one
     or the transcript cannot be read. ``commands`` defaults to this harness's
-    commands/*.md stems."""
+    commands/*.md stems.
+
+    The last opener is the first one a reader from the end meets, so the
+    transcript is read from its end, in chunks that double, until a chunk
+    holds it: the lines before the span are neither read nor decoded."""
     commands = stop_contract.harness_commands() if commands is None else commands
     try:
-        lines = _Lines(_read(transcript_path))
+        handle = open(transcript_path, "rb")
+        info = os.fstat(handle.fileno())
+        # A file with no end to read from (not a regular file) is read whole.
+        data, base = (b"", info.st_size) if stat.S_ISREG(info.st_mode) else (handle.read(), 0)
     except (OSError, TypeError, ValueError):
         return None
-    span = None
-    # A tool result is never typed.
-    for number, end, raw in lines.having(_USER_RECORD, unless=_RESULT_BLOCK):
-        record = _decode(raw)
-        opener = stop_contract.span_opener(record, commands) if record else None
-        if opener:
-            span = Span(command=opener[0], args=opener[1], start_line=number,
-                        transcript_path=str(transcript_path), data=lines.data, floor=end + 1)
-    return span
+    found, chunk, scanned = None, _TAIL_CHUNK, len(data)  # data[scanned:] holds no opener
+    while True:
+        if base == 0:
+            found = _last_opener(data, 0, scanned, commands)
+            break
+        try:
+            piece = _piece(handle, base, chunk)
+            if piece is None:  # read it whole, as one read of it would have
+                handle.seek(0)
+                data = handle.read()
+                base, scanned = 0, len(data)
+                continue
+        except (OSError, ValueError):
+            handle.close()
+            return None
+        data, base, scanned, chunk = piece + data, base - len(piece), scanned + len(piece), chunk * 2
+        if base == 0:
+            continue
+        newline = data.find(b"\n", 0, scanned)  # the line before it may start in an earlier chunk
+        if newline < 0:
+            continue
+        found = _last_opener(data, newline + 1, scanned, commands)
+        if found:
+            break
+        scanned = newline + 1
+    if not found:
+        handle.close()
+        return None
+    begin, end, (command, args) = found
+    if base == 0:
+        handle.close()
+        return Span(command=command, args=args, start_line=1 + data.count(b"\n", 0, begin),
+                    transcript_path=str(transcript_path), data=data, floor=end + 1)
+    return Span(command=command, args=args, start_line=None, transcript_path=str(transcript_path),
+                data=data, floor=end + 1, base=base, ahead=(handle, begin))
 
 
 EDIT_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",

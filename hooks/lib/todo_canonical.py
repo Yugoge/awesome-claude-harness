@@ -289,7 +289,7 @@ class Checklist:
         reading it later raises nothing checklist() would have raised."""
         if self._todos is _UNREAD:
             self._todos = next((new for _call, new in _ok_lists(
-                self.span.iter_calls('TodoWrite', newest_first=True, before=self._before))), None)
+                self.span.uses('TodoWrite', newest_first=True, before=self._before))), None)
         return self._todos
 
     @property
@@ -300,6 +300,13 @@ class Checklist:
         if self._writes is None:
             self._writes = _accepted_writes(_ok_lists(self.span.calls('TodoWrite'), self._before))[1]
         return self._writes
+
+    @property
+    def write_uses(self):
+        """writes as command_span.Use records (results by offset, no line
+        numbers), for a reader that only orders them: a span read from the end
+        of a long transcript then never counts the lines before it."""
+        return _accepted_writes(_ok_lists(self.span.uses('TodoWrite'), self._before))[1]
 
     @property
     def command(self):
@@ -359,5 +366,5 @@ def checklist(transcript_path, before=None):
     # caller that guards checklist() must see that inside the call. With no ok
     # list the rules run on nothing, as when the newest list is None.
     accepted = any(
-        not initial_status_violations(new) for _call, new in _ok_lists(span.iter_calls('TodoWrite', before=before)))
+        not initial_status_violations(new) for _call, new in _ok_lists(span.uses('TodoWrite', before=before)))
     return Checklist(span, canonical, _UNREAD, accepted, before=before)
