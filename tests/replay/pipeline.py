@@ -327,7 +327,8 @@ class Orchestrator:
             return prompt[:lit.start()] + self._block(ob) + prompt[lit.end():]
         lines = prompt.split("\n")
         for i, line in enumerate(lines):
-            m = re.search(r"embed `<obligation v=\"1\">\{\.\.\.\}</obligation>` here with (.*)$", line)
+            # "here with" (the dev.md templates) or "with" (dev-overnight.md's bullet and inline dispatches)
+            m = re.search(r"embed `<obligation v=\"1\">\{\.\.\.\}</obligation>` (?:here )?with (.*)$", line)
             if not m:
                 continue
             spec = m.group(1)

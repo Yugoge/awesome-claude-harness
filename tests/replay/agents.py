@@ -172,7 +172,7 @@ def brief(prompt: str, project: str) -> Brief:
     inputs, seen = [], set()
     for line in prompt.split("\n"):
         im = _INPUT_RE.match(line)
-        if not im or im.group(1).lower().startswith("write"):  # an output instruction, not an input
+        if not im or im.group(1).lower().startswith(("write", "output")):  # an output instruction, not an input
             continue
         path = expand(im.group(2), project)
         if path not in seen and path != first:
