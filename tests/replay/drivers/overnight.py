@@ -174,9 +174,16 @@ DEVIATIONS = Deviations([
 #                    that variable (hooks/lib/claude_home.py project_dir, else the harness home), which
 #                    the CLI's Bash does not export (E5), so /stop unlocks nothing and the time-lock
 #                    keeps the session from ending.
+#   R6 stop sentinel dir  the same call gains CLAUDE_USERINTENT_SENTINEL_DIR (the helper's own override)
+#                    set to the replay's state root: the base's break-overnight-lock.py reads the
+#                    helper-auth token from the literal /tmp (the historical state root), while the
+#                    user-intent guard writes it under CLAUDE_STATE_DIR, which rule 8 moves off /tmp;
+#                    without it the base's /stop withholds isolation_released_at in every replay.
 STOP_RESPELLINGS = [
     Respelling("R5 stop wrapper", r"(?<![\w=\"] )(?<![\w=])bash ~/\.claude/hooks/stop\.sh",
                devdrv.PROJECT_ROOT_PREFIX + "bash ~/.claude/hooks/stop.sh", "commands/stop.md Implementation"),
+    Respelling("R6 stop sentinel dir", r"(?m)^(?!CLAUDE_USERINTENT_SENTINEL_DIR=)(.*\bbash ~/\.claude/hooks/stop\.sh)",
+               'CLAUDE_USERINTENT_SENTINEL_DIR="${CLAUDE_STATE_DIR:-/tmp}" \\1', "commands/stop.md Implementation"),
 ]
 
 
@@ -397,7 +404,7 @@ def _spec_updates(sub, brief, sections: dict, verdict: str = "pass") -> None:
         sub.edit(path, a, b, label=f"{sub.role} Edit spec sections")
 
 
-def report_work(content, reads=(), globs=(), extra=None):
+def report_work(content, reads=(), globs=()):
     """A PM or specialist run: Reads of what its agent text has it read (project files, Globbed
     reports), then its report: content for the declared artifact where its obligation names the
     path, else the file its prompt's output line names, written by the role itself."""
@@ -412,8 +419,6 @@ def report_work(content, reads=(), globs=(), extra=None):
                          label=f"{sub.role} Glob {pattern}")
             for f in (g.response.get("filenames") or []) if g.ok else []:
                 sub.read(f, label=f"{sub.role} Read {os.path.relpath(f, project)}")
-        if extra:
-            extra(sub, brief, player)
         doc = content() if callable(content) else content
         rel = _out_path(brief.prompt)
         declared = [a["path"] for a in (brief.obligation or {}).get("artifacts") or []]
@@ -475,7 +480,6 @@ class Night:
         self.o = NightOrchestrator(rp, "dev-overnight", deviations=devs, respellings=devdrv.RESPELLINGS,
                                    rules=self._rules())
         rp.deviation_at = self.o.devs.at  # the subagents' own calls take the same deviations by label
-        self.project = rp.layout.project
         self.sid = self.o.s.sid
         self.cycle = 0
         self.state: dict = {}
@@ -645,7 +649,8 @@ class Night:
 
     def dispatch(self, fields: dict, act: agents.Act, label: str, task_id: str, atype=None, pipe: Pipe | None = None):
         fields = dict(fields, prompt=self.prep(fields["prompt"], pipe),
-                      description=fill_curly(fields.get("description", ""), pipe.rec if pipe else None, {}))
+                      description=fill_curly(fields.get("description", ""), pipe.rec if pipe else None,
+                                             {"N": self.n}))
         return self.o.dispatch(fields, act, self.L + label, task_id, subagent_type=atype)
 
     def git(self, cmd: str) -> str:
@@ -1223,7 +1228,7 @@ class Night:
             path = os.path.join(self.project, self.log_rel)
             old = agents.peek(self.rp, "main", path)
             self.write(self.log_rel, old.rstrip("\n") + f"\n\n**End-of-cycle commit**: failed ({cc.error.splitlines()[0][:200]}); "
-                       "refs/checkpoints/* snapshots remain.\n", "Step 19 Edit cycle log (commit failure)")
+                       "refs/checkpoints/* snapshots remain.\n", "Step 19 Write cycle log (commit failure)")
 
     def step20(self) -> None:
         o = self.o
@@ -1291,9 +1296,12 @@ class Night:
         st = Orchestrator(self.rp, "stop", session=s, deviations=self.o.devs,
                           respellings=STOP_RESPELLINGS if self.base_kit else ())
         st.slash("", label="/stop")
+        out = []
         for name, b, _ in st.step_blocks("Implementation"):
-            st.run_text(b.text, f"/stop Bash {name}", "Release the overnight time-lock")
-        s.stop("Overnight time-lock released (/stop). The working branch, the state record and the cycle log "
+            c = st.run_text(b.text, f"/stop Bash {name}", "Release the overnight time-lock")
+            out.append((c.response.get("stdout", "") if c.ok else c.error).strip())
+        said = "\n".join(x for x in out if x)
+        s.stop(f"/stop ran the release wrapper:\n{said}\nThe working branch, the state record and the cycle log "
                "are left for review.", label="/stop Stop", deviation=self.o.devs.at("/stop Stop"))
 
     def run(self) -> None:
