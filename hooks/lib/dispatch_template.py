@@ -112,6 +112,31 @@ def _parsed_fences(text: str) -> tuple:
     return found
 
 
+def _fill(line: str, fixed: list[str], i: int = 0, pos: int | None = None) -> list[str] | None:
+    """The values a template line binds in a prompt line: the line read as
+    ^fixed[0](.+?)fixed[1](.+?)...fixed[-1]$, each value as re.match finds it
+    (the shortest that lets the rest match, at least one character); None when
+    the line does not read so. Matched by hand, not by a compiled pattern: a
+    tool-policy run reads every dispatch of the session against its template,
+    and compiling each template line's pattern was most of what that cost. A
+    prompt line holds no newline (str.splitlines), so every character counts."""
+    if pos is None:
+        if not line.startswith(fixed[0]):
+            return None
+        pos = len(fixed[0])
+    following = fixed[i + 1]
+    if i + 2 == len(fixed):  # the last value runs to the text after it, which ends the line
+        end = len(line) - len(following)
+        return [line[pos:end]] if end > pos and line.endswith(following) else None
+    at = line.find(following, pos + 1)
+    while at >= 0:
+        rest = _fill(line, fixed, i + 1, at + len(following))
+        if rest is not None:
+            return [line[pos:at]] + rest
+        at = line.find(following, at + 1)
+    return None
+
+
 def _matched_lines(template: str, prompt: str) -> list[list[tuple[str, str]]]:
     """The template lines some prompt line matches, each as the (placeholder,
     value) pairs it binds. A line with no fixed word matches nothing: it would
@@ -122,27 +147,26 @@ def _matched_lines(template: str, prompt: str) -> list[list[tuple[str, str]]]:
         text = raw.strip()
         if not re.search(r"\w", _PLACEHOLDER_RE.sub("", text)):
             continue
-        names, parts, pos = [], [], 0
-        for i, m in enumerate(_PLACEHOLDER_RE.finditer(text)):
-            parts.append(re.escape(text[pos:m.start()]) + f"(?P<g{i}>.+?)")
+        names, fixed, pos = [], [], 0
+        for m in _PLACEHOLDER_RE.finditer(text):
+            fixed.append(text[pos:m.start()])
             names.append(m.group(1))
             pos = m.end()
-        # Early exits, each a condition every line the pattern matches meets:
-        # it equals a line that holds no placeholder, and it starts with the
-        # text before the first placeholder and ends with the text after the
-        # last; a template line no prompt line can match is never compiled.
+        fixed.append(text[pos:])
+        # Early exits, each a condition every line the template line matches
+        # meets: it equals a line that holds no placeholder, and it starts with
+        # the text before the first placeholder and ends with the text after
+        # the last.
         if not names:
             if text in lines:
                 found.append([])
             continue
-        head, tail = text[:_PLACEHOLDER_RE.search(text).start()], text[pos:]
-        if not any(line.startswith(head) and line.endswith(tail) for line in lines):
+        if not any(line.startswith(fixed[0]) and line.endswith(fixed[-1]) for line in lines):
             continue
-        pattern = re.compile("^" + "".join(parts) + re.escape(text[pos:]) + "$")
         for line in lines:
-            match = pattern.match(line)
-            if match:
-                found.append([(name, match.group(f"g{i}").strip()) for i, name in enumerate(names)])
+            values = _fill(line, fixed)
+            if values is not None:
+                found.append([(name, value.strip()) for name, value in zip(names, values)])
                 break
     return found
 
