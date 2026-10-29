@@ -216,7 +216,7 @@ close_awaiting_input() {
 
 ```
 
-**`source_check` values** (the one check that produced the finding): the route-select / resolver run or a QA bullet. The command builds each entry itself with `close_required_action`.
+**`source_check` values** (the one check that produced the finding): the route-select / resolver run, the artifact schema gate, an inspector report validation, or a QA bullet. The command builds each entry itself with `close_required_action`.
 
 **Awaiting-input (R1-b / R6) — closed cause set.** The ONLY causes that wait are: (i) a human-only authorized operation (deletion, `/allow`, freeing `/tmp`, a rule-conflict ruling, or a hook rejection, which pauses per Subagent Hook Discipline and is never retried or worked around); (ii) an environment fault (R14) that needs a human action; (iii) pre-cycle argument or usage input the human must correct or supply (an invalid flag combination, `--auto` with a task-id / `--force` / `--reason`, `--late-repair` with `--force`, no resolvable task-id). Any other cause is routed (the loop below), never waited on. While waiting, NOTHING lands as complete: no `CLOSE:` line of any kind, no `CLOSE_FINDINGS:` line, and no close-report section is written; the wait is signalled by the single `AWAITING_INPUT:` line, and a consumer tells a wait from a landed verdict by the absence of any `CLOSE:` line. When the awaited input arrives, the loop resumes at the same step in place.
 
@@ -224,7 +224,7 @@ close_awaiting_input() {
 
 Applies identically at EVERY site that records a finding with
 `close_route_finding` (Step 0, the do-report lite preflight, the cp-state
-handoff, and every Step 2
+handoff, the artifact schema gate, Step 1's missing-report check, and every Step 2
 verdict branch below), whenever `REQUIRED_ACTIONS_JSON` is a non-empty array.
 There is no repair engine and no repetition bound: the loop is bounded only by
 the R15 progress measure.
@@ -383,6 +383,64 @@ When `SPEC_ID` is non-empty, `/close` MUST hand the QA subagent
 `$CP_DIR/cp-state-qa.json`; this is what makes the close gate participate in the
 same check-in/checklist chain as `/dev`.
 
+### Artifact schema gate (interactive schema validation — closes the §13 asymmetry)
+
+The structural preflight (Step 0's chain call above) is a hand-rolled shape check. It does NOT run the JSON-Schema validators (`schemas/dev-report.v1.json` / `schemas/qa-report.v1.json`) that the `/dev-overnight` contract path applies via `hooks/lib/contract_runtime.py`. Historically that made interactive `/dev` artifacts categorically exempt from schema validation (ARCHITECTURE.md §13). This gate removes that exemption using the SAME `contract_runtime` engine (Draft7Validator) — it does NOT touch the overnight contract machinery.
+
+Run the gate over the exact normal-path `ARTIFACT_CHAIN.report_paths[]`; this is
+the canonical dev + QA pair for singular mode and the canonical aggregate plus
+every lane dev/QA report (and a validated optional parent QA if present) for
+fan-out mode. Do not synthesize a parent QA input. Paths are relative to the
+resolver's `--project-dir`; the harness code + schemas live under `~/.claude`. Populate
+`REPORT_PATHS` directly from the retained JSON, preserving order:
+
+```bash
+mapfile -t REPORT_PATHS < <(python3 -c \
+  'import json,sys; print(*json.loads(sys.argv[1])["report_paths"], sep="\n")' \
+  "$ARTIFACT_CHAIN")
+source ~/.claude/venv/bin/activate 2>/dev/null || true
+SCHEMA_GATE_OUT="$(python3 -c '
+import sys, os
+sys.path.insert(0, os.path.expanduser("~/.claude/hooks"))
+from lib import contract_runtime as cr
+rc = 0
+for p in sys.argv[1:]:
+    r = cr.validate_report_artifact(p)
+    if r["status"] == "fail":
+        rc = 2
+        print("SCHEMA-GATE FAIL:", p, "->", r["schema"])
+        for e in r["errors"]:
+            print("   -", e)
+    else:
+        print("SCHEMA-GATE " + r["status"].upper() + ":", p, "(" + (r.get("reason") or r.get("schema") or "") + ")")
+sys.exit(rc)
+' "${REPORT_PATHS[@]}")"
+SCHEMA_GATE_RC=$?
+printf '%s\n' "$SCHEMA_GATE_OUT"
+```
+
+Blocking semantics:
+- **Non-zero (`SCHEMA-GATE FAIL`)**: a report DECLARED a schema version (`report_version`) but VIOLATED its schema. Each `SCHEMA-GATE FAIL:` line names the offending report path; each is a finding on that path, routed by the Routing loop to the dispatch that owes the report, which fixes the named field(s):
+
+  ```bash
+  if [ "$SCHEMA_GATE_RC" -ne 0 ]; then
+    while IFS= read -r FAILED_REPORT; do
+      close_route_finding "$FAILED_REPORT" "artifact schema gate reported SCHEMA-GATE FAIL for this report" "artifact schema gate (contract_runtime.validate_report_artifact)"
+    done < <(sed -n 's/^SCHEMA-GATE FAIL: \([^ ]*\) ->.*/\1/p' <<<"$SCHEMA_GATE_OUT")
+  fi
+  ```
+
+  Inspector dispatch (Step 1) proceeds once the routing loop has re-run the gate and it passes.
+- **Exit 0 (`SCHEMA-GATE PASS` / `SKIP`)**: proceed.
+  `validate_report_artifact()` is version-gated and no-ops (never fail-closed)
+  for an artifact kind with no registered schema, unparseable JSON
+  already rejected by the structural resolver, or an unversioned legacy record.
+  Every required dev/QA report in a fan-out chain is nevertheless presented to
+  this gate through `report_paths`; an optional parent report is omitted only
+  when the resolver says it is absent and optional.
+
+`/close --force` is deprecated and no longer short-circuits before this gate (see "Forced-override path" above) — this gate always runs on the normal path.
+
 ### Step 1: Agent dispatch — three inspectors (orchestrator authority — `commands/close.md` itself, NOT QA)
 
 **TodoWrite ordering reminder (task 20260519-211515 R3 / AC3)**: TodoWrite mark-as-in_progress for step N must precede any Agent() call dispatched within step N.
@@ -421,7 +479,9 @@ result: a parallel cycle is detected exactly when
 
 **Wait** for all three Agent tool calls to return. Each inspector writes its findings JSON to its assigned report path; the orchestrator does not re-interpret or re-aggregate those findings here — Step 2's QA dispatch passes the three concrete report paths as inputs and QA applies the AC-2.6 verdict-plumbing logic against them.
 
-**Transient-failure retry (both dispatch branches).** Inspector dispatch over the API can hit transient infrastructure errors — `529 Overloaded`, `Server is temporarily limiting requests` / rate-limited, or a subagent that returns with 0 tokens and no report written. These are NOT inspection results. When an inspector returns such a transient error, RE-DISPATCH that ONE inspector (same prompt — not the others) up to 3 times with escalating backoff (~5s, ~15s, ~30s) before giving up. If the 3 retries still fail transiently, that is an environment fault (R14): the defined wait (`close_awaiting_input`), never a silent advisory. A substantive (non-transient) inspector result — including one that reports findings or returns a clean verdict — is NEVER retried. Sequential branch: retry the current inspector before moving to the next. Parallel branch: after the initial batch returns, re-dispatch only the inspector(s) that failed transiently.
+**Transient-failure retry (both dispatch branches).** Inspector dispatch over the API can hit transient infrastructure errors — `529 Overloaded`, `Server is temporarily limiting requests` / rate-limited, or a subagent that returns with 0 tokens and no report written. These are NOT inspection results. When an inspector returns such a transient error, RE-DISPATCH that ONE inspector (same prompt — not the others) up to 3 times with escalating backoff (~5s, ~15s, ~30s) before giving up. If the 3 retries still fail transiently, that inspector's report is simply still missing and is handled by the missing/invalid-report check immediately below — performed by the orchestrator, before Step 2 ever dispatches QA — never silently treated as advisory. A substantive (non-transient) inspector result — including one that reports findings or returns a clean verdict — is NEVER retried. Sequential branch: retry the current inspector before moving to the next. Parallel branch: after the initial batch returns, re-dispatch only the inspector(s) that failed transiently.
+
+**Missing/invalid-report re-dispatch (orchestrator-owned, before Step 2 — 20261001-161041-r11 / AC5).** After the dispatch above (including the Transient-failure retry) completes for all three inspectors, the orchestrator — never QA, which has no inspector-dispatch authority per the Authority note at the top of this Step — checks each inspector's own report path for existence and schema-validity, reusing `hooks/lib/contract_runtime.validate_artifact_for_obligation()`'s existing fail/pass semantics under that inspector's own obligation-named path + registered schema id (`style-inspector-report.v1`, `cleanliness-inspector-report.v1`, `prompt-inspector-report.v1` respectively — `fail` on a missing or schema-invalid report, `pass` on a present, shape-matching one). For any inspector whose report fails that check, the orchestrator records an unresolved finding on that inspector's own report path (`close_route_finding "<inspector report path>" "report missing or schema-invalid" "inspector report validation"`; the Routing loop's declaring-dispatch reader answers with that inspector's own dispatch) and re-dispatches that SAME inspector (same prompt template, same `<obligation v="1">` block, a fresh `dispatched_at`) before Step 2 ever dispatches QA, then re-runs the same validation. A re-dispatch whose report bytes and unresolved set are unchanged is `no_progress`: the orchestrator arbitrates by diagnosing why the inspector keeps producing no valid report, and a persistent environment-class cause (R14) is the defined wait (`close_awaiting_input`). QA is not dispatched while an inspector report is still unresolved — never a silent advisory downgrade. This re-dispatch is entirely a Step 1 / orchestrator action; it does not loosen QA's documented lack of inspector-dispatch authority (preserved verbatim below and at this Step's Authority note), and it does not require flipping either `CLAUDE_OBLIGATION_GATE` or `CLAUDE_OBLIGATION_STOPGATE` out of their advisory-first defaults.
 
 The three concrete inspector report paths produced by Step 1 — for verbatim cross-reference by Step 2's QA dispatch prompt — are:
 
@@ -508,7 +568,7 @@ Round 1:
       - `docs/dev/style-inspector-report-<TASK_ID>.json`
       - `docs/dev/cleanliness-inspector-report-<TASK_ID>.json`
       - `docs/dev/prompt-inspector-report-<TASK_ID>.json`
-      **DO NOT attempt to dispatch inspector subagents — you do not have that authority; the orchestrator already did Step 4.** Inspector dispatch is `/close`-orchestrator-only by design (`agents/style-inspector.md` etc. are auditors invoked at the orchestrator layer). Treat the JSON contents of the three report files above as input to the AC-2.6 verdict-plumbing rules below. Inspector findings DO NOT directly decide the verdict — `close.md`'s finding-routing rules at AC-2.6 govern when an inspector finding becomes a routed finding.
+      **DO NOT attempt to dispatch inspector subagents — you do not have that authority; the orchestrator already did Step 4.** Inspector dispatch is `/close`-orchestrator-only by design (`agents/style-inspector.md` etc. are auditors invoked at the orchestrator layer). Treat the JSON contents of the three report files above as input to the AC-2.6 verdict-plumbing rules below. Inspector findings DO NOT directly decide the verdict — `close.md`'s finding-routing rules at AC-2.6 govern when an inspector finding becomes a routed finding. If any of the three report files is still missing or unreadable when you read it here, that is not something for you to resolve: Step 1's own missing/invalid-report re-dispatch (see "Missing/invalid-report re-dispatch" above) already performed one bounded re-dispatch of that specific inspector — by the orchestrator, before QA's debate in this Step 2 dispatch began. You still have NO authority to invoke the inspector yourself (this Step's Authority note, close.md:420, preserved verbatim). Report the still-missing/unreadable report as an unresolved finding (path = that report's path) so the orchestrator routes it to the dispatch that owes it and a fresh round re-judges — instead of treating it as empty/advisory input to the AC-2.6 finding-routing rules.
 
   1b'. Invoke the Skill tool with skill=codex. Pass codex a prompt that includes:
       - The same input artifact paths

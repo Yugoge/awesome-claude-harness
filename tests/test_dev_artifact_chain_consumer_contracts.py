@@ -62,10 +62,11 @@ def test_close_resolves_explicit_and_bare_before_singular_assumptions() -> None:
 
 def test_close_reuses_resolver_for_qa_and_workflow_integrity() -> None:
     text = _read("commands/close.md")
+    schema = text[text.index("### Artifact schema gate") : text.index("### Step 1:")]
     qa_prompt = text[text.index("### Step 2:") : text.index("### Step 3:")]
 
-    # Report schemas are checked at each producer's stop (G2), not re-run here.
-    assert "### Artifact schema gate" not in text
+    assert "ARTIFACT_CHAIN.report_paths[]" in schema
+    assert '"report_paths"' in schema
     assert "Lane matrix: <ARTIFACT_CHAIN.lanes" in qa_prompt
     assert "QA inputs: <ARTIFACT_CHAIN.qa_inputs" in qa_prompt
     assert "commit_whitelist_artifacts" in qa_prompt
