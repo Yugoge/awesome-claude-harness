@@ -144,7 +144,7 @@ OPTIONS_XML_PATTERNS = (
 )
 OPTIONS_XML_HEADER = (
     "orchestrator must not dispatch <options> blocks during overnight; "
-    "choose autonomously or park the pipeline and skip."
+    "pick one path and execute it."
 )
 OPTIONS_XML_LABEL = "options-xml block (overnight forbids)"
 
@@ -269,10 +269,8 @@ def _scan_prompt(prompt: str):
 
 
 _OPTIONS_XML_REMEDY = (
-    "describe the work autonomously: pick one path,\n"
-    "            execute it, or park the pipeline (Hard Rule 5)\n"
-    "            and skip to the next pipeline. Defer all user-input\n"
-    "            questions to the end-of-overnight summary."
+    "describe the work autonomously: pick one path and\n"
+    "            execute it."
 )
 _GENERIC_REMEDY = (
     "describe the desired end-state (problem, constraints,\n"
