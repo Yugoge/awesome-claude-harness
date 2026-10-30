@@ -26,10 +26,13 @@ GITIGNORE="$GIT_ROOT/.gitignore"
 # If no .gitignore exists, exit without modifying anything
 [[ -f "$GITIGNORE" ]] || exit 0
 
+# The one writer of a project's .gitignore appends each rule it does not hold yet.
+HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RULE_ARGS=()
 for rule in "${HARNESS_RULES[@]}"; do
-  if ! grep -qF "$rule" "$GITIGNORE"; then
-    printf '# harness-propagated by session-gitignore-propagate.sh\n%s\n' "$rule" >> "$GITIGNORE"
-  fi
+  RULE_ARGS+=(--rule "$rule")
 done
+bash "$HARNESS_DIR/scripts/update-gitignore.sh" "$GIT_ROOT" \
+  --comment "harness-propagated by session-gitignore-propagate.sh" "${RULE_ARGS[@]}" >/dev/null || true
 
 exit 0

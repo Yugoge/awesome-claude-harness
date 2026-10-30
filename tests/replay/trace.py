@@ -233,6 +233,7 @@ class _Reducer:
         # before its parent's fork call is reported complete).
         self.forks: dict[int, list] = {}  # child pid -> parent pid of each fork returning it, in order
         self.lives: dict[int, int] = {}   # pid -> lifetimes started so far
+        self.forked: dict[int, int] = {}  # pid -> forks returning it reported so far
         self.root_pid: int | None = None
         self.events = []    # [comp, op, path, step, inst, extra]
         self.inst_of: dict[str, int] = {}
@@ -265,7 +266,10 @@ class _Reducer:
 
         def rel(x):
             if x and not x.startswith("/") and p.cwd:
-                x = os.path.normpath(os.path.join(p.cwd, x))
+                x = os.path.join(p.cwd, x)
+            # normalized first: `$DIR/../venv/bin/python3` is the venv's interpreter, not a
+            # harness file of its own
+            x = os.path.normpath(x) if x else x
             return x[len(h) + 1:] if x and x.startswith(h + "/") and not x.startswith(h + "/venv/") else None
 
         if rel(filename):
@@ -337,6 +341,8 @@ class _Reducer:
 
     def feed(self, pid: int, name: str, args: str, ret: int, tail: str, start: int = 0) -> None:
         if name == EXIT:
+            if pid not in self.procs:
+                self.proc(pid)  # a lifetime that made no traced call before its exit still was one
             self.procs.pop(pid, None)
             return
         p = self.proc(pid)
@@ -346,7 +352,13 @@ class _Reducer:
             p.cwd = cwd
         if name in _FORKS:
             if ret > 0:
-                self.proc(ret)  # the child, as its parent was when it forked (unless it ran already)
+                # the child, as its parent was when it forked, unless it ran already: a child can
+                # run, and even exit, before its parent's fork is reported, and that fork then
+                # starts no lifetime of its own (a phantom one would hand every later lifetime of
+                # the pid the wrong fork, and so no parent)
+                self.forked[ret] = self.forked.get(ret, 0) + 1
+                if self.lives.get(ret, 0) - (ret == self.root_pid) < self.forked[ret]:
+                    self.proc(ret)
         elif name in ("execve", "execveat"):
             k = 1 if name == "execveat" else 0
             script = self.script_of(p, _cstr(a[k] if len(a) > k else "") or "", _argv(a[k + 1] if len(a) > k + 1 else ""))

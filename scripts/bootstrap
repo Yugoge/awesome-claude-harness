@@ -362,12 +362,13 @@ else
   exit 1
 fi
 
-if _exists "$LITERALS"; then echo "bootstrap: private-literals.txt exists"
-elif (umask 077 && set -o noclobber && : > "$LITERALS") && chmod 0600 "$LITERALS"; then
-  echo "bootstrap: created private-literals.txt (empty, mode 0600; one private literal per line)"
-else
-  echo "bootstrap: could not create $LITERALS" >&2; exit 1
-fi
+# The list's one writer, render-settings' (the landing seeds an empty list from it too), which
+# also says whether one was there already.
+case "$(python3 "$RENDERER" literals)" in
+  exists) echo "bootstrap: private-literals.txt exists" ;;
+  created) echo "bootstrap: created private-literals.txt (empty, mode 0600; one private literal per line)" ;;
+  *) echo "bootstrap: could not create $LITERALS" >&2; exit 1 ;;
+esac
 
 # Path and keys come from hooks/lib/runtime_guard/config.py itself
 # (CLAUDE_PROTECTED_RUNTIME_FILE, else $HOME/.config/claude/protected-runtime.json).

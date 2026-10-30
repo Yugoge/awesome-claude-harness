@@ -49,8 +49,15 @@ from lib import obligation
 # Only enforce for QA agents
 ENFORCED_AGENT_TYPE = "qa"
 
-# Statuses that allow QA to stop
-PASSING_STATUSES = {"performed", "ran", "blocked_app_unavailable", "legitimately_skipped"}
+# The one status that does not let QA stop: a skip with no reason. Every other
+# value of the qa-report.v2 vocabulary (the schema's e2e_enforcement.status
+# enum, read through obligation's schema reader) lets it stop; a value outside
+# that vocabulary, or none, does not.
+UNJUSTIFIED_STATUS = "skipped_without_justification"
+
+
+def _passing_statuses() -> frozenset[str]:
+    return obligation._schema_enum("qa-report.v2", "qa.e2e_enforcement.status") - {UNJUSTIFIED_STATUS}
 
 
 def _load_stdin() -> dict:
@@ -190,8 +197,9 @@ def _enforce_e2e_status(
         sys.exit(2)
 
     status = e2e.get("status", "")
+    passing = _passing_statuses()
 
-    if status in PASSING_STATUSES:
+    if status in passing:
         # For legitimately_skipped, blocking_reason should be populated
         # but we do not hard-block on missing blocking_reason (advisory check only)
         return

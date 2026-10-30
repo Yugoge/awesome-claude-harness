@@ -217,7 +217,7 @@ def _derive(root: Path, chain_script: str) -> StaticResult:
     records += _owner_outputs(root, files, findings, sh, py, hook_regs)
     records += D.policy_prefixes(root, files)
     records += _literal_sites(root, py, sh, decls, obligations)
-    records += _rule7(findings, roster, commands, schema_decls, obligations)
+    records += _rule7(findings, roster, commands, schema_decls, obligations, read_text)
     records += [{"kind": "file", "file": f, "lang": lang, "status": st, "detail": det}
                 for f, lang, st, det in findings.files]
     # handlers that turn an exception into a block (exit 2 or a block decision)
@@ -909,7 +909,7 @@ def _declared_paths(obligations: list) -> list[tuple]:
     for ob in obligations:
         for a in ob.get("artifacts") or []:
             if a.get("path"):
-                out.append((a["path"], ob.get("role"), ob["site"]))
+                out.append((a["path"], ob.get("role"), ob["site"], a.get("schema") or ""))
     return out
 
 
@@ -921,12 +921,12 @@ def _key_matches(key: str, declared: list) -> list:
     if "/" in core and not core.startswith(("docs/", ".claude/", "tests/")):
         return []
     hits = []
-    for pat, role, site in declared:
+    for pat, role, site, schema in declared:
         base = pat.rsplit("/", 1)[-1]
         lit = re.sub(r"<[a-z*]+>", "", base)
         globbed = re.sub(r"<[a-z*]+>", "*", base)
         if core in lit or core in pat or _fnmatch(k, globbed):
-            hits.append((pat, role, site))
+            hits.append((pat, role, site, schema))
     return hits
 
 
@@ -935,13 +935,32 @@ def _fnmatch(name: str, pattern: str) -> bool:
     return fnmatch.fnmatchcase(name, pattern) or fnmatch.fnmatchcase(pattern, name)
 
 
-def _rule7(findings: M.Findings, roster: list, commands: list, schema_decls: list, obligations: list) -> list[dict]:
+def _names_schema(text: str, schema: str) -> bool:
+    """The code names the schema's documents: by the schema's id (qa-report.v2) or by the stem of
+    that id (qa-report), the name of the artifact family the schema declares."""
+    stem = re.sub(r"\.v\d+$", "", schema)
+    return bool(re.search(r"(?<![\w-])" + re.escape(stem) + r"(?![\w])", text))
+
+
+def _rule7(findings: M.Findings, roster: list, commands: list, schema_decls: list, obligations: list,
+           read_text=None) -> list[dict]:
     names = {r["name"] for r in roster}
     cmds = {c["name"] for c in commands}
     enums = [(e["schema"], e["pointer"], e["site"], {v for v in e["values"] if isinstance(v, str)})
              for e in schema_decls if e["type"] == "schema_enum"]
     enums = [e for e in enums if len(e[3]) >= 2]
+    props = {e["id"]: set(e.get("properties") or ()) for e in schema_decls if e["type"] == "schema"}
     declared = _declared_paths(obligations)
+    texts: dict = {}
+
+    def text_of(comp: str) -> str:
+        f = comp.split("#", 1)[0]
+        if f not in texts:
+            try:
+                texts[f] = read_text(f) if read_text else ""
+            except OSError:
+                texts[f] = ""
+        return texts[f]
     out = []
     for lf in findings.literals:
         comp = lf.component
@@ -965,13 +984,20 @@ def _rule7(findings: M.Findings, roster: list, commands: list, schema_decls: lis
                 match = "subset"
             else:
                 continue
+            if read_text is not None and not _names_schema(text_of(comp), schema):
+                # code that names neither the schema nor the artifact family it declares handles
+                # none of its documents: its literal is a vocabulary of its own that shares words
+                # with the enum (a status rank, a roster), not a copy of it
+                continue
             out.append({"kind": "rule7", "class": "enum_copy", "component": comp, "site": site, "shape": lf.shape,
                         "schema": schema, "pointer": ptr, "enum_site": esite, "match": match,
                         "values": sorted(inter)})
         for k, v in lf.pairs:
             if v is None or v not in names or k is None:
                 continue
-            hits = _key_matches(k, declared)
+            # a value the declared artifact's schema names as one of its properties is the field
+            # the code reads in that document (the dev report's `dev` object), not a role
+            hits = [h for h in _key_matches(k, declared) if v not in props.get(h[3], ())]
             if hits:
                 out.append({"kind": "rule7", "class": "path_to_role", "component": comp, "site": site,
                             "shape": lf.shape, "key": k, "role": v,

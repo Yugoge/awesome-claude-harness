@@ -30,6 +30,8 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
   seed --claude-home PATH [MODULE=on|off ...]
                      write a NEW overlay holding the modules and env.CLAUDE_HOME: init's
                      (scripts/bootstrap) overlay when it migrates nothing.
+  literals           create the private-literal list <H>/private-literals.txt, empty and mode
+                     0600, when there is none: init's (scripts/bootstrap); the landing seeds it.
   land [--rev | --repair]
                      the settings half of the landing (scripts/install/land, at every Stop, on a
                      home that ran pre-P7 code): undo what a conflicted pull left in the index,
@@ -1234,6 +1236,25 @@ def cmd_seed(home, claude_home, specs):
     return 0
 
 
+def cmd_literals(home):
+    """init's private-literal list (scripts/bootstrap): an empty list, owner-only, when there is
+    none; the landing seeds an absent or empty one (seed_literals). This file is the list's one
+    writer. O_EXCL never clobbers a list the owner already keeps."""
+    target = os.path.join(home, LITERALS)
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        print("exists")
+        return 0
+    except OSError as exc:
+        _err("literals: %s" % type(exc).__name__)
+        return 1
+    os.close(fd)
+    os.chmod(target, 0o600)
+    print("created")
+    return 0
+
+
 # -------------------------------------------------------------------------------------- land
 
 DOC_SYNC_LINE = re.compile(rb"^(\*Last updated: [^*]*\*|> Last updated: .*)$")  # doc-sync's dates
@@ -1561,6 +1582,7 @@ def main(argv=None):
     p_seed = sub.add_parser("seed", help="write a new overlay: the modules and env.CLAUDE_HOME")
     p_seed.add_argument("--claude-home", required=True, metavar="PATH")
     p_seed.add_argument("modules", nargs="*", metavar="MODULE=on|off")
+    sub.add_parser("literals", help="create the empty private-literal list, mode 0600 (init)")
     p_land = sub.add_parser("land", help="the settings half of the landing (P7b)")
     p_land.add_argument("--rev", dest="mode", action="store_const", const="rev")
     p_land.add_argument("--repair", dest="mode", action="store_const", const="repair")
@@ -1576,6 +1598,8 @@ def main(argv=None):
         return cmd_check_staged(home) if args.staged else cmd_check(home)
     if args.command == "seed":
         return cmd_seed(home, args.claude_home, args.modules)
+    if args.command == "literals":
+        return cmd_literals(home)
     if args.command == "land":
         try:
             return cmd_land(home, args.mode)

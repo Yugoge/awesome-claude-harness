@@ -90,6 +90,8 @@ _HAND = re.compile(r"\b(by hand|manually|(user|owner|human|operator|you)\b[^\n]{
 # `${DIR}/x-$ID.json`, `x-*.log`)
 _TEXT_PATH = re.compile(r"[\w.$<>{}*-]*[\w>}*]\.[A-Za-z0-9]{1,6}\b")
 _TEXT_HOLE = re.compile(r"<[^<>\s]+>|\$\{[^}\s]+\}|\$\w+|\*")
+# a call that loads a module from a file path
+_LOAD_BY_PATH = re.compile(r"\b(spec_from_file_location|SourceFileLoader|run_path|load_sibling_module)\b")
 
 
 # ---------------------------------------------------------------- inputs
@@ -411,7 +413,14 @@ class _Ctx:
                 # fan-out lane's); a named family
                 # (claude-<*>-userintent-<sid>.flag) is each member, those only code names too. A
                 # write keyed by an id stays with the one instance it matches, or none: which
-                # task's file a writer makes is the run's, not the pattern's
+                # task's file a writer makes is the run's, not the pattern's. A writer of a named
+                # family that the replays show writing some of its members writes those: the run
+                # shows which of them its code makes (the fan-out's aggregate, not the lanes'
+                # reports beside it)
+                if op == "write":
+                    mine = [h for h in hits if any(w.source == "runtime" and w.who == comp_identity(r["component"])
+                                                   for w in m.artifacts[h].writers)]
+                    hits = mine or hits
                 for h in hits:
                     staged.append((r, op, h))
                 if "<*>" in pat and literal_root(pat):
@@ -567,17 +576,57 @@ class _Ctx:
 
         return {t: rels_ for t, rels_ in own.items() if not scratch(t, rels_)}
 
-    def _loads(self, component: str, lib: str) -> bool:
-        """The component's text sources or imports `lib` (a shell `source`/`.`, a Python import)."""
+    def _loads(self, component: str, lib: str, depth: int = 3) -> bool:
+        """The component's code runs `lib`'s in its own process: its text sources or imports `lib`
+        (a shell `source`/`.` of the file, or of a variable assigned its path; a Python import), or
+        loads it by its file name (importlib's spec_from_file_location, runpy), or a library it
+        imports or sources does (a writer function reached through a library is still that
+        function, rows 11 and 14)."""
         if not component.startswith(("hooks/", "scripts/")) or not lib.startswith(("hooks/", "scripts/")):
             return False
+        key = (component, lib, depth)
+        cache = self.__dict__.setdefault("_loads_seen", {})
+        if key not in cache:
+            cache[key] = False      # a cycle of imports loads nothing new
+            cache[key] = self._loads_directly(component, lib) or depth > 0 and any(
+                self._loads(mid, lib, depth - 1) for mid in self._loaded_libs(component))
+        return cache[key]
+
+    def _loads_directly(self, component: str, lib: str) -> bool:
         text = self._text(component)
         base = lib.rsplit("/", 1)[-1]
         stem = base.rsplit(".", 1)[0] if "." in base else base
         if base.endswith(".sh") or "." not in base:
-            return bool(re.search(r"(^|[\s;&|])(source|\.)\s+[^\n]*" + re.escape(base), text, re.M))
-        return bool(re.search(r"^\s*(from\s+[\w.]*\b" + re.escape(stem) + r"\b|import\s+[\w., ]*\b"
-                              + re.escape(stem) + r"\b)", text, re.M))
+            if re.search(r"(^|[\s;&|])(source|\.)\s+[^\n]*" + re.escape(base), text, re.M):
+                return True
+            # `. "$LIB"` where LIB is assigned the library's path
+            for var in re.findall(r"(?:^|[\s;&|])(?:source|\.)\s+\"?\$\{?(\w+)", text, re.M):
+                if re.search(r"(?:^|[\s;])(?:local\s+)?" + re.escape(var) + r"=[^\n]*" + re.escape(base), text, re.M):
+                    return True
+            return False
+        if re.search(r"^\s*(from\s+[\w.]*\b" + re.escape(stem) + r"\b|import\s+[\w., ]*\b"
+                     + re.escape(stem) + r"\b|from\s+[\w.]+\s+import\s+[\w., (]*\b" + re.escape(stem) + r"\b)",
+                     text, re.M):
+            return True
+        # a module loaded by its file name: the name within a few lines of the loading call
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
+            if _LOAD_BY_PATH.search(line) and any(base in x for x in lines[max(0, i - 3):i + 1]):
+                return True
+        return False
+
+    def _loaded_libs(self, component: str) -> list[str]:
+        """The tree's library files a component imports or sources by name."""
+        cache = self.__dict__.setdefault("_libs_of", {})
+        if component not in cache:
+            cache[component] = [f for f in self._libs() if f != component and self._loads_directly(component, f)]
+        return cache[component]
+
+    def _libs(self) -> list[str]:
+        if not hasattr(self, "_lib_files"):
+            self._lib_files = sorted(f for f in self.tree_files if f.startswith(("hooks/lib/", "scripts/lib/"))
+                                     and f.endswith((".py", ".sh")) and "/tests/" not in f)
+        return self._lib_files
 
     def _frames(self, r: dict) -> list[str]:
         """file:function of each frame of a relation's chain, outermost first."""
@@ -780,7 +829,8 @@ class _Ctx:
                     hits = [pat]
                     m.art(pat)
                 for k in hits:
-                    rec = {"role": ob.get("role"), "site": ob["site"], "schema": art.get("schema") or ""}
+                    rec = {"role": _bound_role(ob.get("role"), art.get("template") or "", k), "site": ob["site"],
+                           "schema": art.get("schema") or ""}
                     if rec not in m.artifacts[k].declared:
                         m.artifacts[k].declared.append(rec)
         # D21: the obligation that declares a file names its producer. A role writes it with its
@@ -1207,6 +1257,21 @@ def _local_layer(key: str, tree_files: set) -> bool:
     return bool(m) and (m.group(1) + (m.group(2) or "")) in tree_files
 
 
+def _bound_role(role, template: str, key: str):
+    """D21: a template that declares its role by a placeholder its path also holds
+    (role="<specialist.type>", ".../<specialist.type>-report.json": one template for every
+    specialist it dispatches) declares, for each file it matches, the role that placeholder takes
+    in that file's name; a role the path does not bind stays as declared."""
+    if not (isinstance(role, str) and re.fullmatch(r"<[^<>]+>", role) and role in template):
+        return role
+    tail = re.sub(r"^<[a-z]+>/", "", key)
+    parts = re.split(r"(<[^<>]+>)", template)
+    rx = "".join("(?P<role>[^/<>]+?)" if p == role and "(?P<role>" not in "".join(parts[:i]) else
+                 "[^/]+?" if re.fullmatch(r"<[^<>]+>", p) else re.escape(p) for i, p in enumerate(parts))
+    hit = re.fullmatch(rx, tail)
+    return hit.group("role") if hit else role
+
+
 def _text_names(line: str, name: str) -> bool:
     """The line writes the file name `name` as a template: a path whose varying parts are
     placeholders (`claude-allow-daemon-restart-<target>.flag` names
@@ -1274,19 +1339,24 @@ def _state_tail(key: str) -> str | None:
 
 def _private_scratch(events: list[dict]) -> set:
     """Rule (1): raw paths one hook run (one origin, one event) creates and removes, whichever
-    of its processes does each: its private scratch."""
-    made, gone, other = {}, {}, set()
+    of its processes does each: its private scratch. A name a temp-name generator minted
+    (<rand>) is known only to the run that minted it, so a file under such a name that only that
+    run touched is its scratch also when the run did not remove it (a run stopped before its
+    cleanup)."""
+    made, gone, other, minted = {}, {}, set(), set()
     for e in events:
         run = (e["origin"], e["event"])
         if e["op"] == "create":
             made.setdefault(e["raw"], set()).add(run)
+            if "<rand>" in e["pattern"]:
+                minted.add(e["raw"])
         elif e["op"] == "unlink":
             gone.setdefault(e["raw"], set()).add(run)
     for e in events:
         if e["op"] in ("read", "write") and e["raw"] in made and (e["origin"], e["event"]) not in made[e["raw"]]:
             other.add(e["raw"])     # another run touched it: not private
     return {raw for raw, runs in made.items() if raw not in other and len(runs) == 1
-            and gone.get(raw) == runs and next(iter(runs))[0]}
+            and (gone.get(raw) == runs or raw in minted and raw not in gone) and next(iter(runs))[0]}
 
 
 def _targets(inv: dict) -> set:
@@ -1354,8 +1424,9 @@ def violations(m: Map, static_records: list | None = None) -> list[Violation]:
         prods = a.producers()
         writers_txt = [f"{p}: " + ", ".join(sorted({w.evidence for w in a.writers if w.who == p})[:3]) for p in prods]
         # goal 1 / rule (1): one producer
-        if len(prods) > 1:
-            out.append(Violation("1-producers", key, f"{len(prods)} producers", writers_txt,
+        producing = _producing(a)
+        if len(producing) > 1:
+            out.append(Violation("1-producers", key, f"{len(producing)} producers", writers_txt,
                                  evidence=_ev(a.writers, 8)))
         # D21: the producer is the role the declaring obligation names
         roles = sorted({"agent:" + d["role"] for d in a.declared if d.get("role")})
@@ -1457,6 +1528,35 @@ def _rule_groups(ds: list) -> list[str]:
     for w in sorted(sites):
         groups.setdefault(find(w), []).append(w)
     return sorted("+".join(g) for g in groups.values())
+
+
+def _producing(a: Artifact) -> list[str]:
+    """Rule (1)'s producers of an artifact, each counted once:
+    - a script or hook whose every write of a declared artifact ran inside the call of the role
+      the declaration names (the fan-out's aggregate, written by the hook the lane's dev report
+      sets off; QA's close-report section, appended by the helper QA runs) is that role's write
+      path, not a producer of its own (D21: the declared role owns it, and G2 returns it there);
+    - a file of the user's project that was there at replay start, that no declaration names and
+      no harness code writes, and that only the roles' own tool calls write, is the task's work
+      product, whichever role the command gives the work (dev under /dev, the main agent under
+      /do or in a session with no command): one producer, the task's work."""
+    prods = a.producers()
+    roles = sorted({"agent:" + d["role"] for d in a.declared if d.get("role")})
+    if roles and a.kind == "file":
+        mapped = set()
+        for p in prods:
+            if p not in roles and _runs_for(a, p, roles):
+                acts = {w.actor for w in a.writers if w.who == p and w.source == "runtime"}
+                mapped |= acts
+            else:
+                mapped.add(p)
+        prods = sorted(mapped)
+    if len(prods) > 1 and a.kind == "file" and a.key.startswith("<proj>/") and not a.declared and a.writers and all(
+            w.source == "runtime" and RUNTIME_ROLE.match(w.who) and w.who != "cli"
+            and getattr(w, "raw", None) and w.raw in getattr(getattr(w, "run", None), "manifest", ())
+            for w in a.writers):
+        return ["the task's work (" + ", ".join(prods) + ")"]
+    return prods
 
 
 def _runs_for(a: Artifact, producer: str, roles: list[str]) -> bool:

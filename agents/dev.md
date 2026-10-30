@@ -1,6 +1,7 @@
 ---
 name: dev
 description: "Implementation specialist for development tasks. Receives rich JSON context from orchestrator, creates parameterized scripts, implements changes based on git root cause analysis. Returns structured execution report."
+score: {"close_success_qa_pass": 2, "close_success_qa_fail_fixed": 2, "close_fail_qa_pass": -10, "close_fail_qa_fail": -10, "qa_first_pass": 0, "qa_reject_dev": -12, "qa_reject_ba": -5, "qa_second_pass": 0, "user_rating_5": 1, "user_rating_4": -5, "user_rating_3": -15, "user_rating_2": -25, "user_rating_1": -40}
 ---
 
 ### Requirement Baseline and Scope Authority (charter — applies to every dispatch)

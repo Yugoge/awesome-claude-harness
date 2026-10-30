@@ -280,8 +280,10 @@ def schemas(root: Path, files: list[str]) -> list[dict]:
             if sid.endswith(".json"):
                 sid = sid[:-5]
         sid = reg_ids.get(f, sid) or f.rsplit("/", 1)[-1][:-5]
+        props = doc.get("properties") if isinstance(doc, dict) else None
         out.append({"kind": "declaration", "type": "schema", "id": sid, "site": f"{f}:1",
-                    "registered": f in reg_ids})
+                    "registered": f in reg_ids,
+                    "properties": sorted(props) if isinstance(props, dict) else []})
         enum_lines = [text.count("\n", 0, m.start()) + 1 for m in re.finditer(r'"enum"\s*:', text)]
         found: list = []
         _walk_enums(doc, "", found)

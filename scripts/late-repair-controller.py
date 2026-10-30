@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import uuid
@@ -52,10 +53,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from sibling_loader import load_sibling_module, sha256_bytes  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from hooks.lib.obligation import declaring_dispatch  # noqa: E402  (who owes a report)
+from hooks.lib.obligation import command_templates, declaring_dispatch  # noqa: E402  (who owes a report)
 
 ROUTE = "R4-late-repair"
-STAGE_ORDER = ("ba", "dev", "qa")
+# The route runs the /dev cycle's dispatches that produce the chain's reports again.
+CYCLE_COMMAND = "dev"
+
+
+def stage_order(root: Path, task_id: str) -> tuple[str, ...]:
+    """The route's stages, in order: the role of each dispatch template of the
+    /dev cycle (commands/dev.md, in text order) that declares one of the
+    chain's reports for this task (the resolver's parent paths), each role
+    once. The templates are the declaration of who produces which report and
+    in which order the cycle runs them; no list of roles is kept here."""
+    resolver = load_sibling_module("resolve-dev-artifact-chain.py", __file__)
+    reports = {resolver._rel(path, root)
+               for path in resolver._parent_paths(root / "docs" / "dev", task_id).values()}
+    order: list[str] = []
+    for template in command_templates(CYCLE_COMMAND):
+        role = template.get("role")
+        for artifact in template.get("artifacts") or []:
+            path = artifact.get("path") if isinstance(artifact, dict) else None
+            if (isinstance(role, str) and isinstance(path, str) and role not in order
+                    and re.sub(r"<[^<>/]+>", task_id, path) in reports):
+                order.append(role)
+    return tuple(order)
 
 
 def _load_sibling_module(name: str) -> ModuleType:
@@ -269,8 +291,9 @@ def cmd_record_stage(ns: argparse.Namespace) -> int:
         return _refuse("no active late-repair run record for this task", 3)
     if record.get("repair_run_id") != ns.repair_run_id:
         return _refuse("repair-run-id does not match the active run record", 3)
-    if ns.stage not in STAGE_ORDER:
-        return _refuse(f"unknown stage: {ns.stage!r}", 2)
+    stages = stage_order(root, ns.task_id)
+    if ns.stage not in stages:
+        return _refuse(f"unknown stage: {ns.stage!r} (stages: {', '.join(stages) or 'none declared'})", 2)
     if (
         record.get("original_cycle_at") is None
         and _dev_report_missing_at_init(root, ns.task_id, record)
@@ -278,8 +301,8 @@ def cmd_record_stage(ns: argparse.Namespace) -> int:
         return _fail_closed_no_evidence(_run_record_path(root, ns.task_id), record, ns.stage)
     if ns.stage in record["stages"]:
         return _refuse(f"stage {ns.stage!r} already recorded for this repair_run_id", 3)
-    index = STAGE_ORDER.index(ns.stage)
-    for earlier in STAGE_ORDER[:index]:
+    index = stages.index(ns.stage)
+    for earlier in stages[:index]:
         if earlier not in record["stages"]:
             return _refuse(f"stage {ns.stage!r} recorded before {earlier!r}", 4)
 
@@ -318,7 +341,10 @@ def cmd_finalize(ns: argparse.Namespace) -> int:
         return _refuse("no active late-repair run record for this task", 3)
     if record.get("repair_run_id") != ns.repair_run_id:
         return _refuse("repair-run-id does not match the active run record", 3)
-    for stage in STAGE_ORDER:
+    stages = stage_order(root, ns.task_id)
+    if not stages:
+        return _refuse("no stage declared: no /dev dispatch template declares a report of the chain", 3)
+    for stage in stages:
         if stage not in record["stages"]:
             return _refuse(f"stage {stage!r} not yet recorded", 3)
 
@@ -417,7 +443,7 @@ def cmd_verify_disclosure(ns: argparse.Namespace) -> int:
     # file when it wrote it, and the report is taken only from the outcome
     # and path it recorded (resolve_effective_report_state).
     targets: list[tuple[Path, str | None]] = []
-    for stage in STAGE_ORDER:
+    for stage in stage_order(root, ns.task_id):
         info = record.get("stages", {}).get(stage)
         if info:
             targets.append((root / info["report_path"], info.get("sha256")))
@@ -519,7 +545,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_stage = sub.add_parser("record-stage")
     p_stage.add_argument("--task-id", required=True)
     p_stage.add_argument("--project-dir", required=True)
-    p_stage.add_argument("--stage", required=True, choices=STAGE_ORDER)
+    p_stage.add_argument("--stage", required=True, help="the stage's role (see stage_order)")
     p_stage.add_argument("--report-path", required=True)
     p_stage.add_argument("--repair-run-id", required=True)
     p_stage.set_defaults(func=cmd_record_stage)

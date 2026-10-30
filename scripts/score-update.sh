@@ -230,39 +230,43 @@ import datetime
 sys.path.insert(0, sys.argv[9])
 from score_log import ScoreLogError, read_lines
 sys.path.insert(0, sys.argv[10])
-from roster import roles
 
-# Canonical event delta table (spec 5.1).
-# Path A rebalance (task 20260524-205206 M1, cycle-total <= +5 across {dev,ba,qa}):
-# - qa_first_pass / qa_second_pass zeroed (per-iteration nudges collapsed into close events)
-# - close_success_qa_pass / close_success_qa_fail_fixed reduced to cross-agent sum = 4
-# - user_rating_5 kept at {dev:1,ba:0,qa:0} so the cycle scenario
-#   (qa_first_pass + close_success_qa_pass + user_rating_5) sums to 0+4+1 = 5
-# - All negative-valued entries UNCHANGED (user directive: minimum stays -40)
-# manual_reversal (task 20260529-210616 M1/M1b): all-zeros row exists only so the
-#   EVENT_DELTAS sum-sweep tests trivially pass (NG1). Actual delta comes from
-#   --delta CLI param or computed -target.delta in --undo mode. Caller-supplied
-#   --event manual_reversal is ALWAYS rejected at the shell layer (M1b).
-EVENT_DELTAS = {
-    "close_success_qa_pass":       {"dev": 2,  "ba": 1,  "qa": 1},
-    "close_success_qa_fail_fixed": {"dev": 2,  "ba": 1,  "qa": 1},
-    "close_fail_qa_pass":          {"dev": -10, "ba": -5, "qa": -12},
-    "close_fail_qa_fail":          {"dev": -10, "ba": -5, "qa": 0},
-    "qa_first_pass":               {"dev": 0,  "ba": 0,  "qa": 0},
-    "qa_reject_dev":               {"dev": -12, "ba": 0,  "qa": 0},
-    "qa_reject_ba":                {"dev": -5, "ba": -8, "qa": 0},
-    "qa_second_pass":              {"dev": 0,  "ba": 0,  "qa": 0},
-    "user_rating_5":               {"dev": 1,  "ba": 0,  "qa": 0},
-    "user_rating_4":               {"dev": -5, "ba": -3, "qa": -3},
-    "user_rating_3":               {"dev": -15, "ba": -8, "qa": -8},
-    "user_rating_2":               {"dev": -25, "ba": -12, "qa": -12},
-    "user_rating_1":               {"dev": -40, "ba": -20, "qa": -20},
-    "manual_reversal":             {"dev": 0,  "ba": 0,  "qa": 0},
-}
+# Each role's score delta per event (spec 5.1; Path A rebalance, task
+# 20260524-205206 M1: cycle-total <= +5 across the scored roles, negatives
+# unchanged, minimum -40) is declared in that role's own agent file, the
+# `score:` mapping of agents/<role>.md's front matter. An agent is one of the
+# roster (agents/*.md with front matter), read here; no list of agent names or
+# table of their deltas is kept in this script. An event is known when an
+# agent file declares it; an agent whose file declares no delta for it moves
+# by 0. manual_reversal (task 20260529-210616 M1/M1b) is internal: its delta
+# comes from --delta or the --undo target, and a caller-supplied --event
+# manual_reversal is ALWAYS rejected (shell layer, and below).
+import roster
+agents = roster.roles()
 
-# An agent is one of the roster (agents/*.md with front matter), read here;
-# no list of agent names is kept in this script.
-agents = roles()
+
+def declared_scores(agent_name):
+    try:
+        lines = (roster.AGENTS_DIR / f"{agent_name}.md").read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if line.startswith("score:"):
+            try:
+                value = json.loads(line[len("score:"):])
+            except ValueError:
+                return {}
+            if isinstance(value, dict):
+                return {k: v for k, v in value.items() if isinstance(v, int) and not isinstance(v, bool)}
+            return {}
+    return {}
+
+
+SCORES = {name: declared_scores(name) for name in sorted(agents)}
+KNOWN_EVENTS = {event for declared in SCORES.values() for event in declared} | {"manual_reversal"}
+
 if agent not in agents:
     sys.stderr.write(
         f"score-update.sh: unknown agent '{agent}'. "
@@ -276,10 +280,10 @@ mode = "event" if event else ("delta" if delta_str else "undo")
 
 # Validate event name when in event mode
 if mode == "event":
-    if event not in EVENT_DELTAS:
+    if event not in KNOWN_EVENTS:
         sys.stderr.write(
             f"score-update.sh: unknown event '{event}'. "
-            f"Allowed events: {', '.join(sorted(k for k in EVENT_DELTAS.keys() if k != 'manual_reversal'))}\n"
+            f"Allowed events: {', '.join(sorted(k for k in KNOWN_EVENTS if k != 'manual_reversal'))}\n"
         )
         sys.exit(1)
     if event == "manual_reversal":
@@ -328,8 +332,7 @@ if expected_prev_score_str and mode in ("event", "delta"):
 
 # -------- Compute delta + final event label per mode --------
 if mode == "event":
-    delta_map = EVENT_DELTAS[event]
-    delta = delta_map.get(agent, 0)
+    delta = SCORES.get(agent, {}).get(event, 0)
     final_event = event
     final_reason = note or ""
 elif mode == "delta":
