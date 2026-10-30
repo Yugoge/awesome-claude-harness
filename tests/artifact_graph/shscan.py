@@ -391,11 +391,36 @@ class ShWalk:
         self.an.memo[key] = Unk("assembled:recursive")
         self.an.depth += 1
         try:
-            v = self._var_lookup(name, at)
+            v = self._past_guard(name, at, self._var_lookup(name, at))
         finally:
             self.an.depth -= 1
         self.an.memo[key] = v
         return v
+
+    def _past_guard(self, name: str, at, v: V.Val) -> V.Val:
+        """In the branch of an `if` whose test says the variable differs from a literal
+        (`[[ "$X" != "null" && ... ]]`, `[ "$X" != null ]`), the variable holds no such literal:
+        that alternative of its value names nothing there."""
+        if not isinstance(v, Str):
+            return v
+        excluded: set = set()
+        cur = at
+        for _ in range(200):
+            info = self.f.parent.get(id(cur))
+            if info is None:
+                break
+            _container, _idx, owner, slot = info
+            if isinstance(owner, S.If) and slot.startswith("body"):
+                for c in owner.clauses[int(slot[4:])][0]:
+                    excluded |= _differs_from(c, name)
+            if owner is None:
+                break
+            cur = owner
+        alts = [a for a in v.alts if a not in excluded]
+        if len(alts) == len(v.alts):
+            return v
+        # past the test only the values the static half could not name are left
+        return V.make_str(alts) if alts else Unk("dynamic")
 
     def _moves_args(self) -> bool:
         """The script's top level shifts, resets or parses its arguments (shift, set --,
@@ -1948,6 +1973,43 @@ def _direct_vars(word: S.Word) -> list:
             out.append(p.name)
             if p.arg is not None:
                 out += _direct_vars(p.arg)
+    return out
+
+
+def _differs_from(n, name: str) -> set:
+    """The literals a test node (a `[[ ]]`, a `[`/`test` command, or an and-list of them) says
+    $name differs from; none where an `||` or `-o` lets the test pass otherwise."""
+    if isinstance(n, S.AndOr):
+        if any(op != "&&" for op, _ in n.rest):
+            return set()
+        out: set = set()
+        for x in [n.first] + [x for _, x in n.rest]:
+            out |= _differs_from(x, name)
+        return out
+    if isinstance(n, S.Test):
+        words = list(n.words)
+    elif isinstance(n, S.Simple) and n.words and n.words[0].literal() in ("[", "test"):
+        words = list(n.words[1:])
+    else:
+        return set()
+    raws = [w.raw for w in words]
+    if "||" in raws or "-o" in raws:
+        return set()
+    out = set()
+    for i, w in enumerate(words):
+        is_var = len(w.parts) == 1 and isinstance(w.parts[0], S.Var) and w.parts[0].name == name \
+            and not w.parts[0].op and w.parts[0].index is None
+        if not is_var:
+            continue
+        rest = raws[i + 1:i + 4]
+        if rest[:1] == ["!="] and len(words) > i + 2:
+            lit = words[i + 2].literal()
+        elif rest[:2] == ["!", "="] and len(words) > i + 3:
+            lit = words[i + 3].literal()
+        else:
+            continue
+        if lit is not None:
+            out.add(lit)
     return out
 
 

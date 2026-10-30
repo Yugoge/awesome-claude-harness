@@ -84,8 +84,12 @@ from . import patterns as P
 
 RUNTIME_ROLE = re.compile(r"^(main|agent:.+|cli)$")
 ALLOWED = ("producer stop", "producer tool call", "own artifact", "G1", "G3", "own stop", "chain call", "library")
-_HAND = re.compile(r"\b(by hand|manually|(user|owner|human|operator|you)\b[^\n]{0,60}\b(creat|touch|add|write|place|put))",
-                   re.I)
+_HAND = re.compile(r"\b(by hand|manually|(user|owner|human|operator|you)\b[^\n]{0,60}\b(creat|touch|add|write|place|put)"
+                   r"|(user|owner|human|operator)-run\b)", re.I)
+# a path the text writes with its varying parts as placeholders (`claude-allow-<target>.flag`,
+# `${DIR}/x-$ID.json`, `x-*.log`)
+_TEXT_PATH = re.compile(r"[\w.$<>{}*-]*[\w>}*]\.[A-Za-z0-9]{1,6}\b")
+_TEXT_HOLE = re.compile(r"<[^<>\s]+>|\$\{[^}\s]+\}|\$\w+|\*")
 
 
 # ---------------------------------------------------------------- inputs
@@ -479,6 +483,19 @@ class _Ctx:
                 moves[k] = dest
             elif k in floating:
                 moves[k] = []
+        # a pattern that goes (it joined the runtime instances it matches, or it names no
+        # artifact) is no destination: a wider pattern narrowing to it joined those instances
+        # itself, and brought there it would come back as an artifact holding half the relations
+        gone = {k for k, dest in moves.items() if not dest}
+        for k, dest in list(moves.items()):
+            if set(dest) & gone:
+                kept = [h for h in dest if h not in gone]
+                if kept:
+                    moves[k] = kept
+                elif k in floating:
+                    moves[k] = []
+                else:
+                    del moves[k]
         for k, dest in moves.items():
             moved = own.pop(k)
             for h in dest:
@@ -735,13 +752,14 @@ class _Ctx:
         # or a message of the reader's tells whoever reads it to write the file (`use --baseline
         # <sha> or write a SHA into .claude-cycle-baseline-sha`)
         told = re.compile(r"\b(?:write|create|touch|put|add)\b[^\n]{0,40}" + re.escape(base), re.I)
+        name = key.rsplit("/", 1)[-1]
         for r in a.readers:
             comp = r.evidence.split(":", 1)[0] if r.source == "static" else r.who
             if not comp.startswith(("hooks/", "scripts/")):
                 continue
             lines = self._text(comp).splitlines()
             for i, line in enumerate(lines):
-                if base not in line:
+                if base not in line and not _text_names(line, name):
                     continue
                 # the sentence that names the file, which may run on to the next lines
                 para = " ".join(x.strip(" #*\"'") for x in lines[i:i + 4])
@@ -1187,6 +1205,21 @@ def _local_layer(key: str, tree_files: set) -> bool:
     settings' local layer); an input unless a trace event or a code site writes it."""
     m = re.match(r"^<(?:harness|proj)>/(.+?)\.local(\.[A-Za-z0-9]+)?$", key)
     return bool(m) and (m.group(1) + (m.group(2) or "")) in tree_files
+
+
+def _text_names(line: str, name: str) -> bool:
+    """The line writes the file name `name` as a template: a path whose varying parts are
+    placeholders (`claude-allow-daemon-restart-<target>.flag` names
+    claude-allow-daemon-restart-default.flag), with four or more characters of its own."""
+    for m in _TEXT_PATH.finditer(line):
+        last = m.group(0).rsplit("/", 1)[-1]
+        parts = _TEXT_HOLE.split(last)
+        if len(parts) < 2 or len("".join(parts).strip(".-_")) < 4:
+            continue
+        rx = "[^/]+".join(re.escape(p) for p in parts)
+        if re.fullmatch(rx, re.sub(r"<[a-z*]+>", "x", name)):
+            return True
+    return False
 
 
 def _family(pattern: str) -> bool:

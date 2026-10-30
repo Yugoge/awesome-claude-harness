@@ -797,3 +797,86 @@ def test_a_script_run_by_hand_prints_to_the_owner(tmp_path):
     assert "owner" in m.artifacts["<harness>/logs/watch-<*>.log"].consumers()
     assert "owner" in m.artifacts["<harness>/logs/watch-<*>.pid"].consumers()
     assert rule2(vs) == {("2-unread", "<harness>/logs/claude-helper.log")}
+
+
+def test_a_family_scan_follows_a_pattern_that_joined_its_runtime_instance(tmp_path):
+    """A writer's `claude-x-grant-<sid>-<nonce>.json` joins the one instance the replay made, and
+    a scan of `claude-x-grant-*.json` reads that instance too: the writer's own pattern goes with
+    the join, and the wider scan narrowing to it does not bring it back as an artifact that holds
+    the scan's reads and no writer."""
+    root = make_tree(tmp_path, {
+        "scripts/mint.py": hook('''
+            import secrets
+            sid = sys.argv[1]
+            p = harness_state_dir() + "/claude-x-grant-" + sid + "-" + secrets.token_hex(8) + ".json"
+            open(p, "w").write("{}")
+        '''),
+        "scripts/revoke.py": hook('''
+            import glob
+            for p in glob.glob(harness_state_dir() + "/claude-x-grant-*.json"):
+                if open(p).read():
+                    os.unlink(p)
+        '''),
+    })
+    st = derive(root)
+    run = _run([
+        ("scripts/mint.py", "create", "<state>/claude-x-grant-<sid>-<hex>.json", "/sbx/state/claude-x-grant-s-1.json"),
+        ("hooks/guard.py", "read", "<state>/claude-x-grant-<sid>-<hex>.json", "/sbx/state/claude-x-grant-s-1.json"),
+    ])
+    m = C.derive(str(root), st, [run])
+    vs = C.violations(m, st.records)
+    grants = sorted(k for k in m.artifacts if "claude-x-grant" in k)
+    assert grants == ["<state>/claude-x-grant-<sid>-<hex>.json"], grants
+    assert "scripts/revoke.py" in m.artifacts[grants[0]].consumers()
+    assert not rule2(vs)
+
+
+def test_a_file_a_human_run_tool_makes_is_an_input_its_reader_names_as_a_template(tmp_path):
+    """Rule (1): a file the reading code's own text says a person makes is an input, also where
+    the text names it as a template (`claude-x-allow-<target>.flag sentinel (human-run grant
+    helper)`) and the code reads one instance of it (`claude-x-allow-default.flag`). A file whose
+    reader's text names no maker stays read and never written."""
+    m, vs = check(make_tree(tmp_path, {"hooks/guard.sh": (
+        SH_STATE
+        + '# The $STATE/claude-x-allow-<target>.flag sentinel (human-run grant helper) grants one restart.\n'
+        + 'case "$1" in svc) target="default" ;; svc-*) target="${1#svc-}" ;; *) exit 2 ;; esac\n'
+        + 'f="$STATE/claude-x-allow-${target}.flag"\n[ -f "$f" ] || exit 2\ncat "$f"\n'
+        + 'cat "$STATE/claude-x-unmade-${target}.flag"\n'),
+        # the harness writes into that directory, so it is no directory nothing writes
+        "hooks/w.sh": SH_STATE + 'echo x > "$STATE/claude-x-state.json"\ncat "$STATE/claude-x-state.json"\n'}))
+    assert not [k for k in m.artifacts if "claude-x-allow" in k]
+    assert {a for r, a in rule2(vs)} and all("claude-x-unmade" in a for r, a in rule2(vs))
+
+
+def test_a_placeholder_of_a_few_words_is_a_placeholder(tmp_path):
+    """`--report "<resolved dev_report_path>"` in an agent's block passes the value the agent fills
+    in, as `<TASK_ID>` does: the script's option names no file called `<resolved dev_report_path>`
+    in the project, and stays the run's argument."""
+    root = make_tree(tmp_path, {
+        "scripts/stage.py": '''
+            import argparse
+            ap = argparse.ArgumentParser()
+            ap.add_argument("--report")
+            args = ap.parse_args()
+            print(open(args.report).read()[:10])
+        ''',
+        "agents/qa.md": ("---\nname: qa\n---\n# QA\n\n```bash\npython3 ~/.claude/scripts/stage.py "
+                         "--report \"<resolved dev_report_path>\"\n```\n"),
+    })
+    assert not [p for p in rel_paths(root) if "resolved" in p]
+    m, vs = check(root)
+    assert not [k for k in m.artifacts if "resolved" in k]
+
+
+def test_past_a_test_that_a_value_differs_from_a_literal_it_holds_no_such_literal(tmp_path):
+    """`X="null"` then `[[ "$X" != "null" && -n "$X" ]]`: the branch the test guards reads the
+    path the caller gave, never one called `null` (where the caller's value is unknown, nothing
+    the static half can name); outside the test `null` stays."""
+    root = make_tree(tmp_path, {"scripts/use.sh": (
+        'X="null"\n[ -n "$SPEC_FROM_CALLER" ] && X="$SPEC_FROM_CALLER"\n'
+        'if [[ "$X" != "null" && -n "$X" ]]; then cat "$CLAUDE_PROJECT_DIR/$X"; fi\n'
+        'if [ "$X" != null ]; then head -1 "$CLAUDE_PROJECT_DIR/docs/$X"; fi\n'
+        'wc -c "$CLAUDE_PROJECT_DIR/notes/$X"\n')})
+    paths = rel_paths(root, op="read")
+    assert "<proj>/null" not in paths and "<proj>/docs/null" not in paths
+    assert "<proj>/notes/null" in paths

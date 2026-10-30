@@ -17,7 +17,8 @@ from . import patterns as P
 SHELL_INFO = {"bash", "sh", "shell", "zsh", "console"}
 
 _FENCE = re.compile(r"^(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})(?P<info>[^\n`]*)$")
-_PLACEHOLDER = re.compile(r"<([A-Za-z_][A-Za-z0-9_.:-]*(?: or [^<>\n]{0,40})?)>")
+# `<TASK_ID>`, `<path or none>`, and a placeholder of a few words (`<resolved dev_report_path>`)
+_PLACEHOLDER = re.compile(r"<([A-Za-z_][A-Za-z0-9_.:-]*(?: or [^<>\n]{0,40}| [A-Za-z_][A-Za-z0-9_.:-]*(?: [A-Za-z_][A-Za-z0-9_.:-]*){0,3})?)>")
 # `{pipeline.index}`, `{REQUEST_ID}`: a brace with no comma or range is literal text to the
 # shell, so in a command block it is the template's placeholder
 _DOTTED_PH = re.compile(r"(?<![$\w])\{([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z0-9_.]+|[A-Z][A-Z0-9]*_[A-Z0-9_]+)\}")
