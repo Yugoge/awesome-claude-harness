@@ -117,6 +117,28 @@ def test_a_project_file_only_the_roles_edit_is_the_tasks_work(tmp_path):
     assert "1-producers" in rules_on(vs, key)
 
 
+def test_the_owners_edits_and_a_merge_a_role_runs_are_the_tasks_work_too(tmp_path):
+    """The owner commits on their project in their own terminal, and the main agent's tool call
+    runs the harness's merge wrapper, whose own code writes no file of the project (git puts the
+    merged content there): with the roles' edits, the file is still the task's work, one
+    producer. A script whose own code writes the file is a producer of its own."""
+    def tree(name: str, wrapper: str):
+        return make_tree(tmp_path / name, {"scripts/merge.sh": wrapper})
+    key = "<proj>/pkg/mod.py"
+    edits = _run([("agent:dev", "agent:dev", "write", "<project>/pkg/mod.py", "/p/pkg/mod.py")],
+                 manifest=["/p/pkg/mod.py"], name="dev")
+    merge = _run([("owner", "owner", "write", "<project>/pkg/mod.py", "/p/pkg/mod.py"),
+                  ("scripts/merge.sh", "main", "create", "<project>/pkg/mod.py", "/p/pkg/mod.py")],
+                 manifest=["/p/pkg/mod.py"], name="merge")
+    git_only = '#!/usr/bin/env bash\ngit checkout main\ngit merge "$1" --no-edit || exit 1\n'
+    m, vs = _derive(tree("git", git_only), [edits, merge])
+    assert m.artifacts[key].producers() == ["agent:dev", "owner", "scripts/merge.sh"]
+    assert "1-producers" not in rules_on(vs, key)
+    writes = git_only + 'printf "# merged\\n" >> "$CLAUDE_PROJECT_DIR/pkg/mod.py"\n'
+    _m2, vs2 = _derive(tree("writes", writes), [edits, merge])
+    assert "1-producers" in rules_on(vs2, key)
+
+
 # ------------------------------------------------------------------ rule (1): who writes
 
 def test_a_named_family_writer_writes_the_members_its_code_makes(tmp_path):

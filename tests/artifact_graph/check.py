@@ -87,6 +87,7 @@ from dataclasses import dataclass, field
 from . import patterns as P
 
 RUNTIME_ROLE = re.compile(r"^(main|agent:.+|cli)$")
+RULES = "|"     # joins the several code identities one decision's rule names (_rules)
 ALLOWED = ("producer stop", "producer tool call", "own artifact", "G1", "G3", "own stop", "chain call", "library")
 _HAND = re.compile(r"\b(by hand|manually|(user|owner|human|operator|you)\b[^\n]{0,60}\b(creat|touch|add|write|place|put)"
                    r"|(user|owner|human|operator)-run\b)", re.I)
@@ -1087,13 +1088,23 @@ class _Ctx:
         own function chain, or the read site."""
         lib = _library_read(d)
         if lib and d.get("whole"):
-            return lib
+            return self._function_of(lib)
         through = d.get("through") or []
         return (through[-1] if through else d["read_site"])
 
+    def _function_of(self, site: str) -> str:
+        """A library read site's code identity: the function of its file it lies in, since every
+        read one function makes (a stat, then the read) feeds that function's one verdict; the
+        site itself where it lies in no function."""
+        f, _, line = site.rpartition(":")
+        fn = self._function_at(f, int(line)) if line.isdigit() else ""
+        return f"{f}:{fn}" if fn else site
+
     def _rule_id(self, reader: str, key: str) -> str:
         """The code identity of a reader's deciding read: its static deciding read site, when the
-        static half finds exactly one read site of that artifact in that component's code."""
+        static half finds exactly one read site of that artifact in that component's code; the
+        functions of other files whose verdict it takes, when its reads of it run there (one or
+        several, each a rule it shares with every reader that takes that function's verdict)."""
         ck = ("rule", reader, key)
         if ck not in self.texts:
             if ("dec_by",) not in self.texts:
@@ -1103,10 +1114,11 @@ class _Ctx:
                         by.setdefault(comp_identity(d["component"]), []).append(d)
                 self.texts[("dec_by",)] = by
             mine = [d for d in self.texts[("dec_by",)].get(reader, ()) if d["path"] == key or matches(d["path"], key)]
-            sites = {self._static_rule(d) for d in mine}
-            # a reader whose reads of it all run in one function of another file takes its verdict
             libs = {self._static_rule(d) for d in mine if d.get("whole") and _library_read(d)}
-            self.texts[ck] = sorted(libs)[0] if len(libs) == 1 else sorted(sites)[0] if len(sites) == 1 else reader
+            # else the functions of its own code its reads of it run in: a library its callers load
+            # in-process decides by the same function when it runs as a process of its own
+            own = {self._function_of((d.get("read_through") or [d["read_site"]])[-1]) for d in mine}
+            self.texts[ck] = RULES.join(sorted(libs or own)) or reader
         return self.texts[ck]
 
     def _runners(self, script: str) -> set:
@@ -1134,6 +1146,21 @@ class _Ctx:
                 and pat[len("<proj>/"):] in self.tree_files:
             return "<harness>/" + pat[len("<proj>/"):]
         return pat
+
+    def version_control(self, component: str) -> bool:
+        """A harness script a tool call runs (no hook registration) whose own code, as the static
+        half reads it, writes no file of the user's project, resolved or not: what the trace shows
+        it writing there, a program it ran wrote (git's checkout or merge of what commits hold)."""
+        if self._registrations(component) != [("", "")] or not component.startswith(("hooks/", "scripts/")):
+            return False
+        key = ("vc", component)
+        if key not in self.texts:
+            self.texts[key] = not any(
+                r["kind"] in ("relation", "unresolved") and r.get("component") == component
+                and r.get("op") in ("write", "create", "rename")
+                and (r["kind"] == "unresolved" or str(r.get("path") or "").startswith("<proj>/"))
+                for r in self.recs)
+        return self.texts[key]
 
     def code_produced(self, a: Artifact) -> bool:
         """Rule (6)'s use. An artifact no obligation declares, that only code writes (a hook, a
@@ -1189,6 +1216,41 @@ class _Ctx:
                 out.add("agent:" + d["role"])
         return out
 
+    def _write_tools(self, a: Artifact) -> set:
+        """The tools of the calls in which the replays wrote the artifact, when every write of it is
+        a traced one inside a tool call: the producer's own tool calls, the only ones a hook on a
+        tool event can reject the write at (a hook on Bash never runs in the Agent call in which
+        the platform records a dispatch). Empty when some write is outside a tool call or untraced."""
+        out = set()
+        for w in a.writers:
+            run = getattr(w, "run", None)
+            if w.source != "runtime" or run is None:
+                return set()
+            inv = run.invocations.get(getattr(w, "seq", None)) or {}
+            t = (inv.get("payload") or {}).get("tool_name")
+            if inv.get("event") not in ("PreToolUse", "PostToolUse", "PostToolUseFailure") or not t:
+                return set()
+            out.add(t)
+        return out
+
+    def _own_run_reader(self, a: Artifact, component: str) -> bool:
+        """A script the artifact's producer runs on what it has just written: every traced read of
+        it by the script ran in a tool call of the actor whose own tool wrote it, after that write
+        and before the next prompt, so the script's refusal goes back to the producer in the run
+        that wrote it (E1's selection counts the calling actor's own artifact so). Its decision is
+        the producer checking its own output before using it: the producer side (rule (5)). A
+        read in a later command (a report one command writes and the next one reads) is not."""
+        reads = [r for r in a.readers if r.source == "runtime" and r.who == component]
+        if not reads or any(getattr(r, "run", None) is None for r in reads):
+            return False
+        for r in reads:
+            prompts = [s for s, inv in r.run.invocations.items() if inv.get("event") == "UserPromptSubmit"]
+            start = max([p for p in prompts if p <= r.seq], default=0)
+            if not any(w.source == "runtime" and getattr(w, "run", None) is r.run and w.who == r.actor
+                       and RUNTIME_ROLE.match(w.who) and start <= w.seq < r.seq for w in a.writers):
+                return False
+        return True
+
     def _position(self, a: Artifact, event: str, tool, agent_type, origin: str, kind: str, matcher=None) -> str:
         from tests.replay.hookrun import matches as hook_matches
         actors = self._producer_actors(a)
@@ -1201,7 +1263,7 @@ class _Ctx:
         if kind == "bash" or (not event and kind == "static"):
             if os.path.normpath(origin) == self.chain_script or origin == self.chain_script:
                 return "chain call"
-            return "elsewhere"
+            return "producer tool call" if self._own_run_reader(a, origin) else "elsewhere"
         if event == "SubagentStop":
             if agent_type is not None:
                 return "producer stop" if ("agent:" + agent_type) in actors or "*" in actors else "elsewhere"
@@ -1211,6 +1273,9 @@ class _Ctx:
             if is_agent:
                 return "G1" if event == "PreToolUse" else "G3"
             caller = ("agent:" + agent_type) if agent_type else ("main" if tool is not None else None)
+            tools = self._write_tools(a)
+            if tools and not any(t == tool if tool is not None else hook_matches(matcher, t) for t in tools):
+                return "elsewhere"
             if caller is not None:
                 return "producer tool call" if caller in actors or "*" in actors else "elsewhere"
             return "producer tool call" if actors else "elsewhere"
@@ -1505,7 +1570,7 @@ def violations(m: Map, static_records: list | None = None) -> list[Violation]:
         prods = a.producers()
         writers_txt = [f"{p}: " + ", ".join(sorted({w.evidence for w in a.writers if w.who == p})[:3]) for p in prods]
         # goal 1 / rule (1): one producer
-        producing = _producing(a)
+        producing = _producing(a, m.ctx)
         if len(producing) > 1:
             out.append(Violation("1-producers", key, f"{len(producing)} producers", writers_txt,
                                  evidence=_ev(a.writers, 8)))
@@ -1606,12 +1671,18 @@ def _library_read(d: dict) -> str | None:
     return sites[-1] if sites else None
 
 
+def _rules(d) -> set:
+    """The code identities a decision's rule names (_rule_id): one, or each library function a
+    reader measured by the differential decides through."""
+    return set((d.rule or d.who).split(RULES))
+
+
 def _rule_groups(ds: list) -> list[str]:
     """Deciders (components) grouped into rules: two are one rule when a deciding read of each is
     the same code site (both call the one function that reads and decides)."""
     sites: dict[str, set] = {}
     for d in ds:
-        sites.setdefault(d.who, set()).add(d.rule or d.who)
+        sites.setdefault(d.who, set()).update(_rules(d))
     parent = {w: w for w in sites}
 
     def find(x):
@@ -1633,16 +1704,19 @@ def _rule_groups(ds: list) -> list[str]:
     return sorted("+".join(g) for g in groups.values())
 
 
-def _producing(a: Artifact) -> list[str]:
+def _producing(a: Artifact, ctx=None) -> list[str]:
     """Rule (1)'s producers of an artifact, each counted once:
     - a script or hook whose every write of a declared artifact ran inside the call of the role
       the declaration names (the fan-out's aggregate, written by the hook the lane's dev report
       sets off; QA's close-report section, appended by the helper QA runs) is that role's write
       path, not a producer of its own (D21: the declared role owns it, and G2 returns it there);
     - a file of the user's project that was there at replay start, that no declaration names and
-      no harness code writes, and that only the roles' own tool calls write, is the task's work
-      product, whichever role the command gives the work (dev under /dev, the main agent under
-      /do or in a session with no command): one producer, the task's work."""
+      no harness code writes, and that only the people working on the project write, is the
+      task's work product, whichever role the command gives the work (dev under /dev, the main
+      agent under /do or in a session with no command): one producer, the task's work. They are
+      the roles' own tool calls, the owner in their own terminal, and version control a role's
+      tool call runs on the project (a script it ran whose own code writes no file of the
+      project: git's checkout or merge puts there what the commits hold, authored by the others)."""
     prods = a.producers()
     roles = sorted({"agent:" + d["role"] for d in a.declared if d.get("role")})
     if roles and a.kind == "file":
@@ -1655,8 +1729,11 @@ def _producing(a: Artifact) -> list[str]:
                 mapped.add(p)
         prods = sorted(mapped)
     if len(prods) > 1 and a.kind == "file" and a.key.startswith("<proj>/") and not a.declared and a.writers and all(
-            w.source == "runtime" and RUNTIME_ROLE.match(w.who) and w.who != "cli"
-            and getattr(w, "raw", None) and w.raw in getattr(getattr(w, "run", None), "manifest", ())
+            w.source == "runtime" and getattr(w, "raw", None)
+            and w.raw in getattr(getattr(w, "run", None), "manifest", ())
+            and (RUNTIME_ROLE.match(w.who) and w.who != "cli" or w.who == "owner"
+                 or ctx is not None and RUNTIME_ROLE.match(w.actor or "") and w.actor != "cli"
+                 and ctx.version_control(w.who))
             for w in a.writers):
         return ["the task's work (" + ", ".join(prods) + ")"]
     return prods
@@ -1686,7 +1763,7 @@ def _rechecks(a: Artifact, key: str, writers_txt: list, ctx=None) -> list[Violat
             return True
         return any(d.settings in ok and (how == "any" or d.how in (how, "any")) for d in side)
 
-    allowed_rules = {d.rule for d in a.decisions if d.position in ALLOWED and d.rule and d.rule != d.who}
+    allowed_rules = {r for d in a.decisions if d.position in ALLOWED and d.rule and d.rule != d.who for r in _rules(d)}
     groups: dict[tuple, list] = {}
     for d in outside:
         if d.settings in ("armed", "static-armed"):
@@ -1704,7 +1781,7 @@ def _rechecks(a: Artifact, key: str, writers_txt: list, ctx=None) -> list[Violat
             continue    # E4: the fault's only stop while its gate is advisory (listed by the map)
         elif ctx is not None and ctx.code_produced(a):
             continue    # rule (6)'s use: no gate can hold a rule on what only code writes
-        elif {d.rule for d in ds} & allowed_rules:
+        elif {r for d in ds for r in _rules(d)} & allowed_rules:
             continue    # rule (6)'s use: it takes the verdict of the one function a decider at an
             # allowed position decides by (row 13: every other deciding reader calls it and decides
             # its own action from what it returns)

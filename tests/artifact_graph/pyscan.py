@@ -83,6 +83,7 @@ class ReadInfo:
     mode: str
     line: int
     via: tuple = ()
+    verdict: frozenset = frozenset()    # fields of the returning function's own verdict (_verdict_keys)
 
 
 @dataclass
@@ -94,6 +95,7 @@ class Summary:
     raises: list = field(default_factory=list)          # [M.Decision] kind raise
     chain_returned: bool = False
     prints: list = field(default_factory=list)
+    verdict_keys: frozenset = frozenset()
 
 
 EMPTY = Summary()
@@ -1771,11 +1773,12 @@ class FunctionWalk:
             for shown in P.paths_in_text(P.shown_text(t)):
                 self.an.findings.outputs.append(M.OwnerOutput(self.mod.path, self.mod.ln(vnode), "system_message", shown))
 
-    def _emit(self, op: str, path: V.Val, mode: str, via: str, call, s, src: V.Val | None = None, chain=()) -> None:
+    def _emit(self, op: str, path: V.Val, mode: str, via: str, call, s, src: V.Val | None = None, chain=(),
+              verdict: frozenset = frozenset()) -> None:
         o = M.Op(self.mod.path, self.mod.ln(call), op, path, mode, via, "python", self.fname, src, tuple(chain), self.mod.origin)
         self.ops.append(o)
         if op == "read":
-            self.reads.append((call, ReadInfo(path, mode, self.mod.ln(call), tuple(chain))))
+            self.reads.append((call, ReadInfo(path, mode, self.mod.ln(call), tuple(chain), verdict)))
 
     def _visit_call(self, call: ast.Call, s) -> None:
         kind, a, b = self.callee(call, s)
@@ -1978,10 +1981,11 @@ class FunctionWalk:
             p = V.subst_val(e.path, binding)
             src = V.subst_val(e.src, binding) if e.src is not None else None
             chain = (f"{e.component}:{e.line}",) + tuple(e.chain)
-            self._emit(e.op, p, e.mode, e.via, call, s, src=src, chain=chain)
+            self._emit(e.op, p, e.mode, e.via, call, s, src=src, chain=chain, verdict=summ.verdict_keys)
         for r in summ.return_reads:
             p = V.subst_val(r.path, binding)
-            self.reads.append((call, ReadInfo(p, r.mode, ln, (f"{fi.module.path}:{r.line}",) + tuple(r.via))))
+            self.reads.append((call, ReadInfo(p, r.mode, ln, (f"{fi.module.path}:{r.line}",) + tuple(r.via),
+                                              summ.verdict_keys)))
         for d in summ.decisions:
             nd = M.Decision(d.kind, ln, d.code, fi.qual, (f"{fi.module.path}:{d.line}",))
             self.decisions.append((s, nd))
@@ -2122,6 +2126,7 @@ class FunctionWalk:
                     rets.append(self.ev(n.value, n))
             if rets:
                 self.summary.ret = V.union(rets)
+            self.summary.verdict_keys = _verdict_keys(self._stmts_in(fi.node.body))
         self._decide()
         self._chain_uses()
         dec_stmts = {id(st) for st, d in self.decisions if d.kind in ("exit2", "block")}
@@ -2163,16 +2168,14 @@ class FunctionWalk:
         tainted: dict[str, set] = {}
         body = self.body_statements()
         stmts = self._stmts_in(body)
-        call_ids = {id(c): i for i, (c, _) in enumerate(seeds)}
+        call_ids = _ids_by_call(seeds)
 
         def seeds_in(node) -> set:
             out = set()
             if node is None:
                 return out
             for n in ast.walk(node):
-                i = call_ids.get(id(n))
-                if i is not None:
-                    out.add(i)
+                out |= call_ids.get(id(n), set())
             return out
 
         assigns = []
@@ -2217,16 +2220,14 @@ class FunctionWalk:
             return
         an = self.an
         tainted = self._taint(reads)
-        call_ids = {id(c): i for i, (c, _) in enumerate(reads)}
+        call_ids = _ids_by_call(reads)
 
         def reads_of(node) -> set:
             out = set()
             if node is None:
                 return out
             for n in ast.walk(node):
-                i = call_ids.get(id(n))
-                if i is not None:
-                    out.add(i)
+                out |= call_ids.get(id(n), set())
                 if isinstance(n, ast.Name):
                     out |= tainted.get(n.id, set())
             return out
@@ -2243,19 +2244,28 @@ class FunctionWalk:
 
         # a test examines a part of a read's value when it subscripts it, takes an attribute of it
         # or `.get`s from it, or tests a name assigned from such a part: a test of the value whole
-        # (`if has_consent(p):`) uses the verdict the reading function returned (rule (4))
+        # (`if has_consent(p):`) uses the verdict the reading function returned (rule (4)), and so
+        # does a test of a field that function sets itself (`evaluate(...)["decision"]`): the field
+        # is its verdict, not the artifact's content
         parted_names: dict[str, set] = {}
 
         def parts_in(node) -> set:
             out = set()
             if node is None:
                 return out
+            got = {id(n.func): n.args[0].value for n in ast.walk(node)
+                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get"
+                   and n.args and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str)}
             for n in ast.walk(node):
-                base = None
-                if isinstance(n, (ast.Subscript, ast.Attribute)):
+                base = field_ = None
+                if isinstance(n, ast.Subscript):
                     base = n.value
+                    if isinstance(n.slice, ast.Constant) and isinstance(n.slice.value, str):
+                        field_ = n.slice.value
+                elif isinstance(n, ast.Attribute):
+                    base, field_ = n.value, got.get(id(n), n.attr)
                 if base is not None:
-                    out |= reads_of(base)
+                    out |= {r for r in reads_of(base) if field_ not in reads[r][1].verdict}
                 if isinstance(n, ast.Name):
                     out |= parted_names.get(n.id, set())
             return out
@@ -2317,9 +2327,7 @@ class FunctionWalk:
                 rs = set()
                 for x in self._stmts_in(st.body):
                     for n in self._own_nodes(x):
-                        i = call_ids.get(id(n))
-                        if i is not None:
-                            rs.add(i)
+                        rs |= call_ids.get(id(n), set())
                 if not rs:
                     continue
                 for h in st.handlers:
@@ -2509,6 +2517,66 @@ def id_form_of(t: str) -> str | None:
     if not re.fullmatch(r"[A-Za-z0-9_.:-]*", lit) or len(re.sub(r"[^A-Za-z0-9]", "", lit)) < 2:
         return None
     return P.shown_text(t)
+
+
+def _verdict_keys(stmts: list) -> frozenset:
+    """The fields of the dict a function builds and returns that it sets itself, each time to a
+    value it computes (a literal, a choice between literals, a comparison): its verdict, which a
+    caller testing the field uses whole, as against content it passes on from what it read.
+    Every value it returns must be such a dict (a literal, or a name bound to literals alone and
+    changed only by assignments of literal keys) or none."""
+    returns = [st.value for st in stmts if isinstance(st, ast.Return) and st.value is not None]
+    names = {v.id for v in returns if isinstance(v, ast.Name)}
+    if not returns or any(not isinstance(v, (ast.Dict, ast.Name)) and not (isinstance(v, ast.Constant) and v.value is None)
+                          for v in returns):
+        return frozenset()
+    values: dict[str, list] = {}
+    for v in returns:
+        if isinstance(v, ast.Dict):
+            if any(k is None for k in v.keys):
+                return frozenset()      # `**other`: fields it did not set
+            for k, x in zip(v.keys, v.values):
+                if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                    values.setdefault(k.value, []).append(x)
+    for st in stmts:
+        targets = st.targets if isinstance(st, ast.Assign) else [st.target] \
+            if isinstance(st, (ast.AnnAssign, ast.AugAssign)) and st.value is not None else []
+        for t in targets:
+            if isinstance(t, ast.Name) and t.id in names:
+                if not isinstance(st, ast.Assign) and not isinstance(st, ast.AnnAssign) \
+                        or not isinstance(st.value, ast.Dict) or any(k is None for k in st.value.keys):
+                    return frozenset()  # a dict it did not build: its fields may be content
+                for k, x in zip(st.value.keys, st.value.values):
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                        values.setdefault(k.value, []).append(x)
+            elif isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) and t.value.id in names:
+                if not (isinstance(t.slice, ast.Constant) and isinstance(t.slice.value, str)):
+                    return frozenset()
+                values.setdefault(t.slice.value, []).append(st.value)
+        for n in ast.walk(st):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name) \
+                    and n.func.value.id in names and n.func.attr in ("update", "setdefault", "__setitem__"):
+                return frozenset()      # fields set from elsewhere
+    return frozenset(k for k, vs in values.items() if all(_computed(x) for x in vs))
+
+
+def _computed(v) -> bool:
+    if isinstance(v, ast.Constant):
+        return True
+    if isinstance(v, ast.IfExp):
+        return _computed(v.body) and _computed(v.orelse)
+    if isinstance(v, ast.BoolOp):
+        return all(_computed(x) for x in v.values)
+    return isinstance(v, ast.Compare) or isinstance(v, ast.UnaryOp) and isinstance(v.op, ast.Not)
+
+
+def _ids_by_call(reads: list) -> dict:
+    """id(call node) -> the indices of every read it carries: a call into a function of the tree
+    carries each read its callee returns on, one entry each, so all of them meet its decisions."""
+    out: dict[int, set] = {}
+    for i, (call, _info) in enumerate(reads):
+        out.setdefault(id(call), set()).add(i)
+    return out
 
 
 def _terminates(block) -> bool:

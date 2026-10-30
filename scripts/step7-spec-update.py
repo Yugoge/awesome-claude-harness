@@ -45,6 +45,7 @@ Claude Code Agent call, not a shell command).
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import pathlib
@@ -65,6 +66,16 @@ def _trace_on() -> bool:
 def _emit(marker: str) -> None:
     if _trace_on():
         print(marker, file=sys.stderr, flush=True)
+
+
+def _close_report_missing(cr: pathlib.Path) -> bool:
+    """Whether there is no close report, as hooks/lib/close-verdict.py, the one
+    classifier every reader of a close report takes its verdict from, decides it
+    (its file name is no identifier: imported by name from the harness root)."""
+    harness = str(pathlib.Path(__file__).resolve().parent.parent)
+    if harness not in sys.path:
+        sys.path.insert(0, harness)
+    return importlib.import_module("hooks.lib.close-verdict").classify_file(cr) == "missing"
 
 
 def _parse_close_report_lines_outside_fences(path: pathlib.Path):
@@ -104,7 +115,7 @@ def _stage1_context_spec_path(task_id: str, dev_docs_root: pathlib.Path):
 
 def _stage2_close_report_continuation(task_id: str, dev_docs_root: pathlib.Path):
     cr = dev_docs_root / f"close-report-{task_id}.md"
-    if not cr.is_file():
+    if _close_report_missing(cr):
         return None
     matches = []
     for line in _parse_close_report_lines_outside_fences(cr):
@@ -123,7 +134,7 @@ def _stage2_close_report_continuation(task_id: str, dev_docs_root: pathlib.Path)
 
 def _stage3_mtime_glob(task_id: str, dev_docs_root: pathlib.Path):
     cr = dev_docs_root / f"close-report-{task_id}.md"
-    if not cr.is_file():
+    if _close_report_missing(cr):
         return []
     cr_mtime = cr.stat().st_mtime
     lo = cr_mtime - 24 * 3600

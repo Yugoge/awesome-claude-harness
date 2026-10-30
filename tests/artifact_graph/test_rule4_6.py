@@ -93,6 +93,211 @@ def test_a_deciding_reads_rule_is_the_library_site_it_ran_in_when_the_verdict_is
         == ["hooks/a.sh+hooks/b.sh"]
 
 
+def test_a_call_carrying_several_reads_pairs_its_verdict_with_each(tmp_path):
+    """A call into a library function that reads two files and returns both carries both reads:
+    the `except` around the call decides on each, not on the last one alone."""
+    lib = '''
+        import json
+        from pathlib import Path
+        from lib.harness_state_dir import harness_state_dir
+        def load(sid):
+            rec = json.loads(Path(harness_state_dir(), f"claude-rec-{sid}.json").read_text())
+            flag = Path(harness_state_dir(), f"claude-flag-{sid}.flag").read_text()
+            return rec, flag
+    '''
+    writer = hook('''
+        import json
+        d = json.load(sys.stdin)
+        open(harness_state_dir() + "/claude-rec-" + d["session_id"] + ".json", "w").write("{}")
+        open(harness_state_dir() + "/claude-flag-" + d["session_id"] + ".flag", "w").write("true")
+    ''')
+    reader = hook('''
+        import json
+        from lib.both import load
+        d = json.load(sys.stdin)
+        try:
+            load(d["session_id"])
+        except ValueError:
+            sys.exit(2)
+    ''')
+    m, _vs = check(make_tree(tmp_path, {"hooks/lib/both.py": lib, "hooks/w.py": writer, "scripts/r.py": reader}))
+    for key in (REC, FLAG):
+        assert [d for d in m.artifacts[key].decisions if d.who == "scripts/r.py"], key
+
+
+_STATE_LIB = '''
+    import json
+    from pathlib import Path
+    from lib.harness_state_dir import harness_state_dir
+    def read_state(sid):
+        try:
+            path = Path(harness_state_dir(), f"claude-rec-{sid}.json")
+            if path.stat().st_size == 0:
+                return None
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        return record if isinstance(record, dict) else None
+'''
+
+
+def test_the_reads_one_library_function_makes_are_one_rule(tmp_path):
+    """A record's one reading function stats it, then reads it: a hook taking its verdict whole
+    and a reader the differential measured whose static reads run there both decide by that
+    function, whichever of its two reads a mutation reaches."""
+    use = hook('''
+        import json
+        from lib.st import read_state
+        d = json.load(sys.stdin)
+        if read_state(d["session_id"]) is None:
+            sys.exit(2)
+    ''')
+    root = make_tree(tmp_path, {"hooks/lib/st.py": _STATE_LIB, "hooks/a.py": use, "hooks/b.py": use,
+                                "hooks/w.py": hook('open(harness_state_dir() + "/claude-rec-x.json", "w")\n')})
+    m, _vs = check(root)
+    ctx = m.ctx
+    statics = [d for d in m.artifacts[REC].decisions if d.who == "hooks/a.py"]
+    assert {d.rule for d in statics} == {"hooks/lib/st.py:read_state"}
+    measured = C.Decision("hooks/b.py", "own stop", "run#3", "differential", "removed", "shipped",
+                          rule=ctx._rule_id("hooks/b.py", REC))
+    assert measured.rule == "hooks/lib/st.py:read_state"
+    assert C._rule_groups(statics + [measured]) == ["hooks/a.py+hooks/b.py"]
+
+
+def test_a_measured_reader_through_several_library_functions_shares_each_ones_rule(tmp_path):
+    """A gate the differential measured whose static deciding reads of the record run in two
+    functions of other files (the record's one reading function, a schema check) takes the
+    verdict of each: it shares a rule with a planner that takes the reading function's, where a
+    single identity of its own would make it a rule apart (and the planner a rule to move)."""
+    load = '''
+        import json
+        from pathlib import Path
+        from lib.harness_state_dir import harness_state_dir
+        def load(sid):
+            return json.loads(Path(harness_state_dir(), f"claude-rec-{sid}.json").read_text())
+    '''
+    schema = '''
+        import json
+        from pathlib import Path
+        from lib.harness_state_dir import harness_state_dir
+        def valid(sid):
+            try:
+                return isinstance(json.loads(Path(harness_state_dir(), f"claude-rec-{sid}.json").read_text()), dict)
+            except (OSError, ValueError):
+                return False
+    '''
+    gate = hook('''
+        import json
+        from lib.r import load
+        from lib.schema import valid
+        d = json.load(sys.stdin)
+        try:
+            load(d["session_id"])
+        except ValueError:
+            sys.exit(2)
+        if not valid(d["session_id"]):
+            sys.exit(2)
+    ''')
+    plan = hook('''
+        import json
+        from lib.r import load
+        d = json.load(sys.stdin)
+        try:
+            load(d["session_id"])
+        except ValueError:
+            sys.exit(2)
+    ''')
+    root = make_tree(tmp_path, {"hooks/lib/r.py": load, "hooks/lib/schema.py": schema, "hooks/gate.py": gate,
+                                "scripts/plan.py": plan,
+                                "hooks/w.py": hook('open(harness_state_dir() + "/claude-rec-x.json", "w")\n')})
+    m, _vs = check(root)
+    rule = m.ctx._rule_id("hooks/gate.py", REC)
+    assert C._rules(C.Decision("hooks/gate.py", "", "", "", rule=rule)) == {"hooks/lib/r.py:load",
+                                                                          "hooks/lib/schema.py:valid"}
+    d1 = C.Decision("hooks/gate.py", "own stop", "e", "differential", "removed", "shipped", rule=rule)
+    d2 = next(d for d in m.artifacts[REC].decisions if d.who == "scripts/plan.py")
+    assert C._rule_groups([d1, d2]) == ["hooks/gate.py+scripts/plan.py"]
+    a = C.Artifact(REC)
+    a.writers.append(C.Rel("main", "write", "x", "runtime"))
+    a.decisions = [d1, d2]
+    assert not C._rechecks(a, a.key, [])
+
+
+def test_a_field_the_library_function_sets_itself_is_its_verdict(tmp_path):
+    """Two hooks test the `decision` field of what one evaluating function returns: the function
+    builds that record and sets the field to literals of its own, so the field is its verdict and
+    both take it whole (one rule). Where the function copies the field from what it read, or
+    returns what it read on some path, the field is the artifact's content and each test is a
+    rule of its own."""
+    def tree(name: str, value: str, extra: str = "pass"):
+        lib = f'''
+            import json
+            from pathlib import Path
+            from lib.harness_state_dir import harness_state_dir
+            def evaluate(sid):
+                record = {{"decision": "REFUSE", "reason": None}}
+                try:
+                    state = json.loads(Path(harness_state_dir(), f"claude-rec-{{sid}}.json").read_text())
+                except (OSError, ValueError) as e:
+                    record["reason"] = str(e)
+                    return record
+                if state.get("raw"):
+                    {extra}
+                record["decision"] = {value}
+                return record
+        '''
+        use = hook('''
+            import json
+            from lib.ev import evaluate
+            d = json.load(sys.stdin)
+            rec = evaluate(d["session_id"])
+            if rec["decision"] != "PERMIT":
+                sys.exit(2)
+        ''')
+        return make_tree(tmp_path / name, {
+            "hooks/lib/ev.py": lib, "hooks/a.py": use, "scripts/b.py": use,
+            "hooks/w.py": hook('open(harness_state_dir() + "/claude-rec-x.json", "w")\n')})
+    _m, vs = check(tree("verdict", '"PERMIT" if state.get("ok") is True else "REFUSE"'))
+    assert "4-one-rule" not in rules_on(vs, REC)
+    _m2, vs2 = check(tree("content", 'state.get("decision")'))
+    assert "4-one-rule" in rules_on(vs2, REC)
+    _m3, vs3 = check(tree("passed-on", '"PERMIT"', extra="return dict(state)"))
+    assert "4-one-rule" in rules_on(vs3, REC)
+
+
+def test_a_library_run_as_a_process_decides_by_the_function_its_callers_call(tmp_path):
+    """The one classifier of a report is run as a process by one consumer and called in-process
+    by another: both decide by the function that reads the report (the process's own reading
+    function, the caller's library function), one rule."""
+    cv = '''
+        import sys
+        def classify(path):
+            try:
+                text = open(path).read()
+            except FileNotFoundError:
+                return "missing"
+            return "yes" if text.strip().endswith("YES") else "no"
+        if __name__ == "__main__":
+            if classify(sys.argv[1]) != "yes":
+                sys.exit(2)
+    '''
+    use = '''
+        import sys
+        from lib.cv import classify
+        if classify(sys.argv[1]) == "missing":
+            sys.exit(2)
+    '''
+    root = make_tree(tmp_path, {"hooks/lib/cv.py": cv, "hooks/u.py": use})
+    m, _vs = check(root)
+    key = "<*>"
+    statics = [C.Decision("hooks/u.py", "elsewhere", "s", "static", "any", "static", rule=m.ctx._static_rule(d))
+               for d in m.ctx.recs if d["kind"] == "deciding" and d["component"] == "hooks/u.py"]
+    assert {d.rule for d in statics} == {"hooks/lib/cv.py:classify"}
+    process = C.Decision("hooks/lib/cv.py", "elsewhere", "run#7", "differential", "removed", "shipped",
+                         rule=m.ctx._rule_id("hooks/lib/cv.py", key))
+    assert C._rule_groups(statics + [process]) == ["hooks/lib/cv.py+hooks/u.py"]
+
+
 # ------------------------------------------------------------------ rule (5): the chain's output
 
 CHAIN = '''
@@ -409,6 +614,60 @@ def test_a_decision_elsewhere_that_takes_an_allowed_deciders_verdict_is_its_use(
     assert not C._rechecks(a, a.key, [])
     a.decisions[1].rule = "scripts/use.py:4"
     assert [v.rule for v in C._rechecks(a, a.key, [])] == ["6-move"]
+
+
+def _calls_run(calls: dict) -> C.Run:
+    """A replay reduced to its invocations: seq -> a tool name (a tool call) or None (a prompt)."""
+    r = C.Run("x", "shipped", "")
+    r.invocations = {seq: ({"seq": seq, "event": "PreToolUse", "payload": {"tool_name": tool}} if tool
+                           else {"seq": seq, "event": "UserPromptSubmit", "payload": {"prompt": "/x"}})
+                     for seq, tool in calls.items()}
+    return r
+
+
+def _traced(who: str, op: str, run: C.Run, seq: int, actor: str) -> C.Rel:
+    rel = C.Rel(who, op, f"{run.name}#{seq}", "runtime", via=who, actor=actor)
+    rel.run, rel.seq, rel.raw = run, seq, "/p/f"     # type: ignore[attr-defined]
+    return rel
+
+
+def test_a_hook_on_a_tool_the_producer_did_not_write_with_is_not_at_its_tool_call():
+    """The platform records a dispatch in the Agent call that makes it: a hook on Bash never runs
+    in that call, so its decision on the record is not the producer's side, while a hook on Agent
+    is the dispatch's (G1). A file the main agent writes through Bash is decided on at its tool
+    call by a hook on Bash."""
+    ctx = C._Ctx(C.Map("/t"), [], [], [], [], set(), "scripts/chain.py", [], "/t")
+    run = _calls_run({5: "Agent"})
+    record = C.Artifact("<harness>/projects/<slug>/<sid>/subagents/agent-<agent>.meta.json")
+    record.writers.append(_traced("cli", "write", run, 5, "main"))
+    assert ctx._position(record, "PreToolUse", None, None, "hooks/guard.py", "static", matcher="Bash") == "elsewhere"
+    assert ctx._position(record, "PreToolUse", None, None, "hooks/g1.py", "static", matcher="Agent") == "G1"
+    shell = C.Artifact("<state>/claude-own-<sid>.json")
+    shell.writers.append(_traced("main", "write", _calls_run({5: "Bash"}), 5, "main"))
+    assert ctx._position(shell, "PreToolUse", None, None, "hooks/guard.py", "static", matcher="Bash") \
+        == "producer tool call"
+
+
+def test_a_script_the_producer_runs_on_what_it_just_wrote_is_its_own_side():
+    """The main agent writes a manifest and, in the next tool call of the same command, runs the
+    script that refuses to go on without it: the refusal goes back to the producer that wrote it,
+    in that run, so the script decides at the producer's side. The same script reading the file
+    in a later command, or in another role's call, decides elsewhere."""
+    ctx = C._Ctx(C.Map("/t"), [], [], [], [], set(), "scripts/chain.py", [], "/t")
+
+    def manifest(calls: dict, read_seq: int, actor: str = "main") -> C.Artifact:
+        run = _calls_run(calls)
+        a = C.Artifact("<state>/claude-manifest-<sid>.json")
+        a.writers.append(_traced("main", "write", run, 10, "main"))
+        a.readers.append(_traced("scripts/mint.py", "read", run, read_seq, actor))
+        return a
+
+    same = manifest({9: None, 10: "Write", 12: "Bash"}, 12)
+    assert ctx._position(same, "", None, None, "scripts/mint.py", "static") == "producer tool call"
+    later = manifest({9: None, 10: "Write", 11: None, 12: "Bash"}, 12)
+    assert ctx._position(later, "", None, None, "scripts/mint.py", "static") == "elsewhere"
+    other = manifest({9: None, 10: "Write", 12: "Bash"}, 12, actor="agent:dev")
+    assert ctx._position(other, "", None, None, "scripts/mint.py", "static") == "elsewhere"
 
 
 def test_a_decision_on_what_nothing_writes_is_rule_twos():
