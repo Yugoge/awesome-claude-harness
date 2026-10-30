@@ -524,7 +524,21 @@ Use Agent tool with:
   "
 ```
 
-**Wait for PM subagent to complete.** The test plan its obligation declares is checked against `schemas/test-plan.v1.json` at PM's own stop (G2, `hooks/subagentstop-artifact-contract-enforce.py`), which returns a missing or invalid plan to PM before PM can end; the plan you read below is the one that passed.
+**Wait for PM subagent to complete.**
+
+**Validate test plan**: run `~/.claude/scripts/check-overnight-reports.sh docs/dev/overnight/<session_id>`. It checks `docs/dev/overnight/<session_id>/test-plan.json`, the plan PM's obligation declares, against the schema that obligation names (`schemas/test-plan.v1.json`); among that schema's rules it verifies:
+- File exists and is valid JSON
+- Has `app_context` with at least `url` field
+- Has `agent_assignments` with every agent key the schema requires
+- Has `core_flow_gate.owner` set to `"user"`
+- Has `core_flow_gate.failure_is_cycle_failure` set to `true`
+- Has `pm_experience` section with browser exploration evidence:
+  - If `pm_experience.app_not_running` is false: verify `urls_visited` is non-empty
+    and `actions_taken` has at least one entry (PM actually explored the app)
+  - If `pm_experience.app_not_running` is true: acceptable (app was not running,
+    PM fell back to doc-based planning)
+
+If validation fails, re-invoke PM (a fresh dispatch: same obligation template, fresh `dispatched_at`; maximum 2 retries). If still failing, proceed to Step 3 without a test plan (specialists will discover context themselves).
 
 #### After PM-Plan Completes: Extract Priority Context
 
@@ -658,7 +672,21 @@ Launching specialist subagents...
 
 **Wait for all recommended subagents to complete** before proceeding.
 
-Each report its specialist's obligation declares is checked against `schemas/specialist-report.v1.json` at that specialist's own stop (G2), which returns a missing or invalid report to the specialist before it can end. The report's full shape is the one its own agent file declares (`agents/<specialist.type>.md`, Output Format).
+**Validate reports** (main agent does NOT read project files, only validates report existence and structure): run `~/.claude/scripts/check-overnight-reports.sh docs/dev/overnight/<session_id>`. It checks each report a specialist's obligation declares against the schema that obligation names (`schemas/specialist-report.v1.json`), and names the dispatch that declared it on the report's line (`role=`, `task_id=`).
+
+**Sanity checks on each report** (only for specialists that were launched):
+- [ ] File exists and is valid JSON
+- [ ] Has `issues` array (may be empty), or the finding channels the schema accepts in its place
+- [ ] Each issue has required fields: `description`, `location`, `severity`, `category`, `estimated_effort`
+- [ ] No duplicate issues within the same report
+- [ ] Issues do not overlap with `addressed_issues` from state file
+
+**Report JSON schema**: `schemas/specialist-report.v1.json`; the report's full shape is the one its own agent file declares (`agents/<specialist.type>.md`, Output Format).
+
+**If validation fails** for any report:
+- Log which reports failed and why
+- Re-invoke only the failed subagent(s): the dispatch whose obligation declared each failed report, as a fresh dispatch (same obligation template, fresh `dispatched_at`) (maximum 2 retries)
+- If still failing after retries, proceed with available reports
 
 **If zero issues found across all RELEVANT specialist reports** (reports from launched specialists only — skipped specialists do not count as clean):
 - Log a "clean sweep" entry
@@ -747,7 +775,18 @@ Use Agent tool with:
   "
 ```
 
-**Wait for PM-Triage to complete.** The triage report its obligation declares is checked against `schemas/triage-report.v1.json` at PM's own stop (G2), which returns a missing or invalid report to PM before PM can end.
+**Wait for PM-Triage to complete.**
+
+**Validate triage report**: run `~/.claude/scripts/check-overnight-reports.sh docs/dev/overnight/<session_id>`. Its line for `triage-report-cycle<N>.json` checks the report PM's obligation declares against the schema that obligation names (`schemas/triage-report.v1.json`); among that schema's rules it verifies:
+- File exists and is valid JSON
+- Has `mode` field (`focus` or `normal`)
+- Has `issues` array (may be empty on clean sweep)
+- Has `pipeline_order` array
+- Each issue has `tier`, `pipeline_recommendation`, and required fields
+
+If validation fails, re-invoke PM-Triage (a fresh dispatch: same obligation template, fresh `dispatched_at`; maximum 2 retries); its return runs the TRIAGE contract writer (`hooks/posttool-subagent-track.py`) again, which writes this cycle's contract from the report it reads. If still failing, fall back
+to the legacy mechanical sort in Step 6 (read the RELEVANT specialist reports only — per
+`specialists_assessed` — merge, sort by severity).
 
 **Check pipeline_blocked**: Read the triage report's `pipeline_blocked` field.
 - If `pipeline_blocked: true`: log `block_reasons` to the cycle log file, skip Steps 6-19, jump directly to Step 20 (PM Retrospective) with context that the pipeline was blocked. PM RETRO will analyze the block and recommend next steps. Then loop to Step 2 for the next cycle.
@@ -790,6 +829,8 @@ Read specialist reports. For each pipeline whose spec is your copy of the templa
 
 **Read PM triage report**: `docs/dev/overnight/<session_id>/triage-report-cycle<N>.json`
 
+**If triage report exists and is valid** (primary path):
+
 **NOTE**: The PM triage report has already filtered out subjective improvements via the Improvement Quality Filter (PM triage Step 4). Only findings with objective justification (code errors, specification violations, regressions, data loss risks, measurable performance degradation) remain in the `issues` array. Rejected subjective suggestions are logged in the `rejected_improvements` array for audit purposes. The orchestrator trusts PM's filtering -- do NOT second-guess or re-add filtered items.
 
 1. Use `pipeline_order` from triage report as the authoritative ordering
@@ -797,6 +838,19 @@ Read specialist reports. For each pipeline whose spec is your copy of the templa
    - If `pipeline_recommendation` is `"fix"`: create a pipeline
    - If `pipeline_recommendation` is `"skip"` or `"defer"`: create no pipeline; add it to the cycle's triage-deferred list with PM's reason. This is a planning decision taken before any pipeline starts, not a pipeline exit, and it is counted and reported apart from parked pipelines
 3. Filter out any issue already in `addressed_issues` from state file
+
+**If triage report is missing or invalid** (fallback to legacy behavior):
+
+Read JSON reports from `docs/dev/overnight/<session_id>/` for ONLY the specialists that
+were RELEVANT (launched) this cycle. Determine the launched set from the
+`specialists_assessed` map recorded in Step 3 — include a report path for each entry
+whose value starts with `"RELEVANT"`, and skip (do NOT attempt to read) any entry whose
+value starts with `"SKIP"`.
+
+Candidate report paths (include only for RELEVANT specialists): the path each one's obligation declared in Step 3, `docs/dev/overnight/<session_id>/<specialist>-report.json`.
+
+Merge the available reports into a single issue list, deduplicate, filter against addressed_issues.
+Prioritize by severity and impact. Every remaining issue gets a pipeline, ordered by: (1) severity: critical > major > minor > cosmetic, (2) impact scope: issues flagged by more agents rank higher within the same severity.
 
 **Time guard** (severity-aware): If time remaining < 5 minutes, filter issues by severity+effort: (a) Drop cosmetic issues regardless of effort, (b) Drop minor issues with medium/large effort, (c) Keep major issues with small effort only, (d) Keep critical issues with small effort only. This ensures remaining time is spent on the highest-severity fixable issues.
 
@@ -1504,7 +1558,16 @@ Use Agent tool with:
   "
 ```
 
-**Wait for PM-Retro to complete.** The retro report its obligation declares is checked against `schemas/retro-report.v1.json` at PM's own stop (G2), which returns a missing or invalid report to PM before PM can end; its `is_final_cycle` carries FINAL_CYCLE, and the final cycle's report holds `final_summary`.
+**Wait for PM-Retro to complete.**
+
+**Validate retro report**: run `~/.claude/scripts/check-overnight-reports.sh docs/dev/overnight/<session_id>`. Its line for `retro-report-cycle<N>.json` checks the report PM's obligation declares against the schema that obligation names (`schemas/retro-report.v1.json`); among that schema's rules it verifies:
+- File exists and is valid JSON
+- Has `plan_vs_outcome` array
+- Has `unresolved_issues` array
+- Has `cycle_stats` object
+- If `FINAL_CYCLE: true` (the report's `is_final_cycle`): has `final_summary` object
+
+If validation fails, log warning and proceed (retro is informational, not blocking).
 
 **Check qa_rerun_required**: Read the retro report's `qa_rerun_required` field.
 - If `qa_rerun_required: true`: re-invoke QA for the pipelines listed in `qa_rerun_reasons`. Use the same QA invocation pattern as Step 14-16, but pass additional context: `"This is a PM-requested QA re-run. Reasons: <qa_rerun_reasons>. Focus on the specific concerns raised."` After QA re-run completes, proceed to Step 21 (do NOT re-invoke RETRO — avoid infinite loops).

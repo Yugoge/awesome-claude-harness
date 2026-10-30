@@ -3,13 +3,17 @@
 
 - The PM test plan, triage and retro reports and the specialists' reports are
   declared by their dispatch obligations (commands/dev-overnight.md) with a
-  registered schema each; G2 checks them at the producer's stop, so the prose
-  validations, the Step 6 legacy fallback and check-overnight-reports.py go.
-  Each schema admits the report its producer's agent file declares and
-  refuses what the deleted prose check refused.
+  registered schema each; G2 checks them at the producer's stop. While
+  CLAUDE_OBLIGATION_STOPGATE leaves G2 advisory, the prose validations, the
+  Step 6 legacy fallback and check-overnight-reports.py are those faults' only
+  stop (E4) and stay until rollback step (7) sets it to block. Each schema
+  admits the report its producer's agent file declares and refuses what the
+  prose checks refuse.
 - scripts/overnight-status.sh reads the record through lib/overnight.py and
   exits non-zero once the window has closed (the TIME CHECK routes on that).
-- scripts/check-overnight-reports.sh stays at its path as an exit-0 stub.
+- scripts/check-overnight-reports.sh runs check-overnight-reports.py, which
+  checks each report a cycle's dispatches declared against its obligation's
+  schema.
 - The trace hook files a dispatch under the cycle lib/overnight.py's
   cycle_index reads, not under a counter the record no longer holds.
 """
@@ -198,13 +202,14 @@ def test_pm_and_specialist_dispatches_declare_their_reports():
         assert declared, (path, schema)
 
 
-def test_prose_rechecks_and_the_legacy_fallback_are_gone():
+def test_prose_rechecks_and_the_legacy_fallback_stay_until_g2_blocks():
     text = COMMAND.read_text(encoding="utf-8")
-    for gone in ("**Validate test plan**", "**Validate triage report**", "**Validate retro report**",
+    for kept in ("**Validate test plan**", "**Validate triage report**", "**Validate retro report**",
                  "**Sanity checks on each report**", "check-overnight-reports",
                  "**If triage report is missing or invalid**", "**If triage report exists and is valid**",
-                 "Issues do not overlap with `addressed_issues`",
-                 "Check JSON syntax after modification", "settings.json has syntax error"):
+                 "Issues do not overlap with `addressed_issues`"):
+        assert kept in text, kept
+    for gone in ("Check JSON syntax after modification", "settings.json has syntax error"):
         assert gone not in text, gone
 
 
@@ -255,17 +260,95 @@ def test_status_without_a_record_exits_nonzero(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# The stubbed shell entry and the trace's cycle.
+# The report check the text runs, and the trace's cycle.
 # --------------------------------------------------------------------------
 
-def test_check_overnight_reports_is_an_exit_zero_stub(tmp_path):
-    script = REPO / "scripts" / "check-overnight-reports.sh"
-    assert os.access(script, os.X_OK)
-    assert any(line.startswith("# STUB:") for line in script.read_text().splitlines())
-    for args in ((f"docs/dev/overnight/{SID}",), ("--session-id", SID), ()):
-        assert subprocess.run(["bash", str(script), *args], cwd=tmp_path,
-                              capture_output=True).returncode == 0
-    assert not (REPO / "scripts" / "check-overnight-reports.py").exists()
+CHECK = REPO / "scripts" / "check-overnight-reports.sh"
+REPORT_DIR = f"docs/dev/overnight/{SID}"
+
+
+def _dispatch_record(n: int, role: str, name: str, schema: str, mode: str) -> str:
+    """The session transcript's record of one Agent call whose obligation declares one report."""
+    ob = {"task_id": TASK, "lane": None, "lane_set": None, "role": role, "pipeline": "dev-overnight",
+          "profile": "overnight", "dispatched_at": "2026-10-28T12:00:00Z",
+          "artifacts": [{"kind": "json", "path": f"{REPORT_DIR}/{name}", "schema": schema,
+                         "identity": {"task_id": TASK}}]}
+    prompt = f'<obligation v="1">\n{json.dumps(ob)}\n</obligation>\n' + (f"PM_MODE: {mode}\n" if mode else "")
+    return json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": f"toolu_{n:04d}", "name": "Agent",
+         "input": {"subagent_type": role, "description": role, "prompt": prompt}}]}})
+
+
+def _overnight_session(tmp_path: Path, dispatches: list) -> tuple[Path, dict]:
+    """A project holding the transcript of SID's dispatches (name, role, schema, mode, report; a
+    report of None is never written) in a private CLI store, and the reports."""
+    project, config = tmp_path / "project", tmp_path / "config"
+    (project / REPORT_DIR).mkdir(parents=True)
+    store = config / "projects" / str(project.resolve()).replace("/", "-")
+    store.mkdir(parents=True)
+    lines = []
+    for n, (name, role, schema, mode, report) in enumerate(dispatches, 1):
+        lines.append(_dispatch_record(n, role, name, schema, mode))
+        if report is not None:
+            (project / REPORT_DIR / name).write_text(json.dumps(report))
+    (store / f"{SID}.jsonl").write_text("\n".join(lines) + "\n")
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config), "PYTHONDONTWRITEBYTECODE": "1"}
+    for key in ("CLAUDE_PROJECT_DIR", "CLAUDE_RESTART_ACCOUNTS_ROOT"):
+        env.pop(key, None)
+    return project, env
+
+
+def _check(project: Path, env: dict, *args) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", str(CHECK), *(args or (REPORT_DIR,))], cwd=project, env=env,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_check_overnight_reports_keeps_its_path_and_mode():
+    for script in (CHECK, REPO / "scripts" / "check-overnight-reports.py"):
+        assert os.access(script, os.X_OK), script
+        assert not any(line.startswith("# STUB:") for line in script.read_text().splitlines())
+
+
+def test_check_overnight_reports_passes_the_declared_reports(tmp_path):
+    project, env = _overnight_session(tmp_path, [
+        ("test-plan.json", "pm", "test-plan.v1", "PLAN", TEST_PLAN),
+        ("architect-report.json", "architect", "specialist-report.v1", "", ARCHITECT)])
+    run = _check(project, env)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "SUMMARY: expected=2 present=2 valid=2 missing=0 invalid=0" in run.stdout
+
+
+@pytest.mark.parametrize("report, status", [
+    (_without(ARCHITECT, "issues.0.estimated_effort"), "INVALID"),
+    (None, "MISSING"),
+])
+def test_check_overnight_reports_names_a_failing_report_and_its_dispatch(tmp_path, report, status):
+    project, env = _overnight_session(tmp_path, [
+        ("test-plan.json", "pm", "test-plan.v1", "PLAN", TEST_PLAN),
+        ("architect-report.json", "architect", "specialist-report.v1", "", report)])
+    run = _check(project, env)
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert f"{status} role=architect task_id={TASK} path={REPORT_DIR}/architect-report.json" in run.stdout
+    assert f"OK    role=pm task_id={TASK} path={REPORT_DIR}/test-plan.json" in run.stdout
+
+
+def test_check_overnight_reports_checks_the_cycle_its_retrospective_closes(tmp_path):
+    project, env = _overnight_session(tmp_path, [
+        ("retro-report-cycle1.json", "pm", "retro-report.v1", "RETRO", _without(RETRO, "cycle_stats")),
+        ("test-plan.json", "pm", "test-plan.v1", "PLAN", TEST_PLAN)])
+    latest = _check(project, env)
+    assert latest.returncode == 0, latest.stdout + latest.stderr
+    assert "retro-report-cycle1.json" not in latest.stdout
+    first = _check(project, env, "--session-id", SID, "--cycle", "1")
+    assert first.returncode == 1
+    assert f"INVALID role=pm task_id={TASK} path={REPORT_DIR}/retro-report-cycle1.json" in first.stdout
+
+
+def test_check_overnight_reports_without_dispatch_records_fails(tmp_path):
+    project, env = _overnight_session(tmp_path, [])
+    run = _check(project, env, "--session-id", "no-such-session")
+    assert run.returncode == 1
+    assert "no dispatch records" in run.stderr
 
 
 def test_trace_is_filed_under_the_cycle_index(tmp_path):

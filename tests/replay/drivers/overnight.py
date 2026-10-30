@@ -18,8 +18,9 @@ Then, in one session, the main agent:
     one), the plan Read, the priority context built from it;
   - Step 3: the specialists the plan's recommended_specialists narrow the exploration-mode set to,
     one at a time, each prompt built from the text's bullet list ("Each subagent receives ..."),
-    the report validation the text asks for (the base's check-overnight-reports.sh and its sanity
-    Reads), the core-flow gate Read of the user report;
+    the report validation the text asks for (check-overnight-reports.sh and its sanity Reads; the
+    same script after PM's dispatch at Steps 2, 4 and 20 where the text runs it there), the
+    core-flow gate Read of the user report;
   - Step 4: the cycle number as the text reads it (`overnight.py cycle-index <STATE_FILE>`, or the
     state record's cycle_count), PM TRIAGE from the template, the pipeline_blocked Read; on a text
     with the "Cycle Contract Manifest" (the base), the orchestrator's contract: its primary and
@@ -870,6 +871,7 @@ class Night:
         globs = [("retro-report-cycle*.json", self.sdir)] if n > 1 else []
         act = agents.Act(work=report_work(content, reads, globs), summary="test plan written", status="completed")
         self.dispatch(o.template("Step 2"), act, "Step 2 Agent(pm) PLAN", self.ts, atype="pm")
+        self.check_reports("Step 2", "test plan")
         # After PM-Plan: the plan Read and the priority context built from it.
         self.read(plan_rel, "Step 2 Read test plan")
         self.plan = self.load(plan_rel)
@@ -958,6 +960,17 @@ class Night:
             o.s.say(f"Core flow gate: core_flow_completed={self.user_gate['core_flow_completed']}; "
                     f"route_map_file={'present' if rep.get('route_map_file') else 'absent'}")
 
+    def check_reports(self, heading: str, what: str) -> None:
+        """The report check a step's text runs after PM's dispatch (check-overnight-reports.sh at Steps
+        2, 4 and 20; the base's text runs it at Step 3 only). The replay's reports are compliant, so a
+        failing check is reported as the run's error, not passed."""
+        m = re.search(r"run `(~/\.claude/scripts/check-overnight-reports\.sh[^`]*)`", self.o.section(heading))
+        if not m:
+            return
+        c = self.bash(self.o.bind(m.group(1)), f"Validate the {what}", f"{heading} Bash check-overnight-reports")
+        if not c.ok:
+            raise RuntimeError(f"{heading}: check-overnight-reports failed on the replay's reports: {c.error[:600]}")
+
     def cycle_number(self) -> None:
         o = self.o
         sec = o.section("Step 4")
@@ -994,6 +1007,7 @@ class Night:
         reads = []
         act = agents.Act(work=report_work(doc, reads), summary="triage written", status="completed")
         self.dispatch(o.template("Step 4"), act, "Step 4 Agent(pm) TRIAGE", self.ts, atype="pm")
+        self.check_reports("Step 4", "triage report")
         self.read(tri_rel, "Step 4 Read triage report (pipeline_blocked)")
         self.triage = self.load(tri_rel)
         self.tri_rel = tri_rel
@@ -1509,6 +1523,7 @@ class Night:
                  ("retro-report-cycle*.json", self.sdir)]
         act = agents.Act(work=report_work(doc, (), globs), summary="retro written", status="completed")
         self.dispatch(o.template("Step 20"), act, "Step 20 Agent(pm) RETRO", self.ts, atype="pm")
+        self.check_reports("Step 20", "retro report")
         self.read(retro_rel, "Step 20 Read retro report (qa_rerun_required)")
         assert self.load(retro_rel).get("qa_rerun_required") is False
 

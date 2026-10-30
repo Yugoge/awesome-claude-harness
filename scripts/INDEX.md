@@ -2,7 +2,7 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 166
+**Total entries**: 167
 **Convention**: kebab
 
 ## Tree
@@ -86,7 +86,8 @@ scripts/
 ├── `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 ├── `check-file-references.sh` - File reference detection script - used by /clean command
 ├── `check-late-repair-provenance.py` - Takes ONLY ``--task-id`` and ``--project-dir`` (never a caller-supplied file
-├── `check-overnight-reports.sh` - STUB: each specialist's dispatch obligation declares its report and schema, and G2
+├── `check-overnight-reports.py` - Description: Validates that every report a /dev-overnight cycle's dispatches
+├── `check-overnight-reports.sh` - Validates the reports a /dev-overnight cycle's dispatches declared in the
 ├── `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 ├── `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
