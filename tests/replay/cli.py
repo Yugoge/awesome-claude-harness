@@ -55,11 +55,23 @@ def _env_pairs(pairs) -> dict:
     return out
 
 
+def prepare(sb: str, driver: str) -> None:
+    """The owner's starting state a driver declares (its module's optional `prepare(project, git)`), applied
+    to the reset sandbox's toy before the replay starts: outside the replay and its trace, so the files it
+    leaves are tracked at replay start (row 19 rule 1: inputs), as the toy's own files are."""
+    import importlib
+    fn = getattr(importlib.import_module(f"{__package__}.drivers.{driver}"), "prepare", None)
+    if fn:
+        project = os.path.join(sb, "home", "toyproj")
+        fn(project, lambda *args: sandbox._git(sb, *args, cwd=project))
+
+
 def run_one(sb: str, tree: str, out_dir: str, *, driver: str, mode: str, settings: str, env: dict,
             kind: str, guard: bool, parallel: bool, keep_raw: bool, driver_args: dict | None = None) -> dict:
     """Reset the sandbox, run one replay, collect its outputs into out_dir."""
     traced = kind == "traced"
     sandbox.reset(sb, mode)
+    prepare(sb, driver)
     lay = sandbox.layout_for(sb, mode)
     label, spath = sandbox.settings_file(sb, mode, settings)
     host_home = os.path.realpath(os.environ.get("HOME", "/"))
