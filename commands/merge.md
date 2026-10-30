@@ -126,7 +126,7 @@ REPO_ROOT=<REPO_ROOT>
 </obligation>
 ```
 
-The obligation names this dispatch's role and command. The grant itself lives in the state dir, outside the repository, where no obligation path can name it, so the artifact it declares is the merge-analyst's closing `merge-analyst grant written: <GRANT_PATH>` line (agents/merge-analyst.md Phase 7).
+The obligation names this dispatch's role and command. The grant itself lives in the state dir, outside the repository, where no obligation path can name it, so the artifact it declares is the merge-analyst's closing `merge-analyst grant written: <GRANT_PATH>` line (agents/merge-analyst.md Phase 8).
 
 Wait for the subagent to complete before proceeding.
 
