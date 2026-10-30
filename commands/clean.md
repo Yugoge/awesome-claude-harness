@@ -164,9 +164,14 @@ Delegate to cleanliness-inspector subagent. The dispatch prompt MUST include:
 
 ```
 Context file: docs/clean/context-{REQUEST_ID}.json
+<obligation v="1">
+{"task_id": null, "lane": null, "lane_set": null, "role": "cleanliness-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/cleanliness-report-{REQUEST_ID}.json", "schema": "cleanliness-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}
+</obligation>
 <If codex_required = true, include the literal next line; otherwise omit it>
 codex_required: true
 ```
+
+The obligation declares the report this dispatch owes: the inspector's stop checks it (present, valid JSON of its schema, this request's id) and returns a missing or invalid report to the inspector.
 
 ```bash
 ~/.claude/scripts/orchestrator.sh clean-inspect docs/clean/context-{REQUEST_ID}.json
@@ -324,7 +329,7 @@ Expected final output structure:
 
 ### Step 10A: Invoke Prompt Inspector (agents/ and commands/ verbosity)
 
-The prompt-inspector is the only inspector that audits `agents/*.md` and `commands/*.md`; no other inspector in this workflow reaches those directories, so this step is MANDATORY on every /clean run. Delegate to the prompt-inspector subagent with `docs/clean/context-{REQUEST_ID}.json` plus the literal lines `command_files: <every commands/*.md>` and `agent_files: <every agents/*.md>`, and `codex_required: true` only when `codex_required = true`. It writes `docs/clean/prompt-report-{REQUEST_ID}.json` (top-level `findings` array, one entry per file).
+The prompt-inspector is the only inspector that audits `agents/*.md` and `commands/*.md`; no other inspector in this workflow reaches those directories, so this step is MANDATORY on every /clean run. Delegate to the prompt-inspector subagent with `docs/clean/context-{REQUEST_ID}.json` plus the literal lines `command_files: <every commands/*.md>` and `agent_files: <every agents/*.md>`, the block `<obligation v="1">{"task_id": null, "lane": null, "lane_set": null, "role": "prompt-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/prompt-report-{REQUEST_ID}.json", "schema": "prompt-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}</obligation>`, and `codex_required: true` only when `codex_required = true`. It writes `docs/clean/prompt-report-{REQUEST_ID}.json` (top-level `findings` array, one entry per file), the report the obligation declares: the inspector's stop checks it (present, valid JSON of its schema, this request's id) and returns a missing or invalid report to the inspector.
 
 Coverage gate: every `commands/*.md` and `agents/*.md` file MUST appear in the report's audited-file list or be named in a finding; otherwise re-dispatch once for the missed files and BLOCK Step 11 on a second miss.
 

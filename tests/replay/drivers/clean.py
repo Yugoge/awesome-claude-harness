@@ -30,7 +30,8 @@ What each step does is taken from the tree's commands/clean.md:
   from scripts/orchestrator.sh; the base: every discovered folder), Step 5's README script for each
   folder its freshness entry does not mark FRESH, its Output Format as the final message.
 * Step 5: the step's Bash block (`clean-inspect`), then the cleanliness-inspector dispatch with the
-  step's prompt block and the report path the step says it writes. The inspector reads its context,
+  step's prompt block (its obligation block, where the text has one, instantiated: dispatched_at the
+  current UTC time) and the report path the step says it writes. The inspector reads its context,
   runs the Inspection Checklist calls its text makes over the whole project (`Run`/`MUST execute`
   lines of a section that is not `--changed-files`-only), reads each folder README it finds and Writes
   its Output Format with the scenario's finding.
@@ -40,7 +41,10 @@ What each step does is taken from the tree's commands/clean.md:
   merged report Written; Step 10 the plan Read again and the coverage compared.
 * Step 10A (no checklist item: done while Step 10 is in progress): the prompt-inspector dispatch with
   the context path, the `command_files:` and `agent_files:` lines (Glob of commands/*.md and
-  agents/*.md) and the report path; its report Read for the coverage gate.
+  agents/*.md), the obligation block the step names, where it names one (instantiated as Step 5's),
+  and the report path; its report Read for the coverage gate.
+* A stop that returns an inspector's declared report (G2 naming that report): the inspector writes the
+  report its work drafted again, as the block asks, and stops again (its next round).
 * Step 11: the merge call as the text spells it. On a text whose call names a context no step wrote
   and whose helper returns a combined report outside docs/clean/ (the base, A116/A124), see "Gaps".
 * Step 12: the combined report Read and presented with the text's options.
@@ -69,8 +73,9 @@ Text points the driver resolves (each also reported as a text defect):
   it, is recorded).
 * Step 10A has no checklist item: its dispatch is made while Step 10 is in progress.
 * Step 8's `run_in_background: true` is dispatched as written (a hook that refuses it is recorded).
-* Step 5's prompt names only the context; the report path is the one the step says the inspector
-  writes, added as a `Write your report to:` line (likewise for Step 10A's report). Step 5's Bash block
+* Step 5's prompt names the report only in its obligation, where it has one (the base's names only the
+  context); the report path is the one the step says the inspector writes, added as a `Write your
+  report to:` line (likewise for Step 10A's report). Step 5's Bash block
   runs before the dispatch (its output says the inspectors can now be invoked).
 * "activate venv" (Step 1; the base cleaner's token script) names no venv a product repository has:
   the call runs without one, as row 7 runs `source venv/bin/activate &&` calls (E5 (b)).
@@ -99,6 +104,11 @@ Respellings (row 7): none; every harness script /clean names is spelled `~/.clau
 Deviations: DEVIATIONS below, one entry per block the base tree's replay meets, each with a comment
 quoting the hook's text; nothing else passes a block. `--arg kept=<JSON>` makes each pass only a kept
 base block (drivers/dev.py KeptOnly).
+
+Faults (`--arg fault=<role>:<missing|invalid|notjson>`, none by default): the first Write of that
+inspector's report is changed through the framework's fault hook (Replay.step): `missing` skips it,
+`invalid` drops the first field the declared schema requires, `notjson` keeps the first half of the
+text. Each is meant to be stopped at the inspector's own stop and pass on its next round (above).
 
 Not replayed: options 2-5 at Step 13 (a subset of option 1's relations: fewer approvals, or none and no
 cleaner), `--codex`, a coverage miss at Steps 10 and 10A (a re-dispatch of the same templates), and a
@@ -228,11 +238,26 @@ def _json_out(text: str):
     return found
 
 
+FAULT_KINDS = ("missing", "invalid", "notjson")
+
+
+def _fault_arg(value: str):
+    """`<role>:<kind>` -> (role, kind), or None."""
+    if not value:
+        return None
+    role, _, kind = value.partition(":")
+    if not role or kind not in FAULT_KINDS:
+        raise ValueError(f"fault must be <role>:<{'|'.join(FAULT_KINDS)}>, not {value!r}")
+    return role, kind
+
+
 class CleanRun:
-    def __init__(self, rp, gaps: str = "bridged"):
+    def __init__(self, rp, gaps: str = "bridged", fault: str = ""):
         if gaps not in ("bridged", "strict"):
             raise ValueError(f"gaps must be bridged or strict, not {gaps!r}")
         self.rp, self.gaps = rp, gaps
+        self.fault = _fault_arg(fault)
+        self.reports: dict = {}     # declared report (rel path) -> the text its inspector's work drafted
         from . import close as closedrv
         self.devs = closedrv.kept_only(rp, DEVIATIONS)
         # A subagent's own calls (agents.Player) take the deviations declared for their step labels.
@@ -480,9 +505,10 @@ class CleanRun:
         role = self.checklist_role(5)
         lines = self.prompt_block("Step 5", "Context file:")
         report = self.fill(re.search(r"`(docs/clean/cleanliness-report-[^`]+)`", o.section("Step 5")).group(1))
-        prompt = "\n".join(lines + [f"Write your report to: {report}"])
+        prompt = o.instantiate("\n".join(lines + [f"Write your report to: {report}"]), None)
         self.cleanliness_rel = report
-        self.dispatch(role, prompt, self.cleanliness_work(role, report), "Step 5 Agent(cleanliness-inspector)")
+        self.dispatch(role, prompt, self.cleanliness_work(role, report), "Step 5 Agent(cleanliness-inspector)",
+                      report=report)
 
     def prompt_block(self, heading: str, anchor: str) -> list:
         """A step's prompt block, placeholders filled, the codex conditional and its line left out."""
@@ -498,16 +524,65 @@ class CleanRun:
             out.append(line)
         return out
 
-    def dispatch(self, role: str, prompt: str, act_work, label: str, extra_input=None, description: str = ""):
+    def dispatch(self, role: str, prompt: str, act_work, label: str, extra_input=None, description: str = "",
+                 report: str = ""):
+        """A subagent dispatch of /clean. `report`: the report the role's work writes itself (rel path); where
+        the prompt's obligation declares it, a stop that returns it gets the inspector's next round."""
         o = self.o
         out: dict = {}
+        final: list = []
 
         def work(sub, brief, player):
             out.update(act_work(sub, brief, player) or {})
-        player = agents.Player(o.tree, prompt, agents.Act(work=work), role=role)
-        return o.s.dispatch(role, prompt, description=description or role, body=player.body,
-                            result=lambda sub: out.pop("_final", None) or json.dumps(out, indent=2),
-                            label=label, deviation=self.devs.at(label), extra_input=extra_input)
+
+        def result(sub):
+            final.append(out.pop("_final", None) or json.dumps(out, indent=2))
+            return final[-1]
+        if report and self.fault and self.fault[0] == role:
+            self.inject(role, prompt)
+        act = agents.Act(work=work, produced=[report] if report else [])
+        player = agents.Player(o.tree, prompt, act, role=role)
+        declared = report and any(a.get("path") == report for a in (player.b.obligation or {}).get("artifacts") or [])
+        return o.s.dispatch(role, prompt, description=description or role, body=player.body, result=result,
+                            label=label, deviation=self.devs.at(label), extra_input=extra_input,
+                            on_stop_block=self.next_round(report, final) if declared else None)
+
+    def next_round(self, report: str, final: list):
+        """The inspector's next round after a stop that returns its declared report: the block names the
+        report, so the inspector writes the report its work drafted again and stops again. A block that
+        does not name it is not the inspector's to fix here (the stop stays blocked)."""
+        def on_block(sub, ev):
+            text = "\n".join(h.get("stderr", "") + h.get("stdout", "") for h in ev.blocks)
+            if report not in text or report not in self.reports:
+                return None
+            sub.s.say(f"My stop returned {report}. Writing the report again, then stopping again.", sub.aid)
+            agents.put(sub, self.abs(report), self.reports[report], f"{sub.role} Write report (next round)")
+            return final[-1] if final else "Done."
+        return on_block
+
+    def inject(self, role: str, prompt: str) -> None:
+        """The run's fault on this inspector's report, at the first Write of it (Replay.step's fault hook)."""
+        kind = self.fault[1]
+        arts = [a for a in (agents.obligation_of(prompt) or {}).get("artifacts") or [] if a.get("kind") == "json"]
+        required = (self.o.tree.schema(arts[0]["schema"]).get("required") or []) if arts else []
+        done: list = []
+
+        def fn(rp, phase, step):
+            if phase != "before" or done or step.get("name") != "Write":
+                return
+            done.append(kind)
+            if kind == "missing":
+                step["skip"] = True
+                return
+            text = step["input"]["content"]
+            if kind == "invalid":
+                doc = json.loads(text)
+                doc.pop(required[0] if required else next(iter(doc)), None)
+                text = json.dumps(doc, indent=2) + "\n"
+            else:
+                text = text[: len(text) // 2]
+            step["input"] = dict(step["input"], content=text)
+        self.rp.faults.append((f"agent:{role} Write report", fn))
 
     def cleanliness_work(self, role: str, report: str):
         o = self.o
@@ -555,7 +630,8 @@ class CleanRun:
                                "major": sum(1 for f in items if f.get("severity") == "major"),
                                "minor": sum(1 for f in items if f.get("severity") == "minor"),
                                "estimated_space_saved": "0 MB"}}
-            agents.put(sub, self.abs(report), json.dumps(doc, indent=2) + "\n", f"{sub.role} Write report")
+            self.reports[report] = json.dumps(doc, indent=2) + "\n"
+            agents.put(sub, self.abs(report), self.reports[report], f"{sub.role} Write report")
             return {"status": "complete", "report": report, "total_issues": len(items)}
         return work
 
@@ -662,8 +738,10 @@ class CleanRun:
             listed[key] = [os.path.relpath(f, self.project) for f in (g.response.get("filenames") or [])] if g.ok else []
         report = self.fill(re.search(r"`(docs/clean/prompt-report-[^`]+)`", sec).group(1))
         ctx = self.fill(re.search(r"`(docs/clean/context-[^`]+)`", sec).group(1))
-        prompt = "\n".join([f"Context file: {ctx}"] + [f"{k}: {' '.join(v) if v else '(none)'}" for k, v in listed.items()]
-                           + [f"Write your report to: {report}"])
+        block = re.search(r"`(<obligation v=\"1\">\{.*?\}</obligation>)`", sec)
+        prompt = o.instantiate("\n".join(
+            [f"Context file: {ctx}"] + [f"{k}: {' '.join(v) if v else '(none)'}" for k, v in listed.items()]
+            + ([self.fill(block.group(1))] if block else []) + [f"Write your report to: {report}"]), None)
         self.prompt_rel = report
         files = [f for v in listed.values() for f in v]
 
@@ -676,9 +754,10 @@ class CleanRun:
                                      "feedback_summary": None, "feedback_incorporated": None},
                    "summary": {"files_inspected": len(files), "files_with_violations": 0, "critical": 0, "major": 0,
                                "minor": 0, "total_verbose_lines": 0, "estimated_reduction": "0%"}}
-            agents.put(sub, self.abs(report), json.dumps(doc, indent=2) + "\n", f"{sub.role} Write report")
+            self.reports[report] = json.dumps(doc, indent=2) + "\n"
+            agents.put(sub, self.abs(report), self.reports[report], f"{sub.role} Write report")
             return {"status": "complete", "report": report, "findings": 0}
-        self.dispatch(role, prompt, work, f"Step 10A Agent({role})")
+        self.dispatch(role, prompt, work, f"Step 10A Agent({role})", report=report)
         self.read(report, "Step 10A Read prompt report")
 
     # ------------------------------------------------------------ Steps 11-15
@@ -1021,4 +1100,4 @@ class CleanRun:
 
 
 def run(rp) -> None:
-    CleanRun(rp, rp.args.get("gaps", "bridged")).run()
+    CleanRun(rp, rp.args.get("gaps", "bridged"), rp.args.get("fault", "")).run()
