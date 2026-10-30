@@ -220,10 +220,12 @@ if [ "$INSTALL_WATCHER" = "1" ]; then
   fi
 
   # Start watcher in background
-  nohup bash ~/.claude/hooks/git-watcher.sh "$WATCH_PATH" > /dev/null 2>&1 &
+  nohup bash ~/.claude/hooks/git-watcher.sh "$WATCH_PATH" \
+    > ~/.claude/logs/git-watcher.log 2>&1 &
 
   WATCHER_PID=$!
   echo -e "${GREEN}✓ File watcher started (PID: $WATCHER_PID)${NC}"
+  echo "Log file: ~/.claude/logs/git-watcher.log"
   echo ""
   echo "Stop command: kill $WATCHER_PID"
   echo ""
@@ -252,6 +254,7 @@ fi
 if [ "$INSTALL_WATCHER" = "1" ]; then
   echo "✓ File watcher running"
   echo "  • Monitored path: $WATCH_PATH"
+  echo "  • View logs: tail -f ~/.claude/logs/git-watcher.log"
   echo ""
 fi
 

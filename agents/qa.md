@@ -1207,7 +1207,7 @@ ONLY — future BA specs inherit it by construction. The frozen spec
 
 1. **Check permissions_to_add field exists**:
 ```bash
-# In the dev report your dispatch names (Dev report: docs/dev/dev-report-<TASK_ID>.json)
+# In the dev report your dispatch names (Dev report file: docs/dev/dev-report-<TASK_ID>.json)
 jq '.dev.permissions_to_add' docs/dev/dev-report-<TASK_ID>.json
 ```
 

@@ -725,7 +725,8 @@ def _owner_outputs(root: Path, files: list[str], findings: M.Findings, sh, py, r
         for line, shown, ev in mdscan.command_text_outputs(text):
             out.append({"kind": "owner_output", "channel": "command_text", "component": f,
                         "site": f"{f}:{line}", "shown": shown, "reaches": "command:" + ev})
-    # prints of command blocks, of scripts commands run, of relayed stdout
+    # prints of command blocks, of scripts commands run, of relayed stdout, of scripts run by hand
+    by_hand = _run_by_hand(root, files, findings, sh, py, registered)
     invoked_by: dict[str, set] = {}
     printed_into: dict[str, set] = {}
     for inv in findings.invocations:
@@ -747,6 +748,9 @@ def _owner_outputs(root: Path, files: list[str], findings: M.Findings, sh, py, r
             out.append({"kind": "owner_output", "channel": "system_message", "component": comp,
                         "site": f"{comp}:{line}", "shown": shown, "stream": stream,
                         "reaches": "relayed:" + sorted(stdout_relays[comp])[0]})
+        if comp in by_hand and origin != "md-block":
+            out.append({"kind": "owner_output", "channel": "hand_run_print", "component": comp,
+                        "site": f"{comp}:{line}", "shown": shown, "stream": stream, "reaches": "by_hand"})
         for into, with_stderr in sorted(printed_into.get(comp, ())):
             # E12: a script's output its caller writes into a file reaches the owner where an
             # owner-facing output names that file (the landing's notice names its log); the
@@ -755,6 +759,63 @@ def _owner_outputs(root: Path, files: list[str], findings: M.Findings, sh, py, r
                 out.append({"kind": "owner_output", "channel": "printed_into", "component": comp,
                             "site": f"{comp}:{line}", "shown": shown, "stream": stream,
                             "reaches": "into:" + into})
+    return out
+
+
+def _run_by_hand(root: Path, files: list[str], findings: M.Findings, sh, py, registered: set) -> set:
+    """E12 for a script a person runs: what it prints reaches that person, the owner (a user-run
+    entry point naming its log and pid file, as start-fswatch-all.sh does). A script is run by
+    hand when its own text tells a person how to run it (a `Usage:` line naming the script) and
+    nothing in the harness runs it: no hook registration, no invocation, source or import, and
+    no line of a command or agent file, of settings.json or of another hook or script names it,
+    other than a comment or a line that prints the name to a person ("Start with: bash
+    .../start-fswatch-all.sh")."""
+    import ast
+    run = set(registered) | {inv.target for inv in findings.invocations}
+    run |= {t for _, t in py.script_mentions}
+    for sf in sh.files.values():
+        run |= set(sf.sourced)
+    for path in sorted(py.modules):
+        for n in ast.walk(py.modules[path].tree):
+            if isinstance(n, ast.Import):
+                run |= {py.resolve_import(a.name, path) for a in n.names}
+            elif isinstance(n, ast.ImportFrom):
+                run.add(py.resolve_import(n.module or "", path, n.level or 0))
+                if n.module is None or n.level:
+                    run |= {py.resolve_import(((n.module + ".") if n.module else "") + a.name, path,
+                                              n.level or 0) for a in n.names}
+
+    def text(f: str) -> str:
+        try:
+            return (root / f).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    cands = {}
+    for f in files:
+        if f in run or not f.startswith(("hooks/", "scripts/")) or f.endswith((".md", ".json", ".txt")):
+            continue
+        name = re.compile(r"(?<![\w.-])" + re.escape(f.rsplit("/", 1)[-1]) + r"(?![\w.-])")
+        # the usage line, or the lines right under a bare `Usage:` heading
+        if any(name.search(u.group(0)) for u in re.finditer(r"(?im)^\W*usage\b[^\n]*(?:\n[^\n]*){0,3}", text(f))):
+            cands[f] = name
+    if not cands:
+        return set()
+    # the harness text that runs things: command and agent files, settings.json, hooks and
+    # scripts (their README and INDEX files describe, they run nothing)
+    runners = [f for f in files if f == "settings.json"
+               or f.startswith(("commands/", "agents/")) and f.endswith(".md")
+               or f.startswith(("hooks/", "scripts/")) and not f.endswith(".md")]
+    shown = re.compile(r"^\s*(?:#|echo\b|printf\b|print\(|>&2\s+echo\b)")
+    out = set(cands)
+    for f in runners:
+        lines = text(f).split("\n")
+        for c in sorted(out):
+            if c == f:
+                continue
+            if any(cands[c].search(ln) and (f.endswith(".md") or f == "settings.json" or not shown.search(ln))
+                   for ln in lines):
+                out.discard(c)
     return out
 
 

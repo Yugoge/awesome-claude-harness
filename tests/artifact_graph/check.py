@@ -799,6 +799,10 @@ class _Ctx:
         pat = shown if shown.startswith(("<", "/")) else P.to_pattern(shown)[0]
         if pat.startswith("<home>/.claude/"):
             pat = "<harness>" + pat[len("<home>/.claude"):]
+        # a shown path as a person reads it: a glob (`logs/fswatch-*.log`) names each file it
+        # matches, and an upper-case name (`fswatch-REPO_NAME.pid`) is a value the reader fills in
+        pat = re.sub(r"(?<![<\w])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?![\w>])", "<*>", pat)
+        pat = re.sub(r"(?<!<)\*(?!>)", "<*>", pat)
         if not self._specific(pat):
             return      # a shown path with no file name of its own names no file
         pats = [pat]

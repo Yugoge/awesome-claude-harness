@@ -767,3 +767,33 @@ def test_an_options_value_is_each_value_its_invocations_pass(tmp_path):
     m, vs = check(root)
     assert "scripts/query.py" in m.artifacts["<proj>/.claude/reg/<task>/requirement.txt"].consumers()
     assert not rule2(vs)
+
+
+# ------------------------------------------------------------------ lane K4
+
+def test_a_script_run_by_hand_prints_to_the_owner(tmp_path):
+    """E12 for a user-run entry point: a script whose own text tells a person how to run it, and
+    that nothing in the harness runs (another script only telling a person to run it does not run
+    it), prints to the owner, so the log it names and the pid file a shown command reads (a glob,
+    an upper-case placeholder) have the owner as their reader. A script a hook runs prints to that
+    hook, which is no owner, though its text has a usage line too."""
+    settings = {"env": {}, "hooks": {"Stop": [{"hooks": [
+        {"type": "command", "command": "bash ~/.claude/hooks/stop.sh"}]}]}}
+    m, vs = check(make_tree(tmp_path, {
+        "hooks/start-all.sh": (
+            '#!/bin/bash\n# Usage: bash ~/.claude/hooks/start-all.sh <repo>...\n'
+            'for repo in "$@"; do\n  name=$(basename "$repo")\n'
+            '  log_file="$HOME/.claude/logs/watch-$name.log"\n'
+            '  pid_file="$HOME/.claude/logs/watch-$name.pid"\n'
+            '  nohup bash "$(dirname "$0")/watch.sh" "$repo" > "$log_file" 2>&1 &\n'
+            '  echo $! > "$pid_file"\n  echo "started; if it stops, check $log_file"\ndone\n'
+            'echo "Stop one: kill \\$(cat ~/.claude/logs/watch-REPO_NAME.pid)"\n'),
+        "hooks/status.sh": ('#!/bin/bash\n# Usage: bash ~/.claude/hooks/status.sh\n'
+                            'echo "Start: bash ~/.claude/hooks/start-all.sh <repo>"\n'),
+        "hooks/stop.sh": '#!/bin/bash\nbash "$(dirname "$0")/helper.sh"\n',
+        "hooks/helper.sh": ('#!/bin/bash\n# Usage: helper.sh\nL="$HOME/.claude/logs/claude-helper.log"\n'
+                            'echo x >> "$L"\necho "see $L"\n'),
+    }, settings))
+    assert "owner" in m.artifacts["<harness>/logs/watch-<*>.log"].consumers()
+    assert "owner" in m.artifacts["<harness>/logs/watch-<*>.pid"].consumers()
+    assert rule2(vs) == {("2-unread", "<harness>/logs/claude-helper.log")}
