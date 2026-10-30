@@ -110,7 +110,8 @@ jobs:
 
       - name: Run tests
         # tests/test_artifact_graph.py replays every pipeline traced in a sandbox;
-        # the artifact-graph job below runs it with strace and a mount namespace.
+        # the artifact-graph jobs below run it: shards with strace and a mount
+        # namespace, then the check over all of them.
         run: python3 -m pytest hooks/tests tests -q --ignore=tests/generated --ignore=tests/test_artifact_graph.py
 
       - name: Shell tests (checkpoint privacy gate, push guards, fresh-clone smoke)
@@ -250,18 +251,59 @@ jobs:
         # distinguish "exercised" from "asserted" does not show what ran.
         run: python3 scripts/check-enforcement-evidence.py --coverage
 
-  artifact-graph:
+  artifact-graph-plan:
     # P1b row 19: the artifact check derives every write/read relation at test
     # time from the code and from traced replays of each pipeline driver
-    # (tests/replay), so it needs strace and a mount namespace (the runner's
-    # passwordless sudo). Its 50 replays and E1's differential took 65 minutes
-    # here before the shared sandbox and the byte-compiled harness, and about 50
-    # are expected with them, over E2's 1500 s (the PR gives the time per phase
-    # and per driver), so the check runs once, on the newest supported Python,
-    # in a job of its own.
-    name: artifact check (traced replays)
+    # (tests/replay). On one runner its replays and E1's differential took 70
+    # minutes (b8e34f4), over E2's 1500 s, so they run in shards by pipeline
+    # (E2's remedy) and one job derives the check over all of them. This job
+    # plans the shards from the drivers present (tests/replay/drivers/) and the
+    # cost each declares (tests/artifact_graph/shards.py): the fewest shards
+    # whose expected critical path fits 90% of the budget, each pipeline whole
+    # in one, and E1's mode for the whole job. No driver is named here: a new
+    # one lands in a shard by itself.
+    name: artifact check plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      count: ${{ steps.plan.outputs.count }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Plan the shards
+        id: plan
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 -m tests.artifact_graph.check --tree . --plan > "$RUNNER_TEMP/plan.json"
+          cat "$RUNNER_TEMP/plan.json"
+          echo "count=$(jq -r .count "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(jq -c .matrix "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+
+  artifact-graph-shard:
+    # One shard of the plan: its drivers' traced replays (strace, and a mount
+    # namespace through the runner's passwordless sudo) and E1's differential,
+    # in the mode the plan decided for the whole job. Its runs/ and its record
+    # go to the job below, which derives the check over every shard.
+    name: artifact check shard ${{ matrix.shard }}/${{ needs.artifact-graph-plan.outputs.count }}
+    needs: artifact-graph-plan
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.artifact-graph-plan.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -285,12 +327,69 @@ jobs:
           sudo apt-get install -y strace
           python3 -m pip install --require-hashes -r requirements/py312.txt
 
+      - name: Replays and differential of this shard
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python3 -m tests.artifact_graph.check --tree . --work "$RUNNER_TEMP/artifact-graph"
+          --shard "${{ matrix.shard }}/${{ needs.artifact-graph-plan.outputs.count }}"
+
+      - name: Upload this shard's replays
+        # if: always(): the merge reports a failed replay with the rest, and its
+        # record holds the shard's time per phase.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifact-check-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/artifact-graph/runs/
+            ${{ runner.temp }}/artifact-graph/shards/
+          if-no-files-found: error
+          retention-days: 7
+
+  artifact-graph:
+    # The check over every shard's replays: the job keeps the name of the
+    # single job it replaces. tests/test_artifact_graph.py with
+    # ARTIFACT_GRAPH_REUSE=1 is the check's --reuse --no-differential path: it
+    # derives the map over the union of the shards' replays and asserts every
+    # replay exited 0 in both settings, no violation, and the static half's
+    # determinism; a shard that is missing or ran another plan fails it. It runs
+    # when a shard fails too, so that failure is reported with the rest.
+    name: artifact check (traced replays)
+    needs: [artifact-graph-plan, artifact-graph-shard]
+    if: ${{ !cancelled() && needs.artifact-graph-plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Download every shard's replays
+        # Pinned to a full commit SHA like every other action here, resolved
+        # from the upstream repository's tag at implementation time.
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: artifact-check-shard-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/artifact-graph
+
       - name: Artifact check
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-          # The check's outputs stay for the upload below; check.json holds the time of each phase
-          # and of each replay and differential (-s prints the same lines as the check runs).
+          # check.json holds the time of each phase, each shard and each replay and
+          # differential (-s prints the same lines as the check runs).
           ARTIFACT_GRAPH_WORK: ${{ runner.temp }}/artifact-graph
+          ARTIFACT_GRAPH_REUSE: "1"
         run: python3 -m pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s
 
       - name: Upload the check's timing and violations

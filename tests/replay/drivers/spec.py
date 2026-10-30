@@ -94,6 +94,9 @@ from ..pipeline import DROP_NEXT, Deviations, Orchestrator, utc_now
 from ..replay import Deviation
 
 PIPELINE = "spec"
+# The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
+# CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
+COST = {"plain": 206, "omission": 202, "bad-split": 213, "split-qa-fail": 263, "update": 232}
 
 REQUIREMENT_LARGE = (
     "add input validation to toy.add: raise TypeError naming the offending argument when an argument "

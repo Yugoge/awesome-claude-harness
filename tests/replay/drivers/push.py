@@ -101,6 +101,9 @@ from . import close as closedrv
 from . import merge as mergedrv
 
 PIPELINE = "push"
+# The artifact check's cost of this driver (tests/artifact_graph/shards.py balances its CI shards by it):
+# CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
+COST = 381
 
 # Blocks the base tree's replay meets, each passed by a deviation at the step it occurs on: the
 # refused call is applied as if allowed, so every later step runs and is traced.

@@ -37,6 +37,9 @@ import os
 from . import dev
 
 PIPELINE = "redev"
+# The artifact check's cost of this driver (tests/artifact_graph/shards.py balances its CI shards by it):
+# CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
+COST = 503
 
 
 def run(rp) -> None:

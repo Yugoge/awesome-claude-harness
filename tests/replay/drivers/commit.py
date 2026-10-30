@@ -84,6 +84,9 @@ from ..replay import Deviation
 from . import close as closedrv
 
 PIPELINE = "commit"
+# The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
+# CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
+COST = {"auto": 482, "commit-route": 694, "full": 796}
 
 RESPELLINGS = [
     Respelling("M1 controller", r"source venv/bin/activate && python3 scripts/late-repair-controller\.py",

@@ -85,6 +85,9 @@ from ..replay import Deviation
 from . import close as closedrv
 
 PIPELINE = "merge"
+# The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
+# CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
+COST = {"plain": 104, "conflict": 177}
 
 FEATURE = "feature/toy-sub-format"
 # The owner's files: the feature commit's toy/util.py, and the main line's commit after the branch

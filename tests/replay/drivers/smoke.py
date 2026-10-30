@@ -8,6 +8,9 @@ read-only task, and a Stop. It runs no command text, so it needs no cmdtext.
 from __future__ import annotations
 
 PIPELINE = "smoke"
+# The artifact check's cost of this driver (tests/artifact_graph/shards.py balances its CI shards by it):
+# CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
+COST = 51
 
 TASK = (
     "Problem: a reader needs to know what the add function of the toy package returns.\n"

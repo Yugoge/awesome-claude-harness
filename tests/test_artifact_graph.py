@@ -11,17 +11,26 @@ deciding reads only at the allowed positions, no list that repeats a
 declaration, one state root. It compares against no committed list and keeps no
 exception.
 
-It runs in its own CI job, which installs strace and has a mount namespace
-(root, or passwordless sudo); without either the replays cannot run and the
-tests below fail with the reason, never skip. The baseline job's plain pytest
-step leaves this module to that job with `--ignore=tests/test_artifact_graph.py`.
+Run alone (a local `pytest tests/test_artifact_graph.py`) it is the whole
+check on one runner. It needs strace and a mount namespace (root, or
+passwordless sudo); without either the replays cannot run and the tests below
+fail with the reason, never skip. CI shards the replays by pipeline
+(tests/artifact_graph/shards.py): each shard job replays its drivers with
+`check.py --shard I/N`, and the job "artifact check (traced replays)" runs this
+module over every shard's outputs with ARTIFACT_GRAPH_REUSE=1, the check's
+`--reuse --no-differential` path, so every assertion below holds over every
+replay. The baseline job's plain pytest step leaves this module to that job with
+`--ignore=tests/test_artifact_graph.py`.
 
 Environment: ARTIFACT_GRAPH_WORK (keep the replays, the map and the violations
 in that directory instead of a temporary one), ARTIFACT_GRAPH_JOBS (parallel
 replays, default the CPU count up to 4), ARTIFACT_GRAPH_BUDGET_S (E2's budget
 for the job, default 1500 seconds), ARTIFACT_GRAPH_ONLY (a comma list of drivers
 or driver~variant, for a local run of part of the check; CI leaves it unset,
-since an artifact one pipeline writes and another reads needs every replay).
+since an artifact one pipeline writes and another reads needs every replay),
+ARTIFACT_GRAPH_REUSE ("1": derive from the replays and differential results
+already in ARTIFACT_GRAPH_WORK, the shards' merged outputs, instead of running
+them; a planned replay missing there fails the check).
 """
 from __future__ import annotations
 
@@ -41,14 +50,19 @@ def check(tmp_path_factory):
     from tests.artifact_graph import runtime
     from tests.artifact_graph.check import run_check
 
-    missing = runtime.preconditions()
+    reuse = os.environ.get("ARTIFACT_GRAPH_REUSE") == "1"
+    if reuse and not os.environ.get("ARTIFACT_GRAPH_WORK"):
+        pytest.fail("ARTIFACT_GRAPH_REUSE=1 derives from the replays in ARTIFACT_GRAPH_WORK, which is unset",
+                    pytrace=False)
+    missing = [] if reuse else runtime.preconditions()
     if missing:
         pytest.fail("the artifact check's traced replays cannot run here: " + "; ".join(missing), pytrace=False)
     work = os.environ.get("ARTIFACT_GRAPH_WORK") or str(tmp_path_factory.mktemp("artifact-graph"))
     jobs = int(os.environ.get("ARTIFACT_GRAPH_JOBS") or max(1, min(4, os.cpu_count() or 1)))
     budget = float(os.environ.get("ARTIFACT_GRAPH_BUDGET_S") or 1500)
     only = [x for x in (os.environ.get("ARTIFACT_GRAPH_ONLY") or "").split(",") if x] or None
-    return run_check(str(REPO), work, jobs=jobs, budget_s=budget, only=only, log=lambda s: print(s, flush=True))
+    return run_check(str(REPO), work, jobs=jobs, budget_s=budget, only=only, replays=not reuse,
+                     differential=not reuse, log=lambda s: print(s, flush=True))
 
 
 def test_every_driver_replays_traced_in_both_settings(check):

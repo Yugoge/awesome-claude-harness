@@ -69,7 +69,9 @@ Derivation rules, in the order row 19 states them:
 
 `python -m tests.artifact_graph.check --tree T --work W` runs the static half,
 the replays and the differential, prints every violation as facts and writes
-the artifact map (text, sorted) under W.
+the artifact map (text, sorted) under W. CI shards it (shards.py): `--plan`
+prints the shards and E1's mode, `--shard I/N` replays shard I, and
+`--reuse --no-differential` over every shard's W derives the check.
 """
 from __future__ import annotations
 
@@ -77,6 +79,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -1788,27 +1791,56 @@ def schemas_for(static_records: list) -> dict:
 
 def run_check(tree: str, work: str, *, jobs: int = 4, budget_s: float = 1500.0, replays: bool = True,
               differential: bool = True, settings=("shipped", "armed"), only: list | None = None,
-              log=print) -> dict:
+              shard: tuple | None = None, log=print) -> dict:
     """The whole check on `tree`: static half, replays, differential, derivation, invariants.
     With replays=False the replays under `work` are reused (their sandboxes keep their final
     state, so the differential can still run on them); with differential=False the differential
     results already under `work` are used. Writes under `work`: static.jsonl, runs/, sb/,
-    check.json, violations.txt, map.txt, map-comments/, advisory-copies.txt, e1-sample.tsv."""
+    shards/, check.json, violations.txt, map.txt, map-comments/, advisory-copies.txt, e1-sample.tsv.
+    shard=(I, N): only shard I of the plan's N (tests/artifact_graph/shards.py) replays, with its
+    differential, and the call returns before the derivation; the merge is this call with
+    replays=False and differential=False over every shard's runs/ and shards/."""
     from . import runtime as RT
+    from . import shards as SH
     from .static_half import derive as static_derive
-    from tests.replay import differential as D
     tree = os.path.abspath(tree)
     os.makedirs(work, exist_ok=True)
     timing = {}
     pairs = RT.drivers()
     if only:
         pairs = [p for p in pairs if p[0] in only or f"{p[0]}~{p[1]}" in only]
+    # E2's plan of the whole job, sharded or not: its shards, and E1's mode, decided once over every
+    # driver (a merge takes the shard count its shards recorded)
+    plan = SH.plan(pairs, budget_s=budget_s, count=shard[1] if shard else None if replays else SH.recorded_count(work))
+    refused = SH.shard_errors(plan, shard) if shard else []
+    errors = refused + ([] if replays else SH.merge_errors(work, plan))
+    if shard:
+        pairs = [p for p in pairs if p[0] in plan.shards[shard[0] - 1]] if not refused else []
     jl = RT.jobs_for(work, pairs, settings)
-    # the replays (one sandbox built, then copied per replay) run in worker threads while the
-    # static half runs in this one: neither reads the other's output
-    replaying = RT.start(tree, work, jl, jobs, log) if replays else None
+    # known before the replays when the declared cost already overruns one runner (shards.py);
+    # else E1's measured rule decides once every replay is done
+    mode = plan.mode if plan.mode == "fallback" else None
+    pipelined = replays and differential and mode is not None
+    box: dict = {}
+    ready = threading.Event()
+
+    def after(j):   # in the replay's worker, right after it: the job's differential
+        ready.wait()
+        if "schemas" in box:
+            _differential(j, mode, box["schemas"])
+        log(f"replayed {j.label} {j.settings}: rc {j.rc}, {j.wall_s} s; differential {j.diff_runs} runs, "
+            f"{j.diff_wall_s} s {j.error}")
+    # the replays (one sandbox built, then copied per replay; costliest first, so the slots' tail is
+    # short) run in worker threads while the static half runs in this one: neither reads the other's
+    # output, and a job's differential waits for the static half's schemas
+    order = sorted(jl, key=lambda j: -plan.cost(j.driver, j.variant))
+    replaying = RT.start(tree, work, order, jobs, log, after if pipelined else None) if replays else None
     t0 = time.monotonic()
-    static = static_derive(tree)
+    try:
+        static = static_derive(tree)
+        box["schemas"] = schemas_for(static.records)
+    finally:
+        ready.set()
     timing["static_s"] = round(time.monotonic() - t0, 1)
     with open(os.path.join(work, "static.jsonl"), "w", encoding="utf-8") as fh:
         fh.write(static.jsonl())
@@ -1819,43 +1851,54 @@ def run_check(tree: str, work: str, *, jobs: int = 4, budget_s: float = 1500.0, 
             RT.save_job(j)
             log(f"replay {j.label} {j.settings}: rc {j.rc}, {j.wall_s} s {j.error}")
     else:
-        jl = [RT.load_job(j.out) or j for j in jl]
+        jl = [RT.load_job(j.out, j.sb) or j for j in jl]
+        for j in jl:
+            if j.rc is None and not j.error:
+                j.error = f"no replay of {j.label} ({j.settings}) under {work}: its shard did not run or left no runs/"
         # the replays ran earlier, `jobs` at a time: their wall time as they were scheduled
         timing["replays_wall_s"] = round(sum(j.wall_s for j in jl) / max(1, jobs), 1)
     timing["replays_sum_s"] = round(sum(j.wall_s for j in jl), 1)
-    schemas = schemas_for(static.records)
-    if differential:
-        units = {j.out: D.candidates(j.run_dir) if os.path.isdir(j.run_dir) else [] for j in jl}
-        for j in jl:
-            if j.settings != "shipped" and units[j.out]:
-                units[j.out] = outside_units(j.run_dir, units[j.out], inside=True)
-        total = sum(D.run_count(u) for u in units.values())
-        # E2's budget counts the replays; E1's fallback cuts the differential to the readers
-        # outside the allowed positions when the estimate does not fit
-        est = _estimate(jl, units)
-        left = budget_s - timing.get("replays_wall_s", 0) - timing["static_s"]
-        mode = "full"
-        if est / max(1, jobs) > left:
-            mode = "fallback"
-            for j in jl:
-                # the readers outside the allowed positions, with the tree's switches; the producer
-                # side's decisions, armed or not, come from its static branches and their switches
-                units[j.out] = outside_units(j.run_dir, units[j.out]) if j.settings == "shipped" else []
-        timing["differential_planned_runs"] = total
-        timing["differential_estimate_s"] = round(est, 1)
-        timing["differential_budget_left_s"] = round(left, 1)
-        timing["differential_mode"] = mode
-        timing["differential_selected_runs"] = sum(D.run_count(u) for u in units.values())
+    left = budget_s - timing.get("replays_wall_s", 0) - timing["static_s"]
+    if differential and not pipelined:
+        full = {j.out: _e1_full(j) for j in jl}
+        if mode is None:
+            # E2's budget counts the replays; E1's fallback cuts the differential to the readers
+            # outside the allowed positions when the estimate does not fit
+            mode = "fallback" if sum(j.extra["e1_full_estimate_s"] for j in jl) / max(1, jobs) > left else "full"
         t0 = time.monotonic()
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
-            list(ex.map(lambda j: RT.differential(j, units[j.out], run_schemas(j.run_dir, units[j.out], schemas), 1)
-                        if units[j.out] else j, jl))
+            list(ex.map(lambda j: _differential(j, mode, box["schemas"], full[j.out]), order))
         timing["differential_wall_s"] = round(time.monotonic() - t0, 1)
-        timing["differential_runs"] = sum(j.diff_runs for j in jl)
         for j in jl:
             if os.path.isdir(j.out):    # with reuse, a driver added since has no replay to record
                 RT.save_job(j)
+    e1 = [j.extra for j in jl if "e1_full_estimate_s" in j.extra]
+    if e1:
+        est = sum(x["e1_full_estimate_s"] for x in e1)
+        timing["differential_mode"] = mode or (e1[0].get("e1_mode"))
+        timing["differential_planned_runs"] = sum(x["e1_full_runs"] for x in e1)
+        timing["differential_estimate_s"] = round(est, 1)
+        timing["differential_selected_runs"] = sum(x["e1_selected_runs"] for x in e1)
+        timing["differential_runs"] = sum(j.diff_runs for j in jl)
+        timing["differential_sum_s"] = round(sum(j.diff_wall_s for j in jl), 1)
+        timing["differential_budget_left_s"] = round(left, 1)
+        if not shard and len(e1) == len(jl):
+            # the whole job's measured rule, over every replay (the merge's, or a single job's):
+            # the plan's fallback may not cut a differential the measurement says fits
+            sole = budget_s - timing["replays_sum_s"] / max(1, jobs) - timing["static_s"]
+            measured = "fallback" if est / max(1, jobs) > sole else "full"
+            timing["differential_mode_measured"] = measured
+            if plan.mode == "fallback" and measured == "full":
+                errors.append(f"E1's mode was the fallback by the drivers' declared cost ({plan.expected}), but the "
+                              f"measured full differential ({round(est)} s, {jobs} at a time) fits the "
+                              f"{round(sole)} s left: the drivers' COST overstates them")
+    measures = {"plan": plan.to_json(), "timing": timing, "jobs": [j.to_json() for j in jl]}
+    if replays:
+        SH.write_record(work, plan, shard or (1, 1), timing, refused, sorted({d for d, _v in pairs}))
+    if shard:
+        return {"tree": tree, "measures": measures, "errors": errors + [j.error for j in jl if j.error]}
+    measures["shards"] = SH.records(work)
     runs = []
     for j in jl:
         if os.path.isfile(os.path.join(j.run_dir, "relations.tsv")):
@@ -1864,8 +1907,7 @@ def run_check(tree: str, work: str, *, jobs: int = 4, budget_s: float = 1500.0, 
     m = derive(tree, static, runs)
     vs = violations(m, static.records)
     timing["derive_s"] = round(time.monotonic() - t0, 1)
-    m.measures = {"e1": e1_recall(m, static.records), "timing": timing,
-                  "jobs": [j.to_json() for j in jl]}
+    m.measures = dict(measures, e1=e1_recall(m, static.records))
     c = counts(m, vs)
     text = map_text(m, vs)
     with open(os.path.join(work, "map.txt"), "w", encoding="utf-8") as fh:
@@ -1884,12 +1926,41 @@ def run_check(tree: str, work: str, *, jobs: int = 4, budget_s: float = 1500.0, 
     with open(os.path.join(work, "e1-sample.tsv"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(static_only_sample(m)) + "\n")
     result = {"tree": tree, "counts": c, "measures": m.measures,
-              "errors": [j.error for j in jl if j.error]}
+              "errors": errors + [j.error for j in jl if j.error]}
     with open(os.path.join(work, "check.json"), "w") as fh:
         json.dump(result, fh, indent=1, sort_keys=True)
     result["violations"] = vs
     result["map"] = m
     return result
+
+
+def _e1_full(j) -> list[dict]:
+    """The job's differential units in E1's full mode (every reader in a shipped replay, the producer
+    side's readers in an armed one); records their run count and estimated seconds on the job."""
+    from tests.replay import differential as D
+    units = D.candidates(j.run_dir) if os.path.isdir(j.run_dir) else []
+    if j.settings != "shipped" and units:
+        units = outside_units(j.run_dir, units, inside=True)
+    j.extra.update(e1_full_runs=D.run_count(units), e1_full_estimate_s=round(_estimate([j], {j.out: units}), 2))
+    return units
+
+
+def _differential(j, mode: str, schemas: dict, full: list | None = None):
+    """E1's differential of one job in `mode`: full, or the fallback (the readers outside the allowed
+    positions with the tree's switches; the producer side's decisions, armed or not, come from its
+    static branches and their switches)."""
+    from . import runtime as RT
+    from tests.replay import differential as D
+    try:
+        units = _e1_full(j) if full is None else full
+        if mode == "fallback":
+            units = outside_units(j.run_dir, units) if j.settings == "shipped" else []
+        j.extra.update(e1_mode=mode, e1_selected_runs=D.run_count(units))
+        if units:
+            RT.differential(j, units, run_schemas(j.run_dir, units, schemas), 1)
+    except Exception as e:  # noqa: BLE001 -- a worker's failure is the job's error, never a lost job
+        j.error = (j.error + "; " if j.error else "") + f"differential: {type(e).__name__}: {e}"
+    return j
 
 
 def run_schemas(run_dir: str, units: list[dict], schemas: dict) -> dict:
@@ -1969,7 +2040,7 @@ def main(argv=None) -> int:
     import argparse
     ap = argparse.ArgumentParser(prog="python -m tests.artifact_graph.check", description=__doc__.split("\n")[0])
     ap.add_argument("--tree", required=True, help="the harness tree to check (working tree or a clone)")
-    ap.add_argument("--work", required=True, help="output directory, outside the repository and the tree")
+    ap.add_argument("--work", help="output directory, outside the repository and the tree (all but --plan)")
     ap.add_argument("--jobs", type=int, default=max(1, min(4, os.cpu_count() or 1)))
     ap.add_argument("--budget-s", type=float, default=1500.0, help="E2's time budget for the job (seconds)")
     ap.add_argument("--reuse", action="store_true", help="reuse the replays already under --work")
@@ -1977,7 +2048,28 @@ def main(argv=None) -> int:
                     help="use the differential results already under --work instead of running it")
     ap.add_argument("--only", action="append", default=[], help="driver or driver~variant (repeatable)")
     ap.add_argument("--show", type=int, default=0, help="print at most N violations (0: all)")
+    ap.add_argument("--plan", action="store_true",
+                    help="print the CI shards and E1's mode for the drivers present (JSON; its matrix is the "
+                         "shard numbers) and exit")
+    ap.add_argument("--shard", help="I/N: replay shard I of the plan's N with its differential, leave runs/ and "
+                                    "shards/ under --work for the merge (--reuse --no-differential), and stop")
     a = ap.parse_args(argv)
+    if a.plan:
+        from . import runtime as RT, shards as SH
+        pairs = [p for p in RT.drivers() if not a.only or p[0] in a.only or f"{p[0]}~{p[1]}" in a.only]
+        print(json.dumps(SH.plan(pairs, budget_s=a.budget_s).to_json(), indent=1, sort_keys=True))
+        return 0
+    if not a.work:
+        ap.error("--work is required")
+    shard = None
+    if a.shard:
+        from . import shards as SH
+        try:
+            shard = SH.parse_shard(a.shard)
+        except ValueError as e:
+            ap.error(str(e))
+        if a.reuse:
+            ap.error("--shard replays its share; the merge is --reuse --no-differential without --shard")
     from tests.replay.cli import _outside_repo
     work = _outside_repo(a.work, a.tree)
     if not a.reuse:
@@ -1987,7 +2079,16 @@ def main(argv=None) -> int:
             print("the check's replays cannot run: " + "; ".join(missing), file=sys.stderr)
             return 2
     res = run_check(a.tree, work, jobs=a.jobs, budget_s=a.budget_s, replays=not a.reuse,
-                    differential=not a.no_differential, only=a.only or None)
+                    differential=not a.no_differential, only=a.only or None, shard=shard)
+    if shard:
+        print(json.dumps({"plan": res["measures"]["plan"], "timing": res["measures"]["timing"],
+                          "errors": res["errors"]}, indent=1, sort_keys=True))
+        failed = [j for j in res["measures"]["jobs"] if j["rc"] != 0]
+        for j in failed:
+            print(f"replay {j['driver']} {j['variant']} ({j['settings']}) exited {j['rc']}; see {j['log']}")
+        print(f"shard {shard[0]}/{shard[1]}: {len(res['measures']['jobs'])} replays under {work}/runs/, "
+              f"its record {work}/shards/shard-{shard[0]}.json")
+        return 1 if failed or res["errors"] or not res["measures"]["jobs"] else 0
     vs = res["violations"]
     for v in vs[: a.show or len(vs)]:
         print(v.text())

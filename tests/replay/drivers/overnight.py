@@ -98,6 +98,9 @@ from ..replay import Deviation
 from . import dev as devdrv
 
 PIPELINE = "dev-overnight"
+# The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
+# CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
+COST = {"plain": 813, "stop": 345}
 FOCUS = "harden the toy package's public functions"
 END_TIME = "8h"
 WORK_BRANCH = "night-work"

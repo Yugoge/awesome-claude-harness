@@ -16,7 +16,9 @@ the recorded invocations of every reader of an artifact in it
 (tests/replay/differential.py). Its run count and wall time are measured
 against E2's budget; over budget, E1's fallback applies (the differential runs
 only for readers outside the allowed positions, and the static half's
-branches decide for the rest): the caller passes the unit filter.
+branches decide for the rest): the caller passes the unit filter. When the
+mode is known before the replays (shards.py), a job's differential runs in its
+worker right after its replay (start(after=...)).
 """
 from __future__ import annotations
 
@@ -138,14 +140,25 @@ def replay(tree: str, job: Job, template: str | None = None) -> Job:
     return job
 
 
-def replay_all(tree: str, jobs: list[Job], workers: int, template: str | None = None) -> list[Job]:
+def replay_all(tree: str, jobs: list[Job], workers: int, template: str | None = None, after=None,
+               ends: list | None = None) -> list[Job]:
+    """Replay `jobs` in their order, `workers` at a time; `after(job)`, if given, runs in the same
+    worker right after the job's replay (its differential, when E1's mode is known before the replays)."""
+    def one(j: Job) -> Job:
+        replay(tree, j, template)
+        if ends is not None:
+            ends.append(time.monotonic())
+        if after:
+            after(j)
+        return j
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        return list(ex.map(lambda j: replay(tree, j, template), jobs))
+        return list(ex.map(one, jobs))
 
 
-def start(tree: str, work: str, jobs: list[Job], workers: int, log=print):
-    """Build the template, then replay every job `workers` at a time, in a thread of its own; the
-    future's result is the timing: template_s, and replays_wall_s from the start to the last replay's end."""
+def start(tree: str, work: str, jobs: list[Job], workers: int, log=print, after=None):
+    """Build the template, then replay every job `workers` at a time (each followed by `after`), in a
+    thread of its own; the future's result is the timing: template_s, replays_wall_s from the start to
+    the last replay's end, and runtime_wall_s to the last job's end."""
     def run() -> dict:
         t0 = time.monotonic()
         tpl = None
@@ -154,8 +167,10 @@ def start(tree: str, work: str, jobs: list[Job], workers: int, log=print):
         except (OSError, RuntimeError, subprocess.SubprocessError) as e:
             log(f"sandbox template: {e}; every replay builds its own sandbox")
         built = round(time.monotonic() - t0, 1)
-        replay_all(tree, jobs, workers, tpl)
-        return {"template_s": built, "replays_wall_s": round(time.monotonic() - t0, 1)}
+        ends: list = []
+        replay_all(tree, jobs, workers, tpl, after, ends)
+        return {"template_s": built, "replays_wall_s": round(max(ends, default=t0) - t0, 1),
+                "runtime_wall_s": round(time.monotonic() - t0, 1)}
     ex = ThreadPoolExecutor(max_workers=1)
     fut = ex.submit(run)
     ex.shutdown(wait=False)
@@ -174,12 +189,19 @@ def differential(job: Job, units: list[dict], schemas: dict, workers: int) -> Jo
     return job
 
 
-def load_job(out: str) -> Job | None:
+def load_job(out: str, sb: str | None = None) -> Job | None:
+    """The job recorded under `out`, its paths rebased onto `out` (and `sb`): a shard's job.json
+    holds the paths of the runner that replayed it, and the merge reads it from its own directory."""
     try:
         with open(os.path.join(out, "job.json")) as fh:
-            return Job(**json.load(fh))
+            job = Job(**json.load(fh))
     except (OSError, ValueError, TypeError):
         return None
+    job.out = out
+    job.log = os.path.join(out, "replay.log")
+    if sb:
+        job.sb = sb
+    return job
 
 
 def save_job(job: Job) -> None:
@@ -195,8 +217,12 @@ def preconditions() -> list[str]:
     if not ok:
         missing.append(f"strace: {ver} (CI installs it: sudo apt-get install -y strace)")
     pre = [] if os.geteuid() == 0 else ["sudo", "-n"]
-    p = subprocess.run(pre + ["unshare", "--mount", "--propagation", "private", "true"], capture_output=True, text=True)
-    if p.returncode:
-        missing.append("a mount namespace: `" + " ".join(pre + ["unshare", "--mount", "true"]) + "` failed: "
-                       + (p.stderr.strip() or f"exit {p.returncode}"))
+    try:
+        p = subprocess.run(pre + ["unshare", "--mount", "--propagation", "private", "true"], capture_output=True,
+                           text=True)
+        why = p.stderr.strip() or f"exit {p.returncode}" if p.returncode else ""
+    except OSError as e:
+        why = str(e)
+    if why:
+        missing.append("a mount namespace: `" + " ".join(pre + ["unshare", "--mount", "true"]) + "` failed: " + why)
     return missing

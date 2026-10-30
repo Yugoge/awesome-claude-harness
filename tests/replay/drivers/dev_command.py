@@ -67,6 +67,9 @@ from ..replay import Deviation
 from .dev import with_lines
 
 PIPELINE = "dev-command"
+# The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
+# CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
+COST = {"plain": 187, "qa-fail": 236}
 COMMAND = "dev-command"
 
 CMD_REL = ".claude/commands/test.md"

@@ -97,6 +97,9 @@ from ..pipeline import DROP, DROP_NEXT, Deviations, Orchestrator, Respelling, ut
 from ..replay import Deviation
 
 PIPELINE = "dev"
+# The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
+# CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
+COST = {"plain": 301, "qa-fail": 366, "question": 300, "ba-qa-fail": 322, "fanout": 430, "fanout-qa-fail": 508}
 
 REQUIREMENT = ("add input validation to toy.add: raise TypeError naming the offending argument "
                "when an argument is not a number")
