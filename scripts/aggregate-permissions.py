@@ -7,7 +7,18 @@ import glob, json, os, sys
 
 
 def extract(path):
-    return json.load(open(path)).get("qa", {}).get("permissions_verification", {}).get("validated_permissions", [])
+    """The permissions QA validated in one report. A report this cannot read gives none: the
+    report itself is decided on by its producer's stop and by the chain call at the cycle's end,
+    which send it back to its QA dispatch; the next run of this step applies what it holds."""
+    try:
+        with open(path) as fh:
+            perms = json.load(fh)["qa"]["permissions_verification"]["validated_permissions"]
+    except KeyError:
+        return []
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"aggregate-permissions: {path}: no permissions read ({exc})", file=sys.stderr)
+        return []
+    return [p for p in perms if isinstance(p, dict)] if isinstance(perms, list) else []
 
 
 if len(sys.argv) < 2:

@@ -100,9 +100,8 @@ def _find_latest_qa_report(
     if dev_session_id:
         # dev_session_id format: "dev-YYYYMMDD-HHMMSS"
         # Extract YYYYMMDD-HHMMSS portion from any session ID format
-        _m = re.search(r'\d{8}-\d{6}', dev_session_id)
-        if _m:
-            session_ts = _m.group()
+        session_ts = obligation.task_stamp(dev_session_id)
+        if session_ts:
             # Check by filename match first (fastest)
             for p in reversed(matches):
                 fname = os.path.basename(p)
@@ -142,15 +141,14 @@ def _qa_report_expected_absent(project_dir: str, dev_session_id: str | None) -> 
     from this module's own outer fail-open wrapper at the bottom of the file).
     """
     try:
-        ts_match = re.search(r"\d{8}-\d{6}", dev_session_id or "")
-        if not ts_match:
+        stamp = obligation.task_stamp(dev_session_id)
+        if not stamp:
             return False
+        from lib import do_report  # the report's one reading (E8)
         for p in glob.glob(
-            os.path.join(project_dir, "docs", "dev", f"do-report-*{ts_match.group()}*.json")
+            os.path.join(project_dir, "docs", "dev", f"do-report-*{stamp}*.json")
         ):
-            data = _read_json(Path(p))
-            absent = data.get("expected_absent")
-            if isinstance(absent, list) and "qa-report" in absent:
+            if "qa-report" in do_report.expected_absent(p):
                 return True
         return False
     except Exception:

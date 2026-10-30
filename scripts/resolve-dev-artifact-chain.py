@@ -2233,6 +2233,22 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
     return result
 
 
+def exit_status(result: dict[str, Any]) -> int:
+    """The chain's verdict as an exit status: 0 for a complete chain (status
+    "pass", or "pass_with_exceptions" with its disclosed_exceptions[]), 2
+    otherwise. main exits with it; a caller that loads this module acts on the
+    verdict through it, never through a status test of its own."""
+    return 0 if result["status"] in ("pass", "pass_with_exceptions") else 2
+
+
+def late_repair_eligible(result: dict[str, Any]) -> bool:
+    """The chain's verdict on the late-repair route: the field
+    `_compute_gap_fields` computes, true only for a singular chain whose every
+    gap is a stage gap; NOT_APPLICABLE (a fan-out chain, or none classified) is
+    not eligible."""
+    return result.get("late_repair_eligible") is True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = StableArgumentParser(prog="resolve-dev-artifact-chain.py")
     parser.add_argument("--task-id", required=True)
@@ -2255,7 +2271,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     result = resolve_chain(args.project_dir, args.task_id)
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
-    return 0 if result["status"] in ("pass", "pass_with_exceptions") else 2
+    return exit_status(result)
 
 
 if __name__ == "__main__":

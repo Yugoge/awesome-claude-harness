@@ -218,21 +218,6 @@ CURRENT_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 #    (in_place == main root; .claude/worktrees/<n>; .claude/overnight-fresh-clones/<n>).
 #    Selection is by exact session-keyed FILENAME and then a parsed field check, so
 #    it cannot be fooled by another session's file or by JSON whitespace drift.
-PROJECT_DIR=""; STATE_FILE=""
-for start in "${CLAUDE_PROJECT_DIR:-}" "$PWD"; do
-  [ -n "$start" ] || continue
-  d="$(cd "$start" 2>/dev/null && pwd -P)" || continue
-  while [ -n "$d" ]; do
-    f="$d/.claude/overnight-state-$CURRENT_SESSION_ID.json"
-    if [ -f "$f" ] && jq -e --arg s "$CURRENT_SESSION_ID" '.session_id == $s' "$f" >/dev/null 2>&1; then
-      STATE_FILE="$(readlink -f "$f")"; break
-    fi
-    [ "$d" = "/" ] && break
-    d="$(dirname "$d")"
-  done
-  [ -n "$STATE_FILE" ] && break
-done
-[ -n "$STATE_FILE" ] || { echo "ERROR: no readable overnight-state file for session $CURRENT_SESSION_ID at or above ${CLAUDE_PROJECT_DIR:-<unset>} or $PWD" >&2; exit 1; }
 #    The walk DISCOVERS the record; it does NOT define the root. Take the root
 #    from what the record SAYS about itself, never from the directory the record
 #    happens to sit in: the launcher writes the record under its own resolved
@@ -241,9 +226,12 @@ done
 #    ordinary case, since the launcher's own resolution falls back to `$PWD`.
 #    Binding to the containing directory is what made Step 1 hard-abort with
 #    "verify: directory does not exist: <subdir>/.claude/dev-registry/<sid>".
-PROJECT_DIR="$(jq -r '.main_root // empty' "$STATE_FILE")"
-[ -n "$PROJECT_DIR" ] && [ -d "$PROJECT_DIR" ] || { echo "ERROR: $STATE_FILE records no usable main_root: '${PROJECT_DIR:-<empty>}'" >&2; exit 1; }
-PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)"
+#    The state's one reading (hooks/lib/overnight.py) does the walk and the field
+#    checks and prints both paths, canonical; it exits 1 with the reason otherwise.
+PROJECT_DIR=""; STATE_FILE=""
+{ read -r STATE_FILE; read -r PROJECT_DIR; } < <(python3 ~/.claude/hooks/lib/overnight.py \
+    session-root "$CURRENT_SESSION_ID" "${CLAUDE_PROJECT_DIR:-}" "$PWD")
+[ -n "$STATE_FILE" ] && [ -n "$PROJECT_DIR" ] || exit 1
 
 # 3. Normalise the variable IN THIS SHELL, so the canonical anchor below resolves.
 #    Same-shell only: this export does NOT reach later Bash calls, hooks, or Agent
@@ -1395,11 +1383,10 @@ Loop termination:
 
 **CRITICAL**: Aggregate permissions from ALL pipelines before updating.
 
-**Collect and apply permissions from all pipeline QA reports** with two one-line invocations:
+**Collect and apply permissions from all pipeline QA reports** with one invocation, the aggregator's list piped to the applier as `/dev` does:
 
 ```bash
-python3 ~/.claude/scripts/aggregate-permissions.py docs/dev/ docs/dev/overnight/<session_id>/pipelines.json > docs/dev/overnight/<session_id>/aggregated-permissions.json
-bash ~/.claude/scripts/apply-permissions.sh docs/dev/overnight/<session_id>/aggregated-permissions.json .claude/settings.json
+python3 ~/.claude/scripts/aggregate-permissions.py docs/dev/ docs/dev/overnight/<session_id>/pipelines.json | bash ~/.claude/scripts/apply-permissions.sh /dev/stdin .claude/settings.json
 ```
 
 The aggregator filters QA reports to those whose `timestamp_suffix` matches a `status: fixed` pipeline, extracts `qa.permissions_verification.validated_permissions[]`, and emits a deduplicated list (by `pattern`). The applier merges each entry into `.permissions.<section>` (allow/ask/deny) atomically, skipping patterns already present.

@@ -162,8 +162,8 @@ def do_report_lite_preflight(doc: dict) -> Optional[str]:
 def chain_state(task_id: str, result: dict) -> dict:
     """The row a dev-chain task takes from its one chain call.
 
-    The chain's own status decides; its result is carried whole
-    (`artifact_chain`), and a fan-out's lanes are the ones it lists.
+    The chain's own verdict decides (its `exit_status`); its result is carried
+    whole (`artifact_chain`), and a fan-out's lanes are the ones it lists.
     """
     row: dict[str, Any] = {
         "invoke_resolver": True,
@@ -173,7 +173,7 @@ def chain_state(task_id: str, result: dict) -> dict:
             for lane in result["lanes"]
         ],
     }
-    if result["status"] in ("pass", "pass_with_exceptions"):
+    if _load_resolver_module().exit_status(result) == 0:
         row.update(state="close_pending", next_action="close")
     else:
         row.update(state="blocked", next_action="inspect", blocker="RESOLVER_FAIL")

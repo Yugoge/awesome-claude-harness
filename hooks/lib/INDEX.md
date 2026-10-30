@@ -38,6 +38,7 @@ lib/
 ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
 ├── `dev_report_shard_patterns.py` - Single source for the per-worker / canonical dev-report filename regexes and
 ├── `dispatch_template.py` - A dispatch made from a base template before a merge carries no obligation block
+├── `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - Provides iter_git_invocations() — a token-aware parser that detects git
 ├── `grepguard_context_strip.py` - PURPOSE (narrow, guard-specific)

@@ -160,6 +160,15 @@ TASK_ID_RE = re.compile(
     r"^(?:\d{8}-\d{6}[A-Za-z0-9._-]*|dev-(?:command-)?\d{8}-\d{6}(?:-l\d+)?)$"
 )
 _MINTED_PREFIX_RE = re.compile(r"^dev-(?:command-)?(?=\d{8}-\d{6})")
+_STAMP_RE = re.compile(r"\d{8}-\d{6}")
+
+
+def task_stamp(text) -> str | None:
+    """The minted timestamp (``yyyymmdd-hhmmss``) a task id, a session id or a
+    text naming one holds first, or None: the one reading of an id's
+    timestamp, which every hook and script that keys on it calls."""
+    m = _STAMP_RE.search(text) if isinstance(text, str) else None
+    return m.group() if m else None
 _LANE_SUFFIX_RE = re.compile(r"-l\d+$")
 
 # Closed terminal vocabulary (design D1/R2): schema id -> dotted path -> legal
@@ -692,15 +701,15 @@ def registry_dir_for(project_dir: str | Path, task_id: Any) -> Path | None:
     and defaults to ``dev-<ts>``. None when the id carries no timestamp."""
     if not isinstance(task_id, str):
         return None
-    stamp = re.search(r"\d{8}-\d{6}", task_id)
+    stamp = task_stamp(task_id)
     if stamp is None:
         return None
     root = Path(project_dir) / ".claude" / "dev-registry"
     if task_id.startswith("dev-command-"):
-        return root / f"dev-command-{stamp.group()}"
-    candidates = [root / f"dev-{stamp.group()}"]
+        return root / f"dev-command-{stamp}"
+    candidates = [root / f"dev-{stamp}"]
     if not task_id.startswith("dev-"):
-        candidates.append(root / f"dev-command-{stamp.group()}")
+        candidates.append(root / f"dev-command-{stamp}")
     return next((c for c in candidates if c.is_dir()), candidates[0])
 
 
@@ -1050,9 +1059,9 @@ def _task_records(task_id: str, project_dir: str | Path,
     # A dispatch of the task is appended to its transcript after the task id
     # was minted, so a transcript last written a day or more before the id's
     # timestamp (local or UTC) holds none of them.
-    stamp = re.search(r"\d{8}-\d{6}", family)
+    stamp = task_stamp(family)
     try:
-        cutoff = datetime.strptime(stamp.group(), "%Y%m%d-%H%M%S").timestamp() - 86400 if stamp else None
+        cutoff = datetime.strptime(stamp, "%Y%m%d-%H%M%S").timestamp() - 86400 if stamp else None
     except ValueError:
         cutoff = None
     seen: set[tuple[str, str]] = set()

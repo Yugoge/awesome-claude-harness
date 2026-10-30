@@ -227,7 +227,7 @@ def init_run(root: Path, task_id: str) -> tuple[int, dict[str, Any], dict[str, A
     """
     resolver = load_sibling_module("resolve-dev-artifact-chain.py", __file__)
     result = resolver.resolve_chain(root, task_id)
-    if result.get("mode") != "singular" or result.get("late_repair_eligible") is not True:
+    if not resolver.late_repair_eligible(result):
         return 1, {"outcome": "refuse", "reason": "not a beyond-QA gap; use R1's route"}, result
 
     run_record_path = _run_record_path(root, task_id)

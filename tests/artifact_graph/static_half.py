@@ -215,6 +215,9 @@ def _derive(root: Path, chain_script: str) -> StaticResult:
     records += _deciding(findings, md_env)
     records += [_chain_record(c) for c in findings.chain_calls]
     records += _owner_outputs(root, files, findings, sh, py, hook_regs)
+    # scripts a person runs and nothing in the harness runs (E12's by-hand entry points)
+    records += [{"kind": "declaration", "type": "hand_run", "component": c} for c in sorted(_run_by_hand(
+        root, files, findings, sh, py, {r["component"] for r in hook_regs if r.get("component")}))]
     records += D.policy_prefixes(root, files)
     records += _literal_sites(root, py, sh, decls, obligations)
     records += _rule7(findings, roster, commands, schema_decls, obligations, read_text)
@@ -385,6 +388,9 @@ def _obligations(root: Path, files: list[str], md_env: dict) -> list[dict]:
                 for key in ("schema", "terminal_line_regex", "begin_marker", "end_marker"):
                     if isinstance(a.get(key), str):
                         rec[key] = a[key]
+                # what else the declaration states about the artifact (a schema, a terminal-line
+                # rule, a source it is checked against): the gate at its producer's stop checks it
+                rec["states"] = sorted(k for k in a if k not in ("kind", "path"))
                 arts.append(rec)
             out.append({
                 "kind": "declaration", "type": "obligation",
@@ -629,7 +635,7 @@ def _bind_argv(findings: M.Findings, md_env: dict) -> None:
                                   src, tuple(o.chain), o.origin, via))
             else:
                 bound.append(M.Deciding(o.component, o.function, o.read_line, V.make_str(alts), o.read_mode,
-                                        o.decision, o.evidence, o.lang))
+                                        o.decision, o.evidence, o.lang, o.read_via, o.whole))
     for b in bound:
         (findings.ops if isinstance(b, M.Op) else findings.deciding).append(b)
 
@@ -653,7 +659,8 @@ def _deciding(findings: M.Findings, md_env: dict) -> list[dict]:
                 "path": pat, "resolution": status, "read_site": f"{d.component}:{d.read_line}",
                 "read_mode": d.read_mode, "decision": d.decision.kind, "code": d.decision.code,
                 "decision_site": f"{d.component}:{d.decision.line}", "detail": d.decision.detail,
-                "through": list(d.decision.via), "evidence": d.evidence,
+                "through": list(d.decision.via), "evidence": d.evidence, "read_through": list(d.read_via),
+                "whole": d.whole,
             })
     return out
 
@@ -878,14 +885,19 @@ def _literal_sites(root: Path, py, sh, decls: list, obligations: list) -> list[d
             except re.error:
                 rx = None
             hits = [m for m in (rx.search(s) for s in samples) if m] if rx is not None else []
-            if any(m.end() - m.start() >= len(m.string) for m in hits):
+            # shaped to the id: it does not also take the sample with each digit run cut to one
+            # digit (a number range `[0-9]+-[0-9]+` matches a timestamp by accident)
+            if any(m.end() - m.start() >= len(m.string) and not rx.fullmatch(re.sub(r"\d+", "1", m.string))
+                   for m in hits):
                 out.append({"kind": "id_regex", "component": comp, "site": f"{comp}:{line}", "regex": text,
                             "lang": lang})
 
     for key in sorted(py.modules):
         mod = py.modules[key]
+        shown = _shown_text(mod.tree)
         for n in _ast.walk(mod.tree):
-            if isinstance(n, _ast.Constant) and isinstance(n.value, str) and id(n) not in mod.docstrings:
+            if isinstance(n, _ast.Constant) and isinstance(n.value, str) and id(n) not in mod.docstrings \
+                    and id(n) not in shown:
                 check(mod.path, mod.ln(n), n.value, "python")
     for key in sorted(sh.files):
         sf = sh.files[key]
@@ -900,6 +912,29 @@ def _literal_sites(root: Path, py, sh, decls: list, obligations: list) -> list[d
     for comp, line, form, lang in py.id_forms + sh.id_forms:
         out.append({"kind": "id_form", "component": comp, "site": f"{comp}:{line}", "form": form, "lang": lang})
     return out
+
+
+_MATCHING = {"startswith", "endswith", "match", "fullmatch", "search", "findall", "finditer", "compile", "sub",
+             "subn", "split", "partition", "rpartition", "index", "rindex", "find", "rfind", "count", "replace",
+             "removeprefix", "removesuffix"}
+
+
+def _shown_text(tree) -> set:
+    """The text fragments of the f-strings a module only shows (a message, a log line): an
+    f-string that no comparison holds and that is passed to no matching operation formats
+    output, so a marker in it names the marker and reads no response (rule (2))."""
+    import ast
+    tested = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Compare):
+            tested |= {id(x) for x in ast.walk(n)}
+        elif isinstance(n, ast.Call):
+            f = n.func
+            name = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else ""
+            if name in _MATCHING:
+                tested |= {id(x) for x in ast.walk(n)}
+    return {id(v) for n in ast.walk(tree) if isinstance(n, ast.JoinedStr) and id(n) not in tested
+            for v in n.values if isinstance(v, ast.Constant)}
 
 
 # ------------------------------------------------------------------ rule 7

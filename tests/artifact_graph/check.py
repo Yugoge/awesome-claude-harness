@@ -35,7 +35,8 @@ Derivation rules, in the order row 19 states them:
     task id first; readers: the sites that template or match a minted id), and
     the chain function's stdout (readers: its call sites, deciding when they
     test fields of it: a decision on the chain function's output that is not
-    its use verbatim, rule (5)).
+    its use verbatim, rule (5); its exit status, and what a function of the
+    chain's own module returns for it, are the chain's verdict).
 (3) Readers read content or names; a bulk read (trace.py: a program reading
     most files of a directory it listed, `git add -A`) reads nothing; a hook
     whose artifact reads in one run are exactly the triggering tool call's
@@ -393,6 +394,7 @@ class _Ctx:
         for r in rels:
             if (r["op"] == "rename" or r["op"] == "read" and r.get("mode") == "name") and r["path"] in dirs:
                 continue
+            r = dict(r, path=self.own_checkout(r["component"], r["path"]))
             if r["path"].startswith(("<harness>/", "<home>/")):
                 root, tail = r["path"].split("/", 1)
                 tails = {tail, ".claude/" + tail} if root == "<harness>" else {tail}
@@ -513,16 +515,13 @@ class _Ctx:
             for h in dest:
                 own.setdefault(h, []).extend(moved)
         own = self._without_scratch(own, rels)
-        # a file under a tree a component creates whole (python -m venv DIR) is that component's
+        # a tree a platform tool creates whole (`python -m venv DIR`: the interpreter's own
+        # environment, which the interpreter and the shell load) holds the platform's files, as
+        # the interpreter on PATH is: no harness component writes them for another, so they are
+        # inputs (rule (1)), and a test that the environment works tests no artifact
         trees = [r for r in rels if r["op"] == "create" and r.get("mode") == "tree" and literal_root(r["path"])]
-        for k, rels_ in own.items():
-            if any(x.op == "write" for x in rels_):
-                continue
-            for r in trees:
-                if k.startswith(r["path"].rstrip("/") + "/"):
-                    who = comp_identity(r["component"])
-                    rels_.append(Rel(who, "write", r["site"], "static", via=who))
-                    break
+        for k in [k for k in own if any(k == r["path"] or k.startswith(r["path"].rstrip("/") + "/") for r in trees)]:
+            del own[k]
         for k in sorted(own):
             a = m.art(k)
             for rel in own[k]:
@@ -831,6 +830,8 @@ class _Ctx:
                 if not hits:
                     hits = [pat]
                     m.art(pat)
+                hits += [k for k, a in m.artifacts.items() if a.kind == "file" and k not in hits
+                         and (_under(pat, k) or _lane_of(pat, k))]
                 for k in hits:
                     rec = {"role": _bound_role(ob.get("role"), art.get("template") or "", k), "site": ob["site"],
                            "schema": art.get("schema") or ""}
@@ -914,7 +915,17 @@ class _Ctx:
     # ------------------------------------------------------------ deciding (rules 3-6)
     def deciding(self) -> None:
         m = self.m
-        # E1's differential
+        # E1's differential. One Bash call that runs the chain function and, after it, a script
+        # reading a file the chain decides on has one exit status: a mutation the chain function
+        # decides on changes the call there first (the call acts on its verdict, rule (5)), so
+        # the call's change is the chain's and measures no rule of the other reader's
+        chain_calls, chain_decides = set(), set()
+        for run in self.runs:
+            for u in (run.differential or {}).get("units", []):
+                if os.path.normpath(u.get("origin") or "") == self.chain_script:
+                    chain_calls.add((run.name, u["seq"]))
+                    chain_decides |= {(runtime_pattern(r["pattern"], run.env), r["how"]) for r in u["runs"]
+                                      if r["changed"]}
         for run in self.runs:
             for u in (run.differential or {}).get("units", []):
                 inv = run.invocations.get(u["seq"]) or {}
@@ -936,6 +947,9 @@ class _Ctx:
                             continue
                         if exact_targets and r["how"] != "invalid":
                             continue    # rule (3): a call's own targets count on a content change only
+                        if (run.name, u["seq"]) in chain_calls and os.path.normpath(reader) != self.chain_script \
+                                and (key, r["how"]) in chain_decides:
+                            continue    # the call's change is the chain function's (above)
                         rec["changed"].add((run.settings, r["how"]))
                         pos = self._position(a, u["event"], u.get("tool"), u.get("agent_type"), u["origin"],
                                              u["kind"])
@@ -956,7 +970,7 @@ class _Ctx:
                 continue    # a branch on a directory test or a listing reads no file (rule (3))
             if not (d["decision"] in ("exit2", "block") or d["decision"] == "exit" and d.get("code") not in (0, None)):
                 continue
-            pat = d["path"]
+            pat = self.own_checkout(d["component"], d["path"])
             if d["resolution"] == "unresolved":
                 continue
             if pat in self.moved:
@@ -1067,6 +1081,13 @@ class _Ctx:
         return out or [("", "")]
 
     def _static_rule(self, d: dict) -> str:
+        """The code identity of a static deciding read: the read's own site in the function of
+        another file it ran in, when the decision tests that function's return whole (every
+        caller of it takes its one verdict, rule (4)); else the decision's site in the reader's
+        own function chain, or the read site."""
+        lib = _library_read(d)
+        if lib and d.get("whole"):
+            return lib
         through = d.get("through") or []
         return (through[-1] if through else d["read_site"])
 
@@ -1081,9 +1102,11 @@ class _Ctx:
                     if d["kind"] == "deciding":
                         by.setdefault(comp_identity(d["component"]), []).append(d)
                 self.texts[("dec_by",)] = by
-            sites = {self._static_rule(d) for d in self.texts[("dec_by",)].get(reader, ())
-                     if d["path"] == key or matches(d["path"], key)}
-            self.texts[ck] = sorted(sites)[0] if len(sites) == 1 else reader
+            mine = [d for d in self.texts[("dec_by",)].get(reader, ()) if d["path"] == key or matches(d["path"], key)]
+            sites = {self._static_rule(d) for d in mine}
+            # a reader whose reads of it all run in one function of another file takes its verdict
+            libs = {self._static_rule(d) for d in mine if d.get("whole") and _library_read(d)}
+            self.texts[ck] = sorted(libs)[0] if len(libs) == 1 else sorted(sites)[0] if len(sites) == 1 else reader
         return self.texts[ck]
 
     def _runners(self, script: str) -> set:
@@ -1098,6 +1121,55 @@ class _Ctx:
                     out.add("main" if mm.group(1) == "commands" else "agent:" + mm.group(2))
             self.texts[key] = out
         return self.texts[key]
+
+    def own_checkout(self, component: str, pat: str) -> str:
+        """Rule (1)'s tracked files, for a script a person runs and nothing in the harness runs
+        (the static half's by-hand entry points): its project is the checkout it verifies, its
+        own tree, so a file of the tree it names under the project root (`git rev-parse
+        --show-toplevel`) is the tree's own file, not a product project's file of that name."""
+        if ("hand",) not in self.texts:
+            self.texts[("hand",)] = {d["component"] for d in self.recs
+                                     if d.get("kind") == "declaration" and d.get("type") == "hand_run"}
+        if component in self.texts[("hand",)] and pat.startswith("<proj>/") \
+                and pat[len("<proj>/"):] in self.tree_files:
+            return "<harness>/" + pat[len("<proj>/"):]
+        return pat
+
+    def code_produced(self, a: Artifact) -> bool:
+        """Rule (6)'s use. An artifact no obligation declares, that only code writes (a hook, a
+        script, the platform), none of it with a role's own tool (Write, Edit, the role's own
+        shell): E4's gates return a fault to its producer, at the producer's stop (G2) or at its
+        dispatch and collection (G1, G3), and code has neither a stop nor a dispatch, so no gate
+        can hold a rule on such an artifact. A decision on it outside the allowed positions is its
+        use, which rule (4) still holds to one rule."""
+        if a.kind != "file" or a.declared or not a.writers:
+            return False
+        return not any(w.source == "declaration" or RUNTIME_ROLE.match(w.who) and w.who != "cli"
+                       for w in a.writers)
+
+    def stop_gates(self) -> list[str]:
+        """E4's G2: hooks registered at SubagentStop whose gate switch the armed copy sets
+        otherwise than the tree's settings.json (advisory as the tree ships, blocking armed)."""
+        return sorted({r["component"] for r in self.regs if r.get("event") == "SubagentStop"
+                       and r.get("component") in self.switched()})
+
+    def stop_gate(self, a: Artifact) -> dict:
+        """E4's G2 on a declared artifact, from what the tree declares: a hook registered at
+        SubagentStop whose gate switch the armed copy sets otherwise than the tree's settings.json
+        (switched()) checks, at the stop of the role whose dispatch declares the artifact, every
+        artifact that dispatch's obligation declares: that it exists, and, where the declaration
+        states a property of its content (a schema, a terminal-line rule, an identity anchor, a
+        source it is checked against), that content. {mutation: settings in which it rejects}."""
+        if a.kind != "file" or not a.declared or not self.stop_gates():
+            return {}
+        out = {"removed": {"armed", "static-armed"}}
+        entries = [art for ob in self.obl for art in ob.get("artifacts") or ()
+                   if art.get("path") and any(d["site"] == ob["site"] for d in a.declared)
+                   and (art["path"] == a.key or matches(art["path"], a.key) or _under(art["path"], a.key)
+                        or _lane_of(art["path"], a.key))]
+        if entries and all(e.get("states") for e in entries):
+            out["invalid"] = {"armed", "static-armed"}
+        return out
 
     def _producer_actors(self, a: Artifact) -> set:
         out = set()
@@ -1121,10 +1193,11 @@ class _Ctx:
         from tests.replay.hookrun import matches as hook_matches
         actors = self._producer_actors(a)
         origin = os.path.normpath(origin) if origin and not RUNTIME_ROLE.match(origin) else origin
+        if origin and any(origin in (w.who, w.via) for w in a.writers):
+            return "own artifact"   # a producer reading back what it wrote (its state, its cache),
+            # also where it is a library its callers load: the read is the producer's own
         if kind == "static" and not event and origin and self.is_library(origin):
             return "library"        # its callers' positions are the ones rule (5) judges
-        if origin and any(origin in (w.who, w.via) for w in a.writers):
-            return "own artifact"   # a producer reading back what it wrote (its state, its cache)
         if kind == "bash" or (not event and kind == "static"):
             if os.path.normpath(origin) == self.chain_script or origin == self.chain_script:
                 return "chain call"
@@ -1203,7 +1276,10 @@ class _Ctx:
                 a.writers.append(Rel(self.chain_script, "write", self.chain_script + ":1", "declaration"))
             who = comp_identity(r["component"])
             a.readers.append(Rel(who, "read", r["site"], "static", via=",".join(r["uses"])))
-            if set(r["uses"]) & {"fields", "status"}:
+            # its exit status is the chain function's own verdict (its main maps its status to it):
+            # a branch on it uses the output verbatim; a test of a field of the output is the
+            # caller's own decision (rule (5))
+            if "fields" in r["uses"]:
                 a.decisions.append(Decision(who, "elsewhere", r["site"], "static", "any", "static",
                                             rule=r["site"], matcher=",".join(r["uses"])))
 
@@ -1237,7 +1313,9 @@ class _Ctx:
             if who in minters:
                 continue
             a.readers.append(Rel(who, "read", r["site"], "static", via=r.get("form") or r.get("regex") or ""))
-            if r["kind"] == "id_regex" or r["component"].startswith(("hooks/", "scripts/")):
+            # a regex that parses or matches a minted id is a rule on what the id is; a template
+            # that builds a name from an id it holds (`dev-report-{task_id}-`) uses the id
+            if r["kind"] == "id_regex":
                 a.decisions.append(Decision(who, "elsewhere", r["site"], "static", "any", "static", rule=who))
 
 
@@ -1459,7 +1537,7 @@ def violations(m: Map, static_records: list | None = None) -> list[Violation]:
         # rules (5) and (6): deciding reads outside the allowed positions (file artifacts; a response
         # block's or the task-id rule's second parser is rule (4)'s)
         if a.kind == "file":
-            out += _rechecks(a, key, writers_txt)
+            out += _rechecks(a, key, writers_txt, m.ctx)
         if a.kind == "stdout":
             for d in sorted(a.decisions, key=lambda d: d.evidence):
                 out.append(Violation("5-chain-verbatim", key, f"{d.who} decides on the chain function's output "
@@ -1504,6 +1582,28 @@ def violations(m: Map, static_records: list | None = None) -> list[Violation]:
     for v in out:
         uniq.setdefault(v.text(), v)
     return sorted(uniq.values(), key=Violation.sort_key)
+
+
+def _under(directory_pattern: str, key: str) -> bool:
+    """A file under a declared directory (a declared path whose name has no extension: the
+    spec views' folder): the dispatch that declares the folder declares its files."""
+    return "." not in directory_pattern.rstrip("/").rsplit("/", 1)[-1] \
+        and matches(directory_pattern.rstrip("/") + "/<*>", key)
+
+
+def _lane_of(declared: str, key: str) -> bool:
+    """A fan-out lane's file of a declared path: the template's id is the dispatch's task id,
+    which a lane's dispatch carries with its lane (rule (1)'s <lane>), so the lane's report is
+    the one its own dispatch declares."""
+    return any(tok in declared and matches(declared.replace(tok, tok + "-<lane>"), key) for tok in ("<ts>", "<task>"))
+
+
+def _library_read(d: dict) -> str | None:
+    """The site of a static deciding read inside the innermost function of another file that
+    it ran in (a library the reader imports or sources), or None for a read of its own code."""
+    own = d["component"].split("#")[0]
+    sites = [x for x in d.get("read_through") or () if x.rsplit(":", 1)[0] != own]
+    return sites[-1] if sites else None
 
 
 def _rule_groups(ds: list) -> list[str]:
@@ -1570,17 +1670,23 @@ def _runs_for(a: Artifact, producer: str, roles: list[str]) -> bool:
         any(w.source == "runtime" for w in ws)
 
 
-def _rechecks(a: Artifact, key: str, writers_txt: list) -> list[Violation]:
+def _rechecks(a: Artifact, key: str, writers_txt: list, ctx=None) -> list[Violation]:
     out = []
     outside = [d for d in a.decisions if d.position not in ALLOWED]
-    if not outside:
-        return out
+    if not outside or not a.writers:
+        return out      # rule (6) weighs a decision against its producer's side: with no producer
+        # the reading branch itself goes (goal 2, rule 2-unwritten)
     side = [d for d in a.decisions if d.position in ("producer stop", "producer tool call", "G1", "G3")]
+    stop_gate = ctx.stop_gate(a) if ctx is not None else {}
 
     def rejects(how: str, settings: str) -> bool:
         ok = ("shipped", "static") if settings == "shipped" else ("armed", "static", "static-armed")
+        if any(s in ok for s in stop_gate.get(how, ())) or how == "any" and any(
+                s in ok for v in stop_gate.values() for s in v):
+            return True
         return any(d.settings in ok and (how == "any" or d.how in (how, "any")) for d in side)
 
+    allowed_rules = {d.rule for d in a.decisions if d.position in ALLOWED and d.rule and d.rule != d.who}
     groups: dict[tuple, list] = {}
     for d in outside:
         if d.settings in ("armed", "static-armed"):
@@ -1596,6 +1702,12 @@ def _rechecks(a: Artifact, key: str, writers_txt: list) -> list[Violation]:
                                  evidence=sites[:6] + _dec([x for x in side if x.settings in ("shipped", "static")], 4)))
         elif armed:
             continue    # E4: the fault's only stop while its gate is advisory (listed by the map)
+        elif ctx is not None and ctx.code_produced(a):
+            continue    # rule (6)'s use: no gate can hold a rule on what only code writes
+        elif {d.rule for d in ds} & allowed_rules:
+            continue    # rule (6)'s use: it takes the verdict of the one function a decider at an
+            # allowed position decides by (row 13: every other deciding reader calls it and decides
+            # its own action from what it returns)
         else:
             out.append(Violation("6-move", key, f"{who} decides outside the allowed positions and no gate rejects "
                                  f"mutation '{how}' even armed: a rule to move into the gate, or a use",
@@ -1611,13 +1723,16 @@ def advisory_copies(m: Map) -> list[str]:
     for key in sorted(m.artifacts):
         a = m.artifacts[key]
         side = [d for d in a.decisions if d.position in ("producer stop", "producer tool call", "G1", "G3")]
+        stop_gate = m.ctx.stop_gate(a) if m.ctx is not None else {}
         for d in a.decisions:
             if d.position in ALLOWED or d.settings not in ("shipped", "static"):
                 continue
+            hows = [h for h in stop_gate if d.how in (h, "any")]
             ship = any(x.settings in ("shipped", "static") and x.how in (d.how, "any") for x in side)
-            arm = any(x.settings in ("armed", "static-armed") and x.how in (d.how, "any") for x in side)
+            arm = any(x.settings in ("armed", "static-armed") and x.how in (d.how, "any") for x in side) or hows
             if arm and not ship:
-                gates = sorted({x.who + " at " + x.position for x in side if x.settings in ("armed", "static-armed")})
+                gates = sorted({x.who + " at " + x.position for x in side if x.settings in ("armed", "static-armed")}
+                               | ({f"{g} at the declared role's stop" for g in m.ctx.stop_gates()} if hows else set()))
                 out.append(f"{key}: {d.who} at {d.position} ({d.how}) is the fault's only stop while "
                            f"{', '.join(gates)} is advisory")
     return sorted(set(out))

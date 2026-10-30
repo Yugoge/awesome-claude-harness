@@ -1072,7 +1072,23 @@ class ShWalk:
         return V.make_str([t if t.startswith(("/", P.L, "~")) else a
                            for t in temps for a in V.as_templates(V.join(cwd, V.s(t)))])
 
-    def emit(self, op: str, path: V.Val, mode: str, via: str, n, src=None, chain=()) -> None:
+    def _feeds_tree_script(self, n) -> bool:
+        """The command runs a script of the tree (`python3 <harness>/x`, `bash x.sh`, or the
+        script itself)."""
+        if not isinstance(n, S.Simple) or not n.words:
+            return False
+        ws = self._strip_prefix(n.words)
+        if not ws:
+            return False
+        name = self._cmd_name_words(ws) or ""
+        cand = ws[1:2] if (_PY.search(name) or name in ("bash", "sh")) else ws[:1]
+        for w in cand:
+            for t in V.as_templates(self.word(w, n)):
+                if pyscan.tree_target(t, self.an.file_set):
+                    return True
+        return False
+
+    def emit(self, op: str, path: V.Val, mode: str, via: str, n, src=None, chain=(), deciding=True) -> None:
         if isinstance(path, Lst):
             # an array expanded as an operand (`tail -f "${logs[@]}"`) is each of its elements
             # that names a path; option words and bare words in it (`--arg k v`) name none
@@ -1088,7 +1104,7 @@ class ShWalk:
                 src = self._rebase(src, line, n)
         o = M.Op(self.f.component, line, op, path, mode, via, "shell", self.func or "", src, tuple(chain), self.f.origin)
         self.ops.append(o)
-        if op == "read":
+        if op == "read" and deciding:
             self.reads.append((n, pyscan.ReadInfo(path, mode, line, tuple(chain))))
 
     def redirs(self, n, redirs: list) -> None:
@@ -1110,6 +1126,10 @@ class ShWalk:
                 self.emit("write", v, "truncate", r.op, n)
             elif r.op in (">>", "&>>"):
                 self.emit("write", v, "append", r.op, n)
+            elif r.op == "<" and self._feeds_tree_script(n):
+                # the harness script the command runs reads its standard input: the decision on
+                # that content is the script's own, which the caller takes from its exit status
+                self.emit("read", v, "stdin", "<", n, deciding=False)
             elif r.op == "<":
                 self.emit("read", v, "content", "<", n)
             elif r.op == "<>":
@@ -1211,7 +1231,8 @@ class ShWalk:
             self.an.instantiated[id(e)] = self.an.instantiated.get(id(e), 0) + 1
             p = V.subst_val(e.path, b)
             src = V.subst_val(e.src, b) if e.src is not None else None
-            self.emit(e.op, p, e.mode, e.via, n, src=src, chain=(f"{e.component}:{e.line}",) + tuple(e.chain))
+            self.emit(e.op, p, e.mode, e.via, n, src=src, chain=(f"{e.component}:{e.line}",) + tuple(e.chain),
+                      deciding=e.mode != "stdin")
         for r in s.reads:
             self.reads.append((n, pyscan.ReadInfo(V.subst_val(r.path, b), r.mode, n.line, (f"{g.component}:{r.line}",))))
         for d in s.decisions:
@@ -1751,6 +1772,14 @@ class ShWalk:
                         out |= tainted.get(v, set())
             return out
 
+        def status_reads(body: list) -> set:
+            # reads a condition tests by their command's own exit status (`if f; then`, `f || exit`):
+            # the verdict of the function or command that read, not its output
+            out = set()
+            for x in iter_nodes(body):
+                out.update(read_idx.get(id(x), []))
+            return out
+
         dec_ids: dict = {}
         for node, d in self.decisions:
             dec_ids.setdefault(id(node), []).append(d)
@@ -1761,6 +1790,15 @@ class ShWalk:
                 out += dec_ids.get(id(x), [])
             return out
 
+        # the exits a guarded byte copy's failure takes (`cp "$X" "$B" || exit 1`): the branch's
+        # existence test that guards the copy decides none of them (_guarded_copy)
+        copy_failures = set()
+        for x in iter_nodes(self._body()):
+            if isinstance(x, S.AndOr):
+                items = [x.first] + [y for _, y in x.rest]
+                for k in range(len(items) - 1):
+                    if any(self._guarded_copy(y) for y in iter_nodes([items[k]])):
+                        copy_failures |= {id(d) for d in decisions_in(items[k + 1:])}
         paired = set()
         for x in iter_nodes(self._body()):
             if isinstance(x, S.If):
@@ -1776,18 +1814,18 @@ class ShWalk:
                         info = self.f.parent.get(id(x))
                         if info is not None:
                             later += info[0][info[1] + 1:]
-                    decs = decisions_in(later)
-                    self._pair(rs, decs, x, paired)
+                    decs = [d for d in decisions_in(later) if id(d) not in copy_failures]
+                    self._pair(rs, decs, x, paired, status_reads(cond))
             elif isinstance(x, S.Loop):
                 rs = reads_in(x.cond)
                 if rs:
-                    self._pair(rs, decisions_in(x.body), x, paired)
+                    self._pair(rs, decisions_in(x.body), x, paired, status_reads(x.cond))
             elif isinstance(x, S.AndOr):
                 items = [x.first] + [y for _, y in x.rest]
                 for k in range(len(items) - 1):
-                    rs = reads_in([items[k]])
+                    rs = {r for r in reads_in([items[k]]) if not self._guarded_copy(self.reads[r][0])}
                     if rs:
-                        self._pair(rs, decisions_in(items[k + 1:]), x, paired)
+                        self._pair(rs, decisions_in(items[k + 1:]), x, paired, status_reads([items[k]]))
             elif isinstance(x, S.Case):
                 rs = set()
                 for v in word_vars(x.word):
@@ -1805,19 +1843,19 @@ class ShWalk:
                 if d.kind in ("exit2", "block") and d.line > info.line and (i, id(d)) not in paired:
                     self._record(info, d, "order")
 
-    def _pair(self, rs: set, decs: list, x, paired: set) -> None:
+    def _pair(self, rs: set, decs: list, x, paired: set, whole: set = frozenset()) -> None:
         for r in sorted(rs):
             info = self.reads[r][1]
             if decs:
                 for d in decs:
-                    self._record(info, d, "branch")
+                    self._record(info, d, "branch", r in whole)
                     paired.add((r, id(d)))
             else:
-                self._record(info, M.Decision("route", getattr(x, "line", 0)), "branch")
+                self._record(info, M.Decision("route", getattr(x, "line", 0)), "branch", r in whole)
 
-    def _record(self, info, d, evidence: str) -> None:
+    def _record(self, info, d, evidence: str, whole: bool = False) -> None:
         self.an.findings.deciding.append(M.Deciding(self.f.component, self.func or "", info.line, info.path,
-                                                    info.mode, d, evidence, "shell"))
+                                                    info.mode, d, evidence, "shell", tuple(info.via), whole))
 
     def chain_uses(self) -> None:
         for node, holder in self.chain:
@@ -1882,6 +1920,33 @@ class ShWalk:
                 uses.add("status")
             self.an.findings.chain_calls.append(M.ChainCall(self.f.component, node.line, "exec", tuple(sorted(uses)),
                                                             tuple(sorted(fields)), self.func or ""))
+
+    def _guarded_copy(self, n) -> bool:
+        """A byte copy (`cp`, `install`, `rsync`) of a source that the condition of the branch
+        it runs in has just found present (`if [ -f "$X" ]; then cp "$X" ...`): its exit status
+        is the same for every content of the source, and the guard leaves it no absent source,
+        so no mutation of the file changes the decision on its failure (E1)."""
+        if not isinstance(n, S.Simple) or self._cmd_name(n) not in ("cp", "install", "rsync"):
+            return False
+        ws = self._strip_prefix(n.words)[1:]
+        sources = {w.raw for w in ws[:-1] if w.raw and not w.raw.startswith("-")}
+        cur = n
+        for _ in range(50):
+            info = self.f.parent.get(id(cur))
+            if info is None:
+                return False
+            _container, _idx, owner, slot = info
+            if isinstance(owner, S.If) and slot.startswith("body"):
+                cond = owner.clauses[int(slot[4:])][0]
+                for y in iter_nodes(cond):
+                    tw = [w.raw for w in node_words(y)]
+                    for i, t in enumerate(tw[:-1]):
+                        if t in ("-f", "-e", "-s", "-r") and tw[i + 1] in sources:
+                            return True
+            if owner is None:
+                return False
+            cur = owner
+        return False
 
     def _in_condition(self, n) -> bool:
         cur = n

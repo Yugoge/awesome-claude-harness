@@ -49,6 +49,8 @@ class Deciding:
     decision: Decision
     evidence: str           # branch | except | order | assert
     lang: str
+    read_via: tuple = ()    # the read's own sites inside the functions it was reached through
+    whole: bool = False     # the decision tests the read's value whole (a function's verdict), no part of it
 
 
 @dataclass

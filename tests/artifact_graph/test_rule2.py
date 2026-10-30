@@ -374,12 +374,14 @@ def test_a_project_resolvers_harness_home_tier_names_the_projects_file(tmp_path)
     assert not rule2(vs)
 
 
-def test_files_of_a_tree_a_component_creates_whole_are_its(tmp_path):
+def test_files_of_a_tree_a_platform_tool_creates_whole_are_inputs(tmp_path):
+    """`python -m venv` creates the interpreter's own environment (rules (1) and (6)): its files
+    are no artifacts, so a reader of them is neither unwritten (rule 2) nor a decider."""
     m, vs = check(make_tree(tmp_path, {
         "scripts/boot.sh": 'for c in python3 python3.12; do PICK="$c"; done\n"$PICK" -m venv "$HOME/.claude/venv"\n',
         "scripts/use.sh": '. "$HOME/.claude/venv/bin/activate"\ncat "$HOME/.claude/venv/pyvenv.cfg"\n',
     }))
-    assert m.artifacts["<harness>/venv/pyvenv.cfg"].producers() == ["scripts/boot.sh"]
+    assert not [k for k in m.artifacts if k.startswith("<harness>/venv")]
     assert not rule2(vs)
 
 

@@ -41,9 +41,20 @@ def classify_line(line: str) -> str:
     return "unknown"
 
 
+def classify_file(path) -> str:
+    """The class of a close report's last non-empty line, or "missing" when
+    there is no file: the one decision every reader of a close report takes."""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return "missing"
+    return classify_line(last_nonempty(text))
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("usage: close-verdict.py classify-line <line> | classify-file <path> | last-line <path>", file=sys.stderr)
+        print("usage: close-verdict.py classify-line <line> | classify-file <path> (yes, no, unknown, "
+              "or missing) | last-line <path>", file=sys.stderr)
         return 2
     mode = argv[1]
     if mode == "classify-line":
@@ -53,8 +64,10 @@ def main(argv: list[str]) -> int:
         if len(argv) != 3:
             print(f"close-verdict.py: {mode} requires a path", file=sys.stderr)
             return 2
-        line = last_nonempty(Path(argv[2]).read_text(encoding="utf-8", errors="replace"))
-        print(line if mode == "last-line" else classify_line(line))
+        if mode == "classify-file":
+            print(classify_file(argv[2]))
+            return 0
+        print(last_nonempty(Path(argv[2]).read_text(encoding="utf-8", errors="replace")))
         return 0
     print(f"close-verdict.py: unknown mode: {mode}", file=sys.stderr)
     return 2

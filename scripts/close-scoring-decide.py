@@ -43,20 +43,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 
-def _load_close_verdict_module(repo_root: Path):
-    """Load hooks/lib/close-verdict.py via SourceFileLoader because the
-    filename has a hyphen (Python module names cannot contain hyphens —
-    codex iter-2 C6).
-    """
+def _close_verdict(repo_root: Path, mode: str, report: Path) -> str:
+    """Run hooks/lib/close-verdict.py, the one classifier every reader of a close
+    report takes its verdict from (/commit Step 3 runs the same call), and return
+    what it prints. FileNotFoundError when the classifier is not there; OSError
+    when it could not read the report."""
     path = repo_root / "hooks" / "lib" / "close-verdict.py"
     if not path.is_file():
         raise FileNotFoundError(f"close-verdict.py not found at {path}")
-    return SourceFileLoader("close_verdict", str(path)).load_module()
+    proc = subprocess.run([sys.executable, str(path), mode, str(report)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise OSError((proc.stderr.strip().splitlines() or [f"exit {proc.returncode}"])[-1])
+    return proc.stdout.strip()
 
 
 def _resolve_repo_root(override: str | None) -> Path:
@@ -167,23 +170,21 @@ def decide(close_report_path: Path, qa_ever_rejected: bool, repo_root: Path) -> 
     Exit code 0 always when result is a valid decision (even empty events).
     Exit code 3 ONLY when an IO error other than missing-file occurs.
     """
-    # Missing file is a valid gate-block, not an error
-    if not close_report_path.exists():
-        return (
-            {"events": [], "skip_reason": f"close-report missing at {close_report_path}"},
-            0,
-        )
-
     try:
-        text = close_report_path.read_text(encoding="utf-8", errors="replace")
+        verdict = _close_verdict(repo_root, "classify-file", close_report_path)
+        # Missing file is a valid gate-block, not an error
+        if verdict == "missing":
+            return (
+                {"events": [], "skip_reason": f"close-report missing at {close_report_path}"},
+                0,
+            )
+        last_line = _close_verdict(repo_root, "last-line", close_report_path) if verdict != "yes" else ""
+    except FileNotFoundError:
+        raise
     except OSError as e:
         # Real IO error (permission denied, etc.) — distinct from missing
         sys.stderr.write(f"close-scoring-decide.py: IO error reading {close_report_path}: {e}\n")
         return ({"events": [], "skip_reason": f"IO error: {e}"}, 3)
-
-    cv = _load_close_verdict_module(repo_root)
-    last_line = cv.last_nonempty(text)
-    verdict = cv.classify_line(last_line)
 
     if verdict != "yes":
         return (

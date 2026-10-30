@@ -2241,6 +2241,34 @@ class FunctionWalk:
                 out += dec_by_stmt.get(id(st), [])
             return out
 
+        # a test examines a part of a read's value when it subscripts it, takes an attribute of it
+        # or `.get`s from it, or tests a name assigned from such a part: a test of the value whole
+        # (`if has_consent(p):`) uses the verdict the reading function returned (rule (4))
+        parted_names: dict[str, set] = {}
+
+        def parts_in(node) -> set:
+            out = set()
+            if node is None:
+                return out
+            for n in ast.walk(node):
+                base = None
+                if isinstance(n, (ast.Subscript, ast.Attribute)):
+                    base = n.value
+                if base is not None:
+                    out |= reads_of(base)
+                if isinstance(n, ast.Name):
+                    out |= parted_names.get(n.id, set())
+            return out
+
+        for _ in range(3):
+            for st in self._stmts_in(self.body_statements()):
+                if isinstance(st, ast.Assign) and st.value is not None:
+                    src = parts_in(st.value)
+                    if src:
+                        for t in st.targets:
+                            for nm in _target_names(t):
+                                parted_names.setdefault(nm, set()).update(src)
+
         paired: set = set()
         body = self.body_statements()
         stmts = [x for x in self._stmts_in(body)]
@@ -2250,6 +2278,7 @@ class FunctionWalk:
                 rs = reads_of(st.test)
                 if not rs:
                     continue
+                parted = parts_in(st.test)
                 decs = decisions_in(st.body) + decisions_in(st.orelse)
                 if isinstance(st, ast.If) and not st.orelse and _terminates(st.body):
                     # a guard clause: what follows it is the branch's else
@@ -2260,10 +2289,11 @@ class FunctionWalk:
                 for r in sorted(rs):
                     if decs:
                         for d in decs:
-                            self._deciding(reads[r][1], d, "branch")
+                            self._deciding(reads[r][1], d, "branch", whole=r not in parted)
                             paired.add((r, id(d)))
                     else:
-                        self._deciding(reads[r][1], M.Decision("route", self.mod.ln(st)), "branch")
+                        self._deciding(reads[r][1], M.Decision("route", self.mod.ln(st)), "branch",
+                                       whole=r not in parted)
                 if fi is not None:
                     for x in self._stmts_in(st.body) + self._stmts_in(st.orelse):
                         if isinstance(x, ast.Return) and x.value is not None:
@@ -2271,14 +2301,17 @@ class FunctionWalk:
                                 self.summary.return_reads.append(reads[r][1])
                             break
             elif isinstance(st, ast.Assert):
+                parted = parts_in(st.test)
                 for r in sorted(reads_of(st.test)):
-                    self._deciding(reads[r][1], M.Decision("raise", self.mod.ln(st), None, "AssertionError"), "assert")
+                    self._deciding(reads[r][1], M.Decision("raise", self.mod.ln(st), None, "AssertionError"), "assert",
+                                   whole=r not in parted)
             elif isinstance(st, ast.Match):
                 rs = reads_of(st.subject)
+                parted = parts_in(st.subject)
                 for c in st.cases:
                     for d in decisions_in(c.body):
                         for r in sorted(rs):
-                            self._deciding(reads[r][1], d, "branch")
+                            self._deciding(reads[r][1], d, "branch", whole=r not in parted)
                             paired.add((r, id(d)))
             elif isinstance(st, (ast.Try, getattr(ast, "TryStar", ast.Try))):
                 rs = set()
@@ -2292,7 +2325,8 @@ class FunctionWalk:
                 for h in st.handlers:
                     for d in decisions_in(h.body):
                         for r in sorted(rs):
-                            self._deciding(reads[r][1], d, "except")
+                            # the reading function raised: its own verdict on the content
+                            self._deciding(reads[r][1], d, "except", whole=True)
                             paired.add((r, id(d)))
             elif isinstance(st, ast.Return) and st.value is not None and fi is not None:
                 for r in sorted(reads_of(st.value)):
@@ -2312,9 +2346,9 @@ class FunctionWalk:
                 uniq.append(r)
         self.summary.return_reads = uniq
 
-    def _deciding(self, info: ReadInfo, d: M.Decision, evidence: str) -> None:
+    def _deciding(self, info: ReadInfo, d: M.Decision, evidence: str, whole: bool = False) -> None:
         self.an.findings.deciding.append(M.Deciding(self.mod.path, self.fname, info.line, info.path, info.mode,
-                                                    d, evidence, "python"))
+                                                    d, evidence, "python", tuple(info.via), whole))
 
     def _chain_uses(self) -> None:
         seeds = list(self.chain_seeds)
@@ -2369,18 +2403,64 @@ class FunctionWalk:
         def touches(node) -> bool:
             return any((isinstance(n, ast.Name) and n.id in tnames) or (call is not None and n is call) for n in ast.walk(node))
 
+        def field_of(n) -> str | None:
+            if isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Load) and touches(n.value):
+                return _const_str(n.slice)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get" \
+                    and touches(n.func.value):
+                return _const_str(n.args[0]) if n.args else None
+            return None
+
+        # Rule (5): a field of the output is decided on where a test examines it (a branch's or an
+        # assertion's test, a comparison, a boolean operation), directly or through a name assigned
+        # or looped from it, or where it is returned for a caller to test; a field only carried on
+        # (copied into a record, iterated for the next step, printed) is the output used, not a
+        # decision of the reader's
+        tests: set = set()
+        returned: set = set()       # a field handed back to the caller, which may test it
+        field_names: set = set()
+        for st in self._stmts_in(body):
+            roots = []
+            if isinstance(st, (ast.If, ast.While, ast.Assert)):
+                roots.append(st.test)
+            elif isinstance(st, ast.Return) and st.value is not None:
+                returned |= {id(x) for x in ast.walk(st.value)}
+            elif isinstance(st, ast.Match):
+                roots.append(st.subject)
+            for n in self._own_nodes(st):
+                if isinstance(n, (ast.Compare, ast.BoolOp, ast.IfExp)) or \
+                        isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.Not):
+                    roots.append(n)
+                elif isinstance(n, ast.comprehension):
+                    roots += n.ifs
+            for r in roots:
+                tests |= {id(x) for x in ast.walk(r)}
+        for _ in range(3):
+            for st in self._stmts_in(body):
+                pairs = []
+                if isinstance(st, ast.Assign):
+                    pairs = [(t, st.value) for t in st.targets]
+                elif isinstance(st, (ast.For, ast.AsyncFor)):
+                    pairs = [(st.target, st.iter)]
+                for t, v in pairs:
+                    if any(field_of(x) is not None for x in ast.walk(v)) or _names_in(v) & field_names:
+                        field_names |= set(_target_names(t))
+            for st in self._stmts_in(body):
+                for n in self._own_nodes(st):
+                    if isinstance(n, ast.comprehension) and (
+                            any(field_of(x) is not None for x in ast.walk(n.iter)) or _names_in(n.iter) & field_names):
+                        field_names |= set(_target_names(n.target))
         for st in self._stmts_in(body):
             for n in self._own_nodes(st):
-                if isinstance(n, ast.Subscript) and touches(n.value):
-                    k = _const_str(n.slice)
-                    if k is not None:
+                k = field_of(n)
+                if k is not None:
+                    if id(n) in tests or id(n) in returned:
                         uses.add("fields")
                         fields.add(k)
-                elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get" and touches(n.func.value):
-                    k = _const_str(n.args[0]) if n.args else None
-                    if k is not None:
-                        uses.add("fields")
-                        fields.add(k)
+                    else:
+                        uses.add("data")
+                elif isinstance(n, ast.Name) and n.id in field_names and id(n) in tests:
+                    uses.add("fields")
                 elif isinstance(n, ast.Attribute) and n.attr == "returncode" and touches(n.value):
                     uses.add("status")
                 elif isinstance(n, ast.Call) and _dotted(n.func) in ("print", "sys.stdout.write") and any(touches(a) for a in n.args):

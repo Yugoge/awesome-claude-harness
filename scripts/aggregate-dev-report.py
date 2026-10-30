@@ -752,8 +752,7 @@ def _validate_shards(
     heads_agree = len(non_empty_heads) <= 1 and len(shards) == sum(
         1 for _, data in shards if data.get("baseline_head_sha")
     )
-    m_target = re.search(r"(\d{8}-\d{6})", task_id)
-    normalized_target = m_target.group(1) if m_target else task_id
+    normalized_target = _bare_task_id(task_id)
     labels = [label for label, _ in shards]
     duplicate_labels = sorted({label for label in labels if labels.count(label) > 1})
     if duplicate_labels:
@@ -767,8 +766,7 @@ def _validate_shards(
                 f"shard '{label}': missing or empty task_id / request_id field"
             )
         else:
-            m = re.search(r"(\d{8}-\d{6})", shard_task_id)
-            normalized_shard = m.group(1) if m else shard_task_id
+            normalized_shard = _bare_task_id(shard_task_id)
             if normalized_shard != normalized_target:
                 errors.append(
                     f"shard '{label}': task_id {shard_task_id!r} does not match target {task_id!r}"
@@ -1295,10 +1293,39 @@ def _baseline_wave_projection(shards: list[tuple[str, dict]]) -> dict | None:
     }
 
 
+def _obligation_module():
+    """hooks/lib/obligation.py, loaded from this file's own harness (its flat
+    sibling imports find hooks/lib), whatever `hooks` package the project's
+    path already resolved; else the caller's import path (a bare namespace has
+    no __file__); None where neither holds it (a copy of this file alone)."""
+    name = "_aggregate_dev_report_obligation"
+    if name in sys.modules:
+        return sys.modules[name]
+    own_file = globals().get("__file__")
+    lib = Path(own_file).resolve().parent.parent / "hooks" / "lib" if own_file else None
+    try:
+        if lib is not None and (lib / "obligation.py").is_file():
+            import importlib.util
+            if str(lib) not in sys.path:
+                sys.path.append(str(lib))
+            spec = importlib.util.spec_from_file_location(name, lib / "obligation.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        else:
+            from hooks.lib import obligation as module
+    except Exception:
+        module = None
+    sys.modules[name] = module
+    return module
+
+
 def _bare_task_id(task_id: str) -> str:
-    """Extract YYYYMMDD-HHMMSS portion from a potentially-prefixed task-id."""
-    m = re.search(r"(\d{8}-\d{6})", task_id)
-    return m.group(1) if m else task_id
+    """The YYYYMMDD-HHMMSS portion of a potentially-prefixed task-id (the one
+    reading of an id's timestamp, hooks/lib/obligation.py task_stamp), else the
+    id itself (also where the harness library is missing: ids then compare
+    exactly, which only adds mismatches, never hides one)."""
+    module = _obligation_module()
+    return (module.task_stamp(task_id) if module is not None else None) or task_id
 
 
 def _roster_authority(shards: list[tuple[str, dict]]) -> tuple[list[str] | None, list[str]]:

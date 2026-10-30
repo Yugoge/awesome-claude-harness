@@ -46,7 +46,7 @@ def _resolver_module() -> ModuleType:
 
 def _not_selected(resolver: ModuleType, result: dict) -> tuple[int, dict]:
     payload = {"outcome": "not_selected", "artifact_chain": result}
-    return (0 if result["status"] in ("pass", "pass_with_exceptions") else 2), payload
+    return resolver.exit_status(result), payload
 
 
 def run(task_id: str, project_dir: str, late_repair: bool, force: bool) -> tuple[int, dict]:

@@ -20,7 +20,8 @@ calls `state_verdicts` and acts on what it returns, so each verdict has one rule
 
 The git keystone and the overnight policy shim run this module as a script
 (`protected-branches`) instead of parsing the record in shell, and the
-/dev-overnight orchestrator reads the cycle number through `cycle-index`.
+/dev-overnight orchestrator binds its state file and main root through
+`session-root` and reads the cycle number through `cycle-index`.
 
 `is_overnight_active` is deliberately session-agnostic: ANY live record under a
 candidate project dir counts. The "except dev-overnight" policy exempts the whole
@@ -140,6 +141,26 @@ def session_state(session_id, project_dir=None):
     return record
 
 
+def session_state_file(session_id, starts):
+    """The canonical state file of `session_id` and its record, found by walking up
+    from each start in turn: the record sits at <main root>/.claude/ and every
+    working root lies under the main root. Selection is the record's own
+    (`session_state`: the session-keyed file name, then its session_id field).
+    (None, None) when no start reaches one."""
+    for start in starts:
+        if not start:
+            continue
+        try:
+            d = Path(start).resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        for p in (d, *d.parents):
+            record = session_state(session_id, p)
+            if record is not None:
+                return state_path(session_id, p).resolve(), record
+    return None, None
+
+
 def working_root(state):
     """Where the session's producers write: the record's worktree_path."""
     wt = state.get('worktree_path') if isinstance(state, dict) else None
@@ -229,7 +250,24 @@ def _main(argv):
                                    that is not released, one per line
       cycle-index FILE             the cycle in progress for the record in FILE
       write-state FILE SOURCE      publish the record in SOURCE as FILE
+      session-root SID START...    this session's state file and the main root its
+                                   record names (a directory), one per line, found
+                                   walking up from each START in turn; exit 1 with
+                                   the reason when there is none
     """
+    if len(argv) >= 2 and argv[0] == 'session-root':
+        sf, record = session_state_file(argv[1], argv[2:])
+        if sf is None:
+            print(f'ERROR: no readable overnight-state file for session {argv[1]} at or above '
+                  + ' or '.join(a or '<unset>' for a in argv[2:]), file=sys.stderr)
+            return 1
+        root = record.get('main_root')
+        if not isinstance(root, str) or not root or not Path(root).is_dir():
+            print(f"ERROR: {sf} records no usable main_root: '{root or '<empty>'}'", file=sys.stderr)
+            return 1
+        print(sf)
+        print(Path(root).resolve())
+        return 0
     if len(argv) >= 2 and argv[0] == 'protected-branches':
         for sf in argv[1:]:
             record = read_state(sf)

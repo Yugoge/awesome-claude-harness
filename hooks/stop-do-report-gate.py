@@ -64,14 +64,10 @@ _TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 def _compliance_problems(report_path: Path, task_id: str) -> list[str]:
     """Return [] when the do-report satisfies the stop contract, else the
     human-readable list of violations."""
-    if not report_path.exists():
-        return [f"do-report absent: {report_path}"]
-    try:
-        record = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        return [f"do-report unreadable/unparseable: {e}"]
-    if not isinstance(record, dict):
-        return ["do-report is not a JSON object"]
+    from lib import do_report  # the report's one reading (E8)
+    record, problem = do_report.load(report_path)
+    if record is None:
+        return [problem]
 
     problems: list[str] = []
     if record.get("task_id") != task_id:
