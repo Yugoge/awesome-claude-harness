@@ -6,7 +6,8 @@ tree's text spells each one, read at run time:
 
 * Step 3: the close-report resolution block; check 2 as the text gives it (the one classifier
   call where the text names it, else a Read of the file whose last line the text checks itself);
-  check 3's mtime read; check 4 by derivation (no call).
+  check 3's mtime read; check 4 by derivation (no call). Where the text's resolution block itself
+  prints check 2's classifier answer and check 3's mtime, that one call is all of it.
 * Step 5: the repository-plan block (late-repair state, the chain call, the plan). The block calls
   `route_finding`, which the text describes ("the loop above made concrete") but never defines:
   the driver prepends a stand-in that records the finding on stderr and ends the shell, so a
@@ -191,9 +192,14 @@ class CommitRun:
     # ------------------------------------------------------------ Step 3
     def step3(self) -> bool:
         o = self.o
-        self.run_text(o.block("Step 3", anchor="resolve-close-report.sh"), self.label("Step 3 Bash resolve-close-report"),
-                      "Resolve the close-report path", capture=("CLOSE_REPORT",))
+        block = o.block("Step 3", anchor="resolve-close-report.sh")
+        c = self.run_text(block, self.label("Step 3 Bash resolve-close-report"), "Resolve the close-report path",
+                          capture=("CLOSE_REPORT",))
         report = o.values.get("CLOSE_REPORT", "")
+        if "close-verdict.py classify-file" in block:
+            # The text's block prints check 2's classifier answer and check 3's mtime in the same call.
+            out = [l.strip() for l in ((c.response.get("stdout") or "") if c.ok else (c.error or "")).split("\n")]
+            return next((l for l in out if l in ("yes", "no", "unknown")), "") == "yes"
         sec = o.section("Step 3")
         m = re.search(r"`(python3 ~/\.claude/hooks/lib/close-verdict\.py classify-file \"\$CLOSE_REPORT\")`", sec)
         if m:

@@ -12,8 +12,9 @@ each step does is read from the tree's own text at run time:
   array precompute (`LATE_REPAIR_SELECTOR_ARGS=()...`, the inline code that section tells Step 0
   to append) and by the routing helpers' function definitions when the block calls one (the text
   defines them "once"; every Bash call is a new shell). A non-zero ROUTE_SELECT_RC is worked as the
-  "Resolver-error routing rule" says: one finding per element of the chain's errors[], routed
-  (below) and the same block re-run as the source_check.
+  "Resolver-error routing rule" says: one finding per element of the chain's errors[] (recorded by
+  the block itself where the text's block makes the rule's close_route_finding calls, else by one
+  Bash call of the text's helper), routed (below) and the same block re-run as the source_check.
 * The do-report lite preflight (the /do path): the DO_STATUS block where the text has one; on a
   text that runs the Artifact schema gate over $DO_REPORT, that gate's block with $DO_REPORT as
   its sole argument, as the text says.
@@ -39,7 +40,8 @@ each step does is read from the tree's own text at run time:
 * A round-open return is echoed and routed (the Routing loop): each finding is recorded with the
   text's own `close_route_finding`, its owner found as the tree's text says, dispatched again
   scoped to the finding, the source_check re-run and the progress measured with `close_progress`
-  (a fresh QA round after a close-QA finding). On a text with the declaring-dispatch reader
+  (a fresh QA round after a close-QA finding; on a text that measures it only when the re-check
+  still fails, only then). On a text with the declaring-dispatch reader
   (hooks/lib/obligation.py declaring-dispatch: its own Bash call with the path for `<path>`, or a
   helper function that runs it) the reader is run on the path and its answer acted on as the text
   lists: a `dispatch`, `lane` or `writer` answer runs that dispatch again (its recorded prompt, a
@@ -632,6 +634,12 @@ class CloseRun:
                     if c.startswith("LATE_REPAIR_SELECTOR_ARGS=()")), "")
         return "LATE_REPAIR=false\n" + pre + "\n" + o.block("Step 0", lang="bash", index=0)
 
+    def step0_records(self) -> bool:
+        """The text's Step 0 block records the Resolver-error routing rule's findings itself (its
+        close_route_finding calls over the chain's errors[])."""
+        block = self.o.block("Step 0", lang="bash", index=0)
+        return "close_route_finding" in block and ".errors[]" in block
+
     def step0(self, label: str = "Step 0") -> int:
         o = self.o
         caps = ("PROJECT_ROOT", "ROUTE_SELECT_RESULT", "ROUTE_SELECT_RC", "ARTIFACT_CHAIN", "CLOSE_CANONICAL_REPORT",
@@ -661,7 +669,10 @@ class CloseRun:
         while (rc != 0 or pending) and k < rounds:
             k += 1
             errs = self.chain.get("errors") or []
-            if rc != 0:
+            if rc != 0 and self.step0_records():
+                # The text's Step 0 block makes the rule's close_route_finding calls itself, in its own Bash call.
+                pending = json.loads(self.o.values.get("REQUIRED_ACTIONS_JSON") or "[]")
+            elif rc != 0:
                 # An element naming no path: the chain's dev report where the text says so, else $TASK_ID.
                 default = (f"docs/dev/dev-report-{self.tid}.json" if "the chain's dev report" in self.o.section("Step 0")
                            else self.tid)
@@ -759,6 +770,8 @@ class CloseRun:
             if passed and e.get("source_check"):
                 passed_checks.add(e["source_check"])
             after = _sha(target)
+            if passed and "`close_progress` when the re-check still fails" in self.routing_section():
+                continue  # the text measures progress only on a re-check that still fails
             if self.helpers and "close_progress" in self.helpers:
                 # before/after producer-artifact hash; before/after unresolved finding ids (this entry's path)
                 self.run_text(f"close_progress {before} {after} {shlex.quote(path)} "

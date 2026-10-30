@@ -184,10 +184,15 @@ subproject docs/dev/ first, then falls back to the resolved control-root
 the harness/project root, not an author-absolute literal — see
 `scripts/resolve-close-report.sh`). The script exits 1 when no candidate
 file exists; `CLOSE_REPORT` still holds the fallback path for the error
-message in check 1 below.
+message in check 1 below. The same Bash call prints what checks 2 and 3 read
+(check 2's classifier answer, then the file's mtime in epoch seconds): Steps 3
+to 5 dispatch nothing, and the orchestrator gate refuses a sixth Bash call in a
+row.
 
 ```
 CLOSE_REPORT="$(bash ~/.claude/scripts/resolve-close-report.sh "$TASK_ID")" || true
+python3 ~/.claude/hooks/lib/close-verdict.py classify-file "$CLOSE_REPORT"
+stat -c %Y "$CLOSE_REPORT" 2>/dev/null || stat -f %m "$CLOSE_REPORT"
 ```
 
 Run these checks in order (checks 1, 2, 4 each build a required-action entry
@@ -667,8 +672,9 @@ dispatch-and-recheck loop and re-read.
 **Handle each commit_status value:**
 
 #### status = `committed`
-Every planned repository reached `committed` or `nothing_to_commit` (the status says so).
-Continue to Step 8 normally.
+Require every planned repository to have a terminal `repository_results` entry
+(`committed` with commit SHA and push-gate written, or `nothing_to_commit`) and no
+failed/remaining entry. Continue to Step 8 normally.
 
 #### status = `partially_committed`
 
@@ -914,7 +920,7 @@ Follow the ## Continuation-spec mode instructions from ~/.claude/commands/spec-u
     context-<TASK_ID>.json, dev-report-<TASK_ID>*.json, qa-report-<TASK_ID>*.json,
     close-report-<TASK_ID>.md, completion-<TASK_ID>.md
 - Determine the next cycle number: max(existing "### Cycle N" headings) + 1; if none exist, use Cycle 1.
-- Append the new cycle block to the spec, one section at a time through spec-write.py. Never overwrite prior cycles.
+- Append the new cycle block to the spec through spec-write.py, as spec-update.md's Continuation-spec mode says. Never overwrite prior cycles.
 - Take each section's text from the report that holds it (dev reports' dev.tasks_completed, QA reports' qa.spec_section_updates, the context), as spec-update.md lists.
 - Populate sections 2-8 per the spec-update continuation-spec instructions.
 - Output the spec path when done.

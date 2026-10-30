@@ -159,10 +159,12 @@ by the rest of this file).
 ```bash
 # Required-action entry: {path, detail, source_check}. path is the artifact the
 # finding concerns; source_check names the ONE check that produced the finding.
+# One key per object literal: pretool-bash-safety.sh refuses a function whose
+# body holds a comma inside braces.
 close_required_action() {
   local path="${1:-}" detail="${2:-}" source_check="${3:-}"
   jq -nc --arg path "$path" --arg detail "$detail" --arg sc "$source_check" \
-    '{path:$path, detail:$detail, source_check:$sc}'
+    '{path:$path} + {detail:$detail} + {source_check:$sc}'
 }
 
 # Record a finding: append its entry to REQUIRED_ACTIONS_JSON for the routing loop.
@@ -268,8 +270,9 @@ For each `{path, detail, source_check}` entry:
 3. **Re-check** — re-run ONLY the entry's `source_check` (never the whole
    `/close` flow from scratch), as an independent verifier. A verifier never
    edits the artifact it judges; it reports a finding and the producer fixes it.
-4. **Measure progress** with `close_progress` (before/after hash of the producer
-   artifact's bytes; before/after set of unresolved finding ids). Re-check
+4. **Measure progress** with `close_progress` when the re-check still fails
+   (before/after hash of the producer artifact's bytes; before/after set of
+   unresolved finding ids), as `/commit`'s loop does. Re-check
    passes -> the finding is closed: it is recorded as a completed repair (see
    `## Disclosures` below), never as an open gap. A round that changed neither
    the producer artifact's bytes nor shrank the unresolved set, or that
@@ -302,6 +305,14 @@ ROUTE_SELECT_ARGS=(--task-id "$TASK_ID" --project-dir "$PROJECT_ROOT" "${LATE_RE
 ROUTE_SELECT_RESULT="$(python3 ~/.claude/scripts/close-route-select.py "${ROUTE_SELECT_ARGS[@]}")"; ROUTE_SELECT_RC=$?
 [ "$(jq -r '.outcome' <<<"$ROUTE_SELECT_RESULT")" = "not_selected" ] && LATE_REPAIR=false   # init declined: the ordinary route goes on with the chain of this call
 ARTIFACT_CHAIN="$(jq -c '.artifact_chain // {}' <<<"$ROUTE_SELECT_RESULT")"
+REQUIRED_ACTIONS_JSON='[]'   # the Resolver-error routing rule below, recorded in this same call
+if [ "$LATE_REPAIR" != "true" ] && [ "$ROUTE_SELECT_RC" -ne 0 ]; then
+  while IFS= read -r ERR; do
+    close_route_finding "$(jq -r --arg report "docs/dev/dev-report-$TASK_ID.json" '.path // .artifact // $report' <<<"$ERR")" \
+      "resolver reported $(jq -r '.code // "an error"' <<<"$ERR") (rc=$ROUTE_SELECT_RC)" "close-route-select.py"
+  done < <(jq -c '.errors[]?' <<<"$ARTIFACT_CHAIN")
+  [ "$REQUIRED_ACTIONS_JSON" != "[]" ] || close_route_finding "docs/dev/dev-report-$TASK_ID.json" "close-route-select.py returned non-zero (rc=$ROUTE_SELECT_RC) with no parseable errors[] and LATE_REPAIR=false" "close-route-select.py"
+fi
 ```
 
 **Resolver-error routing rule.** Applies only when `LATE_REPAIR != true` and
@@ -315,7 +326,10 @@ the same `{path, detail, source_check}` shape `close_route_finding` takes
 everywhere else in this document. When `errors[]` is empty or unparseable,
 there is exactly one such finding instead, on that same dev report, with detail
 "close-route-select.py returned non-zero (rc=$ROUTE_SELECT_RC) with no
-parseable errors[] and LATE_REPAIR=false", same `source_check`.
+parseable errors[] and LATE_REPAIR=false", same `source_check`. The block's
+last lines make these calls in the chain call's own Bash call: a routing round
+the main agent works itself dispatches nothing, and the orchestrator gate
+refuses a sixth Bash call in a row before Step 1's dispatch.
 
 Whatever `close_route_finding` recorded in this block is then worked by the routing loop (below) before Step 1; the same `source_check` is re-run after each fix.
 
