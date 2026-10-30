@@ -218,6 +218,7 @@ def _derive(root: Path, chain_script: str) -> StaticResult:
     # scripts a person runs and nothing in the harness runs (E12's by-hand entry points)
     records += [{"kind": "declaration", "type": "hand_run", "component": c} for c in sorted(_run_by_hand(
         root, files, findings, sh, py, {r["component"] for r in hook_regs if r.get("component")}))]
+    records += _dispatch_handoffs(root, files, md_env)
     records += D.policy_prefixes(root, files)
     records += _literal_sites(root, py, sh, decls, obligations)
     records += _rule7(findings, roster, commands, schema_decls, obligations, read_text)
@@ -766,6 +767,37 @@ def _owner_outputs(root: Path, files: list[str], findings: M.Findings, sh, py, r
                 out.append({"kind": "owner_output", "channel": "printed_into", "component": comp,
                             "site": f"{comp}:{line}", "shown": shown, "stream": stream,
                             "reaches": "into:" + into})
+    return out
+
+
+def _dispatch_handoffs(root: Path, files: list[str], md_env: dict) -> list[dict]:
+    """A file a command or agent text hands to a role's dispatch on a `<Label>: <path>` line (the
+    line naming that role) is read by that role where its own agent text says it reads the file
+    its dispatch names on that label (agents/dev.md: "When your dispatch names a `Graph context
+    file:` ..., DEV MUST read ... it"). A replay shows the read only where the text's condition
+    for the line holds in it; this is the same relation from the two texts, at the handing line."""
+    md = sorted(f for f in files if re.match(r"^(commands|agents)/[^/]+\.md$", f))
+    texts = {f: (root / f).read_text(encoding="utf-8", errors="replace") for f in md}
+    readers: dict[str, list] = {}
+    for f in md:
+        if f.startswith("agents/"):
+            for lab in sorted(mdscan.dispatch_read_labels(texts[f])):
+                readers.setdefault(lab, []).append(f)
+    out = []
+    for lab, agents in sorted(readers.items()):
+        for f in md:
+            env = _md_env_for(f, md_env)
+            for line, template, ctx in mdscan.labelled_paths(texts[f], lab):
+                pat, holes, status = P.to_pattern(_resolve_ph(template, env))
+                if status == "unresolved":
+                    continue
+                for a in agents:
+                    if not re.search(r"(?i)(?<![\w-])" + re.escape(a[len("agents/"):-len(".md")]) + r"(?![\w-])", ctx):
+                        continue    # the line hands the file to another role's dispatch
+                    out.append({"kind": "relation", "component": a, "op": "read", "path": pat,
+                                "resolution": status, "holes": list(holes), "mode": "content",
+                                "via": "dispatch:" + lab, "lang": "markdown", "site": f"{f}:{line}",
+                                "function": "", "origin": "md-handoff"})
     return out
 
 

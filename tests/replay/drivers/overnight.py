@@ -36,7 +36,9 @@ Then, in one session, the main agent:
     record Read, Step 12 in_progress again, dev; Step 13: the dev reports Read;
   - Step 14: the docker-compose lookup (none: nothing to rebuild), the base's QA verification
     plans Write; Step 15 per pipeline: pre-dispatch shell lines, QA final verification;
-    Step 16: the QA reports Read; Step 17: every pipeline passed, nothing to iterate;
+    Step 16: the QA reports Read; Step 17: every pipeline passed, nothing to iterate (variant
+    qa-fail: Step 16 marks each pipeline's phase in the pipelines file the iteration plan reads, and
+    Step 17 iterates, see below);
   - Step 18: the permissions block; Step 19: the cycle log, the TIME CHECK, the per-cycle commit
     (its failure logged); Step 20: PM RETRO, the retro Read; Step 21: marked completed, the loop
     hook's reset (a fresh checklist, Step 1 done, Step 2 in progress);
@@ -56,11 +58,21 @@ subagents also write the overnight spec sections their prompts tell them to upda
 
 The scenario: cycle 1's specialists find toy.add and toy.util.sub accepting non-numbers (dev.py's
 two scenarios), cycle 2's a README with no usage line and a package that does not export sub; PM
-triages each pair into two `fix` pipelines; BA-QA and QA pass every pipeline.
+triages each pair into two `fix` pipelines; BA-QA and QA pass every pipeline (variant qa-fail: pipeline 0's
+first fix leaves the TypeError without the argument's name, its QA fails, and its Step 17 iteration fixes it).
 
 Driver arguments (cli.py --arg K=V):
   variant=plain   two cycles, then the owner's /stop inside cycle 3's window (default)
   variant=stop    the owner's /stop inside cycle 1's window, once Step `stop_at` (default 12) is done
+  variant=qa-fail one cycle whose pipeline 0 fails its first QA (its dev's first fix is incomplete),
+                  then the owner's /stop inside cycle 2's window. Step 16 marks each pipeline's phase
+                  (done and fixed, or qa_failed) in the pipelines file; Step 17, as the tree's text
+                  says: the iteration plan's block, the plan Read, and for each entry the pipeline's
+                  iteration incremented in the pipelines file, the text's per-iteration blocks (the
+                  base's context refinement), the Step 11g precondition at the new iteration, dev from
+                  Step 12's template with the lines Step 17 adds (the base's iteration context in place
+                  of the context file), the qa_mode write the text has before QA (the base's), QA from
+                  Step 15's template, its report Read, and the pipeline marked done and fixed on a pass
   stop_at=N       the step after which variant=stop interrupts
   kit=base        the replay of the base kit's text: row 7's respellings below are applied
   kept=<JSON>     [[hook, step_norm, normalised text], ...]: a declared deviation passes only a block
@@ -100,7 +112,8 @@ from . import dev as devdrv
 PIPELINE = "dev-overnight"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
-COST = {"plain": 813, "stop": 345}
+# (qa-fail: measured beside plain on the P1b working tree at effa0ec, scaled by plain's 813)
+COST = {"plain": 813, "stop": 345, "qa-fail": 524}
 FOCUS = "harden the toy package's public functions"
 END_TIME = "8h"
 WORK_BRANCH = "night-work"
@@ -133,6 +146,31 @@ DEVIATIONS = Deviations([
     ("C* Step [234] Agent(*", Deviation(
         "hooks/pretool-subagent-enforce.py", "CONTRACT BLOCK (pretool-subagent-enforce)",
         "the Steps 2-4 dispatches the text makes before its contract exists")),
+    # DEVIATION: "CONTRACT BLOCK (pretool-subagent-enforce): step=17 ... errors: - no required_calls entry for
+    # step '17'" The cycle contract has entries for the dispatches of Steps 2-4, 8, 10, 11g, 12, 15 and 20
+    # only, so Step 17's iteration dispatches of dev and QA (the step in progress, as Step 11g's
+    # precondition says to restore it) are refused (variant qa-fail).
+    ("C* Step 17 Agent(*", Deviation(
+        "hooks/pretool-subagent-enforce.py", "no required_calls entry for step '17'",
+        "Step 17's iteration dispatches, which the cycle contract names no entry for")),
+    # DEVIATION: "OVERNIGHT FILE CHECK BLOCK (contract): ... projection dev-report.v1: flat field
+    # 'report_version' must be literal integer 1 ..." The Step 12 refusal below, again at Step 17's dev
+    # re-dispatch, which Step 17 says takes Step 12's template (variant qa-fail).
+    ("C* Step 17 Agent(dev) *", Deviation(
+        "hooks/posttool-overnight-file-check.py", "OVERNIGHT FILE CHECK BLOCK (contract)",
+        "the dev report Step 17's re-dispatch's obligation declares, collected")),
+    # DEVIATION: "BLOCKED Agent dispatch (qa): canonical aggregate dev-report missing. ... per-worker
+    # reports present: 0, 1 ..." The Step 15 refusal below, again at Step 17's QA dispatch, which Step 17
+    # says takes Step 15's template (variant qa-fail).
+    ("C* Step 17 Agent(qa) *", Deviation(
+        "hooks/pretool-aggregate-check.py", "canonical aggregate dev-report missing",
+        "Step 17's QA dispatch of an overnight pipeline")),
+    # DEVIATION: "E2E_ENFORCE_BLOCKED: agent <agent> (type=qa) has no qa-report-*.json in <project>/docs/dev/
+    # under session <sid>." The Step 15 refusal below, again at the stop of Step 17's QA, once the base
+    # text's Step 17 qa_mode write has set final_verification (variant qa-fail).
+    ("C* Step 17 Agent(qa) *", Deviation(
+        "hooks/subagentstop-e2e-enforce.py", "E2E_ENFORCE_BLOCKED",
+        "the stop of Step 17's QA, which wrote the report its obligation declares")),
     # DEVIATION: "OVERNIGHT FILE CHECK BLOCK (contract): ... projection dev-report.v1: flat field
     # 'report_version' must be literal integer 1 ..." posttool-overnight-file-check.py checks each
     # collected report against the contract entry's schema_name, which the base text's manifest
@@ -1207,14 +1245,23 @@ class Night:
                 fields = devdrv.with_lines(fields, [fill_curly(add.group(1).replace("${DEV_SESSION_ID}", self.sid), p.rec, {})])
             self.pre_shell(d_tpl, p, f"Step 12 Bash pre-dispatch {p.index}")
             sc = p.sc
-            work = roles.dev([(sc.rel, sc.old, sc.final)], baseline_fallback=True)
+            self.dispatch_dev(fields, p, sc.old, sc.partial if self.fails_first(p) else sc.final,
+                              f"Step 12 Agent(dev) pipeline {p.index}", attempt=1)
 
-            def dev_work(sub, b, pl, work=work):
-                out = work(sub, b, pl)
-                _spec_updates(sub, b, {"2": f"Attempt 1: {sc.what}", "3": f"{sc.rel}: {sc.dev_summary}"})
-                return out
-            act = agents.Act(work=dev_work, summary=sc.dev_summary)
-            self.dispatch(fields, act, f"Step 12 Agent(dev) pipeline {p.index}", p.sfx, atype="dev", pipe=p)
+    def fails_first(self, p: Pipe) -> bool:
+        """Whether this pipeline's first QA fails (variant qa-fail: pipeline 0, in cycle 1)."""
+        return self.variant == "qa-fail" and self.cycle == 1 and p.index == 0
+
+    def dispatch_dev(self, fields: dict, p: Pipe, old: str, new: str, label: str, attempt: int):
+        sc = p.sc
+        work = roles.dev([(sc.rel, old, new)], baseline_fallback=True)
+
+        def dev_work(sub, b, pl, work=work):
+            out = work(sub, b, pl)
+            _spec_updates(sub, b, {"2": f"Attempt {attempt}: {sc.what}", "3": f"{sc.rel}: {sc.dev_summary}"})
+            return out
+        act = agents.Act(work=dev_work, summary=sc.dev_summary)
+        return self.dispatch(fields, act, label, p.sfx, atype="dev", pipe=p)
 
     def step13(self) -> None:
         self.todo_to(13)
@@ -1245,39 +1292,156 @@ class Night:
         tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 15"), None) if "Agent(" in b.text))
         for p in self.pipes:
             self.pre_shell(tpl, p, f"Step 15 Bash qa_mode {p.index}")
-            sc = p.sc
-            work = roles.qa(e2e={"status": "legitimately_skipped", "blocking_reason": sc.no_e2e},
-                            guard_respell=o.respell)
+            self.dispatch_qa(dict(tpl), p, "fail" if self.fails_first(p) else "pass",
+                             f"Step 15 Agent(qa) pipeline {p.index}")
 
-            def qa_work(sub, b, pl, work=work, sc=sc):
-                out = work(sub, b, pl)
-                _spec_updates(sub, b, {"4": f"{sc.measured.split(' ')[0]}: {sc.ac['then']} (measured after the change)"})
-                return out
-            act = agents.Act(verdict="pass", work=qa_work, summary="QA pass", respell=o.respell,
-                             text_calls=[("Phase 6: Blast-Radius Phase 2 Verification", {})])
-            self.dispatch(dict(tpl), act, f"Step 15 Agent(qa) pipeline {p.index}", p.sfx, atype="qa", pipe=p)
+    def dispatch_qa(self, fields: dict, p: Pipe, verdict: str, label: str):
+        o, sc = self.o, p.sc
+        extra = sections = None
+        if verdict == "fail":  # the dev report's change leaves AC-01 unmet (drivers/dev.py's QA fail)
+            extra = {"qa": {"failures": [sc.qa_failure], "overall_assessment": "AC-01 not met"}}
+            sections = {"6": sc.qa_failure["description"], "7": "name the offending argument in the TypeError message"}
+        work = roles.qa(e2e={"status": "legitimately_skipped", "blocking_reason": sc.no_e2e},
+                        guard_respell=o.respell, extra=extra)
+
+        def qa_work(sub, b, pl, work=work, sc=sc):
+            out = work(sub, b, pl)
+            _spec_updates(sub, b, dict({"4": f"{sc.measured.split(' ')[0]}: {sc.ac['then']} (measured after the change)"},
+                                       **(sections or {})))
+            return out
+        act = agents.Act(verdict=verdict, work=qa_work, summary=f"QA {verdict}", respell=o.respell,
+                         text_calls=[("Phase 6: Blast-Radius Phase 2 Verification", {})])
+        return self.dispatch(fields, act, label, p.sfx, atype="qa", pipe=p)
 
     def step16(self) -> None:
         self.todo_to(16)
-        passed = 0
+        self.failed = []
         for p in self.pipes:
             rel = f"docs/dev/qa-report-{p.sfx}.json"
             self.read(rel, f"Step 16 Read qa-report {p.index}")
-            passed += (self.load(rel).get("qa") or {}).get("status") == "pass"
+            if (self.load(rel).get("qa") or {}).get("status") != "pass":
+                self.failed.append(p)
+        passed = len(self.pipes) - len(self.failed)
         self.o.s.say(f"Pipelines passed: {passed} of {len(self.pipes)}\nPipelines needing iteration: "
-                     f"{len(self.pipes) - passed}\nPipelines parked: 0")
-        if passed != len(self.pipes):
-            raise RuntimeError("a QA did not pass: this driver plays no Step 17 iteration")
+                     f"{len(self.failed)}\nPipelines parked: 0")
+        if self.failed and self.variant != "qa-fail":
+            raise RuntimeError("a QA did not pass outside variant qa-fail")
+        if self.failed:
+            # The decision tree's marks, in the pipelines file Step 6 wrote (the file Step 17's
+            # iteration plan selects the qa_failed pipelines from).
+            self.mark({p.index: ({"phase": "qa_failed"} if p in self.failed else {"phase": "done", "status": "fixed"})
+                       for p in self.pipes}, "Step 16 Write pipelines.json (phases)")
+
+    # ------------------------------------------------------------ Step 17 (variant qa-fail)
+    @property
+    def pipes_rel(self) -> str:
+        """The pipelines file Step 6's block writes (`... | tee <path>`)."""
+        name, b, _ = self.o.step_blocks("Step 6")[0]
+        return self.o.bind(re.search(r"\btee\s+(\S+\.json)", b.text).group(1))
+
+    def mark(self, changes: dict, label: str) -> None:
+        """Pipeline records updated in the pipelines file: Read, then edited in place (its own format)."""
+        rel = self.pipes_rel
+        path = os.path.join(self.project, rel)
+        if path not in self.read_paths:
+            self.read(rel, label.replace(" Write ", " Read "))
+        old = agents.peek(self.rp, "main", path)
+        recs = json.loads(old)
+        for r in recs:
+            r.update(changes.get(r.get("index"), {}))
+        for p in self.pipes:
+            p.rec.update(changes.get(p.index, {}))
+        new = json.dumps(recs, indent=2) + ("\n" if old.endswith("\n") else "")
+        self.write(rel, new, label)
+
+    def step17(self) -> None:
+        """Step 17 as the tree's text says: the iteration plan's block, the plan Read, and each entry's
+        Dev+QA inner loop until its QA passes."""
+        o = self.o
+        once, per = [], []
+        for name, b, _ in o.step_blocks("Step 17"):
+            (per if "<new-iter>" in b.text else once).append((name, b))
+        plan_rel = None
+        for name, b in once:
+            o.run_text(b.text, f"{self.L}Step 17 Bash {name}", "Build the iteration plan")
+            m = re.search(r">\s*(\S+\.json)\s*$", o.bind(b.text).strip())
+            plan_rel = m.group(1) if m else plan_rel
+        if plan_rel is None:
+            raise cmdtext.TextNotFound("Step 17 has no block writing the iteration plan")
+        self.read(plan_rel, "Step 17 Read iteration plan")
+        plan = self.load(plan_rel).get("iteration_plan") or []
+        sec = o.section("Step 17")
+        g_tpl = o.template("Step 11g")
+        d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 12"), None) if "Agent(" in b.text))
+        q_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 15"), None) if "Agent(" in b.text))
+        qa_mode = [c for c in re.findall(r"`([^`\n]+)`", sec) if "write-qa-mode.sh" in c]
+        for entry in plan:
+            p = next(x for x in self.pipes if x.index == entry["index"])
+            while True:
+                it = int(p.rec.get("iteration") or entry.get("current_iteration") or 0) + 1
+                self.mark({p.index: {"iteration": it}}, f"Step 17 Write pipelines.json (iteration {it} of {p.index})")
+                # The text's per-iteration blocks (the base's context refinement); a block that writes a
+                # context file gives the context dev consumes this iteration.
+                self.ctx_rel = f"docs/dev/context-{p.sfx}.json"
+                rules = [(r"^new-iter$", str(it)), (r"^timestamp_suffix$", p.sfx)]
+                for name, b in per:
+                    o.run_text(b.text, f"{self.L}Step 17 Bash {name} {p.index}", "Refine the context", extra_rules=rules)
+                    m = re.search(r">\s*(\S*context\S*\.json)\s*$", o.bind(b.text, rules).strip())
+                    if m:
+                        self.ctx_rel = m.group(1)
+                # Step 11g's precondition at the new iteration, then Step 17 in progress again.
+                o.set_in_progress("11g", f"{self.L}TodoWrite Step 11g in_progress (pipeline {p.index} iteration {it})")
+                self.dispatch(g_tpl, agents.Act(summary="graphify enrichment"),
+                              f"Step 11g Agent(graphify) pipeline {p.index} iteration {it}", p.sfx, atype="graphify", pipe=p)
+                run_rel = f".claude/dev-registry/{self.sid}-pipeline-{p.index}/graphify/graphify-run.json"
+                status = None
+                if os.path.isfile(os.path.join(self.project, run_rel)):
+                    self.read(run_rel, f"Step 11g Read graphify-run {p.index} iteration {it}")
+                    status = self.load(run_rel).get("status")
+                o.s.say(f"pipeline {p.index} iteration {it}: graphify status={status}")
+                o.set_in_progress(17, f"{self.L}TodoWrite Step 17 in_progress (pipeline {p.index} iteration {it})")
+                # Dev from Step 12's template: the lines Step 17 adds that it does not carry yet, the
+                # context it consumes this iteration.
+                fields = dict(d_tpl)
+                labels = {l.split(":", 1)[0].strip() for l in fields["prompt"].split("\n") if ":" in l}
+                add = [fill_curly(c, p.rec, {}) for c in re.findall(r"`([A-Z][\w ]* file:\s*[^`\s]+)`", sec)
+                       if c.split(":", 1)[0].strip() not in labels]
+                g_add = re.search(r"`(Graph context file: [^`]+)`", o.section("Step 11g"))
+                if g_add and status in ("ok", "degraded"):
+                    add.append(fill_curly(g_add.group(1).replace("${DEV_SESSION_ID}", self.sid), p.rec, {}))
+                ctx = self.ctx_rel if self.ctx_rel != f"docs/dev/context-{p.sfx}.json" else None
+                fields = devdrv.with_lines(fields, add, ctx)
+                self.dispatch_dev(fields, p, p.sc.partial, p.sc.final,
+                                  f"Step 17 Agent(dev) pipeline {p.index} iteration {it}", attempt=it + 1)
+                for k, code in enumerate(qa_mode, 1):  # the qa_mode write the text has before QA (the base's)
+                    o.run_text(code, f"{self.L}Step 17 Bash qa_mode {p.index} iteration {it}" + (f" #{k}" if k > 1 else ""),
+                               "Set qa_mode before the QA dispatch")
+                self.dispatch_qa(dict(q_tpl), p, "pass", f"Step 17 Agent(qa) pipeline {p.index} iteration {it}")
+                rel = f"docs/dev/qa-report-{p.sfx}.json"
+                self.read(rel, f"Step 17 Read qa-report {p.index} iteration {it}")
+                if (self.load(rel).get("qa") or {}).get("status") == "pass":  # the only exit
+                    self.mark({p.index: {"phase": "done", "status": "fixed"}},
+                              f"Step 17 Write pipelines.json (pipeline {p.index} fixed)")
+                    break
+        self.failed = []
 
     def step18(self) -> None:
         o = self.o
         self.todo_to(17)
-        o.s.say("Step 17: every pipeline passed QA; no iteration.")
+        if getattr(self, "failed", None):
+            self.step17()
+        else:
+            o.s.say("Step 17: every pipeline passed QA; no iteration.")
         self.todo_to(18)
         for name, b, _ in o.step_blocks("Step 18"):
             o.run_text(b.text, f"{self.L}Step 18 Bash {name}", "Aggregate and apply the pipelines' permissions")
 
     # ------------------------------------------------------------ Steps 19-21
+    @staticmethod
+    def attempts(p: Pipe) -> int:
+        """Dev+QA attempts of a pipeline this cycle: the first, plus each Step 17 iteration."""
+        return 1 + int(p.rec.get("iteration") or 0)
+
     def step19(self) -> None:
         o = self.o
         self.todo_to(19)
@@ -1285,7 +1449,7 @@ class Night:
         log = re.search(r"running log\*\* at `([^`]+)`", sec).group(1)
         self.log_rel = o.bind(log)
         tpl = cmdtext.block(sec, None, lang="markdown")
-        rows = "\n".join(f"| {p.index} | {p.rec['description']} | Fixed | 1 |" for p in self.pipes)
+        rows = "\n".join(f"| {p.index} | {p.rec['description']} | Fixed | {self.attempts(p)} |" for p in self.pipes)
         entry = []
         for l in tpl.split("\n"):
             if re.match(r"^\| (?:0|1|\.\.\.) \|", l):
@@ -1332,7 +1496,8 @@ class Night:
         doc = {"retro_id": f"rr-{self.ts}", "session_id": self.sid, "cycle_number": self.n, "timestamp": utc_now(),
                "is_final_cycle": self.final_cycle,
                "plan_vs_outcome": [{"triage_index": k, "description": p.rec["description"], "tier": 1,
-                                    "pipeline_recommendation": "fix", "actual_outcome": "fixed", "iterations_used": 1,
+                                    "pipeline_recommendation": "fix", "actual_outcome": "fixed",
+                                    "iterations_used": self.attempts(p),
                                     "failure_reason": None} for k, p in enumerate(self.pipes)],
                "cycle_stats": {"issues_triaged": len(self.pipes), "issues_attempted": len(self.pipes),
                                "issues_fixed": len(self.pipes), "issues_failed": 0, "issues_skipped": 0,
@@ -1403,6 +1568,8 @@ class Night:
         try:
             if self.variant == "stop":
                 self.run_cycle(until=int(self.rp.args.get("stop_at", "12")))
+            elif self.variant == "qa-fail":
+                self.run_cycle(until=until)
             else:
                 if not self.run_cycle(until=until):
                     return
@@ -1412,7 +1579,7 @@ class Night:
         self.owner_stop()
 
 
-VARIANTS = ("plain", "stop")
+VARIANTS = ("plain", "stop", "qa-fail")
 
 
 def run(rp) -> None:

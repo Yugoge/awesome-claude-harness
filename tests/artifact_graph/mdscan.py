@@ -308,3 +308,51 @@ def command_text_outputs(text: str) -> list[tuple[int, str, str]]:
 
 def _placeholders_shown(text: str) -> str:
     return P.shown_text(with_placeholders(text))
+
+
+# ----------------------------------------------------------------- dispatch handoffs
+
+# An agent text reading the file its dispatch names on a label: "When your dispatch names a
+# `Graph context file:` ..., DEV MUST read ... it", "taken from the `Graph context file:` your
+# dispatch names".
+_NAMES_LINE = re.compile(r"\b(?:dispatch|prompt) names\b")
+_LABEL_CODE = re.compile(r"`([A-Z][A-Za-z ]*[A-Za-z]):`")
+_SHELL_VAR = re.compile(r"\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)")
+
+
+def dispatch_read_labels(text: str) -> set[str]:
+    """Labels whose file an agent text says it reads when its dispatch names one."""
+    return {lab for ln in text.split("\n") if _NAMES_LINE.search(ln) for lab in _LABEL_CODE.findall(ln)}
+
+
+def labelled_paths(text: str, label: str) -> list[tuple[int, str, str]]:
+    """(line, path template, context) of each `<label>: <path>` the text hands over: an inline code
+    span (context: its line, which names the dispatch it goes to), or a line of a fenced block that
+    is no shell block (a dispatch template's line; context: the block). A shell variable
+    (`${DEV_SESSION_ID}`) is the template's placeholder."""
+    path = r"([^`\s]*/[^`\s]*\.[A-Za-z0-9]{1,6})"
+    inline = re.compile(r"`" + re.escape(label) + r":\s+" + path + r"`")
+    whole = re.compile(r"^\s*" + re.escape(label) + r":\s+" + path + r"\s*$")
+    out = []
+    lines = text.split("\n")
+    shell, block_of = set(), {}
+    for b in blocks(text):
+        rng = range(b.start_line, b.start_line + b.text.count("\n") + 1)
+        if b.info in SHELL_INFO:
+            shell.update(rng)
+        for k in rng:
+            block_of[k] = b.text
+    in_fence = False
+    for i, ln in enumerate(lines, start=1):
+        if _FENCE.match(ln):
+            in_fence = not in_fence
+            continue
+        if i in shell:
+            continue
+        found = [(m.group(1), ln) for m in inline.finditer(ln)]
+        if in_fence:
+            m = whole.match(ln)
+            found += [(m.group(1), block_of.get(i, ln))] if m else []
+        for p, ctx in found:
+            out.append((i, with_placeholders(_SHELL_VAR.sub(lambda m: "<" + (m.group(1) or m.group(2)) + ">", p)), ctx))
+    return out

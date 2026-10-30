@@ -882,3 +882,29 @@ def test_past_a_test_that_a_value_differs_from_a_literal_it_holds_no_such_litera
     paths = rel_paths(root, op="read")
     assert "<proj>/null" not in paths and "<proj>/docs/null" not in paths
     assert "<proj>/notes/null" in paths
+
+
+# ------------------------------------------------------------------ lane Z4
+
+def test_a_file_handed_to_a_dispatch_on_a_label_its_role_reads_is_read_by_that_role(tmp_path):
+    """A command that tells the orchestrator to add `Graph context file: <path>` to the dev
+    dispatch hands that file to dev, and dev's own text reads the file its dispatch names on that
+    label: dev reads it, though no replay meets the condition the line is added under. A role the
+    handing line does not name reads nothing from it, and a label no role's text reads hands
+    nothing."""
+    root = make_tree(tmp_path, {
+        "scripts/enrich.py": ('import os, sys\nd = os.path.join(os.getcwd(), ".claude/reg", sys.argv[1])\n'
+                              'open(os.path.join(d, "graph.json"), "w").write("{}")\n'
+                              'open(os.path.join(d, "notes.json"), "w").write("{}")\n'),
+        "agents/dev.md": ("---\nname: dev\n---\n# Dev\n\nWhen your dispatch names a `Graph context file:`, "
+                          "read it before you change anything.\n"),
+        "agents/qa.md": "---\nname: qa\n---\n# QA\n\nVerify the change.\n",
+        "commands/run.md": ("# /run\n\n```bash\npython3 ~/.claude/scripts/enrich.py <TASK_ID>\n```\n\n"
+                            "When it reports ok, include `Graph context file: .claude/reg/<TASK_ID>/graph.json` "
+                            "in the dev dispatch prompt.\n\nInclude `Notes file: .claude/reg/<TASK_ID>/notes.json` "
+                            "in the QA dispatch prompt.\n"),
+    })
+    m, vs = check(root)
+    graph = [k for k in m.artifacts if k.endswith("/graph.json")]
+    assert graph and all(m.artifacts[k].consumers() == ["agent:dev"] for k in graph)
+    assert rule2(vs) == {("2-unread", "<proj>/.claude/reg/<task>/notes.json")}
