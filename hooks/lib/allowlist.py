@@ -137,16 +137,15 @@ def write_tool_streak(session_id: str, state: dict | None) -> None:
 def _enumerate_sentinel_grant_files(task_id: str | None = None) -> list[Path]:
     """List existing sentinel grant files under SENTINEL_GRANT_DIR.
 
-    If task_id is provided, restrict to files whose basename starts with
-    "<task_id>-" or equals "<task_id>.json".
+    If task_id is provided, restrict to "<task_id>.json", the one name
+    write_sentinel_grant() writes.
     """
     try:
         d = Path(SENTINEL_GRANT_DIR)
         if not d.is_dir():
             return []
         if task_id:
-            return [p for p in d.glob("*.json")
-                    if p.name == f"{task_id}.json" or p.name.startswith(f"{task_id}-")]
+            return [p for p in d.glob("*.json") if p.name == f"{task_id}.json"]
         return list(d.glob("*.json"))
     except Exception:
         return []

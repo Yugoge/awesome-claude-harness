@@ -102,9 +102,7 @@ def find_monolith(specs_base: Path, spec_dir: Path) -> Path | None:
     for sid in ids:
         candidates += [
             specs_base / f"{sid}.md",
-            specs_base / f"{sid}.monolith.md",
             spec_dir / f"{sid}.md",
-            spec_dir / f"{sid}.monolith.md",
         ]
     for c in candidates:
         if c.is_file():

@@ -386,9 +386,7 @@ class TestAllowSettingsPreflight(unittest.TestCase):
 
             task_id = "test-allow-hard-deny-stale"
             session_id = "test-allow-hard-deny-stale-session"
-            paths = self._paths(task_id, session_id) + (
-                os.path.join(_grant_dir(), f"{task_id}-older.json"),
-            )
+            paths = self._paths(task_id, session_id)
             for path in paths:
                 Path(path).parent.mkdir(parents=True, exist_ok=True)
                 Path(path).write_text("{}", encoding="utf-8")

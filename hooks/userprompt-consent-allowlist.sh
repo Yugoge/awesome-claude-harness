@@ -50,10 +50,9 @@ SID=$(echo "$INPUT" | python3 -c \
 [ -z "$SID" ] && SID="default"
 
 # ── Stale-grant cleanup (AC15) ──────────────────────────────────────
-# Remove EVERY pre-existing grant file the consumer's loader would honor for
-# this TASK_ID: the canonical per-task sentinel AND every suffixed
-# '<task_id>-*.json' sentinel (the full loader glob —
-# hooks/lib/allowlist.py _enumerate_sentinel_grant_files). Invoked on
+# Remove the pre-existing grant file the consumer's loader would honor for
+# this TASK_ID: the per-task sentinel, the one name the loader reads
+# (hooks/lib/allowlist.py _enumerate_sentinel_grant_files). Invoked on
 # EVERY refusal path so no stale broad grant can survive an /allow that does
 # not result in a written narrow grant. Defining property: on ANY /allow that
 # does not write a narrow grant, no stale grant may survive.
@@ -66,8 +65,7 @@ _remove_stale_grants() {
   local state_root
   state_root="$(harness_state_dir)"
   for grant_path in \
-    "${state_root}/claude-grants/${task_id}.json" \
-    "${state_root}/claude-grants/${task_id}"-*.json
+    "${state_root}/claude-grants/${task_id}.json"
   do
     if [ -e "$grant_path" ] || [ -L "$grant_path" ]; then
       had_stale_grant=true
