@@ -11,6 +11,20 @@ One scratch root holds everything a replay touches:
     <sb>/settings            the armed copy and any custom settings file
     <sb>/replay              copy of this framework, run inside the sandbox
     <sb>/out, trace, markers per-run outputs, raw strace, step markers
+    <sb>/bytecode            the harness's byte-compiled modules, put back by reset()
+
+Bytecode: build() compiles every module of the harness and its venv once, as
+checked-hash .pyc files in __pycache__ beside each module (what the CLI's own
+hook runs leave there; the replay's processes run with PYTHONDONTWRITEBYTECODE,
+so without them every hook process compiles every module it imports again). A
+checked-hash .pyc is used only while its source's hash matches, and the import
+still reads the source to check it, so a replay reads the same files with or
+without them (trace.py leaves __pycache__ paths out). They are left out when
+the tree's own ignore rules do not ignore them (the harness's git status stays
+the tree's).
+
+clone() copies a built sandbox (a template, built once per tree) instead of
+building another: the same copy, snapshot, venv and bytecode.
 
 Mode "ns" (a): a private mount namespace (root, or passwordless sudo) with the
 kit's layout: <sb>/home bound at root's HOME (so the harness is ~/.claude and
@@ -211,23 +225,70 @@ def _make_venv(tree: str, venv: str, log) -> str:
     return f"pip install {args[-1]}"
 
 
+_COMPILE = r'''
+import os, py_compile, sys
+mode = py_compile.PycInvalidationMode.CHECKED_HASH
+n = 0
+for dp, dns, fns in os.walk(sys.argv[1]):   # symlinked directories are not followed
+    dns[:] = sorted(d for d in dns if d not in (".git", "__pycache__"))
+    for fn in sorted(fns):
+        p = os.path.join(dp, fn)
+        if fn.endswith(".py") and not os.path.islink(p):
+            try:
+                py_compile.compile(p, doraise=True, invalidation_mode=mode)
+                n += 1
+            except (py_compile.PyCompileError, OSError, ValueError):
+                pass
+print(n)
+'''
+
+
+def _bytecode(sb: str, harness: str) -> str:
+    """Compile the harness and its venv with the venv's interpreter (checked-hash .pyc), and keep
+    the harness's own __pycache__ directories in <sb>/bytecode for reset() to put back."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8"}
+    p = subprocess.run([os.path.join(harness, "venv", "bin", "python"), "-c", _COMPILE, harness],
+                       env=env, capture_output=True, text=True)
+    if p.returncode:
+        raise RuntimeError(f"byte-compiling the sandbox failed: {p.stderr.strip()[-2000:]}")
+    store = os.path.join(sb, "bytecode")
+    os.makedirs(store)
+    venv = os.path.join(harness, "venv")
+    caches = []     # (directory, in the venv)
+    for dp, dns, _fns in os.walk(harness):
+        if dp == os.path.join(harness, ".git"):
+            dns[:] = []
+        elif os.path.basename(dp) == "__pycache__":
+            caches.append((dp, _under(dp, venv)))
+            dns[:] = []
+    shown = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "status", "--porcelain", "-z",
+                            "--untracked-files=all"], cwd=harness, env=_git_env(sb), capture_output=True,
+                           text=True).stdout
+    if "__pycache__/" in shown:
+        # the tree does not ignore them: its harness's git status would change
+        for d, _in_venv in caches:
+            _rm(sb, d)
+        return f"none: the tree's ignore rules do not ignore __pycache__ ({p.stdout.strip()} compiled, removed)"
+    for d, in_venv in caches:
+        if not in_venv:     # the venv is kept as it is across resets; the harness is cleaned
+            dst = os.path.join(store, os.path.relpath(d, harness))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.move(d, dst)
+    return f"{p.stdout.strip()} modules, checked-hash"
+
+
+def _restore_bytecode(sb: str, harness: str) -> None:
+    store = os.path.join(sb, "bytecode")
+    if os.path.isdir(store):
+        shutil.copytree(store, harness, dirs_exist_ok=True)
+
+
 # ---------------------------------------------------------------- build / reset
 
 def build(tree: str, sb: str, log=print) -> dict:
     """Build a sandbox at `sb` from the harness tree at `tree` (working tree or a clone at any commit)."""
     tree, sb = os.path.abspath(tree), os.path.abspath(sb)
-    if _under(sb, tree) or _under(tree, sb):
-        raise RuntimeError("the sandbox and the tree under test must not contain each other")
-    if _under(sb, "/mnt"):
-        raise RuntimeError("the sandbox must not lie under /mnt (the namespace mounts over it)")
-    if os.path.exists(sb):
-        if os.listdir(sb) and not os.path.isfile(os.path.join(sb, MARK)):
-            raise RuntimeError(f"{sb} exists and is not a sandbox; refusing to replace it")
-        if os.path.isfile(os.path.join(sb, MARK)):
-            for name in os.listdir(sb):
-                if name != MARK:
-                    _rm(sb, os.path.join(sb, name))
-    os.makedirs(sb, exist_ok=True)
+    _clear(sb, tree)
     t0 = time.monotonic()
     with open(os.path.join(sb, MARK), "w") as fh:
         json.dump({"tree": tree}, fh)
@@ -238,6 +299,7 @@ def build(tree: str, sb: str, log=print) -> dict:
     _git(sb, "commit", "-q", "--allow-empty", "-m", "sandbox snapshot", cwd=harness)
     snapshot = _git(sb, "rev-parse", "HEAD", cwd=harness)
     deps = _make_venv(tree, os.path.join(harness, "venv"), log)
+    bytecode = _bytecode(sb, harness)
     shutil.copytree(HERE, os.path.join(sb, "replay"), ignore=COPY_IGNORE)
     os.makedirs(os.path.join(sb, "settings"))
     with open(os.path.join(harness, "settings.json")) as fh:
@@ -249,12 +311,50 @@ def build(tree: str, sb: str, log=print) -> dict:
         p = subprocess.run(["git", "-C", tree, "rev-parse", "HEAD"], capture_output=True, text=True,
                            env=_git_env(sb))
         tree_rev = p.stdout.strip()
-    info = {"tree": tree, "tree_head": tree_rev, "snapshot": snapshot, "deps": deps,
+    info = {"tree": tree, "tree_head": tree_rev, "snapshot": snapshot, "deps": deps, "bytecode": bytecode,
             "python": os.path.realpath(getattr(sys, "_base_executable", sys.executable)),
             "built_s": round(time.monotonic() - t0, 1)}
     with open(os.path.join(sb, MARK), "w") as fh:
         json.dump(info, fh, indent=1)
     return info
+
+
+def _clear(sb: str, *apart: str) -> None:
+    """An empty sandbox directory at `sb` (an existing sandbox emptied, never anything else)."""
+    for other in apart:
+        if _under(sb, other) or _under(other, sb):
+            raise RuntimeError(f"the sandbox and {other} (the tree under test, or a template) must not contain "
+                               "each other")
+    if _under(sb, "/mnt"):
+        raise RuntimeError("the sandbox must not lie under /mnt (the namespace mounts over it)")
+    if os.path.exists(sb):
+        if os.listdir(sb) and not os.path.isfile(os.path.join(sb, MARK)):
+            raise RuntimeError(f"{sb} exists and is not a sandbox; refusing to replace it")
+        if os.path.isfile(os.path.join(sb, MARK)):
+            for name in os.listdir(sb):
+                if name != MARK:
+                    _rm(sb, os.path.join(sb, name))
+    os.makedirs(sb, exist_ok=True)
+
+
+def clone(template: str, sb: str) -> dict:
+    """A sandbox at `sb` copied from the built sandbox `template` (build() once per tree, then one
+    copy per replay): the same harness copy, snapshot, venv and bytecode, as build() makes them."""
+    template, sb = os.path.abspath(template), os.path.abspath(sb)
+    tinfo = info(template)
+    _clear(sb, tinfo["tree"], template)
+    t0 = time.monotonic()
+    p = subprocess.run(["cp", "-a", "--reflink=auto", "--", template + "/.", sb], capture_output=True, text=True)
+    if p.returncode:
+        raise RuntimeError(f"copying the sandbox template failed: {p.stderr.strip()[-2000:]}")
+    # A copy has new inodes and ctimes: the snapshot's index takes the files' stat data again, as
+    # build()'s `git add` left it, or the replay's first git command in the harness would re-read
+    # every tracked file (reads the trace would attribute to the hook that ran it)
+    _git(sb, "update-index", "-q", "--refresh", cwd=os.path.join(sb, "home", ".claude"))
+    new = dict(tinfo, template=template, cloned_s=round(time.monotonic() - t0, 1))
+    with open(os.path.join(sb, MARK), "w") as fh:
+        json.dump(new, fh, indent=1)
+    return new
 
 
 def armed(settings: dict) -> dict:
@@ -303,6 +403,7 @@ def reset(sb: str, mode: str) -> None:
     _git(sb, "checkout", "-q", "-f", "master", cwd=harness)
     _git(sb, "reset", "-q", "--hard", snap, cwd=harness)
     _git(sb, "clean", "-qffdx", "-e", "/venv", cwd=harness)
+    _restore_bytecode(sb, harness)
     for name in os.listdir(home):
         if name != ".claude":
             _rm(sb, os.path.join(home, name))

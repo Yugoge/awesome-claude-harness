@@ -67,18 +67,24 @@ def test_no_violation(check):
                     + "\n\n".join(v.text() for v in vs[:300]))
 
 
-def _static_bytes(tmp_path: Path, seed: str) -> bytes:
-    out = tmp_path / f"static-{seed}.jsonl"
-    env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")
-    p = subprocess.run([sys.executable, "-m", "tests.artifact_graph", str(REPO), str(out)], cwd=REPO, env=env,
-                       capture_output=True, text=True)
-    assert p.returncode == 0, p.stderr[-2000:]
-    return out.read_bytes()
+def _static_bytes(tmp_path: Path, *seeds: str) -> list[bytes]:
+    """The static half's output under each hash seed, the runs side by side (separate processes)."""
+    runs = []
+    for seed in seeds:
+        out = tmp_path / f"static-{seed}.jsonl"
+        env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONDONTWRITEBYTECODE="1")
+        runs.append((out, subprocess.Popen([sys.executable, "-m", "tests.artifact_graph", str(REPO), str(out)],
+                                           cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                           text=True)))
+    for _out, p in runs:
+        _stdout, stderr = p.communicate()
+        assert p.returncode == 0, stderr[-2000:]
+    return [out.read_bytes() for out, _p in runs]
 
 
 def test_static_half_is_byte_identical_over_two_runs(tmp_path):
     """Rule (10): the static half's output is sorted, and two runs (different hash seeds) agree byte for byte."""
-    a, b = _static_bytes(tmp_path, "1"), _static_bytes(tmp_path, "4242")
+    a, b = _static_bytes(tmp_path, "1", "4242")
     assert a, "the static half wrote nothing"
     assert a == b, (f"two static runs differ: sha256 {hashlib.sha256(a).hexdigest()} vs "
                     f"{hashlib.sha256(b).hexdigest()}")

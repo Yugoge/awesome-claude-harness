@@ -1800,20 +1800,21 @@ def run_check(tree: str, work: str, *, jobs: int = 4, budget_s: float = 1500.0, 
     tree = os.path.abspath(tree)
     os.makedirs(work, exist_ok=True)
     timing = {}
+    pairs = RT.drivers()
+    if only:
+        pairs = [p for p in pairs if p[0] in only or f"{p[0]}~{p[1]}" in only]
+    jl = RT.jobs_for(work, pairs, settings)
+    # the replays (one sandbox built, then copied per replay) run in worker threads while the
+    # static half runs in this one: neither reads the other's output
+    replaying = RT.start(tree, work, jl, jobs, log) if replays else None
     t0 = time.monotonic()
     static = static_derive(tree)
     timing["static_s"] = round(time.monotonic() - t0, 1)
     with open(os.path.join(work, "static.jsonl"), "w", encoding="utf-8") as fh:
         fh.write(static.jsonl())
     log(f"static half: {len(static.records)} records in {timing['static_s']} s")
-    pairs = RT.drivers()
-    if only:
-        pairs = [p for p in pairs if p[0] in only or f"{p[0]}~{p[1]}" in only]
-    jl = RT.jobs_for(work, pairs, settings)
     if replays:
-        t0 = time.monotonic()
-        RT.replay_all(tree, jl, jobs)
-        timing["replays_wall_s"] = round(time.monotonic() - t0, 1)
+        timing.update(replaying.result())
         for j in jl:
             RT.save_job(j)
             log(f"replay {j.label} {j.settings}: rc {j.rc}, {j.wall_s} s {j.error}")

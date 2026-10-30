@@ -254,8 +254,11 @@ jobs:
     # P1b row 19: the artifact check derives every write/read relation at test
     # time from the code and from traced replays of each pipeline driver
     # (tests/replay), so it needs strace and a mount namespace (the runner's
-    # passwordless sudo). The replays take most of an hour, so the check runs
-    # once, on the newest supported Python, in a job of its own.
+    # passwordless sudo). Its 50 replays and E1's differential took 65 minutes
+    # here before the shared sandbox and the byte-compiled harness, and about 50
+    # are expected with them, over E2's 1500 s (the PR gives the time per phase
+    # and per driver), so the check runs once, on the newest supported Python,
+    # in a job of its own.
     name: artifact check (traced replays)
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -285,4 +288,18 @@ jobs:
       - name: Artifact check
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 -m pytest tests/test_artifact_graph.py -q -p no:cacheprovider
+          # The check's outputs stay for the upload below; check.json holds the time of each phase
+          # and of each replay and differential (-s prints the same lines as the check runs).
+          ARTIFACT_GRAPH_WORK: ${{ runner.temp }}/artifact-graph
+        run: python3 -m pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s
+
+      - name: Upload the check's timing and violations
+        # if: always(): a failing check's timing is the one the budget question needs.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifact-check
+          path: |
+            ${{ runner.temp }}/artifact-graph/check.json
+            ${{ runner.temp }}/artifact-graph/violations.txt
+          if-no-files-found: warn

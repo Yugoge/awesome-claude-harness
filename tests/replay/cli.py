@@ -101,6 +101,7 @@ def run_one(sb: str, tree: str, out_dir: str, *, driver: str, mode: str, setting
         if keep_raw:
             with open(raw, "rb") as src, gzip.open(os.path.join(out_dir, "raw.txt.gz"), "wb") as dst:
                 shutil.copyfileobj(src, dst)
+        os.unlink(raw)  # reduced into out_dir; tens of MB per replay, and reset() would remove it anyway
     elif os.path.exists(os.path.join(out_dir, "outside-writes.txt")):
         with open(os.path.join(out_dir, "outside-writes.txt")) as fh:
             row["outside_writes"] = sum(1 for _ in fh)

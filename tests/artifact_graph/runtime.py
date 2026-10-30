@@ -3,7 +3,9 @@
 Every driver under tests/replay/drivers/ is replayed, each variant it offers,
 traced, once with the tree's own settings.json ("shipped") and once with the
 sandbox-armed copy ("armed"), each in a sandbox of its own (E2: the check's
-replay runs with the tree's settings; rule (6) measures the gates armed too).
+replay runs with the tree's settings; rule (6) measures the gates armed too),
+copied from one sandbox built for the tree (start(): the template, built while
+the check's static half runs, then the replays, `workers` at a time).
 A driver offers variants through a module-level VARIANTS list of argument
 dicts, or, without one, through the ``variant=NAME`` lines of its docstring's
 argument list; a driver with neither runs once with no arguments. Adding a
@@ -97,18 +99,38 @@ def _env() -> dict:
     return env
 
 
-def replay(tree: str, job: Job) -> Job:
-    """One traced replay of `job` (its sandbox rebuilt from `tree`)."""
+def template(tree: str, work: str, log=print) -> str:
+    """The sandbox every replay starts from: built once from `tree`, then copied per replay."""
+    from tests.replay import sandbox
+    sb = os.path.join(work, "template")
+    log(f"sandbox template: {json.dumps(sandbox.build(tree, sb, log=log))}")
+    return sb
+
+
+def replay(tree: str, job: Job, template: str | None = None) -> Job:
+    """One traced replay of `job`, in a copy of `template` (else a sandbox rebuilt from `tree`)."""
     os.makedirs(job.out, exist_ok=True)
     argv = [sys.executable, "-m", "tests.replay", "run", "--tree", tree, "--out", job.out, "--sandbox", job.sb,
-            "--driver", job.driver, "--settings", job.settings, "--runs", "traced", "--rebuild"]
+            "--driver", job.driver, "--settings", job.settings, "--runs", "traced"]
+    t0 = time.monotonic()
+    job.log = os.path.join(job.out, "replay.log")
+    if template:
+        from tests.replay import sandbox
+        try:
+            sandbox.clone(template, job.sb)
+        except (OSError, RuntimeError) as e:
+            job.rc, job.wall_s = 1, round(time.monotonic() - t0, 2)
+            job.error = f"replay {job.label} ({job.settings}) has no sandbox: {e}; see {job.log}"
+            with open(job.log, "w") as fh:
+                fh.write(job.error + "\n")
+            return job
+    else:
+        argv.append("--rebuild")
     if job.variant:
         argv += ["--arg", f"variant={job.variant}"]
-    t0 = time.monotonic()
     p = subprocess.run(argv, cwd=REPO, env=_env(), capture_output=True, text=True)
     job.wall_s = round(time.monotonic() - t0, 2)
     job.rc = p.returncode
-    job.log = os.path.join(job.out, "replay.log")
     with open(job.log, "w") as fh:
         fh.write(p.stdout + p.stderr)
     if not os.path.isfile(os.path.join(job.run_dir, "relations.tsv")):
@@ -116,9 +138,28 @@ def replay(tree: str, job: Job) -> Job:
     return job
 
 
-def replay_all(tree: str, jobs: list[Job], workers: int) -> list[Job]:
+def replay_all(tree: str, jobs: list[Job], workers: int, template: str | None = None) -> list[Job]:
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        return list(ex.map(lambda j: replay(tree, j), jobs))
+        return list(ex.map(lambda j: replay(tree, j, template), jobs))
+
+
+def start(tree: str, work: str, jobs: list[Job], workers: int, log=print):
+    """Build the template, then replay every job `workers` at a time, in a thread of its own; the
+    future's result is the timing: template_s, and replays_wall_s from the start to the last replay's end."""
+    def run() -> dict:
+        t0 = time.monotonic()
+        tpl = None
+        try:
+            tpl = template(tree, work, log) if jobs else None
+        except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+            log(f"sandbox template: {e}; every replay builds its own sandbox")
+        built = round(time.monotonic() - t0, 1)
+        replay_all(tree, jobs, workers, tpl)
+        return {"template_s": built, "replays_wall_s": round(time.monotonic() - t0, 1)}
+    ex = ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(run)
+    ex.shutdown(wait=False)
+    return fut
 
 
 def differential(job: Job, units: list[dict], schemas: dict, workers: int) -> Job:

@@ -42,17 +42,23 @@ OVERLAY = r'''
 set -e
 mkdir -p /mnt/ovl
 mount -t tmpfs none /mnt/ovl
-i=0
-for r in "$@"; do
-  [ "$r" = "--" ] && break
-  i=$((i+1))
-  if [ -d "$r" ]; then
-    mkdir -p "/mnt/ovl/$i/u" "/mnt/ovl/$i/w"
-    mount -t overlay overlay -o "lowerdir=$r,upperdir=/mnt/ovl/$i/u,workdir=/mnt/ovl/$i/w" "$r"
-  fi
-done
-while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+roots=()
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do roots+=("$1"); shift; done
 shift
+dirs=()
+for i in "${!roots[@]}"; do [ ! -d "${roots[$i]}" ] || dirs+=("/mnt/ovl/$i/u" "/mnt/ovl/$i/w"); done
+[ "${#dirs[@]}" -eq 0 ] || mkdir -p "${dirs[@]}"
+for i in "${!roots[@]}"; do
+  r="${roots[$i]}"
+  [ ! -d "$r" ] || mount -t overlay overlay -o "lowerdir=$r,upperdir=/mnt/ovl/$i/u,workdir=/mnt/ovl/$i/w" "$r"
+done
+# the mutation, over the overlays: HOW PATH CONTENT (PATH resolved, its root checked, by _one)
+how="$1"; path="$2"; content="$3"; shift 3
+case "$how" in
+  outside) echo "differential: $path lies outside the sandbox roots" >&2; exit 97;;
+  removed) [ ! -f "$path" ] || rm -f -- "$path";;
+  invalid) [ ! -f "$path" ] || cat -- "$content" > "$path";;
+esac
 cd "$PWD"
 exec "$@"
 '''
@@ -245,12 +251,14 @@ def _roots(lay: dict) -> list[str]:
 def _one(cfg: dict, n: int, unit: dict, mutation: dict | None, payload: str, env: dict) -> dict:
     lay = cfg["layout"]
     roots = _roots(lay)
-    spec = os.path.join(cfg["work"], f"run-{n:06d}.json")
-    with open(spec, "w") as fh:
-        json.dump({"mutation": mutation, "roots": roots}, fh)
+    how, path, content = "none", "", ""
+    if mutation:
+        # resolved here, outside the run's overlays: they show the same final state
+        path = os.path.realpath(mutation["path"])
+        inside = any(path.startswith(r.rstrip("/") + "/") for r in roots)
+        how, content = (mutation["how"] if inside else "outside"), mutation.get("content_file", "")
     argv = (["unshare", "--mount", "--propagation", "private", "--pid", "--fork", "--mount-proc",
-             "bash", "-c", OVERLAY, "overlay", *roots, "--",
-             sys.executable, "-m", "replay.differential", "--apply", spec, "--",
+             "bash", "-c", OVERLAY, "overlay", *roots, "--", how, path, content,
              "env", "-i", *[f"{k}={v}" for k, v in sorted(env.items())], "bash", "-c", unit["command"]])
     t0 = time.monotonic()
     try:
@@ -260,29 +268,8 @@ def _one(cfg: dict, n: int, unit: dict, mutation: dict | None, payload: str, env
         rc, out, err = p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
         rc, out, err = "timeout", "", "timeout"
-    os.unlink(spec)
     return {"decision": _decision(unit["kind"], rc, out), "ms": round((time.monotonic() - t0) * 1000),
             "stderr": (err or "")[-300:]}
-
-
-def _apply(spec_path: str, argv: list[str]) -> int:
-    """In the run's own namespace, over the overlays: apply the mutation, then become the hook."""
-    with open(spec_path) as fh:
-        spec = json.load(fh)
-    m = spec["mutation"]
-    if m:
-        path = os.path.realpath(m["path"])
-        if not any(path.startswith(r.rstrip("/") + "/") for r in spec["roots"]):
-            sys.stderr.write(f"differential: {path} lies outside the sandbox roots\n")
-            return 97
-        if os.path.isfile(path):
-            if m["how"] == "removed":
-                os.unlink(path)
-            else:
-                with open(m["content_file"], "rb") as src, open(path, "wb") as dst:
-                    dst.write(src.read())
-    os.execvp(argv[0], argv)
-    return 127
 
 
 def _inner(units_path: str) -> int:
@@ -374,9 +361,6 @@ def _inner(units_path: str) -> int:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv and argv[0] == "--apply":
-        sep = argv.index("--")
-        return _apply(argv[1], argv[sep + 1:])
     return _inner(argv[0])
 
 
