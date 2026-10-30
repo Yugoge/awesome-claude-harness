@@ -86,6 +86,20 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   master's CLAUDE.md Hook Discipline #5 ("honest terminal branch") contradicts this and "诚实终态永远不允许"; P9 rewrites
   it under D20 and D23.
 
+## Owner ruling of 2026-10-30 (it governs how work is cut and handed out; it changes no requirement of D18-D25)
+
+- **D26 Split heavy work into phases small enough to spread usage.** "下次这么重的任务分成多个phase……我要分散用量……你这一个花了我一周的用量……自己好好反思"
+  [Next time split a task this heavy into several phases... I want to spread the usage... this one cost me a week of
+  usage... reflect on it properly] P1b, estimated XL (about 7 days), went to one session on one account and used that
+  account's week. From now on no phase is handed out with an effort above M (about 1 day of work). A phase estimated
+  L or XL is split before hand-out into sub-phases (for example P1c-1, P1c-2, ...), each with its own branch, PR,
+  acceptance tests and merge, each finishable by one session within about one day of work. The reviewer hands
+  consecutive sub-phases to different accounts, and work that can run at the same time goes to different accounts at
+  the same time. Every hand-off prompt states its effort and its split, and the session pushes after each commit. P1b,
+  already under way, is finished as one PR (#8); its acceptance tests may be shared with a helper session. At
+  2026-10-30 the remaining estimates are P1c XL, P2-P5 and P9-P10 L, P6 and P11 M: P1c and the L phases are split
+  before hand-out.
+
 ## Product stance
 
 - **D15 Published product.** The repo is a public, general-purpose harness that anyone can clone and use.
@@ -204,7 +218,8 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
 
 ## Execution
 
-- One session per phase, one branch and one PR per phase, PR base `master`.
+- One session per phase, one branch and one PR per phase, PR base `master`; after D26 a phase estimated L or XL is
+  split into sub-phases, each with its own session, branch and PR.
 - The reviewing session reviews and merges. Phase sessions never merge their own PR.
 - Phase numbering follows PLAN-v2.md: P0-P11 (P5 = the unified Stop gate, P6 = producer input and
   identity, P7 = portable product, P8 = private tree and CI, P9 = prose pass, P10 = clean tree,
