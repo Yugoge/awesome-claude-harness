@@ -18,8 +18,8 @@ Logic:
   4. Otherwise → block
 
 The Codex compatibility runtime (CLAUDE_COMPAT_RUNTIME=codex) keeps its own
-plan state in the bookmark: its update_plan calls are not in a Claude
-transcript.
+plan state in the bookmark (written through lib.todo_canonical.write_bookmark,
+its one writer): its update_plan calls are not in a Claude transcript.
 
 Exit codes:
   0: Allow tool use
@@ -918,7 +918,10 @@ def persist_codex_initialization(
         if implicit:
             state['codex_plan_acknowledged_implicit'] = True
         state.pop('lock_reason', None)
-        bookmark_path.write_text(json.dumps(state, ensure_ascii=False))
+        from lib.todo_canonical import write_bookmark
+        # The whole state the checks above ran on, as it always was: what another
+        # hook may have written since is not merged in (see write_bookmark).
+        write_bookmark(bookmark_path, lambda _current: json.dumps(state, ensure_ascii=False))
     except Exception:
         return False
     return True
@@ -1008,7 +1011,8 @@ def acknowledge_codex_plan(data: dict, session_id: str, bookmark_path: Path, pro
         try:
             state['todo_acknowledged'] = False
             state['lock_reason'] = 'sequence_violation'
-            bookmark_path.write_text(json.dumps(state, ensure_ascii=False))
+            from lib.todo_canonical import write_bookmark
+            write_bookmark(bookmark_path, lambda _current: json.dumps(state, ensure_ascii=False))
         except Exception:
             pass
         emit_codex_plan_block(cmd_name, violations, last_todos or todos)

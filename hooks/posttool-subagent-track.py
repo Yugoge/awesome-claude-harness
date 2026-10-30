@@ -3,9 +3,10 @@
 PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark.
 
 Bookkeeping (every workflow): locate the in_progress canonical todo via
-array-index (not label), fresh-read the workflow bookmark, set
+array-index (not label) and set
     bookmark.subagent_calls[str(ip_index)] = True
-and write back. This unblocks pretool-todo-validate.py at line 238 which
+in the workflow bookmark as lib.todo_canonical.write_bookmark, its one writer,
+reads it at the write. This unblocks pretool-todo-validate.py at line 238 which
 reads `state.get('subagent_calls', {}).get(str(i), False)` where `i` is the
 canonical enumerate-index. Whether the dispatch produced its artifact is
 decided by posttool-overnight-file-check.py at the same PostToolUse (G3) and
@@ -42,7 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.todo_canonical import run_todo_script
+from lib.todo_canonical import run_todo_script, write_bookmark
 from lib import contract_runtime
 from lib import overnight
 
@@ -228,24 +229,29 @@ def _check_role_match(expected: str, prompt: str, ip_index: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bookmark writers
+# Bookmark update
 # ---------------------------------------------------------------------------
 
 def _record_subagent_call_legacy(bm_path: Path, key: str) -> None:
-    """Fresh-read the bookmark, set subagent_calls[key]=True, write back.
+    """Set subagent_calls[key]=True in the bookmark as write_bookmark reads it.
 
-    The bookkeeping writer. `key` MUST be the validator-side
+    The bookkeeping update. `key` MUST be the validator-side
     string form, i.e. str(array_index). Iter1 fix replaced previous
     label-form key with index-form key.
     """
-    try:
-        fresh = json.loads(bm_path.read_text())
+    def _mark(text):
+        if text is None:
+            return None  # no bookmark to record the call in
+        fresh = json.loads(text)
         calls = fresh.get('subagent_calls', {})
         if not isinstance(calls, dict):
             calls = {}
         calls[str(key)] = True
         fresh['subagent_calls'] = calls
-        bm_path.write_text(json.dumps(fresh))
+        return json.dumps(fresh)
+
+    try:
+        write_bookmark(bm_path, _mark)
     except Exception:
         pass
 

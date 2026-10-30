@@ -12,6 +12,9 @@ AF2 fix: Checks project dir first, then home dir (matches other hooks).
 checklist() is the one reading of a command's checklist state (P1b E7): the
 transcript records every TodoWrite the CLI ran, so the hooks that gate on the
 checklist read it there instead of a copy a hook kept in the workflow bookmark.
+
+write_bookmark() is the workflow bookmark's one writer (P1b D24): every hook
+that starts or updates <project>/.claude/workflow-<sid>.json writes through it.
 """
 
 import io
@@ -368,3 +371,58 @@ def checklist(transcript_path, before=None):
     accepted = any(
         not initial_status_violations(new) for _call, new in _ok_lists(span.uses('TodoWrite', before=before)))
     return Checklist(span, canonical, _UNREAD, accepted, before=before)
+
+
+def _bookmark_text(path, encoding):
+    try:
+        return path.read_text(encoding=encoding)
+    except (OSError, ValueError):
+        return None
+
+
+def write_bookmark(path, update, encoding=None):
+    """Write the workflow bookmark at ``path`` (<project>/.claude/workflow-<sid>.json).
+
+    ``update`` gets the bookmark's text as it is now (None when there is no
+    file it can read) and returns the text to put in its place, or None to
+    leave the file as it is; what it raises reaches the caller with the file
+    untouched. ``encoding`` is the text's on both sides (None: the locale's,
+    as Path.read_text and write_text use).
+
+    The text goes to a new file beside the bookmark that then replaces it
+    (synced, then renamed), so a hook that reads the bookmark while another
+    writes it sees the old bookmark or the new one, never a part of one. The
+    PreToolUse workflow gate and the PostToolUse subagent tracker can write it
+    in the same tool call and nothing serializes them (C1: no lock file): when
+    another hook replaced the bookmark while this one synced its text,
+    ``update`` runs again on that bookmark, so the window in which a write can
+    undo another's is the one between that last read and the rename."""
+    path = Path(path)
+    current = _bookmark_text(path, encoding)
+    for attempt in range(3):
+        text = update(current)
+        if text is None:
+            return
+        temporary = path.with_name(f'.{path.name}.tmp-{os.getpid()}-{os.urandom(8).hex()}')
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, 'w', encoding=encoding) as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+            latest = _bookmark_text(path, encoding)
+            if latest != current and attempt < 2:
+                current = latest
+                continue
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            return
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass

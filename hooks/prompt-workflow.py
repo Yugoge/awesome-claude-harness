@@ -4,8 +4,10 @@ UserPromptSubmit Hook: Checklist Injection for Slash Commands
 
 Phase A (slash command detected):
   - Runs scripts/todo/<command>.py to get the step list
-  - Writes {session_id, command} to .claude/workflow-{session_id}.json once
-    (the bookmark; nothing else writes it)
+  - Starts the bookmark .claude/workflow-{session_id}.json: the command, its
+    arguments and the workflow instance. The Codex plan path of
+    pretool-workflow-gate.py and posttool-subagent-track.py update it; every
+    write goes through lib.todo_canonical.write_bookmark, its one writer
   - If /dev-overnight: creates overnight-state-<session_id>.json with parsed end-time
   - Prints checklist-ready message + exact first TodoWrite call to use
 
@@ -1576,13 +1578,9 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
         todos = run_todo_script(cmd_name, user_input)
         if not todos:
             return
-        current = {}
-        bookmark = workflow_bookmark_path(sid)
-        if bookmark.exists():
-            try:
-                current = json.loads(bookmark.read_text(encoding='utf-8'))
-            except Exception:
-                current = {}
+        # Loaded before the task family is published: a start that cannot load
+        # the bookmark's writer publishes nothing.
+        from lib.todo_canonical import write_bookmark
 
         # Task family publication happens before either mutable current file.
         # Capture any fail-open enforcement diagnostics so exact replay returns
@@ -1595,21 +1593,34 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
         diagnostics = captured_stdout.getvalue()
         error_output = captured_stderr.getvalue()
 
-        generation = int(current.get('workflow_generation', 0) or 0) + 1
-        data = {
-            'command': cmd_name,
-            'workflow_instance_id': secrets.token_hex(32),
-            'workflow_generation': generation,
-            'workflow_started_at_ms': time.time_ns() // 1_000_000,
-            'task_id': task_id,
-            'preservation_policy': 'immutable_prior_family_atomic_current_pointer/v1',
-            'start_envelope_sha256': envelope_digest,
-        }
-        arguments = _extract_arguments(user_input, cmd_name)
-        if arguments:
-            data['arguments'] = arguments
-        # The bookmark is the authoritative generation selector.
-        _atomic_write_json(bookmark, data)
+        generation = 0
+
+        def _started(text):
+            # The bookmark is the authoritative generation selector: the new
+            # generation follows the one it holds when it is replaced.
+            nonlocal generation
+            try:
+                current = json.loads(text) if text is not None else {}
+            except Exception:
+                current = {}
+            generation = int(current.get('workflow_generation', 0) or 0) + 1
+            data = {
+                'command': cmd_name,
+                'workflow_instance_id': secrets.token_hex(32),
+                'workflow_generation': generation,
+                'workflow_started_at_ms': time.time_ns() // 1_000_000,
+                'task_id': task_id,
+                'preservation_policy': 'immutable_prior_family_atomic_current_pointer/v1',
+                'start_envelope_sha256': envelope_digest,
+            }
+            arguments = _extract_arguments(user_input, cmd_name)
+            if arguments:
+                data['arguments'] = arguments
+            return json.dumps(data, ensure_ascii=False, sort_keys=True)
+
+        bookmark = workflow_bookmark_path(sid)
+        bookmark.parent.mkdir(parents=True, exist_ok=True)
+        write_bookmark(bookmark, _started, encoding='utf-8')
 
         codex_active = '--codex' in user_input.split()
         spec = decide_spec_path(_strip_spec_arg(user_input)[1], sid)
@@ -1683,6 +1694,7 @@ def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
     """Write the workflow bookmark file."""
     bm = workflow_bookmark_path(sid)
     try:
+        from lib.todo_canonical import write_bookmark
         bm.parent.mkdir(parents=True, exist_ok=True)
         data = {
             'command': cmd_name,
@@ -1692,7 +1704,7 @@ def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
         }
         if arguments:
             data['arguments'] = arguments
-        bm.write_text(json.dumps(data))
+        write_bookmark(bm, lambda _current: json.dumps(data))  # a new workflow: whatever was there goes
     except Exception:
         pass
 

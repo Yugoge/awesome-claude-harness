@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 113
+*Last updated: 2026-10-30T15:51:30Z*
+**Total entries**: 114
 **Convention**: kebab
 
 ## Tree
@@ -120,6 +120,7 @@ tests/
 ├── `test_userprompt_bulk_commit_capability.py` - These assertions (AC-FRESH-F-14) came from the tests of an unreachable script
 ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 ├── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
+├── `test_write_guard_consent_process.py` - The /do bypass is hooks/lib/allowlist.py has_do_consent (main agent only); the hook takes it in t...
 └── `test_write_push_gate_token.py` - changelog-analyst (under /commit) and the cleaner (under /clean) both call it after
 ```
 <!-- /AUTO:index-stats -->
