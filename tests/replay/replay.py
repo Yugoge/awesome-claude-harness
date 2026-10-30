@@ -21,6 +21,13 @@ only through a Deviation the driver declares on that step, quoting the hook's
 text; the call is then applied as if allowed and the deviation recorded.
 Anything else blocked stays blocked and is reported.
 
+A block is identified by its hook, its step (normalised: "step_norm") and the
+normalised first line of its refusal ("first"; P1b acceptance 4's kept base
+block): the recorded text is the refusal's tail, which for a long refusal is
+its echoed command and differs between trees. kept_list() reads a base run's
+blocks.json into the `kept` list a kept-only driver takes; covers() is how a
+declared deviation, kept-only or not, is asked about a block.
+
 Every step goes through Replay.step(), which runs the faults registered for its
 label (fnmatch patterns) before and after it, so a later phase can inject a
 fault at any step without editing the driver. Writes the driver performs on an
@@ -36,6 +43,7 @@ import os
 import pwd
 import re
 import subprocess
+import sys
 import time
 import uuid
 from contextlib import contextmanager
@@ -106,6 +114,36 @@ def now_iso() -> str:
 
 def _as_list(dev):
     return [] if dev is None else list(dev) if isinstance(dev, (list, tuple)) else [dev]
+
+
+def covers(dev, hook: str, raw: str, text: str, first: str) -> bool:
+    """Whether a declared deviation passes a block. Its quote is looked for in the whole refusal kept
+    (the tail, raw and normalised, and the first line). A kept-only deviation (drivers/dev.py KeptOnly
+    and the classes built like it) also needs [hook, step, X] in its kept list, X being the block's
+    normalised first line in a list kept_list() reads, or its whole text in a list taken from a
+    blocks.json older than "first". The first line is offered in the text's place, with the rest of
+    the refusal in raw's, so those classes compare it as they are."""
+    return dev.covers(hook, raw, text) or (first != text and dev.covers(hook, f"{raw}\n{text}", first))
+
+
+def kept_list(blocks, warn=None) -> list:
+    """`--arg kept=<JSON>` from a base replay's blocks.json (its path or its loaded content):
+    [hook, step_norm, first] per block. A blocks.json written before blocks carried "first" is still
+    read: each such block gives its whole recorded text instead (the refusal's tail, so a long
+    refusal is not matched across trees by it), and warn (default: a line on stderr) says so."""
+    if isinstance(blocks, str):
+        with open(blocks) as fh:
+            blocks = json.load(fh)
+    out, old = [], 0
+    for b in blocks.get("blocks", []):
+        if "first" not in b:
+            old += 1
+        out.append([b["hook"], b.get("step_norm", b["step"]), b["first"] if "first" in b else b["text"]])
+    if old:
+        msg = (f"kept_list: {old} of {len(out)} blocks predate the \"first\" field; "
+               f"their whole recorded text stands in for the first line")
+        (warn or (lambda m: print(m, file=sys.stderr)))(msg)
+    return out
 
 
 class Replay:
@@ -260,12 +298,13 @@ class Replay:
         for b in ev.blocks:
             raw = hookrun.refusal(b)
             text = self.norm_text(raw)
-            dev = next((d for d in devs if d.covers(b["hook"], raw, text)), None)
+            first = self.norm_text(hookrun.refusal_first(b))  # with hook and step_norm, the block's identity
+            dev = next((d for d in devs if covers(d, b["hook"], raw, text, first)), None)
             # step_norm: the label with the run's own ids normalised (a label naming an artifact path
             # holds the session id or a task id), so kept-block comparisons hold across runs.
             self.blocks.append({"step": label, "event": ev.event, "hook": b["hook"], "how": b["how"],
                                 "text": text, "passed_by_deviation": dev is not None,
-                                "step_norm": self.norm_text(label)})
+                                "step_norm": self.norm_text(label), "first": first})
             if dev:
                 self.deviations.append({"step": label, "event": ev.event, "hook": b["hook"],
                                         "quote": dev.quote, "why": dev.why, "text": text})

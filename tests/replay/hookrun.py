@@ -9,6 +9,12 @@ file's env exported over the replay's base env, and its own timeout (CLI
 default 60 s). A hook's verdict is "ok", "block" (exit 2, or exit 0 with a JSON
 deny / block / ask / continue:false decision) or "error" (any other exit, a
 timeout, or a launch failure).
+
+A run keeps the last TAIL characters of the hook's stdout and stderr. For a
+block it also keeps the refusal's head ("refusal_head": its first HEAD
+characters, never cutting its first line), taken from the uncut output: the
+tail of a long refusal can be its echoed command alone, while the first line
+names the block (refusal_first). What the hook receives and returns is the same.
 """
 from __future__ import annotations
 
@@ -21,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 TOOL_EVENTS = {"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"}
 DEFAULT_TIMEOUT_S = 60
 TAIL = 4000
+HEAD = 1000  # a refusal's opening characters kept beside the tail; its first line is kept whole
 _HOOK_PATH_RE = re.compile(r"""[^"'\s]*?/((?:hooks|scripts)/[^"'\s]+)""")
 
 
@@ -106,6 +113,27 @@ def refusal(result: dict) -> str:
     return (result.get("stderr") or out).strip()
 
 
+def first_line(text) -> str:
+    """The first non-blank line of a refusal, stripped."""
+    for line in str(text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def refusal_head(text: str) -> str:
+    """A refusal's first HEAD characters, extended to the end of its first line."""
+    text = (text or "").strip()
+    end = text.find("\n")
+    return text[:max(HEAD, end if end >= 0 else len(text))]
+
+
+def refusal_first(result: dict) -> str:
+    """The refusal's first line: from its uncut head when the run kept one, else from the kept tail
+    (a record written before the head was kept)."""
+    return first_line(result.get("refusal_head") or refusal(result))
+
+
 def _run_one(h: dict, payload_raw: str, env: dict, cwd: str) -> dict:
     t0 = time.monotonic()
     try:
@@ -119,9 +147,12 @@ def _run_one(h: dict, payload_raw: str, env: dict, cwd: str) -> dict:
     except OSError as e:
         rc, out, err = -1, "", f"launch failed: {e}"
     verdict, how = interpret(rc, out)
-    return {"hook": h["hook"], "matcher": h["matcher"], "rc": rc, "verdict": verdict, "how": how,
-            "ms": round((time.monotonic() - t0) * 1000), "stdout": out[-TAIL:], "stderr": err[-TAIL:],
-            "command": h["command"], "timeout": h["timeout"]}
+    rec = {"hook": h["hook"], "matcher": h["matcher"], "rc": rc, "verdict": verdict, "how": how,
+           "ms": round((time.monotonic() - t0) * 1000), "stdout": out[-TAIL:], "stderr": err[-TAIL:],
+           "command": h["command"], "timeout": h["timeout"]}
+    if verdict == "block":  # from the uncut output: the kept tail can lack the refusal's first line
+        rec["refusal_head"] = refusal_head(refusal({"how": how, "stdout": out, "stderr": err}))
+    return rec
 
 
 def run_event(settings: dict, event: str, payload: dict, env: dict, cwd: str, parallel: bool = False) -> dict:
