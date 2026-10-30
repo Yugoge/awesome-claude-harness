@@ -125,7 +125,7 @@ changelog-analyst.md's and qa.md's agent calls, /dev-command's auto-detect and t
   never). R2-R5 (new): test_pipelines.py (1), test_faults.py (2), test_regressions.py (4), both modes; test_no_dead_end.py (X6).
 - R6 baseline.yml (or a workflow it calls); tests/TESTING.md: suite jobs per X10, reachable from release.yml; the comment's
   "already-required" and "gates merges" go; the `baseline` pytest step leaves tests/replay/ to the suite jobs; the merge rule's coverage
-  step (code in tests/replay/); X2's network guard in each; one TESTING.md section (how to run, the merge rule).
+  step (code in tests/replay/); X2's network guard in each; one TESTING.md section (how to run, the merge rule); no repo setting changed.
 - R7 hooks/subagentstop-artifact-contract-enforce.py (G2; F2g): a failing obligation stop is a plain exit 2 naming each failing artifact and
   check to the stopping producer, every round; delete what remains of the no-progress hand-off, `ESCALATION_ACK` admission and four stores
   (escalations/, escalation-admissions/, progress/, deferred-checks/), each once grep and trace show no other reader; `GATE_FAULT` never
@@ -284,7 +284,7 @@ Setup: "before" trees are scratch clones in the kit (`"$T/sb-setup.sh" <tree>`, 
 - A3 `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/replay/test_pipelines.py` -> passed; table: 0 blocks, 0
   errors, every terminal reached, both modes; for /dev-overnight, F6o and X8's /stop replay, 0 wakes fired while the modeled clock runs two
   wake intervals past the terminal (/stop replay: past its CronDelete). Base before changes: the refusals R18 and R19 fix, with hook text,
-  P1b's hand-off items (both lists) among them. Head: `git grep -n 'DEVIATION:'` prints nothing; P1b's check passes, no exception.
+  P1b's hand-off items (both) still shown among them. Head: `git grep -n 'DEVIATION:'` prints nothing; P1b's check passes, no exception.
 - A4 the same for tests/replay/test_faults.py and the fault table: for every block and every gap an F8 fault routes, artifact named, check
   named, receiving actor = expected producer, the first compliant repair round passes (F2g: after its forged round), 0 human events except
   HX. Base before changes: the "before" table against the pilot's, every difference explained.

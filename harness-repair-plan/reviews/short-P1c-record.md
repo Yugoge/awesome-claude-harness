@@ -1,7 +1,7 @@
 # Short prompt P1c: record
 
 `prompts/P1c.md` (1,219 lines, 130,505 bytes; the body before its shared tail "## Context (read once)" is 1,114 lines)
-was condensed into `prompts/short/P1c.md`: 350 lines, 43,494 bytes, every line at most 140 characters (counted in
+was condensed into `prompts/short/P1c.md`: 350 lines, 43,525 bytes, every line at most 140 characters (counted in
 characters; the `…` in two command lines is one character). The method is the one `reviews/short-prompts-record.md`
 gives, applied to the task's own keep and drop lists. This record maps every experiment, scope row, suite requirement,
 merge-rule item and acceptance test of the long prompt to its place in the short one, then gives the verification round.
@@ -10,8 +10,8 @@ merge-rule item and acceptance test of the long prompt to its place in the short
 - Source: `prompts/P1c.md` as last changed by 92bff83. "Long place" below is a line of that file; "Short place" is a
   label of the short prompt (X1-X10, R1-R21, A1-A17, R-P1 to R-V1, or a section heading).
 - Commits: 2ee103a (the short prompt), 6dd25fe (merge of the branch's new D26 commit 6d12486; its message has no
-  attribution lines, see "Found, not fixed"), bc20145 (this record), then one commit for the fix round (prompt and
-  record).
+  attribution lines, see "Found, not fixed"), bc20145 (this record), then e57b5bb (round 1 fixes, prompt and record)
+  and one commit for round 2's fixes.
 
 ## How the short prompt was written
 
@@ -64,7 +64,7 @@ merge-rule item and acceptance test of the long prompt to its place in the short
 | X7 held git lock: options (A)/(B), experiment, rule with and without /proc, worktree unit test | 380-404 | X7 | kept |
 | X8 autonomous resume: facts and sources, the wake, the capability question and its two outcomes, deletion and time-lock, rule, reporting | 406-469 | X8 (question, options, rule), R17 (the change) | kept (the dev-overnight.md wake-step line, the /stop replay and "any later span" restored in the fix round) |
 | X9 N1: record, before, (i), (ii), rule, `safe_pull` exit status | 471-489 | X9, R20, R-N1 | kept |
-| X10 CI time: estimate, (a), (b), (c), rule, split, full set before merge, P1b's check outside | 491-511 | X10 | kept ("to master" and the cancel clause restored in the fix round; P1b's own schedule and "no setting changed" not restated) |
+| X10 CI time: estimate, (a), (b), (c), rule, split, full set before merge, P1b's check outside | 491-511 | X10 | kept ("to master" and the cancel clause restored in the fix round; P1b's own schedule not restated; "no repository setting changed" kept in R6 since round 2) |
 
 ### Scope rows (21 of 21 kept, plus the kept-base-blocks paragraph and the two row lists)
 
@@ -229,10 +229,8 @@ phases, X10's "untraced", R8's "per its transcript, not a sibling's", "held to t
 - Low findings left as they are (each judged harmless brevity or covered elsewhere): X1's "exactly", the strace syscall
   list and "record each piece"; X2's five proxy names, "fails fast", origin/HEAD, other home states from the same
   origin; X3's "through P7b's function"; X4's `run_in_background: false`; X5's 2.21 quote on steps 2-4; X6's
-  "hook-level" and "the agent keeps working"; X7's "fixed interval", "no option asks the orchestrator" and "before merge"
-  in (B)'s rule; X8's 0-candidate wake, "after the summary is written", "where the session scheduled the wake" and "no
-  second issuer"; X9's GIT_CONFIG_GLOBAL in scratch; X10's inputs, ubuntu-latest, P1b's own check schedule and "no
-  setting changed"; R6 "(not a skip)"; R7's "a store another reader uses stays, in the D24 table" and GATE_FAULT's
+  "hook-level" and "the agent keeps working"; X7's "fixed interval" and "no option asks the orchestrator"; X8's 0-candidate wake, "after the summary is written", "where the session scheduled the wake" and "no
+  second issuer"; X9's GIT_CONFIG_GLOBAL in scratch; X10's inputs, ubuntu-latest and P1b's own check schedule; R6 "(not a skip)"; R7's "a store another reader uses stays, in the D24 table" and GATE_FAULT's
   classing; R12 "singular cycles unchanged"; R13's obligation qualifier; R16 "where declared"; R21's claims-check
   names; merge.sh's file list; R19's "carries no producer question" (a scenario constraint) and "never in place on a
   protected branch"; F4c "removed by that process"; A2's "say so" on a failed unshallow; the acceptance setup's per-tree
@@ -240,3 +238,20 @@ phases, X10's "untraced", R8's "per its transcript, not a sibling's", "held to t
   the wake; restart.md's name in HX; A8's expected classes; A10's examples; the merge rule's example lists; the rulings'
   INFERRED marks for D20's preset default and D21's mechanism, D24's "trust one conclusion", D23's "specific decision";
   "sandbox output" in the captures item; the commit-subject format.
+
+## Verification round 2
+
+Round 1 found high-severity defects, so a second round ran: one subagent that wrote nothing reviewed e57b5bb's diff
+against prompts/P1c.md and DECISIONS.md. It confirmed every fix in the round-1 table, the D26 line (agrees with D26,
+invents no split), the limits (350 lines, at most 140 characters, first and last lines, no e-mail) and no rejected idea
+reintroduced. It found that the room-making shortenings of e57b5bb had dropped two conditions:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| X10/row 6 "the PR changes no repository setting" removed by e57b5bb | high | R6: "no repo setting changed" |
+| A3 "those ... your base still shows" lost "still shown", widening the pass condition to all hand-off items | medium | "P1b's hand-off items (both) still shown among them" |
+
+Not fixed (low; a round fixes only medium or higher): e57b5bb also shortened X7's (B) rule from "same conditions before
+merge" to "held to the same", dropping "before merge"; and X5's list now says "P3" where the long prompt says "the
+resolver (P3)", which reads wider beside "Not here: disposition and gaps (P3)" (X5's own rule still limits the work to
+the smallest part of the later row that clears a block).
