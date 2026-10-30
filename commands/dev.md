@@ -712,14 +712,14 @@ Use Task tool with:
     risk_level: <high|medium|low from BA context>
 
   Write your report to: docs/dev/test-writer-report-<task_id>.json
-  Generated tests go under: tests/generated/<task_id>/
-  Per-task active manifest: tests/generated/<task_id>/manifest.json (active_tests[] lives here — this is what QA Phase 5 reads).
+  Generated tests go under: tests/generated/<task_id>/ (each manifest entry's file, which dev writes from the entry's skeleton; you write no test file)
+  Per-task active manifest: tests/generated/<task_id>/manifest.json (active_tests[] lives here, each entry with its skeleton — dev writes the tests from it and QA Phase 5 reads it).
   "
 ```
 
 After the test-writer subagent completes, verify on disk that both `tests/generated/<task_id>/manifest.json` (per-task active manifest) and `docs/dev/test-writer-report-<task_id>.json` exist. If either is missing, abort the cycle with an error (the orchestrator MUST NOT proceed to Dev with a silently-skipped test-writer). When `test_writer_expected == false`, SKIP the dispatch (record skip rationale in the todo list).
 
-After test-writer completes (or is skipped), the generated test file paths and manifest path are passed onward to Dev (in the dispatch prompt) and to QA (Step 13). Dev makes the skeleton tests pass; QA verifies the manifest at Step 13 Phase 5 AND that `test_writer_expected == true` implies manifest/report existence (Phase 5 fails with `primary_cause: "dev_implementation"` or `"qa_oversight"` if expected but missing).
+After test-writer completes (or is skipped), the manifest path is passed onward to Dev (in the dispatch prompt) and to QA (Step 13). Dev, the one writer of the test files, writes each from its manifest entry's skeleton and makes it pass; QA verifies the manifest at Step 13 Phase 5 AND that `test_writer_expected == true` implies manifest/report existence (Phase 5 fails with `primary_cause: "dev_implementation"` or `"qa_oversight"` if expected but missing).
 
 **Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
 
@@ -762,7 +762,7 @@ Use Task tool with:
   BA spec file: docs/dev/ticket-<timestamp>.md (legacy: docs/dev/ba-spec-<timestamp>.md)
   Spec file: <spec_path or null>
   View file: <view_paths.dev or null — sibling views/dev.md if present>
-  Generated tests (when test-writer ran): tests/generated/<task_id>/ + per-task active manifest at tests/generated/<task_id>/manifest.json.
+  Generated tests (when test-writer ran): tests/generated/<task_id>/ + per-task active manifest at tests/generated/<task_id>/manifest.json (you write each active entry's file from its skeleton; agents/dev.md, Generated tests).
   Write your implementation report to: docs/dev/dev-report-<timestamp>.json
   baseline_head_sha: <baseline_head_sha captured above>
   baseline_dirty_snapshot: <baseline_dirty_snapshot captured above>

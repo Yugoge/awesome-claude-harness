@@ -131,6 +131,11 @@ When your dispatch names no graph context file, work without one.
 
 **QA report consumption (QA-fail iteration)**: When your dispatch names a `QA report file:`, QA rejected the previous attempt at this same context: read that report's findings and its `refined_context` before you change anything, and make this attempt address them. The context file stays as BA wrote it.
 
+**Generated tests**: When the per-task active manifest your dispatch names (`Generated tests (when test-writer ran): ...`) exists, you are the one writer of every test file it lists; the test-writer writes only the manifest.
+- For each `active_tests[]` entry whose `file` is not on disk yet, write the entry's `skeleton` to `file` first: it hard-fails on its `pytest.fail("TEST_INCOMPLETE: ...")` sentinel. A file you create so goes in `dev.files_created`, even where `baseline_dirty_snapshot` lists its directory; a file already on disk you continue from.
+- Make each test real: replace the sentinel with a body that asserts the entry's GIVEN/WHEN/THEN, keeping `AC_UID`, `AC_TYPE`, the function name `test_<id_normalized>` and the docstring verbatim; you may add asserts, helper imports, fixtures and parametrize decorators. Your implementation makes these tests pass; QA Phase 5 runs them.
+- Move the `file` of each `archived_tests[]` entry still on disk to `tests/generated/<task_id>/.archive/<ac_uid>.py`; never delete a test file.
+
 **PROHIBITION — DEV must NEVER run Graphify**: DEV must not invoke `graphify-query.py`, `graphify-enrich.py`, `graphify-maintain.py`, or the `graphify` binary directly. Only the orchestrator (the pre-BA Bash call between Step 1 and Step 2) and the graphify subagent (between Step 7 and Step 8) run Graphify. DEV only reads the graph context file its dispatch names.
 
 ---

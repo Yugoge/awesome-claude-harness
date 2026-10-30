@@ -11,6 +11,7 @@ role it dispatches; nothing here enumerates roles.
 """
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -54,7 +55,10 @@ def _sha256(path: str) -> str:
 
 def test_writer(tier_key: str = "complexity_tier", risk_key: str = "risk_level"):
     """Skeletons per acceptance criterion from the agent file's skeleton template, the per-task
-    manifest content, the global index the prompt names, and the report content."""
+    manifest content, the global index the prompt names, and the report content. Where the agent
+    file's manifest template carries a `skeleton` per entry, each skeleton goes there and no test
+    file is written (dev writes it); else each is written as its file. The manifest's
+    schema_version is the one the template spells."""
 
     def work(sub, brief, player):
         tree, project, tid, prompt = player.tree, brief.project, brief.task_id, brief.prompt
@@ -68,6 +72,10 @@ def test_writer(tier_key: str = "complexity_tier", risk_key: str = "risk_level")
                                            re.M)), None)
         if name is None:
             raise cmdtext.TextNotFound(f"agents/{player.role}.md names no skeleton file pattern")
+        manifest_rel = _prompt_value(prompt, "Per-task active manifest") or f"{gen_dir}/manifest.json"
+        mtpl = player.tree.template(player.role, manifest_rel) or ""
+        embed = '"skeleton"' in mtpl
+        version = re.search(r'"schema_version":\s*"([^"]+)"', mtpl)
         tests, active = [], []
         for n, ac in enumerate(acs, 1):
             uid = ac["ac_uid"]
@@ -82,11 +90,13 @@ def test_writer(tier_key: str = "complexity_tier", risk_key: str = "risk_level")
                              ("<given>", ac["given"]), ("<when>", ac["when"]), ("<then>", ac["then"]),
                              ("<one-line summary>", ac["then"])):
                 text = text.replace(key, val)
-            put(sub, os.path.join(project, rel), text, f"{sub.role} Write {rel}")
+            if not embed:
+                put(sub, os.path.join(project, rel), text, f"{sub.role} Write {rel}")
             tests.append(rel)
             active.append({"task_id": tid, "ac_id": ac["id"], "ac_uid": uid, "type": ac["type"], "file": rel,
                            "status": "active", "hook_check": ac.get("check", {})})
-        manifest_rel = _prompt_value(prompt, "Per-task active manifest") or f"{gen_dir}/manifest.json"
+            if embed:
+                active[-1]["skeleton"] = text
         report_rel = _prompt_value(prompt, "Write your report to")
         report = {"manifest_path": manifest_rel,
                   "trigger_gate": {"complexity_tier": tier, "risk_level": risk, "fired": True},
@@ -102,7 +112,8 @@ def test_writer(tier_key: str = "complexity_tier", risk_key: str = "risk_level")
                 {"task_id": tid, "manifest_path": manifest_rel}]
             put(sub, index_path, json.dumps(index, indent=2) + "\n", f"{sub.role} Write {index_rel}")
             report.update(global_index_path=index_rel, global_index_kind=index["kind"])
-        return {manifest_rel: {"schema_version": "1.1", "active_tests": active, "archived_tests": []},
+        return {manifest_rel: {"schema_version": version.group(1) if version else "1.1", "active_tests": active,
+                               "archived_tests": []},
                 report_rel: report}
     return work
 
@@ -112,7 +123,8 @@ def test_writer(tier_key: str = "complexity_tier", risk_key: str = "risk_level")
 def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None = None, creates: list | None = None,
         baseline_fallback: bool = False):
     """Apply `edits` [(rel, old, new)] (Read, then Edit), write each new file of `creates`
-    [(rel, content)] (an existing one is Read, then edited in place), replace each generated test's
+    [(rel, content)] (an existing one is Read, then edited in place), write each generated test the
+    per-task manifest gives a skeleton for and the disk lacks, replace each generated test's
     TEST_INCOMPLETE sentinel line with `test_bodies[ac_uid]`, then derive dev.files_* with the
     git commands of the agent text (with `baseline_fallback`, its `git status --porcelain` fallback
     when the dispatch passed no baseline_head_sha) and record the owned-edits ledger and pre-edit
@@ -122,6 +134,7 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
         project, prompt = brief.project, brief.prompt
         text = player.tree.agent_text(player.role)
         owned, snapshots, touched = {}, {}, []
+        fresh = set()   # generated tests this dispatch wrote from the manifest's skeletons
 
         def edit(rel, old, new):
             path = os.path.join(project, rel)
@@ -148,6 +161,18 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
             touched.append(rel)
         gen = re.search(r"Generated tests \(when test-writer ran\):\s*(\S+?)/?\s", prompt)
         gen_dir = gen.group(1).rstrip("/") if gen else None
+        man = re.search(r"per-task active manifest at\s+(\S+?\.json)", prompt)
+        if test_bodies and man and os.path.isfile(os.path.join(project, man.group(1))):
+            mpath = os.path.join(project, man.group(1))
+            sub.read(mpath, label=f"{sub.role} Read {man.group(1)}")
+            for e in json.loads(peek(sub.rp, sub.role, mpath)).get("active_tests") or []:
+                rel = e.get("file")
+                if e.get("skeleton") and rel and not os.path.exists(os.path.join(project, rel)):
+                    call = put(sub, os.path.join(project, rel), e["skeleton"], f"{sub.role} Write {rel}")
+                    if call is not None and call.ok:
+                        snapshots.setdefault(rel, "")
+                        fresh.add(rel)
+                        touched.append(rel)
         if test_bodies and gen_dir and os.path.isdir(os.path.join(project, gen_dir)):
             for fn in sorted(os.listdir(os.path.join(project, gen_dir))):
                 if not fn.endswith(".py"):
@@ -161,6 +186,8 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
                 if m and body:
                     new = "\n".join(m.group(1) + l if l else l for l in body.strip("\n").split("\n"))
                     edit(rel, m.group(0), new)
+        for rel in fresh:  # a file this dispatch created: one Write of its final content in the ledger
+            owned[rel] = [{"old": "", "new": peek(sub.rp, sub.role, os.path.join(project, rel))}]
         # Git-diff derivation, as the agent text spells each command.
         base = re.search(r"^\s*baseline_head_sha:[ \t]*(\S*)", prompt, re.M)
         base = base.group(1) if base else ""
@@ -197,10 +224,10 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
             snap = json.loads(snap)
         dirty = [l[3:].strip() for l in snap.split("\n") if len(l) > 3]
         pre_dirty = lambda p: any(p == d or (d.endswith("/") and p.startswith(d)) for d in dirty)
-        created = sorted({p for p in untracked + staged_new if not pre_dirty(p) and p in touched})
+        created = sorted({p for p in untracked + staged_new if (p in fresh or not pre_dirty(p)) and p in touched})
         provenance = {}
         for rel in touched:
-            if rel in untracked and pre_dirty(rel):  # adoption cell: pre-existing untracked, modified here
+            if rel in untracked and pre_dirty(rel) and rel not in fresh:  # adoption cell: pre-existing untracked, modified here
                 if rel not in modified:
                     modified.append(rel)
                 provenance[rel] = {
@@ -238,9 +265,12 @@ def qa(manifest_rel: str | None = None, e2e: dict | None = None, guard_respell=N
             pytest_cmd = _codes(text, "Phase 5", "pytest tests/generated/<task_id>/").replace(
                 "tests/generated/<task_id>/", gen_dir + "/")
             run = sub.bash(pytest_cmd, "Run the task's generated tests", label=f"{sub.role} Bash pytest generated")
-            grep = sub.tool("Grep", {"pattern": "TEST_INCOMPLETE:", "path": os.path.join(project, gen_dir),
-                                     "output_mode": "files_with_matches"}, label=f"{sub.role} Grep sentinel")
-            sentinels = grep.response.get("filenames", []) if grep.ok else []
+            # the files the text has the sentinel grep take (its `*.py` scope, where it names one)
+            scope = {"glob": "*.py"} if "`*.py`" in cmdtext.section(text, "Phase 5") else {}
+            grep = sub.tool("Grep", dict({"pattern": "TEST_INCOMPLETE:", "path": os.path.join(project, gen_dir),
+                                          "output_mode": "files_with_matches"}, **scope), label=f"{sub.role} Grep sentinel")
+            sentinels = [f for f in (grep.response.get("filenames", []) if grep.ok else [])
+                         if fnmatch.fnmatch(os.path.basename(f), scope.get("glob", "*"))]
             mv = {"active_tests_count": len(active), "pytest_collected_ok": bool(active) and run.ok,
                   "pytest_failures": ([] if run.ok else [run.error[:400]]) + [f"TEST_INCOMPLETE in {s}" for s in sentinels]}
             guard = _codes(text, "Phase 5", "qa-manifest-guard.py", "( source").strip()

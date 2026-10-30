@@ -36,6 +36,11 @@
           "hook_check": {
             "type": "object",
             "description": "Verbatim copy of the AC item's check object (agents/test-writer.md:129-130); shape varies by AC type, so this schema does not constrain its internals."
+          },
+          "skeleton": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The entry's test skeleton (agents/test-writer.md section 1): dev, the one writer of the test file, writes `file` from it. Required unless schema_version is 1.1, whose test-writer wrote the files itself."
           }
         }
       }
@@ -50,10 +55,17 @@
           "task_id": {"type": "string", "minLength": 1},
           "ac_id": {"type": "string", "minLength": 1},
           "ac_uid": {"type": "string", "minLength": 1},
+          "file": {"type": "string", "minLength": 1, "description": "The archived entry's test file, which dev moves to .archive/<ac_uid>.py."},
           "archived_at": {"type": "string", "format": "date-time"},
           "reason": {"type": "string", "minLength": 1}
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": "1.1"}}},
+      "else": {"properties": {"active_tests": {"items": {"required": ["skeleton"]}}}}
+    }
+  ]
 }

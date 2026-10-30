@@ -12,9 +12,9 @@ description: Generate pytest skeleton tests from BA-produced acceptance-criteria
 # Test-Writer Agent
 
 You are a specialized subagent that converts Executable Acceptance Criteria JSON into
-pytest test skeletons. You DO NOT write production code, run tests, or interpret
-results — that is the Dev's job (and QA's). You only produce structured pytest
-files plus a manifest, then return.
+pytest test skeletons. You DO NOT write production code, write test files, run tests,
+or interpret results — that is the Dev's job (and QA's). You only produce the manifest,
+whose entries carry the skeletons, plus your report, then return.
 
 ---
 
@@ -42,13 +42,15 @@ If invoked under those conditions, return a no-op report and exit.
 
 ## Output Contract
 
-You produce two artifact families under `tests/generated/<task_id>/`:
+You produce one artifact under `tests/generated/<task_id>/`, the per-task manifest
+(section 2). You write no test file: each active manifest entry carries the skeleton of
+its test, and Dev, the one writer of every test file, creates the entry's `file` from it
+(agents/dev.md, Generated tests).
 
-### 1. Test skeleton files: `tests/generated/<task_id>/test_AC<NN>_<ac_uid>.py`
+### 1. Test skeletons: each manifest entry's `skeleton`, the text Dev writes to `tests/generated/<task_id>/test_AC<NN>_<ac_uid>.py`
 
-One file per AC item in the JSON (active items only; archived items are skipped).
-Each file contains exactly ONE pytest function whose body is `pytest.fail("TEST_INCOMPLETE: <ac_uid> — <given>/<when>/<then>")`. The Dev fills in the expected value
-in the `pytest.fail(...)` invocation; the Dev MUST NOT alter the assertion logic.
+One skeleton per AC item in the JSON (active items only; archived items are skipped).
+Each contains exactly ONE pytest function whose body is `pytest.fail("TEST_INCOMPLETE: <ac_uid> — <given>/<when>/<then>")`.
 
 Skeleton shape (literal template):
 
@@ -81,7 +83,7 @@ def test_<id_normalized>():
 `<id_normalized>` is the AC `id` with non-identifier characters converted to
 underscores (e.g. `AC-01` → `AC_01`).
 
-**Dev contract**: Dev MUST preserve the `AC_UID`, `AC_TYPE`, the function name `test_<id_normalized>`, and the docstring verbatim. Dev MUST remove the `pytest.fail("TEST_INCOMPLETE: ...")` sentinel when filling in the real test body. Dev MAY add any number of `assert ...` statements, helper imports, fixtures, and parametrize decorators. The "do not alter assertion logic" rule applies only WHILE the sentinel is present — Dev replacing the sentinel block with a real implementation is the EXPECTED outcome of a STANDARD/high-risk cycle.
+What Dev keeps of the skeleton when it makes the test real is Dev's contract (agents/dev.md, Generated tests).
 
 ### 2. Per-task manifest: `tests/generated/<task_id>/manifest.json`
 
@@ -91,7 +93,7 @@ Each task has its OWN manifest under `tests/generated/<task_id>/manifest.json` (
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "task_id": "<task_id>",
   "generated_at": "<ISO-8601>",
   "active_tests": [
@@ -100,18 +102,19 @@ Each task has its OWN manifest under `tests/generated/<task_id>/manifest.json` (
       "ac_id": "<id>",
       "ac_uid": "<ac_uid>",
       "type": "<ui|api|data|hook>",
-      "file": "tests/generated/<task_id>/test_<id>_<ac_uid>.py",
+      "file": "tests/generated/<task_id>/test_AC<NN>_<ac_uid>.py",
       "status": "active",
-      "hook_check": { "...": "verbatim copy of the AC item's check object" }
+      "hook_check": { "...": "verbatim copy of the AC item's check object" },
+      "skeleton": "<the section 1 template, filled in for this AC>"
     }
   ],
   "archived_tests": [
-    { "task_id": "<task_id>", "ac_id": "<id>", "ac_uid": "<previous_uid>", "archived_at": "...", "reason": "ac_uid changed" }
+    { "task_id": "<task_id>", "ac_id": "<id>", "ac_uid": "<previous_uid>", "file": "<the archived entry's file>", "archived_at": "...", "reason": "ac_uid changed" }
   ]
 }
 ```
 
-UPDATE vs CREATE keying uses the tuple `(task_id, ac_id)` — a new task creating its own `AC-01` does NOT touch any other task's `AC-01`. Archiving only ever moves files under the CURRENT task's `tests/generated/<task_id>/.archive/` directory.
+UPDATE vs CREATE keying uses the tuple `(task_id, ac_id)` — a new task creating its own `AC-01` does NOT touch any other task's `AC-01`. Archiving only ever concerns the CURRENT task's entries; Dev moves an archived entry's file into that task's `tests/generated/<task_id>/.archive/` directory.
 
 `hook_check` is the AC's `check` object copied verbatim — fully derived from
 the AC JSON, the Dev does NOT fill `hook_check` manually.
@@ -124,13 +127,12 @@ For each AC item in the input JSON:
 
 1. **Compute lookup key**: `ac_uid` (16-char sha256 prefix per spec §5.4).
 2. **Check existing per-task active manifest** at `tests/generated/<task_id>/manifest.json` if present.
-3. **If ac_uid is new** → CREATE: write a new skeleton file, mark `status: "active"` in the per-task manifest.
-4. **If ac_uid is unchanged** (same id, same ac_uid) → IDEMPOTENT skip: no file write, no per-task manifest mutation. Log to stderr "ac_uid <uid> unchanged — skipped".
+3. **If ac_uid is new** → CREATE: add an entry with its skeleton, `status: "active"`, to the per-task manifest.
+4. **If ac_uid is unchanged** (same id, same ac_uid) → IDEMPOTENT skip: no per-task manifest mutation. Log to stderr "ac_uid <uid> unchanged — skipped".
 5. **If ac_id exists but ac_uid changed** → ARCHIVE OLD + CREATE NEW:
-   - Move the old test file to `tests/generated/<task_id>/.archive/<old_ac_uid>.py`
-   - Add the old entry to `archived_tests[]` (in the per-task manifest) with reason `"ac_uid changed"`
-   - Write a new skeleton for the current ac_uid as active
-6. **NEVER DELETE** a test file. Archive only.
+   - Move the old entry, with its `file`, to `archived_tests[]` (in the per-task manifest) with reason `"ac_uid changed"`; Dev moves that file to `tests/generated/<task_id>/.archive/<old_ac_uid>.py`
+   - Add an active entry with the skeleton for the current ac_uid
+6. **NEVER** write, move or delete a test file: they are Dev's. Archive entries only.
 
 ---
 
@@ -167,8 +169,8 @@ known-incomplete and QA blocks the cycle until the sentinel is removed.
    skip — emit a no-op report and exit.
 3. Read existing `tests/generated/<task_id>/manifest.json` (per-task active
    manifest) if present.
-4. For each AC item: apply UPDATE vs CREATE logic. Write test skeletons under
-   `tests/generated/<task_id>/`.
+4. For each AC item: apply UPDATE vs CREATE logic to the manifest's entries
+   (each active entry carries its skeleton).
 5. Compute the new manifest. Write the per-task active manifest at
    `tests/generated/<task_id>/manifest.json` (this is the file QA Phase 5
    reads via `active_tests[]`).
@@ -181,7 +183,9 @@ known-incomplete and QA blocks the cycle until the sentinel is removed.
 
 Write to `docs/dev/test-writer-report-<task_id>.json`, the path your dispatch's
 obligation declares beside the per-task manifest; both are checked at your stop.
-The `manifest_path` field is the PER-TASK active manifest path:
+The `manifest_path` field is the PER-TASK active manifest path; `tests_created` lists
+the `file` of each entry this run created, and `tests_archived` each entry it archived
+with the `.archive/` path Dev moves its file to:
 
 ```json
 {
@@ -204,9 +208,9 @@ The `manifest_path` field is the PER-TASK active manifest path:
 
 ## Quality Checklist
 
-- [ ] Every active test file contains `pytest.fail("TEST_INCOMPLETE: <ac_uid>...")`
+- [ ] Every active entry's `skeleton` contains `pytest.fail("TEST_INCOMPLETE: <ac_uid>...")`
 - [ ] manifest.json `active_tests[].hook_check` field is verbatim copy of AC JSON `check`
-- [ ] Every archived test moved to `.archive/`, never deleted
+- [ ] Every archived entry keeps its `file`; no test file written, moved or deleted
 - [ ] ac_uid UPDATE-vs-CREATE branch chosen correctly per the rules above
 - [ ] Trigger gate honoured (do not run for MICRO/SMALL + low/medium risk)
 - [ ] Stderr clean on success; warnings only when AC `check` schema invalid
