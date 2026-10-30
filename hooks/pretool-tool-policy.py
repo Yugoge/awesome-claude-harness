@@ -32,6 +32,11 @@ NotebookEdit target and every Bash write target:
     cost does not grow with the session (P1b review item 2). A path a
     dispatch's own obligation names outside every template's shape is not
     held for it.
+  - A write the calling subagent's own dispatch declares is decided from
+    that dispatch's record, found back from the end of the transcript; any
+    other declared-path write reads the dispatch records in one forward pass
+    for their prompt key, and a template is bound only where its paths could
+    cover the target (_Record).
 
 Behavior:
   - Main agent (no agent_id, no subagent_type) -> exit 0 after the derived
@@ -72,6 +77,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -467,18 +473,170 @@ def _agent_files(transcript, agent_id: str):
     return sub / f"agent-{agent_id}.jsonl", sub / f"agent-{agent_id}.meta.json"
 
 
-def _dispatch_calls(record_bytes: bytes) -> list:
+# A dispatch declares only through its prompt, so only a record line that
+# holds the prompt key is decoded: an Agent or Task call has one, and a call
+# without one declares nothing and is no caller's dispatch. One search of this
+# needle replaces one of "Agent" and one of "Task", each a pass over the file.
+_PROMPT_KEY = b'"prompt"'
+_DISPATCH_NAMES = (b'"Agent"', b'"Task"')
+_PIECE = 1 << 22  # bytes per read of the forward scan
+_BACK_PIECE = 1 << 20  # the first read back from an offset; each further read doubles
+
+
+class _Record:
+    """The session transcript, read where the derived permission looks and no
+    further: forward a piece at a time for the lines that hold a dispatch,
+    back from a dispatch for the command whose span holds it, back from the
+    end for the caller's own dispatch. The whole file is never held at once:
+    at 100 MB, reading it whole and scanning every user record for span
+    openers was most of what a declared-path write cost (P1b review item 2).
+    A file with no end to read back from (not a regular file) is read whole,
+    as before."""
+
+    def __init__(self, transcript):
+        self.handle = open(transcript, "rb")
+        try:
+            info = os.fstat(self.handle.fileno())
+            regular = stat.S_ISREG(info.st_mode)
+            self.data = None if regular else self.handle.read()  # None: read in pieces
+            self.size = info.st_size if regular else len(self.data)
+        except BaseException:
+            self.handle.close()
+            raise
+        self._known = None  # (offset, opener): the last opener before offset, once searched
+
+    def close(self):
+        self.handle.close()
+
+    def lines(self, needle: bytes):
+        """(begin, end, line) of each line that holds ``needle``, in order, once
+        per line, as command_span._Lines.offsets finds them in the whole file
+        (a last line without a newline ends at the end of the file)."""
+        if self.data is not None:
+            pos = self.data.find(needle)
+            while pos >= 0:
+                begin = self.data.rfind(b"\n", 0, pos) + 1
+                end = self.data.find(b"\n", pos)
+                end = len(self.data) if end < 0 else end
+                yield begin, end, self.data[begin:end]
+                pos = self.data.find(needle, end)
+            return
+        self.handle.seek(0)
+        base, start, pending = 0, 0, []  # pending: the line from offset start, not yet ended
+        while True:
+            piece = self.handle.read(_PIECE)
+            if not piece:
+                break
+            first = piece.find(b"\n")
+            if first < 0:
+                pending.append(piece)
+                base += len(piece)
+                continue
+            line = b"".join(pending) + piece[:first] if pending else piece[:first]
+            if needle in line:  # a needle holds no newline: across the pieces it is in this line
+                yield start, base + first, line
+            last = piece.rfind(b"\n")
+            pos = piece.find(needle, first + 1, last)
+            while pos >= 0:
+                begin = piece.rfind(b"\n", first, pos) + 1
+                end = piece.find(b"\n", pos)
+                yield base + begin, base + end, piece[begin:end]
+                pos = piece.find(needle, end + 1, last)
+            pending, start = [piece[last + 1:]], base + last + 1
+            base += len(piece)
+        line = b"".join(pending)
+        if needle in line:
+            yield start, base, line
+        self.size = base
+
+    def _back(self, hi: int, floor: int = 0):
+        """(data, offset of data in the file, offset in data of its first whole
+        line) for ever longer reads back from offset ``hi``, never below offset
+        ``floor`` (a line start); the read doubles each time."""
+        if self.data is not None:
+            yield self.data[floor:hi], floor, 0
+            return
+        data, base, chunk = b"", hi, _BACK_PIECE
+        while base > floor:
+            start = max(floor, base - chunk)
+            self.handle.seek(start)
+            piece = self.handle.read(base - start)
+            if len(piece) != base - start:  # it shrank since: hold it whole, as one read of it would have
+                self.handle.seek(0)
+                self.data = self.handle.read()
+                yield from self._back(min(hi, len(self.data)), min(floor, len(self.data)))
+                return
+            data, base, chunk = piece + data, start, chunk * 2
+            if base == floor:
+                yield data, base, 0
+                return
+            newline = data.find(b"\n")  # the line before it may start in an earlier read
+            if newline >= 0:
+                yield data, base, newline + 1
+
+    def find_call(self, ident: str, prompt: str):
+        """The newest Agent/Task call with id ``ident`` and this prompt, read back
+        from the end of the file as _dispatch_calls reads a call; None when no
+        call has both. Only lines that hold the id's JSON string are decoded."""
+        from lib import command_span
+
+        token = json.dumps(ident).encode()
+        top = self.size  # the lines from offset top on are searched
+        for data, base, lo in self._back(self.size):
+            pos = data.rfind(token, lo, top - base)
+            while pos >= 0:
+                begin = max(data.rfind(b"\n", lo, pos) + 1, lo)
+                end = data.find(b"\n", pos, top - base)
+                end = top - base if end < 0 else end
+                line = data[begin:end]
+                if any(name in line for name in _DISPATCH_NAMES):
+                    for block in command_span._blocks(command_span._decode(line)):
+                        if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+                                and isinstance(block.get("input"), dict) and (block.get("id") or "") == ident
+                                and block["input"].get("prompt") == prompt):
+                            return command_span.Call(id=ident, name=block["name"], input=block["input"],
+                                                     line=base + begin, result_line=0, ok=False)
+                pos = data.rfind(token, lo, begin) if begin > lo else -1
+            top = base + lo
+        return None
+
+    def command_before(self, offset: int):
+        """The command of the last human-typed harness command before offset
+        ``offset`` (a dispatch's record: its span's), read back from there as
+        command_span.active_span reads back from the end; None when none is.
+        Asked in record order, each stretch of the file is searched once."""
+        from lib import command_span, stop_contract
+
+        known = self._known if self._known is not None and self._known[0] <= offset else None
+        floor = known[0] if known else 0
+        commands = stop_contract.harness_commands()
+        found, top = None, offset
+        for data, base, lo in self._back(offset, floor):
+            found = command_span._last_opener(data, lo, top - base, commands)
+            if found:
+                found = (base + found[0], found[2][0])
+                break
+            top = base + lo
+        if found is None and known:
+            found = known[1]
+        self._known = (offset, found)
+        return found[1] if found else None
+
+
+def _dispatch_calls(record: _Record) -> list:
     """The session's Agent/Task calls, read as command_span's Span.calls reads
     them (its line reader, the main session's own records only), without the
-    search for each call's result that this rule does not use. A call's line
-    is its record's offset in the transcript: it is only ordered against the
-    commands that open spans (_span_commands), and numbering every line of a
-    long transcript would be a pass of its own."""
+    search for each call's result that this rule does not use, from the lines
+    that hold a prompt key. A call's line is its record's offset in the
+    transcript: it is only ordered against the commands that open spans, and
+    numbering every line of a long transcript would be a pass of its own."""
     from lib import command_span
 
     calls = []
-    for begin, end in command_span._Lines(record_bytes).offsets((b'"Agent"', b'"Task"')):
-        for block in command_span._blocks(command_span._decode(record_bytes[begin:end])):
+    for begin, _end, line in record.lines(_PROMPT_KEY):
+        if not any(name in line for name in _DISPATCH_NAMES):
+            continue
+        for block in command_span._blocks(command_span._decode(line)):
             if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
                     and isinstance(block.get("input"), dict)):
                 calls.append(command_span.Call(id=block.get("id") or "", name=block["name"], input=block["input"],
@@ -486,33 +644,94 @@ def _dispatch_calls(record_bytes: bytes) -> list:
     return calls
 
 
-def _span_commands(record_bytes: bytes, until: int) -> list:
-    """(offset, command) of each human-typed harness command of the session
-    before offset ``until`` (the last dispatch's record: no later command
-    opens a dispatch's span), read as command_span.active_span reads them (its
-    line reader, the stop_contract span rule); a dispatch's span is the last
-    one before it."""
-    from lib import command_span, stop_contract
-
-    commands, openers = stop_contract.harness_commands(), []
-    for begin, end in command_span._Lines(record_bytes).offsets(command_span._USER_RECORD,
-                                                                unless=command_span._RESULT_BLOCK):
-        if begin >= until:
-            break
-        record = command_span._decode(record_bytes[begin:end])
-        opener = stop_contract.span_opener(record, commands) if record else None
-        if opener:
-            openers.append((begin, opener[0]))
-    return openers
+_FENCE_SHAPES: dict = {}  # (command, subagent_type) -> _template_shapes(), once per process
 
 
-def _declarations(record_bytes: bytes, calls: list) -> list:
+def _segment_prefix(path: str) -> str:
+    """The literal text that starts the segment of template path ``path``
+    holding its last placeholder, up to that segment's first placeholder ("ticket-"
+    for docs/dev/ticket-<timestamp>.md; "" for docs/dev/<x>.md). Every value
+    goes in after it, so unless a value takes a part back with "/..", the
+    declared path keeps a part that starts with it."""
+    found = list(_SHAPE_PLACEHOLDER_RE.finditer(path))
+    if not found:
+        return ""
+    start = path.rfind("/", 0, found[-1].start()) + 1
+    first = next(m for m in found if m.start() >= start)
+    return path[start:first.start()]
+
+
+def _template_shapes(command, subagent_type: str):
+    """(shape, segment prefix) of each path the worked examples of the fences
+    of ``subagent_type`` in commands/<command>.md declare (_shape,
+    _segment_prefix), read as dispatch_template._template reads that file
+    (every harness command's when ``command`` is None: a dispatch carrying no
+    obligation takes its span's). A file _template cannot open declares
+    nothing; _ANY when reading one raises anything else, so the template is
+    read and raises as it did."""
+    from pathlib import Path
+
+    from lib import dispatch_template, stop_contract
+
+    key = (command, subagent_type)
+    if key not in _FENCE_SHAPES:
+        shapes = set()
+        try:
+            names = [command] if command is not None else sorted(stop_contract.harness_commands())
+            for name in names:
+                try:
+                    text = (Path(stop_contract.COMMANDS_DIR) / f"{name}.md").read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                for _body, kind, _roles, _profiles, example in dispatch_template._parsed_fences(text):
+                    if kind != subagent_type or example is None:
+                        continue
+                    try:
+                        declared = json.loads(example)
+                    except ValueError:
+                        continue
+                    for entry in (declared.get("artifacts") or []) if isinstance(declared, dict) else ():
+                        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                            shape = _shape(entry["path"])
+                            if shape is _ANY:
+                                raise ValueError("a template path of any shape")
+                            shapes.add((shape, _segment_prefix(entry["path"]) if shape[0] == "ends" else ""))
+        except Exception:
+            shapes = _ANY
+        _FENCE_SHAPES[key] = shapes
+    return _FENCE_SHAPES[key]
+
+
+def _template_may_cover(command, subagent_type: str, prompt: str, targets) -> bool:
+    """Whether a path the template of such a dispatch declares may cover one
+    of ``targets`` (each a target's _target_forms; None: any path). A path of
+    a shape "ends" covers a target only through a part that starts with its
+    segment prefix, unless the prompt, which every value is taken from, holds
+    "/..". A template that cannot is not read: binding it to the prompt is
+    most of a dispatch's cost in a long session, and nothing it declares
+    could change a decision."""
+    if targets is None:
+        return True
+    shapes = _template_shapes(command, subagent_type)
+    if shapes is _ANY:
+        return True
+    back = "/.." in prompt
+    for forms in targets:
+        for shape, prefix in shapes:
+            if (_could_be_declared({shape}, forms)
+                    and (back or not prefix or any(part.startswith(prefix) for form in forms for part in form))):
+                return True
+    return False
+
+
+def _declarations(record: _Record, calls: list, targets=None) -> list:
     """(path parts, role, task_id, dispatch id) for every path a dispatch of
-    the session declares, in record order."""
+    the session declares, in record order; with ``targets`` (each a target's
+    _target_forms), every template-declared path that may cover one of them,
+    the obligations' own paths and producer questions all."""
     from lib import dispatch_template, obligation
 
     question_roles = None
-    openers = None
     out = []
     for call in calls:
         prompt = call.input.get("prompt")
@@ -525,18 +744,17 @@ def _declarations(record_bytes: bytes, calls: list) -> list:
         if own is not None:
             role, task_id = own.get("role"), own.get("task_id")
             paths += _declared_paths(own)
-            template = dispatch_template.template_obligation(own.get("pipeline"), subagent_type, prompt)
-            # Only the template this dispatch was made from: same role and profile.
-            if template and all(template.get(k) == own.get(k) for k in ("role", "profile")):
-                paths += _declared_paths(template)
+            if _template_may_cover(own.get("pipeline"), subagent_type, prompt, targets):
+                template = dispatch_template.template_obligation(own.get("pipeline"), subagent_type, prompt)
+                # Only the template this dispatch was made from: same role and profile.
+                if template and all(template.get(k) == own.get(k) for k in ("role", "profile")):
+                    paths += _declared_paths(template)
             if question_roles is None:
                 question_roles = _question_roles()
             if role in question_roles and isinstance(task_id, str) and task_id:
                 paths.append(_QUESTION_PATH.format(task_id=task_id, role=role))
-        else:
-            if openers is None:
-                openers = _span_commands(record_bytes, calls[-1].line)
-            command = next((name for offset, name in reversed(openers) if offset < call.line), None)
+        elif _template_may_cover(None, subagent_type, prompt, targets):
+            command = record.command_before(call.line)
             template = dispatch_template.template_obligation(command, subagent_type, prompt) if command else None
             if template:
                 role, task_id = template.get("role") or role, template.get("task_id")
@@ -631,10 +849,71 @@ def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> s
     if undeclared:
         return set()
     try:
-        record_bytes = command_span._read(transcript)
+        record = _Record(transcript)
     except (OSError, TypeError, ValueError):
         return set()
-    calls = _dispatch_calls(record_bytes)
+    try:
+        return _decide_declared_writes(role, tool_name, writes, data, transcript, record)
+    finally:
+        record.close()
+
+
+def _own_from_tail(data: dict, transcript, record: _Record, writes: list, forms_of):
+    """The writes the calling subagent's own dispatch declares, decided from
+    its own transcript and meta and that one dispatch record, found back from
+    the end of the session transcript: a running subagent's dispatch is among
+    the newest records, so this reads what the subagent's own run added, not
+    the session. None unless it covers every write; then the reading of every
+    dispatch below decides, as it always did. The calls with the caller's id
+    found here are some of those that reading finds, so a write they cover is
+    one it finds covered too."""
+    try:
+        from lib import command_span, obligation
+
+        agent_transcript, meta = _agent_files(transcript, data.get("agent_id"))
+        if agent_transcript is None:
+            return None
+        prompt = obligation.read_first_record_prompt(agent_transcript)
+        if prompt is None:
+            return None
+        with open(meta) as fh:
+            named = json.load(fh).get("toolUseId")
+        if not isinstance(named, str) or not command_span._PLAIN_ID.match(named):
+            return None  # an id the record may spell otherwise is matched call by call below
+        call = record.find_call(named, prompt)
+        if call is None:
+            return None
+        declared = _declarations(record, [call], [forms_of(t) for t in writes])
+        own = {t for t in writes if any(_covers(d[0], f) for f in forms_of(t) for d in declared)}
+        return own if own == set(writes) else None
+    except Exception:
+        return None
+
+
+def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, transcript, record: _Record) -> set:
+    known = {}
+
+    def forms_of(target):
+        # Each target's forms once, where the reading of every dispatch takes
+        # them, so one that cannot be formed raises where it always did.
+        if target not in known:
+            known[target] = _target_forms(target, data)
+        return known[target]
+
+    def filter_for(targets):
+        try:
+            return [forms_of(t) for t in targets]
+        except Exception:
+            return None  # no filter: every template is read, as before
+
+    if data.get("agent_id"):
+        own = _own_from_tail(data, transcript, record, writes, forms_of)
+        if own is not None:
+            return own
+    try:
+        calls = _dispatch_calls(record)
+    except (OSError, TypeError, ValueError):
+        return set()  # as when the transcript could not be read
     if not calls:
         return set()
     # A subagent's write of a path its own dispatch declares is its own,
@@ -645,18 +924,18 @@ def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> s
     if data.get("agent_id"):
         try:
             mine = _caller_dispatches(data, transcript, calls)
-            declared = _declarations(record_bytes, [c for c in calls if c.id in mine]) if mine else []
-            own = {t for t in writes if any(_covers(d[0], f) for f in _target_forms(t, data) for d in declared)}
+            declared = _declarations(record, [c for c in calls if c.id in mine], filter_for(writes)) if mine else []
+            own = {t for t in writes if any(_covers(d[0], f) for f in forms_of(t) for d in declared)}
         except Exception:
             mine, own = None, set()
     rest = [t for t in writes if t not in own]
     if not rest:
         return own
-    declarations = _declarations(record_bytes, calls)
+    declarations = _declarations(record, calls, filter_for(rest))
     if not declarations:
         return own
     for target in rest:
-        forms = _target_forms(target, data)
+        forms = forms_of(target)
         covering = [d for d in declarations if any(_covers(d[0], f) for f in forms)]
         if not covering:
             continue

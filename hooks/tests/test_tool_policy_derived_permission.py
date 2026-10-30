@@ -263,10 +263,14 @@ def test_dispatch_records_are_ordered_by_their_offsets_and_no_line_is_numbered(t
     monkeypatch.setattr(command_span._Lines, "_number", numbered)
     data = s.transcript.read_bytes()
     starts = [0] + [i + 1 for i, b in enumerate(data) if b == 10][:-1]
-    calls = policy._dispatch_calls(data)
-    assert [c.line for c in calls] == [starts[1], starts[3]]
-    assert policy._span_commands(data, calls[-1].line) == [(starts[0], "do"), (starts[2], "dev")]
-    assert policy._span_commands(data, calls[0].line) == [(starts[0], "do")]
+    record = policy._Record(s.transcript)
+    try:
+        calls = policy._dispatch_calls(record)
+        assert [c.line for c in calls] == [starts[1], starts[3]]
+        assert record.command_before(calls[0].line) == "do"
+        assert record.command_before(calls[-1].line) == "dev"
+    finally:
+        record.close()
 
 
 # -- a target no template can declare: no transcript read (review item 2) ----------------------------
@@ -291,11 +295,9 @@ def test_a_write_no_template_can_declare_reads_no_transcript(tmp_path, cycle, mo
     # The session's dispatch records grow with the session; a target that no path of the current
     # command files' templates (nor the producer question) can name costs the same in any session.
     policy = _policy()
-    from lib import command_span
-
     read = []
-    real = command_span._read
-    monkeypatch.setattr(command_span, "_read", lambda path: read.append(path) or real(path))
+    real = policy._Record
+    monkeypatch.setattr(policy, "_Record", lambda path: read.append(path) or real(path))
     undeclarable = [("Write", _write("toy/__init__.py")), ("Edit", {"file_path": str(PROJECT / "toy/util.py")}),
                     ("Bash", {"command": "echo a > file"}), ("Bash", {"command": "printf x > toy/x.txt 2>&1"})]
     for tool, tool_input in undeclarable:
@@ -368,7 +370,8 @@ def test_a_subagents_own_declared_write_is_decided_by_its_own_dispatch(tmp_path,
     policy = _policy()
     seen = []
     real = policy._declarations
-    monkeypatch.setattr(policy, "_declarations", lambda data, calls: seen.append([c.id for c in calls]) or real(data, calls))
+    monkeypatch.setattr(policy, "_declarations",
+                        lambda record, calls, targets=None: seen.append([c.id for c in calls]) or real(record, calls, targets))
     ba_call = json.loads((cycle.subagents / f"agent-{cycle.ba}.meta.json").read_text())["toolUseId"]
     dev_call = json.loads((cycle.subagents / f"agent-{cycle.dev}.meta.json").read_text())["toolUseId"]
     own = policy._check_declared_writes("ba", "Write", [str(PROJECT / CONTEXT)],
@@ -380,3 +383,247 @@ def test_a_subagents_own_declared_write_is_decided_by_its_own_dispatch(tmp_path,
         policy._check_declared_writes("dev", "Write", [str(PROJECT / CONTEXT)],
                                       _payload(cycle, "Write", _write(CONTEXT), (cycle.dev, "dev")))
     assert stop.value.code == 2 and seen[0] == [dev_call] and len(seen[-1]) == 3
+
+
+# -- a declared-path write in a long session (review item 2, round 3) --------------------------------
+#
+# The oracle below is the reading the hook made before it read the transcript in pieces: the whole file
+# in memory, every "Agent"/"Task" line decoded, every user record scanned for span openers, every
+# dispatch's template read. The hook must decide every write as it does.
+
+def _oracle_calls(data: bytes) -> list:
+    from lib import command_span
+
+    calls = []
+    for begin, end in command_span._Lines(data).offsets((b'"Agent"', b'"Task"')):
+        for block in command_span._blocks(command_span._decode(data[begin:end])):
+            if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+                    and isinstance(block.get("input"), dict)):
+                calls.append(command_span.Call(id=block.get("id") or "", name=block["name"], input=block["input"],
+                                               line=begin, result_line=0, ok=False))
+    return calls
+
+
+def _oracle_openers(data: bytes) -> list:
+    from lib import command_span, stop_contract
+
+    commands, openers = stop_contract.harness_commands(), []
+    for begin, end in command_span._Lines(data).offsets(command_span._USER_RECORD, unless=command_span._RESULT_BLOCK):
+        record = command_span._decode(data[begin:end])
+        opener = stop_contract.span_opener(record, commands) if record else None
+        if opener:
+            openers.append((begin, opener[0]))
+    return openers
+
+
+def _oracle(policy, data: bytes, calls: list) -> list:
+    """(parts, role, task, id) of every path the dispatches declare, read as the hook read them before."""
+    from lib import dispatch_template, obligation
+
+    openers, out = _oracle_openers(data), []
+    for call in calls:
+        prompt = call.input.get("prompt")
+        if not isinstance(prompt, str) or not prompt:
+            continue
+        subagent_type = call.input.get("subagent_type") or "general-purpose"
+        parsed = obligation.parse_obligation(prompt)
+        own = parsed.obligation if isinstance(parsed, obligation.ParsedObligation) else None
+        paths, role, task_id = [], subagent_type, None
+        if own is not None:
+            role, task_id = own.get("role"), own.get("task_id")
+            paths += policy._declared_paths(own)
+            template = dispatch_template.template_obligation(own.get("pipeline"), subagent_type, prompt)
+            if template and all(template.get(k) == own.get(k) for k in ("role", "profile")):
+                paths += policy._declared_paths(template)
+            if role in policy._question_roles() and isinstance(task_id, str) and task_id:
+                paths.append(policy._QUESTION_PATH.format(task_id=task_id, role=role))
+        else:
+            command = next((name for offset, name in reversed(openers) if offset < call.line), None)
+            template = dispatch_template.template_obligation(command, subagent_type, prompt) if command else None
+            if template:
+                role, task_id = template.get("role") or role, template.get("task_id")
+                paths += policy._declared_paths(template)
+        for path in dict.fromkeys(paths):
+            parts = policy._parts(path)
+            if parts and ".." not in parts and not path.startswith("/"):
+                out.append((parts, role, task_id, call.id))
+    return out
+
+
+def _long_session(root: Path, rounds: int = 6, spaced: bool = True, back: bool = True) -> "Session":
+    """Commands, plain prompts, tool results that quote commands and paths, dispatches with and without
+    an obligation (the current /dev BA template carrying none among them, and with ``back`` one whose
+    value "x/../note" makes its ticket docs/dev/note.md), a control command: the shapes a long
+    session's record has, in the CLI's compact spelling or Python's spaced one."""
+    prompt, _context = _template_prompt()
+    s = Session(root)
+    dump = (lambda r: json.dumps(r)) if spaced else (lambda r: json.dumps(r, separators=(",", ":")))
+    s._append = lambda record: s.transcript.open("a").write(dump(record) + "\n")
+    for k in range(rounds):
+        task = f"20261028-1{k:05d}"
+        s.command(["dev", "do", "allow", "close"][k % 4])
+        s._append({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": f"toolu_r{k}", "content": "<command-name>/dev</command-name>"}]}})
+        s._append({"type": "user", "message": {"role": "user", "content": "please also check docs/dev/ for /dev"}})
+        s.dispatch("You are the BA subagent.\n" + _block(_obligation("ba", "singular", f"docs/dev/context-{task}.json",
+                                                                     task=task)), "ba")
+        s.dispatch(prompt.replace(TASK, task), "ba")
+        if back and k == 0:
+            s.dispatch(prompt.replace(TASK, "x/../note"), "ba")
+        s.dispatch("You are the dev subagent.\n" + _block(_obligation("dev", "singular", f"src/mod{k}.py",
+                                                                      f"docs/dev/notes-{k}", task=task)), "dev")
+        s.dispatch("Describe the toy package.", "general-purpose")
+    return s
+
+
+def _decision(policy, s, tool, tool_input, agent=None):
+    targets = policy._extract_targets(tool, tool_input)
+    try:
+        return ("own", sorted(policy._check_declared_writes(agent[1] if agent else None, tool, targets,
+                                                            _payload(s, tool, tool_input, agent))))
+    except SystemExit as stop:
+        return ("exit", stop.code)
+
+
+def _oracle_decision(policy, s, tool, tool_input, agent=None):
+    """What the hook decided before, from the oracle's reading of the same record."""
+    data = s.transcript.read_bytes()
+    payload = _payload(s, tool, tool_input, agent)
+    writes = policy._write_targets(tool, policy._extract_targets(tool, tool_input))
+    shapes = policy._declarable_shapes()
+    if not writes or not any(policy._could_be_declared(shapes, policy._target_forms(t, payload)) for t in writes):
+        return ("own", [])
+    calls = _oracle_calls(data)
+    if not calls:
+        return ("own", [])
+    mine, own = None, set()
+    if payload.get("agent_id"):
+        mine = policy._caller_dispatches(payload, policy._session_transcript(payload), calls)
+        declared = _oracle(policy, data, [c for c in calls if c.id in mine]) if mine else []
+        own = {t for t in writes if any(policy._covers(d[0], f) for f in policy._target_forms(t, payload)
+                                       for d in declared)}
+    declarations = _oracle(policy, data, calls)
+    for t in [t for t in writes if t not in own]:
+        covering = [d for d in declarations if any(policy._covers(d[0], f) for f in policy._target_forms(t, payload))]
+        if not covering:
+            continue
+        if mine is None:
+            mine = policy._caller_dispatches(payload, policy._session_transcript(payload), calls)
+        if any(d[3] in mine for d in covering):
+            own.add(t)
+            continue
+        return ("exit", 2)
+    return ("own", sorted(own))
+
+
+@pytest.mark.parametrize("spaced", [True, False])
+@pytest.mark.parametrize("piece", [64, 997, 1 << 22])
+def test_every_declared_path_write_is_decided_as_the_whole_file_reading_decided_it(tmp_path, monkeypatch, spaced,
+                                                                                  piece):
+    # The transcript is read in pieces (as small as a fraction of one record here), forward for the
+    # dispatches and back for span openers and the caller's own dispatch: the decision is the one the
+    # whole-file reading took, for every caller, every declared path and paths no dispatch declares.
+    policy = _policy(f"tool_policy_pieces_{piece}_{spaced}")
+    monkeypatch.setattr(policy, "_PIECE", piece)
+    monkeypatch.setattr(policy, "_BACK_PIECE", max(1, piece // 3))
+    s = _long_session(tmp_path / "projects", spaced=spaced)
+    _prompt, template_context = _template_prompt()
+    agents = sorted(p.name[len("agent-"):-len(".meta.json")] for p in s.subagents.glob("*.meta.json"))
+    kinds = {a: json.loads((s.subagents / f"agent-{a}.meta.json").read_text())["agentType"] for a in agents}
+    callers = [None] + [(a, kinds[a]) for a in agents]
+    paths = ["docs/dev/note.md", "src/mod1.py", "docs/dev/notes-2/x.md", "docs/dev/context-20261028-100003.json",
+             template_context.replace(TASK, "20261028-100004"), "docs/dev/producer-question-20261028-100005-ba.json",
+             "docs/dev/producer-question-20261028-100005-dev.json", "README.md"]
+    seen = set()
+    for caller in callers:
+        for path in paths:
+            for tool, tool_input in (("Write", _write(path)), ("Bash", {"command": f"printf x > {path}"})):
+                got = _decision(policy, s, tool, tool_input, caller)
+                assert got == _oracle_decision(policy, s, tool, tool_input, caller), (caller, path, tool)
+                seen.add(got[0] if got[0] == "exit" else ("own" if got[1] else "none"))
+    assert seen == {"exit", "own", "none"}
+
+
+def test_a_subagents_own_declared_write_reads_only_the_newest_records(tmp_path, monkeypatch):
+    # The caller's own dispatch is found back from the end of the session transcript: the dispatches
+    # before it are neither scanned for nor decoded, whatever the session's length.
+    policy = _policy("tool_policy_tail")
+    s = _long_session(tmp_path / "projects", rounds=8)
+    own = s.dispatch("You are the dev subagent.\n" + _block(_obligation("dev", "singular", REPORT)), "dev")
+    monkeypatch.setattr(policy, "_dispatch_calls", lambda record: pytest.fail("the whole record was scanned"))
+    monkeypatch.setattr(policy, "_BACK_PIECE", 512)  # the first read back is a small part of this session
+    reads = []
+    real_read = policy._Record._back
+
+    def back(self, hi, floor=0):
+        for data, base, lo in real_read(self, hi, floor):
+            reads.append(len(data))
+            yield data, base, lo
+
+    monkeypatch.setattr(policy._Record, "_back", back)
+    assert _decision(policy, s, "Write", _write(REPORT), (own, "dev")) == ("own", [str(PROJECT / REPORT)])
+    assert reads and max(reads) < s.transcript.stat().st_size // 4, reads
+    # A write its own dispatch does not declare still reads every dispatch (and is refused here).
+    monkeypatch.undo()
+    assert _decision(policy, s, "Write", _write("docs/dev/context-20261028-100003.json"), (own, "dev")) == ("exit", 2)
+
+
+def test_a_template_that_cannot_declare_the_target_is_not_read(tmp_path, monkeypatch):
+    # A dispatch's template is bound to its prompt only when a path of that template's shape could
+    # cover the write; a dispatch's own obligation paths are always read.
+    policy = _policy("tool_policy_templates")  # puts hooks/ on sys.path, as the hook does
+    from lib import dispatch_template
+
+    s = _long_session(tmp_path / "projects", rounds=2, back=False)
+    read = []
+    real = dispatch_template.template_obligation
+    monkeypatch.setattr(dispatch_template, "template_obligation",
+                        lambda command, subagent_type, prompt, *a: read.append(subagent_type) or real(
+                            command, subagent_type, prompt, *a))
+    # A path of /spec's template shape ("views"), which dev's own obligation covers (docs/dev/notes-1):
+    # no template of these dispatches' types (ba, dev, general-purpose) can declare it.
+    assert _decision(policy, s, "Write", _write("docs/dev/notes-1/views")) == ("exit", 2)
+    assert read == [], read
+    # BA's .md is docs/dev/ticket-<timestamp>.md: with no "/.." in a prompt, only a part that starts
+    # "ticket-" can be one, so a note is not bound to any template ...
+    assert _decision(policy, s, "Write", _write("docs/dev/note.md")) == ("own", [])
+    assert read == [], read
+    assert _decision(policy, s, "Write", _write("docs/dev/ticket-x.md")) == ("own", [])
+    assert read and set(read) == {"ba"}, read  # only BA's template declares a .md
+    # ... while a value with "/.." can make the ticket any .md: then the template is bound, and its
+    # docs/dev/note.md is refused to the main agent as the whole-file reading refused it.
+    read.clear()
+    s2 = _long_session(tmp_path / "back", rounds=1, back=True)
+    assert _decision(policy, s2, "Write", _write("docs/dev/note.md")) == ("exit", 2)
+    assert _oracle_decision(policy, s2, "Write", _write("docs/dev/note.md")) == ("exit", 2)
+    assert "ba" in read
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_the_piece_reader_finds_the_lines_the_whole_file_reader_finds(tmp_path, monkeypatch, seed):
+    import random
+
+    policy = _policy("tool_policy_lines")
+    from lib import command_span
+
+    rng = random.Random(seed)
+    needle = b'"prompt"'
+    lines = []
+    for _ in range(rng.randrange(0, 40)):
+        width = rng.choice([0, 1, 5, 30, 200])
+        body = bytes(rng.choice(b'ab"\\pr{}:, ') for _ in range(rng.randrange(0, width + 1)))
+        if rng.random() < 0.4:
+            at = rng.randrange(0, len(body) + 1)
+            body = body[:at] + needle * rng.choice([1, 2]) + body[at:]
+        lines.append(body)
+    data = b"\n".join(lines) + (b"\n" if rng.random() < 0.5 else b"")
+    path = tmp_path / "t.jsonl"
+    path.write_bytes(data)
+    monkeypatch.setattr(policy, "_PIECE", rng.choice([1, 2, 3, 7, 16, 64]))
+    record = policy._Record(path)
+    try:
+        got = list(record.lines(needle))
+    finally:
+        record.close()
+    want = [(b, e, data[b:e]) for b, e in command_span._Lines(data).offsets((needle,))]
+    assert got == want
