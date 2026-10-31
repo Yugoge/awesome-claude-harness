@@ -31,17 +31,28 @@ Every write outside the scratch root is listed separately, temporaries
 included, before any folding or root filtering.
 
 Processes: pids are reused within a replay (pid_max may be small), so a
-process's lifetime ends at its "+++ exited" line (strace -q keeps those lines),
-and the k-th lifetime of a pid was started by the k-th fork that returned it,
-whether the child's first call or the parent's fork is reported first.
+process's lifetime ends at its "+++ exited" or "+++ killed by" line, or, for a
+thread whose execve took over its thread group, at the group's "+++ superseded
+by execve" line (strace -q keeps them all; "killed by" is printed only for a
+signal the -e signal= set names, so the set leaves out SIGCHLD alone: a pipeline
+writer killed by SIGPIPE ends there, and a later process given its pid is a new
+one, not the dead one's continuation), and the k-th lifetime of a pid was
+started by the k-th fork that returned it, whether the child's first call or
+the parent's fork is reported first. A fork that returns a pid whose earlier
+lifetime never ended in the trace ends it there (trace-stats.json counts those
+as lost_exits: attribution before that fork may be wrong).
 
 relation-events.tsv keeps, per kept file event, what the artifact check's
 differential needs (E1): the component, the origin (the outermost harness file
 of the process tree: the registered hook, or the script a tool call ran), the
 actor, the op, the pattern, the hook event it ran under (Replay.fire's seq, from
-the driver's event markers), "bulk" for a read rule (3) leaves out (a program
-that is not an interpreter reading most files directly in a directory it
-listed, as `git add -A` does) and the raw path as the sandbox saw it.
+the driver's event markers), a mark for a read rule (3) leaves out ("bulk": a
+program that is not an interpreter reading most files directly in a directory
+it listed, as `git add -A` does; "stat": a program that is not an interpreter
+reading a file of a work tree whose git index it opened, as `git status` or
+`git diff` do when the index's stat data cannot vouch for the file, which
+depends on whether the file was written in the same second as the index, so on
+timing) and the raw path as the sandbox saw it.
 """
 from __future__ import annotations
 
@@ -57,6 +68,9 @@ SYSCALLS = ("open,openat,openat2,creat,mkdir,mkdirat,rename,renameat,renameat2,u
 _LINE_RE = re.compile(r"^(\d+)\s+(\w+)\((.*)\)\s+=\s+(-?\d+)(.*)$")
 _RESUMED_RE = re.compile(r"^(\d+)\s+<\.\.\. \w+ resumed>(.*)$")
 _EXIT_RE = re.compile(r"^(\d+)\s+\+\+\+ (?:exited|killed) ")
+# "<leader> +++ superseded by execve in pid <tid> +++": thread <tid> ran execve, and the thread group
+# goes on under the leader's pid; <tid> itself is gone
+_SUPERSEDED_RE = re.compile(r"^\d+\s+\+\+\+ superseded by execve in pid (\d+) ")
 EXIT = "+++exit"
 _ESC_RE = re.compile(r"\\(x[0-9a-fA-F]{2}|[0-7]{1,3}|.)")
 _SIMPLE_ESC = {"n": 10, "t": 9, "r": 13, "v": 11, "f": 12, "a": 7, "b": 8, "e": 27}
@@ -64,6 +78,7 @@ _INTERP_RE = re.compile(r"^(?:(?:ba|da|z|k)?sh|python[0-9.]*|perl|node)$")
 _PSEUDO = ("/dev/null", "/dev/tty", "/dev/pts/", "/dev/fd/", "/dev/std", "/proc/", "/sys/", "/dev/urandom",
            "/dev/random")
 _LOCK_RE = re.compile(r"\.(?:lock|lck)$")
+_INDEX_RE = re.compile(r"(?<![A-Za-z])index(?![A-Za-z])")  # git's index: `index`, GIT_INDEX_FILE's `x-index.N`
 _FORKS = ("clone", "clone3", "fork", "vfork")
 
 
@@ -77,8 +92,11 @@ def available() -> tuple[bool, str]:
 
 
 def strace_argv(raw_path: str) -> list[str]:
-    # -q, not -qq: the "+++ exited" lines delimit each process's lifetime (pids are reused)
-    return ["strace", "-f", "--seccomp-bpf", "-z", "-q", "-e", "signal=none", "-y", "-s", "65535",
+    # -q, not -qq: the "+++ exited" lines delimit each process's lifetime (pids are reused). The
+    # signal set is every signal but SIGCHLD (one delivery line per child exit, and it kills no
+    # process): strace prints "+++ killed by SIG..." only for a signal in the set, so with none a
+    # process a signal ends (`yes | head`'s writer) would never end in the trace
+    return ["strace", "-f", "--seccomp-bpf", "-z", "-q", "-e", "signal=!SIGCHLD", "-y", "-s", "65535",
             "-e", "trace=" + SYSCALLS, "-o", raw_path, "--"]
 
 
@@ -163,6 +181,13 @@ def _records(raw_path: str):
                 pending.pop(x.group(1), None)
                 yield int(x.group(1)), EXIT, "", 0, "", n
                 continue
+            x = _SUPERSEDED_RE.match(line)
+            if x:
+                # the thread's unfinished execve completes under the leader's pid
+                if x.group(1) in pending:
+                    pending[line.partition(" ")[0]] = pending.pop(x.group(1))
+                yield int(x.group(1)), EXIT, "", 0, "", n
+                continue
             r = _RESUMED_RE.match(line)
             if r:
                 head, start = pending.pop(r.group(1), ("", n))
@@ -170,6 +195,27 @@ def _records(raw_path: str):
             m = _LINE_RE.match(line)
             if m:
                 yield int(m.group(1)), m.group(2), m.group(3), int(m.group(4)), m.group(5).strip(), start
+
+
+def _git_dir(path: str) -> str | None:
+    """The git directory a path lies in (`.git`, a bare `*.git`), else None."""
+    parts = path.split("/")
+    for i, seg in enumerate(parts[:-1]):
+        if seg == ".git" or (seg.endswith(".git") and len(seg) > 4):
+            return "/".join(parts[:i + 1])
+    return None
+
+
+def _index_tree(path: str, cwd: str | None) -> str | None:
+    """The work tree whose git index `path` is, when it is one: a file named for git's index in a
+    repository's git directory (its own `index`, or a GIT_INDEX_FILE there, `checkpoint-index.N`), or a
+    file named `index` elsewhere (a GIT_INDEX_FILE in a scratch directory: the tree is where git runs)."""
+    base, gdir = os.path.basename(path), _git_dir(path)
+    if gdir is not None:
+        if not _INDEX_RE.search(base) or not gdir.endswith("/.git"):
+            return None     # a bare repository has no work tree
+        return os.path.dirname(gdir)
+    return cwd if base == "index" and cwd else None
 
 
 def _rand_name(base: str, window: norm.Window) -> str | None:
@@ -241,6 +287,9 @@ class _Reducer:
         self.minted: dict[str, str] = {}
         self.dirs = {r.rstrip("/") for r in [lay["home"], lay["state"], lay["sb"]] + lay["temp_dirs"]}
         self.listed: dict[tuple, set] = {}  # (pid, fork) -> directories that process opened for listing
+        self.indexed: dict[tuple, set] = {}  # (pid, fork) -> work trees whose git index that process read
+        self.named: dict[tuple, set] = {}    # (pid, fork) -> paths its command line names (as written)
+        self.lost_exits = 0  # lifetimes the trace never ended, closed by a later fork returning their pid
 
     # ------------------------------------------------------------ process state
     def proc(self, pid: int) -> _Proc:
@@ -314,7 +363,16 @@ class _Reducer:
         while pid is not None and pid not in anc and len(anc) < 64:
             anc.add(pid)
             pid = self.parent.get(pid)
-        new = re.sub(r"(?<![0-9])[0-9]{2,}(?![0-9])", lambda m: "<pid>" if int(m.group(0)) in anc else m.group(0), new)
+        # a digit run inside a uuid or a long hex id (a git object's name, a content hash) is part of
+        # that id, whatever pid it happens to equal
+        ids = norm.id_spans(new)
+
+        def pid(m):
+            if any(a <= m.start() and m.end() <= b for a, b in ids):
+                return m.group(0)
+            return "<pid>" if int(m.group(0)) in anc else m.group(0)
+
+        new = re.sub(r"(?<![0-9])[0-9]{2,}(?![0-9])", pid, new)
         if new != base:
             self.minted[base] = new
 
@@ -325,6 +383,9 @@ class _Reducer:
                 self.listed.setdefault((p.pid, p.fork_at), set()).add(path)
             return
         if "O_WRONLY" not in flags and "O_RDWR" not in flags:
+            tree = _index_tree(path, p.cwd)
+            if tree:    # git's index of that work tree: its stat cache of the tree's files
+                self.indexed.setdefault((p.pid, p.fork_at), set()).add(tree)
             self.emit(p, "read", path, self.inst(path, p))
             self.exists.add(path)
             return
@@ -358,11 +419,18 @@ class _Reducer:
                 # the pid the wrong fork, and so no parent)
                 self.forked[ret] = self.forked.get(ret, 0) + 1
                 if self.lives.get(ret, 0) - (ret == self.root_pid) < self.forked[ret]:
+                    # the kernel gave the pid out again, so a lifetime of it still open here ended
+                    # with no line in the trace (strace printed no end for it): it is not the child's
+                    if self.procs.pop(ret, None) is not None:
+                        self.lost_exits += 1
                     self.proc(ret)
         elif name in ("execve", "execveat"):
             k = 1 if name == "execveat" else 0
             script = self.script_of(p, _cstr(a[k] if len(a) > k else "") or "", _argv(a[k + 1] if len(a) > k + 1 else ""))
             p.exe = os.path.basename(_cstr(a[k] if len(a) > k else "") or "")
+            # the paths its command line names (`-F msg`, `--file=msg`, `-- path`): asked for by name
+            words = [w for x in _argv(a[k + 1] if len(a) > k + 1 else "")[1:] for w in (x, x.partition("=")[2]) if w]
+            self.named[(pid, p.fork_at)] = {os.path.normpath(w) for w in words if not w.startswith("-")}
             if script:
                 p.comp, p.owner = script, pid
                 if p.origin is None:
@@ -490,6 +558,23 @@ class _Reducer:
                     out |= {(pid, f) for f in got}
         return out
 
+    def stat_reads(self) -> set:
+        """(pid, path) reads rule (3) leaves out: a program that is not an interpreter, reading a
+        file of a work tree whose git index it read (git status, diff, add -A, write-tree, merge),
+        opens it only when the index's stat data cannot vouch for it; for a file written in the
+        same second as the index (racy git) that depends on timing, so which files it opens is
+        its stat cache's choice, not a read its caller asked for. A file its command line names
+        (`git commit -F msg`, `git diff -- path`) stays a read."""
+        out = set()
+        for _comp, op, path, _step, _i, _extra, meta in self.events:
+            trees = self.indexed.get(meta[4])
+            if op != "read" or not trees or _INTERP_RE.match(meta[3] or "") or _git_dir(path) is not None \
+                    or any(path == w or path.endswith("/" + w) for w in self.named.get(meta[4], ())):
+                continue
+            if any(path.startswith(t.rstrip("/") + "/") for t in trees):
+                out.add((meta[4], path))
+        return out
+
     def kept(self):
         self.find_dirs()
         for comp, op, path, step, i, extra, _meta in self.events:
@@ -540,7 +625,7 @@ def parse(raw_path: str, out_dir: str) -> dict:
     for rec in recs:
         r.feed(*rec)
     rel, rel_steps, rel_events, kept = set(), set(), set(), 0
-    bulk = r.bulk()
+    bulk, stat = r.bulk(), r.stat_reads()
     for comp, op, path, step, extra, meta in r.kept():
         kept += 1
         pat = r.pattern(path)
@@ -558,8 +643,9 @@ def parse(raw_path: str, out_dir: str) -> dict:
         origin, actor, event, exe, pid = meta
         if "\t" not in raw and "\n" not in raw:
             # one line per file event and hook event: what E1's differential re-runs and mutates
-            rel_events.add(f"{comp}\t{origin}\t{actor}\t{op}\t{pat}\t{event}\t"
-                           f"{'bulk' if (pid, path) in bulk else ''}\t{raw}")
+            # rule (3) leaves out reads only: the same process's write of that path is still one
+            left_out = "" if op != "read" else "bulk" if (pid, path) in bulk else "stat" if (pid, path) in stat else ""
+            rel_events.add(f"{comp}\t{origin}\t{actor}\t{op}\t{pat}\t{event}\t{left_out}\t{raw}")
     outside = r.outside()  # after kept(): directories are known
 
     def dump(name, lines):
@@ -573,7 +659,7 @@ def parse(raw_path: str, out_dir: str) -> dict:
     stats = {"raw_bytes": os.path.getsize(raw_path), "syscalls": len(recs), "processes": len(r.procs),
              "file_events": len(r.events), "kept_events": kept, "relations": len(rel),
              "outside_writes": len(outside), "minted_names": len(r.minted), "relation_events": len(rel_events),
-             "bulk_reads": len(bulk)}
+             "bulk_reads": len(bulk), "stat_reads": len(stat), "lost_exits": r.lost_exits}
     with open(os.path.join(out_dir, "trace-stats.json"), "w") as fh:
         json.dump(stats, fh, indent=1)
     return stats

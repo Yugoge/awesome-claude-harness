@@ -12,6 +12,7 @@ One scratch root holds everything a replay touches:
     <sb>/replay              copy of this framework, run inside the sandbox
     <sb>/out, trace, markers per-run outputs, raw strace, step markers
     <sb>/bytecode            the harness's byte-compiled modules, put back by reset()
+    <sb>/git-snapshot        the harness's git directory as build() left it, put back by reset()
 
 Bytecode: build() compiles every module of the harness and its venv once, as
 checked-hash .pyc files in __pycache__ beside each module (what the CLI's own
@@ -34,8 +35,11 @@ point into <sb>, and every path written outside <sb> is reported. `guard=True`
 wraps (b) in a namespace that masks the host HOME and temp dirs (except <sb>)
 as a safety net for local runs; (b)'s own isolation and report are unchanged.
 
-reset() restores the pristine state between scenarios. Nothing outside <sb> is
-written; every removal is checked to lie under <sb>.
+reset() restores the pristine state between scenarios, the harness's git
+directory included: a replay's hooks write objects, refs and reflogs there
+(`git hash-object -w`, checkpoints), and a later replay in the same sandbox
+would otherwise find them already written. Nothing outside <sb> is written;
+every removal is checked to lie under <sb>.
 """
 from __future__ import annotations
 
@@ -63,6 +67,7 @@ TOY_FILES = {
     "toy/util.py": "def sub(a,b): return a-b\n",
     "tests/test_add.py": "from toy import add\n\ndef test_add():\n    assert add(2, 3) == 5\n",
 }
+GIT_SNAPSHOT = "git-snapshot"
 PROTECTED_RUNTIME = ".config/claude/protected-runtime.json"  # the empty-lists document init writes
 PROTECTED_RUNTIME_SRC = "hooks/tests/fixtures/protected-runtime.json"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -300,6 +305,7 @@ def build(tree: str, sb: str, log=print) -> dict:
     snapshot = _git(sb, "rev-parse", "HEAD", cwd=harness)
     deps = _make_venv(tree, os.path.join(harness, "venv"), log)
     bytecode = _bytecode(sb, harness)
+    shutil.copytree(os.path.join(harness, ".git"), os.path.join(sb, GIT_SNAPSHOT), symlinks=True)
     shutil.copytree(HERE, os.path.join(sb, "replay"), ignore=COPY_IGNORE)
     os.makedirs(os.path.join(sb, "settings"))
     with open(os.path.join(harness, "settings.json")) as fh:
@@ -311,7 +317,8 @@ def build(tree: str, sb: str, log=print) -> dict:
         p = subprocess.run(["git", "-C", tree, "rev-parse", "HEAD"], capture_output=True, text=True,
                            env=_git_env(sb))
         tree_rev = p.stdout.strip()
-    info = {"tree": tree, "tree_head": tree_rev, "snapshot": snapshot, "deps": deps, "bytecode": bytecode,
+    info = {"tree": tree, "tree_head": tree_rev, "snapshot": snapshot, "git_snapshot": GIT_SNAPSHOT,
+            "deps": deps, "bytecode": bytecode,
             "python": os.path.realpath(getattr(sys, "_base_executable", sys.executable)),
             "built_s": round(time.monotonic() - t0, 1)}
     with open(os.path.join(sb, MARK), "w") as fh:
@@ -350,7 +357,10 @@ def clone(template: str, sb: str) -> dict:
     # A copy has new inodes and ctimes: the snapshot's index takes the files' stat data again, as
     # build()'s `git add` left it, or the replay's first git command in the harness would re-read
     # every tracked file (reads the trace would attribute to the hook that ran it)
-    _git(sb, "update-index", "-q", "--refresh", cwd=os.path.join(sb, "home", ".claude"))
+    harness = os.path.join(sb, "home", ".claude")
+    _git(sb, "update-index", "-q", "--refresh", cwd=harness)
+    if os.path.isdir(os.path.join(sb, GIT_SNAPSHOT)):  # the snapshot reset() puts back, with this stat data
+        shutil.copy2(os.path.join(harness, ".git", "index"), os.path.join(sb, GIT_SNAPSHOT, "index"))
     new = dict(tinfo, template=template, cloned_s=round(time.monotonic() - t0, 1))
     with open(os.path.join(sb, MARK), "w") as fh:
         json.dump(new, fh, indent=1)
@@ -400,6 +410,12 @@ def reset(sb: str, mode: str) -> None:
     home = os.path.join(sb, "home")
     harness = os.path.join(home, ".claude")
     snap = info(sb)["snapshot"]
+    gsnap = os.path.join(sb, GIT_SNAPSHOT)
+    if not os.path.isdir(gsnap):
+        raise RuntimeError(f"sandbox {sb} has no {GIT_SNAPSHOT}/ (built before reset() restored the harness's "
+                           "git directory); rebuild it")
+    _rm(sb, os.path.join(harness, ".git"))
+    shutil.copytree(gsnap, os.path.join(harness, ".git"), symlinks=True)
     _git(sb, "checkout", "-q", "-f", "master", cwd=harness)
     _git(sb, "reset", "-q", "--hard", snap, cwd=harness)
     _git(sb, "clean", "-qffdx", "-e", "/venv", cwd=harness)

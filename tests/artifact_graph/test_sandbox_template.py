@@ -93,3 +93,24 @@ def test_bytecode_is_left_out_where_the_tree_does_not_ignore_it(tmp_path):
     sandbox.reset(str(sb), "scratch")
     assert caches(sb / "home" / ".claude") == [] and caches(sb / "bytecode") == []
     assert not list((sb / "home" / ".claude" / "venv").rglob("*.pyc"))
+
+
+def test_reset_puts_the_harness_git_directory_back(tmp_path):
+    # a replay's hooks write objects, refs and reflogs into the harness's git directory (`git hash-object
+    # -w`, checkpoint refs); the next replay in the same sandbox must not find them already written
+    tree = make_tree(tmp_path, "__pycache__/\nvenv/\n")
+    tpl, sb = tmp_path / "template", tmp_path / "sb"
+    sandbox.build(str(tree), str(tpl), log=lambda s: None)
+    sandbox.clone(str(tpl), str(sb))
+    sandbox.reset(str(sb), "scratch")
+    harness = sb / "home" / ".claude"
+    pristine = sorted(str(p.relative_to(harness)) for p in (harness / ".git").rglob("*") if p.is_file())
+    (harness / "probe.txt").write_text("a replay's content\n", encoding="utf-8")
+    oid = git(harness, "hash-object", "-w", "probe.txt").strip()
+    git(harness, "update-ref", "refs/checkpoints/master", git(harness, "rev-parse", "HEAD").strip())
+    sandbox.reset(str(sb), "scratch")
+    after = sorted(str(p.relative_to(harness)) for p in (harness / ".git").rglob("*") if p.is_file())
+    assert after == pristine
+    assert subprocess.run(["git", "cat-file", "-e", oid], cwd=harness, capture_output=True).returncode != 0
+    # and its index still vouches for the copy's files, as clone() left it
+    assert git(harness, "diff-files", "--name-only") == ""

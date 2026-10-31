@@ -9,7 +9,8 @@
 `run` writes, per run, DIR/run<N>-<kind>/ (hooks.jsonl, invocations.jsonl, blocks.json,
 summary.json, transcripts/, and for traced runs relations.tsv, relation-steps.tsv,
 relation-events.tsv, outside-writes.txt, trace-stats.json), plus DIR/summary.tsv (one row per run),
-DIR/summary.json and, with two or more traced runs, DIR/determinism.txt. --arg
+DIR/summary.json and, with two or more traced runs, DIR/determinism.txt (whether they give the
+artifact check the same relation events). --arg
 values reach the driver as rp.args (for example a variant); --env
 values may name {home}, {harness}, {project}, {state} or {sb}, filled with the
 paths as the replay sees them. The sandbox and DIR must lie outside the
@@ -123,15 +124,16 @@ def run_one(sb: str, tree: str, out_dir: str, *, driver: str, mode: str, setting
 
 
 def determinism(out: str, dirs: list[str]) -> str:
-    files = [os.path.join(d, "relations.tsv") for d in dirs]
-    blobs = [open(f, "rb").read() for f in files]
-    if all(b == blobs[0] for b in blobs):
-        lines = blobs[0].count(b"\n")
-        verdict = (f"identical: {len(dirs)} traced runs, {lines} relations, "
-                   f"sha256 {hashlib.sha256(blobs[0]).hexdigest()}")
+    """Whether the traced runs give the artifact check the same relation events (differential.derived_events)."""
+    from .differential import derived_events
+    runs = [derived_events(d) for d in dirs]
+    blob = "".join(line + "\n" for line in runs[0]).encode("utf-8", "surrogateescape")
+    other = next((i for i, r in enumerate(runs) if r != runs[0]), None)
+    if other is None:
+        verdict = (f"identical: {len(dirs)} traced runs, {len(runs[0])} relation events, "
+                   f"sha256 {hashlib.sha256(blob).hexdigest()}")
     else:
-        diff = difflib.unified_diff(blobs[0].decode().splitlines(), blobs[1].decode().splitlines(),
-                                    files[0], files[1], lineterm="", n=0)
+        diff = difflib.unified_diff(runs[0], runs[other], dirs[0], dirs[other], lineterm="", n=0)
         verdict = "DIFFERENT\n" + "\n".join(list(diff)[:80])
     with open(os.path.join(out, "determinism.txt"), "w") as fh:
         fh.write(verdict + "\n")
@@ -142,7 +144,8 @@ def cmd_run(a) -> int:
     tree = os.path.abspath(a.tree)
     out = _outside_repo(a.out, tree)
     sb = _outside_repo(a.sandbox or os.path.join(out, "sb"), tree)
-    if a.rebuild or not os.path.isfile(os.path.join(sb, sandbox.MARK)) or "snapshot" not in sandbox.info(sb):
+    if a.rebuild or not os.path.isfile(os.path.join(sb, sandbox.MARK)) \
+            or not {"snapshot", "git_snapshot"} <= set(sandbox.info(sb)):
         print(f"building sandbox {sb} from {tree}")
         print(json.dumps(sandbox.build(tree, sb)))
     elif sandbox.info(sb).get("tree") != tree:

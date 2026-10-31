@@ -136,6 +136,11 @@ class Roots:
         return text
 
 
+def id_spans(text: str) -> list[tuple[int, int]]:
+    """Where generic() sees an id no driver registered as a whole token (a uuid, a long hex id)."""
+    return [m.span() for rx in (_UUID_RE, _HEX_RE) for m in rx.finditer(text)]
+
+
 def generic(text: str) -> str:
     """Ids no driver registered: uuids, long hex ids, git object names, temp-file names."""
     text = _GIT_OBJ_RE.sub(r"\1<obj>", text)

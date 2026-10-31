@@ -90,9 +90,20 @@ def load_events(run_dir: str) -> list[dict]:
                 continue
             comp, origin, actor, op, pattern, event, bulk, raw = parts
             out.append({"comp": norm_comp(comp), "origin": norm_comp(origin), "actor": actor, "op": op,
-                        "pattern": pattern, "event": int(event) if event.isdigit() else 0, "bulk": bulk == "bulk",
+                        "pattern": pattern, "event": int(event) if event.isdigit() else 0,
+                        "bulk": bool(bulk),     # a read rule (3) leaves out, whichever kind trace.py marked
                         "raw": raw})
     return out
+
+
+def derived_events(run_dir: str) -> list[str]:
+    """The relation events the artifact check derives from, normalised, sorted: each event's columns
+    but its raw path, without a read rule (3) leaves out and a path inside a git directory (git's
+    own store), which the derivation drops and whose presence git's racy-index timing can decide.
+    Two replays of one driver variant on one tree give the same list (row 19 rule (10))."""
+    return sorted({"\t".join(str(e[k]) for k in ("comp", "origin", "actor", "op", "pattern", "event"))
+                   for e in load_events(run_dir)
+                   if not (e["bulk"] and e["op"] == "read") and not git_store(e["pattern"])})
 
 
 def load_invocations(run_dir: str) -> dict[int, dict]:

@@ -38,10 +38,13 @@ Derivation rules, in the order row 19 states them:
     its use verbatim, rule (5); its exit status, and what a function of the
     chain's own module returns for it, are the chain's verdict).
 (3) Readers read content or names; a bulk read (trace.py: a program reading
-    most files of a directory it listed, `git add -A`) reads nothing; a hook
-    whose artifact reads in one run are exactly the triggering tool call's
-    target paths reads them only where the differential's content mutation
-    changes its decision.
+    most files of a directory it listed, `git add -A`) and a stat-cache read
+    (trace.py: a program comparing a work tree with the git index it read,
+    `git status`, which opens a file when its stat data cannot vouch for it,
+    a matter of timing for a file written in the index's second) read
+    nothing; a hook whose artifact reads in one run are exactly the
+    triggering tool call's target paths reads them only where the
+    differential's content mutation changes its decision.
 (4) Deciders: a reader whose decision changes on a mutation (E1's
     differential, runtime.py and tests/replay/differential.py: every reader in
     the shipped replays, the producer side's readers in the armed ones); without
