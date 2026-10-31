@@ -176,17 +176,24 @@ def session_dir(state):
     return working_root(state) / 'docs' / 'dev' / 'overnight' / sid
 
 
-def cycle_index(state):
+def cycle_index(state, written=()):
     """The number of the cycle in progress, read from the session's directory.
 
     A cycle ends with its PM retrospective (Step 20 writes
     retro-report-cycle<N>.json there), so the cycle in progress is the first
     one whose retrospective is not on disk. No state field counts cycles.
+
+    ``written``: the files a dispatch declares, read as not on disk yet, so the
+    answer is the cycle that dispatch runs in, at its dispatch (G1) and its
+    collection (G3): the PM retrospective's report, left by it or by an earlier
+    attempt of it, does not move that dispatch into the next cycle.
     """
     try:
         base = session_dir(state)
+        before = {os.path.realpath(str(p)) for p in written}
         n = 1
-        while (base / f'retro-report-cycle{n}.json').is_file():
+        while (base / f'retro-report-cycle{n}.json').is_file() and \
+                os.path.realpath(str(base / f'retro-report-cycle{n}.json')) not in before:
             n += 1
         return n
     except (OSError, ValueError, TypeError):

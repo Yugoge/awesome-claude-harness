@@ -962,8 +962,8 @@ class Night:
 
     def check_reports(self, heading: str, what: str) -> None:
         """The report check a step's text runs after PM's dispatch (check-overnight-reports.sh at Steps
-        2, 4 and 20; the base's text runs it at Step 3 only). The replay's reports are compliant, so a
-        failing check is reported as the run's error, not passed."""
+        2 and 4, and at Step 20 where a text still runs it; the base's text runs it at Step 3 only). The
+        replay's reports are compliant, so a failing check is reported as the run's error, not passed."""
         m = re.search(r"run `(~/\.claude/scripts/check-overnight-reports\.sh[^`]*)`", self.o.section(heading))
         if not m:
             return

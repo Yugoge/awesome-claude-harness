@@ -117,6 +117,19 @@ def test_cycle_index_counts_ended_cycles(tmp_path):
     assert overnight.cycle_index(state) == 2
 
 
+def test_cycle_index_of_a_dispatch_reads_what_it_wrote_as_not_yet_there(tmp_path):
+    """The retrospective a PM RETRO dispatch returns with ends the cycle it ran in: read with
+    that dispatch's own files as not yet written, the index is the cycle it ran in."""
+    state = _record(worktree_path=str(tmp_path))
+    base = tmp_path / "docs" / "dev" / "overnight" / SID
+    base.mkdir(parents=True)
+    (base / "retro-report-cycle1.json").write_text("{}")
+    (base / "retro-report-cycle2.json").write_text("{}")
+    assert overnight.cycle_index(state) == 3
+    assert overnight.cycle_index(state, written=[base / "retro-report-cycle2.json"]) == 2
+    assert overnight.cycle_index(state, written=[tmp_path / "docs" / "dev" / "qa-report-x.json"]) == 3
+
+
 # --------------------------------------------------------------------------
 # The script entry the shell callers and the launcher run
 # --------------------------------------------------------------------------
@@ -331,6 +344,55 @@ def test_collection_checks_the_dispatch_obligation(session):
     assert invalid.returncode == 2 and "dev-report" in invalid.stderr
     # A dispatch that carries no obligation declares nothing to check.
     assert _run("posttool-overnight-file-check.py", session, _agent("dev", "x")).returncode == 0
+
+
+def _retro_dispatch(cycle: int) -> dict:
+    task_id = "20261028-020202"
+    obligation = {
+        "task_id": task_id, "lane": None, "lane_set": None, "role": "pm",
+        "pipeline": "dev-overnight", "profile": "overnight", "dispatched_at": _iso(0),
+        "artifacts": [{"kind": "json", "path": f"docs/dev/overnight/{SID}/retro-report-cycle{cycle}.json",
+                       "schema": "retro-report.v1", "identity": {"task_id": task_id}}],
+    }
+    return _agent("pm", f'PM_MODE: RETRO\n<obligation v="1">{json.dumps(obligation)}</obligation>')
+
+
+def test_collection_checks_the_retrospective_that_ends_the_cycle(session):
+    """The PM retrospective returns with the report that ends its cycle: its collection is
+    checked against that cycle's contract (its Step 20 entry), so a missing or schema-invalid
+    retro report is refused there, naming the path, and a valid one passes."""
+    _triage_report(session, 1, fixes=1)
+    _run("posttool-subagent-track.py", session, _agent("pm", "PM_MODE: TRIAGE"))
+    dispatch = _retro_dispatch(1)
+    missing = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert missing.returncode == 2 and f"{SID}/retro-report-cycle1.json" in missing.stderr
+    report = session / "docs" / "dev" / "overnight" / SID / "retro-report-cycle1.json"
+    report.write_text(json.dumps({"retro_id": "rr-1", "task_id": "20261028-020202"}))
+    invalid = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert invalid.returncode == 2 and "retro-report-cycle1.json" in invalid.stderr
+    report.write_text(json.dumps({
+        "retro_id": "rr-1", "task_id": "20261028-020202", "session_id": SID, "cycle_number": 1,
+        "is_final_cycle": False, "plan_vs_outcome": [], "cycle_stats": {"issues_fixed": 1},
+        "unresolved_issues": [], "final_summary": None}))
+    valid = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert valid.returncode == 0, valid.stderr
+    assert "valid (step=20)" in valid.stdout
+
+
+def test_a_retrospective_dispatched_again_stays_in_its_cycle(session):
+    """After its collection refused the report, PM RETRO is dispatched afresh (Step 20): the
+    report its first run left is one the new dispatch declares, so the dispatch check reads the
+    cycle that report would end and allows the Step 20 entry. A dispatch that declares no such
+    report is checked against the cycle on disk, the next one, whose exploration has no Step 20."""
+    _triage_report(session, 1, fixes=1)
+    _run("posttool-subagent-track.py", session, _agent("pm", "PM_MODE: TRIAGE"))
+    report = session / "docs" / "dev" / "overnight" / SID / "retro-report-cycle1.json"
+    report.write_text(json.dumps({"retro_id": "rr-1"}))
+    _bookmark(session, "20")
+    again = _run("pretool-subagent-enforce.py", session, _retro_dispatch(1))
+    assert again.returncode == 0, again.stderr
+    refused = _run("pretool-subagent-enforce.py", session, _agent("pm", "PM_MODE: RETRO"))
+    assert refused.returncode == 2 and "no required_calls entry for step '20'" in refused.stderr
 
 
 # --------------------------------------------------------------------------

@@ -16,7 +16,9 @@ that carries no obligation declares nothing to check here.
 
 The session is the one whose overnight state record the returned call's
 session owns; whether its window is live is lib.overnight.state_verdicts's
-verdict, and the cycle is lib.overnight.cycle_index.
+verdict, and the cycle is lib.overnight.cycle_index's, the one the dispatch ran
+in: the PM retrospective (Step 20) returns with the report that ends its
+cycle, and that report is checked against that cycle's contract.
 
 HARD CUTOVER: when the cycle has no ``cycle-contract.json`` (before PM TRIAGE
 returns, or outside /dev-overnight), exit 0 silently.
@@ -92,7 +94,15 @@ def _run_check(data: dict) -> int:
     state = overnight.session_state(session_id)
     if state is None or not overnight.state_verdicts(state).window_live:
         return 0
-    cycle_id = overnight.cycle_index(state)
+    parsed = obligation.parse_obligation(prompt)
+    if not isinstance(parsed, obligation.ParsedObligation):
+        return 0
+    root = overnight.working_root(state)
+    artifacts = [a for a in parsed.obligation.get('artifacts') or [] if isinstance(a, dict)]
+    # The cycle the dispatch ran in: what it declared is read as not yet written, since the
+    # report a PM retrospective returns with is the one that ends its cycle.
+    cycle_id = overnight.cycle_index(state, written=[root / a['path'] for a in artifacts
+                                                     if isinstance(a.get('path'), str) and a['path']])
     contract = contract_runtime.load_contract(session_id, cycle_id, state)
     if not isinstance(contract, dict):
         # Hard cutover: no contract for this cycle yet — silent passthrough.
@@ -100,14 +110,7 @@ def _run_check(data: dict) -> int:
     entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt))
     if entry is None:
         return 0
-    parsed = obligation.parse_obligation(prompt)
-    if not isinstance(parsed, obligation.ParsedObligation):
-        return 0
-    root = overnight.working_root(state)
-    errors = [error
-              for artifact in parsed.obligation.get('artifacts') or []
-              if isinstance(artifact, dict)
-              for error in _artifact_errors(artifact, root)]
+    errors = [error for artifact in artifacts for error in _artifact_errors(artifact, root)]
     if errors:
         _emit_block(agent_type, session_id, cycle_id, errors)
         return 2

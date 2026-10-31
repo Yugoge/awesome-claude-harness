@@ -6,9 +6,11 @@
   registered schema each; G2 checks them at the producer's stop. While
   CLAUDE_OBLIGATION_STOPGATE leaves G2 advisory, the prose validations, the
   Step 6 legacy fallback and check-overnight-reports.py are those faults' only
-  stop (E4) and stay until rollback step (7) sets it to block. Each schema
-  admits the report its producer's agent file declares and refuses what the
-  prose checks refuse.
+  stop (E4) and stay until rollback step (7) sets it to block. The retro
+  report's are stopped at its collection by G3 (posttool-overnight-file-check.py,
+  the cycle contract's Step 20 entry), so Step 20 checks it no second time.
+  Each schema admits the report its producer's agent file declares and refuses
+  what the prose checks refuse.
 - scripts/overnight-status.sh reads the record through lib/overnight.py and
   exits non-zero once the window has closed (the TIME CHECK routes on that).
 - scripts/check-overnight-reports.sh runs check-overnight-reports.py, which
@@ -204,13 +206,27 @@ def test_pm_and_specialist_dispatches_declare_their_reports():
 
 def test_prose_rechecks_and_the_legacy_fallback_stay_until_g2_blocks():
     text = COMMAND.read_text(encoding="utf-8")
-    for kept in ("**Validate test plan**", "**Validate triage report**", "**Validate retro report**",
+    for kept in ("**Validate test plan**", "**Validate triage report**",
                  "**Sanity checks on each report**", "check-overnight-reports",
                  "**If triage report is missing or invalid**", "**If triage report exists and is valid**",
                  "Issues do not overlap with `addressed_issues`"):
         assert kept in text, kept
     for gone in ("Check JSON syntax after modification", "settings.json has syntax error"):
         assert gone not in text, gone
+
+
+def test_the_retro_report_is_checked_at_its_collection_and_not_again_at_step_20():
+    """The PM retrospective's dispatch is its cycle contract's Step 20 entry, so G3
+    (posttool-overnight-file-check.py) checks its report against the obligation's schema when
+    it returns, with the shipped settings (test_overnight_one_state_reader.py runs the hook on
+    a missing, an invalid and a valid report). Step 20 then runs no second check of it (E4: a
+    re-check goes once the producer side stops its faults with the shipped settings)."""
+    text = COMMAND.read_text(encoding="utf-8")
+    step20 = text.split("### Step 20:", 1)[1].split("### Step 21:", 1)[0]
+    assert "check-overnight-reports" not in step20
+    assert "**Validate retro report**" not in text
+    assert "hooks/posttool-overnight-file-check.py" in step20
+    assert "re-invoke PM-Retro (a fresh dispatch" in step20
 
 
 # --------------------------------------------------------------------------

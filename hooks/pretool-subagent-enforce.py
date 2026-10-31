@@ -8,7 +8,8 @@ For a /dev-overnight session (the session owns an overnight state record):
      TRIAGE, steps 2-4) from scripts/todo/dev-overnight.py ``_STEPS``, plus
      the cycle's contract once PM TRIAGE returned (written by the PM TRIAGE
      handler in posttool-subagent-track.py). The cycle is
-     ``lib.overnight.cycle_index``.
+     ``lib.overnight.cycle_index``'s, the one the dispatch runs in (the files
+     its obligation declares read as not yet written).
   2. Derive the current step from the checklist the transcript records
      (lib.todo_canonical.checklist): the in-progress step of the last list the
      step rules accepted, in every cycle.
@@ -70,9 +71,27 @@ def _resolve_session(stdin_data: dict) -> tuple[str, dict | None]:
     return session_id, overnight.session_state(session_id)
 
 
-def _allowed_calls(overnight_state: dict):
+def _declared_paths(stdin_data: dict, overnight_state: dict) -> list:
+    """The files the about-to-fire dispatch's obligation declares, under the
+    session's working root (none when its prompt carries no obligation)."""
+    from lib import obligation  # an overnight session's dispatch only
+    ti = stdin_data.get('tool_input') or {}
+    parsed = obligation.parse_obligation(ti.get('prompt', '') if isinstance(ti, dict) else '')
+    if not isinstance(parsed, obligation.ParsedObligation):
+        return []
+    root = overnight.working_root(overnight_state)
+    return [root / a['path'] for a in parsed.obligation.get('artifacts') or []
+            if isinstance(a, dict) and isinstance(a.get('path'), str) and a['path']]
+
+
+def _allowed_calls(overnight_state: dict, written=()):
     """The calls this cycle allows, as a contract-shaped dict, or None when the
     canonical steps cannot be read (nothing to derive, so nothing to enforce).
+
+    The cycle is the one the dispatch runs in: ``written``, the files it
+    declares, are read as not yet written, so a PM retrospective dispatched
+    again after its collection refused its report stays in the cycle that
+    report would end.
 
     A cycle contract that is not a JSON object is returned as is, so the block
     names it (Case M) instead of falling back to the exploration steps.
@@ -80,7 +99,7 @@ def _allowed_calls(overnight_state: dict):
     steps = contract_runtime.overnight_steps()
     if not steps:
         return None
-    cycle_id = overnight.cycle_index(overnight_state)
+    cycle_id = overnight.cycle_index(overnight_state, written=written)
     calls = contract_runtime.exploration_calls(steps)
     contract = contract_runtime.load_contract(
         overnight_state.get('session_id', ''), cycle_id, overnight_state)
@@ -256,7 +275,7 @@ def _main() -> None:
     if overnight_state is None:
         # Not an overnight session: no cycle contract governs it.
         sys.exit(0)
-    contract = _allowed_calls(overnight_state)
+    contract = _allowed_calls(overnight_state, _declared_paths(stdin_data, overnight_state))
     if contract is None:
         sys.exit(0)
     step = _current_step_label(stdin_data)

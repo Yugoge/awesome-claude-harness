@@ -1560,14 +1560,14 @@ Use Agent tool with:
 
 **Wait for PM-Retro to complete.**
 
-**Validate retro report**: run `~/.claude/scripts/check-overnight-reports.sh docs/dev/overnight/<session_id>`. Its line for `retro-report-cycle<N>.json` checks the report PM's obligation declares against the schema that obligation names (`schemas/retro-report.v1.json`); among that schema's rules it verifies:
+**Retro report**: this dispatch is the Step 20 entry of the cycle's contract, so when it returns `hooks/posttool-overnight-file-check.py` checks `retro-report-cycle<N>.json`, the report PM's obligation declares, against the schema that obligation names (`schemas/retro-report.v1.json`); among that schema's rules:
 - File exists and is valid JSON
 - Has `plan_vs_outcome` array
 - Has `unresolved_issues` array
 - Has `cycle_stats` object
 - If `FINAL_CYCLE: true` (the report's `is_final_cycle`): has `final_summary` object
 
-If validation fails, log warning and proceed (retro is informational, not blocking).
+If that check refuses the report (its message names the path and the failing rule), re-invoke PM-Retro (a fresh dispatch: same obligation template, fresh `dispatched_at`; maximum 2 retries). If it still fails, log a warning and proceed (retro is informational, not blocking).
 
 **Check qa_rerun_required**: Read the retro report's `qa_rerun_required` field.
 - If `qa_rerun_required: true`: re-invoke QA for the pipelines listed in `qa_rerun_reasons`. Use the same QA invocation pattern as Step 14-16, but pass additional context: `"This is a PM-requested QA re-run. Reasons: <qa_rerun_reasons>. Focus on the specific concerns raised."` After QA re-run completes, proceed to Step 21 (do NOT re-invoke RETRO — avoid infinite loops).

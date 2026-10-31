@@ -50,10 +50,13 @@ Derivation rules, in the order row 19 states them:
     the shipped replays, the producer side's readers in the armed ones); without
     a measurement, a static branch to an exit or a block on a read of the
     artifact (E1's fallback), armed-only when the hook reads a gate switch the
-    armed copy sets otherwise (E4). Deciders of one artifact are one rule only
-    when their deciding reads are the same code site (the one function they all
-    call). Over E2's budget the differential runs only for the shipped readers
-    outside the allowed positions (E1's fallback).
+    armed copy sets otherwise (E4); a branch on a test that the file is there
+    (it exists, is a file, may be opened) decides on its removal alone, since
+    the content mutation leaves that answer as it was. Deciders of one
+    artifact are one rule only when their deciding reads are the same code
+    site (the one function they all call). Over E2's budget the differential
+    runs only for the shipped readers outside the allowed positions (E1's
+    fallback).
 (5) Position of a deciding read: from the hook's event and matcher
     (settings.json) and the event's payload: the producer side (the artifact's
     producer's own stop or tool call), G1 (PreToolUse on Agent), G3
@@ -967,6 +970,10 @@ class _Ctx:
         rels = [r for r in self.recs if r["kind"] == "relation"]
         content = {(r["site"], r["path"]) for r in rels if _content_relation(r)}
         names_only = {(r["site"], r["path"]) for r in rels if not _content_relation(r)} - content
+        probes: dict = {}   # (the read's own site, path): how it reads the file's name
+        for r in rels:
+            if r["op"] == "read" and r.get("mode") == "name":
+                probes.setdefault(((r.get("through") or [r["site"]])[-1], r["path"]), set()).add(r.get("via") or "")
         for d in self.recs:
             if d["kind"] != "deciding" or d["evidence"] not in ("branch", "except", "assert"):
                 continue
@@ -989,10 +996,13 @@ class _Ctx:
                 if key is None:
                     continue
                 keys = [key]
+            # a branch on a presence test decides on the file's removal alone (rule (4)'s mutations)
+            how = "removed" if d.get("read_mode") == "name" and _presence_only(
+                probes.get(((d.get("read_through") or [d["read_site"]])[-1], d["path"]))) else "any"
             for key in keys:
-                self._static_decision(d, key)
+                self._static_decision(d, key, how)
 
-    def _static_decision(self, d: dict, key: str) -> None:
+    def _static_decision(self, d: dict, key: str, how: str = "any") -> None:
         a = self.m.artifacts[key]
         who = comp_identity(d["component"])
         meas = self.measured.get((who, key))
@@ -1001,7 +1011,7 @@ class _Ctx:
         settings = "static-armed" if d["component"] in self.switched() else "static"
         for event, matcher in self._registrations(d["component"]):
             pos = self._position(a, event, None, None, who, "static", matcher=matcher)
-            a.decisions.append(Decision(who, pos, d["decision_site"], "static", "any", settings, event,
+            a.decisions.append(Decision(who, pos, d["decision_site"], "static", how, settings, event,
                                         matcher or "", rule=self._static_rule(d)))
         if not any(x.who == who and x.op == "read" for x in a.readers):
             a.readers.append(Rel(who, "read", d["read_site"], "static"))
@@ -1396,6 +1406,15 @@ _LOCK = re.compile(r"\.(?:lock|lck)$")
 
 
 _DIR_TEST = re.compile(r"(^|\.)(is_?dir)$|^test -d$")
+# rule (4): a test that a file is there (exists, is a file or a link, is non-empty, may be
+# opened), as against one of its content or of its times: E1's 'invalid' mutation rewrites the
+# file in place and leaves every such answer as it was, so only its removal can change them
+_PRESENCE_TEST = re.compile(r"(^|\.)(exists|lexists|is_?file|is_?symlink|islink|access)$|^test -[aefsrwxLhGO]$")
+
+
+def _presence_only(vias) -> bool:
+    """Every read of a deciding read's site is a presence test (_PRESENCE_TEST)."""
+    return bool(vias) and all(_PRESENCE_TEST.search(v or "") for v in vias)
 
 
 def _local_layer(key: str, tree_files: set) -> bool:
@@ -1776,6 +1795,10 @@ def _rechecks(a: Artifact, key: str, writers_txt: list, ctx=None) -> list[Violat
         shipped = rejects(how, "shipped")
         armed = rejects(how, "armed")
         sites = sorted({d.evidence for d in ds})
+        # the reader's rules on this mutation: its decisions on it and those that may stand for it
+        # (a static branch on a content read decides on any mutation, rule (4))
+        rules = {r for (w, p, h), xs in groups.items() if w == who and p == position
+                 and (h == how or "any" in (h, how)) for d in xs for r in _rules(d)}
         if shipped:
             out.append(Violation("6-recheck", key, f"re-check by {who}: the producer side rejects mutation '{how}' "
                                  f"with the tree's switches", writers_txt, _dec(ds), position,
@@ -1784,7 +1807,7 @@ def _rechecks(a: Artifact, key: str, writers_txt: list, ctx=None) -> list[Violat
             continue    # E4: the fault's only stop while its gate is advisory (listed by the map)
         elif ctx is not None and ctx.code_produced(a):
             continue    # rule (6)'s use: no gate can hold a rule on what only code writes
-        elif {r for d in ds for r in _rules(d)} & allowed_rules:
+        elif rules & allowed_rules:
             continue    # rule (6)'s use: it takes the verdict of the one function a decider at an
             # allowed position decides by (row 13: every other deciding reader calls it and decides
             # its own action from what it returns)

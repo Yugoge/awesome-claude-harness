@@ -616,6 +616,59 @@ def test_a_decision_elsewhere_that_takes_an_allowed_deciders_verdict_is_its_use(
     assert [v.rule for v in C._rechecks(a, a.key, [])] == ["6-move"]
 
 
+def test_a_branch_on_a_presence_test_decides_on_the_removal_alone(tmp_path):
+    """E1's content mutation rewrites the file in place: a branch on whether it is there keeps
+    its answer, so that static decision stands for the removal alone, while a branch on the
+    file's content or on its times stands for any mutation. A producer side that only tests
+    presence rejects no invalid content, so a consumer's decision on invalid content is no
+    re-check of it; its decision on the removal is."""
+    settings = _registered(("PreToolUse", "Agent", "hooks/g1.py"))
+    root = make_tree(tmp_path, {
+        "hooks/w.py": hook('open(harness_state_dir() + "/claude-gate.json", "w").write("{}")\n'),
+        "hooks/g1.py": hook('''
+            if not os.path.exists(harness_state_dir() + "/claude-gate.json"):
+                sys.exit(2)
+        '''),
+        "scripts/age.py": hook('''
+            if os.path.getmtime(harness_state_dir() + "/claude-gate.json") < 0:
+                sys.exit(2)
+        '''),
+        "scripts/load.py": hook('''
+            import json
+            if not json.load(open(harness_state_dir() + "/claude-gate.json")):
+                sys.exit(2)
+        '''),
+    }, settings)
+    m, _vs = check(root)
+    a = m.artifacts["<state>/claude-gate.json"]
+    hows = {(d.who, d.how) for d in a.decisions}
+    assert ("hooks/g1.py", "removed") in hows and ("hooks/g1.py", "any") not in hows
+    assert ("scripts/age.py", "any") in hows and ("scripts/load.py", "any") in hows
+    a.decisions = [d for d in a.decisions if d.who == "hooks/g1.py"] + [
+        C.Decision("scripts/use.py", "elsewhere", "x/shipped#9", "differential", how, "shipped", rule="scripts/use.py:3")
+        for how in ("removed", "invalid")]
+    found = {(v.rule, v.message.split("mutation '")[1].split("'")[0]) for v in C._rechecks(a, a.key, [])}
+    assert found == {("6-recheck", "removed"), ("6-move", "invalid")}
+
+
+def test_a_presence_test_beside_a_verdict_the_reader_takes_is_judged_with_it():
+    """A consumer that tests that a report is there before it loads it through the one function
+    an allowed decider decides by decides on the removal through both reads; the one it shares
+    is that function's verdict (rule (6)'s use), as when both stood for any mutation. Its
+    presence test alone is a rule of its own."""
+    a = C.Artifact("<proj>/docs/dev/r.json")
+    a.writers.append(C.Rel("main", "write", "x", "runtime"))
+    a.decisions = [C.Decision("hooks/stop-x.py", "own stop", "e1", "differential", "removed", "shipped",
+                              rule="hooks/lib/r.py:load"),
+                   C.Decision("scripts/use.py", "elsewhere", "s1", "static", "removed", "static",
+                              rule="scripts/use.py:4"),
+                   C.Decision("scripts/use.py", "elsewhere", "s2", "static", "any", "static",
+                              rule="hooks/lib/r.py:load")]
+    assert not C._rechecks(a, a.key, [])
+    a.decisions.pop()
+    assert [v.rule for v in C._rechecks(a, a.key, [])] == ["6-move"]
+
+
 def _calls_run(calls: dict) -> C.Run:
     """A replay reduced to its invocations: seq -> a tool name (a tool call) or None (a prompt)."""
     r = C.Run("x", "shipped", "")
