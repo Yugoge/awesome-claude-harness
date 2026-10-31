@@ -13,8 +13,9 @@ consecutive sub-phases to different accounts, and sub-phases marked parallel to 
   and the new unit tests for that sub-phase's rows, change in that sub-phase's commit. An acceptance test that covers
   several sub-phases is assigned to the last of them and run there whole; earlier sub-phases still keep CI green.
 - Phase base: an acceptance test that compares with `origin/master`, a "before" or "pre-update" tree, or a session
-  started before the phase, reads that as the phase base, the master commit just before the phase's first sub-phase
-  merged, wherever the test runs; a net code cap or diff it measures is the phase total against that base.
+  started before the phase, reads that as the phase base, the master commit just before the first of the phase's
+  sub-phases merged (whichever merged first), wherever the test runs; a net code cap or diff it measures is the
+  phase total against that base.
 - Fault replays per PR: D25's merge rule binds every sub-phase PR, so each one adds the fault replay for each process
   class it changes, in its own PR, whichever sub-phase holds the acceptance test that lists those replays.
 - Not split: P1b (finished as PR #8), P6 (M), P11 (M).
@@ -42,7 +43,8 @@ specification; its rules hold except where this header narrows them.
 - Tests travel with code: in your commit, change the existing tests that pin code you change, and write the new
   unit tests for your rows, even where the prompt's tests row or acceptance test lists them elsewhere.
 - Where your acceptance test compares with `origin/master` or a "before" tree, use the phase base: the master commit
-  just before <PHASE>-1 merged. Add the fault replay for each process class you change (D25's merge rule).
+  just before the first sub-phase of <PHASE> merged (whichever merged first). Add the fault replay for each process
+  class you change (D25's merge rule).
 - Everything else in the prompt binds you unchanged: its owner rulings, its DO NOT list, its merge rule. A net code cap
   in the prompt is the phase's total across all its sub-phases; your PR states your sub-phase's net and the phase's
   running total with the merged sub-phases.
@@ -87,12 +89,12 @@ Source: `prompts/short/P1c.md`.
 | P1c-10 | CI time measured and the suite jobs split | X10 | A9 | `baseline.yml` (X10 split), `tests/TESTING.md` | P1c-9 | none | S |
 | P1c-11 | G2 armed in settings.json (last commit), phase close-out | R9, X3; R21 (parts for R9 and X3's deletions; claims-check lines); shipped-mode F1, F1q, F2, F2j, F2g (with R9) | A3, A4, A7, A8, A11, A12, A13, A14, A15, A16, A17 | `settings.json` (env only), X3's deleted copies and the tests pinning them | P1c-10 | none | M |
 
-Coverage: rows R1-R20 -> each in exactly one sub-phase; two rows are assigned part by part, as the header allows: R6 (its coverage-step clause, which the prompt's "Merge rule from P1c on" section specifies as its own step, in P1c-2; the rest in P1c-1) and R21 (a same-commit tests row, P1c.md:176-178: each part with the row whose tests it changes); X1-X10 -> each in exactly one; suite parts (1), (2), (3), (4) and the merge-rule coverage step -> each in exactly one; faults F1, F1q, F2, F2j, F2g, F3a, F3q, F3b, F4, F4c, F4s, F5, F5f, F6, F6o, F7, F7b, F8, F8q, F8p, F8c (21) and regressions R-P1, R-E1, R-N1, R-V1 -> each with its fix (only F1, F1q, F2, F2j, F2g's shipped mode lands with R9, as R9 says); acceptance tests A1-A17 -> each in exactly one sub-phase.
+Coverage: rows R1-R20 -> each in exactly one sub-phase; two rows are assigned part by part, as the header allows: R6 (its coverage-step clause, which the prompt's "Merge rule from P1c on" section specifies as its own step, in P1c-2; the rest in P1c-1) and R21 (a same-commit tests row, P1c.md:176-178: each part with the row whose tests it changes); X1-X10 -> each in exactly one; suite parts (1), (2), (3), (4) and the merge-rule coverage step -> each in exactly one, except that suite (1) and X1's scenario extension are assigned part by part: each (1) scenario P1c-1 cannot land green moves to its fixing sub-phase (see the D25 note); faults F1, F1q, F2, F2j, F2g, F3a, F3q, F3b, F4, F4c, F4s, F5, F5f, F6, F6o, F7, F7b, F8, F8q, F8p, F8c (21) and regressions R-P1, R-E1, R-N1, R-V1 -> each with its fix (only F1, F1q, F2, F2j, F2g's shipped mode lands with R9, as R9 says); acceptance tests A1-A17 -> each in exactly one sub-phase.
 
 Notes:
 - Order: P1c-1 -> P1c-2 -> {P1c-3 || P1c-4} -> P1c-5 -> P1c-6 -> P1c-7 -> P1c-8 -> P1c-9 -> P1c-10 -> P1c-11. Shared files force the line: dev.md/dev-command.md (R12 before R18), changelog-analyst.md (R14 before R18), dev-overnight.md (R13/R19 before R17), pretool-todo-validate.py and posttool-subagent-track.py (R16 before R17); R19 needs R10's e2e fix; P1c-6 follows P1c-5 because both add fault replays and drop `DEVIATION:` steps in the same drivers, R19 may fall back to X4 (b)'s parser fixes, and both apply X5 to P2's mechanism (one mechanism, P1c.md:80). Sum 10 days (9 M, 2 S; critical path about 9 days, as only P1c-3 and P1c-4 overlap) against the ~6-day estimate: P1c-1 must hold R1 and R6 whole, and every sub-phase carrying a multi-sandbox replay is M.
 - P1c-3 and P1c-4 share only tests/replay/test_faults.py, test_regressions.py and the drivers: each adds its own replays there and changes no other's; the second to merge merges origin/master (merge commit) and runs the suite again before merge.
-- D25: P1c-1 creates the suite on P1b's runner and ten drivers as merged (X1), with both modes, the fault harness and the CI suite jobs; from its merge every sub-phase and later phase merges with the suite green. The suite's definitions (gate block, hook error, expected producer, next round, human event, HX, terminal) are R1's glue. P1b's kept `DEVIATION:` steps stay in the drivers until the R18 (P1c-5) or R19 (P1c-6) commit that fixes the block removes them with its replay; none is added. A (1) scenario P1c-1 adds that meets a base block outside P1b's hand-off lands, with its replay, in the sub-phase of the row that fixes that block (fix and replay together), so P1c-1 merges green without a new `DEVIATION:` step or skip. A3's head grep at P1c-11 is the phase-end check.
+- D25: P1c-1 creates the suite on P1b's runner and ten drivers as merged (X1), with both modes, the fault harness and the CI suite jobs; from its merge every sub-phase and later phase merges with the suite green. The suite's definitions (gate block, hook error, expected producer, next round, human event, HX, terminal) are R1's glue. P1b's kept `DEVIATION:` steps stay in the drivers until the R18 (P1c-5) or R19 (P1c-6) commit that fixes the block removes them with its replay; none is added. A (1) scenario P1c-1 adds that meets a base block no kept `DEVIATION:` step of P1b's drivers already carries on that scenario's path (a P1b hand-off block met at a new point included) lands, as that fix's replay, in the latest sub-phase holding a row that fixes a block it meets (a block no other row names is a process defect fixed under X4 with R18 in P1c-5). P1c-1 thus merges green without a new `DEVIATION:` step or skip. P1c-1's PR names each such scenario with the block's hook text and its fixing row or rows; the reviewer adds the scenario to that sub-phase's rows and items when handing it out, and that sub-phase's PR runs it in both modes. A3's head grep at P1c-11 is the phase-end check.
 - Coverage step: R6 is otherwise whole in P1c-1; its coverage-step clause lands in P1c-2 together with R4 and R-V1, so the step has a (4) trace to read. From P1c-2 every sub-phase PR's CI runs it on its own diff, so every fix sub-phase is judged. P1c-1 changes only tests/replay/, the workflow and TESTING.md, plus any X2 writer fix its write audit forces; those are judged by A8 at P1c-11, read as the step on the whole phase diff.
 - Fix and replay together: each fix row carries the fault and regression replays listed beside it. Per R9's own text, the shipped-mode replays of F1, F1q, F2, F2j, F2g land in R9's commit, the last of P1c-11; their armed-mode replays land with the fixes in P1c-3. If the base already sets STOPGATE `block` (X3's first branch), both modes land in P1c-3 and R9 changes nothing.
 - R21 and A10 by sub-phase: each fix sub-phase changes or deletes (named, D17) the tests pinning its own rows and fixes any claims-check line it made false, in the fixing commit (TC-54), and writes in that commit the unit tests A10 names for its own rows (R7, R8, R10-R14, R16-R20). P1c-8, which holds R17 (the last of A10's rows), runs A10 over all of them and records the command and output.
@@ -141,20 +143,20 @@ Source: `prompts/short/P3.md`.
 | P3-3 | Plain failing G2 stop, no arbitration phases; 60 s replay window; codex-enforce skips close/commit | R6, R7, R10, R11; R16 for them (hooks/tests/test_progress_measure.py, test_artifact_contract_enforce.py incl. test_l2_ac7/test_l2_ac13; new: R10, /redev minting as /dev, R11) | A4, A9, A10, A19 | `hooks/lib/progress_measure.py`, `hooks/subagentstop-artifact-contract-enforce.py`, `hooks/prompt-workflow.py`, `hooks/subagentstop-codex-enforce.py` | none (phase start) | P3-1, P3-2 | S |
 | P3-4 | Warning commit: scoped and validated aggregate check, close-side exemptions, G2 freshness and lane echo, G1 dispatch order; callers on the disposition | R12, R13, R14, R15, R17 (warning-only, per the "Warning and promotion" item); R16 for them (test_gitignore_preflight_close_contract.py, test_obligation_gate.py, test_artifact_contract_enforce.py G2 part; new: R12-R14, R17) | A11, A13, A18 | `hooks/pretool-aggregate-check.py`, `hooks/pretool-gitignore-preflight.py`, `hooks/subagentstop-artifact-contract-enforce.py`, `hooks/pretool-obligation-gate.py`, `agents/dev.md`, `agents/qa.md` | P3-2, P3-3 | none | M |
 | P3-5 | Armed replay, then promotion commit (R12(b), R14, R17 exit 2) | promotion commit of the "Warning and promotion" item; R17's ordering rule and R14(a) as A3's replay and A12's armed replay decide them (any change to P3-4's warning-only code lands before the promotion commit); R16 for it (the R12(b), R14 and R17 cases in P3-4's new tests, test_obligation_gate.py and test_artifact_contract_enforce.py move from warning/exit 0 to exit 2 in the promotion commit) | A3, A12, A16 | `hooks/pretool-aggregate-check.py`, `hooks/subagentstop-artifact-contract-enforce.py`, `hooks/pretool-obligation-gate.py` | P3-4; P2's arming sub-phase merged | none | M |
-| P3-6 | Whole-phase checks and the phase's fault replays | A20's fault replays (dev, close, commit stages; the promoted checks) | A1, A8, A14, A15, A17, A20 | P1c's replay suite (`tests/replay/`) | P3-5 | none | M |
+| P3-6 | Whole-phase checks and the phase's fault replays | R1's reader coverage as A8 decides it (a coverage change to the reader P3-2 verified lands here, with its test); A20's full suite and fault-coverage step over the merged phase (its fault replays land with the code whose process class they replay, per the header: the dev, close and commit stage replays in P3-2, the promoted-check replays in P3-5) | A1, A8, A14, A15, A17, A20 | `hooks/lib/obligation.py` (only if A8 needs it) | P3-5 | none | M |
 
 Coverage: rows R1, R2, R3, R4, R5, R6, R7, R10, R11, R12, R13, R14, R15, R16, R17 (no R8, R9 in the prompt) -> each in exactly one sub-phase, R16 is a list of test files and new tests: each listed file and each new test lands in exactly one sub-phase, with the row it tests (see notes); acceptance tests A1-A20 -> each in exactly one sub-phase.
 
 Notes:
-- Merge order: P3-1 -> P3-2; P3-3 alongside either; P3-4 after P3-2 and P3-3; P3-5, then P3-6 last. Sum 5 days (S+M+S+M+M+M) against the L estimate of about 3 days; P3-5 carries A3, the five-sandbox armed replay (A12) and A16 before promotion, and P3-6 the whole-phase checks and A20's fault replays, so neither exceeds M.
+- Merge order: P3-1 -> P3-2; P3-3 alongside either; P3-4 after P3-2 and P3-3; P3-5, then P3-6 last. Sum 5 days (S+M+S+M+M+M) against the L estimate of about 3 days; P3-5 carries A3, the five-sandbox armed replay (A12) and A16 before promotion, and P3-6 the whole-phase checks and A20's full run, so neither exceeds M.
 - Provider coupling: the resolver exposes `ac_deviation_provider()` and passes `deviation=` to the aggregator; dev-lifecycle forwards it too. P3-1 (R4) stops dev-lifecycle using it and drops close-route-select's lookup of constants R2 deletes. R2 deletes the provider "with R3's deviation parameters", so R2 and R3 stay together in P3-2. Master never holds a caller of a deleted name.
 - R16 is one row, but its test edits must land with the code they test (the prompt's test-dispositions item: "move a test also checking live behaviour to the decided outcome ... a prose pin: in its prose's commit", and D17 "fix failing live tests"), or master breaks. So each sub-phase takes R16's files and new tests for its own rows, and each test edit lands in exactly one sub-phase. test_resolve_dev_artifact_chain.py, test_ac_deviation_record_chain.py and test_ac_deviation_fanout_consumer.py are edited in P3-1 (their dev-lifecycle and close-route-select tests, with R4) and in P3-2 (the rest), in that order. test_artifact_contract_enforce.py is edited in P3-3 (R6/R7, l2_ac7/l2_ac13), P3-4 (R14 warning) and P3-5 (R14 promotion), in that order; test_obligation_gate.py and the R12/R17 new tests in P3-4 (warning) and P3-5 (promotion).
 - "Warning and promotion": R12(b), R14 and R17 warn with R15 in one commit (P3-4, R12 kept whole). A12's armed replay runs between the commits on master, after P3-4 and P2's arming sub-phase have merged and P3-5 has merged origin/master (merge commit, no rebase). P3-5 then adds the promotion commit. A12 sits in P3-5 because it covers both commits. Its warning-commit cases run on P3-4's merged head before the promotion.
 - A3 covers the R2 disposition sequences (P3-2) and the G1 replay. That replay denies only after promotion, so A3 sits in P3-5. R17's ordering rule ([INFERRED]) ships warning-only in P3-4, and A3 settles it before promotion.
-- Whole-phase tests sit in P3-6: A1 (pytest over every touched file), A14 (whole diff), A15 (baseline), A17 (net cap, the phase total across all six PRs: <= -50) A8 (reader coverage over every gap of A2-A6, the last sub-phase where A3's and A4's gaps exist) and A20 (full replay suite, per-stage and promoted-check fault replays). D25 still binds every PR: CI and P1c's replay suite green on each head, and each PR re-runs its tests after merging origin/master. A16 (master-settings replay across all rows plus both commits) stays in P3-5 as the in-flight guard of the promotion.
+- Whole-phase tests sit in P3-6: A1 (pytest over every touched file), A14 (whole diff), A15 (baseline), A17 (net cap, the phase total across all six PRs: <= -50) A8 (reader coverage over every gap of A2-A6, the last sub-phase where A3's and A4's gaps exist) and A20 (full replay suite and fault-coverage step over the phase; its per-stage replays are added in P3-2 and its promoted-check replays in P3-5). D25 still binds every PR: CI and P1c's replay suite green on each head, and each PR re-runs its tests after merging origin/master. A16 (master-settings replay across all rows plus both commits) stays in P3-5 as the in-flight guard of the promotion.
 - Other multi-sub-phase tests sit in the last sub-phase they cover. A7 (resolver, aggregator, dev-lifecycle, close-route-select, qa.md) goes in P3-2. A13 (Bash lines from R4/R15, disposition run) and A18 (D24 table: P3-2 and P3-3 artifacts, plus moving the `resolve_chain` callers in dev-lifecycle, close-route-select and G2's `_wire_qa_chain` to P3-2's function) go in P3-4. A11 (R11 in P3-3, R12(a)/R13 in P3-4) also goes in P3-4. A10 is a placeholder with no test, kept with R10.
 - Shared with P2: P3-4 and P3-5 edit G1's `main` and G3 near `_run_obligation_barrier`. Whichever PR merges second merges origin/master and keeps both sides. R13 adds profiles to the preflight's copy only while the sub-phase's base still has it. P2's merge state decides the `${CLAUDE_HOME:-$HOME/.claude}` spelling in agents/ edits (P3-1, P3-4).
-- Choices decided by experiment go with their row's sub-phase: dev-lifecycle provider removal in P3-1. Gap quoting, function signature, failure exit code, project root, do-branch record access, aggregator helpers and mismatch shape, and reader coverage (A8) in P3-6, where A3's and A4's gaps exist. Codex-enforce resolution and A19 in P3-3. Roster comparison, canonical schema check site, freshness clock and echo comparison in P3-4. The staleness/R17 rule in P3-5 via A3; P3-5 adjusts P3-4's warning-only R17/R14(a) before promoting.
+- Choices decided by experiment go with their row's sub-phase: dev-lifecycle provider removal in P3-1. Gap quoting, function signature, failure exit code, project root, do-branch record access, aggregator helpers and mismatch shape in P3-2. Reader coverage (A8) in P3-6, where A3's and A4's gaps exist; P3-6 owns R1's reader for that coverage. Codex-enforce resolution and A19 in P3-3. Roster comparison, canonical schema check site, freshness clock and echo comparison in P3-4. The staleness/R17 rule in P3-5 via A3; P3-5 adjusts P3-4's warning-only R17/R14(a) before promoting.
 - The start checks, owner rulings, DO NOT list, PR section (body shape; the title is `P3-<k>: …`, as the hand-off header says) and the P1b/P1c verify-not-redo item apply unchanged to every sub-phase.
 
 ## P4 (L, about 3 days; 6 sub-phases)
@@ -289,3 +291,68 @@ Notes:
 - "Before" readings: wherever a test moved to a later sub-phase compares against "origin/master" or "before" (A2's and A4's origin/master kit, A11's origin/master run, A13's removal matrix, A18's counts, A21, A22, A23's diff), it means the phase base, the master before P10-1 merged. P10-1 records that SHA.
 - R19's PR D24 table: each sub-phase PR lists the artifacts it changes, and P10-4 holds R19's own leftovers and P1b's rows. Choices decided by experiment go with their rows: agents/ loading with R5 (P10-9); .gitignore rules, anchoring and the seal default with R9 (P10-5); the protected set with R13 (P10-7); L2's bound and B4's wording with R16 (P10-6); the budget, metrics, CI ref and the name counts (`git grep -c` of both repo names, rename nothing) with R15 (P10-11).
 - Phase-wide rules apply unchanged to every sub-phase: the owner rulings, the DO NOT list, the Dead code method, "Owner steps: none.", and the PR section with the title read as `P10-<k>: …`. The start checks are read as: the eleven phases merged, a split phase counting as merged when all of its sub-phase PRs have merged, plus each sub-phase's "Depends on". P11's check for a `P10: …` PR means P10-1..P10-11 are all merged.
+
+## Summary
+
+| Phase | Estimate | Sub-phases | Effort sum | Sub-phases with a parallel partner | Most at once |
+|---|---|---|---|---|---|
+| P1c | XL, ~6 days | 11 (9 M, 2 S) | 10 days | 2 (P1c-3, P1c-4) | 2 |
+| P2 | L, ~4 days | 8 (4 M, 4 S) | 6 days | 7 (all but P2-1, P2-8) | 3 |
+| P3 | L, ~3 days | 6 (4 M, 2 S) | 5 days | 3 (P3-1, P3-2, P3-3) | 2 |
+| P4 | L, ~3 days | 6 (4 M, 2 S) | 5 days | 5 (all but P4-6) | 2 |
+| P5 | L, ~5 days | 9 (9 M) | 9 days | 2 (P5-5, P5-6) | 2 |
+| P9 | L, ~4 days | 12 (8 M, 4 S) | 10 days | 7 (P9-1 to P9-7) | 3 |
+| P10 | L, ~3 days | 11 (10 M, 1 S) | 10.5 days | 8 (P10-1 to P10-8) | 4 |
+
+Total: 63 sub-phases, none above M. The effort sums exceed the phase estimates because each sub-phase is rounded up
+to S or M and pays for its own setup, sandbox and acceptance runs, and because every sub-phase carrying an armed or
+multi-sandbox replay is M. "Most at once" is the largest set of sub-phases that are pairwise parallel.
+
+## Verification
+
+Two rounds, each by subagents that did not write the plan, one per phase, against the phase's short prompt.
+
+- Round 1 (all seven phases): 6 high and 30 medium findings: P1c 1 high, 6 medium; P2 0, 3; P3 1, 4; P4 1, 2;
+  P5 1, 2; P9 2, 6; P10 0, 7. All were fixed; P1c's M6 was fixed by a different route (a scenario that meets an
+  unfixed base block lands with its fixing row, not a new `DEVIATION:` step). The three header conventions "tests
+  travel with code", "phase base" and "fault replays per PR" came out of this round.
+- Round 2 (the five phases with a high in round 1: P1c, P3, P4, P5, P9): every round-1 high and medium confirmed
+  fixed; 0 high and 4 medium new findings (P1c 1, P3 2, P4 1), all fixed. P5 and P9: no findings.
+- Mechanical check over the final tables: each acceptance test of each prompt is in exactly one sub-phase; every
+  effort is S or M; every parallel pair is symmetric and has no dependency between its members; every dependency
+  points to an earlier sub-phase.
+- Rejected ideas: none came back in either round.
+
+## Found, not fixed (low severity)
+
+- P1c-1: at the top of M (X2 fixture, scenarios in both modes, fault harness, CI jobs); moving R3 and the fault harness to P1c-2 was proposed.
+- P1c-6, P1c-5, P1c-3 to P1c-8: Main files cells omit some files (overnight hook guard, bash_execution_boundary.py, timelock, baseline.yml; restart.md; tests/replay files).
+- P1c-11: X3's "no branch ships F1, F1q or F2 unreturned" is not given an explicit reading for the sub-phases before R9's commit.
+- P2-1: Main files list the overnight hook guard's parser, which is R10's item (P2-4), an undeclared overlap.
+- P2-6: the "old spellings kept" choice is made before A15 (P2-8), one of its named deciders.
+- P2-3, P2-6: P1c's X5 items for P2 (rows 12, 13, bwrap; harness-home channel) are not named in the notes.
+- P2-1: the A20 per-PR mapping omits "the overnight launch".
+- P2-3: "contract prose" in Main files is ambiguous against R15's prose item in P2-5.
+- P3-4: A18's move of the resolve_chain callers is not named in its Rows cell, and Main files omit dev-lifecycle.py and close-route-select.py.
+- P4-3: Main files name scripts/verify-claims.sh, but R7's count fix edits README.md/ARCHITECTURE.md hook-count lines and possibly settings.template.json.
+- P4-2: Effort S understated: R8's G2/e2e/flag-writer deletions, four pinned test files (one 2151 lines) and A12 sandbox checks suggest M.
+- P4-4: Effort sits at M's upper bound (R1-R3, R5, R6, three experiments, A4's 11 cases); merge-order note should say so explicitly.
+- P4-1: Until P4-4 deletes close_awaiting_input, close.md describes a helper printing a line whose grammar P4-1 removed; note should state this.
+- P4-3: R4's Step 3 round-open "routes" names Routes that land only in P4-4; note should say P1b's routing serves until then.
+- P5-6: R17 ledger wording imprecise; H-052/H-053 become true with R19 in P5-7, the do-report-gate row with R21 in P5-9.
+- P5-4, P5-7, P5-9: Main files omit ledger, README, ARCHITECTURE and settings.template.json, which verify-claims requires after each settings change.
+- P5-5: Main files omit stop-command-gate.py and its test, needed only if R15's re-grant line differs from the minted line.
+- P5-7: Main files omit hooks/lib/command_span.py, which R18 and R20 read if P5-3 did not add it.
+- P9-1: an A23 proof needing an allowlist.py fix should wait for P9-3, which edits that file in parallel.
+- P9-1, P9-2, P9-3: parallel sub-phases may all add hooks/tests or hooks/lib INDEX/README rows; count/date lines can collide (E9 shape).
+- P9-3: Main files omit hooks/pretool-bash-safety.sh, which calls the classifier and clean guard with pre-normalised text.
+- P9-5: Main files omit scripts/{INDEX,README}.md rows for iterate-failed-pipelines.py.
+- P9-7: Main files omit scripts/overnight-init.sh (R13 reword), tests/test_ac_deviation_record_chain.py, scripts/{INDEX,README}.md and tests/INDEX.md.
+- P9-8: Main files omit scripts/overnight-status.sh and the overnight loop hook named by R8's TIME CHECK.
+- P9-4: labelled S, but 15 /do consent readers, bash-safety entry point with latency, E2, A5 and A17 suggest M.
+- P9-9: labelled S, but R9's about 25 items, E7's per-target checks and A18's tool-policy replays suggest M.
+- P10-2, P10-3, P10-10: "Before" readings list omits A9's origin/master span check, A1's stub list, and A3's and A4's origin/master tree.
+- P10-1: "P10-1 records that SHA" may read as a new recorded file; say its PR body names the SHA.
+- P10-5, P10-7: R8's rule (3) and R14 may change the same untracked-file producer while marked parallel.
+- P10-3: Main files' `hooks/stop-*.py` also matches stop-launch.py and stop-workflow-coordinator.py; use "the six stubs (A1's grep)".
+- P10-4: Main files omit agents/pm.md, R6's failed_attempts reader ("pm.md's reader if dead").
