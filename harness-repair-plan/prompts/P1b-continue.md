@@ -23,9 +23,17 @@ Two earlier sessions built most of P1b and each hit its usage limit. Their work 
 - /close and /commit reach their terminal with no new block;
 - E4's kept copies for /close and /dev-overnight.
 
-**Left:**
-1. Bring the artifact check to zero violations: the rest of rule 2, and the last 2 of rules 4-8.
-2. The lock commit (7): settings STOPGATE=block; delete the copies E4 kept that only a blocking G2 makes redundant; then the replays.
+**Left.** The second session's last report (2026-10-30) is the source for this list. CI on ec21e1b passed the three baseline legs and all five artifact shards, in about 1,290 s. The final check failed only on known violations: the phase-2 blast-radius map, and /clean's report checks, which 8dd63fb has since moved.
+
+The session also had two lanes half done and never pushed. They are lost; redo them:
+- **Determinism:** the artifact check must give the same result run after run. Its run-to-run test failed. The lane touched tests/replay/trace.py, replay.py, sandbox.py and a new test_run_to_run.py.
+- **The lock commit (7):** settings STOPGATE=block; delete the copies E4 kept that only a blocking G2 makes redundant; then the replays. The lane touched settings.json, G2, claude_home.py, the command texts, and their scripts and tests. Two open points belong to it:
+  - scripts/orchestrator.sh's validity loop is now a leftover copy of that check, and step 7 deletes it;
+  - deleting only the loop leaves the merge's `jq --slurpfile` failing on a removed report, and the artifact check would still count the script as deciding that fault. Settle both together.
+
+The work, in order:
+1. Determinism, then the last violation (the phase-2 blast-radius map). That violation touches the same check code, so it comes after determinism. The artifact check then shows zero violations.
+2. The lock commit (7), as above.
 3. Acceptance tests 1-21, shared with a helper session as below.
 4. The PR body and the evidence comments, as P1b.md's "Branch and pull request" says.
 
