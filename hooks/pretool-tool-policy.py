@@ -10,15 +10,12 @@ Derived write permission (P1b E3, TC-20 as corrected; D8, D21, D24), run first,
 for every caller, the main agent included, on the Write / Edit / MultiEdit /
 NotebookEdit target and every Bash write target:
   - A path a dispatch of this session declares may be written only by that
-    dispatch. What a dispatch declares is read from its own record in the
-    session transcript: the artifacts[].path of its obligation, the producer
-    question that obligation names when schemas/producer-question.v1.json lets
-    its role write one, and what the template it was dispatched from declares
-    in the current command files (lib/dispatch_template; the template of its
-    obligation's pipeline, role and profile, or, for a dispatch that carries
-    none, of its subagent_type in the command whose span holds it), each
-    placeholder bound to that dispatch's own values. A declared directory
-    covers what lies beneath it.
+    dispatch. What a dispatch declares: the artifacts[].path of its
+    obligation, the producer question that obligation names when
+    schemas/producer-question.v1.json lets its role write one, and what the
+    template it was dispatched from declares in the current command files
+    (lib/dispatch_template), each placeholder bound to that dispatch's own
+    values. A declared directory covers what lies beneath it.
   - The declaring dispatch's write skips the role's allow prefixes; its deny
     prefixes, tool lists and the scratch rule below still apply.
   - Any other caller's write of a declared path -> exit 2 naming the path and
@@ -28,15 +25,43 @@ NotebookEdit target and every Bash write target:
   - What a dispatch can declare has the shapes of the paths the current
     command files' templates write ("path" in their JSON, any bracketed text
     a placeholder) and the producer question's: a target with no part such a
-    path can end on is undeclared without reading the transcript, so its
-    cost does not grow with the session (P1b review item 2). A path a
+    path can end on is undeclared without reading the transcript or a
+    subagent's files, so its cost does not grow with the session (P1b review
+    item 2). A path a
     dispatch's own obligation names outside every template's shape is not
     held for it.
-  - A write the calling subagent's own dispatch declares is decided from
-    that dispatch's record, found back from the end of the transcript; any
-    other declared-path write reads the dispatch records in one forward pass
-    for their prompt key, and a template is bound only where its paths could
-    cover the target (_Record).
+  - The calling subagent's own dispatch is read from its record in the
+    session transcript, found back from the end by the call its meta names
+    (_Record; when its meta cannot be read or names no call by a plain id,
+    among every dispatch record, in one forward pass). Its template is the
+    one of its obligation's pipeline, role and profile, or, when it carries
+    none, of its subagent_type in the command whose span holds that record.
+  - Every other dispatch, for the main agent's write and for a subagent's
+    write its own dispatch does not declare, is read from the files the CLI
+    keeps for the subagent it started, beside the session transcript
+    (subagents/agent-<id>.meta.json: its call and subagent type;
+    agent-<id>.jsonl: its prompt, the first record), never from the session
+    transcript: the cost grows with the started dispatches, not with the
+    transcript's bytes (P1b review 1 latency). Its template is the one of its
+    obligation's pipeline, role and profile, or, when it carries none, each
+    of its subagent_type's in every command file (a superset of its span's
+    one: it can only deny more to other callers). A dispatch refused at
+    PreToolUse started no subagent and declares nothing here: these are the
+    dispatches G2 acts on, at a started subagent's stop.
+  - A template is bound only where its paths could cover the target, and no
+    command's fences are read where no obligation block of any command file
+    declares a path that could (lib/declared_paths._template_bounds; with a
+    "/.." in the prompt, where its own text lets no bound value make one
+    cover: _bounds_may_cover_back). A
+    dispatch whose obligation block, valid or not, names no artifact and no
+    producer question that covers the target, and whose templates cannot,
+    declares nothing that does: it is neither validated nor bound
+    (_obligation_may_declare). One decision reads each command file once
+    and the agent and command rosters once (roster.held); nothing is kept
+    from one call to the next.
+  - The readers (shapes, started dispatches, what a dispatch declares) are
+    lib/declared_paths, loaded only for a write; this file keeps the rule
+    and the session transcript's reader (_Record).
 
 Behavior:
   - Main agent (no agent_id, no subagent_type) -> exit 0 after the derived
@@ -69,7 +94,9 @@ Scratch namespace actor-exactness (LANE-B r02, parent RULING_2 G0 admission):
     policy file and survive verbatim.
 
 Fail-safe: any unexpected exception logs to stderr and exits 0 to
-avoid bricking the tool pipeline on a hook bug.
+avoid bricking the tool pipeline on a hook bug. Run as a script, the process
+ends with the status and output it decided without the interpreter's teardown
+(_end).
 """
 
 from __future__ import annotations
@@ -343,10 +370,28 @@ def _note_bash_write_target(data: dict, target) -> None:
 
 
 # -- derived write permission ------------------------------------------------
+#
+# The readers it decides from (the command files' template shapes, the started
+# dispatches' files, what a set of dispatches declares) are lib/declared_paths,
+# loaded only for a write, its bytecode cached like every lib module: this
+# file, compiled on every tool call, keeps the rule and the transcript reader.
+# Under their old names here they are lib/declared_paths' own.
+_READERS = frozenset({
+    "_HARNESS_ROOT", "_DEFAULT_SUBAGENT_TYPE", "_AGENT_ID_CHARS", "_parts", "_question_roles", "_QUESTION_PATH",
+    "_TEMPLATE_PATH_RE", "_SHAPE_PLACEHOLDER_RE", "_ANY", "_shape", "_read_text", "_command_text",
+    "_declarable_shapes", "_could_be_declared", "_declared_paths", "_load_json", "_plain_agent_id", "_agent_files",
+    "_FENCE_SHAPES", "_segment_prefix", "_template_shapes", "_example_shapes", "_template_bounds",
+    "_shapes_may_cover", "_template_may_cover", "_PATTERN_FIELDS", "_obligation_may_declare",
+    "_started_dispatches", "_caller_dispatches", "_covers", "_target_forms",
+})
 
-_HARNESS_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DEFAULT_SUBAGENT_TYPE = "general-purpose"  # the CLI's type for an Agent call that names none
-_AGENT_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+
+def __getattr__(name):
+    if name in _READERS:
+        from lib import declared_paths
+
+        return getattr(declared_paths, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _write_targets(tool_name: str, targets: list) -> list:
@@ -375,104 +420,6 @@ def _session_transcript(data: dict):
     return path
 
 
-def _parts(path: str) -> tuple:
-    return tuple(p for p in os.path.normpath(path).split(os.sep) if p and p != ".")
-
-
-def _question_roles() -> frozenset:
-    """Roles schemas/producer-question.v1.json lets write a producer question."""
-    try:
-        with open(os.path.join(_HARNESS_ROOT, "schemas", "producer-question.v1.json")) as fh:
-            values = json.load(fh)["properties"]["role"]["enum"]
-        return frozenset(v for v in values if isinstance(v, str))
-    except (OSError, ValueError, KeyError, TypeError):
-        return frozenset()
-
-
-# The question G2 takes in place of the declared artifacts
-# (subagentstop-artifact-contract-enforce.py _producer_question).
-_QUESTION_PATH = "docs/dev/producer-question-{task_id}-{role}.json"
-# A path a command file's template declares, as its JSON writes it, and a
-# placeholder in one: <task_id>, <TASK_ID or "bulk">, {pipeline.x}. Any text
-# in brackets counts as one, so no template path is read narrower than the
-# dispatch that fills it in may write it.
-_TEMPLATE_PATH_RE = re.compile(r'"path"\s*:\s*"((?:[^"\\\n]|\\.)*)"')
-_SHAPE_PLACEHOLDER_RE = re.compile(r"<[^<>]*>|\{[^{}]*\}")
-_ANY = None  # a shape whose declared path may end in any name
-
-
-def _shape(path: str):
-    """What the last part of a declared path made from template path ``path``
-    is: ("parts", the parts) for a path without placeholders, ("last", name)
-    or ("ends", text) after the last placeholder, or _ANY. A placeholder's
-    value may hold "/" and "..", and the declared path is normalised, so only
-    the text after the last placeholder is certain, and only while no ".."
-    in it can take a part back."""
-    pieces = _SHAPE_PLACEHOLDER_RE.split(path)
-    if len(pieces) == 1:
-        return ("parts", _parts(path))
-    tail = pieces[-1]
-    head, slash, rest = tail.partition("/")
-    if slash:
-        names = rest.split("/")
-        if ".." in names:
-            return _ANY
-        names = [n for n in names if n not in ("", ".")]
-        if names:
-            return ("last", names[-1])
-    return _ANY if head in ("", ".", "..") else ("ends", head)
-
-
-def _declarable_shapes():
-    """The shapes (_shape) of every path a dispatch can declare from a
-    template: each "path" the current command files write, read at run time,
-    and the producer question's. _ANY when a command file cannot be read:
-    then any target may be declared."""
-    from lib import stop_contract
-
-    shapes = {_shape(_QUESTION_PATH)}
-    try:
-        files = sorted(stop_contract.COMMANDS_DIR.glob("*.md"))
-        for file in files:
-            for raw in _TEMPLATE_PATH_RE.findall(file.read_text(encoding="utf-8")):
-                try:
-                    value = json.loads(f'"{raw}"')
-                except ValueError:
-                    value = raw
-                shapes.add(_shape(value))
-    except (OSError, UnicodeDecodeError):
-        return _ANY
-    return _ANY if _ANY in shapes else shapes
-
-
-def _could_be_declared(shapes, forms: list) -> bool:
-    """Whether a path of one of ``shapes`` may cover a target of these forms:
-    a declared path covers a run of the target's parts that ends with its own
-    last part, so some part of the target must be that last part."""
-    if shapes is _ANY:
-        return True
-    for kind, value in shapes:
-        for form in forms:
-            if (kind == "parts" and value and _covers(value, form)
-                    or kind == "last" and value in form
-                    or kind == "ends" and any(part.endswith(value) for part in form)):
-                return True
-    return False
-
-
-def _declared_paths(obligation_doc: dict) -> list:
-    return [a["path"] for a in obligation_doc.get("artifacts") or []
-            if isinstance(a, dict) and isinstance(a.get("path"), str) and a["path"]]
-
-
-def _agent_files(transcript, agent_id: str):
-    """(transcript, meta) paths the CLI keeps for one subagent of the session."""
-    if not isinstance(agent_id, str) or not 0 < len(agent_id) <= 128 or not set(agent_id) <= _AGENT_ID_CHARS:
-        return None, None
-    sub = transcript.parent / transcript.stem / "subagents"
-    return sub / f"agent-{agent_id}.jsonl", sub / f"agent-{agent_id}.meta.json"
-
-
 # A dispatch declares only through its prompt, so only a record line that
 # holds the prompt key is decoded: an Agent or Task call has one, and a call
 # without one declares nothing and is no caller's dispatch. One search of this
@@ -485,11 +432,13 @@ _BACK_PIECE = 1 << 20  # the first read back from an offset; each further read d
 
 class _Record:
     """The session transcript, read where the derived permission looks and no
-    further: forward a piece at a time for the lines that hold a dispatch,
-    back from a dispatch for the command whose span holds it, back from the
-    end for the caller's own dispatch. The whole file is never held at once:
-    at 100 MB, reading it whole and scanning every user record for span
-    openers was most of what a declared-path write cost (P1b review item 2).
+    further: back from the end for the calling subagent's own dispatch, back
+    from a dispatch for the command whose span holds it, and forward a piece
+    at a time for the lines that hold a dispatch only for a caller whose meta
+    cannot be read or names no call by a plain id. The whole file is never
+    held at once: at 100 MB, reading it whole and scanning every user record
+    for span openers was most of what a declared-path write cost (P1b review
+    item 2).
     A file with no end to read back from (not a regular file) is read whole,
     as before."""
 
@@ -627,9 +576,12 @@ def _dispatch_calls(record: _Record) -> list:
     """The session's Agent/Task calls, read as command_span's Span.calls reads
     them (its line reader, the main session's own records only), without the
     search for each call's result that this rule does not use, from the lines
-    that hold a prompt key. A call's line is its record's offset in the
-    transcript: it is only ordered against the commands that open spans, and
-    numbering every line of a long transcript would be a pass of its own."""
+    that hold a prompt key; read only to find the calling subagent's own
+    dispatch when its meta cannot be read or names no call by a plain id
+    (_own_from_tail). A
+    call's line is its record's offset in the transcript: it is only ordered
+    against the commands that open spans, and numbering every line of a long
+    transcript would be a pass of its own."""
     from lib import command_span
 
     calls = []
@@ -644,169 +596,13 @@ def _dispatch_calls(record: _Record) -> list:
     return calls
 
 
-_FENCE_SHAPES: dict = {}  # (command, subagent_type) -> _template_shapes(), once per process
 
 
-def _segment_prefix(path: str) -> str:
-    """The literal text that starts the segment of template path ``path``
-    holding its last placeholder, up to that segment's first placeholder ("ticket-"
-    for docs/dev/ticket-<timestamp>.md; "" for docs/dev/<x>.md). Every value
-    goes in after it, so unless a value takes a part back with "/..", the
-    declared path keeps a part that starts with it."""
-    found = list(_SHAPE_PLACEHOLDER_RE.finditer(path))
-    if not found:
-        return ""
-    start = path.rfind("/", 0, found[-1].start()) + 1
-    first = next(m for m in found if m.start() >= start)
-    return path[start:first.start()]
+def _declarations(record, calls: list, targets=None) -> list:
+    """What these dispatches declare (lib/declared_paths._declarations)."""
+    from lib import declared_paths
 
-
-def _template_shapes(command, subagent_type: str):
-    """(shape, segment prefix) of each path the worked examples of the fences
-    of ``subagent_type`` in commands/<command>.md declare (_shape,
-    _segment_prefix), read as dispatch_template._template reads that file
-    (every harness command's when ``command`` is None: a dispatch carrying no
-    obligation takes its span's). A file _template cannot open declares
-    nothing; _ANY when reading one raises anything else, so the template is
-    read and raises as it did."""
-    from pathlib import Path
-
-    from lib import dispatch_template, stop_contract
-
-    key = (command, subagent_type)
-    if key not in _FENCE_SHAPES:
-        shapes = set()
-        try:
-            names = [command] if command is not None else sorted(stop_contract.harness_commands())
-            for name in names:
-                try:
-                    text = (Path(stop_contract.COMMANDS_DIR) / f"{name}.md").read_text(encoding="utf-8")
-                except OSError:
-                    continue
-                for _body, kind, _roles, _profiles, example in dispatch_template._parsed_fences(text):
-                    if kind != subagent_type or example is None:
-                        continue
-                    try:
-                        declared = json.loads(example)
-                    except ValueError:
-                        continue
-                    for entry in (declared.get("artifacts") or []) if isinstance(declared, dict) else ():
-                        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
-                            shape = _shape(entry["path"])
-                            if shape is _ANY:
-                                raise ValueError("a template path of any shape")
-                            shapes.add((shape, _segment_prefix(entry["path"]) if shape[0] == "ends" else ""))
-        except Exception:
-            shapes = _ANY
-        _FENCE_SHAPES[key] = shapes
-    return _FENCE_SHAPES[key]
-
-
-def _template_may_cover(command, subagent_type: str, prompt: str, targets) -> bool:
-    """Whether a path the template of such a dispatch declares may cover one
-    of ``targets`` (each a target's _target_forms; None: any path). A path of
-    a shape "ends" covers a target only through a part that starts with its
-    segment prefix, unless the prompt, which every value is taken from, holds
-    "/..". A template that cannot is not read: binding it to the prompt is
-    most of a dispatch's cost in a long session, and nothing it declares
-    could change a decision."""
-    if targets is None:
-        return True
-    shapes = _template_shapes(command, subagent_type)
-    if shapes is _ANY:
-        return True
-    back = "/.." in prompt
-    for forms in targets:
-        for shape, prefix in shapes:
-            if (_could_be_declared({shape}, forms)
-                    and (back or not prefix or any(part.startswith(prefix) for form in forms for part in form))):
-                return True
-    return False
-
-
-def _declarations(record: _Record, calls: list, targets=None) -> list:
-    """(path parts, role, task_id, dispatch id) for every path a dispatch of
-    the session declares, in record order; with ``targets`` (each a target's
-    _target_forms), every template-declared path that may cover one of them,
-    the obligations' own paths and producer questions all."""
-    from lib import dispatch_template, obligation
-
-    question_roles = None
-    out = []
-    for call in calls:
-        prompt = call.input.get("prompt")
-        if not isinstance(prompt, str) or not prompt:
-            continue
-        subagent_type = call.input.get("subagent_type") or _DEFAULT_SUBAGENT_TYPE
-        parsed = obligation.parse_obligation(prompt)
-        own = parsed.obligation if isinstance(parsed, obligation.ParsedObligation) else None
-        paths, role, task_id = [], subagent_type, None
-        if own is not None:
-            role, task_id = own.get("role"), own.get("task_id")
-            paths += _declared_paths(own)
-            if _template_may_cover(own.get("pipeline"), subagent_type, prompt, targets):
-                template = dispatch_template.template_obligation(own.get("pipeline"), subagent_type, prompt)
-                # Only the template this dispatch was made from: same role and profile.
-                if template and all(template.get(k) == own.get(k) for k in ("role", "profile")):
-                    paths += _declared_paths(template)
-            if question_roles is None:
-                question_roles = _question_roles()
-            if role in question_roles and isinstance(task_id, str) and task_id:
-                paths.append(_QUESTION_PATH.format(task_id=task_id, role=role))
-        elif _template_may_cover(None, subagent_type, prompt, targets):
-            command = record.command_before(call.line)
-            template = dispatch_template.template_obligation(command, subagent_type, prompt) if command else None
-            if template:
-                role, task_id = template.get("role") or role, template.get("task_id")
-                paths += _declared_paths(template)
-        for path in dict.fromkeys(paths):
-            parts = _parts(path)
-            if parts and ".." not in parts and not path.startswith("/"):
-                out.append((parts, role, task_id, call.id))
-    return out
-
-
-def _caller_dispatches(data: dict, transcript, calls: list) -> set:
-    """The dispatch record(s) the calling subagent was started from: the one
-    its CLI meta names when that call's prompt is the agent's own first
-    record, else the calls carrying that prompt. The main agent has none."""
-    from lib import obligation
-
-    agent_id = data.get("agent_id")
-    if not agent_id:
-        return set()
-    agent_transcript, meta = _agent_files(transcript, agent_id)
-    if agent_transcript is None:
-        return set()
-    prompt = obligation.read_first_record_prompt(agent_transcript)
-    if prompt is None:
-        return set()
-    try:
-        with open(meta) as fh:
-            named = json.load(fh).get("toolUseId")
-    except (OSError, ValueError, AttributeError):
-        named = None
-    if named:
-        return {c.id for c in calls if c.id == named and c.input.get("prompt") == prompt}
-    return {c.id for c in calls if c.input.get("prompt") == prompt}
-
-
-def _covers(declared: tuple, target: tuple) -> bool:
-    n = len(declared)
-    return any(target[i:i + n] == declared for i in range(len(target) - n + 1))
-
-
-def _target_forms(target: str, data: dict) -> list:
-    base = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    path = os.path.expanduser(target)
-    if not os.path.isabs(path):
-        path = os.path.join(base, path)
-    forms = {os.path.normpath(path)}
-    try:
-        forms.add(os.path.realpath(path))
-    except OSError:
-        pass
-    return [_parts(f) for f in forms]
+    return declared_paths._declarations(record, calls, targets)
 
 
 def _caller_label(role, data: dict) -> str:
@@ -829,7 +625,7 @@ def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> s
     # Loaded only for a write (a read-only call pays nothing), and FAIL CLOSED
     # like _bootstrap_security: a broken reader must never let a write through.
     try:
-        from lib import command_span, dispatch_template, obligation, stop_contract  # noqa: F401
+        from lib import command_span, declared_paths, dispatch_template, obligation, roster, stop_contract  # noqa: F401
     except Exception as e:
         sys.stderr.write(
             "BLOCKED by tool-policy.v1: derived write permission bootstrap FAILED — "
@@ -837,13 +633,24 @@ def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> s
             "(exit 2) rather than allowing; repair the harness install.\n"
         )
         sys.exit(2)
+    # One decision reads each command file once (declared_paths.decision) and
+    # the agent and command rosters once (roster.held), however many
+    # dispatches it reads.
+    with declared_paths.decision(), roster.held():
+        return _derived_writes(role, tool_name, writes, data, transcript)
 
-    # What a dispatch declares is read from the session transcript, which
-    # grows with the session; a target no template's path can name is
-    # undeclared without reading it.
+
+def _derived_writes(role, tool_name: str, writes: list, data: dict, transcript) -> set:
+    # What a dispatch declares is read from its subagent's files and, for the
+    # caller's own, from the session transcript, which grows with the
+    # session; a target no template's path can name is undeclared without
+    # reading either.
+    from lib import declared_paths
+
     try:
-        shapes = _declarable_shapes()
-        undeclared = not any(_could_be_declared(shapes, _target_forms(target, data)) for target in writes)
+        shapes = declared_paths._declarable_shapes()
+        undeclared = not any(declared_paths._could_be_declared(shapes, declared_paths._target_forms(target, data))
+                             for target in writes)
     except Exception:  # the check below decides, as it always did
         undeclared = False
     if undeclared:
@@ -859,38 +666,41 @@ def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> s
 
 
 def _own_from_tail(data: dict, transcript, record: _Record, writes: list, forms_of):
-    """The writes the calling subagent's own dispatch declares, decided from
-    its own transcript and meta and that one dispatch record, found back from
-    the end of the session transcript: a running subagent's dispatch is among
-    the newest records, so this reads what the subagent's own run added, not
-    the session. None unless it covers every write; then the reading of every
-    dispatch below decides, as it always did. The calls with the caller's id
-    found here are some of those that reading finds, so a write they cover is
-    one it finds covered too."""
+    """(the writes the calling subagent's own dispatch declares, the call id
+    of that dispatch), decided from its own transcript and meta and that one
+    dispatch record, found back from the end of the session transcript: a
+    running subagent's dispatch is among the newest records, so this reads
+    what the subagent's own run added, not the session. A caller whose own
+    transcript holds no prompt, or whose meta names a call that no record
+    with that prompt holds, has no dispatch: (empty, empty). None when its
+    meta cannot be read or names no call by a plain id; then its dispatch is
+    found among every dispatch record (_caller_dispatches), as before."""
     try:
-        from lib import command_span, obligation
+        from lib import command_span, declared_paths, obligation
 
-        agent_transcript, meta = _agent_files(transcript, data.get("agent_id"))
+        agent_transcript, meta = declared_paths._agent_files(transcript, data.get("agent_id"))
         if agent_transcript is None:
-            return None
+            return set(), set()
         prompt = obligation.read_first_record_prompt(agent_transcript)
         if prompt is None:
-            return None
+            return set(), set()
         with open(meta) as fh:
             named = json.load(fh).get("toolUseId")
         if not isinstance(named, str) or not command_span._PLAIN_ID.match(named):
-            return None  # an id the record may spell otherwise is matched call by call below
+            return None  # an id the record may spell otherwise is matched call by call
         call = record.find_call(named, prompt)
         if call is None:
-            return None
+            return set(), set()
         declared = _declarations(record, [call], [forms_of(t) for t in writes])
-        own = {t for t in writes if any(_covers(d[0], f) for f in forms_of(t) for d in declared)}
-        return own if own == set(writes) else None
+        return {t for t in writes if any(declared_paths._covers(d[0], f) for f in forms_of(t) for d in declared)}, {named}
     except Exception:
         return None
 
 
 def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, transcript, record: _Record) -> set:
+    from lib import declared_paths
+
+    _covers, _target_forms = declared_paths._covers, declared_paths._target_forms
     known = {}
 
     def forms_of(target):
@@ -906,43 +716,34 @@ def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, tran
         except Exception:
             return None  # no filter: every template is read, as before
 
-    if data.get("agent_id"):
-        own = _own_from_tail(data, transcript, record, writes, forms_of)
-        if own is not None:
-            return own
-    try:
-        calls = _dispatch_calls(record)
-    except (OSError, TypeError, ValueError):
-        return set()  # as when the transcript could not be read
-    if not calls:
-        return set()
     # A subagent's write of a path its own dispatch declares is its own,
-    # whatever any other dispatch declares: its dispatch's declarations
-    # decide that, without every dispatch's of a long session. Should this
-    # shortcut fail, the full reading below meets the failure where it did.
-    mine, own = None, set()
+    # whatever any other dispatch declares: that dispatch's record decides it.
+    own, mine = set(), set()
     if data.get("agent_id"):
-        try:
-            mine = _caller_dispatches(data, transcript, calls)
-            declared = _declarations(record, [c for c in calls if c.id in mine], filter_for(writes)) if mine else []
-            own = {t for t in writes if any(_covers(d[0], f) for f in forms_of(t) for d in declared)}
-        except Exception:
-            mine, own = None, set()
+        found = _own_from_tail(data, transcript, record, writes, forms_of)
+        if found is None:
+            try:
+                calls = _dispatch_calls(record)
+            except (OSError, TypeError, ValueError):
+                return set()  # as when the transcript could not be read
+            try:
+                mine = declared_paths._caller_dispatches(data, transcript, calls)
+                declared = _declarations(record, [c for c in calls if c.id in mine], filter_for(writes)) if mine else []
+                found = {t for t in writes if any(_covers(d[0], f) for f in forms_of(t) for d in declared)}, mine
+            except Exception:
+                found = set(), set()
+        own, mine = found
     rest = [t for t in writes if t not in own]
     if not rest:
         return own
-    declarations = _declarations(record, calls, filter_for(rest))
-    if not declarations:
-        return own
+    # Every other dispatch: the ones the CLI started a subagent for, read from
+    # their files; the caller's own dispatch neither denies nor grants here.
+    declarations = [d for d in _declarations(None, declared_paths._started_dispatches(transcript), filter_for(rest))
+                    if d[3] not in mine]
     for target in rest:
         forms = forms_of(target)
         covering = [d for d in declarations if any(_covers(d[0], f) for f in forms)]
         if not covering:
-            continue
-        if mine is None:
-            mine = _caller_dispatches(data, transcript, calls)
-        if any(d[3] in mine for d in covering):
-            own.add(target)
             continue
         roles = sorted({str(d[1]) for d in covering})
         tasks = sorted({str(d[2]) for d in covering if d[2]})
@@ -1032,9 +833,34 @@ def main() -> None:
     sys.exit(0)
 
 
+def _end(stop: SystemExit) -> None:
+    """End the process with the status ``stop`` carries and the output already
+    written, as the interpreter ends it on an uncaught SystemExit, without its
+    teardown: no atexit handler, thread or buffered output is left to it here,
+    and unloading the dispatch-record readers' modules was a few ms of every
+    call. Only when the interpreter runs this file itself: a caller that runs
+    it as __main__ in its own process (runpy) still gets the SystemExit."""
+    code = stop.code
+    if code is None:
+        status = 0
+    elif isinstance(code, int):
+        status = code
+    else:
+        sys.stderr.write(f"{code}\n")
+        status = 1
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(status)
+
+
 if __name__ == "__main__":
     try:
-        main()
-    except Exception as e:  # pragma: no cover
-        sys.stderr.write(f"pretool-tool-policy: unexpected ({e})\n")
-        sys.exit(0)
+        try:
+            main()
+        except Exception as e:  # pragma: no cover
+            sys.stderr.write(f"pretool-tool-policy: unexpected ({e})\n")
+            sys.exit(0)
+    except SystemExit as stop:
+        if sys._getframe().f_back is None:  # the interpreter runs this file itself: nothing runs after it
+            _end(stop)
+        raise

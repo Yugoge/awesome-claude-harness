@@ -78,6 +78,19 @@ class Session:
                 json.dumps({"agentType": subagent_type or "general-purpose", "toolUseId": call_id}))
         return agent_id
 
+    def refused(self, prompt: str, subagent_type: str | None = None) -> None:
+        """An Agent call a PreToolUse hook refused: its record and its error result; the CLI started no
+        child, so it keeps no subagent files for it."""
+        call_id = "toolu_" + uuid.uuid4().hex[:20]
+        tool_input = {"description": "d", "prompt": prompt}
+        if subagent_type:
+            tool_input["subagent_type"] = subagent_type
+        self._append({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": call_id, "name": "Agent", "input": tool_input}]}})
+        self._append({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": call_id, "is_error": True,
+             "content": "PreToolUse:Agent hook error: refused"}]}})
+
     def run(self, tmp_path: Path, tool: str, tool_input: dict, agent: tuple | None = None):
         payload = {"session_id": self.sid, "transcript_path": str(self.transcript), "cwd": str(PROJECT),
                    "hook_event_name": "PreToolUse", "permission_mode": "default", "tool_name": tool,
@@ -627,3 +640,643 @@ def test_the_piece_reader_finds_the_lines_the_whole_file_reader_finds(tmp_path, 
         record.close()
     want = [(b, e, data[b:e]) for b, e in command_span._Lines(data).offsets((needle,))]
     assert got == want
+
+
+# -- a declared-path write in a session several read pieces long (review 1 latency) ------------------
+#
+# Another caller's question is answered from the started dispatches' files, the caller's own from its
+# record read back from the end; neither reads the session transcript forward. The decisions a large
+# session gives, pinned at the hook's own piece sizes: a dispatch at the start of the file, one whose
+# line crosses the first piece boundary, one at the end, and lines that hold every needle of a dispatch
+# ("prompt", "Agent") without being one.
+
+def _filler(k: int, width: int) -> str:
+    call = f"toolu_f{k:08d}"
+    body = ("def handler(payload):\n    return payload.get('x')  # Task, prompt, Agent\n" * width)[:width]
+    return (json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": call, "name": "Read", "input": {"file_path": f"src/m{k}.py"}}]}}) + "\n"
+            + json.dumps({"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": call, "content": body}]}}) + "\n")
+
+
+def _pad_to(s: "Session", offset: int) -> None:
+    """Append filler until the transcript ends exactly at ``offset``."""
+    size, k = s.transcript.stat().st_size, 0
+    chunk = []
+    while size + 8192 < offset:
+        line = _filler(k, 4000)
+        chunk.append(line)
+        size, k = size + len(line.encode()), k + 1
+    with s.transcript.open("a") as fh:
+        fh.write("".join(chunk))
+    bare = len(json.dumps({"type": "user", "message": {"role": "user", "content": ""}}).encode()) + 1
+    s._append({"type": "user", "message": {"role": "user", "content": "x" * (offset - size - bare)}})
+    assert s.transcript.stat().st_size == offset
+
+
+def _no_forward_read(policy, monkeypatch) -> None:
+    monkeypatch.setattr(policy._Record, "lines", lambda self, needle: pytest.fail("the transcript was read forward"))
+
+
+def test_a_large_session_is_decided_from_its_started_dispatches_as_its_record_decided_it(tmp_path, monkeypatch):
+    policy = _policy("tool_policy_large")
+    piece = policy._PIECE
+    s = Session(tmp_path / "projects")
+    s.command("dev")
+    first = "docs/dev/dev-report-20261028-200001.json"
+    early = s.dispatch("You are the dev subagent.\n" + _block(_obligation("dev", "singular", first,
+                                                                          task="20261028-200001")), "dev")
+    # Lines that hold "prompt" and "Agent" and an obligation, and are no dispatch: a tool result's
+    # record, another tool's call, a subagent's own (sidechain) Agent call. No subagent files name them.
+    decoys = [f"docs/dev/decoy-{n}.md" for n in range(3)]
+    fake = [_block(_obligation("dev", "singular", d, task="20261028-200009")) for d in decoys]
+    s._append({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_x1", "content": "done"}]},
+        "toolUseResult": {"name": "Agent", "prompt": fake[0], "status": "completed"}})
+    s._append({"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_x2", "name": "Bash",
+         "input": {"command": "true", "prompt": fake[1], "description": "Agent"}}]}})
+    s._append({"type": "assistant", "isSidechain": True, "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_x3", "name": "Agent", "input": {"description": "d", "prompt": fake[2]}}]}})
+    # The next dispatch's line starts 64 bytes before the first piece ends.
+    _pad_to(s, piece - 64)
+    second = "docs/dev/context-20261028-200002.json"
+    across = s.dispatch("You are the BA subagent.\n" + _block(_obligation("ba", "singular", second,
+                                                                          task="20261028-200002")), "ba")
+    assert s.transcript.stat().st_size > piece
+    _pad_to(s, 2 * piece + 4096)
+    third = "docs/dev/qa-report-20261028-200003.json"
+    late = s.dispatch("You are the QA subagent.\n" + _block(_obligation("qa", "final_verification", third,
+                                                                        task="20261028-200003")), "qa")
+    assert s.transcript.stat().st_size > 2 * piece
+    # Each dispatch started a subagent: its meta (its call, its type) and its transcript (its prompt).
+    assert len(list(s.subagents.glob("agent-*.meta.json"))) == len(list(s.subagents.glob("agent-*.jsonl"))) == 3
+    _no_forward_read(policy, monkeypatch)
+
+    cases = [
+        (None, first, ("exit", 2)),                       # far from the end, refused to the main agent
+        ((early, "dev"), first, ("own", [first])),        # and its own dispatch's, read back that far
+        ((late, "qa"), first, ("exit", 2)),               # refused to the newest dispatch
+        (None, second, ("exit", 2)),                      # a dispatch line across the piece boundary
+        ((across, "ba"), second, ("own", [second])),
+        ((late, "qa"), third, ("own", [third])),
+        ((early, "dev"), third, ("exit", 2)),
+        (None, "docs/dev/note.md", ("own", [])),          # undeclared: no started dispatch declares it
+    ] + [(None, d, ("own", [])) for d in decoys] + [((late, "qa"), d, ("own", [])) for d in decoys]
+    for agent, path, want in cases:
+        for tool, tool_input in (("Write", _write(path)), ("Bash", {"command": f"printf x > {path}"})):
+            got = _decision(policy, s, tool, tool_input, agent)
+            # A Write names the project path; the Bash command names it as typed.
+            expected = want if want[0] == "exit" else ("own", [str(PROJECT / p) if tool == "Write" else p
+                                                               for p in want[1]])
+            assert got == expected, (agent, path, tool, got)
+            # Every dispatch here started and carries an obligation: the whole record's reading agrees.
+            assert got == _oracle_decision(policy, s, tool, tool_input, agent), (agent, path, tool)
+
+
+# -- what another caller is held off: the started dispatches' files (review 1 latency) -------------
+
+def test_a_dispatch_refused_at_pretooluse_declares_nothing(tmp_path):
+    # A refused Agent call started no subagent: the CLI keeps no files for it, and G2, which runs at a
+    # started subagent's stop, never acts on it. Its record still sits in the session transcript.
+    policy = _policy("tool_policy_refused")
+    s = Session(tmp_path / "projects")
+    s.command("dev")
+    ba = s.dispatch("You are the BA subagent.\n" + _block(_obligation("ba", "singular", CONTEXT)), "ba")
+    s.refused("You are the dev subagent.\n" + _block(_obligation("dev", "singular", REPORT)), "dev")
+    assert sorted(p.name for p in s.subagents.iterdir()) == [f"agent-{ba}.jsonl", f"agent-{ba}.meta.json"]
+    question = f"docs/dev/producer-question-{TASK}-dev.json"
+    for agent in (None, (ba, "ba")):
+        for path in (REPORT, question):
+            for tool, tool_input in (("Write", _write(path)), ("Bash", {"command": f"printf x > {path}"})):
+                assert _decision(policy, s, tool, tool_input, agent) == ("own", []), (agent, path, tool)
+                # The whole record's reading held it for the refused call.
+                assert _oracle_decision(policy, s, tool, tool_input, agent) == ("exit", 2), (agent, path, tool)
+    # The started dispatch's path is still held; the main agent's write of the refused call's report goes on.
+    assert "of the ba dispatch" in _denial(s.run(tmp_path, "Write", _write(CONTEXT), None))["deny_reason"]
+    assert s.run(tmp_path, "Write", _write(REPORT), None).returncode == 0
+
+
+def test_a_started_dispatch_carrying_none_holds_its_types_templates_of_every_command(tmp_path):
+    # Read from its subagent's files, a dispatch carrying no obligation is bound to each template of its
+    # subagent type in every command file, not only its span's: a superset that only denies more to other
+    # callers. Here the span is /do's, which has no such template; /dev's BA template declares the context.
+    policy = _policy("tool_policy_every_command")
+    prompt, context = _template_prompt()
+    s = Session(tmp_path / "projects")
+    s.command("do")
+    ba = s.dispatch(prompt, "ba")
+    gp = s.dispatch("Describe the toy package. DO NOT modify files.", "general-purpose")
+    for agent in (None, (gp, "general-purpose")):
+        assert _decision(policy, s, "Write", _write(context), agent) == ("exit", 2), agent
+        assert _oracle_decision(policy, s, "Write", _write(context), agent) == ("own", []), agent  # its span's
+    assert "of the ba dispatch" in _denial(s.run(tmp_path, "Write", _write(context), None))["deny_reason"]
+    assert "of the ba dispatch" in _denial(s.run(tmp_path, "Bash", {"command": f"printf x > {context}"},
+                                                 (gp, "general-purpose")))["deny_reason"]
+    # The dispatch's own write is still decided from its record: its span's template declares nothing,
+    # so the derived permission neither grants nor refuses it, and the BA rows decide, as before.
+    assert _decision(policy, s, "Write", _write(context), (ba, "ba")) == ("own", [])
+    assert _oracle_decision(policy, s, "Write", _write(context), (ba, "ba")) == ("own", [])
+    assert _denial(s.run(tmp_path, "Write", _write(context), (ba, "ba")))["deny_reason"].endswith(
+        "not in allowed_write_path_prefixes")
+    # Another type's templates are not its: the same prompt as a general-purpose dispatch declares nothing.
+    other = Session(tmp_path / "other")
+    other.command("do")
+    other.dispatch(prompt, "general-purpose")
+    assert _decision(policy, other, "Write", _write(context)) == ("own", [])
+
+
+def test_a_dispatch_at_the_start_of_a_large_session_holds_its_paths_for_other_callers(tmp_path, monkeypatch):
+    # Its record is the transcript's first line, three read pieces before the end: other callers are held
+    # off its paths from its subagent's files, and none of them reads the session transcript forward.
+    policy = _policy("tool_policy_start")
+    s = Session(tmp_path / "projects")
+    ba = s.dispatch("You are the BA subagent.\n" + _block(_obligation("ba", "singular", CONTEXT)), "ba")
+    assert s.transcript.read_bytes().count(b"\n") == 1
+    _pad_to(s, 3 * policy._PIECE)
+    dev = s.dispatch("You are the dev subagent.\n" + _block(_obligation("dev", "singular", REPORT)), "dev")
+    size = s.transcript.stat().st_size
+    _no_forward_read(policy, monkeypatch)
+    monkeypatch.setattr(policy, "_BACK_PIECE", 512)
+    reads = []
+    real_back = policy._Record._back
+
+    def back(self, hi, floor=0):
+        for data, base, lo in real_back(self, hi, floor):
+            reads.append(len(data))
+            yield data, base, lo
+
+    monkeypatch.setattr(policy._Record, "_back", back)
+    for agent in (None, (dev, "dev")):
+        for tool, tool_input in (("Write", _write(CONTEXT)), ("Bash", {"command": f"printf x > {CONTEXT}"})):
+            assert _decision(policy, s, tool, tool_input, agent) == ("exit", 2), (agent, tool)
+    # The newest subagent read back its own run's records only, never the record at the start.
+    assert reads and max(reads) < size // 4, reads
+    # The dispatch's own write is still its own, its record read back that far.
+    assert _decision(policy, s, "Write", _write(CONTEXT), (ba, "ba")) == ("own", [str(PROJECT / CONTEXT)])
+
+
+def test_a_subagents_own_dispatch_is_decided_from_its_record_as_before(tmp_path, monkeypatch):
+    # Only the other dispatches are read from the subagents' files. What the caller's own dispatch
+    # declares is decided from its record as before (its obligation, or its span's template, never every
+    # command's), whatever its own files would declare: the own decisions are the whole record's.
+    policy = _policy("tool_policy_own")
+    prompt, context = _template_prompt()
+    s = Session(tmp_path / "projects")
+    s.command("do")
+    in_do, in_dev = "20261028-300001", "20261028-300002"
+    ba_do = s.dispatch(prompt.replace(TASK, in_do), "ba")
+    s.command("dev")
+    ba_dev = s.dispatch(prompt.replace(TASK, in_dev), "ba")
+    dev = s.dispatch("You are the dev subagent.\n" + _block(_obligation("dev", "singular", REPORT)), "dev")
+    s.refused("You are the QA subagent.\n" + _block(_obligation("qa", "final_verification", "docs/dev/qa.json")), "qa")
+    paths = [context.replace(TASK, in_do), context.replace(TASK, in_dev), REPORT, "docs/dev/qa.json", "docs/dev/note.md"]
+    widened = {(c, context.replace(TASK, in_do)) for c in (ba_dev, dev)}  # ba_do's /dev template, read from its files
+    _no_forward_read(policy, monkeypatch)
+    seen = set()
+    for agent in ((ba_do, "ba"), (ba_dev, "ba"), (dev, "dev")):
+        for path in paths:
+            for tool, tool_input in (("Write", _write(path)), ("Bash", {"command": f"printf x > {path}"})):
+                got = _decision(policy, s, tool, tool_input, agent)
+                was = _oracle_decision(policy, s, tool, tool_input, agent)
+                if (agent[0], path) in widened:
+                    assert (was, got) == (("own", []), ("exit", 2)), (agent, path, tool)
+                elif path == "docs/dev/qa.json":  # the refused dispatch's
+                    assert (was, got) == (("exit", 2), ("own", [])), (agent, path, tool)
+                else:
+                    assert got == was, (agent, path, tool)
+                seen.add(got[0] if got[0] == "exit" else ("own" if got[1] else "none"))
+    assert seen == {"exit", "own", "none"}
+    # Among them: ba_do's own context stays undeclared for it, ba_dev's and dev's are their own.
+    assert _decision(policy, s, "Write", _write(context.replace(TASK, in_do)), (ba_do, "ba")) == ("own", [])
+    assert _decision(policy, s, "Write", _write(context.replace(TASK, in_dev)), (ba_dev, "ba")) == (
+        "own", [str(PROJECT / context.replace(TASK, in_dev))])
+    assert _decision(policy, s, "Write", _write(REPORT), (dev, "dev")) == ("own", [str(PROJECT / REPORT)])
+
+
+# -- the per-call cost: work a decision does not need is not done (review 1 latency, round 2) -------
+#
+# Each shortcut below is held to the reading it skips: the decisions (exit code and the denial's text)
+# with it equal those without it, and the shortcut must fire, so a test cannot pass vacuously.
+
+def _decided(policy, s, tool, tool_input, agent=None):
+    """_decision with what the hook wrote to stderr."""
+    import contextlib
+    import io
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        got = _decision(policy, s, tool, tool_input, agent)
+    return got, err.getvalue()
+
+
+def _mixed_session(root: Path) -> "Session":
+    """Started dispatches of every kind the other-caller reading meets: valid obligations naming files,
+    a directory and a producer question's role, invalid blocks (two of them, malformed JSON, an unknown
+    field, a pattern field), the current /dev BA template carrying none (with and without a "/.." value
+    that makes its ticket docs/dev/note.md), plain prompts, and a dispatch with no meta."""
+    prompt, _context = _template_prompt()
+    s = Session(root)
+    s.command("dev")
+    for k, (role, profile, path) in enumerate([("ba", "singular", "docs/dev/context-{t}.json"),
+                                               ("dev", "singular", "docs/dev/dev-report-{t}.json"),
+                                               ("qa", "final_verification", "docs/dev/qa-report-{t}.json"),
+                                               ("dev", "singular", "docs/dev/notes-{t}"),
+                                               ("spec", "singular", "src/mod{t}.py")]):
+        task = f"20261028-4{k:05d}"
+        s.dispatch(f"You are {role}.\n" + _block(_obligation(role, profile, path.format(t=task), task=task)), role)
+    bad = _obligation("dev", "singular", "docs/dev/note.md", task="20261028-499999")
+    s.dispatch("Two blocks.\n" + _block(bad) + "\n" + _block(bad), "dev")
+    s.dispatch('Malformed.\n<obligation v="1">\n{"task_id": \n</obligation>', "dev")
+    s.dispatch("Unknown field.\n" + _block(dict(bad, extra=1)), "dev")
+    pattern = dict(bad, artifacts=[{"kind": "markdown", "path": "docs/dev/note.md", "identity_anchor": "x",
+                                    "terminal_line_regex": "("}])
+    s.dispatch("A pattern.\n" + _block(pattern), "dev")
+    s.dispatch(prompt.replace(TASK, "20261028-488888"), "ba")
+    s.dispatch(prompt.replace(TASK, "x/../note"), "ba")
+    s.dispatch("Describe the toy package.", "general-purpose")
+    s.dispatch("You are dev.\n" + _block(_obligation("dev", "singular", "docs/dev/nometa.md")), "dev", meta=False)
+    return s
+
+
+def test_a_dispatch_that_cannot_declare_the_target_decides_as_its_full_reading(tmp_path, monkeypatch):
+    # A started dispatch whose obligation block (valid or not) names no path and no producer question
+    # that covers the target, and whose templates cannot, is neither validated nor bound
+    # (_obligation_may_declare, _template_bounds): every decision and denial equals the full reading's.
+    policy = _policy("tool_policy_skip")
+    from lib import declared_paths, obligation
+
+    s = _mixed_session(tmp_path / "projects")
+    agents = sorted(p.name[len("agent-"):-len(".meta.json")] for p in s.subagents.glob("*.meta.json"))
+    kinds = {a: json.loads((s.subagents / f"agent-{a}.meta.json").read_text())["agentType"] for a in agents}
+    callers = [None] + [(a, kinds[a]) for a in agents[::3]]
+    paths = ["docs/dev/note.md", "docs/dev/context-20261028-400000.json", "docs/dev/qa-report-20261028-400002.json",
+             "docs/dev/notes-20261028-400003/a.md", "docs/dev/producer-question-20261028-400000-ba.json",
+             "src/mod20261028-400004.py", "docs/dev/ticket-20261028-488888.md", "docs/dev/nometa.md",
+             "docs/dev/specs/s/views/v.md", "README.md"]
+    parsed = []
+    real_parse = obligation.parse_obligation
+    monkeypatch.setattr(obligation, "parse_obligation", lambda prompt, *a: parsed.append(prompt) or real_parse(prompt, *a))
+    cases = [(tool, tool_input, c) for c in callers for p in paths
+             for tool, tool_input in (("Write", _write(p)), ("Bash", {"command": f"printf x > {p} && printf y > {p}.b"}))]
+    shortcut = [_decided(policy, s, *case) for case in cases]
+    skipped = len(parsed)
+    with monkeypatch.context() as m:
+        m.setattr(declared_paths, "_obligation_may_declare", lambda prompt, targets: True)
+        m.setattr(declared_paths, "_template_bounds", lambda: declared_paths._ANY)
+        parsed.clear()
+        full = [_decided(policy, s, *case) for case in cases]
+    assert shortcut == full
+    assert len(parsed) > skipped, "the shortcut skipped no obligation"
+    outcomes = {got[0] if got[0] == "exit" else ("own" if got[1] else "none") for got, _err in shortcut}
+    assert outcomes == {"exit", "own", "none"} and any(err for _got, err in shortcut)
+
+
+def test_a_block_whose_validation_raises_is_read_in_full(tmp_path, monkeypatch):
+    # Validating a pattern field compiles it, and a repetition too large for re raises OverflowError,
+    # not re.error: such a block is never skipped, so the decision is the full reading's (here, the
+    # error the hook's __main__ handler turns into its fail-open exit) and not another dispatch's denial.
+    policy = _policy("tool_policy_pattern")
+    from lib import declared_paths
+
+    s = Session(tmp_path / "projects")
+    held = "docs/dev/held.md"  # a .md no template's path can be without a "/.." value: only BA's own block names it
+    s.dispatch("You are BA.\n" + _block(_obligation("ba", "singular", held)), "ba")
+    doc = _obligation("dev", "singular", "docs/dev/elsewhere.md", task="20261028-477777")
+    doc["artifacts"][0]["terminal_line_regex"] = "a{99999999999}"
+    s.dispatch("You are dev.\n" + _block(doc), "dev")
+    with pytest.raises(OverflowError):
+        _decision(policy, s, "Write", _write(held))
+    with monkeypatch.context() as m:
+        m.setattr(declared_paths, "_obligation_may_declare", lambda prompt, targets: True)
+        with pytest.raises(OverflowError):
+            _decision(policy, s, "Write", _write(held))
+    proc = s.run(tmp_path, "Write", _write(held), None)
+    assert (proc.returncode, proc.stderr.startswith("pretool-tool-policy: unexpected")) == (0, True), proc.stderr
+    # Without the pattern field the dev block is skipped and BA's declaration decides.
+    del doc["artifacts"][0]["terminal_line_regex"]
+    s.dispatch("You are dev again.\n" + _block(doc), "dev")
+    (s.subagents / next(p.name for p in s.subagents.glob("agent-*.jsonl")
+                        if "a{99999999999}" in p.read_text())).unlink()
+    assert _decision(policy, s, "Write", _write(held)) == ("exit", 2)
+
+
+def test_a_value_that_takes_a_part_back_is_read_from_the_prompt(tmp_path, monkeypatch):
+    # A "/.." in a prompt lets a bound value take a template's segment back, so a template path of
+    # another name may come to cover the target. Bound values are text of the prompt's lines: where the
+    # template's last segment binds one value, it covers a part p only through a value ending in "/" + p
+    # without the tail, which the prompt then holds; a segment binding two is read whatever the prompt
+    # holds. Every decision equals the full reading's, and both kinds of template make a denial.
+    policy = _policy("tool_policy_back")
+    from lib import declared_paths, stop_contract
+
+    one = ("subagent_type: worker\nPart C: <c>\n", '{"role": "worker", "profile": "singular", "artifacts": '
+           '[{"kind": "markdown", "path": "docs/dev/s-<c>.md", "identity_anchor": "<c>"}]}')
+    two = ("subagent_type: maker\nPart A: <a>\nPart B: <b>\n", '{"role": "maker", "profile": "singular", "artifacts": '
+           '[{"kind": "markdown", "path": "docs/dev/t-<a>-<b>.md", "identity_anchor": "<b>"}]}')
+    configs = [
+        (one, [("Part C: y/../note\n", "worker"),               # binds docs/dev/note.md; the prompt holds "/note"
+               ("Part C: y/../other\nsee /../ too\n", "worker"),  # binds docs/dev/other.md
+               ("Part C: plain\nsee /../note.md\n", "worker"),    # holds "/note" in a line no template line matches
+               ("Plain prompt.\n", "worker")],
+         {"docs/dev/note.md": 2, "docs/dev/other.md": 2, "docs/dev/elsewhere.md": 0, "docs/dev/s-z.md": 0}),
+        (two, [("Part A: x/../no\nPart B: te\n", "maker"),      # docs/dev/no-te.md: "/no-te" is in no line
+               ("Part A: k/..\nPart B: q/../w\n", "maker")],    # docs/dev/t-k/w.md
+         {"docs/dev/no-te.md": 2, "docs/dev/w.md": 0, "docs/dev/t-a-b.md": 0}),
+    ]
+    for n, ((fence, example), prompts, want) in enumerate(configs):
+        commands = tmp_path / f"commands{n}"
+        commands.mkdir()
+        monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+        (commands / "x.md").write_text("---\nname: x\n---\n```\n" + fence + "<obligation v=\"1\">\n" + example
+                                       + "\n</obligation>\n```\n", encoding="utf-8")
+        s = Session(tmp_path / f"projects{n}")
+        s.command("x")
+        for prompt, kind in prompts:
+            s.dispatch(prompt, kind)
+        cases = [(tool, tool_input, None) for t in want
+                 for tool, tool_input in (("Write", _write(t)), ("Bash", {"command": f"printf x > {t}"}))]
+        gated = []
+        real = declared_paths._bounds_may_cover_back
+        with monkeypatch.context() as m:
+            m.setattr(declared_paths, "_bounds_may_cover_back", lambda *a: gated.append(real(*a)) or gated[-1])
+            shortcut = [_decided(policy, s, *case) for case in cases]
+        with monkeypatch.context() as m:
+            m.setattr(declared_paths, "_template_bounds", lambda: declared_paths._ANY)
+            m.setattr(declared_paths, "_obligation_may_declare", lambda prompt, targets: True)
+            full = [_decided(policy, s, *case) for case in cases]
+        assert shortcut == full, n
+        for i, (target, code) in enumerate(want.items()):
+            assert shortcut[2 * i][0] == (("exit", 2) if code else ("own", [])), (n, target)
+        assert set(gated) == ({True, False} if n == 0 else {True}), (n, gated)  # skipped some, kept others
+
+
+def _validation_fuzz_doc(rng, kinds):
+    def value():
+        return rng.choice([None, True, 0, 1.5, "", "x", "docs/dev/a.md", "/abs", "a/../b", "2026-10-28T10:10:10Z",
+                           "20261028-101010", "dev", "singular", [], ["a"], ["a", "a"], {}, {"task_id": "x"},
+                           {"task_id": 1}, [{"kind": "json"}]])
+    doc = {}
+    for key in ("task_id", "lane", "lane_set", "role", "pipeline", "profile", "dispatched_at", "artifacts",
+                "consistency", "expected_absent", "extra"):
+        if rng.random() < 0.8:
+            doc[key] = value()
+    if rng.random() < 0.7:
+        doc.update(role=rng.choice(["dev", "ba", "nobody"]), pipeline=rng.choice(["dev", "spec", "none"]),
+                   profile=rng.choice(["singular", "commit-qa", "nope"]), task_id=rng.choice([None, "20261028-101010", 3]))
+    if rng.random() < 0.8:
+        entries = []
+        for _ in range(rng.randrange(0, 3)):
+            entry = {"kind": rng.choice(kinds + ["nope", 3])} if rng.random() < 0.9 else {}
+            for key in ("path", "schema", "identity", "identity_anchor", "begin", "end", "format", "monolith"):
+                if rng.random() < 0.5:
+                    entry[key] = value()
+            entries.append(entry if rng.random() < 0.95 else rng.choice([None, "x", 3]))
+        doc["artifacts"] = entries
+    return doc
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_validation_raises_on_no_document_but_through_a_pattern(seed):
+    # What _obligation_may_declare relies on: validating a parsed obligation that names no pattern field
+    # never raises, so a block it does not validate cannot be one whose validation would have raised.
+    import random
+
+    _policy("tool_policy_validation")
+    from lib import declared_paths, obligation, roster
+
+    rng = random.Random(seed)
+    kinds = sorted(obligation.ARTIFACT_KINDS)
+    assert kinds and declared_paths._PATTERN_FIELDS
+    with roster.held():
+        for _ in range(3000):
+            doc = _validation_fuzz_doc(rng, kinds)
+            artifacts = doc.get("artifacts") if isinstance(doc.get("artifacts"), list) else []
+            assert not any(isinstance(a, dict) and any(f in a for f in declared_paths._PATTERN_FIELDS) for a in artifacts)
+            obligation.validate_obligation(doc)
+            obligation.parse_obligation(_block(doc))
+
+
+def _template_types(policy, text: str) -> set:
+    from lib import dispatch_template
+
+    return {kind for _body, kind, _roles, _profiles, _example in dispatch_template._parsed_fences(text)}
+
+
+def test_the_template_bounds_hold_every_commands_template_shapes(tmp_path, monkeypatch):
+    # _template_bounds reads every obligation block of every command file without parsing a fence; what
+    # _template_shapes gives for any command and subagent type is among them, so a gate on the bounds
+    # never skips a template that could cover a target. Held for the current files and for edge cases:
+    # an opener with no close, two openers before one close, blocks outside any fence, spaces around
+    # the JSON that only a Unicode-aware strip removes, and a path of any shape (then both are _ANY).
+    policy = _policy("tool_policy_bounds")
+    from lib import declared_paths, stop_contract
+
+    def check():
+        declared_paths._FENCE_SHAPES.clear()
+        with declared_paths.decision():
+            bounds = declared_paths._template_bounds()
+            names = sorted(p.stem for p in stop_contract.COMMANDS_DIR.glob("*.md"))
+            seen = 0
+            for name in names + [None]:
+                text = "".join((stop_contract.COMMANDS_DIR / f"{n}.md").read_text() for n in (names if name is None else [name]))
+                for kind in _template_types(policy, text) | {"general-purpose", "nobody"}:
+                    shapes = declared_paths._template_shapes(name, kind)
+                    if shapes is declared_paths._ANY:
+                        assert bounds is declared_paths._ANY, (name, kind)
+                    else:
+                        assert bounds is declared_paths._ANY or shapes <= bounds, (name, kind, shapes - bounds)
+                        seen += len(shapes)
+        declared_paths._FENCE_SHAPES.clear()
+        return bounds, seen
+
+    bounds, seen = check()
+    assert bounds is not declared_paths._ANY and seen
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+    example = '{"role": "ba", "profile": "singular", "artifacts": [{"kind": "markdown", "path": "docs/dev/%s-<t>.md"}]}'
+    (commands / "a.md").write_text(
+        "---\n---\n```\nsubagent_type: ba\n<obligation v=\"1\">  " + example % "one" + "　\n</obligation>\n```\n"
+        "```\nsubagent_type: ba\n<obligation v=\"1\"> <obligation v=\"1\">" + example % "two" + "</obligation>\n```\n"
+        "```\nsubagent_type: qa\n<obligation v=\"1\">" + example % "three" + "\n```\n"
+        "<obligation v=\"1\">" + example % "loose" + "</obligation>\n", encoding="utf-8")
+    bounds, seen = check()
+    assert seen and {p for (kind, p), _prefix in bounds} >= {".md"}
+    (commands / "b.md").write_text("```\nsubagent_type: ba\n<obligation v=\"1\">"
+                                   '{"artifacts": [{"kind": "markdown", "path": "docs/dev/<t>"}]}'
+                                   "</obligation>\n```\n", encoding="utf-8")
+    assert check()[0] is declared_paths._ANY
+
+
+def _line_reader_prompt(path):
+    """read_first_record_prompt as it read every file before its first-line read (the oracle)."""
+    record = None
+    try:
+        with Path(path).open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    candidate = json.loads(line)
+                except ValueError:
+                    return None
+                if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
+                    record = candidate
+                    break
+    except OSError:
+        return None
+    if record is None or record.get("type") != "user":
+        return None
+    message = record.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content or None
+    if isinstance(content, list):
+        return "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text") or None
+    return None
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_the_first_record_is_read_as_the_line_reader_read_it(tmp_path, seed):
+    # obligation.read_first_record_prompt reads a subagent transcript's first line with raw reads and
+    # falls back to the text reader where that line does not decide: the prompt (or None) is the text
+    # reader's for any bytes, invalid UTF-8, carriage returns and lines longer than one read included.
+    import random
+
+    _policy("tool_policy_first_record")
+    from lib import obligation
+
+    rng = random.Random(seed)
+    records = [
+        {"type": "user", "message": {"role": "user", "content": "Prompt é— x"}},
+        {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "a/"},
+                                                                  {"type": "image"}, {"type": "text", "text": ".."}]}},
+        {"type": "assistant", "message": {"content": "no"}}, {"type": "queue-operation"}, {"type": "user"},
+        {"type": "user", "message": {"content": ""}}, [1, 2], "text",
+    ]
+    pieces = [b"\n", b"\r", b"\r\n", b"\xff", b"\xe2\x82", b"\xe2\x82\xac", b"{", b'"', b"x" * 70000, b" "]
+    seen = set()
+    for n in range(60):
+        lines = []
+        for _ in range(rng.randrange(0, 4)):
+            line = json.dumps(rng.choice(records), ensure_ascii=rng.random() < 0.5).encode()
+            if rng.random() < 0.3:
+                at = rng.randrange(0, len(line) + 1)
+                line = line[:at] + rng.choice(pieces) + line[at:]
+            lines.append(line)
+        data = b"\n".join(lines) + (b"\n" if rng.random() < 0.5 else b"")
+        path = tmp_path / f"agent-{n}.jsonl"
+        path.write_bytes(data)
+        want = _line_reader_prompt(path)
+        for spelled in (str(path), path, str(path) + "/", str(tmp_path) + "//" + path.name):
+            assert obligation.read_first_record_prompt(spelled) == want, (data[:200], spelled)
+        seen.add(want is None)
+    assert seen == {True, False}
+    user = {"type": "user", "message": {"role": "user", "content": "the prompt"}}
+    edge = [
+        b'{"type": "user",\r "message": {"content": "split at the CR"}}\n',  # the text reader ends a line at \r
+        json.dumps(user).encode() + b"\r\n" + b"tail\r\n",  # CRLF line ends
+        json.dumps({"type": "queue-operation"}).encode() + b"\n" + json.dumps(user).encode() + b"\n",
+        json.dumps({"type": "user", "message": {"content": "x" * 200000}}).encode() + b"\n",  # longer than one read
+        json.dumps(user).encode()[:-2] + b"\xe2\x82" + b'"}}\n',  # an incomplete sequence in the line
+        json.dumps(user).encode() + b"\xe2\x82\n",  # ... and right before its newline
+        b"", b"\n", b"\r", json.dumps(user).encode(),
+    ]
+    for n, data in enumerate(edge):
+        path = tmp_path / f"edge-{n}.jsonl"
+        path.write_bytes(data)
+        assert obligation.read_first_record_prompt(str(path)) == _line_reader_prompt(path), data[:120]
+    assert _line_reader_prompt(tmp_path / "edge-0.jsonl") is None and _line_reader_prompt(tmp_path / "edge-2.jsonl")
+    assert obligation.read_first_record_prompt(str(tmp_path / "missing.jsonl")) is None
+    assert obligation.read_first_record_prompt(str(tmp_path)) is None
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_the_raw_reads_give_what_the_text_reads_gave(tmp_path, seed):
+    # _load_json (a started dispatch's meta) and _read_text (a command file, once per decision) read raw
+    # bytes; each gives json.load(open()) and Path.read_text(encoding="utf-8")'s result or error class.
+    import random
+
+    _policy("tool_policy_raw_reads")
+    from lib import declared_paths
+
+    rng = random.Random(seed)
+    pieces = [b"\r\n", b"\r", b"\n", b"\xff", b"\xef\xbb\xbf", b"\x01", b'"', b"\\", b"\xc3\xa9", b" "]
+    doc = json.dumps({"agentType": "ba", "toolUseId": "toolu_x", "n": [1, {"a": "bé"}]}).encode()
+
+    def outcome(fn, path):
+        try:
+            return ("ok", fn(path))
+        except (OSError, ValueError) as e:
+            return ("error", OSError if isinstance(e, OSError) else UnicodeDecodeError
+                    if isinstance(e, UnicodeDecodeError) else ValueError)
+
+    for n in range(80):
+        data = doc
+        for _ in range(rng.randrange(0, 3)):
+            at = rng.randrange(0, len(data) + 1)
+            data = data[:at] + rng.choice(pieces) + data[at:]
+        path = tmp_path / f"f{n}"
+        path.write_bytes(data)
+        assert outcome(declared_paths._load_json, path) == outcome(lambda p: json.load(open(p)), path), data
+        assert outcome(declared_paths._read_text, path) == outcome(lambda p: p.read_text(encoding="utf-8"), path), data
+    assert declared_paths._TEXT_ENCODING is not None  # the raw reads were the ones compared
+    for missing in (tmp_path / "missing", tmp_path):
+        assert outcome(declared_paths._load_json, missing) == outcome(lambda p: json.load(open(p)), missing)
+
+
+def test_the_declarable_shapes_decode_only_an_escaped_value(tmp_path, monkeypatch):
+    # A path value with no backslash is taken as written; json.loads gave the same (or refused a control
+    # character, and the raw text was taken). The shapes equal the ones decoding every value gave.
+    policy = _policy("tool_policy_shape_values")
+    from lib import declared_paths, stop_contract
+
+    def decoded_every_value():
+        shapes = {declared_paths._shape(declared_paths._QUESTION_PATH)}
+        for file in sorted(stop_contract.COMMANDS_DIR.glob("*.md")):
+            for raw in declared_paths._TEMPLATE_PATH_RE.findall(file.read_text(encoding="utf-8")):
+                try:
+                    value = json.loads(f'"{raw}"')
+                except ValueError:
+                    value = raw
+                shapes.add(declared_paths._shape(value))
+        return shapes
+
+    assert policy._declarable_shapes() == decoded_every_value()
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+    (commands / "x.md").write_text('"path": "a/b\\u002ec"\n"path": "d/e\\/f.md"\n"path": "g/h\tij.json"\n'
+                                   '"path": "k/<l>\\\\m"\n"path": "n/\\q"\n', encoding="utf-8")
+    with declared_paths.decision():
+        assert declared_paths._declarable_shapes() == decoded_every_value()
+    assert declared_paths._declarable_shapes() == decoded_every_value()
+
+
+def test_the_roster_is_read_once_within_a_held_block(tmp_path):
+    # Validating every started dispatch's obligation asks for the agent and command rosters once each:
+    # within roster.held() a directory is listed and read once; outside it the roster follows the files.
+    _policy("tool_policy_roster")
+    from lib import roster
+
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "ba.md").write_text("---\n", encoding="utf-8")
+    with roster.held():
+        assert roster.roles(agents) == {"ba"}
+        (agents / "qa.md").write_text("---\n", encoding="utf-8")
+        assert roster.roles(agents) == {"ba"}
+        with roster.held():
+            assert roster.roles(agents) == {"ba"}
+        assert roster.roles(str(agents)) == {"ba", "qa"}  # another name for it is read once of its own
+    assert roster.roles(agents) == {"ba", "qa"}
+    assert roster._HELD is None
+
+
+def test_a_hook_process_ends_with_the_status_and_output_it_decided(tmp_path, cycle):
+    # Run as a script, the hook ends without the interpreter's teardown (_end); its exit status and
+    # stderr are the ones it decided, a denial's and an allow's alike.
+    denied = cycle.run(tmp_path, "Write", _write(CONTEXT), None)
+    assert denied.returncode == 2 and denied.stderr.startswith(BLOCK) and denied.stderr.endswith("\n")
+    assert len(denied.stderr.splitlines()) == 1
+    allowed = cycle.run(tmp_path, "Write", _write("docs/dev/notes.md"), None)
+    assert (allowed.returncode, allowed.stderr, allowed.stdout) == (0, "", "")

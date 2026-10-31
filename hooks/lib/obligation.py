@@ -36,6 +36,7 @@ production reader this design cites at :51-54), never duplicated.
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -717,6 +718,43 @@ def registry_dir_for(project_dir: str | Path, task_id: Any) -> Path | None:
 # Resolver: own-dispatch-obligation resolution (design §1.3-G2, rungs L0/L1)
 # --------------------------------------------------------------------------
 
+_READ_ON = object()  # _first_line_record: the first line does not decide
+_FIRST_READ = 1 << 16
+
+
+def _first_line_record(path):
+    """What read_first_record_prompt's line reader decides at a file's first
+    line, from raw reads up to its first newline: the record when that line
+    holds a user or assistant record, None when it is no JSON (the reader
+    stops there), else _READ_ON (another record comes first, or the line
+    holds a carriage return, at which the text reader also ends a line).
+    The line's bytes decode as the text reader decodes them (UTF-8, errors
+    replaced): an ASCII newline ends any sequence before it either way. A
+    tool-policy run reads the first record of every started subagent of a
+    session, and the text reader's layers were most of what each cost."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        chunks, end = [], -1
+        while end < 0:
+            chunk = os.read(fd, _FIRST_READ)
+            if not chunk:
+                break
+            end = chunk.find(b"\n")
+            chunks.append(chunk if end < 0 else chunk[:end])
+    finally:
+        os.close(fd)
+    line = b"".join(chunks)
+    if b"\r" in line:
+        return _READ_ON
+    try:
+        candidate = json.loads(line.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
+        return candidate
+    return _READ_ON
+
+
 def read_first_record_prompt(transcript_path: str | Path) -> str | None:
     """Return the dispatch prompt from a subagent transcript's first MESSAGE
     record when it is a user message (design §1.3-G2: "first record is a user
@@ -728,17 +766,27 @@ def read_first_record_prompt(transcript_path: str | Path) -> str | None:
     reader ``_read_parent_calls`` handles at subagent_restart.py:340-346).
     Read-only; returns None when unreadable, not type=user, or textless.
     """
-    record = None
+    # A str that ends in a name is opened as given: Path() would only drop "."
+    # parts and doubled slashes, which name the same file. Anything else (a
+    # trailing "/" Path() strips, a Path, a wrong type) meets Path() as before.
+    if isinstance(transcript_path, str) and transcript_path and not transcript_path.endswith(("/", "/.")) \
+            and transcript_path != ".":
+        path = transcript_path
+    else:
+        path = Path(transcript_path)
     try:
-        with Path(transcript_path).open("r", encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                try:
-                    candidate = json.loads(line)
-                except ValueError:
-                    return None
-                if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
-                    record = candidate
-                    break
+        record = _first_line_record(path)
+        if record is _READ_ON:
+            record = None
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    try:
+                        candidate = json.loads(line)
+                    except ValueError:
+                        return None
+                    if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
+                        record = candidate
+                        break
     except OSError:
         return None
     if record is None or record.get("type") != "user":

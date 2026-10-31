@@ -2,7 +2,7 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 52
+**Total entries**: 53
 **Convention**: kebab
 
 ## Tree
@@ -36,6 +36,7 @@ lib/
 ├── `commit_journal.py` - WHY THIS EXISTS
 ├── `commit_pipeline.py` - ONE home for the two questions the commit-authorization chain could not
 ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+├── `declared_paths.py` - hooks/pretool-tool-policy.py decides who may write a path a dispatch of the
 ├── `dev_report_shard_patterns.py` - Single source for the per-worker / canonical dev-report filename regexes and
 ├── `dispatch_template.py` - A dispatch made from a base template before a merge carries no obligation block
 ├── `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every

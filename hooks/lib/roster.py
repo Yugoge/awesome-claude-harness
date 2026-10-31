@@ -21,6 +21,29 @@ AGENTS_DIR = Path(__file__).resolve().parent.parent.parent / "agents"
 # keeps its entry, so a process that has read the roster does not see that
 # edit; every hook process reads it afresh.
 _SEEN: dict[str, tuple[tuple, frozenset[str]]] = {}
+# Within held(): each directory's roster as it was first asked for there.
+_HELD: dict | None = None
+
+
+class held:
+    """``with held():`` -- within the block each directory's roster is listed
+    and read once. A caller that decides at one moment over many obligations
+    (tool-policy reading every started dispatch of a long session) takes one
+    roster for all of them, as it would if the directory did not change while
+    it ran: listing the directory again for each obligation was most of what
+    validating one cost there. Nested blocks share the outermost one's."""
+
+    def __enter__(self):
+        global _HELD
+        self._outer = _HELD
+        if _HELD is None:
+            _HELD = {}
+        return self
+
+    def __exit__(self, *exc):
+        global _HELD
+        _HELD = self._outer
+        return False
 
 
 def _md_entries(directory: Path) -> tuple | None:
@@ -39,6 +62,17 @@ def roles(agents_dir: str | Path | None = None) -> frozenset[str]:
     """The stems of the ``*.md`` files in ``agents_dir`` (default: the
     harness's agents/) whose first line opens front matter. A file that cannot
     be read contributes nothing; a missing directory gives the empty set."""
+    if _HELD is not None:
+        # Held by the directory as it is named: one read per name, not one
+        # spelling of a path per obligation.
+        if agents_dir not in _HELD:
+            _HELD[agents_dir] = _read(agents_dir)
+        return _HELD[agents_dir]
+    return _read(agents_dir)
+
+
+def _read(agents_dir: str | Path | None) -> frozenset[str]:
+    """roles(), remembered in _SEEN until the directory changes."""
     directory = Path(agents_dir) if agents_dir is not None else AGENTS_DIR
     key = os.path.abspath(directory)
     listed = _md_entries(directory)
