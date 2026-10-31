@@ -1154,13 +1154,13 @@ Per spec-20260518-225715 §5.3, QA MUST rerun the blast-radius tool against the 
 ```bash
 python3 scripts/blast-radius-tool.py \
   --git-diff --base HEAD \
-  --output .claude/dev-registry/dev-<task_id>/blast-radius-map-phase2.json \
+  --output /dev/stdout \
   --task-id <task_id>
 ```
 
 Use `--base HEAD` (the default) — Dev's changes during this cycle are typically uncommitted, so `git diff HEAD` captures the working-tree mutation set. Using `HEAD~1` would mix in unrelated prior-commit changes and produce false Phase-2 gaps.
 
-Compare:
+The call prints the Phase 2 map; it is read only here, so it is written to no file. Compare from that output:
 - Each `coverage_gaps[]` entry in the Phase 2 map MUST have a matching entry in Dev's `blast_radius_declarations[]` (by file).
 - A Phase 2 gap NOT declared by Dev → critical finding (`primary_cause: "dev_implementation"`).
 - A Dev-declared exemption that you judge insufficient → record under `qa.blast_radius_phase2.exemption_vetoes[]` and demote verdict accordingly.
@@ -1605,7 +1605,6 @@ Return verification report as JSON:
     },
     "blast_radius_phase2": {
       "_doc": "Phase 2 verification per spec-20260518-225715 §5.3. QA reruns blast-radius-tool.py with --git-diff and compares coverage_gaps against the BA-Phase-1 map; verifies every Phase 1 gap and required_validation has a corresponding declaration in dev-report.blast_radius_declarations[].",
-      "phase2_map_path": ".claude/dev-registry/dev-<task_id>/blast-radius-map-phase2.json",
       "git_diff_files": [],
       "phase1_phase2_delta": [],
       "dev_declarations_complete": true,
