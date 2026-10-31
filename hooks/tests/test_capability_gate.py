@@ -213,6 +213,23 @@ def test_unreadable_but_present_layer_fails_closed(home: Path, monkeypatch):
     assert cs.binding_failure(b) == "binding_layer_unreadable"
 
 
+@pytest.mark.parametrize("layer", list(cs.SETTINGS_LAYERS))
+def test_unusable_layer_fails_closed_with_the_settings_load_reason(home: Path, layer: str):
+    """A layer is judged by the one load of a settings file (claude_home.load_settings): one it
+    finds unusable (here unparseable at the same size) fails closed, naming its reason; one it
+    finds absent is recorded absent."""
+    p = home / layer
+    p.write_bytes(b"{" * p.stat().st_size)
+    b = cs.canonical_binding(home)
+    rec = [r for r in b["settings_records"] if r["path"] == layer][0]
+    assert rec["present"] is True and rec["sha256"] is None
+    assert rec["unusable"].startswith(f"{p}: not valid JSON (")
+    assert cs.binding_failure(b) == "binding_layer_unreadable: " + rec["unusable"]
+    p.unlink()
+    rec = [r for r in cs.canonical_binding(home)["settings_records"] if r["path"] == layer][0]
+    assert rec == {"path": layer, "present": False, "sha256": None}
+
+
 def test_host_build_unknown_is_non_passing(home: Path, monkeypatch):
     monkeypatch.setattr(cs, "read_host_build", lambda: "unknown")
     assert cs.binding_failure(cs.canonical_binding(home)) == "binding_host_build_unknown"
@@ -271,6 +288,8 @@ def test_mutation_f_render_regeneration_invalidates_without_touching_live_bounda
     (iso / "scripts" / "install").mkdir(parents=True)
     iso_renderer = iso / "scripts" / "install" / "render-settings"
     shutil.copy2(renderer, iso_renderer)
+    (iso / "hooks" / "lib").mkdir(parents=True)  # render reads settings.json through its load
+    shutil.copy2(REPO / "hooks" / "lib" / "claude_home.py", iso / "hooks" / "lib")
     shutil.copy2(live_settings, iso / "settings.json")
     overlay = {"env": {"CAPGATE_RENDER_PROBE": "first"}}
 

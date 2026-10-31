@@ -629,6 +629,23 @@ def test_unregistered_filter_with_changed_settings_is_blocked(sandbox, filtered_
 
 
 @pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("committed", [False, True], ids=["changed", "as-committed"])
+def test_unregistered_filter_with_unusable_settings_names_the_loads_reason(sandbox, filtered_repo,
+                                                                          caller, committed):
+    """settings.json unparseable at the same size is judged by the one load of a settings file
+    (hooks/lib/claude_home.py load_settings): blocked with its reason, also when HEAD holds it."""
+    _, env = sandbox
+    path = filtered_repo / "settings.json"
+    path.write_bytes(b"{" * path.stat().st_size)
+    if committed:
+        git(env, filtered_repo, "commit", "-q", "-am", "unusable")
+    command = "git commit -m x"
+    r = run_hook(sandbox, command, filtered_repo, caller)
+    assert_blocked(r, "unregistered-settings-filter", command)
+    assert f"settings.json is unusable: {path}: not valid JSON (" in r.stderr, r.stderr
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
 @pytest.mark.parametrize("template", ["git -C {repo} commit -m x", "cd {repo} && git commit -m x"],
                          ids=["dash-C", "cd"])
 def test_unregistered_filter_is_found_through_C_and_cd(sandbox, filtered_repo, caller, template):
@@ -755,7 +772,10 @@ def test_do_consent_does_not_bypass(sandbox, filtered_repo, harness_home, caller
     plain = make_repo(env, tmp_path / "plain" / "repo", declare_filter=False)
     assert run_hook(sandbox, CONTROL[caller], plain, caller).returncode == 2
     (tmp_path / "state" / f"claude-orchestrator-consent-{SID}.flag").write_text("true")
-    assert_allowed(run_hook(sandbox, CONTROL[caller], plain, caller))  # consent is live
+    if caller == "main":
+        assert_allowed(run_hook(sandbox, CONTROL[caller], plain, caller))  # consent is live
+    else:  # a subagent never holds /do consent (hooks/lib/allowlist.py has_do_consent)
+        assert run_hook(sandbox, CONTROL[caller], plain, caller).returncode == 2
     command = "git commit --no-verify -m x"
     assert_blocked(run_hook(sandbox, command, plain, caller), "commit-hook-bypass", command)
     cw = "git config core.hooksPath /dev/null"

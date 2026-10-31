@@ -1,5 +1,5 @@
 {
-  "policy_version": 7,
+  "policy_version": 8,
   "default_action": "deny",
   "_shared_protected_path_prefixes": [
     "/.claude/hooks/",
@@ -10,7 +10,7 @@
     "/.claude/scripts/",
     "/.claude/settings.json"
   ],
-  "_note": "Path prefixes containing '*' use glob-aware matching (fnmatch-style). Use '*/docs/dev/foo-' to match the prefix 'docs/dev/foo-' anywhere under any worktree. Use '/docs/dev/foo-' to anchor at any path that ends with '/docs/dev/foo-' boundary. Shared protected list is the SOLE catch-all for /.claude/ — DO NOT add broad '/.claude/' to denied prefixes; use only the explicit subdirs above so legitimate worktree artifact paths remain writable. spec-20260507-142952 AC-1: cp-state-*.json globs are documented here AND propagated into every subagent role's denied_write_path_prefixes; spec-check.py is the only legal writer. policy_version 2 (2026-05-09): added defense-in-depth denied_tools=[Write,Edit,MultiEdit,NotebookEdit] conventions for read-only roles; project-specific roles introduced in this version were later removed during harness de-privatization. policy_version 3 (spec-20260519-211515 R7 reconciliation, 2026-05-20): broadened codex-detection invariant — added Skill to allowed_tools for 9 roles whose agents/*.md mention codex consultation (architect, cleanliness-inspector, pm, product-owner, prompt-inspector, spec, style-inspector, ui-specialist, user). ba gained docs/dev/acceptance-criteria- and docs/dev/retrospective-classification- write-prefixes; qa gained docs/dev/retrospective-classification-. Reconciliation closes item 7 of qa-output-retrospective-classification-20260519-175339.json. policy_version 4 (20260521-090100, 2026-05-23): adds */docs/codex/ to allowed_write_path_prefixes for 11 codex-consultation roles (ba, qa, pm, architect, product-owner, user, ui-specialist, spec, prompt-inspector, cleanliness-inspector, style-inspector). dev excluded — wildcard * already covers docs/codex/. Establishes docs/codex/<task_id>/<role>.txt as canonical codex output path; demotes /var/tmp/codex-outputs/ to fallback. policy_version 5 (20260524-122910, 2026-05-24, spec-20260518-225715 Cycle 3 Debt 8 / AC-08): adds */.claude/dev-registry/*/blast-radius-map.json to ba.allowed_write_path_prefixes so BA can author its per-task blast-radius-map for the dev pipeline (Phase 1 prediction). The existing */docs/dev/acceptance-criteria- prefix is preserved. dev/qa unaffected because they consume the map but the file is authored by ba. policy_version 6 (20260530-165718, 2026-05-30): registers the graphify Step-7.5 enrichment role with allowed_tools [Read, Bash, Write] (no Skill/Edit — graphify.md uses neither). Its Write grant is scoped TIGHT to */.claude/dev-registry/*/graphify/ (the graphify sub-prefix only, NOT the whole dev-registry) plus scratch/tmp, so it cannot author peer artifacts such as blast-radius-map.json; denied_write_path_prefixes mirrors the shared protected list verbatim. No broad */docs/dev/context- write-prefix is granted — graphify-enrich.py patches context-<ts>.json via --context-file under the already-granted Bash (B2-S1 / codex #9). Before this entry an unregistered graphify role hit default-deny on every dispatch. policy_version 7 (LANE-B, 20260808-035658 dev-20260910-111227): adds the managed scratch namespace '*/.claude/scratch/' to every role and REMOVES the bare raw-temp grants '/tmp/*' and '/var/tmp/*' from the 21 roles that held them. Pre-existing exact temp exceptions ('*/tmp/claude-scratch/<role>/', '*/var/tmp/codex-outputs/', '/tmp/agentic-commit/<role>/*') are UNCHANGED and remain allowed for exactly the role that held each. A JSON prefix cannot express actor identity and cannot deny a role that holds a bare '*' grant, so raw-temp denial and owner-vs-sibling scratch exactness are enforced behaviorally by hooks/pretool-tool-policy.py; this list is the declaration, not the sole enforcement.",
+  "_note": "Path prefixes containing '*' use glob-aware matching (fnmatch-style): '*/docs/dev/overnight/' matches that directory under any worktree. A prefix starting with '/' is anchored at the project root. The shared protected list is the SOLE catch-all for /.claude/ — DO NOT add broad '/.claude/' to denied prefixes; use only the explicit subdirs above so legitimate worktree paths remain writable. Allow prefixes name directories (ending in '/') or wildcards (ending in '*'), and the /dev/null, /dev/stderr and /dev/stdout devices, never the file of an artifact: hooks/pretool-tool-policy.py derives an artifact's write permission from the session's dispatch records (P1b E3). A path a dispatch's obligation declares (with the producer question it names and what the template it was dispatched from declares in the current command files) is written by that dispatch only, whatever these rows allow, and the role's deny prefixes still apply to it; an undeclared path keeps these rows. Deny prefixes grant nothing and all stay. cp-state files have one writer, scripts/spec-check.py (pretool-cp-state-write-guard.py). The managed scratch namespace '*/.claude/scratch/' is granted to every role; raw /tmp and /var/tmp are denied for every role, including one holding '*', except that role's own exact temp entries ('*/tmp/claude-scratch/<role>/', '*/var/tmp/codex-outputs/', '<state dir>/agentic-commit/<role>/'). A JSON prefix cannot express actor identity, so raw-temp denial and owner-vs-sibling scratch exactness are enforced behaviorally by hooks/pretool-tool-policy.py; these rows are the declaration, not the sole enforcement. policy_version 8 (P1b): every allow prefix that named an artifact's file went, with user.allowed_path_prefixes, which nothing read.",
   "roles": {
     "user": {
       "allowed_tools": [
@@ -22,29 +22,19 @@
         "Write",
         "mcp__playwright__*"
       ],
-      "allowed_path_prefixes": [
-        "/CLAUDE.md",
-        "/README.md",
-        "/.env"
-      ],
       "denied_path_prefixes": [
         "/src/",
         "/app/",
         "/lib/",
         "/components/"
       ],
-      "rationale": "User simulation: Playwright/read for user-flow testing, plus report and own cp-state updates for checklist-stop enforcement; no source/protected/test edits",
+      "rationale": "User simulation: Playwright/read for user-flow testing; writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight, codex and scratch directories; no source/protected/test edits",
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-user.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/cp-state-user.json",
-        "*/docs/dev/specs/*/user-",
-        "*/docs/dev/user-",
-        "*/docs/dev/user-report-",
         "*/tmp/claude-scratch/user/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -76,17 +66,11 @@
         "mcp__playwright__*"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-ui-specialist.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
-        "*/docs/dev/design-handoff-",
         "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/cp-state-ui-specialist.json",
-        "*/docs/dev/ui-audit-",
-        "*/docs/dev/ui-evidence-",
-        "*/docs/dev/ui-specialist-",
         "*/tmp/claude-scratch/ui-specialist/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -103,7 +87,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "UI specialist DESIGN_MODE: read + screenshot + write design-handoff/ui-evidence artifacts; forbid app-source writes and protected infrastructure"
+      "rationale": "UI specialist DESIGN_MODE: read + screenshot; writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight, codex and scratch directories; forbid app-source writes and protected infrastructure"
     },
     "ba": {
       "allowed_tools": [
@@ -119,26 +103,11 @@
         "WebFetch"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/dev-registry/*/blast-radius-map.json",
-        "*/.claude/specs/*/cp-state-ba.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
-        "*/docs/dev/acceptance-criteria-",
-        "*/docs/dev/ba-qa-report-",
-        "*/docs/dev/ba-spec-",
-        "*/docs/dev/ba-spec-iter-",
-        "*/docs/dev/context-",
-        "*/docs/dev/context-iter-",
-        "*/docs/dev/observations-ledger.md",
         "*/docs/dev/overnight/",
-        "*/docs/dev/producer-question-*-ba.json",
-        "*/docs/dev/retrospective-classification-",
-        "*/docs/dev/specs/*/ba-",
-        "*/docs/dev/specs/*/cp-state-ba.json",
-        "*/docs/dev/ticket-",
-        "*/docs/dev/ticket-iter-",
         "*/docs/research/",
         "*/tmp/claude-scratch/ba/",
         "*/var/tmp/codex-outputs/",
@@ -156,7 +125,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "BA: analysis + spec/context outputs + ba-iter; cp-state limited to own (cp-state-ba.json); no code/agent/hook writes"
+      "rationale": "BA: analysis; writes what its dispatch's obligation declares and the producer question that obligation names (pretool-tool-policy.py derives that permission from the dispatch record), plus its research, codex, overnight and scratch directories; no code/agent/hook writes"
     },
     "dev": {
       "allowed_tools": [
@@ -175,7 +144,7 @@
         "*/docs/dev/overnight/",
         "*/.claude/scratch/"
       ],
-      "rationale": "Dev: write per files_to_modify/files_to_create from BA context; orchestrator-level enforcement of scope"
+      "rationale": "Dev: write per files_to_modify/files_to_create from BA context; orchestrator-level enforcement of scope. A path another dispatch's obligation declares is that dispatch's alone, whatever '*' allows (pretool-tool-policy.py)"
     },
     "qa": {
       "allowed_tools": [
@@ -190,23 +159,11 @@
         "Skill"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-qa.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
-        "*/docs/dev/ba-qa-report-",
-        "*/docs/dev/close-report-",
-        "*/docs/dev/commit-qa-report-",
         "*/docs/dev/overnight/",
-        "*/docs/dev/qa-codex-consensus-",
-        "*/docs/dev/qa-input-",
-        "*/docs/dev/qa-output-",
-        "*/docs/dev/qa-report-",
-        "*/docs/dev/qa-spec-",
-        "*/docs/dev/retrospective-classification-",
-        "*/docs/dev/specs/*/cp-state-qa.json",
-        "*/docs/dev/specs/*/qa-",
         "*/tmp/claude-scratch/qa/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -224,7 +181,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "QA: read + verify + write report (qa-report, qa-input, qa-output, qa-spec, qa-codex-consensus, ba-qa-report, spec-section qa-*); cp-state limited to own (cp-state-qa.json); no app/source/test edits"
+      "rationale": "QA: read + verify; writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its codex, overnight and scratch directories; no app/source/test edits"
     },
     "pm": {
       "allowed_tools": [
@@ -239,19 +196,11 @@
         "mcp__playwright__*"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-pm.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/docs/dev/pm-",
-        "*/docs/dev/pm-plan-",
-        "*/docs/dev/pm-retro-",
-        "*/docs/dev/pm-triage-",
-        "*/docs/dev/specs/*/cp-state-pm.json",
-        "*/docs/dev/specs/*/pm-",
-        "*/docs/dev/test-plan",
         "*/tmp/claude-scratch/pm/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -269,7 +218,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "PM: read + plan/triage/retro outputs + overnight test-plan; cp-state limited to own (cp-state-pm.json); no implementation"
+      "rationale": "PM: read + plan/triage/retro; writes what its dispatch's obligation declares under the overnight directory (pretool-tool-policy.py derives that permission from the dispatch record), plus its codex and scratch directories; no implementation"
     },
     "architect": {
       "allowed_tools": [
@@ -281,15 +230,11 @@
         "Write"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-architect.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
-        "*/docs/dev/architect-",
         "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/architect-",
-        "*/docs/dev/specs/*/cp-state-architect.json",
         "*/tmp/claude-scratch/architect/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -306,7 +251,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "Architect: read + analyze + write architectural reports (architect-*); cp-state limited to own (cp-state-architect.json)"
+      "rationale": "Architect: read + analyze; writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight, codex and scratch directories"
     },
     "product-owner": {
       "allowed_tools": [
@@ -318,18 +263,11 @@
         "Write"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-product-owner.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/docs/dev/po-",
-        "*/docs/dev/product-owner-",
-        "*/docs/dev/specs/*/cp-state-product-owner.json",
-        "*/docs/dev/specs/*/product-owner-",
-        "*/docs/dev/user-feedback-",
-        "*/docs/dev/user-report-",
         "*/tmp/claude-scratch/product-owner/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -346,7 +284,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "Product-owner: business-logic analysis + report (product-owner-, user-report-, user-feedback-); cp-state limited to own"
+      "rationale": "Product-owner: business-logic analysis; writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight, codex and scratch directories"
     },
     "cleaner": {
       "allowed_tools": [
@@ -359,15 +297,10 @@
         "MultiEdit"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-cleaner.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
-        "*/docs/dev/cleaner-",
-        "*/docs/dev/cleaner_",
         "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/cleaner-",
-        "*/docs/dev/specs/*/cp-state-cleaner.json",
         "*/tmp/claude-scratch/cleaner/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -385,7 +318,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "cleaner: non-core specialist may read/analyze, write its own docs/dev reports, and update only its own cp-state; no source/protected/test edits."
+      "rationale": "cleaner: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; no source/protected/test edits."
     },
     "cleanliness-inspector": {
       "allowed_tools": [
@@ -399,16 +332,11 @@
         "Write"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-cleanliness-inspector.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
-        "*/docs/dev/cleanliness-inspector-",
-        "*/docs/dev/cleanliness-inspector_",
         "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/cleanliness-inspector-",
-        "*/docs/dev/specs/*/cp-state-cleanliness-inspector.json",
         "*/tmp/claude-scratch/cleanliness-inspector/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -426,7 +354,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "cleanliness-inspector: non-core specialist may read/analyze, write its own docs/dev reports, and update only its own cp-state; no source/protected/test edits."
+      "rationale": "cleanliness-inspector: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; no source/protected/test edits."
     },
     "git-edge-case-analyst": {
       "allowed_tools": [
@@ -439,15 +367,10 @@
         "MultiEdit"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-git-edge-case-analyst.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
-        "*/docs/dev/git-edge-case-analyst-",
-        "*/docs/dev/git-edge-case-analyst_",
         "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/cp-state-git-edge-case-analyst.json",
-        "*/docs/dev/specs/*/git-edge-case-analyst-",
         "*/tmp/claude-scratch/git-edge-case-analyst/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -465,7 +388,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "git-edge-case-analyst: non-core specialist may read/analyze, write its own docs/dev reports, and update only its own cp-state; no source/protected/test edits."
+      "rationale": "git-edge-case-analyst: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; no source/protected/test edits."
     },
     "prompt-inspector": {
       "allowed_tools": [
@@ -479,16 +402,11 @@
         "Write"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-prompt-inspector.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/docs/dev/prompt-inspector-",
-        "*/docs/dev/prompt-inspector_",
-        "*/docs/dev/specs/*/cp-state-prompt-inspector.json",
-        "*/docs/dev/specs/*/prompt-inspector-",
         "*/tmp/claude-scratch/prompt-inspector/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -506,7 +424,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "prompt-inspector: non-core specialist may read/analyze, write its own docs/dev reports, and update only its own cp-state; no source/protected/test edits."
+      "rationale": "prompt-inspector: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; no source/protected/test edits."
     },
     "rule-inspector": {
       "allowed_tools": [
@@ -519,15 +437,10 @@
         "MultiEdit"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-rule-inspector.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/dev/overnight/",
-        "*/docs/dev/rule-inspector-",
-        "*/docs/dev/rule-inspector_",
-        "*/docs/dev/specs/*/cp-state-rule-inspector.json",
-        "*/docs/dev/specs/*/rule-inspector-",
         "*/tmp/claude-scratch/rule-inspector/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -545,7 +458,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "rule-inspector: non-core specialist may read/analyze, write its own docs/dev reports, and update only its own cp-state; no source/protected/test edits."
+      "rationale": "rule-inspector: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; no source/protected/test edits."
     },
     "style-inspector": {
       "allowed_tools": [
@@ -559,16 +472,11 @@
         "Write"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-style-inspector.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/cp-state-style-inspector.json",
-        "*/docs/dev/specs/*/style-inspector-",
-        "*/docs/dev/style-inspector-",
-        "*/docs/dev/style-inspector_",
         "*/tmp/claude-scratch/style-inspector/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -586,7 +494,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "style-inspector: non-core specialist may read/analyze, write its own docs/dev reports, and update only its own cp-state; no source/protected/test edits."
+      "rationale": "style-inspector: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; no source/protected/test edits."
     },
     "test-writer": {
       "allowed_tools": [
@@ -601,9 +509,6 @@
       ],
       "allowed_write_path_prefixes": [
         "*/tests/generated/",
-        "*/.claude/dev-registry/*/test-writer.json",
-        "*/.claude/specs/spec-*/cp-state-test-writer*.json",
-        "*/docs/dev/test-writer-report-",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
@@ -623,7 +528,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "test-writer (spec-20260518-225715 §5.2): generates pytest skeleton tests from BA-produced acceptance-criteria JSON; writes ONLY under tests/generated/<task_id>/ + its own dev-registry sentinel + cp-state + docs/dev/test-writer-report-; explicitly forbidden from src/app/lib and all protected /.claude/ subdirs. Read access is broad (analyses AC JSON, spec files, existing tests for archive/idempotency keying)."
+      "rationale": "test-writer (spec-20260518-225715 §5.2): generates pytest skeleton tests from BA-produced acceptance-criteria JSON under tests/generated/ and writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record); explicitly forbidden from src/app/lib and all protected /.claude/ subdirs. Read access is broad (analyses AC JSON, spec files, existing tests for archive/idempotency keying)."
     },
     "test-executor": {
       "allowed_tools": [
@@ -636,15 +541,10 @@
         "MultiEdit"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-test-executor.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/cp-state-test-executor.json",
-        "*/docs/dev/specs/*/test-executor-",
-        "*/docs/dev/test-executor-",
-        "*/docs/dev/test-executor_",
         "*/tmp/claude-scratch/test-executor/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -662,7 +562,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "test-executor: non-core specialist may read/analyze, write its own docs/dev reports, and update only its own cp-state; no source/protected/test edits."
+      "rationale": "test-executor: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; no source/protected/test edits."
     },
     "test-validator": {
       "allowed_tools": [
@@ -675,15 +575,10 @@
         "MultiEdit"
       ],
       "allowed_write_path_prefixes": [
-        "*/.claude/specs/*/cp-state-test-validator.json",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/dev/overnight/",
-        "*/docs/dev/specs/*/cp-state-test-validator.json",
-        "*/docs/dev/specs/*/test-validator-",
-        "*/docs/dev/test-validator-",
-        "*/docs/dev/test-validator_",
         "*/tmp/claude-scratch/test-validator/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
@@ -701,7 +596,7 @@
         "/.claude/settings.json",
         "/tests/"
       ],
-      "rationale": "test-validator: non-core specialist may read/analyze, write its own docs/dev reports, and update only its own cp-state; no source/protected/test edits."
+      "rationale": "test-validator: non-core specialist may read/analyze and write what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight and scratch directories; no source/protected/test edits."
     },
     "spec": {
       "allowed_tools": [
@@ -738,7 +633,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "spec: may generate spec views and cp-state files only; no source/protected/test edits."
+      "rationale": "spec: may write the spec folders and scratch only; the views directory its dispatch's obligation declares is its alone (pretool-tool-policy.py); no source/protected/test edits."
     },
     "general-purpose": {
       "allowed_tools": {
@@ -785,7 +680,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "changelog-analyst: git commit operations; reads dev-artifacts, stages and commits source changes via Bash (git add/commit); writes push-gate token to /tmp/agentic-commit/push/; no write access to protected infra"
+      "rationale": "changelog-analyst: git commit operations; reads dev-artifacts, stages and commits source changes via Bash (git add/commit). Its Write tool writes only the message file of its own `git commit -F`, a scratch input, under its scratch directory; the push-gate token is written by scripts/write-push-gate-token.py, never by Write; no write access to protected infra"
     },
     "push-analyst": {
       "allowed_tools": [
@@ -801,6 +696,7 @@
         "*/dev/stdout",
         "*/tmp/claude-scratch/push-analyst/",
         "/tmp/agentic-commit/push-analyst/*",
+        "*/agentic-commit/push-analyst/*",
         "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
@@ -812,7 +708,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "push-analyst: pre-push git read-only analysis; reads commits-to-push range, sensitive file patterns, and divergence; writes nonce-keyed grant to /tmp/agentic-commit/push-analyst/ (role-specific directory only, no broad /tmp/*); no write access to protected infra"
+      "rationale": "push-analyst: pre-push git read-only analysis; reads commits-to-push range, sensitive file patterns, and divergence; writes nonce-keyed grant to <state dir>/agentic-commit/push-analyst/ (role-specific directory only, no broad /tmp/*; the /tmp entry is the default state dir's exception to the raw-temp denial, the */ entry a CLAUDE_STATE_DIR outside the temp roots); no write access to protected infra"
     },
     "merge-analyst": {
       "allowed_tools": [
@@ -828,6 +724,7 @@
         "*/dev/stdout",
         "*/tmp/claude-scratch/merge-analyst/",
         "/tmp/agentic-commit/merge-analyst/*",
+        "*/agentic-commit/merge-analyst/*",
         "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
@@ -839,7 +736,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "merge-analyst: pre-merge git read-only analysis; reads branch divergence, diff stat, conflict markers, and overnight-state for consistency validation; writes nonce-keyed grant (60s expiry) to /tmp/agentic-commit/merge-analyst/ (role-specific directory only, no broad /tmp/*); no write access to protected infra"
+      "rationale": "merge-analyst: pre-merge git read-only analysis; reads branch divergence, diff stat, conflict markers, and overnight-state for consistency validation; writes one nonce-keyed grant (60s expiry) with the Write tool to <state dir>/agentic-commit/merge-analyst/, checked on that Write by posttool-allowlist-consume.py (lib/merge_grant.py) and read by /merge (role-specific directory only, no broad /tmp/*; the /tmp entry is the default state dir's exception to the raw-temp denial, the */ entry a CLAUDE_STATE_DIR outside the temp roots); no write access to protected infra"
     },
     "pull-analyst": {
       "allowed_tools": [
@@ -885,7 +782,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "graphify: Step-7.5 enrichment subagent; reads dev-registry graphify.json + context + graph.json, runs graphify-enrich.py via Bash, writes per-task artifacts ONLY under .claude/dev-registry/<task_id>/graphify/ (graphify-run.json, focused-subgraph.json, graph-summary.json, graph-report.md). Write grant is scoped TIGHT to the graphify sub-prefix (not the whole dev-registry) so it cannot author peer artifacts (e.g. blast-radius-map.json). No Skill/Edit (graphify.md uses neither). context-<ts>.json is patched by graphify-enrich.py --context-file under the already-granted Bash, so no broad */docs/dev/context- write-prefix is granted (B2-S1 / codex #9). No write access to protected infra."
+      "rationale": "graphify: /dev Step 9 enrichment subagent; runs graphify-enrich.py via Bash, which writes the task's run record and focused subgraph under .claude/dev-registry/<task_id>/graphify/ and never the context (the graph cache is graphify-maintain.py's). Its Write grant is scoped to that graphify sub-directory, not the whole dev-registry, so it cannot author peer artifacts. No Skill/Edit (graphify.md uses neither). No write access to protected infra."
     }
   }
 }

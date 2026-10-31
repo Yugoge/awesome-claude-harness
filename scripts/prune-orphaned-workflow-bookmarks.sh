@@ -179,10 +179,6 @@ if [ "$MODE" = "report" ]; then
   exit 0
 fi
 
-LOG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs"
-mkdir -p "$LOG_DIR" 2>/dev/null || true
-LOG_FILE="$LOG_DIR/workflow-bookmark-prune.log"
-
 for f in "${CANDIDATES[@]}"; do
   base="$(basename "$f")"
 
@@ -205,7 +201,6 @@ for f in "${CANDIDATES[@]}"; do
   rm -f -- "$real"
   DELETED_COUNT=$((DELETED_COUNT + 1))
   DELETED_BYTES=$((DELETED_BYTES + size_bytes))
-  printf '%s deleted %s mtime=%s size=%sB\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$base" "$mtime_iso" "$size_bytes" >> "$LOG_FILE" 2>/dev/null || true
   echo "DELETED       $base  mtime=$mtime_iso size=${size_bytes}B"
 done
 

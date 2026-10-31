@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Break every active overnight time-lock + workflow-enforce.
+"""Break every active overnight time-lock.
 
 Backdates end_time on every active overnight-state-*.json so
-stop-overnight-timelock.py releases, and marks all todos completed so
-stop-workflow-enforce.py releases.
+stop-overnight-timelock.py releases. The CLI's todo list is its own record:
+nothing here writes it (P1b E7).
 
 Used by /stop slash command (commands/stop.md → hooks/stop.sh → here).
 
@@ -21,18 +21,16 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# WS1: resolve the project dir via the shared claude_home resolver (this script
-# lives at <harness home>/scripts/break-overnight-lock.py, so the resolver is at
+# WS1: the state's locator and write path are the shared lib (this script
+# lives at <harness home>/scripts/break-overnight-lock.py, so the lib is at
 # ../hooks/lib). Never default to the author literal /root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
-import claude_home  # noqa: E402
-
-CLAUDE_DIR = claude_home.project_dir() / ".claude"
-TODOS_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "todos"
+from harness_state_dir import harness_state_dir  # noqa: E402
+import overnight  # noqa: E402
 
 # Where the PreTool user-intent guard mints the helper-auth token
 # (claude-stop-helper-auth-<sid>.json). Overridable for sandbox tests.
-_SENTINEL_DIR = os.environ.get("CLAUDE_USERINTENT_SENTINEL_DIR", "/tmp")
+_SENTINEL_DIR = os.environ.get("CLAUDE_USERINTENT_SENTINEL_DIR", harness_state_dir())
 
 
 def _consume_helper_auth() -> bool:
@@ -75,6 +73,8 @@ def _consume_helper_auth() -> bool:
 
 
 def _backdate(sf: Path, past: str, release_isolation: bool) -> str:
+    """The owner's /stop, written through the state's one write path
+    (overnight.write_state, which the launcher publishes the record with)."""
     d = json.loads(sf.read_text())
     sid = d.get("session_id", "?")
     old = d.get("end_time", "?")
@@ -82,7 +82,7 @@ def _backdate(sf: Path, past: str, release_isolation: bool) -> str:
     d["current_phase"] = "completed"
     # M10/AC8 + fix-4: this user `/stop` release path is the ONLY sanctioned
     # setter of isolation_released_at and the closer of isolation_active_until.
-    # update-overnight-state.sh rejects --set on these fields. The release of the
+    # Both fields are otherwise immutable after launch. The release of the
     # isolation guarantee fields happens here ONLY when a valid /stop user-intent
     # helper-auth token was consumed (release_isolation); otherwise the helper
     # MUST NOT touch isolation_released_at / isolation_active_until — so an
@@ -93,29 +93,22 @@ def _backdate(sf: Path, past: str, release_isolation: bool) -> str:
         d["isolation_released_at"] = now_iso
         if "isolation_active_until" in d:
             d["isolation_active_until"] = past
-        sf.write_text(json.dumps(d, indent=2))
+        overnight.write_state(sf, d)
         print(f"  state {sid[:8]}: end_time {old} -> {past}; isolation_released_at={now_iso}")
     else:
-        sf.write_text(json.dumps(d, indent=2))
+        overnight.write_state(sf, d)
         print(f"  state {sid[:8]}: end_time {old} -> {past}; isolation_released_at WITHHELD "
               "(no valid /stop user-intent token — actors cannot self-release isolation)")
     return sid
 
 
-def _complete_todos(sid: str) -> None:
-    todos = TODOS_DIR / f"{sid}-agent-{sid}.json"
-    if not todos.exists():
-        return
-    items = json.loads(todos.read_text())
-    for t in items:
-        if isinstance(t, dict):
-            t["status"] = "completed"
-    todos.write_text(json.dumps(items))
-    print(f"  todos {sid[:8]}: marked all {len(items)} completed")
-
-
 def main() -> int:
-    states = sorted(CLAUDE_DIR.glob("overnight-state-*.json"))
+    # Every session's record, where the launcher writes it (overnight.state_path:
+    # CLAUDE_PROJECT_DIR, else the cwd). /stop runs in the CLI's Bash, which does
+    # not export CLAUDE_PROJECT_DIR; its cwd is the session's project directory,
+    # the one the launching hook was given.
+    records = overnight.state_path("*")
+    states = sorted(records.parent.glob(records.name))
     if not states:
         print("no overnight state files found — nothing to unlock")
         return 0
@@ -125,10 +118,9 @@ def main() -> int:
     release_isolation = _consume_helper_auth()
     past = (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     for sf in states:
-        sid = _backdate(sf, past, release_isolation)
-        _complete_todos(sid)
+        _backdate(sf, past, release_isolation)
     if release_isolation:
-        print("done — both Stop hooks released; session can now terminate")
+        print("done — the time-lock Stop hook released; session can now terminate")
         return 0
     # No valid /stop user intent: the time-lock backdate still releases the Stop
     # hooks (so a stuck session is not wedged), but isolation_released_at is

@@ -26,7 +26,9 @@ _STEPS = [
     ("13", "Process QA results", "Processing QA results", None),
     ("14", "Update settings.json permissions", "Updating settings.json permissions", None),
     ("15", "Iteration loop (if QA fails)", "Executing iteration loop", None),
-    ("16", "Generate completion report", "Generating completion report", None),
+    # The main agent's own step: it declares the report it writes, which no dispatch template does.
+    ("16", "Generate completion report", "Generating completion report",
+     {"artifacts": [{"kind": "markdown", "path": "docs/dev/completion-<task>.md"}]}),
 ]
 
 

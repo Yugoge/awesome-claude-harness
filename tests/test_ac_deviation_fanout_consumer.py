@@ -957,14 +957,16 @@ def test_c6_changed_anti_bypass_rows__change(tmp_path, row, agg_rc, status, expe
     assert out["status"] == "fail"
 
 
-def test_c6_route_selector_surfaces_the_explicit_rejection__change(tmp_path):
+def test_c6_route_selector_passes_the_rejection_through_in_the_chain__change(tmp_path):
     root, rc = row_fixture(tmp_path, "r4_blocker_not_attributable_to_a_recorded_id")
     assert rc == 1
     rc, out = select(root)
     assert rc == 2
-    assert out["explicit_rejection"]["code"] == "INVALID_AC_DEVIATION_RECORD"
-    assert out["explicit_rejection"]["path"] == LANE_A
+    assert "explicit_rejection" not in out
     assert out["artifact_chain"]["status"] == "fail"
+    assert {"code": "INVALID_AC_DEVIATION_RECORD", "path": LANE_A} in [
+        {"code": e["code"], "path": e["path"]} for e in out["artifact_chain"]["errors"]
+    ]
 
 
 def test_c6_aggregator_stderr_names_the_rejected_record__change(tmp_path):
@@ -1140,17 +1142,12 @@ def test_c8_an_unusable_resolver_fails_closed_with_exactly_one_note__change(tmp_
 
 
 # ==========================================================================
-# class 9: lifecycle stage 2 with a stub resolver
+# class 9: the lifecycle row of a dev chain is its one chain call, verbatim
 # ==========================================================================
 
 
-def stage2(tmp_path, canned):
-    dev_dir = tmp_path / "docs" / "dev"
-    dev_dir.mkdir(parents=True, exist_ok=True)
-    stub = types.SimpleNamespace(resolve_chain=lambda project_root, task_id: canned)
-    return lifecycle().stage2_close_eligibility(
-        tmp_path, dev_dir, TASK, {"dev": {"status": "completed"}}, types.SimpleNamespace(), stub
-    )
+def chain_row(canned):
+    return lifecycle().chain_state(TASK, canned)
 
 
 def canned_result(status, mode="singular", errors=None, disclosed=None, schema_version=2):
@@ -1158,76 +1155,49 @@ def canned_result(status, mode="singular", errors=None, disclosed=None, schema_v
         "schema_version": schema_version,
         "mode": mode,
         "status": status,
+        "lanes": [],
         "errors": errors if errors is not None else [],
         "disclosed_exceptions": disclosed if disclosed is not None else [],
     }
 
 
-def test_c9_a_passing_singular_chain_keeps_its_exact_row__pin(tmp_path):
-    row = stage2(tmp_path, canned_result("pass"))
+def test_c9_a_passing_chain_is_close_pending_with_the_chain_verbatim__pin():
+    canned = canned_result("pass")
+    row = chain_row(canned)
     assert row == {
         "state": "close_pending",
         "next_action": "close",
         "invoke_resolver": True,
-        "resolver_schema_version": 2,
-        "resolver_mode": "singular",
+        "artifact_chain": canned,
+        "lanes": [],
     }
-    assert sorted(row) == [
-        "invoke_resolver",
-        "next_action",
-        "resolver_mode",
-        "resolver_schema_version",
-        "state",
-    ]
 
 
-def test_c9_pass_with_exceptions_is_close_eligible_and_never_blocked__change(tmp_path):
+def test_c9_pass_with_exceptions_is_close_eligible_and_never_blocked__change():
     entries = [
         {"code": "INVALID_DEV_STATUS", "path": SINGULAR_DEV, "kind": KIND, "classification": FLAG,
          "lane_task_id": TASK, "evidence_ref_count": 2, "deviated_ac_ids": ["AC19"]},
         {"code": "UNRESOLVED_BLOCKERS", "path": SINGULAR_DEV, "kind": KIND, "classification": FLAG,
          "lane_task_id": TASK, "evidence_ref_count": 2, "deviated_ac_ids": ["AC19"]},
     ]
-    row = stage2(tmp_path, canned_result("pass_with_exceptions", disclosed=entries))
+    row = chain_row(canned_result("pass_with_exceptions", disclosed=entries))
     assert row["state"] == "close_pending"
     assert row["next_action"] == "close"
-    assert row["invoke_resolver"] is True
-    assert row["resolver_status"] == "pass_with_exceptions"
-    assert row["disclosed_exceptions"] == [
-        {"code": "INVALID_DEV_STATUS", "path": SINGULAR_DEV, "kind": KIND, "classification": FLAG},
-        {"code": "UNRESOLVED_BLOCKERS", "path": SINGULAR_DEV, "kind": KIND, "classification": FLAG},
-    ]
+    assert row["artifact_chain"]["status"] == "pass_with_exceptions"
+    assert row["artifact_chain"]["disclosed_exceptions"] == entries
     assert "blocker" not in row
-    assert row["state"] != "blocked"
 
 
-def test_c9_a_failing_chain_is_blocked_with_the_real_errors__pin(tmp_path):
+def test_c9_a_failing_chain_is_blocked_with_the_real_errors__pin():
     errors = [
         {"code": "INVALID_QA_STATUS", "path": "docs/dev/qa-report-x.json", "detail": "d1"},
         {"code": "MISSING_ARTIFACT", "path": "docs/dev/ticket-x.md", "detail": "d2"},
     ]
-    row = stage2(tmp_path, canned_result("fail", errors=errors))
+    row = chain_row(canned_result("fail", errors=errors))
     assert row["state"] == "blocked"
     assert row["next_action"] == "inspect"
     assert row["blocker"] == "RESOLVER_FAIL"
-    assert row["resolver_errors"] == errors
-
-
-def test_c9_an_unmapped_status_never_gives_an_empty_reason__change(tmp_path):
-    row = stage2(tmp_path, canned_result("pass", mode="fanout"))
-    assert row["state"] == "blocked"
-    assert row["blocker"] == "RESOLVER_FAIL"
-    assert [e["code"] for e in row["resolver_errors"]] == ["RESOLVER_STATUS_UNMAPPED"]
-    assert "pass" in row["resolver_errors"][0]["detail"]
-    assert "fanout" in row["resolver_errors"][0]["detail"]
-    assert row["resolver_errors"] != []
-
-
-def test_c9_a_foreign_schema_version_is_a_contract_mismatch__pin(tmp_path):
-    row = stage2(tmp_path, canned_result("pass", schema_version=3))
-    assert row["state"] == "blocked"
-    assert row["next_action"] == "inspect"
-    assert row["blocker"] == "RESOLVER_CONTRACT_MISMATCH"
+    assert row["artifact_chain"]["errors"] == errors
 
 
 # ==========================================================================
@@ -1244,11 +1214,13 @@ def shape(row):
 
 
 def test_c10_a_released_singular_chain_is_close_pending__change(tmp_path):
-    row = derive(build_singular(tmp_path, with_deviation()))
+    root = build_singular(tmp_path, with_deviation())
+    row = derive(root)
     assert shape(row) == ("close_pending", "close", True)
-    assert row["resolver_status"] == "pass_with_exceptions"
-    assert len(row["disclosed_exceptions"]) == 2
-    assert sorted(e["code"] for e in row["disclosed_exceptions"]) == [
+    assert row["artifact_chain"] == resolve(root)
+    assert row["artifact_chain"]["status"] == "pass_with_exceptions"
+    assert len(row["artifact_chain"]["disclosed_exceptions"]) == 2
+    assert sorted(e["code"] for e in row["artifact_chain"]["disclosed_exceptions"]) == [
         "INVALID_DEV_STATUS",
         "UNRESOLVED_BLOCKERS",
     ]
@@ -1266,28 +1238,34 @@ def test_c10_a_released_chain_is_listed_by_scan_and_list_actionable__change(tmp_
         capture_output=True, text=True, cwd=str(root), timeout=120,
     )
     assert done.returncode == 0
-    assert done.stdout.split() == [TASK]
+    lines = done.stdout.splitlines()
+    assert [line.split(" ", 1)[0] for line in lines] == [TASK]
+    assert json.loads(lines[0].split(" ", 1)[1]) == resolve(root)
 
 
-def test_c10_a_plain_blocked_report_is_still_developing__pin(tmp_path):
-    row = derive(build_singular(tmp_path, without_flag))
-    assert shape(row) == ("developing", "wait", False)
+def test_c10_a_plain_blocked_report_is_blocked_by_its_chain__change(tmp_path):
+    root = build_singular(tmp_path, without_flag)
+    row = derive(root)
+    assert shape(row) == ("blocked", "inspect", True)
+    assert row["artifact_chain"] == resolve(root)
 
 
-def test_c10_a_malformed_record_is_still_developing__pin(tmp_path):
+def test_c10_a_malformed_record_is_blocked_by_its_chain__change(tmp_path):
     def malformed(report):
         with_deviation()(report)
         report[BLOCK][K_IDS] = []
 
-    row = derive(build_singular(tmp_path, malformed))
-    assert shape(row) == ("developing", "wait", False)
+    root = build_singular(tmp_path, malformed)
+    row = derive(root)
+    assert shape(row) == ("blocked", "inspect", True)
+    assert row["artifact_chain"] == resolve(root)
 
 
-def test_c10_a_released_chain_with_a_failing_parent_qa_is_qa_failed__change(tmp_path):
-    row = derive(build_singular(tmp_path, with_deviation(), qa_status="fail"))
-    assert row["state"] == "qa_failed"
-    assert row["next_action"] == "resume_dev"
-    assert row["invoke_resolver"] is False
+def test_c10_a_released_chain_with_a_failing_parent_qa_is_blocked_by_its_chain__change(tmp_path):
+    root = build_singular(tmp_path, with_deviation(), qa_status="fail")
+    row = derive(root)
+    assert shape(row) == ("blocked", "inspect", True)
+    assert row["artifact_chain"] == resolve(root)
 
 
 def test_c10_a_released_chain_with_a_missing_reference_is_blocked_with_real_errors__change(tmp_path):
@@ -1297,8 +1275,8 @@ def test_c10_a_released_chain_with_a_missing_reference_is_blocked_with_real_erro
     assert row["state"] == "blocked"
     assert row["next_action"] == "inspect"
     assert row["blocker"] == "RESOLVER_FAIL"
-    assert row["resolver_errors"] == expected
-    assert row["resolver_errors"] != []
+    assert row["artifact_chain"]["errors"] == expected
+    assert expected != []
 
 
 def test_c10_a_released_fanout_canonical_is_close_pending_and_previews_complete__change(tmp_path):
@@ -1306,32 +1284,29 @@ def test_c10_a_released_fanout_canonical_is_close_pending_and_previews_complete_
     rc, payload, stderr = run_aggregator(root)
     assert rc == 0
     row = derive(root)
-    assert shape(row) == ("close_pending", "close", False)
-    assert row["roster_preview"] is True
+    assert shape(row) == ("close_pending", "close", True)
+    assert row["artifact_chain"] == resolve(root)
     assert [lane["task_id"] for lane in row["lanes"]] == [TASK + "-lane-a", TASK + "-lane-b"]
-    preview = lifecycle().roster_preview(
-        root / "docs" / "dev", TASK, aggregator(), deviation=resolver().ac_deviation_provider()
-    )
-    assert preview["complete"] is True
-    assert preview["lane_labels"] == ["lane-a", "lane-b"]
 
 
-def test_c10_a_released_fanout_with_a_failing_lane_qa_is_roster_incomplete__change(tmp_path):
+def test_c10_a_released_fanout_with_a_failing_lane_qa_is_blocked_by_its_chain__change(tmp_path):
     root = build_fanout(tmp_path, lane_a=with_deviation(), qa={"lane-b": "fail"})
     rc, payload, stderr = run_aggregator(root)
     assert rc == 0
     row = derive(root)
-    assert row["state"] == "blocked"
-    assert row["next_action"] == "inspect"
-    assert row["blocker"].split(":", 1)[0] == "ROSTER_INCOMPLETE"
-    assert row["blocker"] == "ROSTER_INCOMPLETE:lane 'lane-b' qa-report missing or qa.status != pass"
+    assert shape(row) == ("blocked", "inspect", True)
+    assert row["blocker"] == "RESOLVER_FAIL"
+    assert row["artifact_chain"] == resolve(root)
+    assert any("lane-b" in e["path"] for e in row["artifact_chain"]["errors"])
 
 
-def test_c10_a_failure_canonical_of_a_blocked_lane_is_still_developing__pin(tmp_path):
+def test_c10_a_failure_canonical_of_a_blocked_lane_is_blocked_by_its_chain__change(tmp_path):
     root = build_fanout(tmp_path, lane_a=without_flag)
     rc, payload, stderr = run_aggregator(root)
     assert rc == 1
-    assert shape(derive(root)) == ("developing", "wait", False)
+    row = derive(root)
+    assert shape(row) == ("blocked", "inspect", True)
+    assert row["artifact_chain"] == resolve(root)
 
 
 def test_c10_an_ordinary_fanout_chain_is_close_pending__pin(tmp_path):
@@ -1339,16 +1314,10 @@ def test_c10_an_ordinary_fanout_chain_is_close_pending__pin(tmp_path):
     rc, payload, stderr = run_aggregator(root)
     assert rc == 0
     row = derive(root)
-    assert shape(row) == ("close_pending", "close", False)
-    assert row["roster_preview"] is True
+    assert shape(row) == ("close_pending", "close", True)
+    assert row["artifact_chain"] == resolve(root)
     rows = lifecycle().scan(root)
     lane_rows = [r for r in rows if r["task_id"] in (TASK + "-lane-a", TASK + "-lane-b")]
     assert sorted(r["kind"] for r in lane_rows) == ["lane", "lane"]
     assert sorted(r["next_action"] for r in lane_rows) == ["none", "none"]
 
-
-def test_c10_the_preview_without_a_provider_keeps_the_baseline_answer__pin(tmp_path):
-    root = build_fanout(tmp_path, lane_a=with_deviation())
-    preview = lifecycle().roster_preview(root / "docs" / "dev", TASK, aggregator())
-    assert preview["complete"] is False
-    assert BLOCKED_LINE in preview["reason"]

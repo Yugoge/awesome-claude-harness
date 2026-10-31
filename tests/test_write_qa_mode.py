@@ -1,107 +1,56 @@
-"""Root selection and zero-write failure tests for write-qa-mode.sh.
+"""write-qa-mode.sh is an exit-0 stub (P1b E7, acceptance 17).
 
-Contract (scripts/write-qa-mode.sh:35, :73-85): the registry root is
-CLAUDE_PROJECT_DIR, never the script's own (harness home) location, and the
-qa.json sentinel must already exist (pre-created by the launcher) with
-agent_type "qa" and the matching session_id. Every refusal touches nothing.
+Each QA dispatch's obligation now declares the report it owes, so no qa_mode
+switch is written. A session that took up the earlier command text still runs
+every call that text made, by path (the overnight calls execute the script
+directly); each must exit 0 and create or change nothing, with or without
+CLAUDE_PROJECT_DIR and whether or not the session's qa.json exists.
 """
 
-import json
 import os
 from pathlib import Path
-import shutil
+import stat
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-WRITER = ROOT / "scripts/write-qa-mode.sh"
-SESSION = "root-fixture"
-SENTINEL = {"agent_type": "qa", "session_id": SESSION}
+STUB = ROOT / "scripts/write-qa-mode.sh"
+
+# The calls of the earlier text: commands/dev.md Steps 7 and 13,
+# commands/dev-command.md Steps 7 and 12, commands/dev-overnight.md Steps 10,
+# 15, 17 and 20, commands/close.md's QA arming.
+CALLS = [
+    ["--session-id", "dev-20260101-000000", "--mode", "ba_validation"],
+    ["--session-id", "dev-20260101-000000", "--mode", "final_verification", "--task-id", "20260101-000000"],
+    ["--session-id", "dev-20260101-000000", "--mode", "final_verification"],
+    ["--session-id", "dev-20260101-000000", "--mode", "final_verification", "--task-id", "20260101-000000",
+     "--init-if-missing"],
+]
 
 
-def _sentinel_path(root):
-    return root / ".claude/dev-registry" / SESSION / "qa.json"
+def _tree(root):
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*"))
 
 
-def _seed_sentinel(root):
-    path = _sentinel_path(root)
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps(SENTINEL) + "\n")
-    return path
-
-
-def _fixture(tmp_path, with_registry=True):
-    """Return (harness home holding the writer copy, project root)."""
-    home = tmp_path / "harness"
-    (home / "scripts").mkdir(parents=True)
-    shutil.copy2(WRITER, home / "scripts/write-qa-mode.sh")
-    # A sentinel at the script's own root: it must never be the write target.
-    _seed_sentinel(home)
+def test_stub_answers_every_earlier_call_with_exit_0_and_writes_nothing(tmp_path):
+    assert STUB.stat().st_mode & stat.S_IXUSR, "the overnight text executes it by path"
+    assert any(line.startswith("# STUB:") for line in STUB.read_text().splitlines())
     project = tmp_path / "proj"
-    project.mkdir()
-    if with_registry:
-        _seed_sentinel(project)
-    return home, project
-
-
-def _env(tmp_path, project_dir):
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
-    # Keep the global venv fallback (write-qa-mode.sh:55) out of the real home.
-    env["HOME"] = str(tmp_path / "home")
-    if project_dir is not None:
-        env["CLAUDE_PROJECT_DIR"] = str(project_dir)
-    return env
-
-
-def _run(script, env, cwd):
-    return subprocess.run(
-        ["bash", str(script), "--session-id", SESSION, "--mode", "ba_validation"],
-        text=True,
-        capture_output=True,
-        env=env,
-        cwd=cwd,
-    )
-
-
-def _assert_untouched(home):
-    assert json.loads(_sentinel_path(home).read_text()) == SENTINEL
-
-
-def test_env_unset_refuses_and_never_writes_script_root(tmp_path):
-    home, project = _fixture(tmp_path)
-    proc = _run(home / "scripts/write-qa-mode.sh", _env(tmp_path, None), project)
-    assert proc.returncode != 0
-    assert "CLAUDE_PROJECT_DIR not set" in proc.stderr
-    _assert_untouched(home)
-    assert json.loads(_sentinel_path(project).read_text()) == SENTINEL
-
-
-def test_symlinked_writer_resolves_same_primary_root(tmp_path):
-    home, project = _fixture(tmp_path)
-    link = tmp_path / "linked-writer"
-    link.symlink_to(home / "scripts/write-qa-mode.sh")
-    proc = _run(link, _env(tmp_path, project), tmp_path)
-    assert proc.returncode == 0, proc.stderr
-    data = json.loads(_sentinel_path(project).read_text())
-    assert data == {**SENTINEL, "qa_mode": "ba_validation"}
-    _assert_untouched(home)
-
-
-def test_unrelated_ambient_root_cannot_redirect_write(tmp_path):
-    home, project = _fixture(tmp_path)
-    unrelated = tmp_path / "unrelated"
-    unrelated.mkdir()
-    proc = _run(home / "scripts/write-qa-mode.sh", _env(tmp_path, unrelated), project)
-    assert proc.returncode == 1
-    assert "qa sentinel missing" in proc.stderr
-    assert not (unrelated / ".claude").exists()
-    _assert_untouched(home)
-    assert json.loads(_sentinel_path(project).read_text()) == SENTINEL
-
-
-def test_missing_session_registry_fails_before_write(tmp_path):
-    home, project = _fixture(tmp_path, with_registry=False)
-    proc = _run(home / "scripts/write-qa-mode.sh", _env(tmp_path, project), project)
-    assert proc.returncode == 1
-    assert "qa sentinel missing" in proc.stderr
-    assert not (project / ".claude").exists()
-    _assert_untouched(home)
+    sentinel = project / ".claude/dev-registry/dev-20260101-000000/qa.json"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_text('{"agent_type": "qa", "session_id": "dev-20260101-000000"}\n')
+    bare = tmp_path / "bare"  # an in-flight close: no registry, no qa.json
+    bare.mkdir()
+    for root in (project, bare):
+        before, before_bytes = _tree(root), sentinel.read_bytes()
+        for args in CALLS:
+            for env_root in (root, None):
+                env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+                env["HOME"] = str(tmp_path / "home")
+                if env_root is not None:
+                    env["CLAUDE_PROJECT_DIR"] = str(env_root)
+                for argv in (["bash", str(STUB), *args], [str(STUB), *args]):
+                    proc = subprocess.run(argv, text=True, capture_output=True, env=env, cwd=root)
+                    assert proc.returncode == 0, (argv, proc.stderr)
+        assert _tree(root) == before
+        assert sentinel.read_bytes() == before_bytes
+    assert not (tmp_path / "home").exists()

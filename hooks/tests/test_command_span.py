@@ -323,3 +323,96 @@ def test_span_libraries_read_no_error_or_pause_markers():
             if forbidden.search(line)
         ]
         assert hits == [], (name, hits)
+
+
+# --------------------------------------------------------------------------
+# write_set: TC-46's write set of one transcript (P1b E6)
+# --------------------------------------------------------------------------
+
+def _rooted(tx, project):
+    for record in tx.records:
+        if "cwd" in record:
+            record["cwd"] = str(project)
+    return tx
+
+
+def test_write_set_takes_ok_edit_targets_and_named_bash_paths(tmp_path):
+    project = tmp_path / "proj"
+    (project / "toy").mkdir(parents=True)
+    (project / "toy" / "a.py").write_text("x = 1\n")
+    tx = _Transcript()
+    tx.tool("Write", {"file_path": str(project / "toy" / "a.py"), "content": "x = 2\n"})
+    tx.tool("Edit", {"file_path": str(project / "toy" / "b.py"), "old_string": "a", "new_string": "b"},
+            result="String to replace not found in file.", is_error=True)
+    tx.tool("MultiEdit", {"file_path": "toy/c.py", "edits": []})
+    tx.tool("NotebookEdit", {"notebook_path": str(project / "nb" / "x.ipynb"), "new_source": ""})
+    tx.tool("Write", {"file_path": str(project / "docs" / "dev" / "dev-report-x.json"), "content": "{}"})
+    tx.tool("Write", {"file_path": "/etc/elsewhere.conf", "content": ""})
+    tx.tool_use("Write", {"file_path": str(project / "toy" / "unanswered.py"), "content": ""})
+    tx.tool("Bash", {"command": "printf '{}' > toy/gen.json && "
+                                "python3 -c \"open('toy/out.txt','w').write('1')\""})
+    tx.tool("Bash", {"command": "grep -n 'x' toy/a.py; git status --porcelain"})
+    found = command_span.write_set(_rooted(tx, project).write(tmp_path / "agent.jsonl"), project)
+    assert found.written == {"toy/a.py", "toy/c.py", "nb/x.ipynb"}
+    assert found.named == {"toy/gen.json", "toy/out.txt", "toy/a.py"}
+
+
+def test_write_set_starts_after_the_given_line(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    tx = _Transcript()
+    tx.tool("Write", {"file_path": str(project / "before.py"), "content": ""})
+    start = tx.typed(DEV_TEXT)
+    tx.tool("Write", {"file_path": str(project / "after.py"), "content": ""})
+    path = _rooted(tx, project).write(tmp_path / "main.jsonl")
+    assert command_span.write_set(path, project, start_line=start).written == {"after.py"}
+    assert command_span.write_set(path, project).written == {"before.py", "after.py"}
+
+
+def test_write_set_none_for_missing_transcript(tmp_path):
+    assert command_span.write_set(tmp_path / "missing.jsonl", tmp_path) is None
+
+
+# --------------------------------------------------------------------------
+# calls() and last_todos(): the span's tool uses as the record holds them (P1b E7)
+# --------------------------------------------------------------------------
+
+def _todos(*statuses):
+    return [{"content": f"Step {n}", "activeForm": f"Doing {n}", "status": s}
+            for n, s in enumerate(statuses, 1)]
+
+
+def test_calls_attach_results_and_stay_inside_the_span(tmp_path):
+    tx = _Transcript()
+    tx.tool("Bash", {"command": "before"})
+    start = tx.command("dev", "fix the bug")
+    ok = tx.tool("Bash", {"command": "ls"})
+    refused = tx.tool("Agent", {"subagent_type": "ba"}, result="PreToolUse:Agent hook error", is_error=True)
+    pending = tx.tool("Agent", {"subagent_type": "qa"}, result=None)
+    tx.add(tx._envelope("assistant", isSidechain=True, message={"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_side", "name": "Bash", "input": {"command": "sub"}}]}))
+    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
+    assert span.start_line == start
+    calls = span.calls()
+    assert [(c.id, c.name, c.ok) for c in calls] == [
+        (ok, "Bash", True), (refused, "Agent", False), (pending, "Agent", False)]
+    assert all(c.line > start for c in calls)
+    assert calls[0].result_line > calls[0].line and calls[2].result_line == 0
+    assert [c.id for c in span.calls("Agent")] == [refused, pending]
+
+
+def test_last_todos_is_the_last_ok_todowrite(tmp_path):
+    tx = _Transcript()
+    tx.tool("TodoWrite", {"todos": _todos("completed")})  # an earlier command's list
+    tx.command("dev")
+    path = tx.write(tmp_path / "start.jsonl")
+    assert command_span.active_span(path).last_todos() is None
+    first = tx.tool("TodoWrite", {"todos": _todos("in_progress", "pending")})
+    tx.tool("TodoWrite", {"todos": _todos("completed", "completed")}, result="blocked", is_error=True)
+    tx.tool_use("TodoWrite", {"todos": _todos("pending", "pending")})  # no result yet
+    second = tx.tool("TodoWrite", {"todos": _todos("completed", "in_progress")})
+    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
+    assert span.last_todos() == _todos("completed", "in_progress")
+    # A PostToolUse reader names its own call: the list before it.
+    assert span.last_todos(before=second) == _todos("in_progress", "pending")
+    assert span.last_todos(before=first) is None

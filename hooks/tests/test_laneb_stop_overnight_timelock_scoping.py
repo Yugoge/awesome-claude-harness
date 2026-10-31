@@ -102,7 +102,6 @@ def test_publish_terminal_receipt_invoked_on_cancelled_status(
             return {"status": "pass"}
 
     monkeypatch.setattr(timelock, "session_resources", _StubSessionResources)
-    monkeypatch.setattr(timelock, "_invoke_closeout", lambda *_a, **_k: False)
 
     state = {"session_id": "session-cancel", "status": "cancelled_by_user"}
     with pytest.raises(SystemExit) as exc:
@@ -166,6 +165,38 @@ def test_stop_hook_blocks_while_end_time_is_future(tmp_path: Path) -> None:
     result = _run_stop_hook(tmp_path, session_id)
     assert result.returncode == 2
     assert "TIME-LOCK ACTIVE" in result.stderr
+
+
+def test_stop_hook_does_not_revalidate_the_cycle_contract(tmp_path: Path) -> None:
+    """P1b row 13: the Stop no longer re-validates the subagents' reports a
+    cycle contract lists (G2 at each producer's stop and the collection check,
+    posttool-overnight-file-check.py, decide on them). Inside the window a
+    contract entry whose dispatch never ran blocks only by the time-lock's own
+    rule, with its own message; after end_time, with the closeout artifacts
+    recorded, it allows stop."""
+    session_id = "row13-contract"
+    contract = (tmp_path / "docs" / "dev" / "overnight" / session_id / "cycle-1"
+                / "cycle-contract.json")
+    contract.parent.mkdir(parents=True)
+    contract.write_text(json.dumps({"cycle_id": 1, "required_calls": [
+        {"step": "12", "role": "dev", "mode": None, "pipeline_id": "pipeline-0",
+         "expected_output_path": "docs/dev/dev-report-missing.json",
+         "schema_name": "dev-report.v2"}]}))
+    future = (datetime.now() + timedelta(hours=2)).isoformat()
+    _write_state(tmp_path, session_id, end_time=future, worktree_path=str(tmp_path))
+    inside = _run_stop_hook(tmp_path, session_id)
+    assert inside.returncode == 2
+    assert "TIME-LOCK ACTIVE" in inside.stderr
+    assert "required_calls" not in inside.stderr
+
+    summary = tmp_path / "summary.md"
+    summary.write_text("done")
+    past = (datetime.now() - timedelta(hours=2)).isoformat()
+    _write_state(tmp_path, session_id, end_time=past, worktree_path=str(tmp_path),
+                 current_issues=[], unresolved_issues=[], final_summary_path=str(summary),
+                 pm_retro_reports=["retro-1"], artifact_checkpoint_status="checkpointed")
+    after = _run_stop_hook(tmp_path, session_id)
+    assert after.returncode == 0, after.stderr
 
 
 def test_stop_hook_allows_once_end_time_passed_and_closeout_complete(

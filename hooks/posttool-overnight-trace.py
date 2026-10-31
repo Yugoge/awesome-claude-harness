@@ -4,9 +4,9 @@
 Writes one JSONL trace record per Agent invocation to:
     docs/dev/overnight/<session_id>/cycle-<cycle_id>/trace.jsonl
 
-For specialist agents (architect, ui-specialist, product-owner, user) it
-also classifies the produced report and records the yield via
-``lib.specialist_yield``.
+For a specialist dispatch (one whose own obligation declares a
+specialist-report.v1 report) it also classifies the produced report and
+records the yield via ``lib.specialist_yield``.
 
 HARD CUTOVER: when no overnight-state-*.json or cycle-contract.json is
 present (legacy /spec, single-shot /dev sessions) the hook exits 0
@@ -46,8 +46,20 @@ try:
 except Exception:  # pragma: no cover - fail-soft if lib missing
     claude_home = None  # type: ignore[assignment]
 
+try:
+    from lib import overnight  # noqa: E402
+except Exception:  # pragma: no cover - fail-soft if lib missing
+    overnight = None  # type: ignore[assignment]
 
-_SPECIALIST_TYPES = {"architect", "ui-specialist", "product-owner", "user"}
+try:
+    from lib.obligation import ParsedObligation, parse_obligation  # noqa: E402
+except Exception:  # pragma: no cover - fail-soft if lib missing
+    parse_obligation = None  # type: ignore[assignment]
+
+
+# Which dispatches are specialists is what their own obligation declares
+# (dev-overnight Step 3's template names this schema); no role list says so.
+SPECIALIST_REPORT_SCHEMA = "specialist-report.v1"
 
 
 # ---------------------------------------------------------------------------
@@ -110,14 +122,6 @@ def _read_overnight_state(project_dir: Path, session_id: str) -> dict | None:
     return _scan_state_dir(claude_dir, session_id)
 
 
-def _coerce_cycle_id(state: dict) -> int | None:
-    cid_raw = state.get("cycle_count")
-    try:
-        return int(cid_raw) if cid_raw is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
 def _resolve_session_cycle(stdin_ctx: dict) -> tuple[str | None, int | None, dict | None]:
     """Return (session_id, cycle_id, state_dict) from env + state files."""
     session_id = stdin_ctx.get("session_id") or os.environ.get("CLAUDE_SESSION_ID") or ""
@@ -125,7 +129,8 @@ def _resolve_session_cycle(stdin_ctx: dict) -> tuple[str | None, int | None, dic
     if state is None:
         return (session_id or None, None, None)
     sid = session_id or state.get("session_id")
-    return (sid, _coerce_cycle_id(state), state)
+    cid = overnight.cycle_index(state) if overnight is not None else None
+    return (sid, cid, state)
 
 
 # ---------------------------------------------------------------------------
@@ -253,42 +258,35 @@ def _artifact_paths_from_response(tool_response: dict | None) -> list[str]:
     return unique
 
 
-_AGENT_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
-    # T3.2: schema-required field presence per agent_type, used to compute
-    # evidence_completeness from the actual just-completed agent report
-    # (NOT a placeholder).
-    "qa": ("verdict", "evidence_summary", "ui_pipeline", "task_id", "report_version"),
-    "dev": ("status", "files_modified", "files_created",
-            "root_cause_addressed", "ac_status", "task_id", "report_version"),
-    "ba": ("requirement", "root_cause_analysis"),
-    "architect": ("recommendations",),
-    "ui-specialist": ("ui_evidence",),
-    "product-owner": ("decision",),
-    "pm": ("plan",),
-    "user": (),
-}
-
 _UI_EVIDENCE_REQUIRED = (
     "target_route", "target_element", "viewports",
     "evidence_map", "trace", "captured_at",
 )
 
 
-def _required_fields_for(agent_type: str | None) -> tuple[str, ...]:
-    if not agent_type:
-        return ()
-    return _AGENT_REQUIRED_FIELDS.get(agent_type, ())
-
-
-def _pick_json_artifact(artifact_paths: list[str]) -> Path | None:
-    """Return the first .json artifact path resolved against project_dir."""
-    for raw in artifact_paths:
-        if not isinstance(raw, str) or not raw.endswith(".json"):
-            continue
-        p = Path(raw) if raw.startswith("/") else _project_dir() / raw
-        if p.exists():
-            return p
-    return None
+def _declared_report(stdin_ctx: dict) -> tuple[Path | None, tuple[str, ...]]:
+    """T3.2: the json report this Agent call's own obligation declares, and
+    the top-level fields its declared schema requires: what the dispatch
+    declared decides which report and fields count, never the agent type.
+    (None, ()) when the call declares no json report."""
+    tool_input = stdin_ctx.get("tool_input")
+    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
+    if parse_obligation is None or not isinstance(prompt, str):
+        return None, ()
+    parsed = parse_obligation(prompt)
+    if not isinstance(parsed, ParsedObligation):
+        return None, ()
+    for art in parsed.obligation.get("artifacts") or []:
+        if isinstance(art, dict) and art.get("kind") == "json":
+            try:
+                from lib import schema_registry  # noqa: E402
+                schema = schema_registry.get_schema(art.get("schema")) or {}
+            except Exception:
+                schema = {}
+            required = schema.get("required") if isinstance(schema, dict) else None
+            fields = tuple(f for f in required or () if isinstance(f, str))
+            return _project_dir() / art["path"], fields
+    return None, ()
 
 
 def _read_report(path: Path) -> dict | None:
@@ -339,10 +337,9 @@ def _citations_present(report: dict) -> bool | None:
 
 
 def _evidence_completeness_from_report(
-    report: dict, agent_type: str | None,
+    report: dict, required: tuple[str, ...],
 ) -> dict[str, Any]:
     """T3.2: compute evidence_completeness from actual report inspection."""
-    required = _required_fields_for(agent_type)
     missing = _missing_top_level_fields(report, required)
     ui_status, ui_missing = _ui_evidence_status(report)
     return {
@@ -355,8 +352,7 @@ def _evidence_completeness_from_report(
     }
 
 
-def _evidence_completeness_unknown(agent_type: str | None) -> dict[str, Any]:
-    required = _required_fields_for(agent_type)
+def _evidence_completeness_unknown(required: tuple[str, ...]) -> dict[str, Any]:
     return {
         "ui_evidence": None,
         "ui_evidence_missing_fields": [],
@@ -367,50 +363,21 @@ def _evidence_completeness_unknown(agent_type: str | None) -> dict[str, Any]:
     }
 
 
-def _compute_evidence_completeness(
-    artifact_paths: list[str], agent_type: str | None,
-) -> dict[str, Any]:
+def _compute_evidence_completeness(stdin_ctx: dict) -> dict[str, Any]:
     """T3.2: real measurement — replaces the previous None-only placeholder.
 
-    Reads the first JSON artifact emitted by the just-completed agent and
-    reports schema-required field presence + nested ui_evidence status.
+    Reads the JSON report the just-completed agent's dispatch declared and
+    reports its schema's required field presence + nested ui_evidence status.
     Fail-soft: any read/parse error returns the unknown payload so the
     trace hook never blocks observability.
     """
-    if not artifact_paths:
-        return _evidence_completeness_unknown(agent_type)
-    report_path = _pick_json_artifact(artifact_paths)
+    report_path, required = _declared_report(stdin_ctx)
     if report_path is None:
-        return _evidence_completeness_unknown(agent_type)
+        return _evidence_completeness_unknown(required)
     report = _read_report(report_path)
     if not isinstance(report, dict):
-        return _evidence_completeness_unknown(agent_type)
-    return _evidence_completeness_from_report(report, agent_type)
-
-
-def _start_ts_from_bookmark(project_dir: Path, session_id: str | None) -> str | None:
-    if not session_id:
-        return None
-    bookmark = project_dir / ".claude" / f"agent-bookmark-{session_id}.json"
-    if not bookmark.exists():
-        return None
-    data = _try_load_json(bookmark)
-    if not isinstance(data, dict):
-        return None
-    ts = data.get("start_ts") or data.get("started_at")
-    return ts if isinstance(ts, str) and ts else None
-
-
-def _duration_ms(start_ts: str | None, end_ts: str) -> int | None:
-    if not start_ts:
-        return None
-    try:
-        s = datetime.fromisoformat(start_ts.replace("Z", "+00:00"))
-        e = datetime.fromisoformat(end_ts.replace("Z", "+00:00"))
-        delta = (e - s).total_seconds() * 1000.0
-        return int(delta) if delta >= 0 else None
-    except Exception:
-        return None
+        return _evidence_completeness_unknown(required)
+    return _evidence_completeness_from_report(report, required)
 
 
 def _exit_status(tool_response: dict | None) -> str:
@@ -435,7 +402,6 @@ def _build_record(
     state: dict | None,
 ) -> dict[str, Any]:
     end_ts = _now_iso()
-    start_ts = _start_ts_from_bookmark(_project_dir(), session_id)
     tool_response = _tool_response(stdin_ctx)
     agent_type = _agent_type(stdin_ctx)
     artifact_paths = _artifact_paths_from_response(tool_response)
@@ -449,17 +415,16 @@ def _build_record(
         "role": agent_type,
         "mode": _mode_from_input(stdin_ctx),
         "pipeline_id": _pipeline_id_from(stdin_ctx, contract),
-        "start_ts": start_ts,
+        # No writer records an agent's start, so these stay null.
+        "start_ts": None,
         "end_ts": end_ts,
-        "duration_ms": _duration_ms(start_ts, end_ts),
+        "duration_ms": None,
         "tool_call_count": _tool_call_count(tool_response),
         "estimated_tokens": _estimated_tokens(tool_response),
         "estimated_cost_usd": None,
         "artifact_paths": artifact_paths,
         "schema_status": "unchecked",
-        "evidence_completeness": _compute_evidence_completeness(
-            artifact_paths, agent_type
-        ),
+        "evidence_completeness": _compute_evidence_completeness(stdin_ctx),
         "retry_count": 0,
         "exit_status": _exit_status(tool_response),
         "blocked_reason": None,
@@ -490,12 +455,24 @@ def _pick_report_path(artifacts: list[str]) -> str | None:
     return None
 
 
+def _declares_specialist_report(stdin_ctx: dict) -> bool:
+    ti = stdin_ctx.get("tool_input") or {}
+    prompt = ti.get("prompt") if isinstance(ti, dict) else None
+    if parse_obligation is None or not isinstance(prompt, str):
+        return False
+    parsed = parse_obligation(prompt)
+    return isinstance(parsed, ParsedObligation) and any(
+        isinstance(art, dict) and art.get("schema") == SPECIALIST_REPORT_SCHEMA
+        for art in parsed.obligation.get("artifacts") or []
+    )
+
+
 def _maybe_record_yield(
-    record: dict[str, Any], session_id: str, cycle_id: int
+    record: dict[str, Any], stdin_ctx: dict, session_id: str, cycle_id: int
 ) -> None:
     """If this Agent was a specialist, classify+record its report."""
     agent_type = record.get("agent_type")
-    if agent_type not in _SPECIALIST_TYPES:
+    if not _declares_specialist_report(stdin_ctx):
         return
     if classify_report is None or record_yield is None:
         return
@@ -543,7 +520,7 @@ def _process(stdin_ctx: dict) -> None:
         contract=contract, state=state,
     )
     _append_jsonl(_trace_path(_project_dir(), sid, cid), record)
-    _maybe_record_yield(record, sid, cid)
+    _maybe_record_yield(record, stdin_ctx, sid, cid)
 
 
 def main() -> int:

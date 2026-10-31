@@ -28,7 +28,6 @@ LOG_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/logs/git-fswatch-${REPO_NAME}.lo
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
   || harness_state_dir() { printf '%s\n' /tmp; }
 LOCK_FILE="$(harness_state_dir)/git-fswatch-${USER}-${REPO_NAME}.lock"
-STATE_FILE="$(harness_state_dir)/git-fswatch-state-${USER}-${REPO_NAME}.txt"
 
 # Runtime state
 COMMIT_TIMER_PID=""
@@ -86,9 +85,6 @@ cleanup() {
 
     # Remove lock file
     rm -f "$LOCK_FILE"
-
-    # Save state
-    echo "stopped" > "$STATE_FILE"
 
     log_info "Git file watcher stopped"
     exit 0
@@ -547,9 +543,6 @@ main() {
     log_info "Starting file watcher..."
     echo -e "${GREEN}✓${NC} Watching for changes (Press Ctrl+C to stop)"
     echo ""
-
-    # Save state
-    echo "running:$WATCH_PATH:$$" > "$STATE_FILE"
 
     # Initial sync
     log_info "Performing initial sync..."

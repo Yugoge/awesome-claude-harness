@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import tempfile
+from pathlib import Path
 
 from .regions import (
     INDEX_MARKER_ID, README_MARKER_ID, ArtifactKind, RegenRecord, RegenStatus, RegionShape,
@@ -32,14 +33,9 @@ TRUNCATION_SUFFIX = '...'
 # The relay hook (userprompt-doc-sync-check.py) keeps its own copy of this prefix because it
 # must not import doc_sync; a test pins the two together.
 INDEX_NOTICE_PREFIX = 'doc-sync: INDEX not regenerated'
-# Opens every hook_ledger failure line, so an operator can find them by one string.
-LEDGER_FAILURE_PREFIX = 'doc-sync ledger: side-effect record not written '
 # session_id becomes a path component of the state directory, so it gets the same
 # charset guard as hooks/session-scratch-init.sh (no separators, no traversal).
 SESSION_ID_PATTERN = re.compile(r'[A-Za-z0-9_.-]{1,128}')
-# Written by hooks/session-scratch-init.sh; only a directory that carries it is a
-# registered session directory that hooks/sessionend-scratch-sweep.sh removes at SessionEnd.
-OWNER_FILE = '.owner'
 STATE_FILE_TEMPLATE = 'doc-sync-notices-{audience}.json'
 AGENT_AUDIENCE_HASH_CHARS = 16
 # Test seam, never set in production: tempfile.gettempdir() raises under RLIMIT_FSIZE=0
@@ -180,18 +176,14 @@ def _overflow_tail(count):
     return f'doc-sync: {count} more notice(s) not shown here; they are reported again after the next edit'
 
 
-def render_notices(entries, limit=None):
-    """(entries printed, notice text): whole entries in order, at most `limit` chars.
-
-    `limit` defaults to MAX_NOTICE_CHARS. It is a parameter only so the caller can
-    render skip notices into whatever budget the recorder-failure lines left, keeping
-    the combined body inside the ONE capped output object.
+def render_notices(entries):
+    """(entries printed, notice text): whole entries in order, at most MAX_NOTICE_CHARS chars.
 
     The first entry is always printed (cut with the suffix only if it alone exceeds the cap).
     Entries that do not fit are counted in a tail line that itself sits inside the cap, and
     are NOT part of the returned printed list, so the caller records only what was shown.
     """
-    cap = MAX_NOTICE_CHARS if limit is None else limit
+    cap = MAX_NOTICE_CHARS
     texts = []
     describable = []
     for record in entries:
@@ -217,101 +209,6 @@ def render_notices(entries, limit=None):
 
 def build_notice_text(entries):
     return render_notices(entries)[1]
-
-
-def _ledger_failure_text(descriptor):
-    """One operator-findable line for one hook_ledger failure descriptor."""
-    where = descriptor.get('path')
-    tail = f' Path: {where}' if where else ''
-    return (f"{LEDGER_FAILURE_PREFIX}({descriptor.get('class')}). "
-            f"Reason: {descriptor.get('reason')}.{tail}")
-
-
-def _ledger_state_key(descriptor):
-    """`ledger|<class>|<path>` -- the dedupe identity of one recorder failure."""
-    return f"ledger|{descriptor.get('class')}|{descriptor.get('path') or '-'}"
-
-
-def _ledger_digest(descriptor):
-    """Digest of the failure's own content, so a MATERIALLY different failure re-notifies.
-
-    A recorder failure has no artifact file to hash, so it stands in for itself: the
-    same class, path and reason is the same failure and is reported once per audience,
-    exactly like a skip notice. A hook that fires on every edit in the harness must not
-    repeat one line forever -- that is the unbounded-log shape this channel must not grow.
-    """
-    material = f"{descriptor.get('class')}|{descriptor.get('path')}|{descriptor.get('reason')}"
-    return hashlib.sha256(material.encode('utf-8', 'replace')).hexdigest()
-
-
-def render_ledger_failures(descriptors):
-    """The usable subset of hook_ledger.record_landed_files()'s failure descriptors.
-
-    These are the six FAILURE no-op classes only. The four legitimate no-ops never
-    produce a descriptor, so nothing here can report an ordinary non-dev edit --
-    which is the majority case, and reporting it would bury the real failures.
-
-    A descriptor that cannot be understood is dropped on its own; it never hides the
-    others, mirroring notifiable()'s own per-item tolerance.
-    """
-    try:
-        items = list(descriptors or [])
-    except Exception:
-        return []
-    usable = []
-    for descriptor in items:
-        try:
-            if isinstance(descriptor, dict) and descriptor.get('class'):
-                usable.append(descriptor)
-        except Exception:
-            continue
-    return usable
-
-
-def _ledger_overflow_tail(count):
-    return (f'doc-sync ledger: {count} more recorder failure(s) not shown here; '
-            'they are reported again after the next edit')
-
-
-def render_ledger_body(failures, limit=None):
-    """(failures rendered IN FULL, body text): whole lines in order, at most `limit` chars.
-
-    The failure half's counterpart to render_notices, and it returns what it actually
-    showed for the same reason: the caller records ONLY the returned failures as seen,
-    so one withheld by the cap is reported again after the next edit instead of being
-    marked delivered and suppressed forever. Because the shown ones ARE marked, the
-    next edit suppresses them and the withheld ones move to the front, so a body over
-    the cap drains across successive edits rather than starving its own tail.
-
-    A withheld failure is COUNTED in a tail line rather than cut mid-sentence: this
-    channel must never report that something was dropped without reporting how much,
-    which is the rule hook_ledger's own descriptor cap already follows. A single line
-    longer than the whole cap is the one case that must still be cut, and it is then
-    reported as shown to nobody, so it too returns on the next edit.
-    """
-    cap = MAX_NOTICE_CHARS if limit is None else limit
-    texts = []
-    describable = []
-    for failure in failures:
-        try:
-            texts.append(_ledger_failure_text(failure))
-            describable.append(failure)
-        except Exception:
-            continue
-    if not texts:
-        return [], ''
-    total = len(texts)
-    for shown in range(total, 0, -1):
-        text = '\n'.join(texts[:shown])
-        if shown < total:
-            text += '\n' + _ledger_overflow_tail(total - shown)
-        if len(text) <= cap:
-            return describable[:shown], text
-    tail = _ledger_overflow_tail(total)
-    room = cap - len(tail) - 1
-    if room > len(TRUNCATION_SUFFIX):
-        return [], texts[0][:room - len(TRUNCATION_SUFFIX)] + TRUNCATION_SUFFIX + '\n' + tail
-    return [], tail[:cap]
 
 
 def build_hook_output(text):
@@ -344,12 +241,21 @@ def _state_root():
     return tempfile.gettempdir()
 
 
+def _owns_scratch_dir(session_dir, session_id):
+    """hooks/lib/scratch_owner.py's decision; raises when a harness copy has no hooks/lib."""
+    hooks_dir = str(Path(__file__).resolve().parent.parent)
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
+    from lib.scratch_owner import owns_scratch_dir
+    return owns_scratch_dir(session_dir, session_id)
+
+
 def state_path_for(payload):
     """State file of this audience, or None when dedupe must stay off (notify every time).
 
-    Dedupe needs a session directory that already exists and is registered by
-    session-scratch-init.sh. The hook never creates it: a directory without an .owner
-    record cannot be classified by the SessionEnd sweep and would linger for days.
+    Dedupe needs a session directory that already exists and belongs to this session by
+    the rule the SessionEnd sweep removes it by (hooks/lib/scratch_owner.py). The hook never
+    creates it: a directory the sweep would leave alone would linger for days.
     """
     try:
         session_id = payload.get('session_id')
@@ -360,11 +266,12 @@ def state_path_for(payload):
         session_dir = os.path.join(_state_root(), session_id)
         if os.path.islink(session_dir) or not os.path.isdir(session_dir):
             return None
-        if not os.path.isfile(os.path.join(session_dir, OWNER_FILE)):
+        if not _owns_scratch_dir(session_dir, session_id):
             return None
         return os.path.join(session_dir, STATE_FILE_TEMPLATE.format(audience=audience_of(payload)))
     except Exception:
-        # Includes a state root that cannot be resolved: no session directory, notify.
+        # Includes a state root that cannot be resolved and a harness copy without hooks/lib:
+        # no session directory, notify.
         return None
 
 
@@ -434,59 +341,33 @@ def _detach_stdout():
         pass
 
 
-def emit_post_tool_notice(results, payload, ledger_failures=None):
-    """Print ONE PostToolUse JSON object covering skipped artifacts and recorder failures.
+def emit_post_tool_notice(results, payload):
+    """Print ONE PostToolUse JSON object covering skipped artifacts.
 
     Never raises and never changes the exit code of the edit that triggered the hook.
     Every state problem (missing, corrupt, unreadable, unwritable) resolves to "notify":
     a lost notice is worse than a repeated one. Only entries that were printed are recorded
     as seen, and only after the print succeeded, so a failed print (or an entry cut by the
     length cap) is retried on the next edit.
-
-    `ledger_failures` are hook_ledger.record_landed_files()'s structured descriptors. They
-    share this ONE object rather than printing a second one: the PostToolUse protocol reads
-    a single JSON object from stdout, so a second print would corrupt the first.
-
-    Recorder failures LEAD the body, because a failure is the half that says something
-    went wrong; a skip notice describes a deliberate, stable outcome that will be
-    reported again after the next edit, so it is the safer half to drop when the cap
-    binds. Both halves share the SAME per-audience dedupe state, keyed for a failure on
-    its class, path and reason: this hook fires on every Write/Edit/NotebookEdit in the
-    harness, so a failure that repeated its line on every edit would itself become the
-    unbounded log this channel must never grow. A materially different failure has a
-    different digest and notifies again.
     """
     printed = []
-    printed_failures = []
-    shown_failures = []
     digests = {}
     state_path = None
     try:
-        failures = render_ledger_failures(ledger_failures)
         entries = notifiable(results)
-        if not entries and not failures:
+        if not entries:
             return
         state_path = state_path_for(payload)
         state = read_state(state_path) if state_path else {}
         digests = {_record_key(record): _readme_digest(record.path) for record in entries}
-        digests.update({_ledger_state_key(f): _ledger_digest(f) for f in failures})
         unseen = [
             record for record in entries
             if digests[_record_key(record)] is None
             or state.get(_record_key(record)) != digests[_record_key(record)]
         ]
-        printed_failures = [
-            failure for failure in failures
-            if state.get(_ledger_state_key(failure)) != digests[_ledger_state_key(failure)]
-        ]
-        if not unseen and not printed_failures:
+        if not unseen:
             return
-        shown_failures, failure_body = render_ledger_body(printed_failures)
-        remaining = MAX_NOTICE_CHARS - len(failure_body) - (1 if failure_body else 0)
-        notice_text = ''
-        if unseen and remaining > len(TRUNCATION_SUFFIX):
-            printed, notice_text = render_notices(unseen, remaining)
-        text = '\n'.join(part for part in (failure_body, notice_text) if part)
+        printed, text = render_notices(unseen)
         if not text:
             return
         print(json.dumps(build_hook_output(text), ensure_ascii=True))
@@ -500,13 +381,6 @@ def emit_post_tool_notice(results, payload, ledger_failures=None):
         for record in printed:
             key = _record_key(record)
             if digests[key] is not None:
-                state[key] = digests[key]
-        # Only failures that were actually PRINTED are recorded as seen, on the
-        # same terms as a skip notice: one cut by the length cap must be retried
-        # on the next edit rather than marked delivered.
-        if failure_body:
-            for failure in shown_failures:
-                key = _ledger_state_key(failure)
                 state[key] = digests[key]
         write_state(state_path, state)
     except Exception:

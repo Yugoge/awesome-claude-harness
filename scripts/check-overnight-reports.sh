@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# DEPRECATED — replaced by check-overnight-reports.py per spec-20260426-090235 P0/M5.
-# This shim forwards to the Python implementation for any external callers
-# still invoking the .sh path. The .py reads cycle-contract.json instead of
-# the legacy hardcoded 4-specialist list (product-owner, architect, user,
-# ui-specialist). See /root/docs/dev/specs/spec-20260426-090235.md Section 7
-# (P0 #5) for the rationale.
+# Validates the reports a /dev-overnight cycle's dispatches declared in the
+# session's report directory: check-overnight-reports.py reads each report's path
+# and schema from the obligation its dispatch carried and checks the report
+# against that schema. G2 (hooks/subagentstop-artifact-contract-enforce.py) checks
+# the same reports at each producer's own stop once CLAUDE_OBLIGATION_STOPGATE
+# blocks; until then this check is their stop.
 #
-# New callers MUST use:
+# Callers may use the Python implementation directly:
 #   check-overnight-reports.py --session-id <sid> [--cycle <N>]
 #
-# This shim accepts the legacy positional <report_dir> argument and ignores
-# it (the .py resolves the cycle directory from the session id) so that
-# stale crontabs / docs do not break loudly during the transition.
+# This shim accepts the positional <report_dir> argument the /dev-overnight text
+# passes (docs/dev/overnight/<session_id>) and derives the session id from its
+# name.
 
 set -euo pipefail
 
@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY_SCRIPT="$SCRIPT_DIR/check-overnight-reports.py"
 
 if [[ ! -f "$PY_SCRIPT" ]]; then
-    echo "ERROR: $PY_SCRIPT missing — contract-driven validator not installed" >&2
+    echo "ERROR: $PY_SCRIPT missing — obligation-driven validator not installed" >&2
     exit 1
 fi
 

@@ -1,43 +1,42 @@
 #!/usr/bin/env python3
 """
-PreToolUse:Agent Hook — Contract-driven role/pipeline enforcement.
+PreToolUse:Agent Hook — Contract-driven role/pipeline enforcement (G1).
 
-Replaces the legacy 'any Agent call satisfies the current step' behavior
-with a strict cycle-contract.json lookup. For overnight sessions:
+For a /dev-overnight session (the session owns an overnight state record):
 
-  1. Resolve the active cycle-contract.json (via lib.contract_runtime).
-  2. Derive the current step from the workflow bookmark's todo state.
-  3. Look up the required_calls entry whose ``step`` matches.
-  4. Validate the about-to-fire Agent's role / pipeline_id / mode against
-     that entry. On mismatch, exit 2 with a structured stderr message.
-  5. On match, write a bookmark file
-     ``/tmp/contract-bookmark-<sid>-<cycle>.json`` so
-     ``posttool-subagent-track.py`` can reconcile what it sees against
-     what was authorized.
+  1. Derive the calls the cycle allows: its exploration (PM PLAN through PM
+     TRIAGE, steps 2-4) from scripts/todo/dev-overnight.py ``_STEPS``, plus
+     the cycle's contract once PM TRIAGE returned (written by the PM TRIAGE
+     handler in posttool-subagent-track.py). The cycle is
+     ``lib.overnight.cycle_index``.
+  2. Derive the current step from the checklist the transcript records
+     (lib.todo_canonical.checklist): the in-progress step of the last list the
+     step rules accepted, in every cycle.
+  3. Validate the about-to-fire Agent's role / pipeline_id / mode against
+     the entries for that step. On mismatch, exit 2 with a structured stderr
+     message.
 
-HARD CUTOVER: when ``cycle-contract.json`` is absent for the session,
-exit 0 silently (legacy /spec, /dev single-cycle sessions are not
-overnight workflows and produce no contract).
+A session with no overnight state is not an overnight workflow and is not
+contracted: exit 0 silently.
 
 Exit codes:
-  0 — Allow (no contract present, or call matches contract).
-  2 — Reject (role/pipeline_id mismatch against contract).
+  0 — Allow (not an overnight session, or call matches an allowed entry).
+  2 — Reject (role/pipeline_id/mode mismatch against the allowed calls).
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib import contract_runtime  # noqa: E402
+from lib import overnight  # noqa: E402
+from lib.todo_canonical import checklist  # noqa: E402
 from lib.subagent import is_subagent_context  # noqa: E402
-from lib.allowlist import read_grant          # noqa: E402
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
 
 
 def _parse_stdin() -> dict:
@@ -45,25 +44,6 @@ def _parse_stdin() -> dict:
         return json.load(sys.stdin)
     except Exception:
         return {}
-
-
-def _has_consent(session_id: str) -> bool:
-    try:
-        flag = Path(f'{harness_state_dir()}/claude-orchestrator-consent-{session_id}.flag')
-        return flag.exists() and flag.read_text().strip() == 'true'
-    except Exception:
-        return False
-
-
-def _load_bookmark(session_id: str) -> dict | None:
-    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    path = project_dir / '.claude' / f'workflow-{session_id}.json'
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return None
 
 
 def _content_to_step(content: str) -> str:
@@ -74,37 +54,40 @@ def _content_to_step(content: str) -> str:
     return content
 
 
-def _current_step_label(state: dict) -> str | None:
-    """Extract the current in-progress step label from the bookmark."""
-    last_todos = state.get('last_todos') or []
-    for item in last_todos:
+def _current_step_label(stdin_data: dict) -> str | None:
+    """The in-progress step label of the session's checklist, read from the
+    transcript."""
+    state = checklist(stdin_data.get('transcript_path'))
+    for item in (state.accepted if state else None) or []:
         if item.get('status') == 'in_progress':
             return _content_to_step(item.get('content', ''))
     return None
 
 
-def _cycle_id_from_state(state: dict) -> int:
-    """Best-effort cycle id resolution. Defaults to 1 for cold sessions."""
-    val = state.get('cycle_id') or state.get('cycle_count')
-    try:
-        return int(val) if val else 1
-    except (TypeError, ValueError):
-        return 1
-
-
-def _resolve_session_and_cycle(stdin_data: dict) -> tuple[str, int, dict | None]:
+def _resolve_session(stdin_data: dict) -> tuple[str, dict | None]:
+    """(session_id, the session's overnight state record)."""
     session_id = stdin_data.get('session_id', 'default')
-    state = _load_bookmark(session_id)
-    cycle_id = _cycle_id_from_state(state) if state else 1
-    return session_id, cycle_id, state
+    return session_id, overnight.session_state(session_id)
 
 
-def _detect_mode(prompt: str) -> str:
-    """Identify a mode keyword embedded in the Agent prompt, if any."""
-    for keyword in ('PLAN', 'TRIAGE', 'RETRO', 'DESIGN_MODE', 'AUDIT_MODE', 'UI_MODE'):
-        if keyword in prompt:
-            return keyword
-    return ''
+def _allowed_calls(overnight_state: dict):
+    """The calls this cycle allows, as a contract-shaped dict, or None when the
+    canonical steps cannot be read (nothing to derive, so nothing to enforce).
+
+    A cycle contract that is not a JSON object is returned as is, so the block
+    names it (Case M) instead of falling back to the exploration steps.
+    """
+    steps = contract_runtime.overnight_steps()
+    if not steps:
+        return None
+    cycle_id = overnight.cycle_index(overnight_state)
+    calls = contract_runtime.exploration_calls(steps)
+    contract = contract_runtime.load_contract(
+        overnight_state.get('session_id', ''), cycle_id, overnight_state)
+    if contract is not None and not isinstance(contract, dict):
+        return contract
+    calls += contract_runtime._iter_required_calls(contract)
+    return {'cycle_id': cycle_id, 'required_calls': calls}
 
 
 def _detect_pipeline_id_from_prompt(prompt: str) -> str:
@@ -123,33 +106,14 @@ def _resolve_pipeline_id(ti: dict, prompt: str) -> str:
     return _detect_pipeline_id_from_prompt(prompt)
 
 
-def _extract_agent_fields(stdin_data: dict) -> tuple[str, str, str, str]:
-    """Return (role, mode, pipeline_id, prompt_preview) extracted from Agent call."""
+def _extract_agent_fields(stdin_data: dict) -> tuple[str, str, str]:
+    """Return (role, mode, pipeline_id) extracted from Agent call."""
     ti = stdin_data.get('tool_input', {}) or {}
     role = (ti.get('subagent_type') or '').strip().lower()
     prompt = ti.get('prompt', '') if isinstance(ti, dict) else ''
-    mode = _detect_mode(prompt)
+    mode = contract_runtime.detect_mode(prompt)
     pipeline_id = _resolve_pipeline_id(ti, prompt)
-    preview = prompt[:200].replace('\n', ' ')
-    return role, mode, pipeline_id, preview
-
-
-def _bookmark_path(session_id: str, cycle_id: int) -> Path:
-    return Path(f'{harness_state_dir()}/contract-bookmark-{session_id}-{cycle_id}.json')
-
-
-def _write_bookmark(session_id: str, cycle_id: int, step: str, payload: dict) -> None:
-    """Persist authorization context for posttool-subagent-track to read."""
-    path = _bookmark_path(session_id, cycle_id)
-    try:
-        existing = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
-    except Exception:
-        existing = {}
-    existing[step] = payload
-    try:
-        path.write_text(json.dumps(existing, indent=2), encoding='utf-8')
-    except OSError:
-        pass
+    return role, mode, pipeline_id
 
 
 def _contracted_step_id_list(contract) -> list:
@@ -177,16 +141,6 @@ def _contracted_step_id_list(contract) -> list:
             seen.add(step)
             ordered.append(step)
     return ordered
-
-
-def _valid_contracted_step_ids(contract) -> str:
-    """Render the contract's valid step ids (display wrapper over the data helper).
-
-    Joins the deduped, order-preserved id list with ', ', rendering '<none>'
-    when none remain. Presentation only — control flow uses the list helper.
-    """
-    ordered = _contracted_step_id_list(contract)
-    return ', '.join(ordered) if ordered else '<none>'
 
 
 def _expected_signatures(contract, step: str) -> str:
@@ -219,25 +173,25 @@ def _diagnose_block(contract, valid_ids: str, has_step_ids: bool, entry, step: s
 
     ``has_step_ids`` is the EMPTINESS of the data step-id list (not the
     rendered '<none>' string), so a contract whose only step is literally
-    named '<none>' is Case A (stale bookmark), not Case C (incomplete).
+    named '<none>' is Case A (stale step), not Case C (incomplete).
     """
     if not isinstance(contract, dict):
         return (
             "Case M (contract malformed/non-dict): the loaded cycle-contract is "
             "not a JSON object, so it has no usable required_calls.",
-            "do not retry by re-bookmarking; re-publish the contract / request "
+            "do not retry by re-marking the step; re-publish the contract / request "
             "orchestrator escalation.",
         )
     if not has_step_ids and entry is None:
         return (
             "Case C (incomplete contract): the contract is present but has no "
             "usable contracted steps.",
-            "do not retry by re-bookmarking; re-publish the contract / request "
+            "do not retry by re-marking the step; re-publish the contract / request "
             "orchestrator escalation.",
         )
     if entry is None:
         return (
-            f"Case A (stale bookmark): the resolved step '{step}' has no "
+            f"Case A (stale step): the resolved step '{step}' has no "
             "required_calls entry. The in-progress todo is most likely not on "
             "an agent-dispatching step that owns an entry.",
             f"advance the in-progress todo to one of the valid_contracted_step_ids "
@@ -260,7 +214,7 @@ def _emit_block(step: str, role: str, pipeline_id: str, errors: list,
         contract, valid_ids, bool(step_ids), entry, step)
     sys.stderr.write(
         '\nCONTRACT BLOCK (pretool-subagent-enforce):\n'
-        f'  step={step} source=current in-progress Todo bookmark\n'
+        f'  step={step} source=current in-progress Todo\n'
         f'  attempted_role={role or "<none>"} attempted_mode={mode or "<none>"} '
         f'attempted_pipeline_id={pipeline_id or "<none>"}\n'
         f'  valid_contracted_step_ids={valid_ids}\n'
@@ -274,23 +228,8 @@ def _emit_block(step: str, role: str, pipeline_id: str, errors: list,
     sys.stderr.write('\n')
 
 
-def _entry_identity(entry: dict | None) -> dict:
-    """T2.3: distill matched required_call entry to identity fields for bookmarking."""
-    if not isinstance(entry, dict):
-        return {}
-    return {
-        'step': entry.get('step'),
-        'role': entry.get('role'),
-        'pipeline_id': entry.get('pipeline_id'),
-        'mode': entry.get('mode'),
-        'expected_output_path': entry.get('expected_output_path'),
-        'schema_name': entry.get('schema_name') or entry.get('expected_schema'),
-    }
-
-
 def _enforce(stdin_data: dict, contract: dict, step: str) -> None:
-    session_id, cycle_id, _state = _resolve_session_and_cycle(stdin_data)
-    role, mode, pipeline_id, preview = _extract_agent_fields(stdin_data)
+    role, mode, pipeline_id = _extract_agent_fields(stdin_data)
     result = contract_runtime.validate_required_call(
         contract, role, pipeline_id or None, mode or None, step,
     )
@@ -298,41 +237,31 @@ def _enforce(stdin_data: dict, contract: dict, step: str) -> None:
         _emit_block(step, role, pipeline_id, result['errors'],
                     mode=mode, entry=result.get('entry'), contract=contract)
         sys.exit(2)
-    _write_bookmark(session_id, cycle_id, step, {
-        'role': role,
-        'mode': mode,
-        'pipeline_id': pipeline_id,
-        'agent_id': stdin_data.get('agent_id', ''),
-        'ts': time.time(),
-        'prompt_preview': preview,
-        'severity': result['severity'],
-        # T2.3: persist matched required_call identity so posttool-subagent-track
-        # can validate the produced artifact against the authorized contract entry.
-        'matched_entry': _entry_identity(result.get('entry')),
-    })
 
 
 def _main() -> None:
     stdin_data = _parse_stdin()
     if not stdin_data or stdin_data.get('tool_name') != 'Agent':
         sys.exit(0)
-    session_id, cycle_id, state = _resolve_session_and_cycle(stdin_data)
+    session_id, overnight_state = _resolve_session(stdin_data)
 
-    # /do bypass: main-agent-only
-    if not is_subagent_context(stdin_data) and _has_consent(session_id):
+    if has_do_consent(stdin_data):
         sys.exit(0)
 
     # /allow bypass: main-agent-only
-    if not is_subagent_context(stdin_data) and read_grant("Agent", session_id):
+    if (not is_subagent_context(stdin_data)
+            and match_sentinel_grant_for_tool(session_id, "Agent") is not None):
         sys.exit(0)
 
-    contract = contract_runtime.load_contract(session_id, cycle_id)
-    if contract is None:
-        # Hard cutover: legacy session — silent passthrough.
+    if overnight_state is None:
+        # Not an overnight session: no cycle contract governs it.
         sys.exit(0)
-    step = _current_step_label(state) if state else None
+    contract = _allowed_calls(overnight_state)
+    if contract is None:
+        sys.exit(0)
+    step = _current_step_label(stdin_data)
     if not step:
-        # No bookmark / no in-progress step — cannot enforce; fail open
+        # No checklist / no in-progress step — cannot enforce; fail open
         # rather than block all Agent calls.
         sys.exit(0)
     _enforce(stdin_data, contract, step)

@@ -78,8 +78,9 @@ def harness(tmp_path: Path) -> tuple[Path, dict]:
 
 def _stop(home: Path, env: dict, *, active: bool) -> dict:
     """One Stop event through the registered hook, as Claude Code sends it."""
-    # An unconsumed /allow grant: the cleanup phase expires it at every Stop.
-    flag = Path(env["CLAUDE_STATE_DIR"]) / f"claude-bash-allowlist-{SID}.json"
+    # An /allow grant the reader rejects: the cleanup phase reaps it at every Stop.
+    flag = Path(env["CLAUDE_STATE_DIR"]) / "claude-grants" / f"{SID}.json"
+    flag.parent.mkdir(exist_ok=True)
     flag.write_text("{}\n")
     payload = {
         "session_id": SID,

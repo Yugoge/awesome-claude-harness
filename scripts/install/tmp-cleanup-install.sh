@@ -5,7 +5,7 @@
 #
 # Usage:
 #   tmp-cleanup.sh            # delete (called from cron)
-#   tmp-cleanup.sh --dry-run  # list candidates only (stdout AND log)
+#   tmp-cleanup.sh --dry-run  # list candidates only (stdout)
 #
 # Categories + retention:
 #   codex outputs / prompts            >1 day
@@ -33,18 +33,10 @@ set -uo pipefail
 DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
 
-LOG=/var/log/tmp-cleanup.log
-mkdir -p "$(dirname "$LOG")"
-
-# Conditional output redirect:
-#   dry-run → tee to BOTH stdout AND log (SOLE acceptable shape per OBJ-2 — makes
-#             candidate enumeration observable interactively AND preserves the
-#             post-hoc audit record)
-#   real    → log-only (preserves the original silent-cron behavior)
-if [ "$DRY_RUN" -eq 1 ]; then
-  exec > >(tee -a "$LOG") 2>&1
-else
-  exec >> "$LOG" 2>&1
+# Output: a dry run lists its candidates to whoever runs it; a real run (cron) stays
+# silent, as it always has. No log file is kept: nothing reads one (P1b E12).
+if [ "$DRY_RUN" -ne 1 ]; then
+  exec >/dev/null 2>&1
 fi
 
 echo

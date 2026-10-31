@@ -13,18 +13,17 @@
 #         command pattern can be derived (no leading-ASCII command token,
 #         missing/empty flag operand, empty/vacuous re: body) OR the derived
 #         regex is effectively universal (matches commands unrelated to a named
-#         token), the hook writes NO grant on EITHER channel, removes any stale
+#         token), the hook writes NO grant, removes any stale
 #         grant, prints a usage error, and exits 0 without wedging the session.
 #         There is no wildcard FALLBACK: an explicit selector never degrades
 #         into match-all; match-all is reachable only by naming no argument.
 #         Pattern passed via env var — never shell-interpolated into Python source.
-# Step 3: on a grant (narrow or unrestricted): write the legacy flag
-#         /tmp/claude-bash-allowlist-<sid>.json with {pattern, is_regex} AND the
-#         structured per-task sentinel; log to ~/.claude/logs/bash-consent.log.
-#         An unrestricted grant is logged with a distinct GRANTED_MATCH_ALL verb
-#         so a match-all bypass is never invisible in the audit log.
+# Step 3: on a grant (narrow or unrestricted): write the structured per-task
+#         sentinel, the one /allow grant file, through
+#         hooks/lib/allowlist.py write_sentinel_grant().
 #
-# Exit 0 always. Stop hook (stop-cleanup-allowlist.sh) wipes any unconsumed flag.
+# Exit 0 always. PostToolUse (posttool-allowlist-consume.py) spends the grant;
+# the Stop hook (stop-cleanup-allowlist.sh) reaps it once it has expired.
 set -u
 
 # Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
@@ -51,10 +50,9 @@ SID=$(echo "$INPUT" | python3 -c \
 [ -z "$SID" ] && SID="default"
 
 # ── Stale-grant cleanup (AC15) ──────────────────────────────────────
-# Remove EVERY pre-existing grant file the consumer's loader would honor for
-# this SID/TASK_ID: the legacy per-session flag, the canonical per-task
-# sentinel, AND every suffixed '<task_id>-*.json' sentinel (the full loader
-# glob — hooks/lib/allowlist.py _enumerate_sentinel_grant_files). Invoked on
+# Remove the pre-existing grant file the consumer's loader would honor for
+# this TASK_ID: the per-task sentinel, the one name the loader reads
+# (hooks/lib/allowlist.py _enumerate_sentinel_grant_files). Invoked on
 # EVERY refusal path so no stale broad grant can survive an /allow that does
 # not result in a written narrow grant. Defining property: on ANY /allow that
 # does not write a narrow grant, no stale grant may survive.
@@ -67,9 +65,7 @@ _remove_stale_grants() {
   local state_root
   state_root="$(harness_state_dir)"
   for grant_path in \
-    "${state_root}/claude-bash-allowlist-${SID}.json" \
-    "${state_root}/claude-grants/${task_id}.json" \
-    "${state_root}/claude-grants/${task_id}"-*.json
+    "${state_root}/claude-grants/${task_id}.json"
   do
     if [ -e "$grant_path" ] || [ -L "$grant_path" ]; then
       had_stale_grant=true
@@ -357,9 +353,9 @@ else:
     # Reinstated deliberately after e713beff removed it. This is NOT a fallback:
     # it is reachable ONLY when the user typed no argument whatsoever, so none
     # of the refusal branches above can ever land here, and no explicit selector
-    # can decay into it. The representation is the one both consumers already
-    # understand for an unrestricted entry -- legacy {pattern:'.*',is_regex:true}
-    # and sentinel {op:'*',regex:'.*'} -- so no new channel or schema is added.
+    # can decay into it. The representation is the one the sentinel matcher
+    # already understands for an unrestricted entry -- {op:'*',regex:'.*'} --
+    # so no new channel or schema is added.
     # Breadth is traded for lifetime: this grant stays single-use (consumed on
     # any terminal result), TTL-bounded, and human-only.
     emit('GRANT', pattern='.*', is_regex=True, reason='match_all')
@@ -380,10 +376,10 @@ if [ "$PARSED_STATUS" = "GRANT" ] && [ "$PARSED_REASON" = "match_all" ]; then
 fi
 
 # ── Refuse gate (AC1-AC5, AC10, AC13, AC14): no explicit narrow command was
-# derivable, OR the derived regex is effectively universal. Write NO grant on
-# EITHER channel, remove any stale grant for this SID/TASK_ID across the full
+# derivable, OR the derived regex is effectively universal. Write NO grant,
+# remove any stale grant for this TASK_ID across the full
 # loader glob (AC15), print a usage error, and exit 0 (non-wedging). This runs
-# BEFORE the nested-quantifier check, the audit log, and both grant writes. If
+# BEFORE the nested-quantifier check and the grant write. If
 # the Python parser failed to emit a recognized status, fail closed (REFUSE).
 if [ "$PARSED_STATUS" != "GRANT" ]; then
   _remove_stale_grants
@@ -437,11 +433,16 @@ ALLOW_POLICY_RESULT=$(ALLOW_PATTERN="$PATTERN" ALLOW_IS_REGEX="$IS_REGEX" \
   USER_SETTINGS_PATH="${CLAUDE_HOME_ALLOW%/}/settings.json" \
   PROJECT_SHARED_SETTINGS_PATH="${PROJECT_DIR_ALLOW%/}/.claude/settings.json" \
   PROJECT_LOCAL_SETTINGS_PATH="${PROJECT_DIR_ALLOW%/}/.claude/settings.local.json" \
+  ALLOW_SETTINGS_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/lib" \
   "$PYTHON_BIN_ALLOW" - <<'PY' 2>/dev/null
 import fnmatch
-import json
 import os
 import re
+import sys
+
+# Each source's verdict is the one load of a settings file (hooks/lib/claude_home.py).
+sys.path.insert(0, os.environ["ALLOW_SETTINGS_LIB"])
+from claude_home import load_settings
 
 pattern = os.environ.get("ALLOW_PATTERN", "")
 is_regex = os.environ.get("ALLOW_IS_REGEX") == "true"
@@ -467,30 +468,11 @@ for origin, settings_path in source_specs:
     if canonical_path in seen_paths:
         continue
     seen_paths.add(canonical_path)
-    if not os.path.lexists(settings_path):
-        continue
-    if not os.path.isfile(settings_path):
-        print("INCONCLUSIVE")
+    settings, problem = load_settings(settings_path)
+    if problem:
+        print("INCONCLUSIVE\t" + problem)
         raise SystemExit(0)
-    try:
-        with open(settings_path, encoding="utf-8") as settings_file:
-            settings = json.load(settings_file)
-    except Exception:
-        print("INCONCLUSIVE")
-        raise SystemExit(0)
-    if not isinstance(settings, dict):
-        print("INCONCLUSIVE")
-        raise SystemExit(0)
-    permissions = settings.get("permissions", {})
-    if not isinstance(permissions, dict):
-        print("INCONCLUSIVE")
-        raise SystemExit(0)
-    source_deny = permissions.get("deny", [])
-    if not isinstance(source_deny, list) or not all(
-        isinstance(entry, str) for entry in source_deny
-    ):
-        print("INCONCLUSIVE")
-        raise SystemExit(0)
+    source_deny = (settings or {}).get("permissions", {}).get("deny", [])
     deny.extend((origin, entry) for entry in source_deny)
 
 def anchored_literal_head(expr):
@@ -619,6 +601,9 @@ case "$ALLOW_POLICY_RESULT" in
   *)
     _remove_stale_grants
     echo "[allow] REFUSED: a participating file-based settings source could not be evaluated; no grant was issued. Runtime effective-permission enforcement remains final." >&2
+    case "$ALLOW_POLICY_RESULT" in
+      INCONCLUSIVE$'\t'*) printf '[allow] unusable_source=%s\n' "${ALLOW_POLICY_RESULT#*$'\t'}" >&2 ;;
+    esac
     exit 0
     ;;
 esac
@@ -650,87 +635,33 @@ else:
   fi
 fi
 
-# ── Step 3: write flag via env-var Python (no shell interpolation) ──
-FLAG="$(harness_state_dir)/claude-bash-allowlist-${SID}.json"
-ALLOW_PATTERN="$PATTERN" ALLOW_IS_REGEX="$IS_REGEX" FLAG_PATH="$FLAG" python3 -c "
-import json, os
-data = {
-    'pattern': os.environ['ALLOW_PATTERN'],
-    'is_regex': os.environ['ALLOW_IS_REGEX'] == 'true',
-}
-with open(os.environ['FLAG_PATH'], 'w') as f:
-    json.dump(data, f)
-" 2>/dev/null
-
-# ── Audit log ───────────────────────────────────────────────────────
-CONSENT_LOG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/bash-consent.log"
-mkdir -p "$(dirname "$CONSENT_LOG")"
-# A match-all bypass must never be invisible in the audit log: it is recorded
-# with its own verb plus an explicit scope token, so grepping the log for
-# unrestricted grants never depends on recognizing '.*' as a pattern value.
-# The verb keeps 'GRANTED' as a prefix so existing log readers still match.
-GRANT_VERB="GRANTED"
-GRANT_SCOPE=""
-if [ "$ALLOW_MATCH_ALL" = "true" ]; then
-  GRANT_VERB="GRANTED_MATCH_ALL"
-  GRANT_SCOPE=" scope=unrestricted single_use=true"
-fi
-if [ -n "$COMMENT" ]; then
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$SID $GRANT_VERB pattern='$PATTERN' is_regex=$IS_REGEX$GRANT_SCOPE comment='$COMMENT'" >> "$CONSENT_LOG"
-else
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) sid=$SID $GRANT_VERB pattern='$PATTERN' is_regex=$IS_REGEX$GRANT_SCOPE" >> "$CONSENT_LOG"
-fi
-
-if [ -n "$COMMENT" ]; then
-  echo "[allow] Grant recorded: pattern='$PATTERN' is_regex=$IS_REGEX comment='$COMMENT'. Valid for ONE matching bash call this turn."
-else
-  echo "[allow] Grant recorded: pattern='$PATTERN' is_regex=$IS_REGEX. Valid for ONE matching bash call this turn."
-fi
-if [ "$ALLOW_MATCH_ALL" = "true" ]; then
-  echo "[allow] UNRESTRICTED grant: no command was named, so this matches ANY command. It is consumed by the FIRST matching operation and expires with the sentinel TTL."
-fi
-
-# ── Step 4: write sentinel grant (task 20260519-211515 R2 / AC2) ──
-# Sentinel-file grant lifecycle: /tmp/claude-grants/<task_id>.json contains
-# {task_id, session_id, allowed_operations[], created_at, expires_at}.
-# The legacy pattern-string grant (above) remains for back-compat; the new
-# sentinel is a STRUCTURED grant that hooks/lib/allowlist.py reads via
-# load_sentinel_grant_for_task() — predicate never substring-matches against
-# the command line.
+# ── Step 3: write the sentinel grant (task 20260519-211515 R2 / AC2) ──
+# <state dir>/claude-grants/<task_id>.json contains {task_id, session_id,
+# allowed_operations[], created_at, expires_at}: a STRUCTURED grant that
+# hooks/lib/allowlist.py reads via load_sentinel_grant_for_task() — predicate
+# never substring-matches against the command line. hooks/lib/allowlist.py
+# write_sentinel_grant() is its one writer (scripts/capture-hero-run.py writes
+# the README demo's grant through it too) and replaces it atomically.
 #
 # Literal patterns: single {op, target?, args_contain?} entry.
 # Regex patterns: {op:"*", regex:<pattern>} entry. match_sentinel_grant_for_bash_command()
-#   tests re.search(regex, subcommand) for op="*" entries, enabling regex grants to
-#   reach subagents (which cannot use the legacy grant path).
-#   S1 early-exit removed (task 20260524-133650 gap-1 fix): regex grants now write a
-#   sentinel so subagents are covered. CF-1 (sentinel-exists-but-no-match suppresses
-#   legacy path) no longer applies because the matcher now returns a match for regex.
-#
-# Atomic write-temp+rename so partial files never appear.
+#   tests re.search(regex, subcommand) for op="*" entries, so regex grants
+#   reach subagents too.
+# Pattern passed via env vars — never shell-interpolated into Python source.
 TASK_ID="${CLAUDE_TASK_ID:-${SID}}"
-SENTINEL_DIR="$(harness_state_dir)/claude-grants"
-mkdir -p "$SENTINEL_DIR" 2>/dev/null
-SENTINEL_FILE="${SENTINEL_DIR}/${TASK_ID}.json"
-SENTINEL_TMP="${SENTINEL_FILE}.tmp.$$"
-ALLOW_PATTERN="$PATTERN" \
+if ! ALLOW_PATTERN="$PATTERN" \
   ALLOW_IS_REGEX="$IS_REGEX" \
-  SENTINEL_TMP="$SENTINEL_TMP" \
   SID="$SID" \
   TASK_ID="$TASK_ID" \
+  HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" \
   python3 -c "
-import json, os, time
+import os, sys
+sys.path.insert(0, os.environ['HOOKS_DIR'])
+from lib.allowlist import write_sentinel_grant
 pattern = os.environ['ALLOW_PATTERN']
-is_regex = os.environ.get('ALLOW_IS_REGEX') == 'true'
-now = time.time()
-# Default sentinel TTL: 300s. Aligns with bash-safety grant window.
-ttl = 300
-if is_regex:
-    # Regex sentinel: op='*' with 'regex' field. The matcher (allowlist.py
-    # match_sentinel_grant_for_bash_command) runs re.search(regex, subcommand)
-    # for op='*' entries, allowing regex grants to reach subagents.
+if os.environ.get('ALLOW_IS_REGEX') == 'true':
     entry = {'op': '*', 'regex': pattern}
 else:
-    # Literal patterns produce a single structured op entry.
     parts = pattern.split(None, 1)
     op = parts[0] if parts else pattern
     rest = parts[1] if len(parts) >= 2 else ''
@@ -741,16 +672,19 @@ else:
         entry['target'] = rest
     elif rest:
         entry['args_contain'] = rest.split()
-ops = [entry]
-grant = {
-    'task_id': os.environ['TASK_ID'],
-    'session_id': os.environ['SID'],
-    'allowed_operations': ops,
-    'created_at': now,
-    'expires_at': now + ttl,
-}
-with open(os.environ['SENTINEL_TMP'], 'w') as f:
-    json.dump(grant, f)
-" 2>/dev/null && mv -f "$SENTINEL_TMP" "$SENTINEL_FILE" 2>/dev/null
+write_sentinel_grant(os.environ['TASK_ID'], os.environ['SID'], [entry])
+" 2>/dev/null; then
+  echo "[allow] ERROR: the grant could not be written; no grant was issued." >&2
+  exit 0
+fi
+
+if [ -n "$COMMENT" ]; then
+  echo "[allow] Grant recorded: pattern='$PATTERN' is_regex=$IS_REGEX comment='$COMMENT'. Valid for ONE matching bash call this turn."
+else
+  echo "[allow] Grant recorded: pattern='$PATTERN' is_regex=$IS_REGEX. Valid for ONE matching bash call this turn."
+fi
+if [ "$ALLOW_MATCH_ALL" = "true" ]; then
+  echo "[allow] UNRESTRICTED grant: no command was named, so this matches ANY command. It is consumed by the FIRST matching operation and expires with the sentinel TTL."
+fi
 
 exit 0

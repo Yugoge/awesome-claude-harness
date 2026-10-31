@@ -16,39 +16,9 @@ cd "$PROJECT_ROOT"
 CLAUDE_DIR="${PROJECT_ROOT}/.claude"
 GLOBAL_CLAUDE_DIR="$HARNESS_HOME"
 
-# Exception list: agents invoked dynamically by orchestrators
-WORKFLOW_ORCHESTRATED_AGENTS=(
-    "git-edge-case-analyst"    # Invoked by /test Step 1 for git history analysis
-    "cleaner"                   # Invoked by /clean workflow Step 11
-    "layout-optimizer"            # Invoked by resume optimization workflows
-    "rule-inspector"              # Invoked by /clean workflow Step 4
-    "style-inspector"             # Invoked by /clean workflow Step 6
-    "prompt-inspector"            # Invoked by cleanup workflows
-    "test-validator"              # Invoked by /test workflow
-    "resume-critique"            # Invoked by resume workflows
-    "resume-refiner"              # Invoked by resume workflows
-    "resume-tailor"              # Invoked by resume workflows
-    "cover-letter-writer"         # Invoked by job application workflows
-    "job-parser"                 # Invoked by job application workflows
-)
-
 # Initialize JSON output
 orphan_agents=""
 total_count=0
-
-# Function to check if agent is in exception list
-is_excepted() {
-    local agent_name="$1"
-
-    for excepted_agent in "${WORKFLOW_ORCHESTRATED_AGENTS[@]}"; do
-        if [[ "$agent_name" == "$excepted_agent" ]]; then
-            echo "true"
-            return
-        fi
-    done
-
-    echo "false"
-}
 
 # Function to check if agent is referenced by commands
 check_agent_references() {
@@ -56,16 +26,20 @@ check_agent_references() {
 
     local referenced=false
 
+    # A command references an agent it names: its dispatch template, or the
+    # prose of a step that delegates to it ("Delegate to test-validator
+    # subagent", "invoke the cleaner subagent"). The commands' own index and
+    # readme name every command, not what they dispatch.
     # Check in .claude/commands/*.md (local)
     if [[ -d "${CLAUDE_DIR}/commands" ]]; then
-        if grep -rqE "(subagent_type.*${agent_name}|Task.*${agent_name}|agents/${agent_name}\.md|${agent_name}-agent|Dispatch.*${agent_name})" "${CLAUDE_DIR}/commands/" 2>/dev/null; then
+        if grep -rqwF --include='*.md' --exclude=INDEX.md --exclude=README.md -e "${agent_name}" "${CLAUDE_DIR}/commands/" 2>/dev/null; then
             referenced=true
         fi
     fi
 
     # Check in .claude/commands/*.md (global)
     if [[ -d "${GLOBAL_CLAUDE_DIR}/commands" ]]; then
-        if grep -rqE "(subagent_type.*${agent_name}|Task.*${agent_name}|agents/${agent_name}\.md|${agent_name}-agent|Dispatch.*${agent_name})" "${GLOBAL_CLAUDE_DIR}/commands/" 2>/dev/null; then
+        if grep -rqwF --include='*.md' --exclude=INDEX.md --exclude=README.md -e "${agent_name}" "${GLOBAL_CLAUDE_DIR}/commands/" 2>/dev/null; then
             referenced=true
         fi
     fi
@@ -154,11 +128,6 @@ if [[ -d "${CLAUDE_DIR}/agents" ]]; then
         # Skip meta-agents
         [[ "$agent_name" =~ ^(orchestrator|dispatcher|coordinator)$ ]] && continue
 
-        # Check exception list
-        if [[ $(is_excepted "$agent_name") == "true" ]]; then
-            continue
-        fi
-
         # Check if referenced
         is_referenced=$(check_agent_references "$agent_name")
 
@@ -199,11 +168,6 @@ if [[ -d "${GLOBAL_CLAUDE_DIR}/agents" ]]; then
 
         # Skip meta-agents
         [[ "$agent_name" =~ ^(orchestrator|dispatcher|coordinator)$ ]] && continue
-
-        # Check exception list
-        if [[ $(is_excepted "$agent_name") == "true" ]]; then
-            continue
-        fi
 
         # Check if referenced
         is_referenced=$(check_agent_references "$agent_name")

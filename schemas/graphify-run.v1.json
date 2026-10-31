@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "graphify-run.v1",
   "title": "Graphify Run Manifest",
-  "description": "Step 7.5 run manifest. Records the graphify subagent's execution: update run, focused subgraph extraction, and context patching status.",
+  "description": "Step 7.5 run record, written by graphify-enrich.py on every path: its status, the cache refresh, the focused subgraph extraction, and the context fingerprint /dev-overnight Step 11g compares. graphify never writes the context.",
   "type": "object",
   "additionalProperties": true,
   "required": ["status", "task_id"],
@@ -41,26 +41,6 @@
         "blast_radius_map_present": {"type": "boolean"},
         "nodes_extracted": {"type": "integer"},
         "edges_extracted": {"type": "integer"}
-      }
-    },
-    "context_patch": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Status of in-place patching of context-{ts}.json with graph_context field (arch-6 accepted divergence from sidecar)",
-      "properties": {
-        "patched": {"type": "boolean"},
-        "context_path": {"type": "string"},
-        "graph_context_size_tokens": {"type": "integer"}
-      }
-    },
-    "artifacts": {
-      "type": "object",
-      "additionalProperties": true,
-      "description": "Per-task artifact paths under .claude/dev-registry/{task_id}/graphify/",
-      "properties": {
-        "focused_subgraph": {"type": "string"},
-        "graph_summary": {"type": "string"},
-        "graph_report": {"type": "string"}
       }
     },
     "error_detail": {

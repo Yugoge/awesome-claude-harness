@@ -6,21 +6,22 @@ chain exactly as before and NEVER touches ``late-repair-controller.py`` --
 bare ``/close`` has zero R4 side effects (AC-11). With ``--late-repair`` it
 delegates the eligibility check and run-record creation entirely to
 ``late-repair-controller.py init`` (the single source of truth for
-eligibility -- this script never recomputes it).
+eligibility -- this script never recomputes it). When init declines, the
+payload is the pass-through's, built from the chain result init decided on
+and carrying init's refusal under ``late_repair``: /close goes on with it on
+the ordinary route, so the chain is resolved once per run.
 
 The pass-through payload is ``{"outcome": "not_selected", "artifact_chain":
 <resolver result>}`` with ``artifact_chain`` byte-identical to the resolver's
-own result.  Only when that result carries the resolver's additive
-``AC_DEVIATION_REJECTION_CODE`` error (a malformed AC-deviation record) does the
-payload gain a top-level ``explicit_rejection`` ``{code, path, detail}`` copied
-from that error; the outcome and the exit code do not change.  The code is read
-from the resolver module, never re-typed here.
+own result and the resolver's own exit status: this script adds no verdict of
+its own to the one chain call.
 
 Exit codes:
-  0  not_selected (no --late-repair) with a passing chain (status "pass" or
-     "pass_with_exceptions" -- ticket 20260911-011232), or initialized
+  0  not_selected (no --late-repair, or init declined) with a passing chain
+     (status "pass" or "pass_with_exceptions" -- ticket 20260911-011232), or
+     initialized / already_initialized
   1  refuse (usage error, e.g. --late-repair + --force)
-  2  not_selected with a failing chain, or late-repair refuse (ineligible)
+  2  not_selected with a failing chain
 """
 
 from __future__ import annotations
@@ -43,6 +44,11 @@ def _resolver_module() -> ModuleType:
     return load_sibling_module("resolve-dev-artifact-chain.py", __file__)
 
 
+def _not_selected(resolver: ModuleType, result: dict) -> tuple[int, dict]:
+    payload = {"outcome": "not_selected", "artifact_chain": result}
+    return resolver.exit_status(result), payload
+
+
 def run(task_id: str, project_dir: str, late_repair: bool, force: bool) -> tuple[int, dict]:
     if late_repair and force:
         payload = {"outcome": "refuse", "reason": "--late-repair combined with --force is not permitted"}
@@ -50,32 +56,16 @@ def run(task_id: str, project_dir: str, late_repair: bool, force: bool) -> tuple
 
     if not late_repair:
         resolver = _resolver_module()
-        result = resolver.resolve_chain(project_dir, task_id)
-        payload = {"outcome": "not_selected", "artifact_chain": result}
-        rejection = next(
-            (e for e in result["errors"] if e.get("code") == resolver.AC_DEVIATION_REJECTION_CODE),
-            None,
-        )
-        if rejection is not None:
-            payload["explicit_rejection"] = {
-                "code": rejection["code"],
-                "path": rejection["path"],
-                "detail": rejection["detail"],
-            }
-        return (0 if result["status"] in ("pass", "pass_with_exceptions") else 2), payload
+        return _not_selected(resolver, resolver.resolve_chain(project_dir, task_id))
 
     controller = _controller_module()
-    ns = argparse.Namespace(task_id=task_id, project_dir=project_dir, force=False)
-    import contextlib
-    import io
-
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        rc = controller.cmd_init(ns)
-    try:
-        payload = json.loads(buffer.getvalue().strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        payload = {"outcome": "error", "reason": "controller produced no parseable output"}
+    rc, payload, chain = controller.init_run(Path(project_dir).resolve(), task_id)
+    if payload.get("outcome") == "refuse":
+        # init declined: its chain result is this run's one chain call, used
+        # verbatim on the ordinary route rather than resolved again.
+        exit_code, ordinary = _not_selected(_resolver_module(), chain)
+        ordinary["late_repair"] = payload
+        return exit_code, ordinary
     return (0 if rc == 0 else 2), payload
 
 

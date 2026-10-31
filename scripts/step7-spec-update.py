@@ -16,8 +16,8 @@ USAGE:
       --task-id <TASK_ID> \\
       --dev-docs-root <DEV_DOCS_ROOT> \\
       [--bulk true|false] [--dryrun true|false] \\
-      [--changelog-status committed|nothing_to_commit|nothing_to_commit_precommitted|push_gate_reconciled|failed] \\
-      [--push-gate-token-path <path-or-NONE>]
+      [--changelog-status <commit_status as changelog-analyst reported it>] \\
+      [--push-gate-token-path <ignored>]
 
 ENV:
   COMMIT_STEP7_TRACE=1   Emit STEP7_* deterministic markers to stderr.
@@ -45,6 +45,7 @@ Claude Code Agent call, not a shell command).
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import pathlib
@@ -65,6 +66,16 @@ def _trace_on() -> bool:
 def _emit(marker: str) -> None:
     if _trace_on():
         print(marker, file=sys.stderr, flush=True)
+
+
+def _close_report_missing(cr: pathlib.Path) -> bool:
+    """Whether there is no close report, as hooks/lib/close-verdict.py, the one
+    classifier every reader of a close report takes its verdict from, decides it
+    (its file name is no identifier: imported by name from the harness root)."""
+    harness = str(pathlib.Path(__file__).resolve().parent.parent)
+    if harness not in sys.path:
+        sys.path.insert(0, harness)
+    return importlib.import_module("hooks.lib.close-verdict").classify_file(cr) == "missing"
 
 
 def _parse_close_report_lines_outside_fences(path: pathlib.Path):
@@ -104,7 +115,7 @@ def _stage1_context_spec_path(task_id: str, dev_docs_root: pathlib.Path):
 
 def _stage2_close_report_continuation(task_id: str, dev_docs_root: pathlib.Path):
     cr = dev_docs_root / f"close-report-{task_id}.md"
-    if not cr.is_file():
+    if _close_report_missing(cr):
         return None
     matches = []
     for line in _parse_close_report_lines_outside_fences(cr):
@@ -123,7 +134,7 @@ def _stage2_close_report_continuation(task_id: str, dev_docs_root: pathlib.Path)
 
 def _stage3_mtime_glob(task_id: str, dev_docs_root: pathlib.Path):
     cr = dev_docs_root / f"close-report-{task_id}.md"
-    if not cr.is_file():
+    if _close_report_missing(cr):
         return []
     cr_mtime = cr.stat().st_mtime
     lo = cr_mtime - 24 * 3600
@@ -158,18 +169,13 @@ def main() -> int:
     ap.add_argument("--dev-docs-root", required=True)
     ap.add_argument("--bulk", default="false", choices=["true", "false"])
     ap.add_argument("--dryrun", default="false", choices=["true", "false"])
-    # push_gate_reconciled: changelog-analyst wrote a missing push-gate token for an
-    # already-existing HEAD commit ATTRIBUTED to this task (attribution is by journal
-    # entry, not authorship — see hooks/lib/commit_journal.py) and created no new commit. It
-    # must be an accepted choice so the status routes to the normal
-    # "changelog_no_real_commit" skip below; without it argparse aborts before
-    # that branch is ever reached.
-    ap.add_argument("--changelog-status", default="committed",
-                    choices=["committed", "nothing_to_commit",
-                             "nothing_to_commit_precommitted",
-                             "push_gate_reconciled", "failed"])
-    ap.add_argument("--push-gate-token-path", default="",
-                    help="Path to push-gate token; empty/NONE => not present")
+    # The status is read verbatim: G2 validated changelog-analyst's status block
+    # against changelog-status.v1 at the analyst's own stop, and only
+    # `committed` is a real commit of this cycle.
+    ap.add_argument("--changelog-status", default="committed")
+    # Accepted and not read: hooks/push.sh is the push-gate token's one decider,
+    # and a `committed` status already says a token was written.
+    ap.add_argument("--push-gate-token-path", default="", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     task_id = args.task_id.strip()
@@ -190,17 +196,9 @@ def main() -> int:
         _emit("STEP7_SKIPPED: task_id_empty")
         print("Step 8 skipped: TASK_ID is empty")
         return 0
-    push_gate_ok = (
-        args.push_gate_token_path
-        and args.push_gate_token_path != "NONE"
-        and pathlib.Path(args.push_gate_token_path).is_file()
-    )
-    if args.changelog_status != "committed" or not push_gate_ok:
+    if args.changelog_status != "committed":
         _emit("STEP7_SKIPPED: changelog_no_real_commit")
-        print(
-            f"Step 8 skipped: changelog status={args.changelog_status} "
-            f"push_gate_ok={push_gate_ok}"
-        )
+        print(f"Step 8 skipped: changelog status={args.changelog_status}")
         return 0
 
     # Stage (1) context.spec_path

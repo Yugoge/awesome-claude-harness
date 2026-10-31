@@ -42,45 +42,10 @@ echo -e "${BLUE}🚀 No Git repository found. Initializing...${NC}"
 # Initialize git
 git init > /dev/null 2>&1
 
-# Create .gitignore (if doesn't exist)
-if [ ! -f .gitignore ]; then
-  cat > .gitignore << 'EOF'
-# Dependencies
-node_modules/
-venv/
-__pycache__/
-*.pyc
-.Python
-env/
-build/
-dist/
-*.egg-info/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Claude Code local settings
-.claude/settings.local.json
-EOF
+# Create .gitignore (if doesn't exist), through the one writer of a project's
+# .gitignore, scripts/update-gitignore.sh.
+HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ "$(bash "$HARNESS_DIR/scripts/update-gitignore.sh" "$PWD" --init)" = "created" ]; then
   echo -e "${GREEN}✅ Created .gitignore${NC}"
 fi
 

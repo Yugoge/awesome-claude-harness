@@ -10,10 +10,6 @@
 # use the safety script directly). See CLAUDE.md permanent-block list
 # (EnterPlanMode/ExitPlanMode only).
 
-# Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-  || harness_state_dir() { printf '%s\n' /tmp; }
-
 # Read full JSON from stdin
 INPUT=$(cat)
 
@@ -47,7 +43,11 @@ then
   exit 0
 fi
 
-# /do + /allow bypass (main-agent only)
+# /do bypass: hooks/lib/allowlist.py has_do_consent (main agent only).
+if printf '%s' "$INPUT" | python3 "$_BEW_OV_DIR/lib/allowlist.py" consent 2>/dev/null; then
+  exit 0
+fi
+# /allow bypass (main-agent only) — lib/allowlist.match_sentinel_grant_for_tool
 _BEW_IS_SUB=$(echo "$INPUT" | python3 -c \
   "import json,sys; d=json.load(sys.stdin); print('1' if d.get('agent_id') else '0')" \
   2>/dev/null)
@@ -57,25 +57,16 @@ if [ "$_BEW_IS_SUB" != "1" ]; then
 print(d.get('session_id','') or os.environ.get('CLAUDE_SESSION_ID','default'))" \
     2>/dev/null)
   [ -z "$_BEW_SID" ] && _BEW_SID="default"
-  _BEW_DO_FLAG="$(harness_state_dir)/claude-orchestrator-consent-${_BEW_SID}.flag"
-  if [ -f "$_BEW_DO_FLAG" ] && [ "$(cat "$_BEW_DO_FLAG" 2>/dev/null)" = "true" ]; then
-    exit 0
-  fi
-  # /allow bypass — delegates to lib/allowlist.read_grant("EnterWorktree", sid)
-  _BEW_HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  _BEW_ALLOW_FILE="$(harness_state_dir)/claude-bash-allowlist-${_BEW_SID}.json"
-  if [ -f "$_BEW_ALLOW_FILE" ]; then
-    _BEW_MATCHED=$(HOOKS_DIR="$_BEW_HOOKS_DIR" BEW_SID="$_BEW_SID" python3 - <<'BEWEOF'
+  _BEW_MATCHED=$(HOOKS_DIR="$_BEW_OV_DIR" BEW_SID="$_BEW_SID" python3 - <<'BEWEOF'
 import os, sys
 sys.path.insert(0, os.environ["HOOKS_DIR"])
-from lib.allowlist import read_grant
-if read_grant("EnterWorktree", os.environ["BEW_SID"]):
+from lib.allowlist import match_sentinel_grant_for_tool
+if match_sentinel_grant_for_tool(os.environ["BEW_SID"], "EnterWorktree") is not None:
     print("1")
 BEWEOF
 )
-    if [ "$_BEW_MATCHED" = "1" ]; then
-      exit 0
-    fi
+  if [ "$_BEW_MATCHED" = "1" ]; then
+    exit 0
   fi
 fi
 

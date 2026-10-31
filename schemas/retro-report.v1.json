@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "retro-report.v1",
+  "title": "PM Retrospective Report",
+  "description": "The retrospective PM writes in /dev-overnight RETRO mode (agents/pm.md, Step 9), docs/dev/overnight/<session_id>/retro-report-cycle<N>.json; G2 checks it at PM's own stop. Its presence ends the cycle (hooks/lib/overnight.py cycle_index) and the next cycle's PLAN reads its unresolved_issues. is_final_cycle carries the dispatch's FINAL_CYCLE; the final cycle's report holds final_summary. task_id is the identity the obligation names. Every other field of the PM payload is allowed.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["task_id", "is_final_cycle", "plan_vs_outcome", "unresolved_issues", "cycle_stats"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "is_final_cycle": {"type": "boolean"},
+    "plan_vs_outcome": {"type": "array"},
+    "unresolved_issues": {"type": "array"},
+    "cycle_stats": {"type": "object"}
+  },
+  "if": {
+    "properties": {"is_final_cycle": {"const": true}},
+    "required": ["is_final_cycle"]
+  },
+  "then": {
+    "required": ["final_summary"],
+    "properties": {"final_summary": {"type": "object"}}
+  }
+}

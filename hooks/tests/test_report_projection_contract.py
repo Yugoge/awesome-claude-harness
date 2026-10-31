@@ -54,7 +54,6 @@ def _load_module(name: str, relative: str):
 
 aggregate = _load_module("projection_aggregate", "scripts/aggregate-dev-report.py")
 resolver = _load_module("projection_resolver", "scripts/resolve-dev-artifact-chain.py")
-closeout = _load_module("projection_closeout", "hooks/lib/closeout.py")
 file_check = _load_module(
     "projection_file_check", "hooks/posttool-overnight-file-check.py"
 )
@@ -253,7 +252,7 @@ def _assert_both_entry_points_fail(
 ) -> None:
     before = copy.deepcopy(report)
     _assert_fail(runtime.validate(report, schema_name), *fragments)
-    _assert_fail(runtime.validate_artifact(report, schema_name), *fragments)
+    _assert_fail(runtime.validate(report, schema_name), *fragments)
     assert report == before
 
 
@@ -326,8 +325,8 @@ def test_producer_examples_are_valid_singular_projections() -> None:
         "errors": [],
         "severity": "pass",
     }
-    assert runtime.validate_artifact(dev, "dev-report.v1")["ok"]
-    assert runtime.validate_artifact(qa, "qa-report.v1")["ok"]
+    assert runtime.validate(dev, "dev-report.v1")["ok"]
+    assert runtime.validate(qa, "qa-report.v1")["ok"]
 
     # Singularity: a flat alias is never duplicated inside the nested block it
     # projects from, and it agrees with that canonical source exactly.
@@ -377,7 +376,7 @@ def test_dev_status_projection_positive_and_non_mutating(status: str) -> None:
     report = _dev_report(status)
     before = copy.deepcopy(report)
     assert runtime.validate(report, "dev-report.v1")["ok"]
-    assert runtime.validate_artifact(report, "dev-report.v1")["ok"]
+    assert runtime.validate(report, "dev-report.v1")["ok"]
     assert report == before
 
 
@@ -386,7 +385,7 @@ def test_dev_status_other_than_completed_is_rejected(status: str) -> None:
     """D2: dev-report v1 and v2 each have one legal status, completed."""
     report = _dev_report(status)
     assert not runtime.validate(report, "dev-report.v1")["ok"]
-    assert not runtime.validate_artifact(report, "dev-report.v1")["ok"]
+    assert not runtime.validate(report, "dev-report.v1")["ok"]
 
 
 @pytest.mark.parametrize(("mutations", "fragments"), DEV_NEGATIVE_CASES)
@@ -408,7 +407,7 @@ def test_qa_status_projection_positive_and_non_mutating(status: str) -> None:
     }
     before = copy.deepcopy(report)
     assert runtime.validate(report, "qa-report.v1")["ok"]
-    assert runtime.validate_artifact(report, "qa-report.v1")["ok"]
+    assert runtime.validate(report, "qa-report.v1")["ok"]
     assert report == before
 
 
@@ -702,47 +701,38 @@ def test_projection_failure_precedes_draft7_unavailability(
     matching_path = tmp_path / "qa-report-matching.json"
     matching_path.write_text(json.dumps(matching), encoding="utf-8")
     assert runtime.validate_report_artifact(matching_path)["status"] == "skip"
-    direct = runtime.validate_artifact(matching, "qa-report.v1")
+    direct = runtime.validate(matching, "qa-report.v1")
     assert direct["ok"] is True and direct["severity"] == "warn"
 
     for name, report in (("contradiction", contradiction), ("missing", missing_source)):
         path = tmp_path / f"qa-report-{name}.json"
         path.write_text(json.dumps(report), encoding="utf-8")
         assert runtime.validate_report_artifact(path)["status"] == "fail"
-        _assert_fail(runtime.validate_artifact(report, "qa-report.v1"), "qa.evidence_summary")
+        _assert_fail(runtime.validate(report, "qa-report.v1"), "qa.evidence_summary")
 
 
 def test_direct_caller_keeps_invalid_json_and_projection_fail_closed(tmp_path: Path) -> None:
-    valid = tmp_path / "dev-report-valid.json"
-    valid.write_text(json.dumps(_dev_report()), encoding="utf-8")
-    assert file_check._validate_one_artifact(valid, "dev-report.v1") == ("pass", [])
+    # The overnight file check validates the artifact its dispatch's
+    # obligation declares, against the obligation's schema.
+    def errors_for(name: str) -> list[str]:
+        artifact = {"kind": "json", "path": name, "schema": "dev-report.v1"}
+        return file_check._artifact_errors(artifact, tmp_path)
+
+    (tmp_path / "dev-report-valid.json").write_text(json.dumps(_dev_report()), encoding="utf-8")
+    assert errors_for("dev-report-valid.json") == []
 
     missing_version = _dev_report()
     del missing_version["report_version"]
-    _assert_fail(runtime.validate_artifact(missing_version, "dev-report.v1"), "report_version")
+    _assert_fail(runtime.validate(missing_version, "dev-report.v1"), "report_version")
 
     mismatch = _dev_report()
     mismatch["files_created"] = []
-    mismatch_path = tmp_path / "dev-report-mismatch.json"
-    mismatch_path.write_text(json.dumps(mismatch), encoding="utf-8")
-    status, errors = file_check._validate_one_artifact(mismatch_path, "dev-report.v1")
-    assert status == "fail" and any("dev.files_created" in error for error in errors)
+    (tmp_path / "dev-report-mismatch.json").write_text(json.dumps(mismatch), encoding="utf-8")
+    assert any("dev.files_created" in error for error in errors_for("dev-report-mismatch.json"))
 
-    invalid = tmp_path / "dev-report-invalid.json"
-    invalid.write_text("not-json", encoding="utf-8")
-    assert file_check._validate_one_artifact(invalid, "dev-report.v1")[0] == "invalid_json"
-    assert file_check._validate_one_artifact(tmp_path / "missing.json", "dev-report.v1")[0] == "missing"
-
-
-@pytest.mark.parametrize(("ui", "coverage"), [(False, None), (True, 1.0)])
-def test_projected_qa_activates_correct_closeout_metrics(ui: bool, coverage) -> None:
-    report = _qa_report(ui=ui)
-    assert runtime.validate(report, "qa-report.v1")["ok"]
-    loaded = [{"entry": {"ui_pipeline": ui}, "report": report}]
-
-    assert closeout._count_passed_pipelines(loaded) == 1
-    assert closeout._false_pass_risk_count(loaded) == 0
-    assert closeout._ui_evidence_coverage(loaded) == coverage
+    (tmp_path / "dev-report-invalid.json").write_text("not-json", encoding="utf-8")
+    assert any("unparseable JSON" in error for error in errors_for("dev-report-invalid.json"))
+    assert any("missing" in error for error in errors_for("missing.json"))
 
 
 def test_projected_dev_preserves_aggregate_and_resolver_nested_semantics(
@@ -874,7 +864,7 @@ def test_historical_required_qa_policy_is_always_enforced() -> None:
         record = _historical_qa_record(name, task_id)
         task_ids.add(record["task_id"])
         _assert_fail(
-            runtime.validate_artifact(record, "qa-report.v1"),
+            runtime.validate(record, "qa-report.v1"),
             "evidence_summary",
             "qa.evidence_summary",
         )
@@ -910,7 +900,7 @@ def test_historical_qa_shape_is_blocked_at_the_gate_without_mutation(
         # Hand the SAME object to the in-memory entry point, which does take it,
         # and only then is non-mutation an assertion about anything.
         _assert_fail(
-            runtime.validate_artifact(record, "qa-report.v1"),
+            runtime.validate(record, "qa-report.v1"),
             "evidence_summary",
             "qa.evidence_summary",
         )

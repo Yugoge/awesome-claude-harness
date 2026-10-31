@@ -66,9 +66,18 @@ RECLASSIFIABLE_CODES = frozenset(
 # divergent enum.  Only "environment" ever excuses a blocking finding here.
 QA_ENVIRONMENT_PRIMARY_CAUSE = "environment"
 
-QA_DISCLOSED_EXCEPTION_CLASSIFICATIONS = frozenset(
-    {"shared_working_tree_concurrency", "infrastructure_unavailability", "other_environmental"}
-)
+
+def _qa_disclosed_classifications() -> frozenset:
+    """The disclosed_exception classifications schemas/qa-report.v1.json
+    declares; none (the finding stays a hard error) when it cannot be read."""
+    try:
+        schema = json.loads((Path(__file__).resolve().parent.parent / "schemas" / "qa-report.v1.json")
+                            .read_text(encoding="utf-8"))
+        return frozenset(schema["properties"]["disclosed_exception"]["properties"]["classification"]["enum"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return frozenset()
+
+
 DEV_STATUS_RATIONALE_CLASSIFICATIONS = frozenset(
     {"pending_commit_handoff", "pending_external_authorization", "other_disclosed_handoff"}
 )
@@ -415,7 +424,7 @@ def _qa_environmental_eligible(value: dict[str, Any] | None) -> bool:
     disclosed = qa.get("disclosed_exception")
     if not isinstance(disclosed, dict):
         return False
-    if disclosed.get("classification") not in QA_DISCLOSED_EXCEPTION_CLASSIFICATIONS:
+    if disclosed.get("classification") not in _qa_disclosed_classifications():
         return False
     evidence = disclosed.get("evidence")
     if not isinstance(evidence, list) or not evidence:
@@ -1143,33 +1152,6 @@ def _parent_paths(dev_dir: Path, task_id: str) -> dict[str, Path]:
     }
 
 
-def _optional_parent_result(
-    validator: ChainValidator,
-    paths: dict[str, Path],
-) -> dict[str, dict[str, Any]]:
-    result: dict[str, dict[str, Any]] = {}
-    for kind in ("ticket", "context", "qa_report"):
-        path = paths[kind]
-        result[kind] = {
-            "path": _rel(path, validator.root),
-            "present": path.is_file(),
-        }
-        if not path.is_file():
-            continue
-        if kind == "ticket":
-            text = validator.read_text(path)
-            if text is not None:
-                validator.validate_markdown_identity(text, validator.task_id, path)
-        else:
-            value = validator.read_json(path)
-            if value is not None:
-                if kind == "qa_report":
-                    validator.validate_qa(value, validator.task_id, path)
-                else:
-                    validator.validate_json_identity(value, validator.task_id, path)
-    return result
-
-
 def _find_undeclared_lane_artifacts(
     validator: ChainValidator, workers: list[str], aggregate: ModuleType | None
 ) -> None:
@@ -1298,7 +1280,6 @@ def _base_result(task_id: str, canonical: str, completion: str) -> dict[str, Any
         "parallel_workers": [],
         "parallel_workers_declaration": "unknown",
         "lanes": [],
-        "optional_parent_artifacts": {},
         "report_paths": [],
         "artifact_paths": [],
         "commit_whitelist_artifacts": [],
@@ -1977,13 +1958,6 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             validator.validate_completion(
                 completion, task_id, parents["completion"], completion_refs
             )
-        optional = _optional_parent_result(validator, parents)
-        result["optional_parent_artifacts"] = optional
-        artifact_paths.extend(
-            value["path"] for value in optional.values() if value["present"]
-        )
-        if optional["qa_report"]["present"]:
-            result["report_paths"].append(optional["qa_report"]["path"])
         result["artifact_paths"] = artifact_paths
         result["commit_whitelist_artifacts"] = artifact_paths
         result["qa_inputs"] = [
@@ -2259,6 +2233,22 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
     return result
 
 
+def exit_status(result: dict[str, Any]) -> int:
+    """The chain's verdict as an exit status: 0 for a complete chain (status
+    "pass", or "pass_with_exceptions" with its disclosed_exceptions[]), 2
+    otherwise. main exits with it; a caller that loads this module acts on the
+    verdict through it, never through a status test of its own."""
+    return 0 if result["status"] in ("pass", "pass_with_exceptions") else 2
+
+
+def late_repair_eligible(result: dict[str, Any]) -> bool:
+    """The chain's verdict on the late-repair route: the field
+    `_compute_gap_fields` computes, true only for a singular chain whose every
+    gap is a stage gap; NOT_APPLICABLE (a fan-out chain, or none classified) is
+    not eligible."""
+    return result.get("late_repair_eligible") is True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = StableArgumentParser(prog="resolve-dev-artifact-chain.py")
     parser.add_argument("--task-id", required=True)
@@ -2281,7 +2271,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     result = resolve_chain(args.project_dir, args.task_id)
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
-    return 0 if result["status"] in ("pass", "pass_with_exceptions") else 2
+    return exit_status(result)
 
 
 if __name__ == "__main__":

@@ -24,18 +24,15 @@ HOOKS_DIR = str(Path(__file__).parent.parent)
 sys.path.insert(0, HOOKS_DIR)
 
 from lib.allowlist import (
-    MatchResult,
-    _match_loaded_grant,
-    _load_and_match,
-    read_grant,
-    read_grant_for_git_command,
-    match_grant_for_bash_command,
-    consume_grant_for_posttool,
+    has_do_consent,
     load_sentinel_grant_for_task,
     match_sentinel_grant_for_bash_command,
+    match_sentinel_grant_for_tool,
     match_sentinel_grant_for_write,
     consume_sentinel_grant_on_terminal_result,
     reap_expired_sentinel_grants,
+    sentinel_grant_path,
+    write_sentinel_grant,
 )
 from lib.harness_state_dir import harness_state_dir
 
@@ -45,10 +42,6 @@ from lib.harness_state_dir import harness_state_dir
 # neither this process nor a spawned hook touches the shared default root.
 def _grant_dir():
     return os.path.join(harness_state_dir(), "claude-grants")
-
-
-def _legacy_flag(sid):
-    return os.path.join(harness_state_dir(), f"claude-bash-allowlist-{sid}.json")
 
 
 def _harness_home_consent_hook(root):
@@ -70,7 +63,13 @@ def _harness_home_consent_hook(root):
     for rel in (
         "userprompt-consent-allowlist.sh",
         "lib/claude_home.sh",
+        # The one load of a settings file: the resolver's probe and the deny preflight.
+        "lib/claude_home.py",
         "lib/harness_state_dir.sh",
+        # The grant's one writer and what it imports.
+        "lib/allowlist.py",
+        "lib/harness_state_dir.py",
+        "lib/subagent.py",
     ):
         shutil.copy2(os.path.join(HOOKS_DIR, rel), home / "hooks" / rel)
     python = home / "venv" / "bin" / "python"
@@ -83,7 +82,7 @@ def _harness_home_consent_hook(root):
 
 
 class TestAllowSettingsPreflight(unittest.TestCase):
-    """Known file-based settings DENYs resolve before either grant channel writes."""
+    """Known file-based settings DENYs resolve before the grant is written."""
 
     @pytest.fixture(autouse=True)
     def _user_settings(self, tmp_path):
@@ -126,10 +125,7 @@ class TestAllowSettingsPreflight(unittest.TestCase):
         )
 
     def _paths(self, task_id, session_id):
-        return (
-            os.path.join(_grant_dir(), f"{task_id}.json"),
-            _legacy_flag(session_id),
-        )
+        return (os.path.join(_grant_dir(), f"{task_id}.json"),)
 
     def _assert_hard_deny_record(
         self, result, *, origin, matched_rule, earlier_pending_grant_cleared
@@ -272,7 +268,7 @@ class TestAllowSettingsPreflight(unittest.TestCase):
         The hook must resolve its interpreter structurally
         (hooks/lib/claude_home.sh) instead of deriving it from
         CLAUDE_CONFIG_DIR, so an explicit narrow selector still records the
-        grant on BOTH channels (legacy flag + structured sentinel)."""
+        grant."""
         with tempfile.TemporaryDirectory() as temp:
             config_dir = Path(temp) / "account-state"
             project_dir = Path(temp) / "project"
@@ -390,9 +386,7 @@ class TestAllowSettingsPreflight(unittest.TestCase):
 
             task_id = "test-allow-hard-deny-stale"
             session_id = "test-allow-hard-deny-stale-session"
-            paths = self._paths(task_id, session_id) + (
-                os.path.join(_grant_dir(), f"{task_id}-older.json"),
-            )
+            paths = self._paths(task_id, session_id)
             for path in paths:
                 Path(path).parent.mkdir(parents=True, exist_ok=True)
                 Path(path).write_text("{}", encoding="utf-8")
@@ -494,6 +488,13 @@ class TestAllowSettingsPreflight(unittest.TestCase):
                     "participating file-based settings source could not be evaluated",
                     result.stderr,
                 )
+                # The verdict and its reason are the one load of a settings file's
+                # (hooks/lib/claude_home.py load_settings).
+                self.assertIn(
+                    "[allow] unusable_source=%s: not valid JSON ("
+                    % (project_settings_dir / "settings.json"),
+                    result.stderr,
+                )
                 self.assertNotIn("Grant recorded", result.stdout)
                 self.assertFalse(any(os.path.exists(path) for path in paths))
             finally:
@@ -502,329 +503,224 @@ class TestAllowSettingsPreflight(unittest.TestCase):
                         os.unlink(path)
 
 
-class TestMatchLoadedGrant(unittest.TestCase):
-    """Unit tests for _match_loaded_grant (pure match, no I/O)."""
-
-    def _grant(self, pattern, is_regex=False):
-        return {"pattern": pattern, "is_regex": is_regex}
-
-    def test_exact_or_substr_exact_match(self):
-        result = _match_loaded_grant(
-            self._grant("Write"), ["Write"], "exact_or_substr", None
-        )
-        self.assertIsNotNone(result)
-        self.assertEqual(result.pattern, "Write")
-        self.assertFalse(result.is_regex)
-        self.assertEqual(result.matched_sub, "Write")
-
-    def test_exact_or_substr_substring_match(self):
-        result = _match_loaded_grant(
-            self._grant("git"), ["git push origin"], "exact_or_substr", None
-        )
-        self.assertIsNotNone(result)
-
-    def test_substr_only_no_exact_match(self):
-        # substr_only: "Write" must be IN the candidate as a substring
-        # "Write" is not a substring of "TodoWrite" being checked differently —
-        # here we test that "Write" IN "TodoWrite" is True (which it is),
-        # but the policy difference is: exact_or_substr also allows pattern == cand
-        result = _match_loaded_grant(
-            self._grant("write"), ["git commit -m write something"], "substr_only", None
-        )
-        self.assertIsNotNone(result)
-
-    def test_substr_only_rejects_no_substr(self):
-        result = _match_loaded_grant(
-            self._grant("push"), ["git pull"], "substr_only", None
-        )
-        self.assertIsNone(result)
-
-    def test_regex_match(self):
-        result = _match_loaded_grant(
-            self._grant(r"git\s+push", True), ["git push origin"], "substr_only", None
-        )
-        self.assertIsNotNone(result)
-        self.assertTrue(result.is_regex)
-
-    def test_invalid_pattern_returns_none(self):
-        result = _match_loaded_grant({"pattern": "", "is_regex": False}, ["anything"], "exact_or_substr", None)
-        self.assertIsNone(result)
-
-    def test_missing_pattern_key_returns_none(self):
-        result = _match_loaded_grant({}, ["anything"], "exact_or_substr", None)
-        self.assertIsNone(result)
-
-    def test_first_candidate_wins(self):
-        result = _match_loaded_grant(
-            self._grant("b"), ["a", "b", "c"], "exact_or_substr", None
-        )
-        self.assertIsNotNone(result)
-        self.assertEqual(result.matched_sub, "b")
+def _tool_grant(task_id, session_id, ops):
+    """A live grant written by the one writer, as /allow writes it."""
+    return str(write_sentinel_grant(task_id, session_id, ops))
 
 
-class TestLoadAndMatch(unittest.TestCase):
-    """Unit tests for _load_and_match (blocking-lock wrapper)."""
+class TestMatchSentinelGrantForTool(unittest.TestCase):
+    """match_sentinel_grant_for_tool: the /allow reader of the tool-name gates
+    (orchestrator gate, Agent gates, Read guard, EnterWorktree)."""
 
-    def _write_grant(self, path, pattern, is_regex=False):
-        with open(path, "w") as f:
-            json.dump({"pattern": pattern, "is_regex": is_regex}, f)
+    def setUp(self):
+        self.nonce = f"{os.getpid()}-{int(time.time() * 1000)}"
+        self.paths = []
 
-    def test_match_found(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            grant_path = os.path.join(tmpdir, "claude-bash-allowlist-testsid.json")
-            self._write_grant(grant_path, "git push")
-            with patch("lib.allowlist.Path") as MockPath:
-                MockPath.return_value = Path(grant_path)
-                result = _load_and_match("testsid", ["git push origin"], "substr_only", None)
-            self.assertIsNotNone(result)
+    def tearDown(self):
+        for path in self.paths:
+            if os.path.exists(path):
+                os.unlink(path)
 
-    def test_missing_file_returns_none(self):
-        result = _load_and_match("nonexistent_sid_xyz", ["anything"], "exact_or_substr", None)
-        self.assertIsNone(result)
+    def _grant(self, ops, session_id=None):
+        sid = session_id or f"test-tool-grant-{self.nonce}"
+        self.paths.append(_tool_grant(sid, sid, ops))
+        return sid
 
+    def test_exact_tool_name_matches(self):
+        sid = self._grant([{"op": "Agent"}])
+        self.assertEqual(match_sentinel_grant_for_tool(sid, "Agent"), {"op": "Agent"})
 
-class TestReadGrant(unittest.TestCase):
-    """Unit tests for read_grant (public API, exact_or_substr semantics)."""
-
-    def _write_grant(self, path, pattern, is_regex=False):
-        with open(path, "w") as f:
-            json.dump({"pattern": pattern, "is_regex": is_regex}, f)
-
-    def test_exact_match_returns_true(self):
-        # Use a controlled SID
-        test_sid = "test-read-grant-unit"
-        grant_path = _legacy_flag(test_sid)
-        try:
-            self._write_grant(grant_path, "Write")
-            self.assertTrue(read_grant("Write", test_sid))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
-
-    def test_no_match_returns_false(self):
-        test_sid = "test-read-grant-nomatch"
-        grant_path = _legacy_flag(test_sid)
-        try:
-            with open(grant_path, "w") as f:
-                json.dump({"pattern": "Bash", "is_regex": False}, f)
-            self.assertFalse(read_grant("Write", test_sid))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
-
-    def test_missing_grant_returns_false(self):
-        self.assertFalse(read_grant("Write", "sid-that-does-not-exist-abc123"))
-
-    # AC-D1 regression (cycle 20260519-211515 Item D): read_grant is exact_only.
-    # Substring grants (e.g. '/allow Re') MUST NOT match the tool name 'Read'
-    # at PreTool. This closes the PreTool/PostTool asymmetry that allowed
-    # grant leakage past single-use.
-    def test_read_grant_exact_only_rejects_substring(self):
-        """Grant pattern 'Re' must NOT match tool name 'Read' (AC-D1)."""
-        test_sid = "test-read-grant-exact-only"
-        grant_path = _legacy_flag(test_sid)
-        try:
-            with open(grant_path, "w") as f:
-                json.dump({"pattern": "Re", "is_regex": False}, f)
-            # Pre-cycle behavior: exact_or_substr would have returned True
-            # ("Re" in "Read"). New exact_only semantics returns False.
-            self.assertFalse(read_grant("Read", test_sid))
-            # Grant file MUST still exist (read-only, no unlink).
-            self.assertTrue(os.path.exists(grant_path))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
-
-    # AC-D1 additional regression: '/allow Write' must NOT match 'TodoWrite'
-    # at PreTool (was the original asymmetry — PostTool was already exact-only
-    # via Branch 3 of consume_grant_for_posttool, but PreTool was substr).
-    def test_read_grant_exact_only_rejects_write_against_todowrite(self):
-        """Grant pattern 'Write' must NOT match tool name 'TodoWrite' (AC-D1)."""
-        test_sid = "test-read-grant-write-vs-todowrite"
-        grant_path = _legacy_flag(test_sid)
-        try:
-            with open(grant_path, "w") as f:
-                json.dump({"pattern": "Write", "is_regex": False}, f)
-            self.assertFalse(read_grant("TodoWrite", test_sid))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
-
-
-class TestReadGrantForGitCommand(unittest.TestCase):
-    """Unit tests for read_grant_for_git_command (substr_only semantics)."""
-
-    def test_substring_match(self):
-        test_sid = "test-git-grant-1"
-        grant_path = _legacy_flag(test_sid)
-        try:
-            with open(grant_path, "w") as f:
-                json.dump({"pattern": "git push", "is_regex": False}, f)
-            # substr_only: "git push" in "git push origin main"
-            self.assertTrue(read_grant_for_git_command("git push origin main", test_sid))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
-
-    def test_no_match(self):
-        test_sid = "test-git-grant-2"
-        grant_path = _legacy_flag(test_sid)
-        try:
-            with open(grant_path, "w") as f:
-                json.dump({"pattern": "git push", "is_regex": False}, f)
-            self.assertFalse(read_grant_for_git_command("git pull origin main", test_sid))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
-
-
-class TestMatchGrantForBashCommand(unittest.TestCase):
-    """Unit tests for match_grant_for_bash_command (NB-flock + subcommand split)."""
-
-    def test_compound_command_match(self):
-        test_sid = "test-bash-grant-1"
-        grant_path = _legacy_flag(test_sid)
-        try:
-            with open(grant_path, "w") as f:
-                json.dump({"pattern": "git stash", "is_regex": False}, f)
-            result = match_grant_for_bash_command(
-                "ls -la && git stash pop", test_sid
-            )
-            self.assertIsNotNone(result)
-            self.assertEqual(result.pattern, "git stash")
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
-
-    def test_no_match(self):
-        test_sid = "test-bash-grant-2"
-        grant_path = _legacy_flag(test_sid)
-        try:
-            with open(grant_path, "w") as f:
-                json.dump({"pattern": "git push", "is_regex": False}, f)
-            result = match_grant_for_bash_command("ls -la && echo hello", test_sid)
-            self.assertIsNone(result)
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
+    def test_other_tool_does_not_match(self):
+        sid = self._grant([{"op": "Bash"}])
+        self.assertIsNone(match_sentinel_grant_for_tool(sid, "Write"))
 
     def test_missing_grant_returns_none(self):
-        result = match_grant_for_bash_command("any command", "sid-does-not-exist-xyz")
-        self.assertIsNone(result)
+        self.assertIsNone(
+            match_sentinel_grant_for_tool(f"sid-without-grant-{self.nonce}", "Write"))
+
+    # AC-D1 (cycle 20260519-211515 Item D): exact names only, so '/allow Re'
+    # never lets 'Read' through and '/allow Write' never matches 'TodoWrite'.
+    def test_name_prefix_does_not_match(self):
+        sid = self._grant([{"op": "Re"}])
+        self.assertIsNone(match_sentinel_grant_for_tool(sid, "Read"))
+        self.assertTrue(os.path.exists(self.paths[-1]), "the reader unlinked the grant")
+
+    def test_write_grant_does_not_match_todowrite(self):
+        sid = self._grant([{"op": "Write"}])
+        self.assertIsNone(match_sentinel_grant_for_tool(sid, "TodoWrite"))
+
+    def test_scoped_entries_do_not_match_the_bare_tool(self):
+        sid = self._grant([{"op": "Write", "target": "/tmp/x"}])
+        self.assertIsNone(match_sentinel_grant_for_tool(sid, "Write"))
+        sid = self._grant([{"op": "Agent", "args_contain": ["foo"]}],
+                          session_id=f"test-tool-grant-args-{self.nonce}")
+        self.assertIsNone(match_sentinel_grant_for_tool(sid, "Agent"))
+
+    def test_regex_entry_selects_commands_not_tools(self):
+        """The argument-less match-all grant waits for the command it was
+        given for: no tool gate spends it."""
+        sid = self._grant([{"op": "*", "regex": ".*"}])
+        self.assertIsNone(match_sentinel_grant_for_tool(sid, "Agent"))
+        self.assertIsNotNone(match_sentinel_grant_for_bash_command(sid, "git stash"))
+
+    def test_grant_of_another_session_does_not_match(self):
+        task_id = f"test-tool-grant-task-{self.nonce}"
+        self.paths.append(_tool_grant(task_id, "the-other-session", [{"op": "Agent"}]))
+        with patch.dict(os.environ, {"CLAUDE_TASK_ID": task_id}):
+            self.assertIsNone(match_sentinel_grant_for_tool("this-session", "Agent"))
+            self.assertIsNotNone(match_sentinel_grant_for_tool("the-other-session", "Agent"))
 
 
-class TestConsumeGrantForPosttool(unittest.TestCase):
-    """Unit tests for consume_grant_for_posttool (AC5, AC8 scenarios)."""
+class TestPosttoolSpendsToolGrant(unittest.TestCase):
+    """posttool-allowlist-consume.py spends a grant that names the tool once
+    the call it let through returns."""
 
-    def _write_grant(self, sid, pattern, is_regex=False):
-        path = _legacy_flag(sid)
-        with open(path, "w") as f:
-            json.dump({"pattern": pattern, "is_regex": is_regex}, f)
-        return path
+    POSTTOOL = os.path.join(HOOKS_DIR, "posttool-allowlist-consume.py")
 
-    # AC8(b): /allow Write does NOT consume a TodoWrite call (exact-only non-Bash)
-    def test_non_bash_literal_exact_only_no_consume_for_todowrite(self):
-        """Grant 'Write' (literal) must NOT match tool_name 'TodoWrite'."""
-        test_sid = "test-posttool-exact-1"
-        grant_path = self._write_grant(test_sid, "Write")
-        try:
-            result = consume_grant_for_posttool(test_sid, "TodoWrite", "")
-            self.assertFalse(result)
-            # Grant should still exist (not consumed)
-            self.assertTrue(os.path.exists(grant_path))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
+    def setUp(self):
+        self.sid = f"test-spend-tool-grant-{os.getpid()}-{int(time.time() * 1000)}"
+        self.path = None
 
-    # AC8(b) positive: /allow Write DOES consume a Write call
-    def test_non_bash_literal_exact_match_write(self):
-        """Grant 'Write' (literal) matches tool_name 'Write' exactly."""
-        test_sid = "test-posttool-exact-2"
-        grant_path = self._write_grant(test_sid, "Write")
-        try:
-            result = consume_grant_for_posttool(test_sid, "Write", "")
-            self.assertTrue(result)
-            # Grant should be consumed (unlinked)
-            self.assertFalse(os.path.exists(grant_path))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
+    def tearDown(self):
+        if self.path and os.path.exists(self.path):
+            os.unlink(self.path)
 
-    # AC8(c): Bash compound command is consumed correctly
-    def test_bash_compound_command_consumed(self):
-        """Bash compound command containing granted substring is consumed."""
-        test_sid = "test-posttool-bash-1"
-        grant_path = self._write_grant(test_sid, "git stash")
-        try:
-            result = consume_grant_for_posttool(
-                test_sid, "Bash", "ls -la && git stash pop"
-            )
-            self.assertTrue(result)
-            self.assertFalse(os.path.exists(grant_path))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
-
-    def test_bash_no_match_not_consumed(self):
-        """Bash command not matching grant pattern — grant preserved."""
-        test_sid = "test-posttool-bash-2"
-        grant_path = self._write_grant(test_sid, "git push")
-        try:
-            result = consume_grant_for_posttool(test_sid, "Bash", "ls -la")
-            self.assertFalse(result)
-            self.assertTrue(os.path.exists(grant_path))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
-
-    def test_missing_grant_returns_false(self):
-        result = consume_grant_for_posttool("sid-nonexistent-xyz", "Bash", "ls")
-        self.assertFalse(result)
-
-    def test_bash_exact_tool_name_fallback(self):
-        """Grant pattern 'Bash' (literal) matches tool_name 'Bash' via fallback."""
-        test_sid = "test-posttool-bash-fallback"
-        grant_path = self._write_grant(test_sid, "Bash")
-        try:
-            result = consume_grant_for_posttool(test_sid, "Bash", "some-unmatched-command")
-            self.assertTrue(result)
-            self.assertFalse(os.path.exists(grant_path))
-        finally:
-            if os.path.exists(grant_path):
-                os.unlink(grant_path)
-
-
-class TestCheckGitAllowlistSubagentFirewall(unittest.TestCase):
-    """AC8(a): subagent payload passed to git-guard returns False (IS_SUBAGENT firewall)."""
-
-    def test_subagent_payload_returns_false(self):
-        """_check_git_allowlist returns False for payloads with agent_id set."""
-        # Import the function under test
-        sys.path.insert(0, HOOKS_DIR)
-        # We test the IS_SUBAGENT logic directly via the guard's _check_git_allowlist
-        # by importing and calling it with a mock data dict containing agent_id
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "pretool_git_privilege_guard",
-            os.path.join(HOOKS_DIR, "pretool-git-privilege-guard.py"),
+    def _posttool(self, tool_name, **extra):
+        payload = {"session_id": self.sid, "tool_name": tool_name, "tool_input": {}}
+        payload.update(extra)
+        env = dict(os.environ)
+        env.pop("CLAUDE_TASK_ID", None)
+        return subprocess.run(
+            [sys.executable, self.POSTTOOL], input=json.dumps(payload),
+            capture_output=True, text=True, env=env, timeout=20,
         )
-        mod = importlib.util.module_from_spec(spec)
-        # We only need _check_git_allowlist; loading the module runs no side effects
-        # because it only defines functions at module level (no top-level execution)
-        try:
-            spec.loader.exec_module(mod)
-        except SystemExit:
-            pass  # Some guard modules may sys.exit(0) early on import in test context
 
-        if hasattr(mod, "_check_git_allowlist"):
-            # Subagent payload: agent_id present
-            result = mod._check_git_allowlist(
-                "git push origin main",
-                {"agent_id": "some-agent-uuid", "session_id": "test-session"},
-            )
-            self.assertFalse(result)
-        else:
-            self.skipTest("_check_git_allowlist not accessible in test context")
+    def test_agent_call_spends_an_agent_grant(self):
+        self.path = _tool_grant(self.sid, self.sid, [{"op": "Agent"}])
+        self.assertEqual(self._posttool("Agent", tool_response={}).returncode, 0)
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_other_tool_keeps_the_grant(self):
+        self.path = _tool_grant(self.sid, self.sid, [{"op": "Write"}])
+        self._posttool("TodoWrite", tool_response={})
+        self.assertTrue(os.path.exists(self.path))
+
+    def test_bash_background_receipt_keeps_a_bash_grant(self):
+        self.path = _tool_grant(self.sid, self.sid, [{"op": "Bash"}])
+        receipt = {"stdout": "", "stderr": "", "backgroundTaskId": "b1"}
+        self._posttool("Bash", tool_input={"command": "sleep 9"}, tool_response=receipt)
+        self.assertTrue(os.path.exists(self.path))
+        done = {"stdout": "", "stderr": ""}
+        self._posttool("Bash", tool_input={"command": "sleep 9"}, tool_response=done)
+        self.assertFalse(os.path.exists(self.path))
+
+
+class TestWriteSentinelGrant(unittest.TestCase):
+    """write_sentinel_grant: the one writer of /allow's grant and the demo's."""
+
+    def setUp(self):
+        self.task_id = f"test-writer-{os.getpid()}-{int(time.time() * 1000)}"
+        self.path = sentinel_grant_path(self.task_id)
+
+    def tearDown(self):
+        if self.path.exists():
+            self.path.unlink()
+
+    def test_writes_a_grant_the_reader_accepts(self):
+        path = write_sentinel_grant(self.task_id, "s1", [{"op": "ls"}])
+        self.assertEqual(path, self.path)
+        grant = load_sentinel_grant_for_task(self.task_id)
+        self.assertEqual(grant["allowed_operations"], [{"op": "ls"}])
+        self.assertEqual(grant["session_id"], "s1")
+        self.assertLessEqual(grant["expires_at"] - grant["created_at"], 300)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(
+            [p for p in path.parent.iterdir() if p.name.startswith(f".{path.name}")], [],
+            "the temp file outlived the rename")
+
+    def test_default_write_replaces_the_tasks_grant(self):
+        write_sentinel_grant(self.task_id, "s1", [{"op": "ls"}])
+        write_sentinel_grant(self.task_id, "s1", [{"op": "cat"}])
+        self.assertEqual(
+            load_sentinel_grant_for_task(self.task_id)["allowed_operations"], [{"op": "cat"}])
+
+    def test_exclusive_write_refuses_an_existing_grant(self):
+        write_sentinel_grant(self.task_id, "s1", [{"op": "ls"}], exclusive=True)
+        with self.assertRaises(FileExistsError):
+            write_sentinel_grant(self.task_id, "s1", [{"op": "cat"}], exclusive=True)
+        self.assertEqual(
+            load_sentinel_grant_for_task(self.task_id)["allowed_operations"], [{"op": "ls"}])
+
+
+class TestReapTakesTheReadersVerdict(unittest.TestCase):
+    """reap_expired_sentinel_grants removes every grant the reader rejects and
+    keeps every grant it accepts."""
+
+    def test_rejected_grants_go_and_live_ones_stay(self):
+        nonce = f"{os.getpid()}-{int(time.time() * 1000)}"
+        live = write_sentinel_grant(f"test-reap-live-{nonce}", "s", [{"op": "ls"}])
+        now = time.time()
+        rejected = {
+            "no-expiry": json.dumps({"task_id": "t", "session_id": "s",
+                                     "allowed_operations": [], "created_at": now}),
+            "not-an-object": "[1, 2]",
+            "expired": json.dumps({"task_id": "t", "session_id": "s",
+                                   "allowed_operations": [], "created_at": now - 600,
+                                   "expires_at": now - 300}),
+        }
+        paths = []
+        for name, body in rejected.items():
+            path = sentinel_grant_path(f"test-reap-{name}-{nonce}")
+            path.write_text(body, encoding="utf-8")
+            paths.append(path)
+        try:
+            self.assertGreaterEqual(reap_expired_sentinel_grants(), len(rejected))
+            self.assertEqual([p for p in paths if p.exists()], [])
+            self.assertTrue(live.exists())
+        finally:
+            for path in paths + [live]:
+                if path.exists():
+                    path.unlink()
+
+
+class TestHasDoConsent(unittest.TestCase):
+    """has_do_consent: the one /do consent decision, and its shell entry point."""
+
+    def setUp(self):
+        self.sid = f"test-do-consent-{os.getpid()}-{int(time.time() * 1000)}"
+        self.flag = Path(harness_state_dir(), f"claude-orchestrator-consent-{self.sid}.flag")
+
+    def tearDown(self):
+        if self.flag.exists():
+            self.flag.unlink()
+
+    def _entry_point(self, payload):
+        return subprocess.run(
+            [sys.executable, os.path.join(HOOKS_DIR, "lib", "allowlist.py"), "consent"],
+            input=payload, capture_output=True, text=True, timeout=20,
+        ).returncode
+
+    def test_main_agent_with_the_flag_holds_consent(self):
+        self.flag.write_text("true\n")
+        payload = {"session_id": self.sid}
+        self.assertTrue(has_do_consent(payload))
+        self.assertEqual(self._entry_point(json.dumps(payload)), 0)
+
+    def test_a_subagent_never_holds_consent(self):
+        self.flag.write_text("true")
+        payload = {"session_id": self.sid, "agent_id": "a1"}
+        self.assertFalse(has_do_consent(payload))
+        self.assertEqual(self._entry_point(json.dumps(payload)), 1)
+
+    def test_no_flag_other_content_or_no_session_is_no_consent(self):
+        self.assertFalse(has_do_consent({"session_id": self.sid}))
+        self.flag.write_text("")
+        self.assertFalse(has_do_consent({"session_id": self.sid}))
+        self.flag.write_text("true")
+        self.assertFalse(has_do_consent({"session_id": self.sid + "-other"}))
+        self.assertFalse(has_do_consent({}))
+        self.assertFalse(has_do_consent(["not", "a", "payload"]))
+        self.assertEqual(self._entry_point("not json"), 1)
 
 
 class TestSentinelGrantLifecycle(unittest.TestCase):
@@ -1190,9 +1086,8 @@ class TestMatchSentinelGrantForWrite(unittest.TestCase):
         task_id = "test-ac7-e2e-tool-dotted"
         session_id = "test-session-ac7"
         sentinel_path = os.path.join(_grant_dir(), f"{task_id}.json")
-        legacy_path = _legacy_flag(session_id)
         # Clean up any leftover from a previous run
-        for p in (sentinel_path, legacy_path):
+        for p in (sentinel_path,):
             if os.path.exists(p):
                 os.unlink(p)
 
@@ -1237,7 +1132,7 @@ class TestMatchSentinelGrantForWrite(unittest.TestCase):
             self.assertIsNone(deny_result,
                               "Matcher should deny /tmp/other.json but returned non-None")
         finally:
-            for p in (sentinel_path, legacy_path):
+            for p in (sentinel_path,):
                 if os.path.exists(p):
                     os.unlink(p)
 
@@ -1254,8 +1149,7 @@ class TestMatchSentinelGrantForWrite(unittest.TestCase):
         task_id = "test-ac8-e2e-bare-syntax"
         session_id = "test-session-ac8"
         sentinel_path = os.path.join(_grant_dir(), f"{task_id}.json")
-        legacy_path = _legacy_flag(session_id)
-        for p in (sentinel_path, legacy_path):
+        for p in (sentinel_path,):
             if os.path.exists(p):
                 os.unlink(p)
 
@@ -1299,7 +1193,7 @@ class TestMatchSentinelGrantForWrite(unittest.TestCase):
             self.assertIsNone(deny_result,
                               "Matcher should deny /tmp/other.json but returned non-None")
         finally:
-            for p in (sentinel_path, legacy_path):
+            for p in (sentinel_path,):
                 if os.path.exists(p):
                     os.unlink(p)
 
@@ -1330,9 +1224,8 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
 
     def _track(self, task_id, session_id):
         sentinel = os.path.join(_grant_dir(), f"{task_id}.json")
-        legacy = _legacy_flag(session_id)
-        self.paths.extend([sentinel, legacy])
-        return sentinel, legacy
+        self.paths.append(sentinel)
+        return sentinel
 
     def _live_env(self, temp, task_id, extra=None):
         """The live environment shape: CLAUDE_CONFIG_DIR names a per-account
@@ -1362,42 +1255,34 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
             text=True, env=env, timeout=10,
         )
 
-    # ── (a) argument-less form records the grant on BOTH channels ──
+    # ── (a) argument-less form records ONE grant file ──
 
-    def test_argument_less_allow_records_match_all_grant_on_both_channels(self):
+    def test_argument_less_allow_records_one_match_all_grant(self):
         task_id = f"test-allow-matchall-a-{self.nonce}"
         session_id = task_id
-        sentinel, legacy = self._track(task_id, session_id)
+        sentinel = self._track(task_id, session_id)
         self.assertFalse(os.path.exists(sentinel))
-        self.assertFalse(os.path.exists(legacy))
+        state_before = set(os.listdir(harness_state_dir())) - {"claude-grants"}
 
         with tempfile.TemporaryDirectory() as temp:
             env = self._live_env(temp, task_id)
-            # The consent log is runtime state under the configuration directory.
-            consent_log = Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / "bash-consent.log"
             result = self._consent(
                 {"prompt": "/allow", "session_id": session_id}, env
             )
-            # Slice by BYTES: the log carries multibyte comments.
-            appended = (consent_log.read_bytes().decode("utf-8", errors="replace")
-                        if consent_log.exists() else None)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("configured Python interpreter is unavailable", result.stderr)
         self.assertNotIn("ERROR: refused", result.stderr)
         self.assertIn("Grant recorded", result.stdout)
+        # (requirement 5) the match-all bypass is announced distinctly.
         self.assertIn("UNRESTRICTED grant", result.stdout)
 
-        # Legacy channel: the representation the legacy matcher already
-        # understands for an unrestricted entry.
-        self.assertTrue(os.path.exists(legacy), result.stdout + result.stderr)
-        with open(legacy) as fh:
-            flag = json.load(fh)
-        self.assertEqual(flag, {"pattern": ".*", "is_regex": True})
+        # The one grant file: nothing else lands in the state root.
+        self.assertEqual(
+            set(os.listdir(harness_state_dir())) - {"claude-grants"}, state_before)
 
-        # Sentinel channel: op="*" regex entry — the existing schema, no new
-        # channel, no new grant shape.
-        self.assertTrue(os.path.exists(sentinel))
+        # op="*" regex entry — the existing schema, no new grant shape.
+        self.assertTrue(os.path.exists(sentinel), result.stdout + result.stderr)
         with open(sentinel) as fh:
             grant = json.load(fh)
         self.assertEqual(grant["allowed_operations"], [{"op": "*", "regex": ".*"}])
@@ -1415,18 +1300,12 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
             match_sentinel_grant_for_bash_command(task_id, "echo anything-at-all")
         )
 
-        # (requirement 5) the match-all bypass is distinguishable in the audit log.
-        if appended is not None:
-            self.assertIn("GRANTED_MATCH_ALL", appended)
-            self.assertIn("scope=unrestricted", appended)
-            self.assertIn(f"sid={session_id}", appended)
-
     # ── (b) end-to-end: blocked command permitted ONCE, then blocked again ──
 
     def test_match_all_grant_permits_blocked_command_exactly_once(self):
         task_id = f"test-allow-matchall-b-{self.nonce}"
         session_id = task_id
-        sentinel, legacy = self._track(task_id, session_id)
+        sentinel = self._track(task_id, session_id)
         # Bare `git stash` is genuinely blocked by pretool-bash-safety.sh and is
         # never executed here — only the hook is invoked.
         command = "git stash"
@@ -1457,7 +1336,6 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
             )
         self.assertEqual(consent.returncode, 0, consent.stderr)
         self.assertTrue(os.path.exists(sentinel))
-        self.assertTrue(os.path.exists(legacy))
 
         # 3. Same command is now permitted.
         granted = run_pretool()
@@ -1466,7 +1344,7 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
         self.assertIn("allow", granted.stdout)
         self.assertNotIn("BLOCKED", granted.stderr)
 
-        # 4. PostToolUse terminal result consumes the grant on BOTH channels.
+        # 4. PostToolUse terminal result consumes the grant.
         consumed = subprocess.run(
             [sys.executable, self.POSTTOOL],
             input=json.dumps({
@@ -1479,7 +1357,6 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
         )
         self.assertEqual(consumed.returncode, 0, consumed.stderr)
         self.assertFalse(os.path.exists(sentinel), "sentinel survived consumption")
-        self.assertFalse(os.path.exists(legacy), "legacy flag survived consumption")
 
         # 5. Second equivalent attempt is blocked again — single-use holds.
         after = run_pretool()
@@ -1491,7 +1368,7 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
     def test_argument_less_allow_from_subagent_writes_nothing(self):
         task_id = f"test-allow-matchall-c-{self.nonce}"
         session_id = task_id
-        sentinel, legacy = self._track(task_id, session_id)
+        sentinel = self._track(task_id, session_id)
         with tempfile.TemporaryDirectory() as temp:
             result = self._consent(
                 {
@@ -1505,8 +1382,6 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "")
         self.assertFalse(os.path.exists(sentinel),
                          "subagent minted a sentinel match-all grant")
-        self.assertFalse(os.path.exists(legacy),
-                         "subagent minted a legacy match-all grant")
 
     # ── explicit selectors keep refusing: no decay into match-all ──
 
@@ -1519,7 +1394,7 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
             with self.subTest(selector=selector), tempfile.TemporaryDirectory() as temp:
                 task_id = f"test-allow-matchall-refuse-{index}-{self.nonce}"
                 session_id = task_id
-                sentinel, legacy = self._track(task_id, session_id)
+                sentinel = self._track(task_id, session_id)
                 result = self._consent(
                     {"prompt": f"/allow {selector}", "session_id": session_id},
                     self._live_env(temp, task_id),
@@ -1529,8 +1404,6 @@ class TestArgumentLessAllowUnrestrictedGrant(unittest.TestCase):
                 self.assertNotIn("UNRESTRICTED grant", result.stdout)
                 self.assertFalse(os.path.exists(sentinel),
                                  f"{selector} wrote a sentinel grant")
-                self.assertFalse(os.path.exists(legacy),
-                                 f"{selector} wrote a legacy grant")
 
 
 class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
@@ -1540,8 +1413,8 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
     (TestSentinelGrantLifecycle.test_terminal_consume_malformed) and a
     malformed settings SOURCE (test_malformed_participating_source_fails_closed).
     This class pins the remaining leg: the ENFORCEMENT READ PATH. For every
-    corruption shape, on BOTH grant channels (legacy per-session flag file +
-    structured sentinel under the state root's claude-grants/):
+    corruption shape of the grant file (the structured sentinel under the
+    state root's claude-grants/):
 
       1. the grant readers in lib/allowlist.py report no-match and never raise;
       2. pretool-bash-safety.sh still BLOCKS (exit 2) a command it genuinely
@@ -1568,9 +1441,7 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
         self.paths = []
 
     def tearDown(self):
-        # Removes exactly the files this test created (grant files written
-        # here, plus the .lock sidecar the legacy matcher creates as a direct
-        # consequence of this test's own invocation).
+        # Removes exactly the files this test created.
         for path in self.paths:
             if os.path.exists(path):
                 os.unlink(path)
@@ -1579,19 +1450,6 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
         self.paths.extend(paths)
 
     # ── corruption corpora ────────────────────────────────────────────────
-
-    @staticmethod
-    def _legacy_corruption_shapes():
-        """Corruption shapes for <state root>/claude-bash-allowlist-<sid>.json
-        (expected well-formed shape: {"pattern": str, "is_regex": bool})."""
-        return (
-            ("invalid_json_bytes", "{not valid json"),
-            ("empty_file", ""),
-            ("json_array_not_object", '["git stash"]'),
-            ("bare_string_not_object", '"git stash"'),
-            ("object_missing_pattern_field", '{"is_regex": false}'),
-            ("pattern_field_wrong_type", '{"pattern": 123, "is_regex": false}'),
-        )
 
     _SENTINEL_SHAPE_NAMES = (
         "invalid_json_bytes",
@@ -1652,23 +1510,6 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
 
     # ── (1) reader level: no-match, no exception, no unlink ──────────────
 
-    def test_corrupted_legacy_flag_readers_report_no_match_and_never_raise(self):
-        for index, (name, body) in enumerate(self._legacy_corruption_shapes()):
-            with self.subTest(shape=name):
-                sid = f"test-corrupt-legacy-lib-{index}-{self.nonce}"
-                flag = _legacy_flag(sid)
-                self._track(flag, flag + ".lock")
-                with open(flag, "w") as f:
-                    f.write(body)
-                # Every legacy reader reports no-match; a raised exception
-                # would escape into the calling hook and fail this test.
-                self.assertFalse(read_grant("Write", sid))
-                self.assertFalse(read_grant_for_git_command("git stash", sid))
-                self.assertIsNone(match_grant_for_bash_command("git stash", sid))
-                # Read path never unlinks — even a corrupted grant.
-                self.assertTrue(os.path.exists(flag),
-                                f"reader unlinked corrupted grant ({name})")
-
     def test_corrupted_sentinel_readers_report_no_match_and_never_raise(self):
         for index, name in enumerate(self._SENTINEL_SHAPE_NAMES):
             with self.subTest(shape=name):
@@ -1689,33 +1530,6 @@ class TestCorruptedGrantFailClosedOnReadPath(unittest.TestCase):
                                 f"reader unlinked corrupted sentinel ({name})")
 
     # ── (2) hook boundary: enforcement keeps blocking ─────────────────────
-
-    def test_pretool_still_blocks_when_corrupted_legacy_flag_is_only_grant(self):
-        # Positive control: a VALID legacy grant on this exact harness shape
-        # is honored (unlink deferred to PostToolUse, so teardown reaps it).
-        control_sid = f"test-corrupt-legacy-hook-control-{self.nonce}"
-        control_flag = _legacy_flag(control_sid)
-        self._track(control_flag, control_flag + ".lock")
-        with open(control_flag, "w") as f:
-            json.dump({"pattern": "git stash", "is_regex": False}, f)
-        control = self._run_pretool(control_sid, control_sid)
-        self.assertEqual(control.returncode, 0, control.stdout + control.stderr)
-        self.assertIn("permissionDecision", control.stdout)
-
-        for index, (name, body) in enumerate(self._legacy_corruption_shapes()):
-            with self.subTest(shape=name):
-                sid = f"test-corrupt-legacy-hook-{index}-{self.nonce}"
-                flag = _legacy_flag(sid)
-                self._track(flag, flag + ".lock")
-                with open(flag, "w") as f:
-                    f.write(body)
-                result = self._run_pretool(sid, sid)
-                self.assertEqual(result.returncode, 2,
-                                 f"{name}: {result.stdout}{result.stderr}")
-                self.assertIn("BLOCKED", result.stderr)
-                self.assertNotIn("permissionDecision", result.stdout)
-                self.assertTrue(os.path.exists(flag),
-                                f"hook unlinked corrupted grant ({name})")
 
     def test_pretool_still_blocks_when_corrupted_sentinel_is_only_grant(self):
         # Positive control: a VALID unrestricted sentinel on this exact

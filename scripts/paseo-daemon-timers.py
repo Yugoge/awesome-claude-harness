@@ -57,7 +57,7 @@ Subcommands:
   drain    safety-ordered stop of all four: watchdog first (a mid-teardown
            watchdog fire would judge the controller dead and escalate),
            then sweep, tick, reinject (DRAIN_ORDER). Prefers `pause`
-           (reversible) via backup -> temp-write -> parse-validate ->
+           (reversible) via temp-write -> parse-validate ->
            atomic os.replace; never deletes. Finishes with exactly one
            `scripts/paseo-daemon-ledger.py teardown-declare` call against
            --ledger-root to journal the teardown; `--for-restart` /
@@ -70,7 +70,7 @@ Subcommands:
            control plane is back online; an early watchdog fire against a
            still-recovering fleet would judge it dead and escalate (the
            same hazard DRAIN_ORDER's watchdog-first avoids, mirrored for the
-           opposite direction). Same file-safety chain as drain: backup ->
+           opposite direction). Same file-safety chain as drain:
            temp-write -> parse-validate -> atomic os.replace. Idempotent: an
            already-active (or missing) timer is a no-op. This is the same
            core `ensure --ledger-root` calls automatically when authorized.
@@ -94,7 +94,6 @@ import argparse
 import json
 import os
 import secrets
-import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -194,10 +193,8 @@ def iso(dt):
 
 
 def compact_iso(dt):
-    """BA-authored backup-suffix format (M5): the live repo's own `.bak-*`
-    files use two inconsistent timestamp formats across only 2/4 files --
-    not an established convention (see ticket Reference Source table) -- so
-    this defines its own: <UTC compact ISO>, e.g. 20260926T111239Z."""
+    """<UTC compact ISO>, e.g. 20260926T111239Z: the stamp in a heartbeat
+    channel id."""
     return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
@@ -246,14 +243,12 @@ def find_all_matches(entry, registrations):
     return [(path, obj) for path, obj in registrations if timer_matches(entry, obj.get("name", ""))]
 
 
-def atomic_write_registration(path, obj, *, backup, now):
-    """Shared file-safety chain for both create (ensure) and pause (drain):
-    optional backup -> write temp in same dir -> parse temp back to confirm
-    well-formed (fail-closed: delete temp, raise, touch nothing else) ->
-    os.replace onto the final path (atomic)."""
-    if backup and path.exists():
-        backup_path = path.with_name(path.name + f".bak-{compact_iso(now)}")
-        shutil.copy2(path, backup_path)
+def atomic_write_registration(path, obj):
+    """Shared file-safety chain for create (ensure), pause (drain) and resume:
+    write temp in same dir -> parse temp back to confirm well-formed
+    (fail-closed: delete temp, raise, touch nothing else) -> os.replace onto
+    the final path (atomic). A pause is undone by resume, never by restoring a
+    copy, so no copy of the previous file is kept (nothing would read it)."""
     tmp_path = path.with_name(path.name + ".tmp")
     tmp_path.write_text(json.dumps(obj, indent=1, ensure_ascii=False, sort_keys=True) + "\n")
     try:
@@ -488,7 +483,7 @@ def cmd_ensure(args):
         obj = build_registration(entry, timer_id, prompts[entry["key"]],
                                   args.controller_agent_id, now)
         path = registry_dir / f"{timer_id}.json"
-        atomic_write_registration(path, obj, backup=False, now=now)
+        atomic_write_registration(path, obj)
         created.append({"key": entry["key"], "id": timer_id, "name": entry["name"]})
 
     print(json.dumps({"ok": True, "created": created, "deviations": deviations,
@@ -552,7 +547,7 @@ def cmd_drain(args):
         updated["pausedAt"] = iso(now)
         updated["updatedAt"] = iso(now)
         try:
-            atomic_write_registration(path, updated, backup=True, now=now)
+            atomic_write_registration(path, updated)
         except TimerWriteValidationError as exc:
             fail(EXIT_REFUSED, str(exc))
         drained.append(key)
@@ -642,7 +637,7 @@ def resume_paused_timers(registry_dir, now, targets=None):
         updated["pausedAt"] = None
         updated["updatedAt"] = iso(now)
         try:
-            atomic_write_registration(path, updated, backup=True, now=now)
+            atomic_write_registration(path, updated)
         except TimerWriteValidationError as exc:
             fail(EXIT_REFUSED, str(exc))
         resumed.append({"key": key, "id": path.stem, "name": obj.get("name")})

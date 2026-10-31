@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 7
+- **Total files**: 9
 - **Subdirectories**: 0
 - **Naming convention**: lower
 
@@ -12,8 +12,10 @@
 - `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 - `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 - `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
+- `score_log.py` - ``scripts/score-update.sh`` (the log's writer) and ``scripts/score-inject.sh`` read
 - `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 - `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
+- `soundness_gate.py` - HUNK-level failure attribution
 <!-- /AUTO:readme-stats -->
 
 ---

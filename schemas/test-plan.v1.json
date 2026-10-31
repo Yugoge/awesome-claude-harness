@@ -2,67 +2,45 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "test-plan.v1",
   "title": "PM Test Plan",
-  "description": "Unified PM-produced test plan. This schema replaces both legacy 'test-plan.json' and 'test-plan-*.json' shapes (per spec-20260426-090235 Section 7 P2 #3 — single canonical naming). additionalProperties:true preserves the existing rich PM payload (priority_tiers, recommended_specialists, pm_experience, app_context, agent_assignments, core_flow_gate, ...).",
+  "description": "The test plan PM writes in /dev-overnight PLAN mode (agents/pm.md, Test Plan Schema), at the path its dispatch obligation declares; G2 checks it at PM's own stop. Required here is what the orchestrator and the specialists read from it: the app's URL, an assignment per specialist, the core-flow gate the user specialist owns, firsthand browser evidence unless the app was not running, and the degradation check of every recommended specialist. task_id is the identity the obligation names. Every other field of the PM payload is allowed.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["plan_version", "pipelines", "generated_at"],
+  "required": ["task_id", "app_context", "agent_assignments", "core_flow_gate", "pm_experience"],
   "properties": {
-    "plan_version": {
-      "type": "integer",
-      "const": 1
+    "task_id": {"type": "string", "minLength": 1},
+    "app_context": {"type": "object", "required": ["url"]},
+    "agent_assignments": {
+      "type": "object",
+      "required": ["user", "product-owner", "architect", "ui-specialist"]
     },
-    "generated_at": {
-      "type": "string",
-      "format": "date-time",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    "core_flow_gate": {
+      "type": "object",
+      "required": ["owner", "failure_is_cycle_failure"],
+      "properties": {
+        "owner": {"const": "user"},
+        "failure_is_cycle_failure": {"const": true}
+      }
     },
-    "session_id": {"type": "string"},
-    "cycle_id": {"type": "integer"},
-    "pipelines": {
-      "type": "array",
-      "minItems": 0,
-      "items": {
-        "type": "object",
-        "additionalProperties": true,
-        "required": ["pipeline_id", "focus_string", "priority", "specialist_assignment"],
+    "pm_experience": {
+      "type": "object",
+      "if": {
+        "properties": {"app_not_running": {"const": true}},
+        "required": ["app_not_running"]
+      },
+      "else": {
+        "required": ["urls_visited", "actions_taken"],
         "properties": {
-          "pipeline_id": {"type": "string", "minLength": 1},
-          "focus_string": {
-            "type": "string",
-            "enum": ["ui_design", "ui_audit", "backend", "infra", "docs", "bug_fix", "other"]
-          },
-          "priority": {"type": "integer"},
-          "tier": {"type": ["integer", "string"]},
-          "specialist_assignment": {
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-              "ba": {"type": ["string", "boolean", "object", "null"]},
-              "dev": {"type": ["string", "boolean", "object", "null"]},
-              "qa": {"type": ["string", "boolean", "object", "null"]},
-              "specialists": {"type": "array"}
-            }
-          },
-          "ui_evidence_required": {"type": "boolean"}
+          "urls_visited": {"type": "array", "minItems": 1},
+          "actions_taken": {"type": "array", "minItems": 1}
         }
       }
     },
     "recommended_specialists": {
-      "type": "array",
+      "type": ["array", "null"],
       "items": {
         "type": "object",
-        "additionalProperties": true,
-        "required": ["type"],
-        "properties": {
-          "type": {"type": "string"},
-          "reason": {"type": "string"},
-          "scope": {"type": "object"},
-          "budget": {"type": "object"},
-          "max_pages": {"type": ["integer", "null"]},
-          "max_viewports": {"type": ["integer", "null"]},
-          "max_minutes": {"type": ["integer", "null"]},
-          "degradation_check": {"type": "object"}
-        }
+        "required": ["degradation_check"],
+        "properties": {"degradation_check": {"type": "object"}}
       }
     }
   }

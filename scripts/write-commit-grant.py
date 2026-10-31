@@ -111,27 +111,15 @@ import commit_pipeline  # noqa: E402
 # operational call site (use the constant symbolically).
 GRANT_TTL_MINUTES = 30
 
-# Deferred-consume pointer namespace written by pretool-git-privilege-guard.py::
-# _lock_grant_for_posttool. Since the event-keyed rename (pointers are named for
-# the tool_use_id of the commit's own tool event, audit R2-4), revocation CANNOT
-# reconstruct a pointer's name — this script never sees a tool_use_id. It instead
-# enumerates the namespace and matches each pointer's RECORDED grant paths
-# (original_path / locked_path) against the grant being revoked. The namespace is
-# under the hook runtime-state root (harness_state_dir(): CLAUDE_STATE_DIR, default
-# /tmp), resolved at import as the guard resolves its writer template. Must stay
-# glob-compatible with the guard's _COMMIT_GRANT_ACTIVE_TEMPLATE.
-COMMIT_GRANT_POINTER_GLOB = harness_state_dir() + "/claude-commit-grant-active-*.json"
-
-
-# Upper bound for any read out of the world-writable grant/pointer namespace.
-# Real grants and pointers are a few hundred bytes; anything larger is not ours.
+# Upper bound for any read out of the world-writable grant namespace.
+# Real grants are a few hundred bytes; anything larger is not ours.
 _UNTRUSTED_READ_LIMIT = 65536
 
 
 def _read_identified(path: str, limit: int = _UNTRUSTED_READ_LIMIT):
     """`(parsed_json_or_None, (st_dev, st_ino)_or_None)` for an untrusted path.
 
-    Revocation reads grant files and deferred-consume pointers out of /tmp,
+    Revocation reads grant files out of the state dir,
     where any local user can plant a FIFO (open blocks until a writer appears)
     or a symlink aimed elsewhere. A plain `open()` would follow the symlink and
     then report the TARGET's identity while the unlink acted on the LINK — so
@@ -188,14 +176,11 @@ def _unlink_identified(path: str, ident) -> bool:
 
     THE DEFECT THIS CLOSES (audit F8). Revocation loaded a file, decided from
     its CONTENTS that it was revocable, and then unlinked BY NAME. Between the
-    two, a concurrent PreToolUse can rename a grant aside and publish a pointer
-    for it, or the finalizer can restore one — the same names are reused across
-    the lock/restore cycle by construction — so the pure-name unlink could
-    delete a grant or pointer that had become LIVE for a different event since
-    the decision was made, leaving that commit with nothing to finalize and no
-    journal attribution. Identity turns "the file called X" into "the file I
-    read", and directory-relative unlinkat keeps the resolution pinned to the
-    directory that was inspected.
+    two, the name can be removed and taken by another file, so the pure-name
+    unlink could delete a file that is not the one whose task_id and sid were
+    checked. Identity turns "the file called X" into "the file I read", and
+    directory-relative unlinkat keeps the resolution pinned to the directory
+    that was inspected.
 
     Residual: POSIX offers no unlink-by-inode, so the fstatat and the unlinkat
     are adjacent syscalls rather than one atomic operation; that pair is the
@@ -265,8 +250,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="/tmp",
-        help="Directory to write the grant JSON into. Default: /tmp.",
+        default=harness_state_dir(),
+        help="Directory to write the grant JSON into. Default: the hook state directory.",
     )
     parser.add_argument(
         "--repo-root",
@@ -295,42 +280,6 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _revoke_pointers_for_grant(candidate: str) -> None:
-    """Delete any deferred-consume pointer that references the revoked grant.
-
-    Pointers are event-keyed (named for a tool_use_id this script never sees),
-    so the old session-named unlink could never match one (audit R2-4): revoking
-    a locked grant left its pointer behind, and a later flow on the same tool
-    event then hit the pointer's O_EXCL no-clobber. Discovery is therefore by
-    CONTENT: enumerate the namespace and match each pointer's recorded
-    original_path / locked_path against the grant file being revoked (either its
-    .json or its .json.lck form). Best-effort: unreadable pointers are skipped —
-    the finalizer's stale sweep and the session-end reaper own those.
-    """
-    import glob as _glob
-
-    base = candidate[: -len(".lck")] if candidate.endswith(".lck") else candidate
-    locked = base + ".lck"
-    for pointer_path in _glob.glob(COMMIT_GRANT_POINTER_GLOB):
-        # Identity-bound read (audit F8): the pointer instance whose CONTENTS
-        # authorize this deletion is the only instance the deletion may act on.
-        pointer, ident = _read_identified(pointer_path)
-        if not isinstance(pointer, dict):
-            continue
-        if pointer.get("original_path") == base or pointer.get("locked_path") == locked:
-            if _unlink_identified(pointer_path, ident):
-                print(
-                    f"[revoke] Deleted grant pointer: {pointer_path}",
-                    file=sys.stderr,
-                )
-            else:
-                print(
-                    f"[revoke] SKIPPED grant pointer (name no longer holds the "
-                    f"instance that was read): {pointer_path}",
-                    file=sys.stderr,
-                )
-
-
 def _revoke_grants_for_task(output_dir: str, task_id_to_revoke: str, sid: str) -> None:
     """Delete stale grant files matching task_id_to_revoke AND sid in output_dir.
 
@@ -341,21 +290,11 @@ def _revoke_grants_for_task(output_dir: str, task_id_to_revoke: str, sid: str) -
     """
     import glob as _glob
 
-    # Revoke both active .json grants and in-flight .lck grants (Fix B deferred-consume).
-    # .lck files are grants locked by PreToolUse; if revocation runs mid-commit the
-    # PostToolUse handler will attempt to restore them — revoking here prevents that.
-    patterns = [
-        str(Path(output_dir) / "claude-commit-grant-*.json"),
-        str(Path(output_dir) / "claude-commit-grant-*.json.lck"),
-    ]
-    candidates = []
-    for pat in patterns:
-        candidates.extend(_glob.glob(pat))
-    for candidate in candidates:
-        # Identity-bound read (audit F8): a grant name is reused across the
-        # whole lock/restore cycle, so "the file called X" is not the same claim
-        # as "the file whose task_id and sid I just checked". Deleting by name
-        # could remove a grant that had become live for another event since.
+    # A grant the privilege guard spent is already gone (spending deletes it), so
+    # every grant file here is unspent.
+    for candidate in _glob.glob(str(Path(output_dir) / "claude-commit-grant-*.json")):
+        # Identity-bound read (audit F8): "the file called X" is not the same
+        # claim as "the file whose task_id and sid I just checked".
         data, ident = _read_identified(candidate)
         if not isinstance(data, dict):
             print(
@@ -376,10 +315,6 @@ def _revoke_grants_for_task(output_dir: str, task_id_to_revoke: str, sid: str) -
                 f"[revoke] Deleted stale grant: {candidate}",
                 file=sys.stderr,
             )
-            # Clean up any event-keyed pointer left by _lock_grant_for_posttool
-            # (Fix B / audit R2-4): matched by recorded grant path, since the
-            # pointer's event-keyed NAME cannot be reconstructed here.
-            _revoke_pointers_for_grant(candidate)
 
 
 def _git_capture(args: list[str], cwd: str | None = None) -> str:

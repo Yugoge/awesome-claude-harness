@@ -15,7 +15,7 @@ the canonical prefixed filename is excluded before legacy role-first matching.
 Bare timestamp role-first/task-first behavior remains unchanged.
 
 Usage:
-    python3 scripts/aggregate-dev-report.py --task-id <TASK_ID>
+    python3 scripts/aggregate-dev-report.py --task-id <TASK_ID> [--project-dir <root>]
     python3 scripts/aggregate-dev-report.py --task-id <TASK_ID> --dry-run
 
 Exit codes:
@@ -68,10 +68,9 @@ from types import ModuleType
 # Resolved via CLAUDE_PROJECT_DIR / cwd, deliberately NOT __file__: this
 # module's source is also exec'd into a bare namespace with no __file__ by
 # tests/test_ac_deviation_fanout_consumer.py::bare_aggregator(), and a
-# module-top-level __file__ reference there raises NameError (see
-# _ledger_contract()'s docstring below for the established precedent this
-# follows). Any failure (unresolvable root, import error) falls back to
-# byte-identical literal copies so classification behavior never changes.
+# module-top-level __file__ reference there raises NameError. Any failure
+# (unresolvable root, import error) falls back to byte-identical literal
+# copies so classification behavior never changes.
 # ---------------------------------------------------------------------------
 
 try:
@@ -112,16 +111,10 @@ except Exception:
         re.IGNORECASE,
     )
 
-# Superseded-round shard, discovered under docs/dev/superseded-<task-id>/ for
-# a lane already present in the primary shard set (backlog #99): a QA-FAIL'd
-# round-N attempt archived there before a corrective retry was promoted as
-# that lane's own top-level shard.
-SUPERSEDED_ROUND_RE = re.compile(
-    r"^dev-report-(?P<task_id>\d{8}-\d{6})-(?P<lane>[A-Za-z0-9][A-Za-z0-9.\-]*)-round(?P<round>\d+)\.json$"
-)
-
-# Strips a superseded-round label's "-round<N>" suffix back to its lane's own
-# base label (backlog #99 iteration 1): e.g. "d-round0" -> "d". Used by
+# Strips a round shard's "-round<N>" label suffix back to its lane's own base
+# label (backlog #99 iteration 1): e.g. "d-round0" -> "d". _scan_shards keeps
+# that label for a dev-report-<task-id>-<lane>-round<N>.json that declares no
+# usable lane identity (see _attribute_shards_by_identity). Used by
 # _merge_owned_edits to recognise that a round shard and its lane's own
 # promoted shard are the SAME lane, for the same-anchor collapse there.
 _ROUND_LABEL_SUFFIX_RE = re.compile(r"-round\d+$")
@@ -170,11 +163,17 @@ COUNT_SUMMARY_RE = re.compile(r"^\s*(\d+)\b")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_project_root() -> Path:
-    """Derive project root from CLAUDE_PROJECT_DIR env var or script location.
+def _resolve_project_root(project_dir: str | None = None) -> Path:
+    """Derive project root from --project-dir, CLAUDE_PROJECT_DIR or script location.
 
+    --project-dir has the resolver's meaning (resolve-dev-artifact-chain.py
+    --project-dir; an empty value is the cwd). Its callers run the harness's
+    own copy of this script, which lives outside the project, from a Bash that
+    exports no CLAUDE_PROJECT_DIR, so they name the project themselves.
     Never hardcodes an absolute path.
     """
+    if project_dir is not None:
+        return Path(project_dir).resolve()
     env_root = os.environ.get("CLAUDE_PROJECT_DIR", "")
     if env_root:
         return Path(env_root)
@@ -753,8 +752,7 @@ def _validate_shards(
     heads_agree = len(non_empty_heads) <= 1 and len(shards) == sum(
         1 for _, data in shards if data.get("baseline_head_sha")
     )
-    m_target = re.search(r"(\d{8}-\d{6})", task_id)
-    normalized_target = m_target.group(1) if m_target else task_id
+    normalized_target = _bare_task_id(task_id)
     labels = [label for label, _ in shards]
     duplicate_labels = sorted({label for label in labels if labels.count(label) > 1})
     if duplicate_labels:
@@ -768,8 +766,7 @@ def _validate_shards(
                 f"shard '{label}': missing or empty task_id / request_id field"
             )
         else:
-            m = re.search(r"(\d{8}-\d{6})", shard_task_id)
-            normalized_shard = m.group(1) if m else shard_task_id
+            normalized_shard = _bare_task_id(shard_task_id)
             if normalized_shard != normalized_target:
                 errors.append(
                     f"shard '{label}': task_id {shard_task_id!r} does not match target {task_id!r}"
@@ -873,37 +870,35 @@ def _merge_owned_edits(shards: list[tuple[str, dict]]) -> dict:
     guess. A shard whose owned_edits is not a dict, or a per-file value that
     is not a list, is skipped for that shard/file rather than raising.
 
-    Same-anchor collapse (backlog #99 iteration 1): when
-    _expand_shards_with_superseded_rounds feeds a lane's own superseded
-    round(s) ahead of its promoted shard, the promoted report is free to
-    re-declare a hunk for the SAME `old` anchor a round already declared --
-    e.g. a squashed "final authored text of the region" hunk that already
-    incorporates the round's own edit plus later revisions (observed on the
-    real cycle 20260921-134709's lane a: round0 and promoted both anchor a
-    hunk on the identical `old` text, but promoted's `new` text differs and
-    carries an extra 'note' key). Exact-JSON-value dedup does not recognise
-    these as the same edit, so BOTH would ship, and stage-owned-hunks.py's
-    sequential replay then double-applies the same region -- corrupting the
-    ledger even though a naive anchor search may still "succeed" (a large
-    `new` block can happen to re-embed the anchor text at its own tail).
-    Two hunks sharing an `old` anchor can never BOTH be truthfully replayed,
-    so only one may survive: within a single lane's OWN fold sequence (its
-    round(s), then its own promoted shard -- `_base_lane` strips the
-    "-roundN" suffix _expand_shards_with_superseded_rounds adds, to
-    recognise this), the LATER declaration wins on CONTENT (it is that
-    lane's own final authored state for the region -- verified empirically
-    against the real cycle: taking the promoted shard's hunks alone already
-    byte-replays the live file), while keeping the EARLIER declaration's
-    ledger POSITION so replay order is otherwise unaffected. No information
-    is lost by discarding the earlier declaration here: it remains fully
-    recoverable from its own archived docs/dev/superseded-<task-id>/ report
-    (untouched by this fix); it is excluded only from this replay-facing
-    ledger. The winning hunk's own auxiliary metadata (e.g. 'note') is kept
-    as-is, since the entry is kept wholesale, not merged field-by-field.
-    This collapse is intentionally scoped to a single base lane -- two
-    DIFFERENT lanes sharing an `old` anchor (never observed in practice,
-    and not this ticket's defect) are NOT collapsed, so ordinary cross-lane
-    merges keep their pre-existing exact-JSON-only dedup, unchanged.
+    Same-anchor collapse (backlog #99 iteration 1): when a lane's round
+    shard reaches this merge beside its own promoted shard, the promoted
+    report is free to re-declare a hunk for the SAME `old` anchor a round
+    already declared -- e.g. a squashed "final authored text of the region"
+    hunk that already incorporates the round's own edit plus later revisions
+    (observed on the real cycle 20260921-134709's lane a: round0 and
+    promoted both anchor a hunk on the identical `old` text, but promoted's
+    `new` text differs and carries an extra 'note' key). Exact-JSON-value
+    dedup does not recognise these as the same edit, so BOTH would ship, and
+    stage-owned-hunks.py's sequential replay then double-applies the same
+    region -- corrupting the ledger even though a naive anchor search may
+    still "succeed" (a large `new` block can happen to re-embed the anchor
+    text at its own tail). Two hunks sharing an `old` anchor can never BOTH
+    be truthfully replayed, so only one may survive: within a single lane's
+    OWN fold sequence (its round shard(s) and its own promoted shard --
+    `_base_lane` strips the "-roundN" label suffix to recognise this), the
+    LATER declaration wins on CONTENT (it is that lane's own final authored
+    state for the region -- verified empirically against the real cycle:
+    taking the promoted shard's hunks alone already byte-replays the live
+    file), while keeping the EARLIER declaration's ledger POSITION so replay
+    order is otherwise unaffected. No information is lost by discarding the
+    earlier declaration here: it remains fully recoverable from its own
+    report on disk; it is excluded only from this replay-facing ledger. The
+    winning hunk's own auxiliary metadata (e.g. 'note') is kept as-is, since
+    the entry is kept wholesale, not merged field-by-field. This collapse is
+    intentionally scoped to a single base lane -- two DIFFERENT lanes
+    sharing an `old` anchor (never observed in practice, and not this
+    ticket's defect) are NOT collapsed, so ordinary cross-lane merges keep
+    their pre-existing exact-JSON-only dedup, unchanged.
     """
     result: dict[str, list] = {}
     seen_json: dict[str, set] = {}
@@ -957,83 +952,6 @@ def _merge_pre_edit_snapshots(shards: list[tuple[str, dict]]) -> dict:
             if file_path not in result:
                 result[file_path] = snapshot
     return result
-
-
-def _scan_superseded_shards(
-    dev_dir: Path, bare_tid: str, lanes: set[str]
-) -> dict[str, list[tuple[int, Path]]]:
-    """Discover per-lane superseded-round shards for lanes already present in
-    the primary shard set (backlog #99): scans docs/dev/superseded-<task-id>/
-    directories whose own bare timestamp matches bare_tid, for files named
-    dev-report-<bare_tid>-<lane>-round<N>.json, restricted to `lanes`.
-
-    Ordering within a lane is derived strictly from the filename's numeric
-    round suffix -- never mtime or directory-listing order, per
-    commands/dev.md:858's existing "never discovered by mtime" principle. A
-    lane with no superseded rounds on disk is simply absent from the result,
-    leaving the no-retry case untouched.
-    """
-    by_lane: dict[str, list[tuple[int, Path]]] = {}
-    if not dev_dir.is_dir():
-        return by_lane
-    try:
-        top_level = list(dev_dir.iterdir())
-    except OSError:
-        return by_lane
-    for entry in top_level:
-        if not entry.is_dir() or not entry.name.startswith("superseded-"):
-            continue
-        if _bare_task_id(entry.name[len("superseded-"):]) != bare_tid:
-            continue
-        try:
-            children = list(entry.iterdir())
-        except OSError:
-            continue
-        for child in children:
-            if not child.is_file():
-                continue
-            m = SUPERSEDED_ROUND_RE.match(child.name)
-            if not m or m.group("task_id") != bare_tid:
-                continue
-            lane = m.group("lane")
-            if lane not in lanes:
-                continue
-            by_lane.setdefault(lane, []).append((int(m.group("round")), child))
-    for entries in by_lane.values():
-        entries.sort(key=lambda t: t[0])
-    return by_lane
-
-
-def _expand_shards_with_superseded_rounds(
-    shards: list[tuple[str, dict]], dev_dir: Path, bare_tid: str
-) -> list[tuple[str, dict]]:
-    """Fold each lane's superseded-round reports ahead of its own promoted
-    shard, for owned_edits/pre_edit_snapshots merge input ONLY (backlog #99).
-
-    A retried lane's promoted report may record only a delta on top of its
-    superseded round(s) rather than full re-attribution; without this, the
-    round(s)' owned_edits/pre_edit_snapshots entries would be invisible to
-    _merge_owned_edits/_merge_pre_edit_snapshots. Callers must use the
-    returned list ONLY for that merge -- every OTHER field
-    (tasks_completed/files_modified/etc.) keeps using the original `shards`
-    unchanged. `shards`' own alphabetical-by-lane order (from _scan_shards)
-    is preserved; only each lane's own superseded rounds are inserted
-    immediately before that lane's entry, in ascending round order. When no
-    lane in `shards` has any superseded round on disk (the ordinary
-    no-retry case), this returns `shards` itself, unmodified.
-    """
-    lanes = {label for label, _ in shards}
-    superseded = _scan_superseded_shards(dev_dir, bare_tid, lanes)
-    if not superseded:
-        return shards
-    expanded: list[tuple[str, dict]] = []
-    for label, data in shards:
-        for round_num, round_path in superseded.get(label, []):
-            round_data = _load_shard(round_path)
-            if round_data is not None:
-                expanded.append((f"{label}-round{round_num}", round_data))
-        expanded.append((label, data))
-    return expanded
 
 
 # Ownership-completeness diagnostics (backlog #99 criterion C) travel on THIS
@@ -1172,339 +1090,6 @@ def _atomic_write_json(path: Path, document: dict) -> None:
         raise
 
 
-_HOOK_LEDGER_ENTRY_FIELDS = ("path", "diff_sha256", "reason")
-
-
-def _ledger_contract():
-    """hooks/doc_sync/ledger_contract.py -- the ONE authoritative declaration
-    of the ledger layout (M6), which the producer imports too.
-
-    Imported lazily HERE for the same reason _diff_sha256 is (see
-    _merge_hook_ledger_into_singular): a module-top-level __file__ reference
-    breaks tests/test_ac_deviation_fanout_consumer.py's bare_aggregator()
-    helper, which execs this file's source into a namespace with no __file__.
-    """
-    own_repo_root = Path(__file__).resolve().parent.parent
-    if str(own_repo_root) not in sys.path:
-        sys.path.insert(0, str(own_repo_root))
-    from hooks.doc_sync import ledger_contract
-    return ledger_contract
-
-
-def _hook_ledger_discovery(project_root: Path, task_id: str) -> dict:
-    """Which producer directories this task-id may consume, and what the
-    AUTHORITY gate rejected (backlog #122 M3a/M3b).
-
-    Replaces a two-name candidate list -- `(task_id, f"dev-{bare_tid}")` --
-    whose second element hardcoded the `dev-` dispatch prefix. That list
-    could not see a directory minted under any third prefix, and a
-    `/dev-command` cycle mints exactly such a name, so five real records sat
-    in a directory neither candidate named. Adding `"dev-command-"` beside
-    `"dev-"` would only move the blind spot to the next dispatch shape.
-
-    Authority now comes from hook-authored evidence: a registry directory is
-    a producer identity only when its co-minted docs/dev/user-requirement-<id>.md
-    exists. Selection still matches on the embedded timestamp and is LABELLED
-    `binding_provenance: timestamp_inferred` rather than presented as exact --
-    the artifact that would make it exact does not exist and is escalated.
-
-    See ledger_contract.select_producers for the full contract; nothing about
-    the layout is restated here.
-    """
-    contract = _ledger_contract()
-    return contract.select_producers(project_root, task_id)
-
-
-def _load_hook_ledger_entries(dir_pairs: list) -> list:
-    """[(registry_file, producer_identity, record)] for every readable, well-shaped record.
-
-    Mirrors _load_shard_with_diagnostic's per-entry fail-closed read
-    pattern: an unreadable or malformed individual ledger file is skipped,
-    never fatal to the whole merge.
-
-    Every record is now retained WITH its own registry file path and the
-    identity of the directory it came from, because M8 requires freshness to
-    be evaluated per RECORD before any path-level aggregation, and because a
-    record excluded later must be nameable: a diagnostic that cannot say
-    which file on disk it is talking about is not a diagnostic.
-    """
-    loaded: list = []
-    for ledger_dir, identity in dir_pairs:
-        if not ledger_dir.is_dir():
-            continue
-        try:
-            children = sorted(ledger_dir.iterdir())
-        except OSError:
-            continue
-        for child in children:
-            if not child.is_file() or child.suffix != ".json":
-                continue
-            try:
-                parsed = json.loads(child.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError, UnicodeError):
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            if not all(
-                isinstance(parsed.get(field), str) and parsed.get(field)
-                for field in _HOOK_LEDGER_ENTRY_FIELDS
-            ):
-                continue
-            loaded.append((str(child), identity, parsed))
-    return loaded
-
-
-def _hook_ledger_exclusion_warning(exclusion: dict) -> str:
-    """One bounded WARNING for one LOSS-class record exclusion.
-
-    Mirrors the field set agents/changelog-analyst.md already emits for the
-    identical condition one layer later (find it by the literal 'declared
-    files_landed_whole, but the staged diff does not match'), and adds the
-    claimant that message lacks -- which is the whole point: a refusal that
-    cannot name whose record it dropped cannot name both sides of a contested
-    region.
-    """
-    claimant = exclusion["claimant"]
-    recomputed = exclusion["recomputed_diff_sha256"]
-    tail = f"recomputed {recomputed}" if recomputed is not None else "the digest could not be recomputed"
-    return (
-        f"WARNING: excluding {exclusion['path']} -- ledger record "
-        f"{exclusion['registry_file']}, declared by task {claimant['task']} "
-        f"(agent {claimant['agent'] or 'unrecorded'}, task_provenance "
-        f"{claimant['task_provenance']}), is classified {exclusion['class']}: "
-        f"declared {exclusion['declared_diff_sha256']}, {tail}. The claimant is retained "
-        f"in hook_ledger_exclusions; only its landing declaration is dropped."
-    )
-
-
-def _hook_ledger_unauthorised_warning(dropped: dict) -> str:
-    """One bounded WARNING for one DISCOVERY-layer directory exclusion.
-
-    The record count is mandatory in the message. Without it the operator
-    learns that something was dropped but not how much -- which is the same
-    silent-loss shape, in miniature, that this whole change exists to remove.
-    """
-    return (
-        f"WARNING: excluding producer directory {dropped['directory']} -- identity "
-        f"{dropped['identity']!r} is not an authorised producer identity because its "
-        f"co-minted {dropped['absent_document']} does not exist, so "
-        f"{dropped['records_not_loaded']} record(s) were NOT loaded. "
-        f"class={dropped['class']} (unit: directory). The records remain on disk at that "
-        f"directory, so their identity is recoverable."
-    )
-
-
-def _emit_hook_ledger_summary(contract, counts: dict, discovery: dict) -> None:
-    """Two SEPARATELY LABELLED blocks, because the two classes count different units.
-
-    The record-level block accounts for records excluded AFTER they were
-    loaded. The discovery-level block counts DIRECTORIES excluded BEFORE any
-    record was loaded. They are never summed, and the discovery-level class
-    contributes nothing to the record-level totals -- that separation is what
-    keeps the record census meaningful.
-    """
-    record_line = ", ".join(f"{name}={counts[name]}" for name in contract.RECORD_LEVEL_CLASSES)
-    _emit_error(
-        f"hook-ledger exclusions [{contract.SUMMARY_BLOCK_RECORD_LEVEL}] (unit: record): {record_line}"
-    )
-    _emit_error(
-        f"hook-ledger exclusions [{contract.SUMMARY_BLOCK_DISCOVERY_LEVEL}] (unit: directory): "
-        f"{contract.CLASS_PRODUCER_IDENTITY_UNAUTHORISED}={len(discovery.get('unauthorised') or [])}"
-    )
-    _emit_error(
-        "hook-ledger discovery: "
-        f"{contract.BINDING_PROVENANCE_FIELD}={discovery.get(contract.BINDING_PROVENANCE_FIELD)}, "
-        f"consumed={discovery.get('consumed')}"
-    )
-
-
-def _merge_hook_ledger_into_singular(
-    existing_doc: dict, discovery: dict, project_root: Path
-) -> bool:
-    """Merge validated hook-ledger entries into existing_doc['files_landed_whole'].
-
-    Backlog #122 M3: additive-only, dedupe by path, never drops a
-    pre-existing entry. Mirrors resolve-commit-repos.py:523-535's own
-    dual-listing constraint (belt-and-suspenders, not a substitute for it --
-    that gate still independently enforces it at admission time): a path
-    already claimed by owned_edits or pre_edit_snapshots is never routed
-    through files_landed_whole instead.
-
-    Freshness recheck (backlog #122 M4, ticket dev-20260926-044454): a
-    ledger entry's diff_sha256 is only ever true AT RECORD TIME -- the path
-    may have been edited again since. Before folding a surviving entry in,
-    recompute sha256(git diff --no-ext-diff --no-textconv HEAD -- path)
-    against project_root using hook_ledger.py's own _diff_sha256 (imported
-    directly, not re-derived) and require byte-for-byte equality with the
-    recorded value. Any mismatch -- including a None/failed recompute -- is
-    rejected on the same fail-closed terms, with NO special-case exemption
-    for a recorded sha256("") (a legitimate "no diff existed at record
-    time" write-side value per hook_ledger.py::_diff_sha256's own
-    docstring, but not exempt from this comparison: recorded-empty vs.
-    now-non-empty is a mismatch like any other). This mirrors
-    agents/changelog-analyst.md:792-832's own recompute/compare/fail-closed
-    pattern for the same files_landed_whole channel at a later point (there
-    stage-then-verify against the index, since staging is the operation it
-    protects) -- defense-in-depth, not a duplicate of that later check.
-
-    Every excluded record is CLASSIFIED (M4). Three of the four classes are a
-    genuine loss and get a bounded per-record WARNING plus a durable entry in
-    hook_ledger_exclusions; the fourth, dual_listing_admission, is DELIBERATE
-    behaviour (see the mirrored gate named above) and is counted under its own
-    label with no warning -- it is the majority class on live data, so warning
-    on it would bury the three that matter under correct behaviour.
-
-    Freshness is evaluated for EVERY loaded record BEFORE any path-level
-    dedupe (M8). Previously the dedupe ran first, so once one claimant's
-    record for a path was folded, a second claimant's record for that path was
-    skipped without ever being freshness-checked and without any diagnostic --
-    a second silent-loss path invisible to any single-record test.
-
-    Returns True iff THE DOCUMENT WAS MUTATED AT ALL -- an entry was appended
-    OR an exclusion was recorded. Widened from "at least one entry was
-    appended": a cycle whose records are ALL excluded appends nothing, so
-    under the old contract its exclusions would never reach disk, which is
-    exactly the both-claimants-stale case this change exists to make durable.
-    The byte-for-byte-unchanged-when-empty guarantee is untouched, because
-    zero records still yields zero appends AND zero exclusions.
-    """
-    contract = _ledger_contract()
-    dir_pairs = [
-        (contract.ledger_dir(project_root, identity), identity)
-        for identity in (discovery.get("consumed") or [])
-    ]
-    loaded = _load_hook_ledger_entries(dir_pairs)
-    unauthorised = discovery.get("unauthorised") or []
-    binding_provenance = discovery.get(contract.BINDING_PROVENANCE_FIELD)
-    counts = {name: 0 for name in contract.RECORD_LEVEL_CLASSES}
-
-    # The discovery layer reports even when nothing was loaded: a gate that
-    # silently drops a record-bearing directory is the defect, not the remedy.
-    for dropped in unauthorised:
-        _emit_error(_hook_ledger_unauthorised_warning(dropped))
-    if discovery.get("ambiguous"):
-        _emit_error(
-            "WARNING: more than one record-bearing minted identity resolves for task-id "
-            f"{discovery.get('task_id')!r}: {discovery.get('matched')}. None was consumed -- "
-            "choosing between them would be a landing verdict this step does not make."
-        )
-
-    if not loaded:
-        if unauthorised or discovery.get("ambiguous"):
-            _emit_hook_ledger_summary(contract, counts, discovery)
-        return False
-
-    # Reuse hook_ledger.py's own _diff_sha256 directly (not a re-derived
-    # hashing scheme), imported lazily HERE rather than at module top level --
-    # mirrors the scripts/*.py -> hooks.doc_sync.* import precedent already
-    # established by scripts/regen-index-dirs.py:18-26. A module-top-level
-    # __file__ reference breaks
-    # tests/test_ac_deviation_fanout_consumer.py's bare_aggregator() helper,
-    # which execs this file's source into a bare namespace with no __file__
-    # at all (test_c8_..._bare_namespace__pin); deferring the reference into
-    # this function body means it is only evaluated when this function
-    # actually runs, which that helper never does.
-    own_repo_root = Path(__file__).resolve().parent.parent
-    if str(own_repo_root) not in sys.path:
-        sys.path.insert(0, str(own_repo_root))
-    from hooks.doc_sync.hook_ledger import _diff_sha256 as hook_ledger_diff_sha256
-
-    owned_paths = set(existing_doc.get("owned_edits") or {})
-    snapshot_paths = set(existing_doc.get("pre_edit_snapshots") or {})
-    existing_landed = existing_doc.get("files_landed_whole")
-    if not isinstance(existing_landed, list):
-        existing_landed = []
-    existing_paths = {item.get("path") for item in existing_landed if isinstance(item, dict)}
-    appended = False
-    exclusions: list = []
-    folded: dict = {}
-
-    def _exclude(failure_class, registry_file, path, claimant, declared, recomputed):
-        """Classify, count, warn, and retain durably -- in that order, always together.
-
-        Exclusion from LANDING is permitted; loss of IDENTITY is not. Every
-        loss-class record therefore leaves both an ephemeral WARNING an
-        operator can see now and a durable hook_ledger_exclusions entry the
-        sibling conflict-classification lane can read later without touching
-        the registry, stderr, or this process's exit status.
-        """
-        counts[failure_class] += 1
-        exclusion = {
-            "registry_file": registry_file,
-            "path": path,
-            "claimant": claimant,
-            "declared_diff_sha256": declared,
-            "recomputed_diff_sha256": recomputed,
-            "class": failure_class,
-            contract.BINDING_PROVENANCE_FIELD: binding_provenance,
-        }
-        exclusions.append(exclusion)
-        _emit_error(_hook_ledger_exclusion_warning(exclusion))
-
-    for registry_file, identity, record in loaded:
-        path = record["path"]
-        declared = record["diff_sha256"]
-        claimant = contract.claimant_of(record, identity)
-        if path in owned_paths or path in snapshot_paths or path in existing_paths:
-            # DELIBERATE admission behaviour, not loss: counted under its own
-            # label, no WARNING, and no hook_ledger_exclusions entry.
-            counts[contract.CLASS_DUAL_LISTING_ADMISSION] += 1
-            continue
-        current_diff_sha256 = hook_ledger_diff_sha256(path, project_root)
-        if current_diff_sha256 is None:
-            # Distinguishable from a digest that merely DIFFERS: "could not be
-            # computed" and "computed to something else" are different facts
-            # and an operator needs to tell them apart.
-            _exclude(contract.CLASS_RECOMPUTE_FAILURE, registry_file, path, claimant, declared, None)
-            continue
-        if current_diff_sha256 != declared:
-            _exclude(
-                contract.CLASS_FRESHNESS_MISMATCH, registry_file, path, claimant,
-                declared, current_diff_sha256,
-            )
-            continue
-        already = folded.get(path)
-        if already is None:
-            entry = {"path": path, "diff_sha256": declared, "reason": record["reason"]}
-            existing_landed.append(entry)
-            folded[path] = (entry, [claimant])
-            appended = True
-            continue
-        entry, claimants = already
-        if entry["diff_sha256"] != declared:
-            # Two records for one path that EACH passed freshness against
-            # their own recompute -- reachable only when the shared working
-            # tree moved between the two recomputes, which is the ordinary
-            # condition of this repository. The path-level entry carries ONE
-            # digest, so this claimant's declared state cannot be represented
-            # in it. It is classified and retained rather than dropped, and no
-            # side is picked: choosing a winner is a landing verdict.
-            _exclude(
-                contract.CLASS_PATH_DEDUPE_SECOND_CLAIMANT, registry_file, path, claimant,
-                declared, current_diff_sha256,
-            )
-            continue
-        claimants.append(claimant)
-
-    # ADDITIVE metadata only: `path`, `diff_sha256` and `reason` keep their
-    # existing shape and values, path cardinality is unchanged, and nothing
-    # below alters entry membership, digest selection, the emitted action or
-    # the return code. Grouping collapses two agents of ONE task into ONE
-    # claimant, because the claimant unit is the task -- handing the sibling
-    # escalation lane a "contested" pair that is one task's two agents would
-    # be a fabricated conflict.
-    for entry, claimants in folded.values():
-        entry["claimants"] = contract.group_claimants(claimants)
-    if appended:
-        existing_doc["files_landed_whole"] = existing_landed
-    if exclusions:
-        # ABSENT, not empty, when nothing was excluded by a loss class, so a
-        # report with nothing to disclose stays byte-identical to today's.
-        existing_doc[contract.EXCLUSIONS_FIELD] = exclusions
-    _emit_hook_ledger_summary(contract, counts, discovery)
-    return appended or bool(exclusions)
-
-
 def _synthesize_status_rationale(shards: list[tuple[str, dict]], needs_review_labels: list[str]) -> dict:
     """Aggregate the contributing needs_review shards' own status_rationale.
 
@@ -1604,22 +1189,6 @@ def _build_aggregate(
     if needs_review_labels and not has_deviation:
         dev_block["status_rationale"] = _synthesize_status_rationale(shards, needs_review_labels)
 
-    # backlog #99: fold each lane's superseded-round reports (a QA-FAIL'd
-    # attempt archived under docs/dev/superseded-<task-id>/) ahead of that
-    # lane's own promoted contribution, for owned_edits/pre_edit_snapshots
-    # ONLY -- every other field above still unions the original `shards`.
-    # _resolve_project_root()'s __file__ fallback is unavailable when this
-    # module is exec()'d into a bare namespace without CLAUDE_PROJECT_DIR set
-    # (e.g. tests/test_ac_deviation_record_chain.py's minimal loader) -- fall
-    # back to `shards` unchanged rather than crash a caller that never asked
-    # for superseded-round discovery in the first place.
-    try:
-        owned_edit_shards = _expand_shards_with_superseded_rounds(
-            shards, _resolve_dev_dir(_resolve_project_root()), _bare_task_id(task_id)
-        )
-    except NameError:
-        owned_edit_shards = shards
-
     aggregate = {
         "request_id": task_id,
         "task_id": task_id,
@@ -1645,8 +1214,8 @@ def _build_aggregate(
         # actually measured.
         OWNERSHIP_COMPLETENESS_BLOCKING_KEY: [],
         "recommendations": _union_list(shards, ["recommendations"]),
-        "owned_edits": _merge_owned_edits(owned_edit_shards),
-        "pre_edit_snapshots": _merge_pre_edit_snapshots(owned_edit_shards),
+        "owned_edits": _merge_owned_edits(shards),
+        "pre_edit_snapshots": _merge_pre_edit_snapshots(shards),
     }
     wave = _baseline_wave_projection(shards)
     if wave is not None:
@@ -1724,10 +1293,39 @@ def _baseline_wave_projection(shards: list[tuple[str, dict]]) -> dict | None:
     }
 
 
+def _obligation_module():
+    """hooks/lib/obligation.py, loaded from this file's own harness (its flat
+    sibling imports find hooks/lib), whatever `hooks` package the project's
+    path already resolved; else the caller's import path (a bare namespace has
+    no __file__); None where neither holds it (a copy of this file alone)."""
+    name = "_aggregate_dev_report_obligation"
+    if name in sys.modules:
+        return sys.modules[name]
+    own_file = globals().get("__file__")
+    lib = Path(own_file).resolve().parent.parent / "hooks" / "lib" if own_file else None
+    try:
+        if lib is not None and (lib / "obligation.py").is_file():
+            import importlib.util
+            if str(lib) not in sys.path:
+                sys.path.append(str(lib))
+            spec = importlib.util.spec_from_file_location(name, lib / "obligation.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        else:
+            from hooks.lib import obligation as module
+    except Exception:
+        module = None
+    sys.modules[name] = module
+    return module
+
+
 def _bare_task_id(task_id: str) -> str:
-    """Extract YYYYMMDD-HHMMSS portion from a potentially-prefixed task-id."""
-    m = re.search(r"(\d{8}-\d{6})", task_id)
-    return m.group(1) if m else task_id
+    """The YYYYMMDD-HHMMSS portion of a potentially-prefixed task-id (the one
+    reading of an id's timestamp, hooks/lib/obligation.py task_stamp), else the
+    id itself (also where the harness library is missing: ids then compare
+    exactly, which only adds mismatches, never hides one)."""
+    module = _obligation_module()
+    return (module.task_stamp(task_id) if module is not None else None) or task_id
 
 
 def _roster_authority(shards: list[tuple[str, dict]]) -> tuple[list[str] | None, list[str]]:
@@ -2096,7 +1694,19 @@ _ITER_SHARD_RE = re.compile(
     r"^dev-report-iter\d+-(?P<task_id>[A-Za-z0-9][A-Za-z0-9.\-]*)-(?P<worker>[A-Za-z0-9][A-Za-z0-9.\-]*)\.json$"
 )
 
-_TERMINAL_DEV_STATUSES = frozenset({"completed", "blocked", "needs_review"})
+def _terminal_dev_statuses() -> frozenset:
+    """The dev-report.v2 dev.status values the one terminal vocabulary
+    (hooks/lib/obligation.py TERMINAL_VOCABULARY) calls terminal.
+
+    Imported lazily from this script's own harness: a module-top-level
+    __file__ reference breaks the bare-namespace exec of this file (see the
+    filename-patterns comment at the top).
+    """
+    own_repo_root = Path(__file__).resolve().parent.parent
+    if str(own_repo_root) not in sys.path:
+        sys.path.insert(0, str(own_repo_root))
+    from hooks.lib import obligation
+    return obligation.TERMINAL_VOCABULARY["dev-report.v2"]["dev.status"]
 
 
 def _label_has_terminal_trace(
@@ -2105,8 +1715,8 @@ def _label_has_terminal_trace(
     """A missing shard label counts as having a 'terminal trace' when EITHER
     (a) some on-disk file for this task-id and label -- a normal shard OR an
     iterN- archival variant (commands/dev.md:1275, deliberately excluded
-    from _scan_shards per trap 9) -- parses with dev.status in
-    {completed,blocked,needs_review}, OR (b) the EXISTING canonical's own
+    from _scan_shards per trap 9) -- parses with a terminal dev.status
+    (_terminal_dev_statuses), OR (b) the EXISTING canonical's own
     blocking_issues/disclosure text already names this label. No exact
     file-format is pinned by the design docs for case (a) beyond the
     existing worker-shard patterns plus the iterN- convention; this is a
@@ -2158,7 +1768,7 @@ def _label_has_terminal_trace(
             continue
         dev_obj = doc.get("dev")
         status = dev_obj.get("status") if isinstance(dev_obj, dict) else None
-        if status in _TERMINAL_DEV_STATUSES:
+        if status in _terminal_dev_statuses():
             return True
     return False
 
@@ -2572,14 +2182,14 @@ def _evidenced_claimant_candidates(
 
 
 def _lane_candidates_for_file(
-    expanded_shards: list[tuple[str, dict]], rel: str,
+    shards: list[tuple[str, dict]], rel: str,
     cycle_claimants: list | None = None, project_root: Path | None = None,
 ) -> list[tuple[str, object, list]]:
     """Per-declaring-lane (snapshot, hunks) candidates for `rel` (task
     20261001-close-multilane-stall), each folded through the SAME
     _merge_owned_edits/_merge_pre_edit_snapshots functions used for the real
-    merge, scoped to only that lane's own shard(s) (its superseded round(s),
-    if any, plus its promoted shard) -- so a retried lane's own round-fold
+    merge, scoped to only that lane's own shard(s) (its round shard(s), if
+    any, plus its promoted shard) -- so a retried lane's own same-anchor
     collapse happens exactly as it would in the real merge. Lanes not
     declaring `rel` are omitted. Empty when no lane declares `rel`.
 
@@ -2598,14 +2208,14 @@ def _lane_candidates_for_file(
     replay output and so structurally cannot reach backwards past it."""
     base_lanes: list[str] = []
     seen: set[str] = set()
-    for label, _ in expanded_shards:
+    for label, _ in shards:
         base = _base_lane(label)
         if base not in seen:
             seen.add(base)
             base_lanes.append(base)
     candidates = []
     for base in base_lanes:
-        subset = [(label, data) for label, data in expanded_shards if _base_lane(label) == base]
+        subset = [(label, data) for label, data in shards if _base_lane(label) == base]
         lane_hunks = _merge_owned_edits(subset).get(rel)
         if not isinstance(lane_hunks, list) or not lane_hunks:
             continue
@@ -3563,8 +3173,7 @@ def _apply_completeness_check(
 
     `loaded` (task 20261001-close-multilane-stall): the per-lane shards this
     aggregate was built from. When supplied, recovers each declaring lane's
-    OWN (snapshot, hunks) pair per file (via `_lane_candidates_for_file`,
-    folding in superseded rounds exactly as `_build_aggregate` does) so
+    OWN (snapshot, hunks) pair per file (via `_lane_candidates_for_file`) so
     `_completeness_check_file` can try the declaring lanes' own (snapshot,
     order) combinations instead of assuming shard-alphabetical order is
     dependency order. Optional and defaulting to None for back-compat with
@@ -3592,14 +3201,6 @@ def _apply_completeness_check(
     baseline_head_sha = aggregate.get("baseline_head_sha") or ""
     dev_dir = _resolve_dev_dir(project_root)
     own_bare_tid = _bare_task_id(str(aggregate.get("task_id") or ""))
-    expanded_shards = None
-    if loaded:
-        try:
-            expanded_shards = _expand_shards_with_superseded_rounds(
-                loaded, dev_dir, own_bare_tid,
-            )
-        except Exception:
-            expanded_shards = None
     claimants = _cycle_claimant_index(
         dev_dir, own_bare_tid, str(aggregate.get("task_id") or "")
     )
@@ -3608,7 +3209,7 @@ def _apply_completeness_check(
         if not _tracked_at_baseline(project_root, baseline_head_sha, rel):
             continue  # untracked at baseline / new-at-cycle-time -- AC-6, skip
         lane_candidates = (
-            _lane_candidates_for_file(expanded_shards, rel) if expanded_shards else None
+            _lane_candidates_for_file(loaded, rel) if loaded else None
         )
         ok, diagnostic = _completeness_check_file(
             project_root, baseline_head_sha, rel, owned[rel], snapshots.get(rel),
@@ -3628,7 +3229,7 @@ def _apply_completeness_check(
             # by no declaration" figure on scripts/aggregate-dev-report.py
             # with a bare BOUNDARY_INDETERMINATE from a deeper permutation.
             widened = _lane_candidates_for_file(
-                expanded_shards or [], rel,
+                loaded or [], rel,
                 cycle_claimants=claimants[rel], project_root=project_root,
             )
             if len(widened) > len(lane_candidates or []):
@@ -3663,6 +3264,11 @@ def main(argv: list[str] | None = None) -> int:
         default=False,
         help="Validate shards without writing the canonical aggregate.",
     )
+    parser.add_argument(
+        "--project-dir",
+        default=None,
+        help="Project whose docs/dev/ holds the shards (an empty value is the cwd).",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     task_id = args.task_id.strip()
@@ -3673,7 +3279,7 @@ def main(argv: list[str] | None = None) -> int:
     # Bare timestamp needed for shard filename matching (patterns use YYYYMMDD-HHMMSS).
     bare_tid = _bare_task_id(task_id)
 
-    project_root = _resolve_project_root()
+    project_root = _resolve_project_root(args.project_dir)
     dev_dir = _resolve_dev_dir(project_root)
     # Canonical path uses the FULL task_id (not bare timestamp) so that
     # dev-report-dev-20260524-170335.json ≠ dev-report-20260524-170335.json.
@@ -3721,23 +3327,6 @@ def main(argv: list[str] | None = None) -> int:
             # /close's Step 0 invoked this script (the single most common
             # invocation shape) -- see
             # test_len_below_2_singular_dev_report_with_no_parallel_workers_key_is_skipped_untouched.
-            #
-            # backlog #122 M3: before the no-op return, merge any
-            # hook-authored side-effect-file declarations (hooks/doc_sync/
-            # hook_ledger.py's write side) into this genuine singular
-            # report's files_landed_whole exemption channel, so a
-            # hook-regenerated file (e.g. an INDEX.md doc-sync rewrites as a
-            # side effect of a dev cycle's own edit) gets a legitimate
-            # declaration path into build_plan()'s ownership gate. Writes
-            # ONLY when there is something new to merge -- an empty or
-            # absent ledger leaves this branch's own untouched guarantee
-            # (see test_len_below_2_singular_dev_report_with_no_parallel_
-            # workers_key_is_skipped_untouched) unaffected. `action` stays
-            # "skipped" either way -- this insertion never invents a 4th
-            # action value.
-            ledger_discovery = _hook_ledger_discovery(project_root, task_id)
-            if _merge_hook_ledger_into_singular(existing_doc, ledger_discovery, project_root):
-                _atomic_write_json(canonical_path, existing_doc)
             _emit_ok(action="skipped", output_path=str(canonical_path), reason=skip_reason,
                      extra=_outcome_fields(_shard_status(existing_doc), [], shards_info))
             return 0

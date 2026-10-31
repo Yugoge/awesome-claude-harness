@@ -4,12 +4,11 @@ Stop Hook: Block spec agent from exiting with < 100% monolith coverage.
 
 Logic:
   1. If stop_hook_active -> exit 0
-  2. Read workflow bookmark to check if current workflow is /spec
+  2. Read the transcript's active span to check if current workflow is /spec
   3. If NOT /spec -> exit 0 (allow)
   4. Derive the target spec from the stopping session's own transcript JSONL
-     (transcript_path from stdin). Scan last 500 lines in reverse for the most
-     recent Write/Edit/MultiEdit tool_use targeting docs/dev/specs/spec-*.md.
-     Read is intentionally excluded — see SPEC_TOOL_NAMES comment below.
+     (transcript_path from stdin): the spec it last wrote (lib/spec_path.py,
+     the one rule prompt-workflow.py's spec decision takes too).
   5. If no spec touched, or transcript missing, or no views/ dir -> exit 0
   6. Run spec-verify.py --monolith <path> --views-dir <path>
   7. If exit 0 (100% coverage) -> exit 0 (allow stop)
@@ -30,12 +29,12 @@ import os
 import re
 import subprocess
 import sys
-from collections import deque
 from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
+import command_span  # noqa: E402
 
 # Relative path of the spec-verify helper under the resolved harness home. The
 # absolute path is resolved at runtime via claude_home so a fresh non-root clone
@@ -48,17 +47,6 @@ SPEC_VERIFY_RELPATH = "scripts/spec-verify/spec-verify.py"
 # extension or subpath. Accepts absolute and relative file_path values.
 SPEC_ID_RE = re.compile(r"docs/dev/specs/(spec-\d{8}-\d{6})(?:\.md|/|$)")
 
-# Tool names whose tool_use events establish spec authorship. Only authorship
-# signals (Write/Edit/MultiEdit) drive target-spec selection. Read was excluded
-# because inspecting another session's spec should not select it as this
-# session's coverage target (see close-report-20260424-133333.md for the bug
-# reproduction: Write(own) + Read(foreign) previously returned the foreign
-# spec_id because Read was the most recent match in the reverse scan).
-SPEC_TOOL_NAMES = frozenset({"Write", "Edit", "MultiEdit"})
-
-# Cap transcript scan cost — most tool events live near the end anyway.
-TRANSCRIPT_TAIL_LINES = 500
-
 
 def read_stdin():
     """Parse stop hook JSON from stdin."""
@@ -70,91 +58,34 @@ def read_stdin():
     return {}
 
 
-def get_workflow_command(project_dir: Path, session_id: str) -> str:
-    """Return the workflow command name from bookmark, or empty string."""
-    bookmark = project_dir / ".claude" / f"workflow-{session_id}.json"
-    if not bookmark.exists():
+def get_workflow_command(transcript_path) -> str:
+    """Return the command of the transcript's active span, or empty string
+    once a TodoWrite in it came back with every step completed: the gate held
+    from the command's start until its checklist was done, and still does."""
+    span = command_span.active_span(transcript_path) if transcript_path else None
+    if span is None:
         return ""
-    try:
-        state = json.loads(bookmark.read_text())
-        return state.get("command", "")
-    except Exception:
-        return ""
-
-
-def _extract_spec_id_from_tool_use(item) -> Optional[str]:
-    """Return spec_id if this content item is a spec-targeting tool_use, else None."""
-    if not isinstance(item, dict) or item.get("type") != "tool_use":
-        return None
-    if item.get("name") not in SPEC_TOOL_NAMES:
-        return None
-    tool_input = item.get("input")
-    if not isinstance(tool_input, dict):
-        return None
-    file_path = tool_input.get("file_path")
-    if not isinstance(file_path, str):
-        return None
-    match = SPEC_ID_RE.search(file_path)
-    return match.group(1) if match else None
-
-
-def _spec_id_from_message_content(content) -> Optional[str]:
-    """Walk a message.content list (newest first) for a spec-targeting tool_use."""
-    if not isinstance(content, list):
-        return None
-    for item in reversed(content):
-        spec_id = _extract_spec_id_from_tool_use(item)
-        if spec_id:
-            return spec_id
-    return None
-
-
-def _spec_id_from_transcript_line(line: str) -> Optional[str]:
-    """Parse one JSONL line and return the most recent spec_id referenced, or None."""
-    line = line.strip()
-    if not line:
-        return None
-    try:
-        obj = json.loads(line)
-    except Exception:
-        return None
-    if not isinstance(obj, dict):
-        return None
-    message = obj.get("message")
-    if not isinstance(message, dict):
-        return None
-    return _spec_id_from_message_content(message.get("content"))
-
-
-def _read_transcript_tail(transcript_path: str) -> Optional[deque]:
-    """Return a deque with the last TRANSCRIPT_TAIL_LINES lines, or None on failure."""
-    try:
-        path = Path(transcript_path)
-        if not path.is_file():
-            return None
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            return deque(fh, maxlen=TRANSCRIPT_TAIL_LINES)
-    except Exception:
-        return None
+    for call in span.uses("TodoWrite"):
+        todos = call.input.get("todos")
+        if call.ok and isinstance(todos, list) and todos \
+                and all(isinstance(t, dict) and t.get("status") == "completed" for t in todos):
+            return ""
+    return span.command
 
 
 def derive_spec_id_from_transcript(transcript_path: str) -> Optional[str]:
-    """Scan a session's JSONL transcript in reverse for the last spec it touched.
-
-    Returns the bare spec_id (e.g. ``spec-20260424-090315``) from the most recent
-    Write/Edit/MultiEdit tool_use whose ``file_path`` lives under
-    ``docs/dev/specs/``. Read is intentionally excluded because inspecting a
-    foreign spec must not override this session's own authorship signal.
-    Returns None on any failure — callers treat None as "allow stop".
+    """The bare spec_id (e.g. ``spec-20260424-090315``) of the spec this session
+    last wrote, by the rule prompt-workflow.py takes too (lib/spec_path.py: an
+    ok Write/Edit/MultiEdit of docs/dev/specs/*.md, or a call of
+    scripts/spec-write.py, the one writer of those files). A Read never selects
+    a spec, so inspecting a foreign spec cannot override this session's own
+    write. Returns None on any failure -- callers treat None as "allow stop".
     """
-    tail = _read_transcript_tail(transcript_path)
-    if tail is None:
-        return None
-    for line in reversed(tail):
-        spec_id = _spec_id_from_transcript_line(line)
-        if spec_id:
-            return spec_id
-    return None
+    from spec_path import last_spec_write  # hooks/lib, on sys.path above
+
+    path = last_spec_write(transcript_path)
+    match = SPEC_ID_RE.search(path) if path else None
+    return match.group(1) if match else None
 
 
 def find_monolith(specs_base: Path, spec_dir: Path) -> Path | None:
@@ -171,9 +102,7 @@ def find_monolith(specs_base: Path, spec_dir: Path) -> Path | None:
     for sid in ids:
         candidates += [
             specs_base / f"{sid}.md",
-            specs_base / f"{sid}.monolith.md",
             spec_dir / f"{sid}.md",
-            spec_dir / f"{sid}.monolith.md",
         ]
     for c in candidates:
         if c.is_file():
@@ -215,9 +144,8 @@ def block_with_message(result: subprocess.CompletedProcess):
 
 def resolve_target_spec_dir(data: dict, project_dir: Path) -> Optional[Path]:
     """Given stdin payload, return the per-session spec dir, or None to allow stop."""
-    session_id = data.get("session_id", "default")
     transcript_path = data.get("transcript_path")
-    if get_workflow_command(project_dir, session_id) != "spec":
+    if get_workflow_command(transcript_path) != "spec":
         return None
     if not transcript_path or not Path(transcript_path).is_file():
         return None

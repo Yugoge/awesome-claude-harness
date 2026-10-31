@@ -1,6 +1,5 @@
 """Prevent host metadata ceremonies from becoming ordinary lifecycle gates."""
 
-import json
 from pathlib import Path
 
 
@@ -34,14 +33,3 @@ def test_active_product_surfaces_do_not_require_human_reload_evidence() -> None:
 
 def test_artificial_close_validator_is_not_a_product_surface() -> None:
     assert not (ROOT / "scripts" / "validate-lifecycle-close-evidence.py").exists()
-
-
-def test_superseded_ceremony_tests_are_not_active() -> None:
-    manifest = json.loads(
-        (ROOT / "tests" / "generated" / "manifest.json").read_text()
-    )
-    active_task_ids = {task["task_id"] for task in manifest["tasks"]}
-
-    # This was the artificial proof-ceremony task. The r03 task is its corrected,
-    # configured-entrypoint replacement and intentionally remains active.
-    assert "dev-20260722-081638" not in active_task_ids

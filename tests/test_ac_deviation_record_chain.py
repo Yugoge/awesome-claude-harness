@@ -617,13 +617,11 @@ def test_c3_cli_and_selector_surface_the_rejection(tmp_path, name):
     rc, payload = select(root)
     assert rc == 2
     assert payload["outcome"] == "not_selected"
-    assert sorted(payload) == ["artifact_chain", "explicit_rejection", "outcome"]
+    # The selector adds no verdict of its own: the rejection reaches /close only
+    # as the chain's own error, verbatim.
+    assert sorted(payload) == ["artifact_chain", "outcome"]
     assert payload["artifact_chain"] == out
-    assert payload["explicit_rejection"] == {
-        "code": NEWCODE,
-        "path": PATHS["dev"],
-        "detail": new_errors(out)[0]["detail"],
-    }
+    assert [(e["code"], e["path"]) for e in new_errors(payload["artifact_chain"])] == [(NEWCODE, PATHS["dev"])]
 
 
 def test_c3_validator_result_contract():
@@ -749,12 +747,13 @@ def test_c4_selector_surfaces_the_coverage_rejection_only_for_that_class(tmp_pat
     coverage = singular(tmp_path, mutated(valid_dev(), _top("blocking_issues", ["AC19: ok", "real failure: db down"])))
     rc, payload = select(coverage)
     assert rc == 2
-    assert sorted(payload) == ["artifact_chain", "explicit_rejection", "outcome"]
-    assert payload["explicit_rejection"]["code"] == NEWCODE
+    assert sorted(payload) == ["artifact_chain", "outcome"]
+    assert [e["code"] for e in new_errors(payload["artifact_chain"])] == [NEWCODE]
     ignored = singular(tmp_path, _tdev("blocked", "absent", False))
     rc, payload = select(ignored)
     assert rc == 2
     assert sorted(payload) == ["artifact_chain", "outcome"]
+    assert new_errors(payload["artifact_chain"]) == []
 
 
 # ==========================================================================
@@ -977,7 +976,8 @@ def test_c7_record_plus_a_stage_gap_is_not_late_repair_eligible(tmp_path, name, 
     assert len(result["disclosed_exceptions"]) == 2
     assert all(e["kind"] == KIND for e in result["disclosed_exceptions"])
     rc, out = select(root, "--late-repair")
-    assert rc == 2 and out.get("outcome") == "refuse"
+    assert rc == 2 and out.get("outcome") == "not_selected"
+    assert out["late_repair"]["outcome"] == "refuse"
     assert not (root / "docs" / "dev" / ("late-repair-run-%s.json" % TASK)).exists()
 
 
@@ -1081,7 +1081,7 @@ def test_c8_a_blocked_lane_with_a_record_is_judged_on_the_record(
     assert gap(result) == ("not_applicable",) * 4
 
 
-def test_c8_a_blocked_lane_with_a_valid_record_and_a_stale_canonical_exits_2_without_explicit_rejection(tmp_path):
+def test_c8_a_blocked_lane_with_a_valid_record_and_a_stale_canonical_exits_2_with_the_chain_alone(tmp_path):
     root = fanout(tmp_path, lane_a=_blocked_lane(GOOD_RECORD))
     assert cli(root)[0] == 2
     rc, payload = select(root)
@@ -1257,9 +1257,11 @@ def test_c10_each_shape_literal_occurs_once_in_the_resolver_source():
     assert _count_of(tree, BLOCK) in (0, 1)
 
 
-def test_c10_the_route_selector_reads_the_rejection_code_from_the_resolver():
+def test_c10_the_route_selector_holds_no_rejection_code_of_its_own():
+    # The rejection reaches /close as the chain's own error; the selector
+    # neither reads nor retypes the code.
     source = Path(SCRIPTS_DIR, "close-route-select.py").read_text(encoding="utf-8")
-    assert "AC_DEVIATION_REJECTION_CODE" in source
+    assert "AC_DEVIATION_REJECTION_CODE" not in source
     assert NEWCODE not in source
 
 
@@ -1338,7 +1340,7 @@ def test_c11_the_resolver_source_never_names_clause_d_or_reads_the_criteria_file
 
 
 # ==========================================================================
-# class 12: the route selector surfaces the rejection and passes the chain through
+# class 12: the route selector passes the chain through, the rejection with it
 # ==========================================================================
 
 SELECTOR_CLASSES = [
@@ -1357,7 +1359,7 @@ SELECTOR_CLASSES = [
 
 
 @pytest.mark.parametrize("name,build,want_rc,want_rejection", SELECTOR_CLASSES, ids=[s[0] for s in SELECTOR_CLASSES])
-def test_c12_the_selector_passes_the_chain_through_and_adds_the_rejection_only_when_present(
+def test_c12_the_selector_passes_the_chain_through_verbatim(
     tmp_path, name, build, want_rc, want_rejection
 ):
     root = build(tmp_path)
@@ -1369,23 +1371,20 @@ def test_c12_the_selector_passes_the_chain_through_and_adds_the_rejection_only_w
         out_cli, sort_keys=True, separators=(",", ":")
     )
     assert out["outcome"] == "not_selected"
-    expected_keys = ["artifact_chain", "explicit_rejection", "outcome"] if want_rejection else ["artifact_chain", "outcome"]
-    assert sorted(out) == expected_keys
-    if want_rejection:
-        rejections = new_errors(out_cli)
-        assert len(rejections) == 1
-        assert out["explicit_rejection"] == {
-            "code": rejections[0]["code"],
-            "path": rejections[0]["path"],
-            "detail": rejections[0]["detail"],
-        }
+    assert sorted(out) == ["artifact_chain", "outcome"]
+    assert len(new_errors(out["artifact_chain"])) == (1 if want_rejection else 0)
 
 
-def test_c12_the_late_repair_refusal_payload_is_untouched(tmp_path):
-    rc, out = select(singular(tmp_path, valid_dev(), skip=("completion",)), "--late-repair")
-    assert rc == 2
-    assert sorted(out) == ["outcome", "reason"]
-    assert out["outcome"] == "refuse"
+def test_c12_a_declined_late_repair_passes_init_s_chain_through_with_its_refusal(tmp_path):
+    root = singular(tmp_path, valid_dev(), skip=("completion",))
+    rc_cli, out_cli = cli(root)
+    rc, out = select(root, "--late-repair")
+    assert rc == rc_cli == 2
+    assert sorted(out) == ["artifact_chain", "late_repair", "outcome"]
+    assert out["outcome"] == "not_selected"
+    assert sorted(out["late_repair"]) == ["outcome", "reason"]
+    assert out["late_repair"]["outcome"] == "refuse"
+    assert json.dumps(out["artifact_chain"], sort_keys=True) == json.dumps(out_cli, sort_keys=True)
 
 
 def test_c12_late_repair_combined_with_force_is_still_a_usage_refusal(tmp_path):

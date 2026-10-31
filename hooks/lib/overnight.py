@@ -1,63 +1,196 @@
-"""Shared /dev-overnight session detection for PreToolUse hooks.
+#!/usr/bin/env python3
+"""The /dev-overnight session state: its one reading, its one write, its cycle index.
 
-Single source of truth for "is a /dev-overnight session currently live?". A
-session is live iff a `<project>/.claude/overnight-state-*.json` file exists with
-a non-empty body, `current_phase` not in {complete, completed}, and an `end_time`
-that has not yet passed.
+The state record `<project>/.claude/overnight-state-<sid>.json` has one producer,
+the launcher's write path `write_state`: scripts/create-overnight-state.sh
+publishes the record through it at launch, and scripts/break-overnight-lock.py
+writes the owner's /stop through it. Every reader that decides on the record
+calls `state_verdicts` and acts on what it returns, so each verdict has one rule:
 
-Detection is deliberately session-agnostic: ANY live overnight-state file under a
-candidate project dir counts. The "except dev-overnight" policy means the whole
-overnight CONTEXT — the orchestrator AND the subagents it dispatches — is exempt,
-and those subagents carry DIFFERENT session_ids than the orchestrator that wrote
-the state file (see hooks/lib/allowlist.py). Binding the exemption to a single
-owning session_id would therefore wrongly block legitimate overnight subagents.
-Forgery of the state file is out of scope for this guardrail: writes to
-.claude/overnight-state-*.json are already blocked by
+  window_live     the session's window is open (current_phase is not
+                  complete/completed and end_time has not passed; a missing or
+                  malformed end_time counts as passed, so a half-written record
+                  is never a live session);
+  isolation_held  the isolation guarantee still binds (isolation_released_at is
+                  unset and isolation_active_until, else end_time, has not
+                  passed; a missing or malformed window keeps it held, so the
+                  guard fails toward enforcing);
+  released        isolation_released_at is set to a non-null value, which only
+                  the owner's /stop does.
+
+The git keystone and the overnight policy shim run this module as a script
+(`protected-branches`) instead of parsing the record in shell, and the
+/dev-overnight orchestrator binds its state file and main root through
+`session-root` and reads the cycle number through `cycle-index`.
+
+`is_overnight_active` is deliberately session-agnostic: ANY live record under a
+candidate project dir counts. The "except dev-overnight" policy exempts the whole
+overnight CONTEXT, the orchestrator AND the subagents it dispatches, and those
+subagents carry DIFFERENT session_ids than the orchestrator that wrote the state
+file (see hooks/lib/allowlist.py). Forgery of the state file is out of scope for
+this guardrail: writes to .claude/overnight-state-*.json are blocked by
 pretool-overnight-hook-guard.py, and the /do and /allow escape hatches exist for
 everything else.
 
-Mirrors the canonical probe previously inlined in pretool-git-privilege-guard.py
-(`_is_overnight_active` / `_state_file_is_live`). Stdlib-only; never raises (every
-probe fails closed → "not active").
+Stdlib-only, so the shell callers can run it with `python3 -I`; readers never
+raise (every probe fails closed).
 """
 
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple, Optional
 
 
-def _end_time_passed(end_str):
-    """True iff end_str (ISO-8601) is in the past, or is missing/unparseable.
+class Verdicts(NamedTuple):
+    """What a record says, decided once. `record` holds the fields callers act on."""
 
-    A missing or malformed end_time is treated as "passed" so a half-written
-    state file never counts as a live session (fail closed).
-    """
+    window_live: bool
+    isolation_held: bool
+    released: bool
+    end_time: Optional[datetime]
+    record: dict
+
+
+def _parse_end_time(value):
+    """The window's end_time as a datetime (naive stays naive-as-local), else None."""
     try:
-        end = datetime.fromisoformat(str(end_str).replace('Z', '+00:00'))
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00'))
     except (ValueError, TypeError, AttributeError):
-        return True
+        return None
+
+
+def _passed(end):
     if end.tzinfo is None:
         return datetime.now() > end
     return datetime.now(timezone.utc) > end
 
 
-def _state_file_is_live(sf):
-    """True iff state file `sf` describes an in-progress overnight session."""
+def _end_time_passed(end_str):
+    """True iff end_str (ISO-8601) is in the past, or is missing/unparseable."""
+    end = _parse_end_time(end_str)
+    return True if end is None else _passed(end)
+
+
+def _isolation_window_passed(value):
+    """True iff the isolation window has passed; missing or malformed keeps it open."""
+    if not isinstance(value, str) or not value:
+        return False
     try:
-        if sf.stat().st_size == 0:
-            return False
-        state = json.loads(sf.read_text())
-    except (OSError, ValueError):
+        end = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
         return False
-    if not isinstance(state, dict):
-        return False
-    if state.get('current_phase', '') in ('complete', 'completed'):
-        return False
-    if _end_time_passed(state.get('end_time', '')):
-        return False
-    return True
+    return _passed(end)
+
+
+def read_state(sf):
+    """The record in state file `sf`, or None when it is empty or not a JSON object."""
+    try:
+        path = Path(sf)
+        if path.stat().st_size == 0:
+            return None
+        record = json.loads(path.read_text())
+    except (OSError, ValueError, TypeError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def state_verdicts(record):
+    """The one decision on an overnight-state record (see the module docstring)."""
+    if not isinstance(record, dict):
+        return Verdicts(False, False, False, None, {})
+    window_live = (record.get('current_phase', '') not in ('complete', 'completed')
+                   and not _end_time_passed(record.get('end_time', '')))
+    window = record.get('isolation_active_until') or record.get('end_time', '')
+    isolation_held = (not record.get('isolation_released_at')
+                      and not _isolation_window_passed(window))
+    released = record.get('isolation_released_at') is not None
+    return Verdicts(window_live, isolation_held, released,
+                    _parse_end_time(record.get('end_time', '')), record)
+
+
+def write_state(path, record):
+    """The record's one write: the whole record, published by rename.
+
+    The temporary name cannot match `overnight-state-*.json`, so no reader ever
+    sees a partial record.
+    """
+    path = Path(path)
+    tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
+    tmp.write_text(json.dumps(record, indent=2, ensure_ascii=False) + '\n')
+    os.replace(tmp, path)
+
+
+def state_path(session_id, project_dir=None):
+    """Where the launcher writes one session's record."""
+    root = Path(project_dir or os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd())
+    return root / '.claude' / f'overnight-state-{session_id}.json'
+
+
+def session_state(session_id, project_dir=None):
+    """One session's record: its state file whose own session_id is
+    `session_id` (no scan of other sessions' files), else None."""
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    record = read_state(state_path(session_id, project_dir))
+    if record is None or record.get('session_id') != session_id:
+        return None
+    return record
+
+
+def session_state_file(session_id, starts):
+    """The canonical state file of `session_id` and its record, found by walking up
+    from each start in turn: the record sits at <main root>/.claude/ and every
+    working root lies under the main root. Selection is the record's own
+    (`session_state`: the session-keyed file name, then its session_id field).
+    (None, None) when no start reaches one."""
+    for start in starts:
+        if not start:
+            continue
+        try:
+            d = Path(start).resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        for p in (d, *d.parents):
+            record = session_state(session_id, p)
+            if record is not None:
+                return state_path(session_id, p).resolve(), record
+    return None, None
+
+
+def working_root(state):
+    """Where the session's producers write: the record's worktree_path."""
+    wt = state.get('worktree_path') if isinstance(state, dict) else None
+    if isinstance(wt, str) and wt:
+        return Path(wt)
+    return Path(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd())
+
+
+def session_dir(state):
+    """`<working root>/docs/dev/overnight/<sid>`, the session's cycle directories."""
+    sid = state.get('session_id') if isinstance(state, dict) else None
+    sid = sid if isinstance(sid, str) and sid else 'unknown'
+    return working_root(state) / 'docs' / 'dev' / 'overnight' / sid
+
+
+def cycle_index(state):
+    """The number of the cycle in progress, read from the session's directory.
+
+    A cycle ends with its PM retrospective (Step 20 writes
+    retro-report-cycle<N>.json there), so the cycle in progress is the first
+    one whose retrospective is not on disk. No state field counts cycles.
+    """
+    try:
+        base = session_dir(state)
+        n = 1
+        while (base / f'retro-report-cycle{n}.json').is_file():
+            n += 1
+        return n
+    except (OSError, ValueError, TypeError):
+        return 1
 
 
 def candidate_project_dirs(project_dir=None):
@@ -93,7 +226,7 @@ def candidate_project_dirs(project_dir=None):
 
 
 def is_overnight_active(project_dir=None):
-    """True iff a live overnight-state-*.json exists under any candidate project
+    """True iff a record whose window is live exists under any candidate project
     dir's .claude/. Fails closed (returns False) on any error."""
     try:
         for d in candidate_project_dirs(project_dir):
@@ -102,8 +235,65 @@ def is_overnight_active(project_dir=None):
             except Exception:
                 continue
             for sf in state_files:
-                if _state_file_is_live(sf):
+                record = read_state(sf)
+                if record is not None and state_verdicts(record).window_live:
                     return True
         return False
     except Exception:
         return False
+
+
+def _main(argv):
+    """Script entry for callers that cannot import this module.
+
+      protected-branches FILE...   the protected_branch of every given record
+                                   that is not released, one per line
+      cycle-index FILE             the cycle in progress for the record in FILE
+      write-state FILE SOURCE      publish the record in SOURCE as FILE
+      session-root SID START...    this session's state file and the main root its
+                                   record names (a directory), one per line, found
+                                   walking up from each START in turn; exit 1 with
+                                   the reason when there is none
+    """
+    if len(argv) >= 2 and argv[0] == 'session-root':
+        sf, record = session_state_file(argv[1], argv[2:])
+        if sf is None:
+            print(f'ERROR: no readable overnight-state file for session {argv[1]} at or above '
+                  + ' or '.join(a or '<unset>' for a in argv[2:]), file=sys.stderr)
+            return 1
+        root = record.get('main_root')
+        if not isinstance(root, str) or not root or not Path(root).is_dir():
+            print(f"ERROR: {sf} records no usable main_root: '{root or '<empty>'}'", file=sys.stderr)
+            return 1
+        print(sf)
+        print(Path(root).resolve())
+        return 0
+    if len(argv) >= 2 and argv[0] == 'protected-branches':
+        for sf in argv[1:]:
+            record = read_state(sf)
+            if record is None or state_verdicts(record).released:
+                continue
+            name = record.get('protected_branch')
+            if isinstance(name, str) and name:
+                print(name)
+        return 0
+    if len(argv) == 2 and argv[0] == 'cycle-index':
+        print(cycle_index(read_state(argv[1]) or {}))
+        return 0
+    if len(argv) == 3 and argv[0] == 'write-state':
+        record = read_state(argv[2])
+        if record is None:
+            print(f'write-state: {argv[2]} holds no JSON object', file=sys.stderr)
+            return 1
+        try:
+            write_state(argv[1], record)
+        except OSError as exc:
+            print(f'write-state: {exc}', file=sys.stderr)
+            return 1
+        return 0
+    print(_main.__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(_main(sys.argv[1:]))

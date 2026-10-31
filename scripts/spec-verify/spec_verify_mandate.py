@@ -22,7 +22,6 @@ this module.
 """
 
 import itertools
-import json
 import os
 import re
 
@@ -298,43 +297,6 @@ def _check_byte_equality(signatures):
     return issues
 
 
-def _load_omissions_doc(path):
-    """Read the existing omissions JSON, or return a fresh skeleton."""
-    if not os.path.isfile(path):
-        return {"omissions": []}
-    try:
-        with open(path, encoding="utf-8") as f:
-            doc = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {"omissions": []}
-    doc.setdefault("omissions", [])
-    return doc
-
-
-def _write_omissions_doc(path, doc):
-    """Persist the omissions doc; swallow OS errors silently."""
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(doc, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-    except OSError:
-        pass
-
-
-def _record_omission(views_dir, view_name, agent, reason):
-    """Append an entry to ``views/mandate-omissions.json`` (R3.4)."""
-    path = os.path.join(views_dir, "mandate-omissions.json")
-    doc = _load_omissions_doc(path)
-    if any(o.get("view") == view_name for o in doc["omissions"]):
-        return
-    doc["omissions"].append({
-        "view": view_name,
-        "agent": agent,
-        "reason": reason,
-    })
-    _write_omissions_doc(path, doc)
-
-
 def _build_parser_context(monolith_text):
     """Precompute role-heading / consumers-tag records once per run."""
     return {
@@ -362,15 +324,6 @@ def _validate_all_views(views_dir, monolith_text, ctx):
     return failures, omissions, signatures
 
 
-def _emit_omissions(views_dir, omissions):
-    """Persist R3.4 OMIT entries; safe to call with an empty list."""
-    if not omissions:
-        return
-    for view_name, msg in omissions:
-        agent = _agent_from_filename(view_name)
-        _record_omission(views_dir, view_name, agent, msg)
-
-
 def _print_failures(failures):
     """Print mandate violation lines, if any."""
     if not failures:
@@ -384,8 +337,7 @@ def _print_omissions(omissions):
     """Print mandate OMIT lines, if any."""
     if not omissions:
         return
-    print(f"OMIT: {len(omissions)} view(s) skipped Role Mandate "
-          f"(recorded in mandate-omissions.json):")
+    print(f"OMIT: {len(omissions)} view(s) skipped Role Mandate:")
     for view_name, msg in omissions:
         print(f"  {view_name}: {msg}")
 
@@ -416,7 +368,6 @@ def run_mandate_check(monolith_text, views_dir):
         views_dir, monolith_text, ctx,
     )
     failures.extend(_check_byte_equality(signatures))
-    _emit_omissions(views_dir, omissions)
     _print_findings(failures, omissions)
     if failures:
         detail = f"{len(failures)} violation(s)"

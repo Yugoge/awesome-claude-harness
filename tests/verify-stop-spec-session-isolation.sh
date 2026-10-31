@@ -44,18 +44,24 @@ make_bookmark() {
 EOF
 }
 
+# The workflow is the command of the transcript's human-typed span opener
+# (lib/command_span). A write is an ok tool_use: its tool_result, not an
+# error, follows it (hooks/lib/spec_path.py, the rule the hook shares with
+# prompt-workflow.py).
 make_transcript_with_spec() {
-  local path="$1" file_path="$2" tool_name="${3:-Write}"
+  local path="$1" file_path="$2" tool_name="${3:-Write}" cmd="${4:-spec}"
   cat > "$path" <<EOF
+{"type": "user", "message": {"role": "user", "content": "/${cmd}"}}
 {"message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}}
-{"message": {"role": "user", "content": [{"type": "tool_result", "content": "done"}]}}
-{"message": {"role": "assistant", "content": [{"type": "tool_use", "name": "${tool_name}", "input": {"file_path": "${file_path}", "content": "stuff"}}]}}
+{"message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "${tool_name}", "input": {"file_path": "${file_path}", "content": "stuff"}}]}}
+{"message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "done"}]}}
 EOF
 }
 
 make_transcript_empty() {
   local path="$1"
   cat > "$path" <<EOF
+{"type": "user", "message": {"role": "user", "content": "/spec"}}
 {"message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
 {"message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}}
 EOF
@@ -81,8 +87,8 @@ TSB="$WORK/.claude/projects/-root/${SID_B}.jsonl"
 mkdir -p "$(dirname "$TSA")"
 # Session A touched spec-20260424-090315-test (no views/ dir)
 make_transcript_with_spec "$TSA" "/root/docs/dev/specs/spec-20260424-090315-test.md"
-# Session B touched spec-20260423-080000 (has views/ dir, will fail coverage)
-make_transcript_with_spec "$TSB" "/root/docs/dev/specs/spec-20260423-080000/views/ba.md"
+# Session B wrote spec-20260423-080000 (has views/ dir, will fail coverage)
+make_transcript_with_spec "$TSB" "/proj/docs/dev/specs/spec-20260423-080000.md"
 
 # Session A stop: should exit 0 (no views/ for its spec) — NOT be blocked by B's spec
 RC=$(run_hook "{\"session_id\":\"$SID_A\",\"transcript_path\":\"$TSA\",\"stop_hook_active\":false}")
@@ -154,7 +160,7 @@ fi
 SID_E="eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 make_bookmark "$SID_E" "dev"  # not 'spec'
 TSE="$WORK/.claude/projects/-root/${SID_E}.jsonl"
-make_transcript_with_spec "$TSE" "/root/docs/dev/specs/spec-20260423-080000/views/ba.md"
+make_transcript_with_spec "$TSE" "/proj/docs/dev/specs/spec-20260423-080000.md" Write dev
 RC=$(run_hook "{\"session_id\":\"$SID_E\",\"transcript_path\":\"$TSE\",\"stop_hook_active\":false}")
 if [[ "$RC" == "0" ]]; then
   log_pass "non_spec_workflow: rc=0"
@@ -202,8 +208,8 @@ else
 fi
 
 # ==================================================================
-# Test 9 (bonus): 500-line cap sanity — transcript with 1000 lines,
-# spec mention only in the last 10 lines, should still find it.
+# Test 9 (bonus): long transcript — 1000 lines, the spec write only at the
+# end, should still find it.
 # ==================================================================
 SID_G="99999999-9999-9999-9999-999999999999"
 make_bookmark "$SID_G" "spec"
@@ -211,18 +217,20 @@ TSG="$WORK/.claude/projects/-root/${SID_G}.jsonl"
 python3 - <<PYEOF
 import json
 with open("$TSG", "w") as f:
+    f.write(json.dumps({"type":"user","message":{"role":"user","content":"/spec"}}) + "\n")
     for i in range(1000):
         f.write(json.dumps({"message":{"role":"user","content":[{"type":"text","text":f"line {i}"}]}}) + "\n")
-    # last line: spec-touching tool_use
-    f.write(json.dumps({"message":{"role":"assistant","content":[{"type":"tool_use","name":"Write","input":{"file_path":"/root/docs/dev/specs/spec-20260423-080000/views/ba.md"}}]}}) + "\n")
+    # last lines: the spec write and its ok result
+    f.write(json.dumps({"message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Write","input":{"file_path":"/proj/docs/dev/specs/spec-20260423-080000.md"}}]}}) + "\n")
+    f.write(json.dumps({"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t9","content":"ok"}]}}) + "\n")
 PYEOF
 
 RC=$(run_hook "{\"session_id\":\"$SID_G\",\"transcript_path\":\"$TSG\",\"stop_hook_active\":false}")
 STDERR_G="$(cat "$WORK/stderr.log")"
 if grep -q "target spec: spec-20260423-080000" <<<"$STDERR_G"; then
-  log_pass "tail_cap_finds_recent_match: 500-line reverse scan reaches last-line spec ref"
+  log_pass "long_transcript_finds_last_write: the scan reaches the last-line spec write"
 else
-  log_fail "tail_cap_finds_recent_match" "expected breadcrumb; got: $STDERR_G"
+  log_fail "long_transcript_finds_last_write" "expected breadcrumb; got: $STDERR_G"
 fi
 
 # ==================================================================
@@ -238,9 +246,11 @@ TSH="$WORK/.claude/projects/-root/${SID_H}.jsonl"
 # spec-20260424-111111 has no monolith and no views/ dir in $WORK,
 # so AC3/AC4 applies: hook exits 0 even after correct targeting.
 cat > "$TSH" <<'EOF'
-{"message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Write", "input": {"file_path": "/root/docs/dev/specs/spec-20260424-111111.md", "content": "own spec"}}]}}
-{"message": {"role": "user", "content": [{"type": "tool_result", "content": "done"}]}}
-{"message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/root/docs/dev/specs/spec-20260423-080000/views/ba.md"}}]}}
+{"type": "user", "message": {"role": "user", "content": "/spec"}}
+{"message": {"role": "assistant", "content": [{"type": "tool_use", "id": "w1", "name": "Write", "input": {"file_path": "/proj/docs/dev/specs/spec-20260424-111111.md", "content": "own spec"}}]}}
+{"message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "w1", "content": "done"}]}}
+{"message": {"role": "assistant", "content": [{"type": "tool_use", "id": "r1", "name": "Read", "input": {"file_path": "/proj/docs/dev/specs/spec-20260423-080000.md"}}]}}
+{"message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "r1", "content": "text"}]}}
 EOF
 
 RC=$(run_hook "{\"session_id\":\"$SID_H\",\"transcript_path\":\"$TSH\",\"stop_hook_active\":false}")
@@ -253,6 +263,26 @@ elif grep -q "⛔ SPEC COVERAGE ENFORCEMENT" <<<"$STDERR_H"; then
   log_fail "ordering_bug_write_then_read_foreign" "hook emitted blocking message when it should have exited 0: $STDERR_H"
 else
   log_pass "ordering_bug_write_then_read_foreign: Read(foreign) ignored; Write(own) correctly drives target; rc=0"
+fi
+
+# ==================================================================
+# Test 11: a call of the one writer (scripts/spec-write.py) is a write of
+# the spec its output line names, as an Edit of the spec is.
+# ==================================================================
+SID_I="22222222-2222-2222-2222-222222222222"
+make_bookmark "$SID_I" "spec"
+TSI="$WORK/.claude/projects/-root/${SID_I}.jsonl"
+cat > "$TSI" <<'EOF'
+{"type": "user", "message": {"role": "user", "content": "/spec"}}
+{"message": {"role": "assistant", "content": [{"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "python3 ~/.claude/scripts/spec-write.py append --spec \"$spec_path\" --section 5 < block.md"}}]}}
+{"message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "b1", "content": "spec-write: append /proj/docs/dev/specs/spec-20260423-080000.md"}]}}
+EOF
+RC=$(run_hook "{\"session_id\":\"$SID_I\",\"transcript_path\":\"$TSI\",\"stop_hook_active\":false}")
+STDERR_I="$(cat "$WORK/stderr.log")"
+if grep -q "target spec: spec-20260423-080000" <<<"$STDERR_I"; then
+  log_pass "one_writer_call_is_a_spec_write: the spec-write.py call drives the target"
+else
+  log_fail "one_writer_call_is_a_spec_write" "expected breadcrumb; got: $STDERR_I"
 fi
 
 # ==================================================================

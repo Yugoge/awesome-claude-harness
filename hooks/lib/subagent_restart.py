@@ -16,11 +16,9 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import hashlib
 import json
 import os
 import re
-import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -184,6 +182,10 @@ def capability_token(session_id: str, grant: Any) -> str:
     if not isinstance(issued_at, str) or not issued_at:
         raise RestartError("restart grant carries no issue time to bind guidance to")
     material = "\n".join([str(SCHEMA_VERSION), GRANT_ISSUER, session_id, issued_at])
+    # Imported here, as tempfile is in _atomic_write_json: obligation imports
+    # this module in hooks that run at every tool call and use neither.
+    import hashlib
+
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
 
 
@@ -292,6 +294,8 @@ def _load_json(path: Path) -> dict[str, Any] | None:
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        import tempfile
+
         fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
         tmp = Path(tmp_name)
         try:
@@ -1009,7 +1013,7 @@ def prepare_state(
         for sibling in sibling_transcripts(project_dir, exclude=own_transcript):
             discovered.extend(discover_candidates(sibling))
     with _state_lock(sid):
-        old = _load_json(state_path(sid)) or {}
+        old = _read_state(sid) or {}
         old_items = {
             item.get("agent_id"): item
             for item in old.get("candidates", [])
@@ -1055,13 +1059,22 @@ def prepare_state(
     return status_view(state)
 
 
-def _load_state(session_id: str) -> dict[str, Any]:
-    sid = _safe_session_id(session_id)
+def _read_state(sid: str) -> dict[str, Any] | None:
+    """The one reader of the restart state: the record prepare wrote for this
+    session, or None when there is none (or it is another session's)."""
     state = _load_json(state_path(sid))
     if not state or state.get("schema_version") != SCHEMA_VERSION:
-        raise RestartError("restart state missing; run prepare first")
+        return None
     if state.get("parent_session_id") != sid:
-        raise RestartError("restart state session mismatch")
+        return None
+    return state
+
+
+def _load_state(session_id: str) -> dict[str, Any]:
+    sid = _safe_session_id(session_id)
+    state = _read_state(sid)
+    if state is None:
+        raise RestartError("restart state missing; run prepare first")
     return state
 
 
@@ -1230,7 +1243,7 @@ def observe_subagent_stop(payload: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not isinstance(agent_id, str) or not AGENT_RE.fullmatch(agent_id):
         return None
-    if not state_path(sid).is_file():
+    if _read_state(sid) is None:
         return None
     last_message = payload.get("last_assistant_message")
     if not isinstance(last_message, str):

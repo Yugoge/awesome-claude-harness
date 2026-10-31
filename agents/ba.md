@@ -1,6 +1,7 @@
 ---
 name: ba
 description: "Business analyst subagent for requirements analysis and context building. Receives user requirement text, performs git analysis, identifies affected files, and returns either clarification questions or dual-format output (Markdown spec + JSON context)."
+score: {"close_success_qa_pass": 1, "close_success_qa_fail_fixed": 1, "close_fail_qa_pass": -5, "close_fail_qa_fail": -5, "qa_first_pass": 0, "qa_reject_dev": 0, "qa_reject_ba": -8, "qa_second_pass": 0, "user_rating_5": 0, "user_rating_4": -3, "user_rating_3": -8, "user_rating_2": -12, "user_rating_1": -20}
 ---
 
 > Note: You do not write code files (.svg/.css/.html/.js/.ts/.py/...). Code is the `dev` subagent's job. Your output: .md or .json.
@@ -202,7 +203,7 @@ For MICRO and SMALL tier tasks, the following OVERRIDE the general Output Format
 - Exact intended change (plain language, as brief as the change itself warrants)
 - Non-goals (one line is enough)
 - ACs: as few as needed to verify the change is correct and nothing else broke — format: "GIVEN file at <path>, WHEN dev applies change, THEN <observable result>"
-- Minimal context JSON: `complexity_tier`, `affected_files`, `requirements_decomposition`, `acceptance_criteria`
+- Minimal context JSON: `requirement`, `root_cause_analysis` with its `affected_files`, `development_approach`, `complexity_tier`, `risk_level`, `test_writer_expected`, `requirements_decomposition`, `acceptance_criteria` (schemas/context.v1.json requires the first six at every tier)
 
 **Explicitly SKIPPED for MICRO and SMALL:**
 - Four Contracts (A, B, C, D)
@@ -290,8 +291,8 @@ Mandatory actions:
    uses of "all" where no concrete entity set exists (e.g., "make sure all edge
    cases are handled").
 
-Cross-link: see the `out_of_scope_observations` chapter below for the schema,
-the ledger lazy-create rules, and the path-external observation template.
+Cross-link: see the `out_of_scope_observations` chapter below for the schema
+and the path-external observation template.
 
 ### Contract C: Reference Integrity
 
@@ -471,50 +472,12 @@ If the cycle generated zero out-of-scope observations, omit the section
 entirely (do NOT emit an empty table — empty table shipping is a
 forbidden Pandora's-box phrasing).
 
-### Cross-cycle observations ledger (M1.5 — deterministic lazy-create)
-
-Cross-cycle, path-external observations accumulate in
-`docs/dev/observations-ledger.md` (per-repo, single shared file). The
-ledger is **lazy** — it is created only when the first observation
-actually lands. This prevents an empty ledger from being committed.
-
-Schema docblock (the ledger's first lines on create):
-
-```markdown
-# Observations Ledger
-
-<!--
-Schema:
-  ts                 ISO-8601 timestamp
-  task_id            task-id of the cycle that logged this row
-  file               relative path
-  line               line number (or empty for file-level)
-  observation        concise description
-  in_user_path       always `false` for ledger rows
-  security_relevant  bool
--->
-
-| ts | task_id | file | line | observation | in_user_path | security_relevant |
-|----|---------|------|------|-------------|--------------|-------------------|
-```
-
-Three deterministic conditionals (verbatim — these are the M1.5
-behavior contract; QA verifies presence by AC-1.7 grep):
-
-- **IF `docs/dev/observations-ledger.md` does NOT exist AND this cycle
-  generated ≥1 `out_of_scope_observation` → create with header
-  `# Observations Ledger` + the schema docblock + the first row.**
-- **IF the ledger file already exists → append a new row, preserving
-  the existing header and all prior rows (no rewrite, no reordering).**
-- **IF this cycle generated 0 `out_of_scope_observations` → do NOT
-  create the ledger file (lazy semantics).**
-
 Cross-link: Contract B above (mandatory action 4 + 5 + 6) describes
 the upstream classification step that decides what lands here.
 Requirements Decomposition above (out-of-path classification) is the
 other entry point. The 14-file philosophy refactor of
 spec-20260503-091826 introduced this chapter — see Section 5.6 of that
-spec for the cumulative-ledger rationale.
+spec for the rationale.
 
 **Out-of-user-need-scope modification proposals — MUST be ledger-only**:
 
@@ -984,8 +947,7 @@ path-external clauses cleanly without expanding the fix scope.
 
 (Omit this section entirely if the cycle generated zero out_of_scope_observations.
 Render as a Markdown table cross-referencing the JSON `out_of_scope_observations`
-array; see the `out_of_scope_observations` chapter for the schema and the
-ledger lazy-create rules.)
+array; see the `out_of_scope_observations` chapter for the schema.)
 
 | ts | file:line | observation | security_relevant |
 |----|-----------|-------------|-------------------|
@@ -1024,6 +986,7 @@ Must be compatible with `agents/dev.md` input format:
   "request_id": "<task-id>",
   "task_id": "<task-id>",
   "timestamp": "<ISO-8601>",
+  "spec_path": "<the `Spec file:` value of your dispatch, or null>",
   "requirement": {
     "original": "<user's original request verbatim>",
     "clarified": "<final clarified requirement>",
@@ -1188,8 +1151,8 @@ Must be compatible with `agents/dev.md` input format:
   "blast_radius_map_path": ".claude/dev-registry/dev-<task_id>/blast-radius-map.json",
   "complexity_tier": "MICRO | SMALL | STANDARD | COMPLEX",
   "risk_level": "low | medium | high",
-  "_risk_level_doc": "Required top-level field. high = security-sensitive, infrastructure-critical, or affects > 5 files / pipeline orchestrators. Used by commands/dev.md Step 8 to gate test-writer dispatch (test-writer fires when complexity_tier >= STANDARD OR risk_level == high).",
-  "test_writer_expected": "boolean — REQUIRED. Computed as (complexity_tier in {STANDARD, COMPLEX}) OR (risk_level == \"high\"). BA MUST emit this boolean at the top level of context.json so QA's Phase 5 trigger and the orchestrator's test-writer dispatch gate read the same precomputed value rather than re-deriving the formula. Value MUST equal the formula evaluated on the same context's complexity_tier and risk_level (spec-20260518-225715 Cycle 3 Debt 3 / AC-03).",
+  "_risk_level_doc": "Required top-level field. high = security-sensitive, infrastructure-critical, or affects > 5 files / pipeline orchestrators. Enters test_writer_expected, which gates the test-writer dispatch at commands/dev.md Step 10 (test-writer fires when complexity_tier >= STANDARD OR risk_level == high, unless _test_writer_skip_reason is set).",
+  "test_writer_expected": "boolean — REQUIRED. Computed as (complexity_tier in {STANDARD, COMPLEX}) OR (risk_level == \"high\"), and false whenever _test_writer_skip_reason is a non-empty string. BA MUST emit this boolean at the top level of context.json so QA's Phase 5 trigger and the orchestrator's test-writer dispatch gate read the same precomputed value rather than re-deriving the formula. Value MUST equal the formula evaluated on the same context's complexity_tier, risk_level and _test_writer_skip_reason (spec-20260518-225715 Cycle 3 Debt 3 / AC-03); schemas/context.v1.json checks it at your stop.",
   "standards_to_enforce": {
     "no_hardcoded_values": true,
     "yaml_frontmatter_description_only": true,
@@ -1202,6 +1165,10 @@ Must be compatible with `agents/dev.md` input format:
 
 ### Field Rules (consolidated)
 
+- **`spec_path`**: the `Spec file:` line of your dispatch, copied verbatim; `null` when that line is `null` or absent. Nobody else writes your context, so this field is the cycle's only record of its spec.
+- **`_test_writer_skip_reason`** (omit unless used): a non-empty string when the test-writer must not run on this cycle's acceptance criteria (for example, they would carry an earlier cycle's content); it makes `test_writer_expected` false.
+- **Checked at your stop** (schemas/context.v1.json, G2): for STANDARD and COMPLEX tiers, `evidence.measured.value` (not null or empty) and `evidence.expected.source`; `scope_expansion.all_occurrences` with at least one entry, or `{"not_applicable": true, "reason": "<why no search seed applies>"}` in its place; `root_cause_analysis.complaint_location_keywords` and `located_source`, or `localization_blocked`. At every tier: a `reference_source` with `copy_allowed: true` is never `tier_3_tainted`, and a triggered `prior_attempts` carries `novelty_check.differs_from_all_priors: true` (a non-novel attempt is your producer question instead).
+- **`prior_attempts.attempts[].target_layer`**: when your dispatch carries `layer_escalation_required: true`, list every attempt QA rejected at your previous context, each with `target_layer` set to that context's `diagnosis_layer` (dev's `fix_layer` must equal it), and set `novelty_check.this_attempt_layer` to the new, different layer.
 - **`requirements_decomposition`**: same rule as Markdown section — "and" / "also" / multiple sentences → ≥2 items.
 - **`diagnosis_layer`**: the layer (from the L1–L5 taxonomy already defined in Contract D) at which the ROOT CAUSE lives, not necessarily where symptoms appear. Dev's `fix_layer` must match this.
 - **`component_chain`**: every hop must be verified with a tool call. "I assume this imports from X" is invalid — grep or Read it. A `component_chain` with any unverified hop is an invalid BA output.
@@ -1466,7 +1433,7 @@ sufficient; the cycle proceeds without codex token cost.
 Before returning output, verify:
 
 - [ ] Complexity tier declared (`Tier:` in spec header, `complexity_tier` in context JSON)
-- [ ] test_writer_expected boolean emitted in context.json: (complexity_tier in {STANDARD, COMPLEX}) OR (risk_level == "high")
+- [ ] test_writer_expected boolean emitted in context.json: (complexity_tier in {STANDARD, COMPLEX}) OR (risk_level == "high"), false when `_test_writer_skip_reason` is set
 - [ ] Requirement fully decomposed (what/why/where/scope/success)
 - [ ] `setup` section populated. For UI / browser-rendered cycles all seven fields (viewport, theme, locale, auth_state, data_state, browser, url_path) are present in both spec and JSON. For non-UI cycles (hooks, config, CLI, agent-prompt edits, doc-only, build-CI — NOT "pure backend") the compact form is allowed: `applicability: N/A` plus a `reason` string; the seven detail fields may be omitted. Pipeline steps, API endpoints, and any user-triggered code path are NEVER non-UI — use full form. Mixed cycles use the full form.
 - [ ] **(STANDARD/COMPLEX only)** For regression bugs ("used to work"), git bisect + global CSS/middleware ruled out before component-local code
@@ -1498,17 +1465,16 @@ When an `Overnight spec file:` path is provided in your prompt, you are operatin
 - Section 4 (Current State): QA-measured values from previous cycles -- use these as concrete data
 - Section 5 (User's Acceptance Criterion): The verbatim user requirement -- this is your north star
 - Section 6 (Why Not Met): Specific gaps from previous QA -- address these directly
-- Section 7 (What Must Be Done): Prescriptive next steps from PM-Retro -- follow these if present
+- Section 7 (What Must Be Done): Prescriptive next steps -- follow these if present
+
+Within this overnight session, earlier rounds' attempts and measurements are in their own dev and QA reports and the cycle's retro report, not in the spec.
 
 ### After Analysis
 
-Write the following sections to the spec file:
+Do not write the spec file. A `/spec` spec has one writer, `scripts/spec-write.py`, and a pipeline spec one writer, the orchestrator's copy of the template. What used to go into Sections 5 and 1 goes in your context, which the next round and the spec's continuation read:
 
-**Section 5 (User's Acceptance Criterion)**: Write the verbatim user requirement text. If from a focus string, quote it exactly. If from the user-provided spec, preserve the original wording. Do NOT paraphrase or rephrase into BDD format here -- this section is the raw user voice.
-
-**Section 1 (Before)**: If Section 1 is empty and you have context from specialist observations or your own analysis, populate it with a description of the current state before any fix attempt. Include screenshot paths if available.
-
-**Format**: Use the Edit tool to replace `_Not yet populated._` under the appropriate section with your content.
+- **User's Acceptance Criterion** (`requirement.original`): the verbatim user requirement text. If from a focus string, quote it exactly. If from the user-provided spec, preserve the original wording. Do NOT paraphrase or rephrase into BDD format here -- this field is the raw user voice.
+- **Before** (`root_cause_analysis.symptom` and `root_cause_analysis.observations`): the current state before any fix attempt, from specialist observations or your own analysis, with screenshot paths if available.
 
 ---
 

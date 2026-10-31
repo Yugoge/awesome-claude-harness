@@ -306,7 +306,8 @@ def cmd_init() -> int:
 
 
 def cmd_update() -> int:
-    """Incremental refresh — non-blocking advisory; called from /pull and /dev Step 7.5."""
+    """Incremental refresh — non-blocking advisory; called from /pull and by
+    graphify-enrich.py before enrichment, which leaves the cache to this script."""
     if not is_graphify_enabled():
         print("graphify-maintain: CLAUDE_GRAPHIFY_ENABLED=0 — skipping update", flush=True)
         return 0

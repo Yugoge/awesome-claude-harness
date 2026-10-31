@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "do-report.v1",
   "title": "Do Report",
-  "description": "Lightweight /do completion report. Skeleton is hook-authored at consent time (status=pending); the agent MUST rewrite it to a terminal status before session stop (enforced by hooks/stop-do-report-gate.py). Read by /close (do-report path) and /commit.",
+  "description": "Lightweight /do completion report. The /do main agent writes the whole report (commands/do.md Step 5) before session stop (enforced by hooks/stop-do-report-gate.py). Read by /close (do-report path) and /commit.",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -48,7 +48,7 @@
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["pending", "completed", "blocked"]
+          "enum": ["completed", "blocked"]
         },
         "summary": {
           "type": "string"

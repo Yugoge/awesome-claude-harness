@@ -221,22 +221,49 @@ class TestPrefixedTaskIdNaming:
         ) == ("canonical", PREFIXED_TID)
 
     def test_hook_scopes_real_lane_artifact_to_prefixed_cycle(self, project_dir: Path):
+        # The scope is the task the QA dispatch's own obligation names; a lane
+        # of the cycle (its task id extended by the lane suffix) stays in it,
+        # and another cycle's incomplete fan-out is out of it.
         dev_dir = project_dir / "docs" / "dev"
         for worker in ("a", "b", "c"):
-            _write(dev_dir, f"dev-report-{PREFIXED_TID}-{worker}.json", _good_shard())
+            _write(dev_dir, f"dev-report-{PREFIXED_TID}-{worker}.json",
+                   {**_good_shard(), "lane": worker, "lane_set": ["a", "b", "c"]})
+        other = "dev-20260101-130000"
+        for worker in ("a", "b"):
+            _write(dev_dir, f"dev-report-{other}-{worker}.json",
+                   {**_good_shard(), "lane": worker, "lane_set": ["a", "b"]})
         workers, canonical = _hook_mod._scan_dev_dir(dev_dir)
-        scope = _hook_mod._resolve_scope_task_ids(
-            _hook_mod._collect_anchored_task_ids(
-                f"Read context-{PREFIXED_TID}-a.json before QA"
-            )
-        )
-        assert scope == [PREFIXED_TID]
+        scope = f"{PREFIXED_TID}-l1"
         assert sorted(workers[PREFIXED_TID]) == ["a", "b", "c"]
-        assert _hook_mod._collect_violations(workers, canonical, scope)
 
-        _write(dev_dir, f"dev-report-{PREFIXED_TID}.json", _good_shard(PREFIXED_TID))
+        def found(scope_task_id):
+            return [(code, path.name) for code, path, _, _ in
+                    _hook_mod._find_violations(workers, canonical, dev_dir, scope_task_id)]
+
+        assert found(scope) == [("canonical_missing", f"dev-report-{PREFIXED_TID}.json")]
+
+        _write(dev_dir, f"dev-report-{PREFIXED_TID}.json",
+               {**_good_shard(PREFIXED_TID), "parallel_workers": ["a", "b", "c"]})
         workers, canonical = _hook_mod._scan_dev_dir(dev_dir)
-        assert not _hook_mod._collect_violations(workers, canonical, scope)
+        assert found(scope) == []
+        # Without an obligation the conservative global scan still sees the
+        # other cycle's missing canonical.
+        assert found(None) == [("canonical_missing", f"dev-report-{other}.json")]
+
+    def test_hook_scope_is_the_dispatch_obligation_task(self):
+        def qa_dispatch(prompt):
+            return {"tool_name": "Agent", "tool_input": {"subagent_type": "qa", "prompt": prompt}}
+        block = json.dumps({
+            "task_id": BARE_TID, "role": "qa", "pipeline": "dev", "profile": "final_verification",
+            "dispatched_at": "2026-01-01T12:00:00Z",
+            "artifacts": [{"kind": "json", "path": f"docs/dev/qa-report-{BARE_TID}.json",
+                           "schema": "qa-report.v2", "identity": {"task_id": BARE_TID}}],
+        })
+        prompt = (f'<obligation v="1">{block}</obligation>\n'
+                  f"Also see context-20251231-235959.json from an earlier cycle.")
+        assert _hook_mod._scope_task_id(qa_dispatch(prompt)) == BARE_TID
+        # A task id named only in prose does not scope the check.
+        assert _hook_mod._scope_task_id(qa_dispatch("Read context-20251231-235959.json")) is None
 
 
 # ---------------------------------------------------------------------------
@@ -376,8 +403,8 @@ class TestHookRoleFirstGhostShardRegression:
         _write(dev_dir, f"dev-report-iter1-{BARE_TID}.json", _good_shard())
 
         workers, canonical = _hook_mod._scan_dev_dir(dev_dir)
-        assert workers[BARE_TID] == ["a"]
-        assert _hook_mod._collect_violations(workers, canonical, [BARE_TID]) == []
+        assert list(workers[BARE_TID]) == ["a"]
+        assert _hook_mod._find_violations(workers, canonical, dev_dir, BARE_TID) == []
 
 
 class TestRoleFirstMirrorInvariant:
@@ -2485,16 +2512,11 @@ class TestObligationBarrierRepairProfileBypass:
 
         # No profile is exempt any more: with a parser that accepts the
         # "repair" profile, G3 checks the completed prior stage like any other
-        # dispatch -- block exits 2, advisory logs the violation, off is off.
+        # dispatch -- block exits 2, advisory and off allow, none writes a log.
         monkeypatch.setattr(_hook_mod, "_scan_transcript_for_prior_obligations", real_scan)
         monkeypatch.setattr(_hook_mod, "_parsed_obligation", _lenient_obligation)
         assert _run_barrier_hook(monkeypatch, data) == (2 if mode == "block" else 0)
-        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
-        if mode in (None, "advisory"):
-            records = [json.loads(ln) for ln in log_path.read_text().splitlines() if ln.strip()]
-            assert [r["path"] for r in records] == [missing_rel]
-        else:
-            assert not log_path.exists()
+        assert not (fake_home / ".claude" / "logs").exists()
 
 
 class TestObligationBarrierBlockMissingPriorArtifact:
@@ -2540,13 +2562,14 @@ class TestObligationBarrierBlockMissingPriorArtifact:
             assert capsys.readouterr().err == ""
 
 
-class TestObligationBarrierAdvisoryLogsAndPasses:
-    """AC4: advisory (unset default, or explicit "advisory") -> exit 0, one
-    JSON line appended to the advisory log recording the violation."""
+class TestObligationBarrierAdvisoryPasses:
+    """AC4: advisory (unset default, or explicit "advisory") -> exit 0, no
+    block message and nothing written, though the prior artifact is missing."""
 
     @pytest.mark.parametrize("explicit_mode", [None, "advisory"])
-    def test_obligation_barrier_advisory_logs_and_passes(
-        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, explicit_mode
+    def test_obligation_barrier_advisory_passes(
+        self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        capsys: pytest.CaptureFixture, explicit_mode,
     ):
         fake_home = tmp_path / f"fakehome-{explicit_mode}"
         fake_home.mkdir()
@@ -2571,17 +2594,13 @@ class TestObligationBarrierAdvisoryLogsAndPasses:
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
         assert _run_barrier_hook(monkeypatch, data) == 0
-
-        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
-        lines = [ln for ln in log_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(lines) == 1
-        record = json.loads(lines[0])
-        assert record["path"] == missing_rel
+        assert missing_rel not in capsys.readouterr().err
+        assert not (fake_home / ".claude" / "logs").exists()
 
 
 class TestObligationBarrierOffSwitchFullBypass:
-    """AC5: CLAUDE_OBLIGATION_BARRIER=off -> exit 0, no advisory record
-    written at all (full kill-switch bypass)."""
+    """AC5: CLAUDE_OBLIGATION_BARRIER=off -> exit 0, nothing written at all
+    (full kill-switch bypass)."""
 
     def test_obligation_barrier_off_switch_full_bypass(
         self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -2590,7 +2609,7 @@ class TestObligationBarrierOffSwitchFullBypass:
         fake_home.mkdir()
         monkeypatch.setenv("HOME", str(fake_home))
         monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "off")
-        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
+        log_path = fake_home / ".claude" / "logs"
         assert not log_path.exists()
 
         transcript = project_dir / "transcript.jsonl"
@@ -2646,7 +2665,7 @@ class TestObligationBarrierSkipsResponseKinds:
 
 class TestObligationBarrierFailOpenOnException:
     """AC7: an unexpected exception inside the new logic -> fail-open, still
-    exits 0 even in block mode (advisory-logged as gate_error)."""
+    exits 0 even in block mode, nothing written."""
 
     def test_obligation_barrier_fail_open_on_exception(
         self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -2670,10 +2689,7 @@ class TestObligationBarrierFailOpenOnException:
         assert _run_barrier_hook(monkeypatch, data) == 0
         # The current block parses, so the scan ran (and raised).
         assert len(calls) == 1
-        log_path = fake_home / ".claude" / "logs" / "obligation-barrier-advisory.jsonl"
-        assert [json.loads(ln) for ln in log_path.read_text().splitlines()] == [
-            {"reason": "gate_error"}
-        ]
+        assert not (fake_home / ".claude" / "logs").exists()
 
 
 class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
@@ -2689,8 +2705,9 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
         self, project_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
     ):
         dev_dir = project_dir / "docs" / "dev"
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+        for lane in ("A", "B"):
+            _write(dev_dir, f"dev-report-{BARE_TID}-{lane}.json",
+                   {**_good_shard(), "lane": lane, "lane_set": ["A", "B"]})
 
         calls = []
         real_barrier = _hook_mod._run_obligation_barrier
@@ -2704,7 +2721,7 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
             data = _barrier_payload(prompt, subagent_type="qa")
             assert _run_barrier_hook(monkeypatch, data) == 2
             err = capsys.readouterr().err
-            assert "BLOCKED Agent dispatch (qa): canonical aggregate dev-report missing." in err
+            assert f"[canonical_missing] {dev_dir / f'dev-report-{BARE_TID}.json'}" in err
 
         assert calls == []
 
@@ -2715,7 +2732,8 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
         # 0); that is the parser, not a profile bypass -- G1 rejects such a
         # dispatch. The same qa dispatch with a registered profile is checked
         # and blocked.
-        _write(dev_dir, f"dev-report-{BARE_TID}.json", _good_shard())
+        _write(dev_dir, f"dev-report-{BARE_TID}.json",
+               {**_good_shard(), "parallel_workers": ["A", "B"]})
         monkeypatch.setattr(_hook_mod, "_run_obligation_barrier", real_barrier)
         monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
         missing_rel = "docs/dev/dev-report-missing-ac8.json"
@@ -2736,7 +2754,7 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
             data = _barrier_payload(prompt, subagent_type="qa", transcript_path=transcript)
             assert _run_barrier_hook(monkeypatch, data) == expected
             err = capsys.readouterr().err
-            assert "canonical aggregate dev-report missing" not in err
+            assert "canonical_missing" not in err
             assert (f"[artifact_missing] {missing_rel}" in err) is (expected == 2)
 
         # With a parser that accepts the "repair" profile, the repair-profile
@@ -2746,6 +2764,113 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
         data = _barrier_payload(repair_prompt, subagent_type="qa", transcript_path=transcript)
         assert _run_barrier_hook(monkeypatch, data) == 2
         assert f"[artifact_missing] {missing_rel}" in capsys.readouterr().err
+
+
+class TestFanoutCollectionCheck:
+    """P1b row 6: G3 demands a fan-out's lane reports and its canonical only
+    when a lane report's own lane_set declares the fan-out, and names each
+    failing artifact's path, its check and its producer. A missing canonical
+    blocks the QA dispatch in shipped settings and armed alike, as on master;
+    the lane roster and parallel_workers rules block only when armed."""
+
+    def _lane(self, dev_dir, task, lane, lanes):
+        _write(dev_dir, f"dev-report-{task}-{lane}.json",
+               {**_good_shard(f"{task}-{lane}"), "lane": lane, "lane_set": lanes})
+
+    def _qa(self, project_dir, home, task_id, mode):
+        block = json.dumps({
+            "task_id": task_id, "role": "qa", "pipeline": "dev", "profile": "final_verification",
+            "dispatched_at": "2026-01-01T12:00:00Z",
+            "artifacts": [{"kind": "json", "path": f"docs/dev/qa-report-{task_id}.json",
+                           "schema": "qa-report.v2", "identity": {"task_id": task_id}}],
+        })
+        data = _barrier_payload(f'<obligation v="1">{block}</obligation>', subagent_type="qa")
+        return _run_barrier_subprocess(project_dir, home, data, mode=mode)
+
+    @pytest.mark.parametrize("mode", [None, "block"])
+    def test_overnight_pipelines_without_lane_set_are_not_lanes(self, project_dir, tmp_path, mode):
+        dev_dir = project_dir / "docs" / "dev"
+        for pipeline in ("1", "2"):
+            _write(dev_dir, f"dev-report-{BARE_TID}-{pipeline}.json",
+                   {**_good_shard(f"{BARE_TID}-{pipeline}"), "lane": None, "lane_set": None})
+        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-1", mode)
+        assert result.returncode == 0, result.stderr
+
+    def test_missing_lane_report_names_its_path_and_lane(self, project_dir, tmp_path):
+        dev_dir = project_dir / "docs" / "dev"
+        self._lane(dev_dir, BARE_TID, "l1", ["l1", "l2"])
+        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l1", "block")
+        assert result.returncode == 2
+        assert (f"[lane_report_missing] {dev_dir / f'dev-report-{BARE_TID}-l2.json'}: lane l2, "
+                f"which the lane_set of dev-report-{BARE_TID}-l1.json declares, has no report "
+                "| producer: dev (lane l2)") in result.stderr
+        assert "canonical" not in result.stderr.split("collected.")[1]
+        assert "orchestrator must write" not in result.stderr and "dev.md" not in result.stderr
+
+    @pytest.mark.parametrize("mode", [None, "block"])
+    def test_missing_canonical_names_the_hook_as_its_producer(self, project_dir, tmp_path, mode):
+        dev_dir = project_dir / "docs" / "dev"
+        for lane in ("l1", "l2"):
+            self._lane(dev_dir, BARE_TID, lane, ["l1", "l2"])
+        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l2", mode)
+        assert result.returncode == 2
+        assert (f"[canonical_missing] {dev_dir / f'dev-report-{BARE_TID}.json'}: the canonical "
+                "aggregate of lanes l1, l2 is missing | producer: "
+                "hooks/posttool-lane-completeness-watch.py") in result.stderr
+
+    def test_canonical_that_misses_a_lane_is_stale(self, project_dir, tmp_path):
+        dev_dir = project_dir / "docs" / "dev"
+        for lane in ("l1", "l2", "l3"):
+            self._lane(dev_dir, BARE_TID, lane, ["l1", "l2", "l3"])
+        _write(dev_dir, f"dev-report-{BARE_TID}.json",
+               {**_good_shard(), "parallel_workers": ["l1", "l2"]})
+        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l1", "block")
+        assert result.returncode == 2
+        assert (f"[canonical_stale] {dev_dir / f'dev-report-{BARE_TID}.json'}: its "
+                "parallel_workers ['l1', 'l2'] do not name lane(s) l3") in result.stderr
+
+    def test_advisory_g3_blocks_only_a_missing_canonical(self, project_dir, tmp_path):
+        # Until P2 arms G3 a missing lane report and a stale canonical pass,
+        # as they did on master; the canonical's absence still blocks.
+        dev_dir = project_dir / "docs" / "dev"
+        self._lane(dev_dir, BARE_TID, "l1", ["l1", "l2"])
+        assert self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l1", None).returncode == 0
+        for lane in ("l1", "l2", "l3"):
+            self._lane(dev_dir, OTHER_TID, lane, ["l1", "l2", "l3"])
+        _write(dev_dir, f"dev-report-{OTHER_TID}.json", {**_good_shard(), "parallel_workers": ["l1", "l2"]})
+        assert self._qa(project_dir, tmp_path / "home", f"{OTHER_TID}-l1", None).returncode == 0
+        (dev_dir / f"dev-report-{OTHER_TID}.json").unlink()
+        result = self._qa(project_dir, tmp_path / "home", f"{OTHER_TID}-l1", None)
+        assert result.returncode == 2
+        assert "[canonical_missing]" in result.stderr
+
+    def test_global_scan_demands_only_a_complete_fanouts_canonical(self, project_dir):
+        # Without an obligation no cycle is named: another cycle's abandoned
+        # lane or stale canonical is not collected here; a fan-out whose lanes
+        # all reported still needs its canonical, as the filename rule had it.
+        dev_dir = project_dir / "docs" / "dev"
+        self._lane(dev_dir, BARE_TID, "l1", ["l1", "l2"])
+        for lane in ("l1", "l2", "l3"):
+            self._lane(dev_dir, OTHER_TID, lane, ["l1", "l2", "l3"])
+        _write(dev_dir, f"dev-report-{OTHER_TID}.json", {**_good_shard(), "parallel_workers": ["l1"]})
+        workers, canonicals = _hook_mod._scan_dev_dir(dev_dir)
+        assert _hook_mod._find_violations(workers, canonicals, dev_dir, None) == []
+        (dev_dir / f"dev-report-{OTHER_TID}.json").unlink()
+        workers, canonicals = _hook_mod._scan_dev_dir(dev_dir)
+        assert [(code, path.name) for code, path, _, _ in
+                _hook_mod._find_violations(workers, canonicals, dev_dir, None)] == [
+            ("canonical_missing", f"dev-report-{OTHER_TID}.json")]
+
+    def test_complete_fanout_and_one_lane_lane_set_pass(self, project_dir, tmp_path):
+        dev_dir = project_dir / "docs" / "dev"
+        for lane in ("l1", "l2"):
+            self._lane(dev_dir, BARE_TID, lane, ["l1", "l2"])
+        _write(dev_dir, f"dev-report-{BARE_TID}.json",
+               {**_good_shard(), "parallel_workers": ["l1", "l2"]})
+        self._lane(dev_dir, OTHER_TID, "l1", ["l1"])
+        for task in (f"{BARE_TID}-l1", f"{OTHER_TID}-l1"):
+            result = self._qa(project_dir, tmp_path / "home", task, None)
+            assert result.returncode == 0, result.stderr
 
 
 class TestObligationBarrierBlockIdentityMismatch:
@@ -3387,3 +3512,57 @@ class TestOutcomeAndLaneRoster:
         assert canonical["parallel_workers"] == ["r01", "r02", "x"]
         assert out["lane_set_conflict"] == ["r01", "r02"]
         assert "excluded_non_lane_reports" not in out
+
+
+# ---------------------------------------------------------------------------
+# P1b E5: --project-dir (the resolver's meaning), passed by the one producer
+# (hooks/posttool-lane-completeness-watch.py) that runs the harness's copy
+# ---------------------------------------------------------------------------
+
+class TestProjectDirOption:
+    def _two_lanes(self, root: Path) -> Path:
+        dev_dir = root / "docs" / "dev"
+        dev_dir.mkdir(parents=True)
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
+        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+        return dev_dir / f"dev-report-{BARE_TID}.json"
+
+    def test_project_dir_wins_over_claude_project_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ):
+        named = self._two_lanes(tmp_path / "named")
+        (tmp_path / "env" / "docs" / "dev").mkdir(parents=True)
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path / "env"))
+        rc = main(["--task-id", BARE_TID, "--project-dir", str(tmp_path / "named")])
+        assert rc == 0, capsys.readouterr()
+        assert json.loads(capsys.readouterr().out)["action"] == "aggregated"
+        assert named.is_file()
+
+    def test_empty_project_dir_is_the_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ):
+        canonical = self._two_lanes(tmp_path)
+        monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+        monkeypatch.chdir(tmp_path)
+        rc = main(["--task-id", BARE_TID, "--project-dir", ""])
+        assert rc == 0, capsys.readouterr()
+        assert canonical.is_file()
+
+
+# ---------------------------------------------------------------------------
+# P1b row 6: a missing lane's terminal trace is read with the one terminal
+# vocabulary (hooks/lib/obligation.py TERMINAL_VOCABULARY, dev-report.v2)
+# ---------------------------------------------------------------------------
+
+def test_terminal_trace_uses_the_one_vocabulary(tmp_path: Path):
+    sys.path.insert(0, str(_SCRIPT.parent.parent))
+    from hooks.lib import obligation
+
+    assert _mod._terminal_dev_statuses() == obligation.TERMINAL_VOCABULARY["dev-report.v2"]["dev.status"]
+    dev_dir = tmp_path / "docs" / "dev"
+    dev_dir.mkdir(parents=True)
+    for status, expected in (("completed", True), ("blocked", False), ("needs_review", False)):
+        shard = _good_shard()
+        shard["dev"]["status"] = status
+        _write(dev_dir, f"dev-report-iter1-{BARE_TID}-A.json", shard)
+        assert _mod._label_has_terminal_trace(dev_dir, BARE_TID, BARE_TID, "A", None) is expected, status

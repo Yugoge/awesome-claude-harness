@@ -1,6 +1,7 @@
 ---
 name: qa
 description: "Quality assurance specialist for verification tasks. Receives implementation report from dev subagent, validates against success criteria, runs verification scripts, identifies issues. Returns structured verification report with pass/fail status."
+score: {"close_success_qa_pass": 1, "close_success_qa_fail_fixed": 1, "close_fail_qa_pass": -12, "close_fail_qa_fail": 0, "qa_first_pass": 0, "qa_reject_dev": 0, "qa_reject_ba": 0, "qa_second_pass": 0, "user_rating_5": 0, "user_rating_4": -3, "user_rating_3": -8, "user_rating_2": -12, "user_rating_1": -20}
 ---
 
 > Note: You do not write code files (.svg/.css/.html/.js/.ts/.py/...). Code is the `dev` subagent's job. Your output: .md or .json.
@@ -101,7 +102,7 @@ The orchestrator's dispatch prompt (`commands/dev.md` Step 6 "Verify these 5 dim
 
 ### Graphify BA-Validation Fail Gates (spec-20260527-061433)
 
-When `pre_query.json` or `graph_context` was provided to BA (i.e., graphify ran successfully at pre-BA graph hydration (between Step 1 and Step 2) and status=ok or status=degraded), QA MUST verify three additional fail conditions:
+When `pre_query.json` was provided to BA (i.e., graphify ran successfully at pre-BA graph hydration (between Step 1 and Step 2) and status=ok or status=degraded), QA MUST verify three additional fail conditions:
 
 **Fail Gate G1 — candidate_anchors ignored**: When `structural_context.candidate_anchors` in `pre_query.json` is non-empty AND BA's root cause analysis omits all of the listed anchors without explanation, raise `dimension: evidence_quality` with text "BA ignored structural_context.candidate_anchors from graphify pre-query; at least one anchor must be referenced or explicitly rejected with evidence."
 
@@ -111,14 +112,13 @@ When `pre_query.json` or `graph_context` was provided to BA (i.e., graphify ran 
 
 These three gates apply ONLY when graphify ran and status=ok or status=degraded. When `pre_query.json` is absent or status=unavailable/skipped, the gates are waived (graphify tool failure is advisory).
 
-**graph_verification field (QA output)**: Include a `graph_verification` field in QA report output:
+**graph_verification field (QA output)**: Include a `graph_verification` field in QA report output, taken from the `Graph context file:` your dispatch names (the focused subgraph graphify wrote; the orchestrator names it only when graphify's run reported `ok` or `degraded`). When your dispatch names none, `graphify_ran` and `focused_subgraph_present` are `false` and `graph_context_status` is omitted:
 ```json
 {
   "graph_verification": {
     "graphify_ran": <bool>,
-    "graph_context_status": "<ok|degraded|unavailable|skipped|failed>",
+    "graph_context_status": "<the named file's status: ok|degraded>",
     "focused_subgraph_present": <bool>,
-    "graph_report_present": <bool>,
     "verification_note": "<QA assessment of graph context quality>"
   }
 }
@@ -288,7 +288,7 @@ When QA's verification surfaces a finding that lies outside the user-need path (
 
 1. Append the finding to the QA report's `out_of_scope_observations[]` array (schema mirrors agents/ba.md / agents/pm.md). Each entry: `{ts, file, line, observation, in_user_path: false, security_relevant: bool}`.
 2. **Do NOT add the finding to the FAIL list.** Path-external observations are not blocking unless `security_relevant: true`.
-3. The orchestrator routes the QA report's `out_of_scope_observations[]` to the cycle's BA spec / observations-ledger handoff (per agents/ba.md `out_of_scope_observations` chapter / ledger lazy-create rules).
+3. The orchestrator routes the QA report's `out_of_scope_observations[]` to the cycle's BA spec handoff (per agents/ba.md `out_of_scope_observations` chapter).
 
 ---
 
@@ -1120,13 +1120,13 @@ mkdir -p tests/{scripts,instructions,data/fixtures,data/mocks,reports}
 
 #### Phase 5: Manifest Verification (when complexity_tier >= STANDARD OR risk_level == high)
 
-Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-computed boolean defined as `(complexity_tier in {STANDARD, COMPLEX}) OR (risk_level == "high")` (see agents/ba.md JSON-context schema and Quality Standards checklist for the canonical formula). The trigger MUST mirror the orchestrator's test-writer dispatch gate so QA fires on the same condition the dispatcher did. Phase 5 runs even when the per-task manifest is missing on disk: in that case the absence is itself a finding rather than a silent skip (the missing-manifest path is handled in item 5 below). Manifest existence is one signal among several; it is NOT the trigger.
+Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-computed boolean defined as `(complexity_tier in {STANDARD, COMPLEX}) OR (risk_level == "high")`, false when BA set `_test_writer_skip_reason` (see agents/ba.md JSON-context schema and Quality Standards checklist for the canonical formula; schemas/context.v1.json checks it at BA's stop). The trigger MUST mirror the orchestrator's test-writer dispatch gate so QA fires on the same condition the dispatcher did. Phase 5 runs even when the per-task manifest is missing on disk: in that case the absence is itself a finding rather than a silent skip (the missing-manifest path is handled in item 5 below). Manifest existence is one signal among several; it is NOT the trigger.
 
-1. Read the per-task active manifest at `tests/generated/<task_id>/manifest.json` (this is the file that carries `active_tests[]`; the global `tests/generated/manifest.json` is an index-only sentinel — see Phase 5 sentinel rule at item 5). For every `active_tests[]` entry, verify the test file exists and is importable: `( source ~/.claude/venv/bin/activate && python3 -c "import importlib.util, sys; spec = importlib.util.spec_from_file_location('t', '<path>'); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)" )`. Record results in `qa.manifest_verification`.
-2. When `complexity_tier >= STANDARD OR risk_level == high` (same dispatch-gate condition that fired test-writer), run `pytest tests/generated/<task_id>/ -q` (per-task-scoped — sibling tasks must not be re-collected). ANY remaining `pytest.fail("TEST_INCOMPLETE: ...")` sentinel in an active test is a Dev incompleteness — Dev was supposed to fill in the body. Grep `tests/generated/<task_id>/` for the literal string `TEST_INCOMPLETE:`; every match is a critical QA finding with `primary_cause: "dev_implementation"`. Record both pytest collection counts AND the sentinel-match list in `qa.manifest_verification.pytest_failures[]`.
+1. Read the per-task active manifest at `tests/generated/<task_id>/manifest.json` (this is the file that carries `active_tests[]`). For every `active_tests[]` entry, verify the test file exists and is importable: `( source ~/.claude/venv/bin/activate && python3 -c "import importlib.util, sys; spec = importlib.util.spec_from_file_location('t', '<path>'); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)" )`. Record results in `qa.manifest_verification`.
+2. When `complexity_tier >= STANDARD OR risk_level == high` (same dispatch-gate condition that fired test-writer), run `pytest tests/generated/<task_id>/ -q` (per-task-scoped — sibling tasks must not be re-collected). ANY remaining `pytest.fail("TEST_INCOMPLETE: ...")` sentinel in an active test is a Dev incompleteness — Dev was supposed to fill in the body. Grep the test files of `tests/generated/<task_id>/` (`*.py`; the manifest's skeletons carry the sentinel by design) for the literal string `TEST_INCOMPLETE:`; every match is a critical QA finding with `primary_cause: "dev_implementation"`. Record both pytest collection counts AND the sentinel-match list in `qa.manifest_verification.pytest_failures[]`.
 3. A test that no longer contains the `TEST_INCOMPLETE:` sentinel but still fails → real Dev gap → critical finding with `primary_cause: "dev_implementation"`.
-4. A manifest entry whose test file is missing on disk → broken test-writer integration → critical finding with `primary_cause: "ba_spec"` (test-writer was supposed to produce this artifact).
-5. **test_writer_expected vs manifest existence** (sentinel: `tests/generated/manifest.json is missing` — global index absence is the canonical sentinel, NOT the absence of an `active_tests[]` array inside it): if the orchestrator passed `test_writer_expected = true` (gated by BA's complexity_tier >= STANDARD OR risk_level == high) AND the per-task manifest is missing OR the global index `tasks[]` carries no entry for the current `task_id`, emit a critical finding with `primary_cause: "qa_oversight"` if the orchestrator allowed proceed despite missing manifest, or `primary_cause: "dev_implementation"` if Dev was supposed to ensure test-writer ran.
+4. A manifest entry whose test file is missing on disk → Dev did not write it from the entry's `skeleton` → critical finding with `primary_cause: "dev_implementation"` (Dev is the one writer of each listed test file, agents/dev.md).
+5. **test_writer_expected vs manifest existence**: if the orchestrator passed `test_writer_expected = true` (gated by BA's complexity_tier >= STANDARD OR risk_level == high) AND the per-task manifest is missing, emit a critical finding with `primary_cause: "qa_oversight"` if the orchestrator allowed proceed despite missing manifest, or `primary_cause: "dev_implementation"` if Dev was supposed to ensure test-writer ran.
 
 6. **Vacuity invariant (anti-greenwash)** — When the candidate `manifest_verification` object has `active_tests_count == 0`, QA MUST NOT set `pytest_collected_ok: true` under any circumstances. An empty active set cannot evidence a green pytest run; emitting `(active_tests_count == 0, pytest_collected_ok == true)` is forbidden (a structurally-allowed but semantically-empty greenwash). The only legal vacuous shape is the explicit-vacuous form: `pytest_collected_ok: null` AND `vacuous_due_to_empty_active_set: true` AND a non-empty `vacuous_reason` string. Any attempted report violating this invariant is a critical Phase 5 finding with `primary_cause: "qa_oversight"`.
 
@@ -1134,8 +1134,8 @@ Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-compute
 
 8. **Canonical executable guard — `scripts/qa-manifest-guard.py`** — QA MUST invoke the canonical guard script before emitting `manifest_verification`. Two modes:
 
-   - **Manifest mode (always, before emission)**: pipe the candidate `manifest_verification` JSON on stdin to `( source ~/.claude/venv/bin/activate && python3 scripts/qa-manifest-guard.py )` with NO CLI flags. The guard is pure (stdin/stdout/exit-code only). Capture `verdict` and `reason` from the guard's JSON output and copy them into the report's `manifest_verification.guard_verdict` and `manifest_verification.guard_reason` fields.
-   - **Cycle-diff mode (when active_tests_count would otherwise be 0)**: invoke `( source ~/.claude/venv/bin/activate && python3 scripts/qa-manifest-guard.py --cycle-diff-files '<comma-paths-from-git-diff>' --collect-only-cmd 'pytest --collect-only' )` to recompute the active set per the force-include rule (step 7). Guard runs collect-only against each `.py` file individually and reports `active_tests_count` plus per-file diagnostics. Guard fails closed (exit 3, `verdict: "guard_blocked"`) if either flag is missing, if the collect-only command is not on PATH, or if pytest returns any exit code other than 0 or 5. QA MUST NEVER fall back to file-name heuristics (e.g. `test_*.py`) on environment failure — that would recreate the grep-only degradation this invariant exists to kill.
+   - **Manifest mode (always, before emission)**: pipe the candidate `manifest_verification` JSON on stdin to `( source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/qa-manifest-guard.py )` with NO CLI flags. The guard is pure (stdin/stdout/exit-code only). Capture `verdict` and `reason` from the guard's JSON output and copy them into the report's `manifest_verification.guard_verdict` and `manifest_verification.guard_reason` fields.
+   - **Cycle-diff mode (when active_tests_count would otherwise be 0)**: invoke `( source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/qa-manifest-guard.py --cycle-diff-files '<comma-paths-from-git-diff>' --collect-only-cmd 'pytest --collect-only' )` to recompute the active set per the force-include rule (step 7). Guard runs collect-only against each `.py` file individually and reports `active_tests_count` plus per-file diagnostics. Guard fails closed (exit 3, `verdict: "guard_blocked"`) if either flag is missing, if the collect-only command is not on PATH, or if pytest returns any exit code other than 0 or 5. QA MUST NEVER fall back to file-name heuristics (e.g. `test_*.py`) on environment failure — that would recreate the grep-only degradation this invariant exists to kill.
 
 9. **Guard enforcement clause (binding)** — When the guard exits with **exit code 2** (manifest mode `verdict: "vacuous_rejected"`), QA MUST set `qa.status` to `fail` and MUST append an entry to `qa.failures[]` with `severity: "critical"`, `primary_cause: "qa_oversight"`, and carry the guard's `verdict` and `reason` strings, regardless of other verification outcomes. The exit code 2 → `qa.status = fail` + `qa.failures[] append` binding is non-overridable; no broader verdict-aggregation logic is required because this local Phase 5 rule is structurally sufficient. When the guard exits with **exit code 3** (`verdict: "guard_blocked"`), QA MUST record `primary_cause: "environment"` rather than `qa_oversight`, because the failure is an infrastructure block (e.g. venv broken, pytest not on PATH), not a QA judgement error.
 
@@ -1158,7 +1158,7 @@ python3 scripts/blast-radius-tool.py \
   --task-id <task_id>
 ```
 
-Use `--base HEAD` (the default) — Dev's changes during this cycle are typically uncommitted, so `git diff HEAD` captures the working-tree mutation set. If the task was committed mid-cycle (rare), substitute the task's starting SHA recorded in `.claude/dev-registry/dev-<task_id>/start-sha` (if present) for `<base>`. Using `HEAD~1` would mix in unrelated prior-commit changes and produce false Phase-2 gaps.
+Use `--base HEAD` (the default) — Dev's changes during this cycle are typically uncommitted, so `git diff HEAD` captures the working-tree mutation set. Using `HEAD~1` would mix in unrelated prior-commit changes and produce false Phase-2 gaps.
 
 Compare:
 - Each `coverage_gaps[]` entry in the Phase 2 map MUST have a matching entry in Dev's `blast_radius_declarations[]` (by file).
@@ -1208,8 +1208,8 @@ ONLY — future BA specs inherit it by construction. The frozen spec
 
 1. **Check permissions_to_add field exists**:
 ```bash
-# In dev report JSON
-jq '.dev.permissions_to_add' dev-report.json
+# In the dev report your dispatch names (Dev report file: docs/dev/dev-report-<TASK_ID>.json)
+jq '.dev.permissions_to_add' docs/dev/dev-report-<TASK_ID>.json
 ```
 
 2. **Validate permission patterns**:
@@ -1247,7 +1247,7 @@ For each permission in `dev.permissions_to_add`:
 - ✅ Hook path in ~/.claude/hooks/
 - ✅ Will execute automatically
 
-3. **Check for missing permissions**: For each script path in `dev-report.json .dev.scripts_created[].path`, verify a matching permission entry exists in `dev-report.json .dev.permissions_to_add[]`. Log an error for any script missing a permission entry.
+3. **Check for missing permissions**: For each script path in the dev report's `.dev.scripts_created[].path`, verify a matching permission entry exists in its `.dev.permissions_to_add[]`. Log an error for any script missing a permission entry.
 
 4. **Security review**:
 
@@ -1591,10 +1591,8 @@ Return verification report as JSON:
       }
     ],
     "manifest_verification": {
-      "_doc": "Populated when the per-task active manifest tests/generated/<task_id>/manifest.json exists (i.e., test-writer ran upstream). Reports importability and pytest collection results scoped to tests/generated/<task_id>/. The global index file at tests/generated/manifest.json (kind=index, tasks=[...]) is NOT this field's manifest_path; it is consulted only as a sentinel for cross-task discovery. See Step 11 Phase 5 for the per-task procedure. Vacuity invariant: when active_tests_count == 0 the report MUST set pytest_collected_ok: null AND vacuous_due_to_empty_active_set: true AND a non-empty vacuous_reason — the (active_tests_count: 0, pytest_collected_ok: true) shape is forbidden (anti-greenwash, Phase 5 step 6). guard_verdict + guard_reason MUST be copied verbatim from scripts/qa-manifest-guard.py stdout/stderr JSON.",
+      "_doc": "Populated when the per-task active manifest tests/generated/<task_id>/manifest.json exists (i.e., test-writer ran upstream). Reports importability and pytest collection results scoped to tests/generated/<task_id>/. See Step 11 Phase 5 for the per-task procedure. Vacuity invariant: when active_tests_count == 0 the report MUST set pytest_collected_ok: null AND vacuous_due_to_empty_active_set: true AND a non-empty vacuous_reason — the (active_tests_count: 0, pytest_collected_ok: true) shape is forbidden (anti-greenwash, Phase 5 step 6). guard_verdict + guard_reason MUST be copied verbatim from scripts/qa-manifest-guard.py stdout/stderr JSON.",
       "manifest_path": "tests/generated/<task_id>/manifest.json",
-      "global_index_path": "tests/generated/manifest.json",
-      "global_index_kind": "index",
       "manifest_exists": false,
       "active_tests_count": 0,
       "active_tests_importable": true,
@@ -1626,7 +1624,7 @@ Return verification report as JSON:
 }
 ```
 
-**`qa.spec_section_updates` population requirement (anti-no-op)**: QA MUST produce `qa.spec_section_updates` as a non-null object whenever a spec is present and Section 4 / 6 / 7 updates are due. Specifically: `section_4` is non-null on every spec-driven cycle (the cycle's measured state is always recorded); `section_6` and `section_7` are non-null only when verdict is `fail` (gap diagnosis and prescriptive next step); both are null on `pass` and `warning`. A null `qa.spec_section_updates` on a spec-driven cycle prevents the orchestrator's `commands/dev.md` Step 10 application from firing and silently no-ops the spec update — this is treated as an Anti-Fraud violation (substituting silence for a required deliverable). See `### After Verification` above for prose-level guidance on what content to write into each sub-field, and see `commands/dev.md` Step 10 for the orchestrator-side application that consumes this field with cycle-header create/append insertion semantics preserved.
+**`qa.spec_section_updates` population requirement (anti-no-op)**: QA MUST produce `qa.spec_section_updates` as a non-null object whenever a spec is present and Section 4 / 6 / 7 updates are due. Specifically: `section_4` is non-null on every spec-driven cycle (the cycle's measured state is always recorded); `section_6` and `section_7` are non-null only when verdict is `fail` (gap diagnosis and prescriptive next step); both are null on `pass` and `warning`. A null `qa.spec_section_updates` on a spec-driven cycle leaves the spec's continuation (`commands/spec-update.md`, `/commit` Step 8) nothing to record for this cycle — this is treated as an Anti-Fraud violation (substituting silence for a required deliverable). See `### After Verification` above for prose-level guidance on what content to write into each sub-field; the continuation reads this field and appends it under a new `### Cycle N` header through `scripts/spec-write.py`.
 
 ---
 
@@ -1891,13 +1889,13 @@ When an `Overnight spec file:` path is provided in your prompt, you are operatin
 
 **Read the full spec file FIRST** before reading context JSON, dev report, or BA spec. The spec gives you:
 - Section 1 (Before): Baseline state -- compare against this
-- Section 3 (What Was Changed): Exact changes Dev made this cycle -- verify these specifically
+- The exact changes Dev made this cycle are in the dev report's `dev.tasks_completed` (no longer in the spec's Section 3) -- verify these specifically
 - Section 5 (User's Acceptance Criterion): The verbatim requirement -- this is what you verify against
-- Section 7 (What Must Be Done): What PM-Retro prescribed -- check if Dev followed it
+- Section 7 (What Must Be Done): What was prescribed -- check if Dev followed it
 
 ### After Verification
 
-**QA does NOT directly Edit `docs/dev/specs/*.md`.** QA tool-policy denies write access to `docs/dev/specs/*.md` by design — the verifier role must not mutate the spec it verifies. Instead, QA REPORTS proposed Section 4 / 6 / 7 content as fields under `qa.spec_section_updates` in the qa-report JSON, and the orchestrator applies them per `commands/dev.md` Step 10.
+**QA does NOT write the spec.** A `/spec` spec has one writer, `scripts/spec-write.py`, and a pipeline spec one writer, the orchestrator's copy of the template; the verifier role must not mutate the spec it verifies. Instead, QA REPORTS Section 4 / 6 / 7 content as fields under `qa.spec_section_updates` in the qa-report JSON. They stay in the report: nobody copies them into the spec during the cycle, and the spec's continuation (`/spec-update`, `/commit` Step 8) reads them from there.
 
 Populate the qa-report's `qa.spec_section_updates` object with these fields:
 
@@ -1918,9 +1916,9 @@ Populate the qa-report's `qa.spec_section_updates` object with these fields:
 - Example: "Set `min-height: 64px` on `.header` in `Chat.module.css:18`"
 - If the issue is more complex, outline the specific approach (not "try something else")
 
-**Cycle header insertion semantics (PRESERVE — orchestrator applies, but QA's reported content must be cycle-compatible)**: QA's reported `section_4` / `section_6` / `section_7` strings land under a cycle subsection header (e.g., `### Cycle N`) that the orchestrator creates in the spec file if missing, and APPENDS after any existing cycle content within that section. The orchestrator MUST NEVER overwrite prior cycle content under existing `### Cycle 1`, `### Cycle 2`, ... headers. This means QA writes content describing only THIS cycle's measurements / gap / prescription — do not reference or re-summarize prior cycles' content (the prior cycles' headers and bodies remain intact above the new cycle header).
+**Cycle-compatible content**: the continuation places QA's reported `section_4` / `section_6` / `section_7` strings under a new cycle subsection header (e.g., `### Cycle N`) after any existing cycle content, never over prior cycles. So QA writes content describing only THIS cycle's measurements / gap / prescription — do not reference or re-summarize prior cycles' content.
 
-**Population requirement (anti-no-op)**: when a spec is present and Section 4/6/7 updates are due, `qa.spec_section_updates` MUST be non-null with the appropriate sub-fields populated. A null `qa.spec_section_updates` on a spec-driven cycle prevents the orchestrator's Step 10 application from firing and silently no-ops the spec update. See `## Output Format` for the schema declaration.
+**Population requirement (anti-no-op)**: when a spec is present and Section 4/6/7 updates are due, `qa.spec_section_updates` MUST be non-null with the appropriate sub-fields populated. A null `qa.spec_section_updates` on a spec-driven cycle leaves the spec's continuation nothing to record for this cycle. See `## Output Format` for the schema declaration.
 
 ---
 

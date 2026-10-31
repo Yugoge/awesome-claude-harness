@@ -14,7 +14,7 @@ of the real hook script:
     unrelated session_id with no agent_id (main-agent actor); the block
     is global, not session-scoped.
   - AC5: the same block applies to a Bash redirect into the state-file
-    path, while scripts/update-overnight-state.sh remains exempt.
+    path.
   - AC6: the identical Write payload from AC4 is NOT blocked (exit 0) when
     no overnight session is live anywhere -- the protection is
     conditional on is_overnight_active(), not an unconditional global
@@ -90,11 +90,8 @@ def test_edit_to_state_file_blocked_while_overnight_active(tmp_path: Path) -> No
     assert "OVERNIGHT STATE PROTECTION" in result.stderr
 
 
-def test_bash_redirect_into_state_file_blocked_but_update_script_exempt(
-    tmp_path: Path,
-) -> None:
-    """AC5: a raw redirect into the state file is blocked; the sanctioned
-    update-overnight-state.sh path remains exempt."""
+def test_bash_redirect_into_state_file_blocked(tmp_path: Path) -> None:
+    """AC5: a raw redirect into the state file is blocked."""
     state_path = _write_live_state(tmp_path, "ac5-bash")
 
     redirect_result = _run_guard(
@@ -107,18 +104,6 @@ def test_bash_redirect_into_state_file_blocked_but_update_script_exempt(
     )
     assert redirect_result.returncode == 2
     assert "OVERNIGHT STATE PROTECTION" in redirect_result.stderr
-
-    sanctioned_result = _run_guard(
-        tmp_path,
-        {
-            "session_id": "unrelated-session",
-            "tool_name": "Bash",
-            "tool_input": {
-                "command": f"scripts/update-overnight-state.sh {state_path} cycle_count 7"
-            },
-        },
-    )
-    assert sanctioned_result.returncode == 0, sanctioned_result.stderr
 
 
 def test_write_to_state_file_allowed_when_no_overnight_session_is_live(

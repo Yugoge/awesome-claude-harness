@@ -27,6 +27,11 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
                      seed a NEW overlay from previous personal settings: run by init
                      (scripts/bootstrap --migrate-from), or once by the landing on an upgraded
                      home. A previous GIT_AUTO_PUSH "1" is named, never migrated (push is opt-in).
+  seed --claude-home PATH [MODULE=on|off ...]
+                     write a NEW overlay holding the modules and env.CLAUDE_HOME: init's
+                     (scripts/bootstrap) overlay when it migrates nothing.
+  literals           create the private-literal list <H>/private-literals.txt, empty and mode
+                     0600, when there is none: init's (scripts/bootstrap); the landing seeds it.
   land [--rev | --repair]
                      the settings half of the landing (scripts/install/land, at every Stop, on a
                      home that ran pre-P7 code): undo what a conflicted pull left in the index,
@@ -243,6 +248,20 @@ def load_overlay(home):
             raise OverlayError("%s: modules.%s must be true or false" % (path, name))
     _validate_layer(_layer_of(overlay), path)
     return overlay
+
+
+def write_overlay(home, overlay):
+    """Write a NEW overlay (canonical, owner-only): the one code path that creates it, for migrate
+    (and so the landing) and for init's seed. False when one exists: O_EXCL never clobbers."""
+    target = os.path.join(home, OVERLAY)
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(canon(overlay))
+    os.chmod(target, 0o600)
+    return True
 
 
 def layers_of(overlay):
@@ -698,6 +717,16 @@ def refresh_index(home):
     _git(home, "update-index", "-q", "--refresh")
 
 
+def load_settings(home):
+    """settings.json through the one load of a settings file (hooks/lib/claude_home.py
+    load_settings): (object, None); (None, None) when absent; (None, reason) when unusable,
+    the reason naming the file relative to the home, as every line of this tool does."""
+    loader = _load_module(os.path.join(home, "hooks", "lib", "claude_home.py"),
+                          "_render_settings_claude_home")
+    settings, problem = loader.load_settings(os.path.join(home, SETTINGS))
+    return settings, problem and problem.replace(os.path.join(home, ""), "", 1)
+
+
 def clean_source(home):
     """The clean form's bytes: the index blob, else HEAD's, else the working file."""
     source = None
@@ -741,13 +770,12 @@ def cmd_render(home, force):
             _err("render refused: %s" % exc)
             return 1
         recorded = []  # --force drops every entry the overlay does not explain
+    working, problem = load_settings(home)
+    if problem and not force:
+        _err("render refused: %s; fix it, or re-run with --force to replace it" % problem)
+        return 1
     path = os.path.join(home, SETTINGS)
     current = _read(path)
-    working = parse(current)
-    if current is not None and working is None and not force:
-        _err("settings.json is not a valid JSON object; fix it, or re-run with --force to "
-             "replace it")
-        return 1
     target, layers, problem = machine_form(home, overlay, working)
     if problem:
         _err("render refused: %s" % problem)
@@ -938,10 +966,10 @@ def cmd_check(home):
         recorded = load_record(home)
     except OverlayError as exc:
         overlay_error = str(exc)
-    working = parse(_read(os.path.join(home, SETTINGS)))
+    working, problem = load_settings(home)
     if working is None:
-        hooks_ok = _ok("hook paths: settings.json is missing or not a JSON object; run "
-                       "scripts/bootstrap", False)
+        hooks_ok = _ok("hook paths: %s; run scripts/bootstrap"
+                       % (problem or "settings.json is missing"), False)
     else:
         hooks_ok = check_hook_paths(home, working, overlay)
     filter_ok = check_filter(home, overlay_error, overlay, recorded, working)
@@ -1180,14 +1208,9 @@ def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
     except OverlayError as exc:
         _err("migrate refused: %s" % exc)
         return 1
-    try:
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
+    if not write_overlay(home, overlay):
         _err("migrate refused: %s already exists" % target)
         return 1
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(canon(overlay))
-    os.chmod(target, 0o600)
     print("render-settings: wrote %s (mode 0600) from %s" % (OVERLAY, source))
     print("  modules: %s" % ", ".join("%s=%s" % (n, "on" if on else "off")
                                       for n, on in modules.items()))
@@ -1203,9 +1226,37 @@ def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
     return 0
 
 
+def cmd_seed(home, claude_home, specs):
+    """init's overlay when it migrates nothing (scripts/bootstrap step 2, which has asked about
+    each module): the modules it names and env.CLAUDE_HOME."""
+    modules = dict(sorted((n, v == "on") for n, _, v in (s.partition("=") for s in specs)))
+    if not write_overlay(home, {"modules": modules, "env": {"CLAUDE_HOME": claude_home}}):
+        _err("seed refused: %s already exists" % os.path.join(home, OVERLAY))
+        return 1
+    return 0
+
+
+def cmd_literals(home):
+    """init's private-literal list (scripts/bootstrap): an empty list, owner-only, when there is
+    none; the landing seeds an absent or empty one (seed_literals). This file is the list's one
+    writer. O_EXCL never clobbers a list the owner already keeps."""
+    target = os.path.join(home, LITERALS)
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        print("exists")
+        return 0
+    except OSError as exc:
+        _err("literals: %s" % type(exc).__name__)
+        return 1
+    os.close(fd)
+    os.chmod(target, 0o600)
+    print("created")
+    return 0
+
+
 # -------------------------------------------------------------------------------------- land
 
-LANDING_LOG = os.path.join("logs", "landing.log")  # append-only; no code reads it
 DOC_SYNC_LINE = re.compile(rb"^(\*Last updated: [^*]*\*|> Last updated: .*)$")  # doc-sync's dates
 SEED_KEYS = tuple(name for name, _, _ in CODE_DEFAULTS) + ("GRAPHIFY_BIN",)
 _HOME_OF = re.compile(r"""(?<![^\s"'])(/[^\s"']*?)/((?:hooks|scripts)/[^\s"';]+)""")
@@ -1492,16 +1543,15 @@ def land(home, mode):
 
 def cmd_land(home, mode):
     """render-settings land, run by scripts/install/land under its lock once no rebase or merge is
-    stopped. It logs counts, key names and revision ids (never a value) to logs/landing.log; stdout
-    is one line: the notice part, or the failed step (exit 1; with --repair also a refused path)."""
+    stopped. It writes its log lines (counts, key names and revision ids, never a value) to stderr,
+    which land appends to logs/landing.log, so land is that log's one writer; stdout is one line:
+    the notice part, or the failed step (exit 1; with --repair also a refused path)."""
     os.chdir(home)
     if mode == "rev":
         rev = pre_pull_rev(home)
         print(rev or "")
         return 0 if rev else 1
-    os.makedirs("logs", exist_ok=True)
-    with open(LANDING_LOG, "a", encoding="utf-8") as log, contextlib.redirect_stdout(log), \
-            contextlib.redirect_stderr(log):
+    with contextlib.redirect_stdout(sys.stderr):
         try:
             note, rc = land(home, mode)
         except Exception as exc:  # never a traceback: its text may carry a value
@@ -1529,6 +1579,10 @@ def main(argv=None):
     p_migrate.add_argument("--from", dest="rev", required=True, metavar="REV")
     p_migrate.add_argument("--settings-file", metavar="PATH")
     p_migrate.add_argument("--base", dest="base_rev", metavar="REV")
+    p_seed = sub.add_parser("seed", help="write a new overlay: the modules and env.CLAUDE_HOME")
+    p_seed.add_argument("--claude-home", required=True, metavar="PATH")
+    p_seed.add_argument("modules", nargs="*", metavar="MODULE=on|off")
+    sub.add_parser("literals", help="create the empty private-literal list, mode 0600 (init)")
     p_land = sub.add_parser("land", help="the settings half of the landing (P7b)")
     p_land.add_argument("--rev", dest="mode", action="store_const", const="rev")
     p_land.add_argument("--repair", dest="mode", action="store_const", const="repair")
@@ -1542,6 +1596,10 @@ def main(argv=None):
         return cmd_render(home, args.force)
     if args.command == "check":
         return cmd_check_staged(home) if args.staged else cmd_check(home)
+    if args.command == "seed":
+        return cmd_seed(home, args.claude_home, args.modules)
+    if args.command == "literals":
+        return cmd_literals(home)
     if args.command == "land":
         try:
             return cmd_land(home, args.mode)

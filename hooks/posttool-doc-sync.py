@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-PostToolUse Hook: Auto-sync INDEX.md and CLAUDE.md when structural files change.
+PostToolUse Hook: keep the marked INDEX.md, README.md and CLAUDE.md sections in sync
+when structural files change (it updates files that exist and creates none).
 
 Delegates to doc_sync module. See doc_sync/ directory for implementation.
 Hook type: PostToolUse (Write|Edit|NotebookEdit matcher)

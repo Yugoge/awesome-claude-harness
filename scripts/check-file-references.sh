@@ -211,14 +211,25 @@ for config_pattern in "${CONFIG_FILES[@]}"; do
     fi
 
     for config_file in "${found_files[@]}"; do
-        if [[ -f "$config_file" ]]; then
-            if grep -q "$FILENAME" "$config_file" 2>/dev/null; then
-                echo -e "  ${RED}❌ Found reference in $config_file:${NC}"
-                grep -n "$FILENAME" "$config_file" | while IFS= read -r line; do
-                    echo -e "    ${YELLOW}$line${NC}"
-                done
+        if [[ "$config_file" == *settings.json ]]; then
+            # The one load of a settings file (hooks/lib/claude_home.py) decides: an absent file
+            # holds no reference; an unusable one (its reason on stderr) cannot show the name is
+            # unreferenced, so it counts as a reference.
+            if ! settings=$(python3 "$HARNESS_HOME/hooks/lib/claude_home.py" settings "$config_file"); then
+                echo -e "  ${RED}❌ $config_file is unusable (see above): counted as a reference${NC}"
                 CONFIG_REF_FOUND=1
+                continue
             fi
+            [[ -n "$settings" ]] || continue
+        elif [[ ! -f "$config_file" ]]; then
+            continue
+        fi
+        if grep -q "$FILENAME" "$config_file" 2>/dev/null; then
+            echo -e "  ${RED}❌ Found reference in $config_file:${NC}"
+            grep -n "$FILENAME" "$config_file" | while IFS= read -r line; do
+                echo -e "    ${YELLOW}$line${NC}"
+            done
+            CONFIG_REF_FOUND=1
         fi
     done
 done
