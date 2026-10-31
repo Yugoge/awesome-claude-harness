@@ -4,26 +4,41 @@ Read this file first, then `prompts/P1b.md` in this directory in full. P1b.md is
 
 ## Budget and stopping rules (they take precedence over any wording in P1b.md that asks for open-ended checking)
 
-- Build the rest of P1b as specified, run each acceptance test, and record its command and output in the PR.
+- Build the rest of P1b as specified, run your acceptance tests, and record each command and its output in the PR.
 - Do not run "verify again until a round finds nothing" loops. Run at most two self-check rounds over your own diff. A self-check round may only fix defects of medium severity or higher; list lower ones in the PR under "Out of scope, found".
-- The inventory you generate in step 1 is evidence for this PR. Generate it once on your base and correct it only where an acceptance test or a deletion depends on a cell; do not re-sweep it.
-- An independent review of your PR is done afterwards by the reviewer session; do not imitate it with your own multi-agent review.
-- If you hit a usage limit, resume the same work after the reset; do not start over. Push your branch after each commit, so the work survives a usage limit and progress is visible in the repository.
+- Do not regenerate the inventory or re-sweep it. Use the artifact check's own output on the branch.
+- An independent review of your PR is done by the reviewer session; do not imitate it with your own multi-agent review.
+- Effort (D26): what is left is about one day of work. Push after each commit, so the work survives a usage limit and progress is visible. If you hit a usage limit, resume the same work after the reset; do not start over.
 
 ## You continue P1b; you do not start it
 
-Another session built the first part of P1b and hit its usage limit. Its work is on branch `claude/p1b-producer-consumer-artifact-wupfqs`, head 3507c9b (pushed 2026-10-28 04:10 UTC). It has two commits on top of master 2acc29b:
+Two earlier sessions built most of P1b and each hit its usage limit. Their work is pull request #8, head branch `claude/quirky-keller-cr679p`. The head is 8dd63fb (pushed 2026-10-30 22:20 UTC): 47 commits on master 2acc29b. The first two commits (277a50d, 3507c9b) come from the first session's branch `claude/p1b-producer-consumer-artifact-wupfqs`, which is superseded.
 
-- 277a50d "P1b: hook state lives under harness_state_dir() on both sides; the guard reads the -F file the commit names" (37 files, +332/-115);
-- 3507c9b "P1b: dead outputs and dead reading branches go" (108 files, +511/-4481).
+**Done**, by the commit subjects and the last session's report:
+- rows 1-18;
+- the replay framework and the pipeline drivers, including /merge, /push and /clean;
+- the artifact check in its own CI job, sharded to fit E2's 1,500 s;
+- violations of rules 4, 5, 6 and 8 down from 64 to 2, and rule 2 reduced;
+- the latency work;
+- /close and /commit reach their terminal with no new block;
+- E4's kept copies for /close and /dev-overnight.
 
-That session reported both commits tested. It planned five more commits, then the acceptance tests and the PR.
+**Left:**
+1. Bring the artifact check to zero violations: the rest of rule 2, and the last 2 of rules 4-8.
+2. The lock commit (7): settings STOPGATE=block; delete the copies E4 kept that only a blocking G2 makes redundant; then the replays.
+3. Acceptance tests 1-21, shared with a helper session as below.
+4. The PR body and the evidence comments, as P1b.md's "Branch and pull request" says.
 
-These rules override P1b.md's branch rules (its "Branch and pull request" section and the shared "Planning documents" paragraph):
+Work out the exact state from the branch's commits, PR #8's body and comments, and one run of the artifact check. Work an earlier session left unpushed is lost; redo only what the list above needs.
 
-1. Fetch that branch. If it has commits after 3507c9b, they are the same phase's work: use the newest head.
-2. Base your work on that head, not on `origin/master`. Point your assigned branch at it; this is a fast-forward of master, not a rewrite. The check "`git log --oneline origin/master..HEAD` must print nothing" does not apply: the commits it prints are this phase's work. Never reset them away, rebase, amend or force-push them.
-3. Push only to your own assigned branch, or to `repair/P1b` if you have none or were assigned the planning branch. Do not push to `claude/p1b-producer-consumer-artifact-wupfqs`. Open the one P1b pull request from your branch.
-4. Read the two commits' messages and diffs and match them to P1b.md. Work out which rows, experiments (E1-E14) and corrections they cover and which remain. Do not redo what they did. Verify them only by one run of the tests their messages name; if that run fails, fix the cause in a new commit.
-5. The earlier session's baseline map measurement was running in the background and is probably lost. If its result is not in the branch, regenerate it once on master 2acc29b, the base of the first commit, as P1b.md's step 1 says.
-6. In the PR, under "Notes for reviewers", say that an earlier session made 277a50d and 3507c9b, and list what you took from them as done.
+## Rules that override P1b.md's branch rules
+
+1. Base your work on the newest head of `claude/quirky-keller-cr679p`, never on `origin/master`. Its commits are this phase's work. The check "`git log --oneline origin/master..HEAD` must print nothing" does not apply. Never reset them away, rebase, amend or force-push.
+2. Push to `claude/quirky-keller-cr679p`, so that PR #8 stays the one P1b pull request. The owner gives explicit permission for this branch even though your session was assigned another one.
+   - Before every push, fetch that branch and merge it with a merge commit if it moved: a helper session may comment on the PR at the same time.
+   - Do not open a second PR. Do not close PR #8.
+3. Verify the earlier sessions' work only by one run of the tests their latest commits name. If that run fails, fix the cause in a new commit.
+4. **Acceptance is shared.** After you push the lock commit, a helper session runs acceptance tests 4, 5, 14, 15, 17 and 21 on that head and posts each one as a PR comment headed `Acceptance <n> on <sha>`. You run 1-3, 6-13, 16 and 18-20, write the PR body, and link the helper's comments from it.
+   - Fix every failure the helper reports, in a new commit.
+   - After such a fix, re-run only the tests it affects.
+5. In the PR body, under "Notes for reviewers", say that three sessions made the commits, and which ones each made.
