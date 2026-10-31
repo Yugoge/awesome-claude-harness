@@ -6,6 +6,9 @@ consecutive sub-phases to different accounts, and sub-phases marked parallel to 
 
 - Source of each split: the phase's short prompt, `prompts/short/<phase>.md`. Row ids (R..., X..., C..., suite parts)
   and acceptance-test ids (A...) are that prompt's own. Every one is assigned to exactly one sub-phase.
+- A row that is itself a list of parts the prompt places in different commits (a tests row naming one test file per
+  row it pins, "in that commit"; a row whose text says "with R6" or "own commit") is assigned part by part: each
+  listed part to exactly one sub-phase, with the row it lands with. The phase's notes name every such row.
 - Not split: P1b (finished as PR #8), P6 (M), P11 (M).
 - Phase order is unchanged: P1b -> P1c -> P2 and P3 -> P4 -> P5 -> P6 -> P9 -> P10 -> P11. A phase starts when every
   sub-phase of the phases its prompt names as dependencies is merged.
@@ -53,6 +56,36 @@ specification; its rules hold except where this header narrows them.
   do not start another sub-phase.
 - Ask the owner nothing (D18, D19).
 ```
+
+## P1c (XL, about 6 days; 9 sub-phases)
+
+Source: `prompts/short/P1c.md`.
+
+| Id | Goal | Rows and items | Acceptance tests | Main files | Depends on | Parallel with | Effort |
+|---|---|---|---|---|---|---|---|
+| P1c-1 | Replay suite skeleton green in CI: fixture, glue, both modes, 16 compliant scenarios, fault harness, suite jobs | R1, R2, R3, R6 (all but its coverage step), X1, X2, suite (1), suite (2) (harness and table) | A1, A2 | `tests/replay/` (conftest.py, glue, P1b's drivers extended, test_pipelines.py, test_faults.py), P1b's runner module, `baseline.yml`, `tests/TESTING.md` | none (phase start) | none | M |
+| P1c-2 | Merge rule's derived coverage step in CI, first regression replay | merge-rule coverage step (R6's last clause), R4, suite (4), R-V1 | none (see notes) | `tests/replay/` (coverage step, test_regressions.py), `baseline.yml` | P1c-1 | none | S |
+| P1c-3 | Stop and collection blocks returned to their producer | R7, R8, R10, R11, R12; F1, F1q, F2, F2j, F2g (armed mode), F3b, F7, F7b; R-P1 | none (see notes) | `hooks/subagentstop-artifact-contract-enforce.py`, `hooks/subagentstop-e2e-enforce.py`, `scripts/aggregate-dev-report.py`, `resolve-dev-artifact-chain.py`, `dev.md`, `dev-command.md` | P1c-2 | P1c-4 | M |
+| P1c-4 | Held git lock and pull judged by git, not by tee | R14, R20, X7, X9; F4, F4c, F4s; R-N1 | none (see notes) | `scripts/lib/session_index.py`, `scripts/session-index.py`, `changelog-analyst.md` (sync step), `hooks/pull.sh`, `git-fswatch.sh`, `scripts/install/land` | P1c-2 | P1c-3 | M |
+| P1c-5 | Prose conflicts fixed on X4's side; F8 routing replays | R18, X4; F8, F8q, F8p, F8c | none (see notes) | `dev.md`, `dev-command.md`, `do.md`, `close.md`, `commit.md`, `merge.md`, `push.md`, `spec-update.md`, `changelog-analyst.md`, `pretool-claude-config-guard.py` | P1c-3, P1c-4 | P1c-6 | M |
+| P1c-6 | Compliant /dev-overnight from launch to Stop after end_time, 0 blocks | R13, R19, X5; F3a, F3q; R-E1 | A6 | `posttool-overnight-file-check.py`, `dev-overnight.md`, `create-overnight-state.sh`, the R19 overnight block sites | P1c-3, P1c-4 | P1c-5 | M |
+| P1c-7 | /restart recovery and the overnight wake | R15, R16, R17, X8; F5, F5f, F6, F6o, X8's /stop replay | A10 | `commands/restart.md`, `pretool-todo-validate.py`, `posttool-subagent-track.py`, `scripts/todo/dev-overnight.py`, `prompt-workflow.py`, `userprompt-restart-authorize.py`, `stop-overnight-timelock.py`, `dev-overnight.md`, `stop.md`, `posttool-todo-count.py`, `posttool-todo-tracker.py`, `pretool-workflow-gate.py` | P1c-5, P1c-6 | none | M |
+| P1c-8 | No dead end: every block site enumerated at test time, classed, cleared; dead ends found are fixed | R5, X6, suite (3) | A5 | `tests/replay/test_no_dead_end.py`, X6's dead-end fixes at the sites it finds | P1c-7 | none | M |
+| P1c-9 | G2 armed in settings.json (last commit), CI split, phase close-out | R9, R21, X3, X10; shipped-mode F1, F1q, F2, F2j, F2g (with R9) | A3, A4, A7, A8, A9, A11, A12, A13, A14, A15, A16, A17 | `settings.json` (env only), X3's deleted copies, `baseline.yml` (X10 split), R21's tests | P1c-8 | none | M |
+
+Coverage: rows R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21 -> each in exactly one sub-phase (R6's coverage step split out as its own item, see notes); X1-X10 -> each in exactly one; suite parts (1), (2), (3), (4) and the merge-rule coverage step -> each in exactly one; faults F1, F1q, F2, F2j, F2g, F3a, F3q, F3b, F4, F4c, F4s, F5, F5f, F6, F6o, F7, F7b, F8, F8q, F8p, F8c (21) and regressions R-P1, R-E1, R-N1, R-V1 -> each with its fix (only F1, F1q, F2, F2j, F2g's shipped mode lands with R9, as R9 says); acceptance tests A1-A17 -> each in exactly one sub-phase.
+
+Notes:
+- Order: P1c-1 -> P1c-2 -> {P1c-3 || P1c-4} -> {P1c-5 || P1c-6} -> P1c-7 -> P1c-8 -> P1c-9. Shared files force the rest: dev.md/dev-command.md (R12 before R18), changelog-analyst.md (R14 before R18), dev-overnight.md (R13/R19 before R17), pretool-todo-validate.py and posttool-subagent-track.py (R16 with R17); R19 needs R10's e2e fix; P1c-6 also waits for P1c-4 so A6 sits after every regression replay. Sum 8.5 days (critical path about 6.5) is above the ~6-day estimate because P1c-1 must hold R1 and R6 whole and no sub-phase may exceed M; the no-dead-end work (P1c-8) is cut from the close-out (P1c-9) so neither exceeds M.
+- D25: P1c-1 creates the suite on P1b's runner and ten drivers as merged (X1), adds the six missing (1) scenarios, both modes, the fault harness and the CI suite jobs; from its merge every sub-phase and later phase merges with the suite green. The suite's definitions (gate block, hook error, expected producer, next round, human event, HX, terminal) are R1's glue. P1b's kept `DEVIATION:` steps stay in the drivers until the R18 (P1c-5) or R19 (P1c-6) commit that fixes the block removes them with its replay; none is added; A3's head grep at P1c-9 is the phase-end check.
+- Coverage step: R6 is otherwise whole in P1c-1; its last clause (the merge rule's coverage step), which the caller lists as a separate item, lands in P1c-2 together with R4 and R-V1, so the step has a (4) trace to read. From P1c-2 every sub-phase PR's CI runs it on its own diff, so every fix sub-phase is judged. P1c-1 changes only tests/replay/, the workflow and TESTING.md, plus any X2 writer fix its write audit forces; those are judged by A8 at P1c-9, read as the step on the whole phase diff.
+- Fix and replay together: each fix row carries the fault and regression replays listed beside it. Per R9's own text, the shipped-mode replays of F1, F1q, F2, F2j, F2g land in R9's commit, the last of P1c-9; their armed-mode replays land with the fixes in P1c-3. If the base already sets STOPGATE `block` (X3's first branch), both modes land in P1c-3 and R9 changes nothing.
+- X5 is assigned to P1c-6 (R13, R19 apply it); R18's X5 parts (P2's channel paths, P9 row 2 auto-detect, P4 close.md Step 0) are applied in P1c-5 under the same rule and recorded in that PR. X4 is assigned to P1c-5; R15 (P1c-7) applies X4 (a) and records it there. R15 sits with R16 because F5 and F6, its replays, also go through the resumed-agent Gate 4 that R16 changes.
+- Whole-phase tests: A6 -> P1c-6 (last regression, R-E1); A10 -> P1c-7 (last of the R7-R20 unit tests); A5 -> P1c-8 (X6, R5); A3, A4, A7 (write audit of the full traced run), A8, A9, A11-A17 -> P1c-9 (whole suite, whole tables or whole diff; R9 re-runs A3, A4, A11). P1c-2 to P1c-5 hold no A-id; they are gated by the per-PR rules below and by their replays in the suite.
+- A1 and A2 are assigned to P1c-1, but every sub-phase PR still runs and pastes the start checks (read as: P1b, P8, P7b merged, plus the earlier P1c sub-phases it depends on) and meets A2's green (suite jobs and, from P1c-2, the coverage step) and A17's per-commit pytest.
+- Readings: the net code cap (+150) is the phase total against the base before P1c-1, checked by A15 at P1c-9 per row; A13's base-vs-branch and A16's diff read as the whole phase diff. X10 is decided in P1c-9; until then R6's jobs run the whole suite on every pull_request push (X10's first branch), and P1c-9 keeps that or applies the split.
+- R21 is assigned to P1c-9 (the named deleted-code tests, claims-check lines); its same-commit rule (TC-54) binds each fix sub-phase for its own rows' pinning tests. A dead end or classless site X6 finds in P1c-8 becomes a scope row fixed there, before P1c-9's R9 commit.
+- C1-C5, the merge rule section, owner rulings, start checks and the DO NOT list are rules, not work: they apply unchanged to every sub-phase; C1-C5 are checked by A13 at P1c-9.
 
 ## P3 (L, about 3 days; 5 sub-phases)
 
