@@ -329,9 +329,8 @@ class Span:
         return todos
 
     def result_text(self, ident: str) -> str:
-        """The text of call ``ident``'s tool_result in the span ('' while none
-        came back). For an Agent call it is the agent's own reply, the
-        record's toolUseResult content, without the CLI's agentId trailer."""
+        """The text of call ``ident``'s tool_result in the span ('' while none came back); an Agent
+        call's is the agent's own reply, its record's toolUseResult content without the agentId trailer."""
         try:
             lines, floor = self._lines()
         except (OSError, TypeError, ValueError):
@@ -349,30 +348,21 @@ class Span:
         return ""
 
     def obligations(self) -> list:
-        """(call, obligation) of each ok Agent/Task dispatch in the span whose
-        prompt carries a well-formed obligation block, in transcript order."""
+        """(call, obligation) of each ok Agent/Task dispatch in the span whose prompt carries a
+        well-formed obligation block, in transcript order."""
         ob = _obligation()
-        found = []
-        for call in self.calls("Agent", "Task"):
-            prompt = call.input.get("prompt")
-            parsed = ob.parse_obligation(prompt) if call.ok and isinstance(prompt, str) else None
-            if isinstance(parsed, ob.ParsedObligation):
-                found.append((call, parsed.obligation))
-        return found
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task") if c.ok)
+        return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
 
     def session_families(self) -> set:
-        """The canonical task ids (obligation.canonical_task_id) the span's
-        obligations name."""
+        """The canonical task ids (obligation.canonical_task_id) the span's obligations name."""
         canonical = _obligation().canonical_task_id
         return {family for _call, doc in self.obligations() if (family := canonical(doc.get("task_id")))}
 
 
 def _obligation():  # imported when first asked: a reader that needs none loads none of it
-    try:
-        from . import obligation
-    except ImportError:
-        import obligation  # type: ignore[no-redef]
-    return obligation
+    import importlib
+    return importlib.import_module(f"{__package__}.obligation" if __package__ else "obligation")
 
 
 def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):
