@@ -77,7 +77,10 @@ Modelled approximations: the background Explore dispatch runs to completion insi
 Agent call (the framework has no asynchronous agent); its notification is a transcript user
 record with no prompt hook.
 
-Respellings: none (/spec's and /spec-update's harness-script calls already name ~/.claude).
+Respellings: none. A text names a harness script `~/.claude/scripts/<x>` (the base) or through
+the quoted CLAUDE_HOME channel, `"${CLAUDE_HOME:-$HOME/.claude}/scripts/<x>"`, whose closing quote
+follows the script's name: the driver finds each call the text makes under either spelling
+(_calls), and activates the venv as Step 5 spells it wherever the text has it activated.
 
 Deviations: DEVIATIONS below, one entry per block the base tree's (2acc29b) replay meets,
 each with a comment quoting the hook's text; nothing else passes a block.
@@ -211,6 +214,12 @@ _SECTION_RE = re.compile(r"^## Section (\d+):")
 _SENTINEL_FALLBACK = r"^\s*-\s*\((inline|unpersisted design|unpersisted)\)\s"
 
 
+def _calls(script: str, verb: str) -> "re.Pattern":
+    """A text's `<script> <verb>` call under either spelling of the script's path: `~/.claude/scripts/<script>`
+    or the quoted channel `"${CLAUDE_HOME:-$HOME/.claude}/scripts/<script>"` (its quote closes after the name)."""
+    return re.compile(re.escape(script) + r'"?\s+' + re.escape(verb) + r"(?![\w-])")
+
+
 def _sub_bash(sub, command: str, description: str, label: str):
     """A subagent's Bash call, with the deviations the driver declares for its step label."""
     return sub.bash(command, description, label=label, deviation=DEVIATIONS.at(label))
@@ -271,7 +280,7 @@ class SpecText:
         self.o = o
         self.create_block = None
         for b in cmdtext.blocks(o.text, "Step 3", "bash"):
-            if "spec-write.py create" in b.text:
+            if _calls("spec-write.py", "create").search(b.text):
                 self.create_block = b.text
         self.writer = self.create_block is not None
 
@@ -318,6 +327,21 @@ class SpecAgent:
     # ------------------------------------------------------------ text
     def block(self, heading: str, anchor: str | None = None, index: int | None = None) -> str:
         return cmdtext.block(self.text, heading, anchor=anchor, index=index, lang="bash")
+
+    def call_block(self, heading: str, rx: "re.Pattern") -> str | None:
+        """The one bash block of a section that makes the call `rx` matches, or None where none does."""
+        cands = [b.text for b in cmdtext.blocks(self.text, heading, "bash") if rx.search(b.text)]
+        if len(cands) > 1:
+            raise cmdtext.TextNotFound(f"{len(cands)} blocks under {heading!r} make the call {rx.pattern!r}")
+        return cands[0] if cands else None
+
+    def venv(self) -> str:
+        """The venv activation as Step 5 spells it (the text has every Python stanza run in the venv)."""
+        sec = cmdtext.section(self.text, "Step 5: Write manifest.json")
+        m = re.search(r"`(source [^`]*/venv/bin/activate\"?)`", sec)
+        if not m:
+            raise cmdtext.TextNotFound("agents/spec.md Step 5 spells no venv activation")
+        return m.group(1)
 
     def omission_reason(self) -> str | None:
         """The closed-enum reason the text gives for an omission whose candidate blocks conflict,
@@ -579,7 +603,7 @@ class SpecAgent:
             "    fh.truncate()\n"
             "    fh.write(json.dumps(doc, indent=2) + '\\n')\n"
             "print(path)\n")
-        cmd = (f"source ~/.claude/venv/bin/activate && python3 - {shlex.quote(c['views_dir'])} "
+        cmd = (f"{self.venv()} && python3 - {shlex.quote(c['views_dir'])} "
                f"{shlex.quote(c['mono_path'])} {shlex.quote(json.dumps(data))} <<'PY'\n{stanza}PY")
         _sub_bash(sub, cmd, "Write manifest.json under an exclusive lock", label="spec Bash manifest")
 
@@ -605,7 +629,7 @@ class SpecAgent:
             "for n, s in bad:\n"
             "    print(f'line {n}: not verbatim: {s}')\n"
             "sys.exit(1 if bad else 0)\n")
-        return (f"source ~/.claude/venv/bin/activate && python3 - {shlex.quote(c['mono_path'])} "
+        return (f"{self.venv()} && python3 - {shlex.quote(c['mono_path'])} "
                 f"{shlex.quote(c['views_dir'] + '/' + view)} <<'PY'\n{stanza}PY")
 
     def self_check(self, sub, mono: str) -> None:
@@ -638,10 +662,7 @@ class SpecAgent:
     def phase2(self, sub, mono: str) -> None:
         c = self.ctx
         checkin = self.block("Writing cp-state files", anchor="check-in")
-        try:
-            checkpoints = self.block("Writing cp-state files", anchor="spec-check.py checkpoints")
-        except cmdtext.TextNotFound:
-            checkpoints = None
+        checkpoints = self.call_block("Writing cp-state files", _calls("spec-check.py", "checkpoints"))
         status = self.block("Quick sanity test", anchor="status")
         ts = c["spec_id"]
         for agent in self.selected:
@@ -695,7 +716,7 @@ class SpecAgent:
             "    sys.exit(0)\n"
             "sys.exit('no running cp-state slot for ' + aid)\n")
         d = f"{self.run.project}/.claude/specs/{c['spec_id']}"
-        return (f"source ~/.claude/venv/bin/activate && python3 - {shlex.quote(d)} {agent} {aid} "
+        return (f"{self.venv()} && python3 - {shlex.quote(d)} {agent} {aid} "
                 f"{shlex.quote(json.dumps(actions))} <<'PY'\n{stanza}PY")
 
     def final(self, sub=None) -> str:
@@ -1096,7 +1117,7 @@ class SpecUpdate:
         """The text's writer example (`spec-write.py append ... <<'X'`), or None where the text has
         the main agent write the spec itself."""
         for b in cmdtext.blocks(o.text, "Continuation-spec mode", "bash"):
-            if "spec-write.py append" in b.text:
+            if _calls("spec-write.py", "append").search(b.text):
                 return b.text
         return None
 
@@ -1107,7 +1128,7 @@ class SpecUpdate:
         if not ex:
             return None
         lines = ex.rstrip("\n").split("\n")
-        at = [i for i, l in enumerate(lines) if "spec-write.py append" in l]
+        at = [i for i, l in enumerate(lines) if _calls("spec-write.py", "append").search(l)]
         return [(lines[i], lines[(at[k + 1] if k + 1 < len(at) else len(lines)) - 1]) for k, i in enumerate(at)]
 
     def chained(self, o: Orchestrator) -> bool:
