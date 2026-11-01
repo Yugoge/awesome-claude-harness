@@ -101,18 +101,15 @@ def official_todos_path(session_id: str) -> Path:
 
 
 def run_canonical_todos(cmd_name: str, project_dir: Path, prompt: str = '') -> list:
-    """Run the canonical todo script and return the full step list.
+    """Run the harness's canonical todo script (never the project's own
+    scripts/todo) in project_dir and return the full step list.
 
     prompt is forwarded as CLAUDE_TODO_PROMPT so argument-aware scripts
     (e.g. close.py --force path) return the correct step-count variant.
     """
-    todo_script = project_dir / 'scripts' / 'todo' / f'{cmd_name}.py'
+    todo_script = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
-        global_todo = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
-        if global_todo.exists():
-            todo_script = global_todo
-        else:
-            return []
+        return []
     env = {**os.environ}
     if prompt:
         env['CLAUDE_TODO_PROMPT'] = prompt
