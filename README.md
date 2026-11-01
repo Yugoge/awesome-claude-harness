@@ -754,9 +754,13 @@ file has to be rewritten. What carries that, and where it stops:
 | **A broken install is reported, not silent** | `scripts/doctor`: every hook path resolves, the filter round-trips, `protected-runtime.json` loads | — |
 | **External extras degrade gracefully, never fall back unsafely** | D2 dependency table (below) | Codex CLI **never** falls back to a bare unsafe `codex`; bwrap absence → fail closed |
 
-Not yet portable: the prompts in `commands/` and `agents/` still name harness scripts as
-`~/.claude/...`, so in a clone outside `~/.claude` the commands they issue still go to
-`~/.claude` until prompt path substitution moves to `$CLAUDE_HOME`.
+The prompts in `commands/`, `agents/` and `skills/` run harness files through the same
+`${CLAUDE_HOME:-$HOME/.claude}` channel and take the project root as
+`${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}`, so the commands they issue reach a clone
+outside `~/.claude`. Not yet portable: some lines of `commands/close.md` (its audit log, routing,
+late-repair, declaring-dispatch and scoring calls) and `commands/commit.md` (its admission, routing,
+late-repair and repository-plan calls) still name `~/.claude/...` until their rework; every other
+mention of `~/.claude` in the prompts only names the default location.
 
 ---
 
