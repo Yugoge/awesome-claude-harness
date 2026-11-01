@@ -831,18 +831,23 @@ def _below(path: str, root) -> str | None:
 
 def _protected(path: str, removed: bool, home, config: str, state: str) -> str | None:
     """What protected file absolute ``path`` is, else None; deleting or
-    renaming (``removed``) a directory takes the protected files beneath it."""
+    renaming (``removed``) a directory takes the protected files beneath it:
+    the harness home's by name, the projects tree's as the directory holds them."""
     from fnmatch import fnmatchcase
+
+    def kept(name: str) -> bool:  # a transcript or agent meta, below ``config``
+        return name.endswith(".jsonl") or fnmatchcase(name, "agent-*.meta.json")
 
     rel, name = (_below(path, home) if home else None), os.path.basename(path)
     if rel and any(rel == p or rel.startswith(p + "/") for p in _HOME_PROTECTED):
         return f"the harness home's {rel}"
-    if _below(path, config) and (name.endswith(".jsonl") or fnmatchcase(name, "agent-*.meta.json")):
+    if _below(path, config) and kept(name):
         return "a session transcript or its subagent meta"
     if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
         return "a /do task sidecar"
     held = [os.path.join(home, p) for p in _HOME_PROTECTED] if home else []
-    if removed and any(_below(p, path) for p in held + [config]):
+    if removed and (any(_below(p, path) for p in held + [config])
+                    or (_below(path, config) and any(kept(n) for _, _, names in os.walk(path) for n in names))):
         return "a directory holding the harness home's protected files or the session transcripts"
     return None
 

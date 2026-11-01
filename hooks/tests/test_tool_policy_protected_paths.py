@@ -6,12 +6,13 @@ private-literals.txt, scripts/check-public-core.sh, scripts/install/render-setti
 hooks/git-hooks/pre-commit, .git/config, .git/hooks/ and .gitattributes; of a session transcript
 (``${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/**/*.jsonl``) and the agent meta beside it; and of a
 /do task sidecar (``claude-do-task-*.json`` in the state dir). A product repository's files of the
-same names, the graphify sidecars and every other path stay writable. A ScheduleWakeup prompt that
-types a harness command outside CONTROL is refused; a CronCreate prompt's fired record is measured
-(P1's COV-7) and excluded from the human's prompts, so it is not.
+same names, the graphify sidecars and every other path stay writable. Deleting or renaming a
+directory that holds one counts: under the projects tree, a directory holding a transcript or meta.
+A ScheduleWakeup prompt that types a harness command outside CONTROL is refused; a CronCreate
+prompt's fired record is measured (P1's COV-7) and excluded from the human's prompts, so it is not.
 
 The harness home is this checkout (the hook resolves it from its own location); only paths are
-judged, nothing is created.
+judged, and nothing is created but the projects tree's files a directory's case puts in tmp_path.
 """
 from __future__ import annotations
 
@@ -117,6 +118,63 @@ def test_the_same_names_in_a_product_repository_stay_writable(tmp_path, form, re
     proc = run(tmp_path, *forms(os.path.join(PRODUCT, rel))[form], CALLERS["dev"])
     assert proc.returncode == 0, proc.stderr
     assert not os.path.exists(os.path.dirname(PRODUCT))
+
+
+HELD = "a directory holding the harness home's protected files or the session transcripts"
+
+
+def sessions(tmp_path):
+    """A project of the config's projects tree as the CLI keeps it: the session transcript, a
+    subagent's transcript and meta (what the D8 rule reads) and the project's memory."""
+    project = tmp_path / "home" / ".claude" / "projects" / "-p"
+    (project / SID / "subagents").mkdir(parents=True)
+    (project / "memory").mkdir()
+    for f in (f"{SID}.jsonl", f"{SID}/subagents/agent-a1.jsonl", f"{SID}/subagents/agent-a1.meta.json",
+              "memory/MEMORY.md"):
+        (project / f).write_text("{}\n")
+    return project
+
+
+@pytest.mark.parametrize("caller", list(CALLERS))
+@pytest.mark.parametrize("command", [
+    "rm -rf $CLAUDE_CONFIG_DIR/projects/-p/{sid}/subagents", "mv $CLAUDE_CONFIG_DIR/projects/-p/{sid} /tmp/x",
+    "rm -rf $CLAUDE_CONFIG_DIR/projects/-p", "rm -r {project}/{sid}/subagents/", "mv {project}/{sid} {project}/old",
+    "git rm -r -q {project}/{sid}",
+    # the last word is no destination where xargs appends words or -t names the target directory
+    "echo /elsewhere/y | xargs mv /elsewhere/a {project}/{sid}", "mv -t /elsewhere {project}/{sid}"])
+def test_a_directory_holding_transcripts_or_metas_is_denied(tmp_path, caller, command):
+    project = sessions(tmp_path)
+    proc = run(tmp_path, "Bash", {"command": command.format(project=project, sid=SID)}, CALLERS[caller])
+    assert_denied(proc, HELD)
+    assert (project / SID / "subagents" / "agent-a1.meta.json").is_file()
+
+
+@pytest.mark.parametrize("command,what", [
+    ("mv /elsewhere/{sid}.jsonl {project}/", "a session transcript or its subagent meta"),
+    ("mv -f /elsewhere/b /elsewhere/agent-a1.meta.json {project}/{sid}/subagents",
+     "a session transcript or its subagent meta"),
+    ("mv /elsewhere/settings.machine.json {root}/", "the harness home's settings.machine.json"),
+    ("git mv hooks {root}/.git", "the harness home's .git/hooks")])
+def test_a_move_into_a_directory_over_a_protected_file_is_denied(tmp_path, command, what):
+    """A directory moved into loses the entry of each source's name: that entry is judged."""
+    project = sessions(tmp_path)
+    assert_denied(run(tmp_path, "Bash", {"command": command.format(project=project, sid=SID, root=ROOT)}), what)
+
+
+@pytest.mark.parametrize("caller", list(CALLERS))
+@pytest.mark.parametrize("command", [
+    "rm -rf {project}/memory", "rm -rf {project}/{sid}/tool-results", "mv {project}/memory /elsewhere/memory",
+    "mv /elsewhere/x {project}/", "mv -v /elsewhere/x /elsewhere/y {project}/{sid}/", "mv /elsewhere/x {parent}/",
+    "git rm -r --cached {project}", "rm -rf /nonexistent-p5-protected-paths/b",
+    'd=$(mktemp -d) && touch "$d/a.jsonl" && rm -rf "$d"'])
+def test_a_removal_or_move_over_no_protected_file_is_not_denied(tmp_path, caller, command):
+    """A directory of the projects tree holding no transcript or meta, a move into a directory (the
+    harness home's parent too), `git rm --cached`, a removal outside the config dir and a temp
+    directory a command makes are no protected path's business."""
+    project = sessions(tmp_path)
+    command = command.format(project=project, sid=SID, parent=os.path.dirname(ROOT))
+    proc = run(tmp_path, "Bash", {"command": command}, CALLERS[caller])
+    assert "D11/D12" not in proc.stderr and (CALLERS[caller] or proc.returncode == 0), proc.stderr
 
 
 def test_reads_and_other_config_files_stay_allowed(tmp_path):

@@ -1238,16 +1238,19 @@ def extract_bash_write_targets_with_modes(command: str) -> List[WriteTarget]:
 
 
 _REMOVE_WORD_RE = re.compile(r"(?:^|[\s;|&])(rm|rmdir|unlink|mv)\b(?!-)")
+# A word bash hands mv as written: a literal path, or an option that keeps the last word the destination.
+_MV_PLAIN_WORD_RE = re.compile(r"-[bfiknuvZ]+|[\w/.,:@%+=~][\w/.,:@%+=~-]*")
 
 
 def extract_bash_touched_paths(command: str) -> List[Tuple[str, bool]]:
     """(path, removed) for each path a command writes (the write-mode targets above) or deletes or
     renames away (removed: every operand of rm, rmdir, unlink and mv, `git rm` and `git mv` too,
-    `git rm --cached` aside), for the protected paths of pretool-tool-policy.py (P5 R2, R3). Read as
-    the write-mode targets are: a heredoc body or quoted text is no command.
+    `git rm --cached` aside; of a plain move's destination, written, only the entry of each source's
+    name, all a directory moved into loses), for the protected paths of pretool-tool-policy.py
+    (P5 R2, R3). Read as the write-mode targets are: a heredoc body or quoted text is no command.
 
     >>> extract_bash_touched_paths('rm -f /tmp/a "/tmp/b c" && mv /tmp/d /tmp/e')
-    [('/tmp/e', False), ('/tmp/a', True), ('/tmp/b c', True), ('/tmp/d', True), ('/tmp/e', True)]
+    [('/tmp/e', False), ('/tmp/a', True), ('/tmp/b c', True), ('/tmp/d', True), ('/tmp/e', False), ('/tmp/e/d', True)]
     >>> extract_bash_touched_paths("echo 'rm /tmp/a' >| /tmp/f; git rm --cached /tmp/b; /bin/rm /tmp/c")
     [('/tmp/f', False), ('/tmp/c', True)]
     """
@@ -1260,7 +1263,12 @@ def extract_bash_touched_paths(command: str) -> List[Tuple[str, bool]]:
         tokens = _segment_tokens(stripped, masked, m.end())
         if m.group(1) == "rm" and _preceding_word(masked, m.end(), "rm") == "git" and "--cached" in tokens:
             continue
-        out.extend((_resolve_path(t), True) for t in _positionals(tokens))
+        paths = [_resolve_path(t) for t in _positionals(tokens)]
+        out.extend((p, True) for p in paths)
+        if (m.group(1) == "mv" and len(paths) > 1 and all(map(_MV_PLAIN_WORD_RE.fullmatch, tokens))
+                and re.split(r"[;|&\n(]", masked[:m.start(1)])[-1].split() in ([], ["git"])):  # no xargs appends
+            dest = paths.pop()
+            out[-1:] = [(dest, False)] + [(os.path.join(dest, os.path.basename(p.rstrip("/"))), True) for p in paths]
     return out
 
 
