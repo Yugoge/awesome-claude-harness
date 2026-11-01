@@ -125,7 +125,7 @@ def _run_hook(
     agent_id: str,
     mode: str | None = None,
     session_id: str | None = None,
-    stopgate_mode: str | None = None,
+    stopgate_mode: str | None = "advisory",
     last_assistant_message: str | None = None,
     extra_env: dict | None = None,
     hook_path: Path | None = None,
@@ -136,6 +136,7 @@ def _run_hook(
     env["HOME"] = str(home_dir)
     # Transcripts live in the configuration directory; pin it to this HOME.
     env["CLAUDE_CONFIG_DIR"] = str(Path(home_dir) / ".claude")
+    env.pop("CLAUDE_HOME", None)
     env.update(extra_env or {})
     env.pop("ARTIFACT_CONTRACT_ENFORCE_MODE", None)
     if mode is not None:
@@ -774,6 +775,49 @@ def test_ac2_resolved_obligation_missing_artifact_blocks(tmp_path):
     assert "Do NOT edit any other agent's artifact" in proc.stderr
 
 
+@pytest.mark.parametrize("settings_value, proc_env, blocked", [
+    ("block", {}, True),
+    ("block", {"CLAUDE_HOME": "<home>"}, True),
+    ("block", {"CLAUDE_HOME": "/elsewhere"}, True),
+    ("advisory", {}, False),
+    (None, {}, False),
+    ("block", {"CLAUDE_OBLIGATION_STOPGATE": "advisory"}, False),
+], ids=["started_before", "started_since_landing", "other_claude_home", "settings_advisory",
+        "key_in_neither", "process_env_wins"])
+def test_stopgate_switch_is_read_at_run_time_from_the_harness_home(
+    tmp_path, settings_value, proc_env, blocked
+):
+    """P1b E4: a process whose env lacks CLAUDE_OBLIGATION_STOPGATE (a session started before
+    the switch was set keeps the env it started with) takes it from the harness home's
+    settings.json env when the stop runs, with or without CLAUDE_HOME in its env, through
+    claude_home.settings_env. The AC2 setup: the declared report is missing."""
+    harness_session = "harness-runtime-switch"
+    agent_id = "agent-dev-runtime-switch"
+    task_id = "20260101-000041"
+    artifact_path = "docs/dev/dev-report-20260101-000041.json"
+    project, home = _standard_setup(tmp_path, "dev", agent_id)
+    _write_obligation_transcript(
+        home, project, harness_session, agent_id,
+        _obligation_block(task_id, artifact_path, "dev-report.v1"),
+    )
+    hook = _l2_hook_tree(tmp_path)
+    harness = hook.parent.parent
+    (harness / "policies").mkdir()
+    env_block = {} if settings_value is None else {"CLAUDE_OBLIGATION_STOPGATE": settings_value}
+    _write(harness / "settings.json", json.dumps({"env": env_block}))
+    extra = {k: (str(harness) if v == "<home>" else v) for k, v in proc_env.items()}
+    stopgate = extra.pop("CLAUDE_OBLIGATION_STOPGATE", None)
+    proc = _run_hook(project, home, agent_id, session_id=harness_session,
+                     stopgate_mode=stopgate, extra_env=extra, hook_path=hook)
+    if blocked:
+        assert proc.returncode == 2, proc.stderr
+        assert "OBLIGATION_STOPGATE_BLOCKED" in proc.stderr
+        assert artifact_path in proc.stderr
+    else:
+        assert proc.returncode == 0, proc.stderr
+        assert "OBLIGATION_STOPGATE_BLOCKED" not in proc.stderr
+
+
 def test_ac3_resolved_obligation_all_valid_bypasses_legacy_path(tmp_path):
     """AC3: all declared artifacts valid -> exit 0 WITHOUT the legacy
     correlation path ever running. Proof fixture: a DIFFERENT report of the
@@ -804,9 +848,8 @@ def test_ac3_resolved_obligation_all_valid_bypasses_legacy_path(tmp_path):
 
 
 def test_ac4_advisory_mode_never_blocks(tmp_path):
-    """AC4: the AC2 setup under advisory mode (the default): the obligation
-    resolves, yet the stop exits 0 with no block message and nothing
-    written."""
+    """AC4: the AC2 setup under advisory mode: the obligation resolves, yet
+    the stop exits 0 with no block message and nothing written."""
     harness_session = "harness-ac4"
     agent_id = "agent-dev-ac4"
     task_id = "20260101-000004"
