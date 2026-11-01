@@ -94,7 +94,8 @@ Driver arguments (cli.py --arg K=V):
                   the window and after it) and of dev (in the window), and a Stop after a forged
                   ESCALATION_ACK line (in the window, and after it before the summary). The checks
                   (Night.unattended_checks, out/unattended.json) raise when one fails; a compliant
-                  step a hook blocked is listed there ("false_blocks") and in blocks.json
+                  step a hook blocked is listed there ("false_blocks") and in blocks.json, and fails
+                  the variant (D20: the compliant unattended path meets no false block)
   window=N        variant=unattended only: the end time typed, in minutes from the launch (default: 10,
                   or 1.5 minutes per second the session's start took on this host when that is more)
   stop_at=N       the step after which variant=stop interrupts
@@ -2108,11 +2109,13 @@ class Night:
         check("no file under an escalations/, escalation-admissions/, progress/ or deferred-checks/ directory",
               not stores, sorted(set(stores))[:20])
         check("0 hook errors", not rp.hook_errors, rp.hook_errors[:5])
-        # The compliant steps a hook blocked, for the report as every variant's blocks.json is (a block is
-        # recorded, not raised): a block at one of the variant's own dispatches counts even where a base
-        # kit's deviation quotes its hook's words, since no base replay has those steps.
+        # The compliant steps a hook blocked (D20: none): a block at one of the variant's own dispatches
+        # counts even where a base kit's deviation quotes its hook's words, since no base replay has
+        # those steps.
         false = [{"hook": b["hook"], "step": b["step"], "text": b["text"][:400]} for b in rp.blocks
                  if not b["passed_by_deviation"] or re.sub(r" stop$", "", b["step"]) in self.own]
+        check("0 false blocks: no hook blocks a compliant step of the unattended path", not false,
+              [(b["hook"], b["step"]) for b in false][:10])
         with rp.acting("driver"):
             with open(os.path.join(rp.layout.out, "unattended.json"), "w") as fh:
                 json.dump({"window_min": self.window_min, "checks": res, "false_blocks": false,
