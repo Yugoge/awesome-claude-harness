@@ -194,6 +194,14 @@ def test_no_venv_on_path_still_records(config: Path) -> None:
     assert [row["rating"] for row in _rows(config)] == [4]
 
 
+def test_the_shipped_settings_register_the_hook_once_for_askuserquestion() -> None:
+    settings = json.loads((REPO_ROOT / "settings.json").read_text(encoding="utf-8"))
+    found = [(event, group.get("matcher"), hook["command"]) for event, groups in settings["hooks"].items()
+             for group in groups for hook in group["hooks"] if "posttool-close-rating.py" in hook["command"]]
+    assert found == [("PostToolUse", "AskUserQuestion",
+                      'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-close-rating.py"')]
+
+
 def test_the_score_scripts_pass_over_rating_rows(tmp_path: Path, config: Path) -> None:
     # The score scripts read rows by their `agent` field; rating rows have none.
     root = tmp_path / "home"

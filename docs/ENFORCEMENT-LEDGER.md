@@ -34,7 +34,7 @@ no more:
   sets declared in `DECLARED_SCHEMA`;
 - `citation` is validated for the presence of an `@<sha8>` revision pin.
 
-**On falsifiability.** 79 of the 81 registered-hook rows carry `proof_layer: source-level`, which
+**On falsifiability.** 80 of the 82 registered-hook rows carry `proof_layer: source-level`, which
 as section 1.3 defines it means those rows rest on **reading the code rather than running it**;
 the remaining 2 carry `component-tested` and none carry `host-observed` or `host-shaped`. The gate validates
 proof-layer membership and a non-blank `verifying_test`, and it does **not** execute the
@@ -170,10 +170,11 @@ be reconciled rather than argued.
 ## 3. Registered-hook rows
 
 All **nine** lifecycle event classes are represented. The tracked `settings.json` wires 9 event
-classes / 51 matchers / **81 hook commands**, and there are exactly 81 rows below: 66 recorded
+classes / 52 matchers / **82 hook commands**, and there are exactly 82 rows below: 66 recorded
 `@4c33f2f5`; H-071 records the later `PostToolUseFailure` registration and H-072 a later
 `PostToolUse` one; H-073 – H-086 record the hooks the tracked `settings.json @ef6e9037` wires that
-the ledger did not list before. Ids H-060 – H-063 are retired and not reused: those four scripts
+the ledger did not list before, and H-087 the close-rating `PostToolUse` registration (P4).
+Ids H-060 – H-063 are retired and not reused: those four scripts
 are not direct `Stop` entries in `settings.json` — they run as phases inside
 `stop-workflow-coordinator.py` (row H-084) — so they are recorded in section 4 as S-004 – S-007.
 Id H-081 is retired as well: `stop-completion-gate.py` lost its `Stop` entry in P1 and is an
@@ -269,6 +270,7 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | H-084 | Stop | (universal) | stop-workflow-coordinator.py | runs the four Stop phases S-004 – S-007 (section 4) in fixed order; only timelock and coverage may block, and a block relays failed_phase and the last 4 KB of that phase's stderr; an auto_commit or cleanup failure, or a coverage failure other than exit 2, is recorded in its result JSON and allowed, and the later phases still run; a timelock instrument failure blocks, naming /stop, while the human-typed command is /dev-overnight or, whatever the command, while the session's time-lock window is open (lib/overnight.py window_open), else it is recorded and allowed; exits 0 without running any phase when the payload carries an agent_id or no session_id; LANEB_COORDINATOR_PHASES_JSON may replace the phase commands (exit 2 if malformed or reordered); resource finalisation runs only when both LANEB_SESSION_RESOURCE_TRUST_KEY and LANEB_SESSION_RESOURCE_TRUST_ROOT are set | advisory | unexercised | source-level | hooks/stop-workflow-coordinator.py:1 @ef6e9037 | none yet |
 | H-085 | SessionEnd | (universal) | sessionend-scratch-sweep.sh | removes only `$TMPDIR/<own-session-id>/`, and only when it is a real directory directly under that root whose `.owner` sid equals the session id; skips otherwise; best-effort, exits 0 on every path | detected | unexercised | source-level | hooks/sessionend-scratch-sweep.sh:1 @ef6e9037 | hooks/tests/test_scratch_lifecycle.py |
 | H-086 | SubagentStop | * | subagentstop-artifact-contract-enforce.py | subagent stops only (agent_id present). Obligation path: advisory when CLAUDE_OBLIGATION_STOPGATE is unset (the default), exits 2 on a failed obligated artifact only under =block, skipped under =off. Legacy path (reached unless the obligation path resolved and checked the agent's own obligation): blocking when ARTIFACT_CONTRACT_ENFORCE_MODE is unset (the default), exits 2 when a json report the agent's own dispatch declares (read as declared even when its block fails the grammar) declares report_version but fails its schema, only while the cycle's artifact-contract-enforce.json is enabled; allows under =advisory | advisory | unexercised | source-level | hooks/subagentstop-artifact-contract-enforce.py:1 @ef6e9037 | none yet |
+| H-087 | PostToolUse | AskUserQuestion | posttool-close-rating.py | the owner's close rating's one writer: appends one row `{ts, task_id, rating, tool_use_id}` to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/lifecycle.jsonl` under an exclusive lock on the score scripts' `<log>.lock`, only for a main-agent call (no agent_id) whose metadata.source is `close-rating:<task-id>` and whose tool_response answers its one question with one of the four rating labels, and only while that task has no rating row; Skip, free text, a decline, an error result and an AFK auto-continue write nothing; prints nothing and exits 0 on every path | detected | unexercised | source-level | hooks/posttool-close-rating.py:1 @31c9636e | hooks/tests/test_close_rating.py |
 
 ---
 
