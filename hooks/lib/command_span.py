@@ -474,6 +474,25 @@ def active_span(transcript_path: str | Path, commands: frozenset | None = None) 
                 data=data, floor=end + 1, base=base, ahead=(handle, begin))
 
 
+def transcript_span(transcript_path) -> Span:
+    """The whole transcript read as one span from its first line, for a decider on the session's
+    calls whatever span is active (the overnight time-lock's wake check)."""
+    return Span("", "", 0, str(transcript_path))
+
+
+def recorded_result(transcript_path, use) -> dict:
+    """The toolUseResult the CLI recorded beside ``use``'s tool_result (a CronCreate's job id),
+    {} while none came back or it holds none."""
+    try:
+        with open(transcript_path, "rb") as handle:
+            handle.seek(use.result_at)
+            record = _decode(handle.readline())
+    except (OSError, TypeError, ValueError):
+        return {}
+    value = record.get("toolUseResult") if record else None
+    return value if isinstance(value, dict) else {}
+
+
 EDIT_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
               "NotebookEdit": "notebook_path"}
 # Trees an agent writes as the pipeline's own bookkeeping, not as product files.

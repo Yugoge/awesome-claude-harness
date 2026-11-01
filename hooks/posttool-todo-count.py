@@ -4,7 +4,8 @@ PostToolUse Hook: Enforce canonical todo count immediately after TodoWrite.
 
 Fires after every TodoWrite call.
 If the number of todos written is less than blocking_count (from todo script),
-block Claude and provide the full canonical todo list to re-submit. The command
+block Claude and provide the full canonical todo list to re-submit, at a command's
+first list or a change of its length only (P1c row 17). The command
 is the one that opened the transcript's active span; the workflow gate reads the
 same record, so the block writes nothing.
 
@@ -48,7 +49,8 @@ def main():
     if not todos:
         sys.exit(0)
 
-    state = checklist(data.get('transcript_path'))
+    # The checklist as it stood before this call: its list is the one this call replaced.
+    state = checklist(data.get('transcript_path'), before=data.get('tool_use_id'))
     if state is None:
         sys.exit(0)
 
@@ -56,7 +58,7 @@ def main():
     blocking_count = len(canonical)
     actual_count = len(todos)
 
-    if actual_count < blocking_count:
+    if actual_count < blocking_count and (state.todos is None or len(state.todos) != actual_count):
         _emit_count_mismatch(state.command, blocking_count, actual_count, canonical)
 
     sys.exit(0)

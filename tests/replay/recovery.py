@@ -7,6 +7,10 @@
                                      the main agent's next step is cut the same way (both lanes of a
                                      fan-out batch). The owner reopens the session (`claude --resume`,
                                      SessionStart source "resume") and types /restart.
+                                     A glob matching a step of the main agent instead (a dispatch,
+                                     `Step 13 [[]l2] Agent(qa)`) cuts the session before that step,
+                                     with no subagent running (F8q: SessionCut ends the command there;
+                                     the owner types /close instead of /restart).
     --arg fault=limit@<label glob>   F6: at that step the subagent's next request meets a usage limit:
                                      its transcript gets the CLI's API-error record, its Agent call ends in
                                      the CLI's error result, the main agent's own request meets the same
@@ -19,6 +23,18 @@ interruption_signals.py documents as measured (`isApiErrorMessage`, `error`, `ap
 rate_limit, HTTP 429)"), and P1's capture (S9). The resumed agent's end reaches the parent as the
 CLI's task-notification, queued (the shape tests/test_restart_command.py reads). Nothing here
 reads such a record: the harness's own /restart helper does (D4c).
+
+F6o (P1c X8): the same `limit` fault inside /dev-overnight, whose driver models the CLI's scheduler
+(tests/replay/wake.py, rp.cron): no human types /restart (D20). The session idles until its wake fires
+(the scheduled prompt record, no human event); the wake's hooks must issue the capability and hand over
+commands/restart.md's recovery, which the main agent then runs as below. With no wake scheduled (a
+text without dev-overnight.md's Step 0), or no hand-over, the cut waits for the owner's /restart: the
+replay records it Stuck, never typing /restart for him. The hand-over names restart.md's path: the main
+agent Reads it and runs its procedure.
+    --arg wake=bad-message | bad-id   the three refusals' first two: in the wake's recovery, one
+                                     SendMessage with another message (the resume message behind a
+                                     prefix) or to an id no candidate has, before the compliant ones;
+                                     its refusal is kept in facts.json ("wake refusal").
 
 The owner's /restart turn follows commands/restart.md of the tree under test as written: its
 fenced blocks run as Bash calls (prepare, status, finalize), one SendMessage per pending candidate
@@ -37,6 +53,7 @@ import threading
 
 from . import cmdtext
 from .faults import _record
+from .pipeline import utc_now
 
 BANNER = "You've hit your session limit · resets 5pm (UTC)"
 TERMINATED = f"Agent terminated early due to an API error: {BANNER} (error type rate_limit, HTTP 429)"
@@ -44,6 +61,12 @@ TERMINATED = f"Agent terminated early due to an API error: {BANNER} (error type 
 
 class Stuck(RuntimeError):
     """The recovery met a refusal or failure the text gives no way past."""
+
+
+class SessionCut(RuntimeError):
+    """A cut between the main agent's own steps (F8q): the CLI process ended before the step it names, with
+    no subagent running; the command the driver was playing ends there, and the owner's next command
+    (their /close, D7) meets the cycle unfinished."""
 
 
 class _Abandoned(BaseException):
@@ -128,13 +151,21 @@ class Cuts:
             s.fire("StopFailure", "StopFailure rate_limit", {"error": "rate_limit"})
 
     def at_step(self, rp, phase, step) -> None:
-        """The cut point: after the first matching step of a subagent (on its own thread)."""
+        """The cut point: after the first matching step of a subagent (on its own thread); before a matching
+        step of the main agent (a dispatch, or a tool call of its own) when no subagent runs (SessionCut)."""
         r = self.runs.get(getattr(step.get("actor"), "aid", None))
+        main = step.get("kind") == "dispatch" or (step.get("kind") == "tool"
+                                                  and getattr(step.get("actor"), "agent", 1) is None)
+        if phase == "before" and r is None and main and self.kind == "cut" and not self.recovered:
+            self.recovered = True  # nothing is parked: no /restart follows
+            _record(rp, {"kind": "cut", "label": step["label"], "agent": None, "role": "main", "repaired": False,
+                         "rounds": 0, "events_before": rp.n_events})
+            raise SessionCut(step["label"])
         if phase != "after" or r is None or r.cut_step is not None or self.recovered:
             return
         r.cut_step = step
         _record(rp, {"kind": self.kind, "label": step["label"], "agent": r.sub.aid, "role": r.sub.role,
-                     "repaired": False, "rounds": 0})
+                     "repaired": False, "rounds": 0, "at": utc_now()})
         if self.kind == "limit":  # the subagent's next request meets the limit
             r.sub.s.append(api_error(BANNER), r.sub.aid)
         r.park()
@@ -197,7 +228,20 @@ def restart_turn(rp, s, cuts: Cuts) -> None:
         s.end("other")
         s.start("resume")
     o = Orchestrator(rp, "restart", session=s)
-    o.slash("")
+    cron = getattr(rp, "cron", None)
+    if cron is None:
+        o.slash("")
+    else:  # inside /dev-overnight nobody types /restart (D20): the session's wake resumes it (X8)
+        if not cron.jobs:
+            raise Stuck("a usage limit cut the /dev-overnight session and no wake is scheduled: "
+                        "it waits for the owner's /restart")
+        evs = cron.idle(s, 1, label="wake after the usage limit's reset")
+        out = "\n".join(h["stdout"] for ev in evs for h in ev.hooks if h["verdict"] == "ok")
+        m = re.search(r"OVERNIGHT WAKE:.*?Read (\S+) now and run its Mandatory procedure", out, re.S)
+        if not m:
+            raise Stuck("the wake fired but no hook handed over commands/restart.md's recovery: "
+                        "the cut waits for the owner's /restart:\n" + out[-600:])
+        s.read(m.group(1), label="wake Read restart.md")  # the procedure below is that file's text
     cmds = {}
     for b in cmdtext.blocks(o.text, "Mandatory procedure", "text"):
         m = re.search(r"restart-subagents\.py\s+(\w+)", b.text)
@@ -215,6 +259,17 @@ def restart_turn(rp, s, cuts: Cuts) -> None:
     pending = [c for c in view.get("candidates") or [] if c.get("status") == "pending"]
     if not pending:
         raise Stuck(f"prepare found no pending candidate: {json.dumps(view)[:600]}")
+    bad = rp.args.get("wake")
+    if cron is not None and bad in ("bad-message", "bad-id"):  # X8's refusals: another message, another id
+        c = pending[0]
+        to, msg = ((c["agent_id"], "Please resume.\n" + c["resume_message"]) if bad == "bad-message"
+                   else ("a" + "0" * 16, c["resume_message"]))
+        call = s.tool("SendMessage", {"to": to, "message": msg},
+                      perform=lambda: {"success": True, "message": f"Message sent to {to}"},
+                      label=f"/restart SendMessage ({bad})")
+        from .drivers.close import fact
+        fact(rp, "wake refusal", {"case": bad, "refused": call.blocked,
+                                  "text": rp.blocks[-1]["text"][:600] if call.blocked else ""})
     sent = []
     for c in pending:  # one batch: a SendMessage per pending candidate, its exact resume message
         msg = c["resume_message"]

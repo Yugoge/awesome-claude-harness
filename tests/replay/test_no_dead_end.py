@@ -245,3 +245,25 @@ def test_every_block_of_the_session_maps_to_a_site(replays, catalog):
         if catalog.of(s) == "G":
             print(f"  {s.id} {s.func}: {'; '.join(sorted(reached.get(s.id, ()))) or 'no replay of this session reaches it'}")
     assert not bad, "\n".join(bad)
+
+
+# ---------------------------------------------------------------- the wake's two gates (P1c X8, row 17)
+
+WAKE_LATE = suite.Scenario("dead end: the wake's gates", "overnight", (("variant", "plain"), ("wake", "late")),
+                           ("dev-overnight",), 600)
+
+
+@pytest.mark.parametrize("key", [pytest.param(suite.replay_key(WAKE_LATE, s), id=s,
+                                              marks=pytest.mark.replay(suite.replay_key(WAKE_LATE, s), WAKE_LATE.cost))
+                                 for s in suite.SETTINGS])
+def test_the_wakes_gates_are_cleared_by_the_actors_next_action(replays, catalog, key):
+    """/dev-overnight marking Step 0 completed before the wake's CronCreate, and stopping after end_time
+    before its CronDelete: each refusal is a G site (pretool-todo-validate.py's wake rule, the time-lock's
+    wake check) that the main agent's next action clears, and the session reaches its terminal."""
+    r = replays.get(key)
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    bl = blocks(r, catalog)
+    assert sorted(s.func for b in bl for s in b["sites"]) == ["_block_open_wake", "check_wake_step"], r.explain()
+    assert all(catalog.of(s) == "G" for b in bl for s in b["sites"]), r.explain()
+    bad = check_replay(r, catalog, compliant=False)
+    assert not bad, "\n".join(bad)

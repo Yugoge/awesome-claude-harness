@@ -26,6 +26,13 @@ with the tree's settings ("shipped") and armed (G1-G3 block).
 The held git index.lock (F4, F4c, F4s; R14, X7): the shared-index sync (scripts/session-index.py
 sync-shared, the changelog-analyst's step after each commit) waits while a process holds the lock and
 removes, once and saying so, a lock no process holds that is older than the sync.
+
+An unfinished cycle the owner's /close or /commit meets (F8, F8q, F8p, F8c; tests/replay/routing.py):
+the gap names the artifact's path and its check and no role (D21); /close's one chain call (Step 0),
+its close-QA round (F8p) or /commit's chain call (Step 5, F8c) finds it; the routing loop dispatches
+again what P1b's E3 reader returns for that path (the same subagent_type, task id, lane and obligation
+template, a fresh dispatched_at), that dispatch's own agent writes the repair, and the typed /close or
+/commit (HX) is the only human event; /close ends in its Terminal form and F8c's commit lands.
 """
 from __future__ import annotations
 
@@ -35,7 +42,7 @@ import re
 
 import pytest
 
-from tests.replay import recovery, suite
+from tests.replay import recovery, routing, suite
 
 FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
 L1_DEV = "agent:dev Write docs/dev/dev-report-*-l1.json"
@@ -373,3 +380,159 @@ def test_f4s_stale_lock_at_commit(replays, key):
     _completed(r, rec)
     assert sum("removed" in line for line in rec["sync_lines"]) == 1, rec
     assert rec["sync_reports"] and not rec["lock_left_after_stop"], rec
+
+
+# ---------------------------------------------------------------- F8, F8q, F8p, F8c: an unfinished cycle met by /close or /commit
+def _route_cases(scn: suite.Scenario, faults: tuple = ()) -> list:
+    keys = [suite.replay_key(scn, s, faults) for s in suite.SETTINGS]
+    return [pytest.param(k, id=s, marks=pytest.mark.replay(k, scn.cost)) for k, s in zip(keys, suite.SETTINGS)]
+
+
+F8 = suite.Scenario("F8", "close", (("variant", "route"), ("cycle_variant", "fanout")), ("dev", "close"), 400)
+F8P = suite.Scenario("F8p", "close", (("variant", "break"), ("cycle_variant", "fanout")), ("dev", "close"), 420)
+F8Q = suite.Scenario("F8q", "close", (("cycle_variant", "fanout"),), ("close",), 420)
+F8Q_CUT = (("fault", "cut@Step 13 [[]l2] Agent(qa)"),)
+F8C = suite.Scenario("F8c", "commit", (("variant", "commit-route"), ("cycle_variant", "fanout")),
+                     ("dev", "close", "commit"), 500)
+
+
+@pytest.mark.parametrize("key", _route_cases(F8))
+def test_f8_lane_qa_report_removed_then_close(replays, key):
+    r = replays.get(key)
+    f = routing.assert_routed(r, typed="close", source="dispatch", check="close-route-select.py")
+    assert f["chain"][0]["route_select_rc"] != 0 and [c for c in f["chain"][0]["errors"]
+                                                      if c[1] == f["injection"][0]["path"]], f["chain"]
+    assert f["chain"][-1]["route_select_rc"] == 0, f["chain"]
+    routing.assert_close_form(r)
+
+
+@pytest.mark.parametrize("key", _route_cases(F8Q, F8Q_CUT))
+def test_f8q_fanout_cut_before_a_lane_qa_then_close(replays, key):
+    r = replays.get(key)
+    assert r.terminal("dev") is None, "the cut /dev reached its own terminal"
+    tid = r.terminal("close")["task"]
+    f = routing.assert_routed(r, typed="close", source="todo_step", check="close-route-select.py",
+                              path=f"docs/dev/qa-report-{tid}-l2.json")
+    # Each step still lacking ran by its expected producer: the completion report, the main agent's own step.
+    done = f"docs/dev/completion-{tid}.md"
+    owing = [o["answer"] for o in f["owing"] if o["path"] == done]
+    assert owing and owing[0]["source"] == "todo_step" and owing[0]["subagent_call"] is None, f["owing"]
+    close_session = f["dispatches"][f["routed"][0]["tool_use_id"]]["session"]
+    assert any(sid == close_session and p.endswith("/" + done) for sid, p in f["main_writes"]), (f["own"], f["main_writes"])
+    assert f["chain"][-1]["route_select_rc"] == 0, f["chain"]
+    routing.assert_close_form(r)
+
+
+@pytest.mark.parametrize("key", _route_cases(F8P))
+def test_f8p_lane_product_file_broken_then_close(replays, key):
+    r = replays.get(key)
+    f = routing.assert_routed(r, typed="close", source="writer", check="close QA round", names=r"\bAC-\d+ fails: \S")
+    path = f["injection"][0]["path"]
+    first = f["rounds"][0]
+    assert first["verdict"].startswith("CLOSE_FINDINGS") and [x for x in first["findings"] if x["path"] == path], first
+    assert f["dispatches"][f["routed"][0]["tool_use_id"]]["subagent_type"] == "dev", f["routed"]
+    assert len(f["rounds"]) == 2 and not f["rounds"][1]["findings"], f["rounds"]
+    routing.assert_close_form(r)
+
+
+@pytest.mark.parametrize("key", _route_cases(F8C))
+def test_f8c_lane_dev_report_removed_then_commit(replays, key):
+    r = replays.get(key)
+    f = routing.assert_routed(r, typed="commit", source="dispatch", check="resolve-dev-artifact-chain.py")
+    assert r.fact("commit")["commit_status"] == "committed", r.fact("commit")
+
+
+# ---------------------------------------------------------------- F6o: a usage limit inside /dev-overnight (X8)
+
+OVERNIGHT = next(s for s in suite.COMPLIANT if s.name == "/dev-overnight")
+F6O_BEFORE = "limit@agent:dev Edit toy/*"  # Step 12's dev, inside the window
+F6O_AFTER = "limit@agent:pm Glob retro-report-cycle*"  # Step 20's PM RETRO: after end_time, before the summary
+STOP_WAKE = suite.Scenario("/dev-overnight /stop, wake refusals", "overnight", (("variant", "stop"), ("then", "idle")),
+                           ("dev-overnight",), 120)
+REFUSALS = {"bad-message": (("stop_at", "3"), ("fault", "limit@agent:pm Read README.md"), ("wake", "bad-message")),
+            "bad-id": (("stop_at", "3"), ("fault", "limit@agent:pm Read README.md"), ("wake", "bad-id")),
+            "after-stop": (("wake", "after-stop"),)}
+
+
+def _cases(scn, extra: tuple, name: str = "") -> list:
+    keys = [suite.replay_key(scn, s, extra) for s in suite.SETTINGS]
+    return [pytest.param(k, id=name + s, marks=pytest.mark.replay(k, scn.cost)) for k, s in zip(keys, suite.SETTINGS)]
+
+
+def _non_human(r, prompts: list) -> list:
+    """Of `prompts` (recovery.facts' prompts and AskUserQuestion calls after the cut), the human events:
+    an AskUserQuestion, or a prompt with a main-transcript record stop_contract.is_human_prompt accepts."""
+    import sys
+    sys.path.insert(0, os.path.join(suite.REPO, "hooks", "lib"))
+    import stop_contract
+    recs = [x for dp, _, fs in os.walk(os.path.join(r.run_dir, "transcripts")) if "subagents" not in dp
+            for f in fs if f.endswith(".jsonl") for x in suite._jsonl(os.path.join(dp, f))]
+    typed = {stop_contract.prompt_text(x) for x in recs} - {None}
+    return [p for p in prompts if p == "AskUserQuestion" or p in typed]
+
+
+def _assert_woken_to_terminal(r) -> dict:
+    """F6o: the cut agent resumed by the wake's recovery, with no human event; the terminal reached."""
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    assert not r.blocks, "the wake's recovery met a block:\n" + r.explain()
+    assert not r.hook_errors, "the wake's recovery met a hook error:\n" + r.explain()
+    f = recovery.facts(r)
+    assert f["cuts"] == 1, f
+    for aid, a in f["agents"].items():  # the same agent id, resumed by the SendMessage, wrote its artifacts
+        assert a["resumed"] and a["written_after_resume"] == a["declared"], (aid, a)
+    cut = next(c for c in fault_records(r) if c.get("kind") == "limit")
+    at = first_index(r, cut["label"])
+    role = cut["role"].split(":", 1)[-1]
+    again = [ev["label"] for ev in invocations(r)[at:] if ev["event"] == "PreToolUse"
+             and ev["payload"].get("tool_name") == "Agent" and not ev["payload"].get("agent_id")
+             and (ev["payload"].get("tool_input") or {}).get("subagent_type") == role]
+    assert not again, f"a replacement Agent call for the cut {role}: {again}"
+    assert not _non_human(r, f["human_after_cut"]), f"human events after the cut: {f['human_after_cut']}"
+    woke = [ev for ev in r.hook_events() if ev["event"] == "UserPromptSubmit" and ev["label"].startswith("wake after")]
+    assert len(woke) == 1 and any("capability issued" in h["stdout"] for h in woke[0]["hooks"]), woke
+    term = r.terminal("dev-overnight") or {}
+    assert term.get("wake_live_at_stop") == [] and term.get("wakes_fired_after") == 0, term
+    assert r.reached(), "/dev-overnight did not reach its terminal:\n" + r.explain()
+    return {"cut": cut, "terminal": term}
+
+
+@pytest.mark.parametrize("key", _cases(OVERNIGHT, (("fault", F6O_BEFORE),)))
+def test_f6o_usage_limit_before_end_time_resumed_by_the_wake(replays, key):
+    got = _assert_woken_to_terminal(replays.get(key))
+    assert got["cut"]["at"] < got["terminal"]["end_time"], got
+
+
+@pytest.mark.parametrize("key", _cases(OVERNIGHT, (("fault", F6O_AFTER),)))
+def test_f6o_usage_limit_after_end_time_before_the_summary_resumed_by_the_wake(replays, key):
+    got = _assert_woken_to_terminal(replays.get(key))
+    assert got["terminal"]["end_time"] < got["cut"]["at"] <= got["terminal"]["stopped_at"], got
+
+
+# ---------------------------------------------------------------- X8's refusals of the widened exception
+
+@pytest.mark.parametrize("key", _cases(STOP_WAKE, REFUSALS["bad-message"], "bad-message-")
+                         + _cases(STOP_WAKE, REFUSALS["bad-id"], "bad-id-"))
+def test_the_wakes_capability_refuses_any_other_message_or_id(replays, key):
+    r = replays.get(key)
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    assert not r.hook_errors, r.explain()
+    refusal = r.fact("wake refusal")
+    assert refusal and refusal["refused"], refusal
+    want = {"bad-message": "does not begin with the exact restart-v1 recovery message",
+            "bad-id": "not a recoverable interrupted subagent"}[refusal["case"]]
+    bl = blocks(r)
+    assert bl and all(b["step"] == f"/restart SendMessage ({refusal['case']})" for b in bl), r.explain()
+    assert any(want in b["text"] for b in bl), r.explain()
+    f = recovery.facts(r)  # the compliant SendMessage after it resumed the cut agent
+    assert all(a["resumed"] and a["written_after_resume"] == a["declared"] for a in f["agents"].values()), f
+
+
+@pytest.mark.parametrize("key", _cases(STOP_WAKE, REFUSALS["after-stop"]))
+def test_a_wake_after_the_owners_stop_gets_no_capability(replays, key):
+    r = replays.get(key)
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    assert not r.blocks and not r.hook_errors, r.explain()
+    late = r.fact("wake after /stop")
+    assert late == {"fired": 1, "issued": False, "recovery": False}, late
+    wake = r.fact("wake")
+    assert wake["deleted"] == wake["created"] and len(wake["created"]) == 1 and len(wake["fired"]) == 1, wake
