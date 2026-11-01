@@ -41,11 +41,7 @@ try:
     import claude_home  # noqa: E402
 except Exception:  # pragma: no cover - fail-soft if lib missing
     claude_home = None  # type: ignore[assignment]
-try:
-    from harness_state_dir import harness_state_dir  # noqa: E402
-except Exception:  # pragma: no cover - fail-soft if lib missing
-    def harness_state_dir() -> str:
-        return "/tmp"
+from harness_state_dir import harness_state_dir  # noqa: E402
 
 
 def _try_git_toplevel() -> Path | None:
@@ -1508,20 +1504,29 @@ def _dev_replay_path(sid: str, envelope_digest: str) -> Path:
     return PROJECT_DIR / '.claude' / 'dev-start-replays' / sid / f'{envelope_digest}.json'
 
 
-def decide_spec_path(explicit: str, sid: str) -> str:
+def decide_spec_path(explicit: str, sid: str) -> tuple[str, str]:
     """E14 (PLAN-v2 P9 row 1): the one decision of a run's spec, made here at
-    UserPromptSubmit and printed in the start output (`Spec: <path>`) or passed
-    to the overnight launcher, which /dev, /dev-command and /dev-overnight read
-    instead of choosing a spec themselves. The command's explicit --spec first,
-    else the spec this session last wrote (lib/spec_path.py); '' when neither
-    names one."""
+    UserPromptSubmit, before anything is written, and printed in the start
+    output, which /dev, /dev-command and /dev-overnight read instead of choosing
+    a spec themselves (the overnight launcher gets the path as --spec). Returns
+    (path or '', its line): the command's --spec as `Spec: <abs> (explicit)`,
+    else the spec this session last wrote (lib/spec_path.py) as `Spec: <abs>`,
+    else `Spec: none`. A --spec that names no readable file prints
+    `Spec: <abs> (unresolved)` and blocks the prompt (exit 2)."""
     if explicit:
-        return os.path.normpath(os.path.join(str(PROJECT_DIR), os.path.expanduser(explicit)))
+        path = os.path.normpath(os.path.join(str(PROJECT_DIR), os.path.expanduser(explicit)))
+        if not (os.path.isfile(path) and os.access(path, os.R_OK)):
+            print(f'Spec: {path} (unresolved)\n'
+                  '--spec names no readable file: retype the command with the path of an '
+                  'existing spec, or without --spec.', file=sys.stderr)
+            raise SystemExit(2)
+        return path, f'Spec: {path} (explicit)'
     transcript = _resolve_transcript_path(sid)
-    if not transcript:
-        return ''
-    from spec_path import last_spec_write  # hooks/lib
-    return last_spec_write(transcript, str(PROJECT_DIR)) or ''
+    path = ''
+    if transcript:
+        from spec_path import last_spec_write  # hooks/lib
+        path = last_spec_write(transcript, str(PROJECT_DIR)) or ''
+    return path, f'Spec: {path or "none"}'
 
 
 def _start_identity(task_id: str) -> str:
@@ -1558,6 +1563,7 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
             sys.stderr.write(error_output)
             return
 
+        _, spec_line = decide_spec_path(_strip_spec_arg(user_input)[1], sid)
         todos = run_todo_script(cmd_name, user_input)
         if not todos:
             return
@@ -1606,11 +1612,10 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
         write_bookmark(bookmark, _started, encoding='utf-8')
 
         codex_active = '--codex' in user_input.split()
-        spec = decide_spec_path(_strip_spec_arg(user_input)[1], sid)
         output = ''.join([
             diagnostics,
             _start_identity(task_id),
-            f'Spec: {spec or "none"}\n',
+            f'{spec_line}\n',
             f'User requirement document: docs/dev/user-requirement-{task_id}.md\n',
             'E2E enforcement: ACTIVE\n',
             f'Codex enforcement: {"ACTIVE (--codex)" if codex_active else "inactive"}\n',
@@ -1643,6 +1648,7 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
     if not todos:
         return
     _check_workflow_conflict(cmd_name)
+    spec_line = ''
     # M5/AC4: for /dev-overnight, create the isolated overnight state
     # BEFORE writing the bookmark/checklist. On failure: print stderr, clean
     # any partials, and FAIL CLOSED (no checklist, no command-spec, no
@@ -1658,7 +1664,7 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
         if not sid:
             sid = secrets.token_hex(16)
         end_time, focus, spec_path, codex_required, worktree_choice = parse_overnight_args(user_input)
-        spec_path = decide_spec_path(spec_path, sid)
+        spec_path, spec_line = decide_spec_path(spec_path, sid)
         ok = create_overnight_state(
             end_time, focus, spec_path=spec_path, session_id=sid,
             codex_required=codex_required, worktree_choice=worktree_choice)
@@ -1669,6 +1675,8 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
             _cleanup_overnight_partials(sid)
             raise SystemExit(2)
     _write_bookmark(cmd_name, sid, _extract_arguments(user_input, cmd_name))
+    if spec_line:
+        print(spec_line)
     emit_checklist_message(cmd_name, todos)
 
 

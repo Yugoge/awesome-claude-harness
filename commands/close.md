@@ -634,61 +634,18 @@ Overwrite policy: if `docs/dev/close-report-<task-id>.md` already exists with a 
   (activates the venv first, matching Step 0's own invocation pattern above). The helper performs an atomic, verified append and never mutates a byte of the file's existing content — see its own module docstring for the full read-append-readback-verification and atomicity design. Branch explicitly on its exit code:
   - **exit 0**: stdout is one line of JSON `{"status":"ok","report_path":...,"verdict_line":...}` — validate `status == "ok"`, then use `verdict_line` (NOT the raw JSON) as QA's own Return-value line.
   - **exit non-zero**: stdout is exactly the sentinel line below; propagate that exact line as QA's own Return-value output. Any other stdout shape (missing/malformed JSON on exit 0, or a non-sentinel line on exit non-zero) is a bug in the invocation itself — treat it as a verification failure and fail closed rather than guessing a verdict.
-  Such a failure is NEVER a basis for falling back to treating the prior closure's verdict as authoritative for this new attempt: print the single non-`CLOSE:`-prefixed line `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` as this attempt's not-landed signal, and run no Step 3 verdict echo, scoring, session summary, or workflow update for it — the pre-existing report's prior verdict is never reused as this attempt's result. The command then retries the atomic append under the R15 progress measure (progress = the section is now appended): a persistent environment-class cause (R14) is the defined wait (`close_awaiting_input`); a defective section text is a finding on `docs/dev/close-report-<task-id>.md`, whose declaring QA dispatch repairs the section text.
+  Such a failure is NEVER a basis for falling back to treating the prior closure's verdict as authoritative for this new attempt: print the single non-`CLOSE:`-prefixed line `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` as this attempt's not-landed signal, and run no Step 3 verdict echo, session summary, or workflow update for it — the pre-existing report's prior verdict is never reused as this attempt's result. The command then retries the atomic append under the R15 progress measure (progress = the section is now appended): a persistent environment-class cause (R14) is the defined wait (`close_awaiting_input`); a defective section text is a finding on `docs/dev/close-report-<task-id>.md`, whose declaring QA dispatch repairs the section text.
 
 Return value: print to stdout, as the final line of your response, the verdict line your verdict branch names — a landed `CLOSE: YES` form, or the round-open line `CLOSE_FINDINGS: <n> items` (NON-LANDING: findings are open and routed; nothing is granted); your obligation's `terminal_line_regex` declares the legal set — or the `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` line of the Overwrite policy above. Every reader classifies the last non-empty line through `hooks/lib/close-verdict.py`: a landed form reads `yes`, the round-open line `no`, anything else `unknown` (fail closed).
 ```
 
 ### Step 3: Generate close-report + workflow update
 
-Take the final line QA returned — either a landed `CLOSE: YES*` form or the round-open `CLOSE_FINDINGS: <n> items` — and echo whichever one QA returned in the orchestrator's text message to the user. A round-open echo is followed by routing (the Routing loop, then a fresh QA round), never by this step's scoring, session summary, rating, or workflow-update branches. The close-report itself is written by QA inside Step 2; this step is the echo + ensures the report file exists at `docs/dev/close-report-<task-id>.md`.
+Take the final line QA returned — either a landed `CLOSE: YES*` form or the round-open `CLOSE_FINDINGS: <n> items` — and echo whichever one QA returned in the orchestrator's text message to the user. A round-open echo is followed by routing (the Routing loop, then a fresh QA round), never by this step's session summary, rating, or workflow-update branches. The close-report itself is written by QA inside Step 2; this step is the echo + ensures the report file exists at `docs/dev/close-report-<task-id>.md`.
 
 **Two distinct final-line contracts — DO NOT confuse**:
 - **Close-report FILE** (`docs/dev/close-report-<task-id>.md`): the LAST non-empty line of the FILE must be EXACTLY the verdict line Step 2's Return value names. This is the runtime-parser contract consumed by `hooks/lib/close-verdict.py` and `/commit`'s admission check. This contract is enforced INSIDE the file QA wrote in Step 2; nothing in Step 3 alters it.
 - **Orchestrator's stdout text message to the user**: the orchestrator's response stream in Step 3 begins with the `CLOSE:` verdict echo, continues with the Session Summary (CLOSE:YES branch only — see below), and ends with the rating `<options>` XML block (CLOSE:YES branch only — see below). On the round-open path there is no Session Summary and no `<options>` block, so the echo is itself the last line of the orchestrator's message. The `<options>` block being the literal final stdout content on CLOSE:YES does NOT violate the close-report FILE contract — they are two different output channels.
-
-**Mascot scoring — close outcome (spec-20260518-225715 §5.1; M4 — task 20260529-210616)**:
-
-> Reachability rule (AC8): Step 2 can no longer produce a literal `CLOSE: NO` Return-value line, so the helper's "last-line `CLOSE: NO`" decision-matrix bullet in step 2 above and step 5's `close_fail_qa_pass`/`close_fail_qa_fail` direct-issuance bullets below apply only to a close-report whose last line was written outside Step 2 (a legacy report or an out-of-band tool). Disclosure-driven negative scoring (dev -10, ba -5, qa -12 or -10/-5/0) is NOT implemented; it is a Won't-Have pending separate user sign-off.
-
-Scoring runs ONLY AFTER the close-report file is written (Step 2 wrote it) AND AFTER the verdict line is echoed. The decision of WHICH `close_success_*` event to issue (if any) is delegated to the executable helper `scripts/close-scoring-decide.py` — NOT inline orchestrator reasoning. Issuing a `close_success_*` event before QA finalizes its verdict is forbidden.
-
-Procedure:
-
-1. Determine `qa_ever_rejected` from every QA report named by
-   `ARTIFACT_CHAIN.qa_inputs` (the single parent QA in singular mode; all lane
-   QA reports in fan-out mode). It is true if any resolved QA history contains a
-   rejection. On the do path, use false because no prior QA cycle exists. Do not
-   substitute or create a parent QA-report for fan-out scoring.
-2. Invoke the helper to decide which close_success_* event (if any) is permitted:
-
-   ```
-   bash -c 'source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/close-scoring-decide.py --task-id "<task-id>" --qa-ever-rejected "<true|false>"'
-   ```
-
-   The helper reads the close-report at `docs/dev/close-report-<task-id>.md`, classifies its last non-empty line via `hooks/lib/close-verdict.py`, and emits stdout JSON `{"events": [...], "skip_reason": "<string|null>"}`:
-   - missing close-report → `events=[]`, `skip_reason` contains "missing"
-   - last-line `CLOSE: NO` → `events=[]`, `skip_reason` non-null
-   - last-line `CLOSE: YES` + qa_ever_rejected=false → `events=["close_success_qa_pass"]`, `skip_reason=null`
-   - last-line `CLOSE: YES` + qa_ever_rejected=true → `events=["close_success_qa_fail_fixed"]`, `skip_reason=null`
-
-3. The orchestrator MUST ONLY issue the events returned by the helper. If `events[]` is empty, log `skip_reason` and SKIP all `close_success_*` score updates. Tests MUST invoke `scripts/close-scoring-decide.py` directly against fixtures; tests MUST NOT reimplement the decision logic in a parallel test harness.
-
-4. For each event name returned by the helper, issue three `score-update.sh` calls (ba, dev, qa). Example for the qa_pass branch:
-
-   ```
-   bash ~/.claude/scripts/score-update.sh --agent dev --event close_success_qa_pass --note "<task-id>"
-   bash ~/.claude/scripts/score-update.sh --agent ba  --event close_success_qa_pass --note "<task-id>"
-   bash ~/.claude/scripts/score-update.sh --agent qa  --event close_success_qa_pass --note "<task-id>"
-   ```
-
-   (dev +2, ba +1, qa +1 — Path A rebalance task 20260524-205206 M1; cycle-total cross-agent sum = +4.)
-
-   For the qa_fail_fixed branch the event name is `close_success_qa_fail_fixed` (same deltas).
-
-5. `close_fail_*` branches are NOT routed through the helper — the orchestrator issues them directly when the verdict is `CLOSE: NO`:
-   - `CLOSE: NO` AND QA had passed (PM/inspector or codex caught issue post-QA) → `score-update.sh --event close_fail_qa_pass` for ba/dev/qa. (dev -10, ba -5, qa -12.)
-   - `CLOSE: NO` AND QA had failed (rejection upstream) → `score-update.sh --event close_fail_qa_fail` for ba/dev/qa. (dev -10, ba -5, qa 0.)
 
 **Session Summary — CLOSE:YES branch only (mandatory before rating)**:
 
@@ -729,11 +686,6 @@ Procedure:
     </options>
     ```
 
-  - **Post-option handling contract**: the task-id MUST be retained in the orchestrator's context across the user's response. Parse the selected option text to extract the star count: "5 stars" → N=5, "4 stars" → N=4, etc. When N ∈ {1,2,3,4,5}, the orchestrator runs three `score-update.sh` calls:
-    - `bash ~/.claude/scripts/score-update.sh --agent ba --event user_rating_<N> --note "<task-id>"`
-    - `bash ~/.claude/scripts/score-update.sh --agent dev --event user_rating_<N> --note "<task-id>"`
-    - `bash ~/.claude/scripts/score-update.sh --agent qa --event user_rating_<N> --note "<task-id>"`
-  - When the user selects "Skip rating": NO score-update calls are made. (Skip does NOT produce a separate event — spec 5.1.)
 - If the last line is any non-YES form (the round-open `CLOSE_FINDINGS:` line, class `no`/`unknown`): SKIP the rating entirely. Per spec 5.1 line 136 verbatim, the rating prompt fires only after CLOSE:YES, NOT after CLOSE:NO.
 
 Then branch the workflow update:

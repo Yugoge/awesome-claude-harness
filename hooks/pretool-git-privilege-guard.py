@@ -41,6 +41,11 @@ git ls-files, git ls-tree, git restore (working-tree only), git branch
 and git stash list/show/pop (non-destructive forms). Hard reset and direct
 ref mutation are not agent-accessible.
 
+/do consent (hooks/lib/allowlist.py has_do_consent: main agent, one turn)
+releases every rule here but three (E2): git commit, git push and a git merge
+into the protected branch are judged as without it, and each block then names
+the commands that land them (/close then /commit, /push, /merge).
+
 Spec: spec-20260424-233926 section 5.2.4 (R4.3) line 233-249.
 
 Revision history:
@@ -1248,6 +1253,44 @@ def _evaluate_merge(command, data):
     )
 
 
+# E2: added to every block the guard emits while the main agent holds /do consent.
+DO_NOT_COVERED = (
+    '/do consent does not cover git commit, git push or a git merge into the '
+    'protected branch: a commit lands through /close, then /commit; a push '
+    'through /push; a merge through /merge.\n'
+)
+
+
+def _merge_into_protected_branch(command):
+    """E2: True unless every `git merge` in `command` provably merges into a
+    branch other than the protected one, the branch refs/remotes/origin/HEAD
+    names (local refs, as the overnight launcher resolves it). Fail closed: a
+    merge the guard cannot place in its own cwd (a cd before it, anything
+    between `git` and `merge`, a prefix before `git`, an ambient GIT_DIR-style
+    redirect), a detached HEAD or an unset origin/HEAD counts as protected."""
+    if _ambient_git_redirect_present():
+        return True
+    cwd_moved = seen = False
+    for seg in _shell_segments(command):
+        toks = seg.split()
+        idx = _cmd_token_index(toks) if toks else None
+        if idx is None:
+            continue
+        if os.path.basename(_unquote_token(toks[idx])) in _CWD_CHANGE_CMDS:
+            cwd_moved = True
+            continue
+        if not any(inv.subcommand == 'merge' for inv in iter_git_invocations(seg)):
+            continue
+        seen = True
+        if cwd_moved or idx or toks[1:2] != ['merge']:
+            return True
+        branch = _git_output(['symbolic-ref', '--quiet', '--short', 'HEAD'])
+        default = _git_output(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
+        if not branch or not default or branch == default.split('/', 1)[-1]:
+            return True
+    return not seen  # called for a classified merge: one not found here is not placed
+
+
 def _block_inline_env_push(command):
     """AC-A1: literal-substring inline-env injection block for push."""
     _block(
@@ -1601,7 +1644,9 @@ def _audit_residual_override(path, ovr, kinds, segments, digest):
     )
 
 
-def _evaluate_command(command, data):
+def _evaluate_command(command, data, do_consent=False):
+    # do_consent: the main agent holds /do consent, which covers every rule
+    # here but git commit, git push and a merge into the protected branch (E2).
     # Classify once: build invocations list for all _looks_like_* and _evaluate_* calls.
     # iter_git_invocations uses token-aware parsing so path-qualified forms like
     # /usr/bin/git are detected alongside bare 'git' (closes RISK-3 bypass).
@@ -1629,7 +1674,7 @@ def _evaluate_command(command, data):
     # unknown binary. The recovery route below therefore sits INSIDE this
     # branch rather than reordering it, and binds to the command's bytes
     # instead of to operations the allowlist could match.
-    if residuals:
+    if residuals and not do_consent:
         kinds = sorted({kind for kind, _seg in residuals})
         segments = [seg for _k, seg in residuals]
         digest = _command_digest(command)
@@ -1679,15 +1724,16 @@ def _evaluate_command(command, data):
     # (force-push must stay blocked even with a broad /allow grant).
     if not _looks_like_git_push(invocations) and _check_git_allowlist(command, data):
         return
-    if _looks_like_git_forbidden_plumbing(invocations):
+    if not do_consent and _looks_like_git_forbidden_plumbing(invocations):
         _evaluate_forbidden_plumbing(command, data)
-    if _looks_like_git_reset_hard(invocations):
+    if not do_consent and _looks_like_git_reset_hard(invocations):
         _evaluate_reset_hard(command, invocations, data)
-    if _looks_like_git_direct_ref_mutation(invocations):
+    if not do_consent and _looks_like_git_direct_ref_mutation(invocations):
         _evaluate_direct_ref_mutation(command, data)
     if _looks_like_git_push(invocations):
         _evaluate_push(command, invocations, data)
-    if _looks_like_git_merge(invocations):
+    if _looks_like_git_merge(invocations) and (
+            not do_consent or _merge_into_protected_branch(command)):
         _evaluate_merge(command, data)
     if _looks_like_git_commit(invocations):
         _evaluate_commit(command, data)
@@ -1707,10 +1753,15 @@ def main():
         command = (data.get('tool_input', {}) or {}).get('command', '') or ''
         if not command:
             sys.exit(0)
-        # /do bypass: main-agent-only; subagents never benefit from consent flag.
-        if has_do_consent(data):
-            sys.exit(0)
-        _evaluate_command(command, data)
+        # /do consent (main agent only) releases every rule but commit, push
+        # and a merge into the protected branch (E2).
+        do_consent = has_do_consent(data)
+        try:
+            _evaluate_command(command, data, do_consent)
+        except SystemExit as exc:
+            if do_consent and exc.code == 2:
+                sys.stderr.write(DO_NOT_COVERED)
+            raise
     except SystemExit:
         raise
     except Exception:

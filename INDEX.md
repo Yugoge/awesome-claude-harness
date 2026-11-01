@@ -455,7 +455,6 @@ dot-claude/
 │   │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 │   │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
-│   │   ├── `score_log.py` - ``scripts/score-update.sh`` (the log's writer) and ``scripts/score-inject.sh`` read
 │   │   ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 │   │   ├── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
 │   │   └── `soundness_gate.py` - HUNK-level failure attribution
@@ -519,7 +518,6 @@ dot-claude/
 │   ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 │   ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 │   ├── `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
-│   ├── `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 │   ├── `commit.sh` - Description: Discoverable canonical entrypoint for commands/dev-overnight.md's
 │   ├── `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 │   ├── `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
@@ -576,8 +574,6 @@ dot-claude/
 │   ├── `restart-subagents.py` - CLI bridge for the human-only /restart recovery workflow.
 │   ├── `runcode-watchdog.py` - Watchdog process for browser_run_code timeout enforcement
 │   ├── `scan-project.sh` - Description: Scan project structure and detect project type
-│   ├── `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
-│   ├── `score-update.sh` - Description: Update agent score by appending an entry to the lifecycle JSONL log.
 │   ├── `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 │   ├── `session-index.py` - Subcommands (all take --git-root):
 │   ├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
@@ -665,10 +661,6 @@ dot-claude/
 │   │   ├── `sandbox.py` - One scratch root holds everything a replay touches:
 │   │   ├── `schemagen.py` - A simulated subagent writes each JSON artifact its obligation declares from the
 │   │   └── `trace.py` - The replay runs under `strace -f --seccomp-bpf -z -y` tracing opens (with
-│   ├── score-inject-contract/
-│   │   └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with
-│   ├── score-lifecycle-contract/
-│   │   └── `test-lifecycle-cas.sh` - Description: Verify CAS and append-only invariants for scripts/score-update.sh and
 │   ├── scripts/
 │   │   ├── `validate-checklist-completeness.py` - Validator: validate-checklist-completeness
 │   │   ├── `validate-chinese-content.py` - Validator: validate-chinese-content
@@ -734,7 +726,6 @@ dot-claude/
 │   ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 │   ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 │   ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
-│   ├── `test_score_log.py` - scripts/score-update.sh and scripts/score-inject.sh both call read_lines in place
 │   ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
 │   ├── `test_settings_load.py` - take its verdict which no other test runs: the claude_home probes, installer.py's plan, and the two
 │   ├── `test_spec_check_agent_id_guard.py` - Lane b of task 20260921-134709. Self-contained and subprocess based: one scratch

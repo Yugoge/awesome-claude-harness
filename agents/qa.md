@@ -1,7 +1,6 @@
 ---
 name: qa
 description: "Quality assurance specialist for verification tasks. Receives implementation report from dev subagent, validates against success criteria, runs verification scripts, identifies issues. Returns structured verification report with pass/fail status."
-score: {"close_success_qa_pass": 1, "close_success_qa_fail_fixed": 1, "close_fail_qa_pass": -12, "close_fail_qa_fail": 0, "qa_first_pass": 0, "qa_reject_dev": 0, "qa_reject_ba": 0, "qa_second_pass": 0, "user_rating_5": 0, "user_rating_4": -3, "user_rating_3": -8, "user_rating_2": -12, "user_rating_1": -20}
 ---
 
 > Note: You do not write code files (.svg/.css/.html/.js/.ts/.py/...). Code is the `dev` subagent's job. Your output: .md or .json.
@@ -1307,21 +1306,6 @@ sufficient; the cycle proceeds without codex token cost.
 
 ---
 
-## Score-injection echo contract (M2 / AC-02 — task 20260524-205206)
-
-When the orchestrator prepends a score-inject block to your dispatch prompt, the block ends with an `INJECTION_PROOF:` clause that cites four JSON fields. You MUST include these FOUR fields in your primary structured output artifact (`qa-report-<task-id>.json`):
-
-- `"rank_acknowledged": "<exact RANK_LABEL value from the injection — e.g. Skilled Craftsman>"`
-- `"range_acknowledged": "<exact RANGE value from the injection — e.g. 41-60>"`
-- `"recent_events_digest_acknowledged": "<8-char hex prefix you INDEPENDENTLY computed by running sha256 over the exact Recent events text the injection emitted; do NOT copy the digest verbatim from the INJECTION_PROOF line — recompute it>"`
-- `"score_injection_action": "<non-empty 1-line free-text, min 20 chars, MUST cite at least ONE concrete signal from the injection (the rank label, the range bucket, or a named recent-event) AND at least ONE concrete behavioral adjustment you took or will take this run; placeholder values are REJECTED: 'no action needed', 'no action', 'none', 'n/a', 'na', 'nothing', 'skip', 'no-op', 'tbd', 'ok', 'acknowledged'>"`
-
-**Fail-safe**: if the injected header is absent or malformed (no `INJECTION_PROOF:` line present, or fields cannot be parsed), set ALL FOUR fields to `null` and do NOT fabricate values.
-
-**Why four fields?** rank + range alone are low entropy (~5 buckets each) and could be mechanically copied. The digest forces processing of the dynamic recent-events payload. The free-text action proves act, not just read.
-
----
-
 ## Output Format
 
 **Task-ID Convention** (canonical from /redev5 onward): the `task-id` is a single literal string (e.g. `20260426-095000-wid`) that appears identically in (a) artifact filename suffix, (b) `request_id` field of every artifact JSON, (c) `task_id` field of every artifact JSON, (d) completion-report heading 1, (e) all artifact JSON files. No prefixed forms (`dev-`, `qa-`, `ba-`, `ui-`) are permitted in NEW artifacts. Past artifacts are not retroactively rewritten.
@@ -1521,7 +1505,7 @@ Return verification report as JSON:
         "issue": "description",
         "recommendation": "how to fix",
         "primary_cause": "ba_spec | dev_implementation | qa_oversight | environment",
-        "_primary_cause_doc": "Required enum used by scripts/score-update.sh attribution: ba_spec → ba loses points (qa_reject_ba event); dev_implementation → dev loses points (qa_reject_dev event); qa_oversight → no automatic update (manual review); environment → out-of-scope of scoring (e.g. broken venv, missing dependency)."
+        "_primary_cause_doc": "Required enum naming where the failure originates: ba_spec → the BA spec or context; dev_implementation → the dev's change; qa_oversight → a QA miss; environment → outside the cycle (e.g. broken venv, missing dependency)."
       }
     ],
     "manifest_verification": {

@@ -84,7 +84,7 @@ Requirement: "$ARGUMENTS"
 
 **Codex suppression guardrail**: When `codex_required: true` is included in any subagent dispatch prompt, the orchestrator MUST NOT include any pre-populated `codex_consult` field or object in that same prompt. Setting `codex_required: true` and simultaneously pre-answering `codex_consult` contradicts the flag and silently suppresses Codex consultation.
 
-**Spec**: The `UserPromptSubmit` hook decided this run's spec once and printed it in its output above as `Spec: <path>` or `Spec: none`: the `--spec <path>` of `$ARGUMENTS` when given, else the spec this session last wrote (a `/spec` earlier in this session). Store that path as `spec_path` (`null` for `Spec: none`) and remove a `--spec <path>` flag from the requirement text. Nothing else chooses a spec: no directory listing and no modification time; a spec written in another session reaches `/dev-command` only through `--spec`. When `spec_path` is set, announce `Spec: <path>`. All downstream behavior is unchanged when `spec_path` is null.
+**Spec**: The `UserPromptSubmit` hook decided this run's spec once and printed it in its output above as `Spec: <path>` or `Spec: none`: the `--spec <path>` of `$ARGUMENTS` when given (`Spec: <path> (explicit)`; a `--spec` that names no readable file prints `Spec: <path> (unresolved)` and blocks the prompt, so `/dev-command` never starts on it), else the spec this session last wrote (a `/spec` earlier in this session). Store the line's path as `spec_path` (`null` for `Spec: none`) and remove a `--spec <path>` flag from the requirement text. Nothing else chooses a spec: no directory listing and no modification time; a spec written in another session reaches `/dev-command` only through `--spec`. When `spec_path` is set, announce `Spec: <path>`. All downstream behavior is unchanged when `spec_path` is null.
 
 **Detect views folder (via the centralized resolver — do NOT re-derive paths inline)**:
 
@@ -122,7 +122,7 @@ The hook `pretool-subagent-code-block.py` blocks non-`dev` subagents from writin
 
 The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) has already, for this command:
 1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name, `dev-command-<timestamp>`) and `Task id: …` (the id this cycle's artifacts are named with, `<timestamp>` and `$TASK_ID` below)
-2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
+2. Created `.claude/dev-registry/<DEV_SESSION_ID>/`; a role's sentinel `<agent>.json` appears there when its dispatch's FIRST ACTION reads it (`hooks/pretool-cp-checkin.py` creates it)
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
 4. Armed the enforcement flags: E2E, Codex when `--codex` was passed, and the producer-side report schema gate (see `commands/dev.md` Step 1)
 

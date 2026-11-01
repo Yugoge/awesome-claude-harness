@@ -38,7 +38,7 @@ source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/test.py
 
 Set up working directory: create `tests/reports/`, generate `REQUEST_ID="test-$(date +%Y%m%d-%H%M%S)"` and `TIMESTAMP` in ISO-8601 format.
 
-**Test folder structure**: If `tests/` does not exist, initialize it by creating subdirectories `tests/{scripts,instructions,data/fixtures,data/mocks,reports}` and copying template files from `~/.claude/tests/` (README.md, INDEX.md, and instructions/*.md).
+**Test folder structure**: If `tests/` does not exist, initialize it by creating subdirectories `tests/{scripts,instructions,data/fixtures,data/mocks,reports}` and copying the instruction templates from `~/.claude/tests/instructions/*.md`; it copies no README.md or INDEX.md into the project.
 
 ### Step 2: Analyze Git History for Edge Cases
 
@@ -491,7 +491,7 @@ Create `tests/reports/completion-{REQUEST_ID}.md` summarizing: request ID, proje
 
 ## Test Folder Initialization
 
-If project has no `tests/` directory, initialize it: create subdirectories `{scripts,instructions,data/fixtures,data/mocks,reports}`, copy template README.md and INDEX.md from `~/.claude/tests/`, and copy instruction templates from `~/.claude/tests/instructions/`. Implement validators per `docs/test/edge-case-analysis.json`.
+If project has no `tests/` directory, initialize it: create subdirectories `{scripts,instructions,data/fixtures,data/mocks,reports}` and copy instruction templates from `~/.claude/tests/instructions/` (no README.md or INDEX.md is copied). Implement validators per `docs/test/edge-case-analysis.json`.
 
 ## Scripts
 

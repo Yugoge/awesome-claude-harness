@@ -36,7 +36,6 @@ Organization and usage documentation for `scripts/`.
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 - `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
-- `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 - `commit.sh` - Description: Discoverable canonical entrypoint for commands/dev-overnight.md's
 - `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 - `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
@@ -93,8 +92,6 @@ Organization and usage documentation for `scripts/`.
 - `restart-subagents.py` - CLI bridge for the human-only /restart recovery workflow.
 - `runcode-watchdog.py` - Watchdog process for browser_run_code timeout enforcement
 - `scan-project.sh` - Description: Scan project structure and detect project type
-- `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
-- `score-update.sh` - Description: Update agent score by appending an entry to the lifecycle JSONL log.
 - `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 - `session-index.py` - Subcommands (all take --git-root):
 - `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.

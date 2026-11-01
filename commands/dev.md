@@ -90,7 +90,7 @@ A single `/dev` cycle MAY carry more than one requirement. When it does, the orc
 - **Step 10 (Dev)** — dispatch exactly ONE Dev per lane, bound to `lane.text` / `requirement_id`, writing lane-suffixed artifacts.
 - **Step 11 (Aggregate)** — ONE parent-level aggregate join AFTER the barrier that unions the lane-suffixed dev-reports into the canonical singular `dev-report-<session>.json`; this is NOT a per-lane dispatch.
 - **Step 13 (QA)** — dispatch exactly ONE QA per lane.
-- **Steps 14 and 15 (Score updates, Permissions)** — each step is ONE Bash call for every lane that reaches it, its lanes' commands one per line, so a failed command does not stop the next: Step 14's score-update calls of every lane, then Step 15's permission merge of every passing lane. The orchestrator gate refuses a sixth Bash call in a row and only a dispatch resets its count, so a call per lane and command (3N+1 in a row through Step 17's completion check, 7 for two lanes) loses Step 15 and the completion check.
+- **Step 15 (Permissions)** — ONE Bash call for every passing lane, its lanes' commands one per line, so a failed command does not stop the next. The orchestrator gate refuses a sixth Bash call in a row and only a dispatch resets its count, so a call per lane (N+1 in a row through Step 17's completion check) loses the completion check from five lanes on.
 - **Step 16 (Iteration)** — retry only the failed lanes (lane-local).
 
 **Lane-execution adapter (this step takes precedence over the singular Step templates).** When N > 1, this fan-out step governs the concrete Steps below: every `<requirement>`, `<timestamp>` / session id, input path, output path, dispatch, wait, validation, and result branch in Steps 4–16 is evaluated PER LANE. Each lane's dispatch prompt MUST carry three explicit fields — `Lane requirement_id`, `Lane requirement text` (the authoritative execution scope), and `Parent requirement document (reference baseline)` — and the lane text OVERRIDES the parent document and any "context / BA-spec is absolute truth" clause for EXECUTION scope: the lane implements, verifies, and edits only its own outcome, and sibling outcomes are not work items within that lane's invocation. REPORTING is not lane-local: the parent document is the lane's baseline for checking whether the lane is correctly sliced, and a lane that finds its slice contradicts the parent requirement, is coupled to a sibling lane (one underlying issue split across lanes), or is a recurring-failure patch MUST report it (see `coupled_issues_merge_requested` below and the subagent baseline-check obligation) instead of completing the mis-sliced work. Dispatch stages (4/7/10/13) batch all applicable lanes; waits are stage barriers; validation stages (6/12) run per lane; retry stages (8/16) act only on affected/failed lanes; and every concrete Step's result branch gains a `multi_issue_fanout_requested` route and a `coupled_issues_merge_requested` route (both handled below). When N == 1, none of this applies and the Steps run exactly as written today.
@@ -121,7 +121,7 @@ Requirement: "$ARGUMENTS"
 
 **Codex suppression guardrail**: When `codex_required: true` is included in any subagent dispatch prompt, the orchestrator MUST NOT include any pre-populated `codex_consult` field or object in that same prompt. `codex_consult` is output authored by the subagent — not by the orchestrator. In particular, do not include `codex_consult: { invoked: false, status: "not_requested" }` or any other suppression shape. Setting `codex_required: true` and simultaneously pre-answering `codex_consult` contradicts the flag and silently suppresses Codex consultation. Set the flag and let the agent's own spec decide whether to invoke Codex.
 
-**Spec**: The `UserPromptSubmit` hook decided this run's spec once and printed it in its output above as `Spec: <path>` or `Spec: none`: the `--spec <path>` of `$ARGUMENTS` when given, else the spec this session last wrote (a `/spec` earlier in this session). Store that path as `spec_path` (`null` for `Spec: none`) and remove a `--spec <path>` flag from the requirement text. Nothing else chooses a spec: no directory listing and no modification time; a spec written in another session reaches `/dev` only through `--spec`. When `spec_path` is set, announce `Spec: <path>`. All downstream behavior is unchanged when `spec_path` is null.
+**Spec**: The `UserPromptSubmit` hook decided this run's spec once and printed it in its output above as `Spec: <path>` or `Spec: none`: the `--spec <path>` of `$ARGUMENTS` when given (`Spec: <path> (explicit)`; a `--spec` that names no readable file prints `Spec: <path> (unresolved)` and blocks the prompt, so `/dev` never starts on it), else the spec this session last wrote (a `/spec` earlier in this session). Store the line's path as `spec_path` (`null` for `Spec: none`) and remove a `--spec <path>` flag from the requirement text. Nothing else chooses a spec: no directory listing and no modification time; a spec written in another session reaches `/dev` only through `--spec`. When `spec_path` is set, announce `Spec: <path>`. All downstream behavior is unchanged when `spec_path` is null.
 
 **Detect views folder (via the centralized resolver — do NOT re-derive paths inline)**:
 
@@ -158,7 +158,7 @@ Pass `view_paths.ba`, `view_paths.qa`, `view_paths.dev`, etc. alongside (not in 
 
 The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) started this cycle and printed what it did in its output above. It has already:
 1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name) and `Task id: …` (the id this cycle's artifacts are named with, `$TASK_ID` below)
-2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
+2. Created `.claude/dev-registry/<DEV_SESSION_ID>/`; a role's sentinel `<agent>.json` appears there when its dispatch's FIRST ACTION reads it (`hooks/pretool-cp-checkin.py` creates it)
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
 4. Armed the enforcement flags: E2E, Codex when `--codex` was passed (both named in its output), and the producer-side report schema gate (`hooks/subagentstop-artifact-contract-enforce.py` blocks a dev/qa subagent from stopping with a versioned-but-schema-invalid report; same `contract_runtime` engine as `/close`'s "Artifact schema gate" section)
 
@@ -382,10 +382,6 @@ If dev changed L1 when spec called for L3, treat as failed implementation.
 
 ### Step 4: Delegate to BA Subagent
 
-**Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
-
-Run `bash ~/.claude/scripts/score-inject.sh --agent ba` and capture stdout into a variable `BA_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the BA dispatch — i.e. right between "You are the BA subagent." and the "Requirement:" / task body. The injection shows the rank+range (NOT exact score) and last 3 events.
-
 **Use Task tool to invoke BA subagent for requirements analysis and context building**:
 
 ```
@@ -424,9 +420,6 @@ Use Task tool with:
   codex_required: true
 
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
-
-  <BA_SCORE_HEADER prepended here — score-inject output is placed AFTER the role declaration above and BEFORE the task instructions below, per spec 5.1 line 113: Injection position: after role declaration, before task instructions>
-
 
   Requirement: '<requirement from Step 1>'
   Clarification round: 0
@@ -721,10 +714,6 @@ After the test-writer subagent completes, verify on disk that both `tests/genera
 
 After test-writer completes (or is skipped), the manifest path is passed onward to Dev (in the dispatch prompt) and to QA (Step 13). Dev, the one writer of the test files, writes each from its manifest entry's skeleton and makes it pass; QA verifies the manifest at Step 13 Phase 5 AND that `test_writer_expected == true` implies manifest/report existence (Phase 5 fails with `primary_cause: "dev_implementation"` or `"qa_oversight"` if expected but missing).
 
-**Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
-
-Run `bash ~/.claude/scripts/score-inject.sh --agent dev` and capture stdout into a variable `DEV_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the Dev dispatch.
-
 **Pre-dispatch baseline capture** (run BEFORE invoking the dev subagent):
 
 ```bash
@@ -755,8 +744,6 @@ Use Task tool with:
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
-
-  <DEV_SCORE_HEADER prepended here — score-inject output is placed AFTER the role declaration above and BEFORE the task instructions below, per spec 5.1 line 113: Injection position: after role declaration, before task instructions>
 
   Context file: docs/dev/context-<timestamp>.json
   BA spec file: docs/dev/ticket-<timestamp>.md (legacy: docs/dev/ba-spec-<timestamp>.md)
@@ -803,10 +790,6 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 
 ### Step 13: Delegate to QA Subagent
 
-**Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
-
-Run `bash ~/.claude/scripts/score-inject.sh --agent qa` and capture stdout into a variable `QA_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the QA dispatch.
-
 **Use Task tool to invoke QA subagent with file paths only**:
 
 ```
@@ -826,9 +809,6 @@ Use Task tool with:
   codex_required: true
 
   You are the QA subagent. Follow agents/qa.md instructions precisely.
-
-  <QA_SCORE_HEADER prepended here — score-inject output is placed AFTER the role declaration above and BEFORE the task instructions below, per spec 5.1 line 113: Injection position: after role declaration, before task instructions>
-
 
   Context file: docs/dev/context-<timestamp>.json
   Dev report file: docs/dev/dev-report-<timestamp>.json
@@ -857,21 +837,6 @@ IF qa.status == "pass":
 ELIF qa.status == "warning" or "fail":
   → Proceed to Step 16 (Iteration)
 ```
-
-**Apply Mascot score-update events (post-QA, spec-20260518-225715 §5.1)**:
-
-This post-decision-tree pass applies the canonical score-update events for this cycle.
-
-After the verdict is known, apply score-update events based on QA outcome and iteration count:
-
-- First-round PASS (iteration 0 + qa.status=pass) → `bash ~/.claude/scripts/score-update.sh --agent dev --event qa_first_pass --note "<task_id>"` AND `--agent ba --event qa_first_pass`. (dev 0, ba 0, qa 0 — Path A rebalance task 20260524-205206 M1; per-iteration nudge collapsed into close events.)
-- Second-or-later-round PASS (iteration ≥1 + qa.status=pass) → `--agent dev --event qa_second_pass --note "<task_id>"`. (dev 0 — Path A rebalance task 20260524-205206 M1.)
-- FAIL (qa.status=fail) — read `qa.failures[].primary_cause` to attribute the rejection:
-  - Any failure with `primary_cause = "dev_implementation"` → `score-update.sh --agent dev --event qa_reject_dev --note "<task_id>"`. (dev -12.)
-  - Any failure with `primary_cause = "ba_spec"` → `score-update.sh --agent ba --event qa_reject_ba --note "<task_id>"` AND `--agent dev --event qa_reject_ba` (dev -5, ba -8).
-  - `primary_cause = "qa_oversight"` or `"environment"` → no auto-score update (manual review).
-
-Each score-update call is independent; failures are non-blocking (a failed score-update writes to stderr but does not abort the dev cycle). Include the score deltas summary in the Step 17 completion report under a `score_updates` array.
 
 ### Step 15: Update Settings.json Permissions
 
@@ -1048,17 +1013,6 @@ initial worker shard.
 *(Fan-out cycle, N > 1 — index EVERY lane, then the aggregate)*
 - Per lane `<lane>`: `docs/dev/ticket-<timestamp>-<lane>.md`, `context-<timestamp>-<lane>.json`, `dev-report-<timestamp>-<lane>.json`, `qa-report-<timestamp>-<lane>.json`
 - Aggregate Dev Report: `docs/dev/dev-report-<timestamp>.json`
-
-## Mascot Score Changes (spec-20260518-225715 §5.1)
-
-Summarise score-update events from Step 14 and any user-rating events from `/close` in a table:
-
-| Agent | Event | Delta | Old → New |
-|-------|-------|-------|-----------|
-| ba    | qa_first_pass | 0  | 50 → 50 |
-| dev   | qa_first_pass | 0  | 50 → 50 |
-
-The current rank+range per agent is read by injecting `bash ~/.claude/scripts/score-inject.sh --agent <name>` (rank+range only — exact score is intentionally hidden per spec 5.1 line 112).
 
 ## Next Steps
 

@@ -29,7 +29,6 @@ scripts/
 │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
-│   ├── `score_log.py` - ``scripts/score-update.sh`` (the log's writer) and ``scripts/score-inject.sh`` read
 │   ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 │   ├── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
 │   └── `soundness_gate.py` - HUNK-level failure attribution
@@ -93,7 +92,6 @@ scripts/
 ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 ├── `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
-├── `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 ├── `commit.sh` - Description: Discoverable canonical entrypoint for commands/dev-overnight.md's
 ├── `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 ├── `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
@@ -150,8 +148,6 @@ scripts/
 ├── `restart-subagents.py` - CLI bridge for the human-only /restart recovery workflow.
 ├── `runcode-watchdog.py` - Watchdog process for browser_run_code timeout enforcement
 ├── `scan-project.sh` - Description: Scan project structure and detect project type
-├── `score-inject.sh` - Description: Emit a prompt-injection text block describing an agent's current rank/range
-├── `score-update.sh` - Description: Update agent score by appending an entry to the lifecycle JSONL log.
 ├── `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 ├── `session-index.py` - Subcommands (all take --git-root):
 ├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
