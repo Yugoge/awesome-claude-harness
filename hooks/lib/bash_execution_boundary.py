@@ -1412,6 +1412,8 @@ INERT_ARGV_CONSUMERS = {
 }
 
 SHELLS = {"bash", "sh", "dash", "zsh", "ksh", "ksh93", "mksh", "ash", "rbash", "bash5"}
+# A shell's script operand in the quoted CLAUDE_HOME channel (P2 R6), each component plain: a named file.
+CLAUDE_HOME_FILE = re.compile(r'"\$\{CLAUDE_HOME:-\$HOME/\.claude\}(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]*)+"')
 
 SHELL_SHORT_BOOL = set("abBCefhHiklmnpPrstTuvxD")
 SHELL_LONG_BOOL = {"--posix", "--norc", "--noprofile", "--login", "--restricted",
@@ -3590,7 +3592,10 @@ class Analyzer:
         operands = args[i:]
         if operands and not read_stdin:
             script = operands[0]
-            if script.literal() is None:
+            path = script.literal()
+            if path is None and CLAUDE_HOME_FILE.fullmatch(script.raw.text):
+                path = script.raw.text
+            if path is None:
                 self.scoped("dynamic_script_operand", script.raw.text[:60])
                 return
             # A named script file is the boundary; its operands are data handed
@@ -3603,11 +3608,11 @@ class Analyzer:
             # sweep measured this leaking for every installed shell.
             if self.word_is_removal_reference(script):
                 self.structural("shell_script_operand_removal_reference",
-                                "%s:%s" % (name, script.literal()[:60]))
+                                "%s:%s" % (name, path[:60]))
                 return
             for w in operands:
                 self.cover(w)
-            self.add(PROVEN_INERT, "shell_script_file", script.literal())
+            self.add(PROVEN_INERT, "shell_script_file", path)
             return
         body = self._stdin_code(redirs)
         if body is not None:
