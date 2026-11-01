@@ -131,7 +131,7 @@ def test_commit_completes_an_unclosed_task_from_one_disposition() -> None:
         assert gone not in command, gone
     # Each wait is one AskUserQuestion with a header of at most 12 characters.
     headers = __import__("re").findall(r"header `([^`]+)`", command)
-    assert sorted(headers) == ["Flags", "Hook block", "Request", "Task"], headers
+    assert sorted(headers) == ["Authorize", "Flags", "Request", "Task"], headers
     assert all(len(h) <= 12 for h in headers)
     assert "/stop" not in command and "I will fix the harness" not in command
     related = command[command.index("## Related") :]

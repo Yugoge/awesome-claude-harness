@@ -689,7 +689,8 @@ after QA reviewed it: rebuild the plan and dispatch a fresh QA over the actual s
 
 **A hook rejection** (`hook_blocked`, or any hook refusing a tool call during `/commit`) is
 the owner's decision (CLAUDE.md Subagent Hook Discipline #1-#3): the rejected operation is
-never retried, wrapped or bypassed. Ask one AskUserQuestion — header `Hook block`,
+never retried without the owner's grant, and never wrapped or bypassed. Ask one
+AskUserQuestion — header `Authorize`,
 question `<hook> refused <the operation> for task <TASK_ID>: authorize it?` with the hook's
 output verbatim, options `Authorize it` (description: the exact command the owner runs to
 authorize it, for example `/allow <op> <args>`; `/commit` runs the operation again once the
