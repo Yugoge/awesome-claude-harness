@@ -176,6 +176,9 @@ class Replay:
         # Optional fn(step label) -> deviations, consulted for a tool call or dispatch whose caller passes
         # none (a subagent's own calls, made by agents.Player): a driver sets it to reach those steps.
         self.deviation_at = None
+        # Dispatches whose subagent's stop waits for the next dispatch to end (a parallel batch's
+        # interleaving, as a fault asks for it: tests/replay/faults.py `defer`).
+        self.deferred: list = []
         os.makedirs(layout.out, exist_ok=True)
         os.makedirs(layout.markers, exist_ok=True)
         self._log = open(os.path.join(layout.out, "hooks.jsonl"), "w")
@@ -574,6 +577,7 @@ class Actor:
             self._result(tid, f"PreToolUse:{name} hook error: {text}", error=True)
             self.rp.after(step, call)
             return call
+        tinput = updated_input(call.pre, tinput)
         perform = step["perform"] or _default_perform(self, name, tinput)
         try:
             with self.rp.acting(self.role):
@@ -636,7 +640,8 @@ class Actor:
             deviation = self.rp.deviation_at(label)
         step = self.rp.step("dispatch", label, {"subagent_type": subagent_type, "prompt": prompt,
                                                 "description": description, "body": body, "result": result,
-                                                "deviation": deviation, "extra_input": extra_input or {}})
+                                                "deviation": deviation, "extra_input": extra_input or {},
+                                                "actor": self})
         d = Dispatch(label, "Agent", agent_type=step["subagent_type"])
         if step.get("skip"):
             d.skipped = True
@@ -665,13 +670,10 @@ class Actor:
         with open(meta, "w") as fh:
             json.dump({"agentType": atype, "description": agent_in["description"], "toolUseId": tid}, fh)
 
-        def rest(on_stop_block=on_stop_block):
+        def rest(on_stop_block=on_stop_block, stop_rounds=stop_rounds):
             if step["body"]:
                 step["body"](sub)
             final = step["result"](sub) if callable(step["result"]) else step["result"]
-            if getattr(self.rp, "fault_pending", None):
-                from . import faults
-                final = faults.forged_line(self.rp, aid, final)
             if d.final_line:
                 final = final.rstrip("\n") + "\n\n" + d.final_line
             sub.last_final = final
@@ -679,30 +681,17 @@ class Actor:
             if default is not None:  # an injected fault's agent repairs at its next round (faults.py)
                 own = on_stop_block
                 on_stop_block = (lambda s, ev: (own and own(s, ev)) or default(s, ev))
-            active = False
-            for _ in range(max(1, stop_rounds)):
-                self.s.say(final, aid)
-                d.stop = self.s.fire("SubagentStop", f"{label} stop", {
-                    "stop_hook_active": active, "agent_id": aid, "agent_type": atype,
-                    "agent_transcript_path": self.s.agent_tpath(aid), "last_assistant_message": final})
-                if not self.rp.settle(d.stop, f"{label} stop", step["deviation"]) or not on_stop_block:
-                    break
-                nxt = on_stop_block(sub, d.stop)
-                if not nxt:
-                    break
-                final, active = nxt, True
-            d.response = {"status": "completed", "prompt": prompt, "agentId": aid,
-                          "content": [{"type": "text", "text": final}],
-                          "totalDurationMs": int((time.monotonic() - t0) * 1000), "totalTokens": 0,
-                          "totalToolUseCount": sub.calls, "usage": {"input_tokens": 0, "output_tokens": 0}}
-            if not d.cut:  # a call cut before it came back gets no result (recovery.py reports its end)
-                self._result(tid, [{"type": "text", "text": final}], resp=d.response)
-                d.post = self.s.fire("PostToolUse", label, {"tool_name": "Agent", "tool_input": agent_in,
-                                                            "tool_response": d.response, "tool_use_id": tid},
-                                     self.agent)
-                self.rp.settle(d.post, label, step["deviation"])
-            d.ok = not d.stop.still_blocked
-            self.rp.after(step, d)
+                stop_rounds = max(stop_rounds, 4)  # F2g: a forged round before the repair round
+
+            def finish():
+                self._finish_dispatch(step, d, sub, agent_in, prompt, final, on_stop_block, stop_rounds, t0)
+
+            if step.get("defer_stop"):  # its stop comes after the next dispatch's (one parallel batch)
+                self.rp.deferred.append(finish)
+                return
+            finish()
+            while self.rp.deferred:
+                self.rp.deferred.pop(0)()
 
         cuts = getattr(self.rp, "cuts", None)
         if cuts is None:
@@ -711,8 +700,48 @@ class Actor:
             cuts.run(d, sub, rest, agent_in)
         return d
 
+    def _finish_dispatch(self, step, d, sub, agent_in, prompt, final, on_stop_block, stop_rounds, t0) -> None:
+        """The subagent's final text and stop rounds, the Agent tool_result and its PostToolUse."""
+        label, aid, atype, tid = d.label, d.agent_id, d.agent_type, d.tool_use_id
+        active = False
+        for _ in range(max(1, stop_rounds)):
+            self.s.say(final, aid)
+            d.stop = self.s.fire("SubagentStop", f"{label} stop", {
+                "stop_hook_active": active, "agent_id": aid, "agent_type": atype,
+                "agent_transcript_path": self.s.agent_tpath(aid), "last_assistant_message": final})
+            if not self.rp.settle(d.stop, f"{label} stop", step["deviation"]) or not on_stop_block:
+                break
+            nxt = on_stop_block(sub, d.stop)
+            if not nxt:
+                break
+            final, active = nxt, True
+        d.response = {"status": "completed", "prompt": prompt, "agentId": aid,
+                      "content": [{"type": "text", "text": final}],
+                      "totalDurationMs": int((time.monotonic() - t0) * 1000), "totalTokens": 0,
+                      "totalToolUseCount": sub.calls, "usage": {"input_tokens": 0, "output_tokens": 0}}
+        if not d.cut:  # a call cut before it came back gets no result (recovery.py reports its end)
+            self._result(tid, [{"type": "text", "text": final}], resp=d.response)
+            d.post = self.s.fire("PostToolUse", label, {"tool_name": "Agent", "tool_input": agent_in,
+                                                        "tool_response": d.response, "tool_use_id": tid},
+                                 self.agent)
+            self.rp.settle(d.post, label, step["deviation"])
+        d.ok = not d.stop.still_blocked
+        self.rp.after(step, d)
+
 
 # ---------------------------------------------------------------- tool effects
+
+def updated_input(pre: Event | None, tinput: dict) -> dict:
+    """The input the tool runs with: a PreToolUse hook that allows the call may print
+    hookSpecificOutput.updatedInput, whose fields replace the model's (the CLI's hooks reference,
+    PreToolUse decision control), and PostToolUse sees the input the tool ran with.
+    pretool-overnight-hook-guard.py rewrites an overnight actor's Bash command into its bubblewrap
+    re-exec this way (hookrun keeps it as "updated_input"). The transcript keeps the model's tool_use."""
+    for h in (pre.hooks if pre else []):
+        if h["verdict"] == "ok" and h.get("updated_input"):
+            tinput = dict(tinput, **h["updated_input"])
+    return tinput
+
 
 def _result_text(resp) -> str:
     if isinstance(resp, dict):

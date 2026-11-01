@@ -200,6 +200,22 @@ def cycle_index(state, written=()):
         return 1
 
 
+def closeout_gaps(state):
+    """What the session's end needs and has not written, read from disk: `final_summary` until
+    Step 21's docs/dev/overnight-summary-*.md under the working root is written after start_time
+    (any, when start_time does not parse) and not empty. The main agent writes it, so its own Stop
+    decides on it; the PM retro report is decided at PM's stop (G2) and not re-checked here."""
+    try:
+        start = _parse_end_time(state.get('start_time'))
+        since = start.timestamp() if start else 0.0
+        for p in sorted((working_root(state) / 'docs' / 'dev').glob('overnight-summary-*.md')):
+            if p.stat().st_mtime > since and p.read_text(errors='replace').strip():
+                return []
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return ['final_summary']
+
+
 def candidate_project_dirs(project_dir=None):
     """Ordered, de-duplicated dirs whose .claude/ may hold the state file.
 
