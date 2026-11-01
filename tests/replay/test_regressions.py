@@ -1,6 +1,6 @@
 """Regression replays (D25 (4)): each defect a review found, replayed on the tree under test.
 
-R-V1 (reviews V1-1 and NV-1 of P7b's PR) is a script-level replay. A
+R-N1 (review N1 of P7b's PR, X9) and R-V1 (reviews V1-1 and NV-1) are script-level replays. A
 landed harness home is a clone of a local bare origin built from the tree under test's tracked
 files and made landed by init (scripts/bootstrap); the CLI's writes are plain file writes; /pull is
 hooks/pull.sh and fswatch's periodic pull is git-fswatch.sh's safe_pull, each in the session's
@@ -119,6 +119,89 @@ def _landing_result(home):
     """The result of the landing's last logged run (logs/landing.log), or "" when none ran."""
     results = [w for w in landing_log(home).split() if w.startswith("result=")]
     return results[-1] if results else ""
+
+
+def _home_head(env, home):
+    head = git(env, home, "rev-parse", "HEAD").stdout.strip()
+    upstream = git(env, home, "rev-parse", "origin/master").stdout.strip()
+    ls = git(env, home, "ls-remote", "origin", "refs/heads/master").stdout.split()[0]
+    return "HEAD %s origin/master %s upstream %s" % (head[:12], upstream[:12], ls[:12]), \
+        head == ls
+
+
+# ----------------------------------------------------------------------- R-N1 (review N1, X9)
+
+def _assert_pulled_and_kept(env, home, rc, out, path):
+    state, at_upstream = _home_head(env, home)
+    assert rc == 0, "%s rc=%d; %s\n%s" % (path, rc, state, out[-1500:])
+    assert at_upstream, "%s rc=%d but %s\n%s" % (path, rc, state, out[-1500:])
+    assert (home / "upstream-note.md").exists()
+    doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    assert doc.get("model") == "demo-live-model", "the CLI's model was not kept"
+    assert git(env, home, "stash", "list").stdout == "", "something was stashed"
+    assert git(env, home, "status", "--porcelain").stdout == ""
+
+
+@pytest.mark.parametrize("path", ["pull.sh", "safe_pull"])
+def test_r_n1_a_cli_write_then_a_stop_then_the_pull_reaches_upstream(tmp_path, env, path):
+    """X9 (i): on a landed home the CLI writes `model`, a key the clean form leaves out, into
+    settings.json (stat-dirty, unchanged through the filter); one Stop; then /pull and fswatch's
+    pull each reach upstream, `model` is kept and nothing is stashed. Before (1d10ae0): pull.sh
+    exited 1 (`cannot pull with rebase: You have unstaged changes`), safe_pull returned 0, HEAD
+    behind."""
+    home, _work, session = _landed_harness_home(tmp_path, env)
+    cli_write(home / "settings.json", "model", "demo-live-model")
+    assert git(env, home, "diff-files", "--name-only").stdout == "settings.json\n"
+    _harness_stop(session, home)
+    rc, out = _home_pull(session, home, path)
+    _assert_pulled_and_kept(env, home, rc, out, path)
+
+
+@pytest.mark.parametrize("path", ["pull.sh", "safe_pull"])
+def test_r_n1_a_cli_write_then_the_pull_before_any_stop_reaches_upstream(tmp_path, env, path):
+    """X9 (ii): the same CLI write, then the pull before any Stop (`/model` starts no turn). The
+    landing's re-record of settings.json's stat runs before the pull's stash decision (R20), so
+    the pull goes through as after a Stop. Before (b97f947, review N1's remaining window): pull.sh
+    exited 1, safe_pull returned 0 without pulling."""
+    home, _work, session = _landed_harness_home(tmp_path, env)
+    cli_write(home / "settings.json", "model", "demo-live-model")
+    assert git(env, home, "diff-files", "--name-only").stdout == "settings.json\n"
+    rc, out = _home_pull(session, home, path)
+    _assert_pulled_and_kept(env, home, rc, out, path)
+    _harness_stop(session, home)
+    assert git(env, home, "status", "--porcelain").stdout == ""
+
+
+def _gone_origin(env, home, tmp_path):
+    git(env, home, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+
+
+def _index_lock(env, home, tmp_path):
+    (home / ".git/index.lock").write_text("")
+
+
+def _lock_and_an_owner_edit(env, home, tmp_path):
+    (home / "README.md").write_text("an owner's edit\n", encoding="utf-8")
+    (home / ".git/index.lock").write_text("")
+
+
+@pytest.mark.parametrize("step,fault,said", [
+    ("fetch", _gone_origin, "Failed to fetch from remote"),
+    ("stash push", _lock_and_an_owner_edit, "Failed to stash changes"),
+    ("pull", _index_lock, "Pull failed"),
+], ids=["fetch", "stash-push", "pull"])
+def test_r_n1_safe_pull_returns_non_zero_when_a_step_fails(tmp_path, env, step, fault, said):
+    """safe_pull judges each step by its git command's own exit status, not tee's: a failed fetch
+    (origin gone), stash push (index.lock held, an owner's edit to stash) or pull (index.lock held)
+    is logged as failed and safe_pull returns non-zero; HEAD stays. Before (b97f947): tee's status
+    chose, so each was logged as success and safe_pull returned 0 behind upstream."""
+    home, _work, session = _landed_harness_home(tmp_path, env)
+    fault(env, home, tmp_path)
+    head = git(env, home, "rev-parse", "HEAD").stdout
+    rc, out = _home_pull(session, home, "safe_pull")
+    assert rc != 0, "safe_pull rc=0 after a failed %s\n%s" % (step, out[-1500:])
+    assert said in out and "Pull successful" not in out, out[-1500:]
+    assert git(env, home, "rev-parse", "HEAD").stdout == head
 
 
 # ------------------------------------------------------------- R-V1 (reviews V1-1 and NV-1)
