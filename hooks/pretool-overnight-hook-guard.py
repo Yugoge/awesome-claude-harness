@@ -10,6 +10,8 @@ Enforcement layers:
   1. Global: Block modifications to .claude/hooks/ and overnight-state files.
   2. Session: Block file writes where path lacks "worktree" string.
   3. Session: Block file writes outside the worktree realpath boundary.
+  AskUserQuestion: denied to the /dev-overnight session's main agent and
+  subagents until a human-typed prompt follows its /dev-overnight (D20).
 
 Exit codes:
   0: Allow tool use
@@ -32,7 +34,7 @@ from lib.bash_write_targets import (  # noqa: E402
     extract_bash_write_paths,
 )
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
-from lib import overnight  # noqa: E402
+from lib import command_span, overnight, stop_contract  # noqa: E402
 
 try:  # T2.4: optional contract runtime + agent resolver for self_repair grant.
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -2067,9 +2069,41 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str) -> N
         )
 
 
+_UNATTENDED_DENY = {  # D20: nobody answers a question asked inside /dev-overnight
+    False: "Overnight is unattended; nobody answers. Decide (experiment, else the question's default), record the "
+           "decision in the cycle log and in the summary's 'Decisions made without the owner', and continue.",
+    True: "Nobody answers overnight. Decide by experiment if one can be run, else take the question's default; "
+          "record the decision, its options, the evidence or experiment and the chosen option in your report, "
+          "and write your report.",
+}
+
+
+def _unattended(payload: dict) -> bool:
+    """True while the caller's session is unattended: the latest human-typed
+    prompt of its main transcript is /dev-overnight. A subagent's payload
+    carries its session's transcript_path (or its own, <sid>/subagents/
+    agent-<id>.jsonl, read as <sid>.jsonl), so it needs no registration; no
+    state file decides, and another session's transcript has no such prompt."""
+    path = Path(str(payload.get('transcript_path') or ''))
+    if path.parent.name == 'subagents':
+        path = path.parent.parent.parent / f'{path.parent.parent.name}.jsonl'
+    latest = None
+    try:
+        for _number, record in command_span._records(path):
+            if stop_contract.is_human_prompt(record):
+                latest = record
+    except (OSError, ValueError):
+        return False
+    return stop_contract.span_opener(latest, frozenset({'dev-overnight'})) is not None
+
+
 def main():
     """Entry point: apply global + actor-scoped overnight enforcement (M9)."""
     tool_name, tool_input, session_id, payload = _parse_hook_input()
+    if tool_name == 'AskUserQuestion':  # R10: the deny is this hook's only rule for it
+        if _unattended(payload):
+            _block(_UNATTENDED_DENY[bool(payload.get('agent_id'))] + '\n')
+        sys.exit(0)
     state = _load_session_state(session_id)
     _set_request_ctx(state, payload)  # T2.4: enable self_repair grant lookup
     if is_overnight_active():
