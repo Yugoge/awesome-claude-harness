@@ -1,7 +1,9 @@
 """scripts/orchestrator.sh's /clean modes meet the files /clean writes and reads.
 
-clean-merge-reports reads the three inspector reports of the request the Step 3 context
-names and writes docs/clean/combined-report-<id>.json, the file Steps 13, 14 and 16 read.
+clean-merge-reports reads the three inspection reports of the request the Step 3 context
+names and writes docs/clean/combined-report-<id>.json, the file Steps 13, 14 and 16 read. It
+checks the style report, which the main agent writes itself (Step 9); the cleanliness and prompt
+reports are checked at their inspector's own stop (G2), and the merge decides nothing on them.
 record-checkpoint prints the checkpoint record and rewrites no file, the context it reads
 included (Step 16 carries the commit into the cleaner's context).
 """
@@ -54,15 +56,33 @@ def test_merge_writes_the_combined_report_clean_reads(tmp_path):
     assert merged["combined_summary"] == {"total_issues": 4, "critical": 1, "major": 1, "minor": 2}
 
 
-@pytest.mark.parametrize("missing", ["cleanliness", "style", "prompt"])
-def test_merge_requires_every_report(tmp_path, missing):
-    context = project(tmp_path, [k for k in ("cleanliness", "style", "prompt") if k != missing])
+def test_merge_requires_the_style_report(tmp_path):
+    context = project(tmp_path, ["cleanliness", "prompt"])
 
     completed = run(tmp_path, "clean-merge-reports", str(context))
 
     assert completed.returncode == 1
-    assert f"{missing}-report-{RID}.json" in completed.stderr
+    assert f"style-report-{RID}.json" in completed.stderr
     assert not (tmp_path / "docs" / "clean" / f"combined-report-{RID}.json").exists()
+
+
+@pytest.mark.parametrize("fault", ["missing", "notjson"])
+@pytest.mark.parametrize("inspector", ["cleanliness", "prompt"])
+def test_merge_decides_nothing_on_an_inspector_report(tmp_path, inspector, fault):
+    """G2 decides on an inspector's report at that inspector's stop: the merge's exit is the same
+    whatever the report holds, and its section of the combined report is the report as it is."""
+    context = project(tmp_path)
+    report = tmp_path / "docs" / "clean" / f"{inspector}-report-{RID}.json"
+    if fault == "missing":
+        report.unlink()
+    else:
+        report.write_text('{"findings": [')
+
+    completed = run(tmp_path, "clean-merge-reports", str(context))
+
+    assert completed.returncode == 0, completed.stderr
+    merged = json.loads((tmp_path / "docs" / "clean" / f"combined-report-{RID}.json").read_text())
+    assert merged[f"{inspector}_report"] is None
 
 
 def test_record_checkpoint_prints_the_record_and_rewrites_nothing(tmp_path):

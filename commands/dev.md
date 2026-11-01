@@ -1030,6 +1030,7 @@ initial worker shard.
 ## Files Generated
 
 *(Single-lane cycle, N == 1)*
+- Ticket: `docs/dev/ticket-<timestamp>.md`
 - Context: `docs/dev/context-<timestamp>.json`
 - Dev Report: `docs/dev/dev-report-<timestamp>.json`
 - QA Report: `docs/dev/qa-report-<timestamp>.json`

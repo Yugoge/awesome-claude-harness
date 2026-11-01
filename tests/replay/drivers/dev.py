@@ -730,9 +730,6 @@ class DevCycle:
             if "Fan-out cycle" in l or "Per lane `<lane>`" in l or "Aggregate Dev Report" in l:
                 continue
             out.append(l)
-            if l.startswith("- Context:"):  # the five-artifact contract Step 17 states includes the ticket
-                ticket = next(p for p in self.ba_outputs if p.endswith(".md"))
-                out.insert(len(out) - 1, f"- Ticket: `{ticket}`")
         return out
 
     def step17(self) -> None:

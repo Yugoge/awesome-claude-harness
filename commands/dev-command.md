@@ -102,6 +102,11 @@ if [ -n "$spec_path" ]; then
   VIEWS_DIR=$(jq -r '.views_dir // empty'        <<<"$RESOLVED_JSON")
   CP_DIR=$(jq -r '.cp_dir // empty'              <<<"$RESOLVED_JSON")
 fi
+if [ -n "$spec_path" ] && [ -d "$CLAUDE_PROJECT_DIR/$CP_DIR" ]; then
+  SPEC_ID="$ARTIFACT_ID"
+else
+  SPEC_ID=""
+fi
 ```
 
 When `VIEWS_AVAILABLE` is `true`, read `view_paths` from `$MANIFEST_PATH` (`views` map of agent → path). The resolver returns `views_available=false` with exit 0 for a genuinely legacy spec with no split artifacts — those are fully supported, the monolith path alone is passed to subagents with no checkpoint enforcement.
@@ -148,16 +153,10 @@ Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the 
 
 Reuse the resolver output from the views-detection step — do NOT re-derive the
 spec-id from `spec_path`. The cp-state directory is exactly the resolver's `cp_dir`:
+the resolver block above sets `SPEC_ID` to the canonical artifact id the resolver
+reports when that directory exists, and to `""` when it does not (or without a spec).
 
-```bash
-if [ -n "$spec_path" ] && [ -d "$CLAUDE_PROJECT_DIR/$CP_DIR" ]; then
-  SPEC_ID="$ARTIFACT_ID"          # resolver's canonical artifact id
-else
-  SPEC_ID=""                       # no cp-state dir -> skip SECOND ACTION below
-fi
-```
-
-If no cp-state directory exists, set `SPEC_ID=""` and skip the `SECOND ACTION`
+If no cp-state directory exists, `SPEC_ID` is `""`: skip the `SECOND ACTION`
 lines below. If a particular agent has no cp-state file under that SPEC_ID, omit that
 agent's `SECOND ACTION` for this launch. When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a
 cp-state file MUST include a `SECOND ACTION` line immediately after the dev-registry `FIRST ACTION`:
@@ -752,7 +751,7 @@ Dev iterates and QA re-checks until QA's status is `pass`; pass is the only exit
 ```markdown
 # Development Completion Report
 
-**Request ID**: dev-<timestamp>
+**Request ID**: <timestamp>
 **Completed**: <ISO-8601>
 **Iterations**: <N>
 
@@ -810,6 +809,7 @@ Dev iterates and QA re-checks until QA's status is `pass`; pass is the only exit
 
 ## Files Generated
 
+- Ticket: `docs/dev/ticket-<timestamp>.md`
 - Context: `docs/dev/context-<timestamp>.json`
 - Dev Report: `docs/dev/dev-report-<timestamp>.json`
 - QA Report: `docs/dev/qa-report-<timestamp>.json`
