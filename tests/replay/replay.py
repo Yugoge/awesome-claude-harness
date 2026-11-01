@@ -167,6 +167,8 @@ class Replay:
         self.bash_env = {k: v for k, v in self.env.items() if k != "CLAUDE_PROJECT_DIR"}
         self.args: dict = {}  # the driver's arguments (cli.py --arg K=V)
         self.respellings: list = []  # row 7 respellings a driver applied, one record per call
+        self.fault_records: list = []  # the injected faults (faults.py), written to faults.json
+        self.terminals: list = []  # what each typed command reached (terminal()), in order
         # Optional fn(step label) -> deviations, consulted for a tool call or dispatch whose caller passes
         # none (a subagent's own calls, made by agents.Player): a driver sets it to reach those steps.
         self.deviation_at = None
@@ -221,6 +223,17 @@ class Replay:
     def rand(self, value) -> None:
         """A random name part the replay learned (a mktemp suffix a later step names)."""
         self.ids.add("rand", value)
+
+    def terminal(self, pipeline: str, reached: bool, stop=None, **detail) -> None:
+        """Record what the typed command `pipeline` reached (P1c's suite reads terminals.json): `reached`
+        is its own terminal condition, and `stop` the Event of the Stop that ended it, which must carry
+        no block at all (a block a deviation passed included)."""
+        blocked = [b["hook"] for b in getattr(stop, "blocks", [])] if stop is not None else []
+        rec = {"pipeline": pipeline, "reached": bool(reached) and stop is not None and not blocked,
+               "condition": bool(reached), "stop": "none" if stop is None else ("blocked" if blocked else "ok"),
+               "stop_blocks": blocked}
+        rec.update({k: v for k, v in detail.items()})
+        self.terminals.append(rec)
 
     def mark(self, kind: str, value: str) -> None:
         """A step or actor marker: a file the trace sees created, its value kept in markers.jsonl."""
@@ -344,6 +357,8 @@ class Replay:
         with open(os.path.join(out, "blocks.json"), "w") as fh:
             json.dump({"blocks": self.blocks, "deviations": self.deviations, "hook_errors": self.hook_errors,
                        "failed_calls": self.failed_calls, "respellings": self.respellings}, fh, indent=1)
+        with open(os.path.join(out, "terminals.json"), "w") as fh:
+            json.dump(self.terminals, fh, indent=1, default=str)
         with open(os.path.join(out, "ids.json"), "w") as fh:
             json.dump({"ids": self.ids.to_json(), "window": [self.window.start, self.window.end],
                        "layout": self.layout.to_json()}, fh, indent=1)
@@ -648,6 +663,14 @@ class Actor:
         if step["body"]:
             step["body"](sub)
         final = step["result"](sub) if callable(step["result"]) else step["result"]
+        if getattr(self.rp, "fault_pending", None):
+            from . import faults
+            final = faults.forged_line(self.rp, aid, final)
+        sub.last_final = final
+        default = getattr(self.rp, "on_stop_block_default", None)
+        if default is not None:  # an injected fault's agent repairs at its next round (faults.py)
+            own = on_stop_block
+            on_stop_block = (lambda s, ev: (own and own(s, ev)) or default(s, ev))
         active = False
         for _ in range(max(1, stop_rounds)):
             self.s.say(final, aid)

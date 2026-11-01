@@ -1196,7 +1196,8 @@ class CloseRun:
         self.start(self.tid)
         last = self.body()
         self.outcome = last
-        self.o.s.stop(f"/close {self.tid}: {last}", label="/close Stop", deviation=self.devs.at("/close Stop"))
+        ev = self.o.s.stop(f"/close {self.tid}: {last}", label="/close Stop", deviation=self.devs.at("/close Stop"))
+        self.rp.terminal("close", last.startswith("CLOSE: YES"), ev, task=self.tid, last_line=last)
         return last
 
     # ------------------------------------------------------------ --auto
@@ -1229,7 +1230,9 @@ class CloseRun:
             results.append((tid, outcome))
         o.s.say("\n".join(f"{t}: {oc}" for t, oc in results) or "no close_pending parent")
         self.outcome = "; ".join(f"{t}: {oc}" for t, oc in results)
-        o.s.stop(f"/close --auto: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
+        ev = o.s.stop(f"/close --auto: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
+        self.rp.terminal("close", bool(results) and all(oc == "success" for _, oc in results), ev,
+                         outcome=self.outcome)
         return results
 
 

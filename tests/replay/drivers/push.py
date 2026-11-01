@@ -252,7 +252,7 @@ class PushRun:
 
     def say_stop(self, text: str) -> None:
         self.outcome = text
-        self.o.s.stop(text, label=self.label("Stop"), deviation=self.devs.at(self.label("Stop")))
+        self.stop_ev = self.o.s.stop(text, label=self.label("Stop"), deviation=self.devs.at(self.label("Stop")))
 
     def check(self, call):
         """A call a hook refused that no declared deviation passed: pause (the turn ends)."""
@@ -574,6 +574,14 @@ def owner_commit(rp) -> None:
         mergedrv._owner_git(p, "commit", "-qam", "docs: say what toy does", date="2026-01-01T00:02:00+0000")
 
 
+def _facts(rp) -> list:
+    try:
+        with open(os.path.join(rp.layout.out, "facts.json")) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return []
+
+
 def run(rp) -> None:
     after = rp.args.get("after", "do")
     if after not in ("do", "dev", "dev-command", "none"):
@@ -596,4 +604,7 @@ def run(rp) -> None:
                                            "landed": [(rp.norm_text(r), sha) for r, sha in cm.landed],
                                            "toy": origin_state(rp), "left": leftovers(rp)})
     session = rp.later_session(s) if session_kind == "later" else s
-    PushRun(rp, session, args=typed, state_mode=state_mode).run()
+    pr = PushRun(rp, session, args=typed, state_mode=state_mode)
+    pr.run()
+    pushed = [f["value"] for f in _facts(rp) if f.get("key") == "push"]
+    rp.terminal("push", bool(pushed) and bool(pushed[-1].get("pushed")), getattr(pr, "stop_ev", None))

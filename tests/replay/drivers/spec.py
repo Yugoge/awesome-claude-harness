@@ -930,7 +930,10 @@ class SpecRun:
         o.advance()  # Step 6 done, Step 7 in progress
         self.step7()
         o.advance()  # Step 7 done
-        s.stop(self.display, label="Stop", deviation=o.devs.at("Stop"))
+        ev = s.stop(self.display, label="Stop", deviation=o.devs.at("Stop"))
+        spec = os.path.join(self.project, self.path) if not os.path.isabs(self.path) else self.path
+        self.rp.terminal("spec", os.path.isfile(spec) and getattr(self, "split_verdict", "") == "pass", ev,
+                         spec=self.path)
 
     def finalize(self) -> None:
         o, s = self.o, self.s
@@ -963,6 +966,7 @@ class SpecRun:
                 self.agent.extra.setdefault(issue["view"], []).append(named.group(1))
             self.dispatch_spec(2, f"Step 6 Agent(spec) re-split round {self.qa_round}")
             verdict = self.split_qa()
+        self.split_verdict = verdict
         # 4. The marker, written by this command after the split QA's last verdict.
         marker_item = next(it for it in re.split(r"\n(?=\d+\.\s)", sec) if ".split-complete" in it and "Mark split" in it)
         content = re.search(r'Write `"([^`]+)"` to `([^`]+)`', marker_item)

@@ -1573,8 +1573,12 @@ class Night:
             c = st.run_text(b.text, f"/stop Bash {name}", "Release the overnight time-lock")
             out.append((c.response.get("stdout", "") if c.ok else c.error).strip())
         said = "\n".join(x for x in out if x)
-        s.stop(f"/stop ran the release wrapper:\n{said}\nThe working branch, the state record and the cycle log "
-               "are left for review.", label="/stop Stop", deviation=self.o.devs.at("/stop Stop"))
+        ev = s.stop(f"/stop ran the release wrapper:\n{said}\nThe working branch, the state record and the cycle log "
+                    "are left for review.", label="/stop Stop", deviation=self.o.devs.at("/stop Stop"))
+        # The owner's /stop ends the session inside the window: /dev-overnight's own terminal (the Stop
+        # after end_time with the summary written) is not reached in this replay.
+        self.rp.terminal("stop", True, ev)
+        self.rp.terminal("dev-overnight", False, None, why="ended by the owner's /stop inside the window")
 
     def run(self) -> None:
         self.launch()

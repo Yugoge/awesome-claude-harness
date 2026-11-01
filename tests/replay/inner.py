@@ -53,6 +53,9 @@ def main(argv=None) -> int:
                        settings_label=cfg["settings_label"], env_extra=cfg.get("env") or {},
                        faults=getattr(driver, "FAULTS", ()), parallel_hooks=cfg.get("parallel_hooks", False))
     rp.args = dict(cfg.get("driver_args") or {})
+    if rp.args.get("fault"):  # P1c: the injected faults of the suite (tests/replay/faults.py)
+        from . import faults
+        faults.install(rp, rp.args["fault"])
     t0, err = time.time(), ""
     rp.mark("run", "begin")
     try:

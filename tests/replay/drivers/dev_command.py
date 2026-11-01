@@ -506,7 +506,8 @@ class DevCommandCycle:
         else:  # the postcondition blocks completion; the block's `|| exit 2` printed no errors[]
             text = (f"/dev-command {self.tid}: QA passed and {CMD_REL} runs the toy package tests, but the "
                     "artifact-chain postcondition (Step 16) exited 2, so the cycle is not complete.")
-        o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        ev = o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        self.rp.terminal("dev-command", self.chain_ok, ev, task=self.tid)
 
 
 def run(rp) -> None:

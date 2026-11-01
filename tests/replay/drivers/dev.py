@@ -80,9 +80,8 @@ the old form; each application is recorded in blocks.json "respellings":
 Not respelled (row 7): BA's and QA's blast-radius tool calls (ba.md:789, qa.md:1155) run as
 written and fail; the replay goes on.
 
-Deviations: DEVIATIONS below, one entry per block the base tree's (2acc29b) replay meets, each
-with a comment quoting the hook's text; nothing else passes a block. On another tree an entry
-whose block no longer occurs is a no-op.
+Deviations: none (DEVIATIONS is empty since P1c fixed each block at its cause): every block a
+replay meets stays blocked and is reported; P1c's suite (tests/replay/test_pipelines.py) fails on it.
 """
 from __future__ import annotations
 
@@ -118,35 +117,11 @@ RESPELLINGS = [
 
 # Blocks the base tree's replay meets, each passed by a deviation at the step it occurs on: the
 # refused call is applied as if allowed, so every later step runs and is traced.
-DEVIATIONS = Deviations([
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED option_value_removal_reference:date:-d=..."
-    # pretool-bash-safety.sh refuses Step 1's auto-detect block (its `date -d` option value).
-    ("Step 1 Bash SESSION_TS", Deviation(
-        "hooks/pretool-bash-safety.sh", "UNRESOLVED option_value_removal_reference:date:-d",
-        "Step 1's auto-detect block as the text spells it")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote"
-    # pretool-bash-safety.sh refuses Step 1's SPEC_ID block (the apostrophe in its comment).
-    ("Step 1 Bash SPEC_ID", Deviation(
-        "hooks/pretool-bash-safety.sh", "UNRESOLVED census_fatal:unbalanced:single_quote",
-        "Step 1's SPEC_ID block as the text spells it")),
-    # DEVIATION: "[Orchestrator Gate] BLOCKED: Bash used consecutively beyond limit (6/5)."
-    # The text's Bash blocks between two dispatches outnumber the gate's cap of 5 (only an Agent
-    # dispatch resets the count): Steps 1-4 before BA, Steps 14-17 after the last QA.
-    ("*Bash*", Deviation(
-        "hooks/pretool-orchestrator-gate.py", "Bash used consecutively beyond limit",
-        "the command's own run of Bash blocks between dispatches")),
-    # DEVIATION: "BLOCKED: Cannot complete Step 8 (\"Step 9: Graphify enrichment: dispatch graphify
-    # subagent (advisory)\"). This step requires a subagent call (graphify) that has not been made."
-    # Step 9 tells the orchestrator not to dispatch graphify when its sentinel is absent.
-    ("TodoWrite Step 9 done, Step 10 in_progress", Deviation(
-        "hooks/pretool-todo-validate.py", "This step requires a subagent call (graphify) that has not been made",
-        "Step 9 skipped as the text says (graphify sentinel absent)")),
-    # DEVIATION: "[Write Guard] BLOCKED: File already exists: /var/tmp/claude-scratch/update-<rand>.md"
-    # /spec-update --temp (which Step 17 runs) creates the note with mktemp, reads it, then writes it.
-    ("Step 17 Write update note", Deviation(
-        "hooks/pretool-write-guard.sh", "[Write Guard] BLOCKED: File already exists",
-        "the temp note mktemp created, written as /spec-update --temp says")),
-])
+# P1c removed each block these passed at its cause (commands/dev.md: Step 1's resolver and SPEC_ID
+# blocks are one Bash call with no comment the bash-safety census misreads; Step 2's query and
+# auto-init are one call, so Steps 1-4 stay within the orchestrator gate's 5-Bash streak; the base
+# tree's Step 1 `date -d`, Step 9 graphify and Step 17 temp-note blocks were gone already).
+DEVIATIONS = Deviations([])
 
 
 class _KeptDeviation:
@@ -799,7 +774,8 @@ class DevCycle:
         o = self.o
         text = (f"/{o.typed} {self.tid} complete: {self.sc.dev_summary}; QA passed. Next: /close {self.tid}"
                 if getattr(self, "chain_ok", True) else self.not_complete())
-        o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        ev = o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        self.rp.terminal(o.typed, getattr(self, "chain_ok", False), ev, task=self.tid)
 
     # ------------------------------------------------------------ the whole cycle
     def run(self) -> None:
@@ -1003,7 +979,8 @@ class FanoutCycle(DevCycle):
         text = (f"/{o.typed} {self.tid} complete: " + "; ".join(
             f"lane {l.name}: {l.sc.dev_summary}" for l in self.lanes) + "; every lane's QA passed. "
             f"Next: /close {self.tid}") if getattr(self, "chain_ok", True) else self.not_complete()
-        o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        ev = o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        self.rp.terminal(o.typed, getattr(self, "chain_ok", False), ev, task=self.tid, lanes=len(self.lanes))
 
     def run(self) -> None:
         o = self.o

@@ -83,6 +83,9 @@ from ..pipeline import Deviations, Orchestrator, Respelling, utc_now
 from ..replay import Deviation
 from . import close as closedrv
 
+# /commit's success outcomes (Step 7's commit_status, as the --auto walk counts them).
+COMMITTED = ("committed", "nothing_to_commit", "push_gate_reconciled", "nothing_to_commit_precommitted")
+
 PIPELINE = "commit"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
@@ -705,6 +708,7 @@ class CommitRun:
                             tokens.append(f)
                     except (OSError, ValueError):
                         pass
+        self.tokens = tokens
         closedrv.fact(self.rp, "commit", {"commit_status": cs, "landed": [(r, s) for r, s in self.landed],
                                           "push_gate_tokens": tokens,
                                           "subject": self.git_log()})
@@ -724,8 +728,27 @@ class CommitRun:
         self.o.slash(self.tid, label=self.label("typed"))
         out = self.walk()
         text = self.awaiting if isinstance(self.awaiting, str) else f"/commit {self.tid}: {out}"
-        self.o.s.stop(text, label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        ev = self.o.s.stop(text, label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        self.rp.terminal("commit", out in COMMITTED and self.clean(), ev, task=self.tid, outcome=out)
         return out
+
+    def clean(self) -> bool:
+        """The terminal's git half: each landed commit on its repository's HEAD, a push-gate token for it,
+        and none of its paths left in `git status --porcelain`."""
+        import subprocess
+        def git(root, *args):
+            return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+        if not self.landed or len(getattr(self, "tokens", [])) < len(self.landed):
+            return False
+        with self.rp.acting("driver"):
+            for root, sha in self.landed:
+                if git(root, "merge-base", "--is-ancestor", sha, "HEAD").returncode:
+                    return False
+                paths = set(git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", sha).stdout.split())
+                left = {l[3:].split(" -> ")[-1] for l in git(root, "status", "--porcelain").stdout.splitlines()}
+                if paths & left:
+                    return False
+        return True
 
     def lifecycle_row(self) -> None:
         """Driver diagnostics, no agent call: the task's lifecycle row when discovery listed no parent."""
@@ -756,13 +779,14 @@ class CommitRun:
             self.tid = line.split()[0]
             self.rp.task(self.tid)
             out = self.walk()
-            results.append((self.tid, "success" if out in ("committed", "nothing_to_commit", "push_gate_reconciled",
-                                                           "nothing_to_commit_precommitted") else out))
+            results.append((self.tid, "success" if out in COMMITTED else out))
         if not parents:
             self.lifecycle_row()
         o.s.say("\n".join(f"{t}: {r}" for t, r in results) or "no commit_pending parent")
         self.outcome = "; ".join(f"{t}: {r}" for t, r in results)
-        o.s.stop(f"/commit --auto: {self.outcome}", label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        ev = o.s.stop(f"/commit --auto: {self.outcome}", label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        self.rp.terminal("commit", bool(results) and all(r == "success" for _, r in results) and self.clean(), ev,
+                         outcome=self.outcome)
         return results
 
 

@@ -212,7 +212,7 @@ class MergeRun:
 
     def say_stop(self, text: str) -> None:
         self.outcome = text
-        self.o.s.stop(text, label=self.label("Stop"), deviation=self.devs.at(self.label("Stop")))
+        self.stop_ev = self.o.s.stop(text, label=self.label("Stop"), deviation=self.devs.at(self.label("Stop")))
 
     def captured(self, text: str, label: str, desc: str, names=(), actor=None):
         """One Bash call of a block; the listed variables it sets kept in the orchestrator's values."""
@@ -405,6 +405,7 @@ class MergeRun:
         o = self.o
         block = o.block("Step 5", lang="bash")
         c = self.check(o.run(o.bind(block), "Step 5: call merge.sh", self.label("Step 5 Bash merge.sh")))
+        self.merged = c.ok and not c.blocked
         closedrv.fact(self.rp, "merge.sh", {"ok": c.ok, "blocked": c.blocked,
                                            "output": self.rp.norm_text((c.response.get("stdout") or "") if c.ok
                                                                        else (c.error or ""))[-1500:],
@@ -718,6 +719,7 @@ def run(rp) -> None:
     closedrv.fact(rp, "owner setup", toy_state(rp))
     mr = MergeRun(rp, typed_ref=ref, sid_mode=sid_mode)
     mr.run(ref)
+    last = mr
     if variant == "conflict" and mr.o.values.get("RESOLVED_REF"):
         st = toy_state(rp)
         if any(s[:2] in ("UU", "AA") for s in st["status"]):
@@ -725,3 +727,11 @@ def run(rp) -> None:
             again = MergeRun(rp, session=mr.o.s, typed_ref=ref or mr.o.values["RESOLVED_REF"], sid_mode=sid_mode,
                              tag="/merge (2)")
             again.run(ref or mr.o.values["RESOLVED_REF"])
+            last = again
+    p = rp.layout.project
+    with rp.acting("driver"):
+        tip = subprocess.run(["git", "-C", p, "rev-parse", "-q", "--verify", FEATURE], capture_output=True,
+                             text=True).stdout.strip()
+        merged = bool(tip) and not subprocess.run(["git", "-C", p, "merge-base", "--is-ancestor", tip, "master"],
+                                                  capture_output=True).returncode
+    rp.terminal("merge", merged, getattr(last, "stop_ev", None), topic=FEATURE)
