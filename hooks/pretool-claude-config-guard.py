@@ -26,7 +26,8 @@ Allow-list mechanism: The sentinel file `.claude/.hook-refactor-allow` at
 `$CLAUDE_PROJECT_DIR` (or cwd fallback). When present, this hook exits 0
 and lets the underlying tool run. The user creates this file by hand
 when they want to refactor hooks/commands; deleting it re-engages the
-guard.
+guard. Without it, one write passes: /dev-command's dev writing the project
+command file the cycle develops (_dev_command_product_file).
 
 Exit codes:
   0: Allow tool use
@@ -140,12 +141,43 @@ def _block_bash(command: str, kind: str) -> None:
     )
 
 
-def _evaluate_write_edit(tool_name: str, tool_input: dict) -> None:
+def _dev_command_product_file(file_path: str, data: dict) -> bool:
+    """The write /dev-command exists for (X4 (b)): its dev, a subagent whose own
+    dispatch (subagent_type dev, an obligation of role dev) lies in the span a
+    human-typed /dev-command opened, writes <project>/.claude/commands/<name>.md,
+    not the harness home's. Anything unread or unmatched is False (blocked)."""
+    try:
+        project = os.path.realpath(_project_dir())
+        target = os.path.realpath(os.path.join(project, file_path))
+        home = os.path.realpath(os.path.expanduser(os.environ.get('CLAUDE_HOME') or '~/.claude'))
+        if (not data.get('agent_id') or not target.endswith('.md') or home == os.path.join(project, '.claude')
+                or os.path.dirname(target) != os.path.join(project, '.claude', 'commands')):
+            return False
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from lib import command_span, declared_paths, obligation
+        transcript = Path(data['transcript_path'])
+        if transcript.parent.name == 'subagents':  # <sid>/subagents/agent-x.jsonl -> <sid>.jsonl
+            transcript = transcript.parent.parent.with_suffix('.jsonl')
+        span = command_span.active_span(transcript)
+        if span is None or span.command != 'dev-command':
+            return False
+        agent_transcript, meta = declared_paths._agent_files(transcript, data['agent_id'])
+        prompt = obligation.read_first_record_prompt(agent_transcript)
+        call_id = json.loads(meta.read_text()).get('toolUseId')
+        parsed = obligation.parse_obligation(prompt)
+        return (isinstance(parsed, obligation.ParsedObligation) and parsed.obligation.get('role') == 'dev'
+                and any(c.id == call_id and c.input.get('prompt') == prompt
+                        and c.input.get('subagent_type') == 'dev' for c in span.iter_calls('Agent', 'Task')))
+    except Exception:
+        return False
+
+
+def _evaluate_write_edit(tool_name: str, tool_input: dict, data: dict) -> None:
     """Apply guard for Write/Edit/MultiEdit/NotebookEdit tools."""
     file_path = tool_input.get('file_path', '') or ''
     if _is_hooks_path(file_path):
         _block_path(tool_name, file_path, 'hooks')
-    if _is_commands_path(file_path):
+    if _is_commands_path(file_path) and not _dev_command_product_file(file_path, data):
         _block_path(tool_name, file_path, 'commands')
 
 
@@ -157,10 +189,10 @@ def _evaluate_bash(tool_input: dict) -> None:
         _block_bash(command, kind)
 
 
-def _evaluate(tool_name: str, tool_input: dict) -> None:
+def _evaluate(tool_name: str, tool_input: dict, data: dict) -> None:
     """Dispatch evaluation by tool_name."""
     if tool_name in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
-        _evaluate_write_edit(tool_name, tool_input)
+        _evaluate_write_edit(tool_name, tool_input, data)
     elif tool_name == 'Bash':
         _evaluate_bash(tool_input)
 
@@ -177,7 +209,7 @@ def main() -> None:
             sys.exit(0)
         tool_name = data.get('tool_name', '') or ''
         tool_input = data.get('tool_input', {}) or {}
-        _evaluate(tool_name, tool_input)
+        _evaluate(tool_name, tool_input, data)
     except SystemExit:
         raise
     except Exception:

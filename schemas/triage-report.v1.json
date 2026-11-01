@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "triage-report.v1",
+  "title": "PM Triage Report",
+  "description": "The triage report PM writes in /dev-overnight TRIAGE mode (agents/pm.md, Step 9), docs/dev/overnight/<session_id>/triage-report-cycle<N>.json; G2 checks it at PM's own stop. The orchestrator creates the cycle's pipelines from it through scripts/build-pipelines-from-triage.py, which joins pipeline_order to issues[].triage_index and carries each issue's description, location, severity and tier into its pipeline. task_id is the identity the obligation names. Every other field of the PM payload is allowed.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["task_id", "mode", "issues", "pipeline_order"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "mode": {"enum": ["focus", "normal"]},
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["triage_index", "tier", "pipeline_recommendation", "description", "location", "severity"],
+        "properties": {
+          "triage_index": {"type": "integer"},
+          "pipeline_recommendation": {"type": "string"}
+        }
+      }
+    },
+    "pipeline_order": {"type": "array", "items": {"type": "integer"}}
+  }
+}

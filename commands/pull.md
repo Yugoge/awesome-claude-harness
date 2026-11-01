@@ -32,8 +32,8 @@ PULL_EXIT_CODE=$?
 ### Step 2: Capture post-pull HEAD
 
 Always capture, regardless of exit code — pull.sh may change HEAD during a partial
-rebase before a conflict (line 151 exit), or after a fully successful rebase before
-stash pop fails (line 174 exit):
+rebase before a conflict (its Step 6 exit), or after a fully successful rebase before
+stash pop fails (its Step 7 exit):
 
 ```bash
 POST_PULL_HEAD=$(git rev-parse HEAD)
@@ -71,8 +71,8 @@ else (PULL_EXIT_CODE != 0):
 
     else if NOT rebase_state_exists AND PRE_PULL_HEAD != POST_PULL_HEAD:
         pull_exit_phase = "stash_restoration_failed"
-        # Rebase fully succeeded (HEAD advanced past line 154 success message);
-        # then stash pop failed at pull.sh line 174.
+        # Rebase fully succeeded (HEAD advanced past its "Pull completed successfully");
+        # then stash pop failed at pull.sh Step 7.
         # No rebase state remains because rebase completed cleanly.
         proceed to Step 5
 

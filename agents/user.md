@@ -382,11 +382,12 @@ If you cannot meet a gate, you MUST explain why in `quality_gate_results` with a
 
 ## Output Format
 
-Write a JSON report to the specified output path:
+Write a JSON report to the specified output path. Under /dev-overnight your dispatch's obligation block declares that path; set `task_id` to the obligation's `task_id`. G2 checks the report against `schemas/specialist-report.v1.json` when you stop (the `issues` array, each issue with `description`, `location`, `severity`, `category` and `estimated_effort`, none repeated) and returns a missing or invalid report to you:
 
 ```json
 {
   "role": "user",
+  "task_id": "<your obligation's task_id>",
   "timestamp": "ISO-8601",
   "route_map_file": "docs/dev/overnight/<session_id>/route-map.json",
   "live_testing": {

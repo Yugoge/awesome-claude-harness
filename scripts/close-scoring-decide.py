@@ -20,12 +20,13 @@
 #   {"events": ["close_success_qa_pass" | "close_success_qa_fail_fixed"] OR [],
 #    "skip_reason": "<string>" OR null}
 #
-# Decision matrix (per ticket-20260529-210616.md M4 / AC-4):
+# Decision matrix (per ticket-20260529-210616.md M4 / AC-4); the verdict is the
+# class hooks/lib/close-verdict.py gives the report's last non-empty line, used
+# as it is:
 #   close-report missing     -> events=[],                              skip_reason contains "missing"
-#   last-line "CLOSE: NO"    -> events=[],                              skip_reason non-null
-#   last-line CLOSE: YES (FORCED) -> events=[],                         skip_reason contains "FORCED"
-#   last-line "CLOSE: YES" + qa_ever_rejected=false -> events=["close_success_qa_pass"], skip_reason=null
-#   last-line "CLOSE: YES" + qa_ever_rejected=true  -> events=["close_success_qa_fail_fixed"], skip_reason=null
+#   last line not class yes  -> events=[],                              skip_reason non-null
+#   last line class yes + qa_ever_rejected=false -> events=["close_success_qa_pass"], skip_reason=null
+#   last line class yes + qa_ever_rejected=true  -> events=["close_success_qa_fail_fixed"], skip_reason=null
 #
 # Exit codes:
 #   0 = decision emitted (events may be empty if blocked by gate)
@@ -42,20 +43,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 
-def _load_close_verdict_module(repo_root: Path):
-    """Load hooks/lib/close-verdict.py via SourceFileLoader because the
-    filename has a hyphen (Python module names cannot contain hyphens —
-    codex iter-2 C6).
-    """
+def _close_verdict(repo_root: Path, mode: str, report: Path) -> str:
+    """Run hooks/lib/close-verdict.py, the one classifier every reader of a close
+    report takes its verdict from (/commit Step 3 runs the same call), and return
+    what it prints. FileNotFoundError when the classifier is not there; OSError
+    when it could not read the report."""
     path = repo_root / "hooks" / "lib" / "close-verdict.py"
     if not path.is_file():
         raise FileNotFoundError(f"close-verdict.py not found at {path}")
-    return SourceFileLoader("close_verdict", str(path)).load_module()
+    proc = subprocess.run([sys.executable, str(path), mode, str(report)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise OSError((proc.stderr.strip().splitlines() or [f"exit {proc.returncode}"])[-1])
+    return proc.stdout.strip()
 
 
 def _resolve_repo_root(override: str | None) -> Path:
@@ -166,31 +170,21 @@ def decide(close_report_path: Path, qa_ever_rejected: bool, repo_root: Path) -> 
     Exit code 0 always when result is a valid decision (even empty events).
     Exit code 3 ONLY when an IO error other than missing-file occurs.
     """
-    # Missing file is a valid gate-block, not an error
-    if not close_report_path.exists():
-        return (
-            {"events": [], "skip_reason": f"close-report missing at {close_report_path}"},
-            0,
-        )
-
     try:
-        text = close_report_path.read_text(encoding="utf-8", errors="replace")
+        verdict = _close_verdict(repo_root, "classify-file", close_report_path)
+        # Missing file is a valid gate-block, not an error
+        if verdict == "missing":
+            return (
+                {"events": [], "skip_reason": f"close-report missing at {close_report_path}"},
+                0,
+            )
+        last_line = _close_verdict(repo_root, "last-line", close_report_path) if verdict != "yes" else ""
+    except FileNotFoundError:
+        raise
     except OSError as e:
         # Real IO error (permission denied, etc.) — distinct from missing
         sys.stderr.write(f"close-scoring-decide.py: IO error reading {close_report_path}: {e}\n")
         return ({"events": [], "skip_reason": f"IO error: {e}"}, 3)
-
-    cv = _load_close_verdict_module(repo_root)
-    last_line = cv.last_nonempty(text)
-    verdict = cv.classify_line(last_line)
-
-    # FORCED check FIRST (excluded per codex F9 — even though classify_line
-    # returns "yes" for "CLOSE: YES (FORCED)"). Use case-insensitive.
-    if "FORCED" in last_line.upper():
-        return (
-            {"events": [], "skip_reason": f"verdict is CLOSE: YES (FORCED) — scoring excluded"},
-            0,
-        )
 
     if verdict != "yes":
         return (
