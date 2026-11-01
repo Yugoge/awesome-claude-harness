@@ -348,8 +348,7 @@ class Span:
         return ""
 
     def obligations(self) -> list:
-        """(call, obligation) of each ok Agent/Task dispatch in the span whose prompt carries a
-        well-formed obligation block, in transcript order."""
+        """(call, obligation) of each ok Agent/Task dispatch whose prompt parses to an obligation, in span order."""
         ob = _obligation()
         parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task") if c.ok)
         return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]

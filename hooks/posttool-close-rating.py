@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """PostToolUse(AskUserQuestion): the one writer of the owner's close rating (D9a). A row only for the
-main agent's (no agent_id) one close-rating question (metadata.source close-rating:<task-id>) answered
-with exactly one of the four labels, read from the CLI's tool_response (the CLI drops answers the model
-writes into its own input). Skip, free text, a decline, an error, an AFK auto-continue and a payload of
-any other shape write nothing. Silent, exit 0: the rating never blocks or speaks to the model (D9b)."""
+main agent's (no agent_id) one close-rating question (metadata.source close-rating:<task-id>) answered with
+one of the four exact labels in the CLI's tool_response (the CLI drops answers the model writes in its input).
+Skip, free text, a decline, an error, an AFK auto-continue or any other payload: no row. Silent, exit 0 (D9b)."""
 import json
 import sys
 from pathlib import Path

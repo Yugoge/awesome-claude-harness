@@ -64,8 +64,7 @@ def _read_json(path: Path) -> dict:
 
 
 def _enforce_e2e_status(qa_report_path: Path, agent_id: str, task_id) -> None:
-    """Check the declared QA report's e2e_enforcement.status. Exits 2 on any
-    blocking outcome; returns normally when the status passes."""
+    """Step 4 above on the declared report: exits 2 unless its e2e_enforcement.status passes."""
     qa_report = _read_json(qa_report_path)
 
     # Navigate to e2e_enforcement field (may be nested under qa.*)
@@ -142,13 +141,9 @@ def _own_obligation(data: dict, agent_id: str, project_dir: str) -> dict:
 
 
 def _enforce_e2e_via_obligation(data: dict, agent_id: str, project_dir: str) -> None:
-    """Judge exactly the qa-report.v2 this QA's own dispatch obligation
-    declares, at the path it declares (P1b row 3). Exits 2 on a block; returns
-    when the obligation's role is not qa, it declares no such report (BA
-    validation, close QA: no E2E evidence is owed here) or its status passes.
-    A declared path the grammar's path rule refuses (only a block that fails
-    the grammar carries one) is the dispatch's defect, G1's to decide, and is
-    never read."""
+    """Steps 3 and 4 above, on exactly the qa-report.v2 this QA's own obligation declares, at its
+    declared path (P1b row 3). A declared path the grammar's path rule refuses (only a block that
+    fails the grammar carries one) is the dispatch's defect, G1's to decide, and is never read."""
     declared = _own_obligation(data, agent_id, project_dir)
     if declared.get("role") != ENFORCED_AGENT_TYPE:
         return
