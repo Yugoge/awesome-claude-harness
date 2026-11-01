@@ -213,12 +213,14 @@ CURRENT_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 #    the state file of THIS session. CLAUDE_PROJECT_DIR is a HINT, never a precondition:
 #    it is measured UNSET in this harness (while CLAUDE_CODE_SESSION_ID is set), and
 #    a STALE value must not veto the fallback — so BOTH it and $PWD are tried, in
-#    that order. Each start walks UP, because the state file lives at
-#    <main_root>/.claude/ and every default working root sits UNDER that root
-#    (in_place == main root; .claude/worktrees/<n>; .claude/overnight-fresh-clones/<n>).
+#    that order. From each start the locator looks in the start itself, the main
+#    root of its repository (the parent of the git common dir) and, for a fresh
+#    clone, the main root of its origin, because the state file lives at
+#    <main_root>/.claude/ (in_place == main root; .claude/worktrees/<n>;
+#    .claude/overnight-fresh-clones/<n>).
 #    Selection is by exact session-keyed FILENAME and then a parsed field check, so
 #    it cannot be fooled by the file of another session or by JSON whitespace drift.
-#    The walk DISCOVERS the record; it does NOT define the root. Take the root
+#    The locator DISCOVERS the record; it does NOT define the root. Take the root
 #    from what the record SAYS about itself, never from the directory the record
 #    happens to sit in: the launcher writes the record under its own resolved
 #    project dir but the dev-registry under the git toplevel (main_root), and
@@ -226,8 +228,9 @@ CURRENT_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 #    ordinary case, since the resolution of the launcher falls back to PWD.
 #    Binding to the containing directory is what made Step 1 hard-abort with
 #    "verify: directory does not exist: <subdir>/.claude/dev-registry/<sid>".
-#    The one reader of the state (hooks/lib/overnight.py) does the walk and the field
-#    checks and prints both paths, canonical; it exits 1 with the reason otherwise.
+#    The one reader of the state (hooks/lib/overnight.py) runs its one locator
+#    (session_state_file) and the field checks and prints both paths, canonical;
+#    it exits 1 with the reason otherwise.
 PROJECT_DIR=""; STATE_FILE=""
 { read -r STATE_FILE; read -r PROJECT_DIR; } < <(python3 ~/.claude/hooks/lib/overnight.py \
     session-root "$CURRENT_SESSION_ID" "${CLAUDE_PROJECT_DIR:-}" "$PWD")
@@ -1721,7 +1724,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 
 **State file location**: `<project_dir>/.claude/overnight-state-<session_id>.json`
 
-**Multi-session support**: Each overnight session uses its own state file keyed by `session_id` (the id the launcher recorded — resolve it as the Step 1 binding block does, from `$CLAUDE_CODE_SESSION_ID`, or a generated UUID). This keys each session's *state* separately, which is not the same as isolating its *work*: concurrent sessions get separate working roots only under `registered_worktree` / `fresh_clone_checkout`. Under the `in_place` default two sessions share one checkout and will collide on the working tree, so run at most one in-place session per checkout. The Stop hook scans for ALL `overnight-state-*.json` files and blocks termination if ANY has a future end_time.
+**Multi-session support**: Each overnight session uses its own state file keyed by `session_id` (the id the launcher recorded — resolve it as the Step 1 binding block does, from `$CLAUDE_CODE_SESSION_ID`, or a generated UUID). This keys each session's *state* separately, which is not the same as isolating its *work*: concurrent sessions get separate working roots only under `registered_worktree` / `fresh_clone_checkout`. Under the `in_place` default two sessions share one checkout and will collide on the working tree, so run at most one in-place session per checkout. The Stop hook reads only the stopping session's own record, found by the one locator in `hooks/lib/overnight.py`; another session's state file never holds or releases this session's lock.
 
 **Worktree naming** (`registered_worktree` / `fresh_clone_checkout` only): a session launched with `--worktree` creates `overnight-<YYYYMMDD>-<session_id_short>` (first 8 chars of session_id) to avoid conflicts between concurrent sessions. Under `in_place` nothing is created and the session stays on the branch the checkout was already on.
 
@@ -1735,7 +1738,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 - **No issues found** — see Step 3 (a clean sweep is logged; the time-lock holds until `end_time`, and the next cycle's PM plans further work).
 - **A pipeline that meets a decision** — decided without the owner and recorded (Hard Rule 5); a QA fail or warning sends it back to dev (Step 17) until QA passes.
 - **Very short time remaining (< 5 minutes)** — see Step 6 (severity-aware time guard).
-- **State file corruption** — create a fresh state file preserving `end_time`, continue.
+- **State file corruption** — a record the locator cannot read gives that session no time-lock and no continuation, and the Step 1 binding exits 1 (HARD ABORT). The agent does not write the state file; the owner relaunches `/dev-overnight` or types `/stop`.
 - **Working root missing or invalid on continuation** — HARD ABORT (see the Step 1 WORKING-ROOT GUARD). Under `--worktree` the launch refuses outright when no durable isolation can be produced rather than silently downgrading to in-place. Under the `in_place` default there is no worktree to create or lose, and running in the main checkout is the intended behavior, not a failure.
 
 ---
