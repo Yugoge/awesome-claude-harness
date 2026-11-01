@@ -82,6 +82,14 @@ def _run(hook: Path, payload: dict, env: dict | None = None, project: Path | Non
                           text=True, env=environment, timeout=30)
 
 
+def _said(result) -> str:
+    """What the loop hands the agent: its PostToolUse JSON's additionalContext (exit 0)."""
+    assert result.returncode == 0, result.stderr
+    hso = json.loads(result.stdout)["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PostToolUse"
+    return hso["additionalContext"]
+
+
 def _closeout(root: Path, sid: str = SID, summary_mtime: float | None = None) -> None:
     retro = root / "docs" / "dev" / "overnight" / sid / "retro-report-cycle1.json"
     retro.parent.mkdir(parents=True, exist_ok=True)
@@ -264,7 +272,7 @@ def test_a_forged_token_and_the_helper_release_nothing_a_typed_stop_does(tmp_pat
     assert held.returncode == 2 and "TIME-LOCK ACTIVE" in held.stderr
     todos = {**payload, "tool_name": "TodoWrite",
              "tool_input": {"todos": [{"content": "a", "status": "completed", "activeForm": "a"}]}}
-    assert "OVERNIGHT LOOP" in _run(LOOP, todos, project=tmp_path).stdout
+    assert "OVERNIGHT LOOP" in _said(_run(LOOP, todos, project=tmp_path))
     # The same /stop text in a Skill-produced, scheduled or isMeta record releases nothing.
     _transcript(session, _command("dev-overnight", "8h"), _command("stop", isMeta=True),
                 _command("stop", isMeta=True, sourceToolUseID="toolu_01"),
@@ -274,8 +282,8 @@ def test_a_forged_token_and_the_helper_release_nothing_a_typed_stop_does(tmp_pat
     _transcript(session, _command("dev-overnight", "8h"), _command("stop"))
     released = _run(TIMELOCK, payload, project=tmp_path)
     assert released.returncode == 0 and "CLOSEOUT" not in released.stderr, released.stderr
-    loop = _run(LOOP, todos, project=tmp_path)
-    assert "OVERNIGHT LOOP" not in loop.stdout and "OVERNIGHT SESSION COMPLETE" in loop.stdout
+    loop = _said(_run(LOOP, todos, project=tmp_path))
+    assert "OVERNIGHT LOOP" not in loop and "OVERNIGHT SESSION COMPLETE" in loop
 
 
 # ------------------------------------------------- acceptance 10: the closeout

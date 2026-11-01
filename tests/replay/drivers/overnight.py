@@ -42,7 +42,8 @@ Then, in one session, the main agent:
     Step 17 iterates, see below);
   - Step 18: the permissions block; Step 19: the cycle log, the TIME CHECK, the per-cycle commit
     where the text has one (the base's; its failure logged); Step 20: PM RETRO, the retro Read;
-    Step 21: marked completed, the loop hook's reset (a fresh checklist, Step 1 done, Step 2 in
+    Step 21: marked completed, the loop hook's reset as the hook hands it to the main agent (its
+    PostToolUse additionalContext, hookrun.context; a fresh checklist, Step 1 done, Step 2 in
     progress);
 * the owner interrupts and types /stop; the main agent runs stop.md's Implementation block once
   and stops.
@@ -584,6 +585,13 @@ def run_experiment(sub, exp: dict) -> dict:
     return {"decision": q["need"], "options": [o["label"] for o in q["options"]], "experiment": exp["run"],
             "result": f"printed {out}" if c.ok else f"failed: {out[:200]}",
             "chosen": exp["supports"].get(out, exp["otherwise"]) if c.ok else q["default"]}
+
+
+def loop_context(call) -> str:
+    """What the TodoWrite's PostToolUse hooks hand the main agent (hookrun.context: the loop's
+    additionalContext), never their raw stdout: the agent acts on that and nothing else."""
+    said = (hookrun.context("PostToolUse", h) for h in (call.post.hooks if call.post else []))
+    return "\n".join(t for t in said if t)
 
 
 def _probe_blocks(ev) -> list:
@@ -1862,7 +1870,7 @@ class Night:
         i = o.current()
         o.todos[i]["status"] = "completed"
         call = o._todo(f"{self.L}TodoWrite Step 21 done (all completed)")
-        hook = "\n".join(h["stdout"] for h in (call.post.hooks if call.post else []) if h["verdict"] == "ok")
+        hook = loop_context(call)
         if "Reset your todo list" in hook:
             # A fresh checklist (all pending, the first step in progress), then Step 1 done: the
             # working root is already established; resume from Step 2.
@@ -1974,8 +1982,9 @@ class Night:
         i = o.current()
         o.todos[i]["status"] = "completed"
         call = o._todo(f"{self.L}TodoWrite Step 21 done (session ending)")
-        hook = "\n".join(h["stdout"] for h in (call.post.hooks if call.post else []) if h["verdict"] == "ok")
+        hook = loop_context(call)
         self.ended["loop_reset_after_end"] = "Reset your todo list" in hook
+        self.ended["loop_said_complete"] = "OVERNIGHT SESSION COMPLETE" in hook
         said = self.announcement(cmdtext.block(sec, None, anchor="Overnight development session complete"))
         label = f"{self.L}Stop (session end)"
         ev = o.s.stop(said, label=label, deviation=o.devs.at(label))
@@ -2078,8 +2087,9 @@ class Night:
               [{"label": pr["label"], "blocks": [(b["hook"], b["rc"], b["text"][:160]) for b in pr["blocks"]]}
                for pr in stops])
         check("the session ends after end_time once retro and summary exist (the main agent's Stop passes), and the "
-              "loop hook resets nothing after end_time",
-              self.ended.get("stopped") and not self.ended.get("loop_reset_after_end"), self.ended)
+              "loop hook resets nothing after end_time: it hands the main agent the session-complete note",
+              self.ended.get("stopped") and not self.ended.get("loop_reset_after_end")
+              and self.ended.get("loop_said_complete"), self.ended)
         def qa_status(p):
             try:
                 return (json.loads(read(os.path.join(self.project, f"docs/dev/qa-report-{p.sfx}.json"))).get("qa")

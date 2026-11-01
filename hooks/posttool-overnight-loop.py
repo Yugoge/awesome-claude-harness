@@ -7,14 +7,16 @@ Fires after every TodoWrite call. Checks if:
 2. ALL todos have status "completed"
 3. The time-lock's window is open (lib.overnight.window_open)
 
-If all conditions met: prints continuation instructions telling the agent to
-reset its own todos and resume from Step 2; once the window has closed (end_time
-or the human's /stop), it prints no continuation. The cycle number is
+If all conditions met: tells the agent to reset its own todos and resume from
+Step 2; once the window has closed (end_time or the human's /stop), no
+continuation, only that the session is complete. The cycle number is
 lib.overnight.cycle_index, read from the session's cycle directories under the
-record's worktree_path; this hook writes no state and no contract.
+record's worktree_path; this hook writes no state and no contract. The text goes
+as the hooks reference documents for PostToolUse, whose plain stdout reaches only
+the debug log: hookSpecificOutput.additionalContext in one JSON object, exit 0.
 
-Does NOT directly modify the todos file -- prints instructions
-for the agent to act on, avoiding race conditions with other hooks.
+Does NOT directly modify the todos file -- the agent acts on the instructions,
+avoiding race conditions with other hooks.
 """
 
 import json
@@ -34,15 +36,15 @@ def _all_completed(data: dict) -> bool:
     return all(t.get('status') == 'completed' for t in todos)
 
 
-def _print_session_complete(state: dict) -> None:
+def _session_complete(state: dict) -> str:
     """The window has closed: tell the agent to summarise and finish."""
-    print(f'OVERNIGHT SESSION COMPLETE: the time-lock window has closed. '
-          f'Cycles: {overnight.cycle_index(state) - 1}, Fixed: {state.get("issues_fixed", 0)}')
-    print('Generate your summary and finish up.')
+    return (f'OVERNIGHT SESSION COMPLETE: the time-lock window has closed. '
+            f'Cycles: {overnight.cycle_index(state) - 1}, Fixed: {state.get("issues_fixed", 0)}\n'
+            'Generate your summary and finish up.')
 
 
-def _print_loop_instructions(state: dict, end_time: datetime, state_path: Path) -> None:
-    """Print continuation instructions for the agent."""
+def _loop_instructions(state: dict, end_time: datetime, state_path: Path) -> str:
+    """The continuation instructions for the agent."""
     remaining = end_time - datetime.now(timezone.utc)
     hours = int(remaining.total_seconds() // 3600)
     minutes = int((remaining.total_seconds() % 3600) // 60)
@@ -50,15 +52,21 @@ def _print_loop_instructions(state: dict, end_time: datetime, state_path: Path) 
     fixed = state.get('issues_fixed', 0)
     wt = state.get('worktree_path', 'unknown')
 
-    print(f'OVERNIGHT LOOP: Cycle {cycle - 1} complete (PM retro filed). Starting cycle {cycle}.')
-    print(f'Time remaining: {hours}h {minutes}m')
-    print(f'Issues fixed this session: {fixed}')
-    print()
-    print('INSTRUCTIONS: Reset your todo list to all-pending and begin Step 1 again.')
-    print(f'State file: {state_path} (read it for current state)')
-    print(f'Worktree: {wt} (already exists, DO NOT create another)')
-    print()
-    print('Resume from Step 2 (exploration) -- Step 1 setup is already done.')
+    return '\n'.join([
+        f'OVERNIGHT LOOP: Cycle {cycle - 1} complete (PM retro filed). Starting cycle {cycle}.',
+        f'Time remaining: {hours}h {minutes}m',
+        f'Issues fixed this session: {fixed}',
+        '',
+        'INSTRUCTIONS: Reset your todo list to all-pending and begin Step 1 again.',
+        f'State file: {state_path} (read it for current state)',
+        f'Worktree: {wt} (already exists, DO NOT create another)',
+        '',
+        'Resume from Step 2 (exploration) -- Step 1 setup is already done.'])
+
+
+def _tell_agent(text: str) -> None:
+    """PostToolUse's documented channel to the agent: additionalContext, exit 0."""
+    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': text}}))
 
 
 def main() -> None:
@@ -78,10 +86,10 @@ def main() -> None:
 
     end_time = overnight.state_verdicts(state).end_time
     if end_time is None or not overnight.window_open(data):
-        _print_session_complete(state)
+        _tell_agent(_session_complete(state))
         sys.exit(0)
 
-    _print_loop_instructions(state, end_time, state_path)
+    _tell_agent(_loop_instructions(state, end_time, state_path))
     sys.exit(0)
 
 
