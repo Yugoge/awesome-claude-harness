@@ -69,14 +69,9 @@ does.
 
 Respellings (row 7): none of the /push text's harness-script calls needs one (Step 5's `python3
 ~/.claude/scripts/execute-push.py` already names the harness copy). Step 2's session-id line already
-falls back to CLAUDE_CODE_SESSION_ID (the binding drivers/merge.py borrows for merge.md:87).
+falls back to CLAUDE_CODE_SESSION_ID, the variable the CLI's Bash exports.
 
-Deviations: DEVIATIONS below, one entry per block the base tree's replay meets, each with a comment
-quoting the hook's text; nothing else passes a block. On 2acc29b: bash-safety on the analyst's Phase 1
-range block and Phase 4 divergence block (kept: the working tree records them too, on lines no row
-changes), and the base's push-analyst grant guard on Step 5's call (base only: row 12 and E11 leave
-execute-push.py the grant's one validator). The base text's Step 1 scan, as the text spells its `find`,
-meets no block. A block no declared deviation passes pauses the agent that met it (Subagent Hook
+Deviations: none (DEVIATIONS stays empty). A block pauses the agent that met it (Subagent Hook
 Discipline): the main agent ends its turn reporting the hook and its text; a paused push-analyst writes
 no grant, so Step 5's execute-push.py finds none.
 
@@ -96,7 +91,6 @@ from datetime import datetime, timezone
 
 from .. import agents, cmdtext
 from ..pipeline import _ASSIGN_RE, Deviations, Orchestrator, Respelling
-from ..replay import Deviation
 from . import close as closedrv
 from . import merge as mergedrv
 
@@ -105,29 +99,8 @@ PIPELINE = "push"
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 COST = 381
 
-# Blocks the base tree's replay meets, each passed by a deviation at the step it occurs on: the
-# refused call is applied as if allowed, so every later step runs and is traced.
-DEVIATIONS = Deviations([
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED unproven_boundary_with_removal_reference:git rev-parse:"
-    # pretool-bash-safety.sh refuses the push-analyst's Phase 1 range block and Phase 4 divergence block as
-    # its agent text spells them (`if git rev-parse "refs/remotes/${REMOTE_NAME}/${BRANCH}" >/dev/null 2>&1;
-    # then`, the prompt's values bound as shell variables), in both kits; the same test with the values
-    # written literally passes.
-    ("agent:push-analyst Bash Phase 1 #2", Deviation(
-        "hooks/pretool-bash-safety.sh", "unproven_boundary_with_removal_reference:git rev-parse:",
-        "Phase 1's range block as the agent text spells it")),
-    ("agent:push-analyst Bash Phase 4", Deviation(
-        "hooks/pretool-bash-safety.sh", "unproven_boundary_with_removal_reference:git rev-parse:",
-        "Phase 4's divergence block as the agent text spells it")),
-    # DEVIATION: "BLOCKED: push-analyst grant guard: no push-analyst grant found at
-    # <state>/agentic-commit/push-analyst/<hex>/<sid>/${REQUEST_ID}.json."
-    # The base's pretool-push-analyst-grant-guard.py, the grant's second validator (E11), refuses Step 5's
-    # call as the text spells it: it looks the grant up under the hook's state dir, where the base text's
-    # analyst does not write it, by the unexpanded `"${REQUEST_ID}"` of the command text.
-    ("/push Step 5 Bash execute-push", Deviation(
-        "hooks/pretool-push-analyst-grant-guard.py", "BLOCKED: push-analyst grant guard: no push-analyst grant found at",
-        "Step 5's execute-push.py call as the text spells it")),
-])
+# Blocks the replays meet: none (a compliant run needs no deviation).
+DEVIATIONS = Deviations([])
 
 _STEP_RE = re.compile(r"^\*\*(Step \d+)\b[^\n]*\*\*[ \t]*$", re.M)
 _LEVELS = ("approved", "warn", "blocked")

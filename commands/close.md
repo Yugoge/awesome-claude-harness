@@ -59,18 +59,7 @@ Parse `--auto` from `$ARGUMENTS` BEFORE evaluating the forced-override path or t
 - If `$ARGUMENTS` contains the literal token `--auto`, strip it and set `auto = true`.
 - Otherwise set `auto = false` (default — every rule below is inert).
 
-**Invalid combination (before any action)**: when `auto = true`, `/close` MUST NOT proceed to Task-id resolution, Step 0, or any Agent dispatch — it waits (awaiting-input cause (iii): `close_awaiting_input` naming the offending token) and resumes in place once the human corrects the arguments — if `$ARGUMENTS` (after stripping `--auto` itself) still contains ANY of: an explicit task-id or path token, `--force`, or a `--reason` value. `--auto` and `--codex` MAY combine (each `--auto` walk below still honors `codex_required` exactly as the non-`--auto` path does). This mirrors `scripts/dev-lifecycle.py`'s `validate_auto_flag_combination()` pure predicate (`--force`/explicit-task-id/`--bulk` all reject; `--bulk` does not exist for `/close` so only the first two apply here) — the mechanical check:
-
-```bash
-python3 -c "
-import os, sys; sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
-import importlib.util
-spec = importlib.util.spec_from_file_location('dlc', os.path.expanduser('~/.claude/scripts/dev-lifecycle.py'))
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-err = m.validate_auto_flag_combination(True, '<explicit-task-id-or-empty>', <force_bool>, False)
-print(err or 'OK')
-"
-```
+**Invalid combination (before any action)**: when `auto = true`, `/close` MUST NOT proceed to Task-id resolution, Step 0, or any Agent dispatch — it waits (awaiting-input cause (iii): `close_awaiting_input` naming the offending token) and resumes in place once the human corrects the arguments — if `$ARGUMENTS` (after stripping `--auto` itself) still contains ANY of: an explicit task-id or path token, `--force`, or a `--reason` value. `--auto` and `--codex` MAY combine (each `--auto` walk below still honors `codex_required` exactly as the non-`--auto` path does). This mirrors `scripts/dev-lifecycle.py`'s `validate_auto_flag_combination()` pure predicate (`--force`/explicit-task-id/`--bulk` all reject; `--bulk` does not exist for `/close` so only the first two apply here).
 
 When `auto = true` and the combination is legal, skip Task-id resolution and Steps 0-3 entirely at THIS level — control passes to the `--auto mode` section below, which drives Steps 0-3 once per discovered parent.
 

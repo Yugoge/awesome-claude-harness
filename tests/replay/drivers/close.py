@@ -78,8 +78,7 @@ Respellings (P1b Scope row 7), driver only, each application recorded in blocks.
 RESPELLINGS (base-text paths that do not resolve in a product repository, and the base text's
 QA-arming scripts with CLAUDE_PROJECT_DIR set in their environment).
 
-Deviations: DEVIATIONS below, one entry per block the replays meet, each with a comment quoting
-the hook's text; nothing else passes a block.
+Deviations: none. DEVIATIONS stays empty: a compliant run meets no block, and none passes one.
 """
 from __future__ import annotations
 
@@ -92,7 +91,6 @@ import shlex
 
 from .. import agents, cmdtext, roles
 from ..pipeline import Deviations, Orchestrator, Respelling, parse_declare, utc_now
-from ..replay import Deviation
 
 PIPELINE = "close"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -115,64 +113,14 @@ RESPELLINGS = [
                "python3 ~/.claude/scripts/close-report-append.py", "commands/close.md Step 2 (:776 at 2acc29b)"),
     Respelling("C4 discovery", r"(?<![\w/~.-])python3 scripts/dev-lifecycle\.py",
                "python3 ~/.claude/scripts/dev-lifecycle.py", "commands/close.md --auto (:950 at 2acc29b)"),
-    Respelling("C5 flag check import", r"import sys; sys\.path\.insert\(0, 'scripts'\)",
-               "import os, sys; sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))",
-               "commands/close.md --auto flag check (:66-68 at 2acc29b)"),
-    Respelling("C5 flag check load", r"'scripts/dev-lifecycle\.py'",
-               "os.path.expanduser('~/.claude/scripts/dev-lifecycle.py')",
-               "commands/close.md --auto flag check (:66-68 at 2acc29b)"),
     # The QA-arming rule's three scripts (close.md:246-249 at 2acc29b, deleted on the branch): named
     # by their repository path in prose; run as the harness's copy with `bash`, CLAUDE_PROJECT_DIR set.
     Respelling("C6 QA arming", r"(?m)^(?:bash )?(?:~/\.claude/)?scripts/(write-[\w-]+\.sh)",
                PROJECT_ROOT_PREFIX + r"bash ~/.claude/scripts/\1", "commands/close.md QA-arming rule (:246-249 at 2acc29b)"),
 ]
 
-# Blocks the replays meet, each passed at the step it occurs on by a deviation whose comment quotes
-# the hook's text; the refused call is applied as if allowed, so every later step runs and is traced.
-DEVIATIONS = Deviations([
-    # DEVIATION: "[Orchestrator Gate] BLOCKED: Bash used consecutively beyond limit (6/5)."
-    # The command's own run of Bash blocks between two dispatches outnumbers the gate's cap of 5.
-    ("*Bash*", Deviation("hooks/pretool-orchestrator-gate.py", "Bash used consecutively beyond limit",
-                         "the command's own run of Bash blocks between dispatches")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED dynamic_command_head:{" (close_required_action,
-    # close_progress) and "... census_fatal:unbalanced:single_quote" (the base text's close_artifact_role)
-    # pretool-bash-safety.sh refuses the routing helpers' own definitions as the text spells them, in every
-    # Bash call that defines one (both kits).
-    ("/close * Bash close_route_finding", Deviation(
-        "hooks/pretool-bash-safety.sh", "BLOCKED: removal-policy — UNRESOLVED",
-        "the routing helpers as the text defines them (close_required_action)")),
-    ("/close * Bash close_progress", Deviation(
-        "hooks/pretool-bash-safety.sh", "BLOCKED: removal-policy — UNRESOLVED",
-        "the R15 progress helper as the text defines it")),
-    ("/close * Bash close_artifact_role", Deviation(
-        "hooks/pretool-bash-safety.sh", "BLOCKED: removal-policy — UNRESOLVED",
-        "the role table as the text defines it")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote" /
-    # "... dynamic_command_head:AGGREGATE_RESULT=..." pretool-bash-safety.sh refuses the base text's Step 0
-    # block as written (its aggregator call inside `if ! AGGREGATE_RESULT="$(cd ... && ...)"`, with the
-    # close_route_finding helpers it calls).
-    ("/close Step 0* Bash route select", Deviation(
-        "hooks/pretool-bash-safety.sh", "BLOCKED: removal-policy — UNRESOLVED",
-        "the base text's Step 0 block as written")),
-    # DEVIATION: "E2E_ENFORCE_BLOCKED: agent <agent> (type=qa) has no qa-report-*.json in <project>/docs/dev/
-    # under session dev-<ts>." subagentstop-e2e-enforce.py, armed by the base text's QA-arming rule,
-    # refuses close QA's stop on a /do task (the base do-report template carries no expected_absent).
-    ("/close Step 2 Agent(qa) close round *", Deviation(
-        "hooks/subagentstop-e2e-enforce.py", "E2E_ENFORCE_BLOCKED",
-        "close QA of a /do task writes the close-report its obligation declares, no qa-report")),
-    # DEVIATION: "[Write Guard] BLOCKED: File already exists: /var/tmp/claude-scratch/update-<rand>.md"
-    # The base text's Step 3 /spec-update --temp note: spec-update.md's Temp-note mode creates it with
-    # mktemp, reads it, then writes it.
-    ("/close Step 3 Write update note", Deviation(
-        "hooks/pretool-write-guard.sh", "[Write Guard] BLOCKED: File already exists",
-        "the temp note mktemp created, written as /spec-update --temp says")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED interpreter_dynamic_attribute_access:python3: importlib"
-    # pretool-bash-safety.sh refuses the --auto flag-combination check as the text spells it (its
-    # importlib.util load of dev-lifecycle.py), on both kits.
-    ("/close --auto Bash flag check", Deviation(
-        "hooks/pretool-bash-safety.sh", "BLOCKED: removal-policy — UNRESOLVED",
-        "the --auto flag-combination check as the text spells it")),
-])
+# Blocks the replays meet: none (a compliant run needs no deviation).
+DEVIATIONS = Deviations([])
 
 CLOSE_YES_PLAIN = "CLOSE: YES — codex disabled by user"
 FINDING = {"path": "toy/__init__.py", "detail": "add() states no contract: its docstring does not say it raises "
@@ -1204,9 +1152,11 @@ class CloseRun:
     def run_auto(self) -> list:
         o = self.o
         self.start("--auto")
-        flag = o.block("Argument parsing: `--auto` flag", lang="bash", index=0)
-        self.run_text(flag, "/close --auto Bash flag check", "--auto flag-combination check",
-                      rules=[(r"^explicit-task-id-or-empty$", ""), (r"^force_bool$", "False")])
+        # The flag combination: `--auto` typed alone is legal by the section's rule; a text that spells
+        # the rule as a Bash check (the base) has it run.
+        for flag in cmdtext.blocks(o.section("Argument parsing: `--auto` flag"), None, "bash")[:1]:
+            self.run_text(flag.text, "/close --auto Bash flag check", "--auto flag-combination check",
+                          rules=[(r"^explicit-task-id-or-empty$", ""), (r"^force_bool$", "False")])
         disc = o.block("`--auto` mode", lang="bash", index=0)
         self.run_text(disc, "/close --auto Bash discovery", "Discover the close_pending parents",
                       capture=("CLOSE_PENDING_PARENTS",))

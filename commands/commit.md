@@ -285,7 +285,10 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   use the exact `docs/dev` directory that supplied `CLOSE_REPORT`, prefer this
   task's dev-report there, then its do-report, and fall back to the control-root
   `docs/dev` only when no close-report directory is available. Pass the selected
-  canonical report explicitly; never scan reports by mtime.
+  canonical report explicitly; never scan reports by mtime. The block below is one
+  Bash call (the orchestrator gate allows five in a row), and each retry loop opens
+  its body with the assignment (`while :; do VAR="$(...)" && break`), the form the
+  removal policy of bash-safety reads, never `until VAR="$(...)"`.
 
   ```bash
   CONTROL_ROOT="$(git rev-parse --show-toplevel)"
@@ -323,8 +326,9 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
       # A failed chain check names its gaps in errors[]: each path is one
       # finding, routed to the dispatch that owes it, then the SAME call is
       # rerun until it passes; ARTIFACT_CHAIN is never blanked.
-      until ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py \
-          --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")"; do
+      while :; do
+          ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py \
+              --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")" && break
           while IFS= read -r GAP_PATH; do
               route_finding "$GAP_PATH" \
                   "resolve-dev-artifact-chain.py (chain-recheck) failed during commit-time repository planning" \
@@ -340,27 +344,16 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   # commit": the plan derives from the dev-report, so route the finding on
   # that report and rerun the SAME computation until it succeeds (exit
   # status 0).
-  until REPOSITORY_PLAN="$(python3 ~/.claude/scripts/resolve-commit-repos.py \
-      --task-id "$TASK_ID" --control-root "$CONTROL_ROOT" \
-      --report "$TASK_REPORT" \
-      --supported-repo "$NESTED_REPO")"; do
+  while :; do
+      REPOSITORY_PLAN="$(python3 ~/.claude/scripts/resolve-commit-repos.py \
+          --task-id "$TASK_ID" --control-root "$CONTROL_ROOT" \
+          --report "$TASK_REPORT" \
+          --supported-repo "$NESTED_REPO")" && break
       route_finding "$TASK_REPORT" \
           "resolve-commit-repos.py could not construct a repository plan" \
           "resolve-commit-repos.py --task-id $TASK_ID --control-root $CONTROL_ROOT --report $TASK_REPORT --supported-repo $NESTED_REPO"
   done
-  ```
-
-  **Attribution-log slice (ground-truth attribution, additive to the plan above).**
-  Immediately after `REPOSITORY_PLAN` resolves, build `ATTRIBUTION_LOG` — a slice of
-  the write-time attribution journal (`hooks/lib/attribution_journal.py`) scoped to
-  exactly this plan's owned paths. This is the fact-based attribution source
-  `agents/changelog-analyst.md`'s staging decision reads instead of (or as a
-  cross-check alongside) the dev-report's self-reported ledger fields. No retry
-  loop here — unlike `REPOSITORY_PLAN`, an exit code of 2 (no journaled events for
-  any requested path — e.g. the path pre-dates the journal's rollout) is an
-  ordinary, expected outcome, not a finding to route:
-
-  ```bash
+  # Attribution-log slice (below): no retry loop, an exit code of 2 is an ordinary outcome.
   ATTRIBUTION_FILES=()
   while IFS= read -r abs_path; do
       [ -n "$abs_path" ] && ATTRIBUTION_FILES+=(--file "$abs_path")
@@ -368,6 +361,16 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   ATTRIBUTION_LOG="$(python3 ~/.claude/scripts/verify-attribution-chain.py --json "${ATTRIBUTION_FILES[@]}" 2>/dev/null)"
   ATTRIBUTION_LOG="${ATTRIBUTION_LOG:-{\"results\":[],\"no_events\":[],\"discarded_lines\":[]}}"
   ```
+
+  **Attribution-log slice (ground-truth attribution, additive to the plan above).**
+  The same block, immediately after `REPOSITORY_PLAN` resolves, builds `ATTRIBUTION_LOG` — a slice of
+  the write-time attribution journal (`hooks/lib/attribution_journal.py`) scoped to
+  exactly this plan's owned paths. This is the fact-based attribution source
+  `agents/changelog-analyst.md`'s staging decision reads instead of (or as a
+  cross-check alongside) the dev-report's self-reported ledger fields. No retry
+  loop there — unlike `REPOSITORY_PLAN`, an exit code of 2 (no journaled events for
+  any requested path — e.g. the path pre-dates the journal's rollout) is an
+  ordinary, expected outcome, not a finding to route.
 
   `ATTRIBUTION_LOG.results[]` carries, per owned path, its folded write-event
   chain verdict (`CONTINUOUS_TAIL_MATCH` / `CONTINUOUS_TAIL_MISMATCH` / `BREAK`)

@@ -18,7 +18,8 @@ tree's text spells each one, read at run time:
   dev report is gone is diagnosed as that missing dev report and its producer dispatched again),
   the owner dispatched again under the same task id, and the block re-run (at most three rounds).
   A reader call a hook refuses, or a `null` answer outside a QA round, is the text's defined wait:
-  the turn ends with its `AWAITING_INPUT:` line. Then the attribution-log slice block; the dispatch-snapshot
+  the turn ends with its `AWAITING_INPUT:` line. Then the attribution-log slice block (where it is not the
+  plan block's own tail); the dispatch-snapshot
   manifest (the state dir and session id read in Bash, each plan entry's `git status
   --porcelain=v1`, then a Write of the fields the text lists); one grant per plan entry with the
   writer block of the step.
@@ -69,7 +70,7 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
                           (default same for plain, later for every routing variant and auto, as
                           acceptance 7 types them)
 
-Respellings: RESPELLINGS below (base-text paths, row 7). Deviations: DEVIATIONS below.
+Respellings: RESPELLINGS below (base-text paths, row 7). Deviations: none (DEVIATIONS stays empty).
 """
 from __future__ import annotations
 
@@ -80,7 +81,6 @@ import shlex
 
 from .. import agents, cmdtext
 from ..pipeline import Deviations, Orchestrator, Respelling, utc_now
-from ..replay import Deviation
 from . import close as closedrv
 
 # /commit's success outcomes (Step 7's commit_status, as the --auto walk counts them).
@@ -107,49 +107,8 @@ RESPELLINGS = [
                "python3 ~/.claude/scripts/resolve-dev-report.py", "agents/changelog-analyst.md Phase 2 (:399 at 2acc29b)"),
 ]
 
-DEVIATIONS = Deviations([
-    # DEVIATION: "[Orchestrator Gate] BLOCKED: Bash used consecutively beyond limit (6/5)."
-    # The command's own run of Bash blocks between two dispatches outnumbers the gate's cap of 5.
-    ("*Bash*", Deviation("hooks/pretool-orchestrator-gate.py", "Bash used consecutively beyond limit",
-                         "the command's own run of Bash blocks between dispatches")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote"
-    # pretool-bash-safety.sh refuses the analyst's Phase 3 lock block as its agent text spells it (the
-    # apostrophe of "the repo's .git/" in its comment).
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED unproven_boundary_with_removal_reference:mkdir:"
-    # pretool-bash-safety.sh refuses the base text's Phase 10 descriptor step (its `mkdir -p
-    # "/tmp/agentic-commit/push/..."`, the form that text calls the accepted one).
-    ("agent:changelog-analyst Bash token descriptor *", Deviation(
-        "hooks/pretool-bash-safety.sh", "unproven_boundary_with_removal_reference:mkdir",
-        "Phase 10 steps 1-5 as the base agent text spells them")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED dynamic_command_head:dev-report*"
-    # pretool-bash-safety.sh refuses the base text's artifact_role table as written (its case patterns).
-    ("/commit * Bash artifact_role", Deviation(
-        "hooks/pretool-bash-safety.sh", "BLOCKED: removal-policy — UNRESOLVED",
-        "the role table as the text defines it")),
-    # (hookrun keeps the last 4000 characters of a hook's output: for this long block the quote is its REASON line)
-    ("agent:changelog-analyst Bash stage and commit *", Deviation(
-        "hooks/pretool-bash-safety.sh", "every execution boundary must be provably inert",
-        "Phase 3's lock block as the agent text spells it")),
-    # DEVIATION: "BLOCKED: agent git commit - the -C argument '${GIT_ROOT}' looks like an unresolved shell
-    # variable reference, not a concrete path."
-    # pretool-git-privilege-guard.py refuses Phase 8's commit line as the agent text spells it
-    # (`git -C "${GIT_ROOT}" commit -F "<msgfile>"`, CP-2's permitted form).
-    # DEVIATION: "BLOCKED: removal-policy — FORBIDDEN_REMOVAL filesystem_removal:rm"
-    # pretool-bash-safety.sh refuses Phase 8's cleanup of the message file (`rm -f "${MSGFILE}"`).
-    ("agent:changelog-analyst Bash rm MSGFILE *", Deviation(
-        "hooks/pretool-bash-safety.sh", "FORBIDDEN_REMOVAL filesystem_removal:rm",
-        "Phase 8's separate cleanup step as the agent text spells it")),
-    ("agent:changelog-analyst Bash stage and commit *", Deviation(
-        "hooks/pretool-git-privilege-guard.py", "looks like an unresolved shell variable reference",
-        "Phase 8's commit line as the agent text spells it")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED dynamic_command_head:ARTIFACT_CHAIN="$(python3
-    # ~/.claude/scripts/resolve-dev-artifact-chain.py ..."
-    # pretool-bash-safety.sh refuses Step 5's block as the text spells it (its `until
-    # ARTIFACT_CHAIN="$(...)"; do` chain-recheck loop), in both kits.
-    ("/commit Step 5 Bash plan *", Deviation(
-        "hooks/pretool-bash-safety.sh", "every execution boundary must be provably inert",
-        "Step 5's block as the text spells it")),
-])
+# Blocks the replays meet: none (a compliant run needs no deviation).
+DEVIATIONS = Deviations([])
 
 STAND_IN = ('route_finding() { printf "ROUTE_FINDING\\t%s\\t%s\\t%s\\n" "$1" "$2" "$3" >&2; exit 3; }\n')
 STATUS_BEGIN, STATUS_END = "--- CHANGELOG-ANALYST-STATUS-BEGIN ---", "--- CHANGELOG-ANALYST-STATUS-END ---"
@@ -243,7 +202,7 @@ class CommitRun:
         block = o.block("Step 5", anchor="LATE_REPAIR_JSON")
         caps = ("CONTROL_ROOT", "NESTED_REPO", "TASK_DOCS_ROOT", "TASK_PROJECT_ROOT", "LATE_REPAIR_JSON",
                 "LATE_REPAIR_STATE", "TASK_REPORT", "ARTIFACT_CHAIN", "FANOUT_MODE", "CANONICAL_DEV_REPORT",
-                "REPOSITORY_PLAN")
+                "REPOSITORY_PLAN", "ATTRIBUTION_LOG")
         for k in range(rounds + 1):
             c = self.run_text(STAND_IN + block, self.label(f"Step 5 Bash plan {k}"),
                               "Step 5: late-repair state, artifact chain and repository plan", capture=caps)
@@ -322,9 +281,12 @@ class CommitRun:
                 .replace("<human|orchestrator>", "human"))
 
     def attribution(self) -> None:
+        """The attribution slice, where the text gives it a block of its own (else the plan block built it)."""
         o = self.o
-        self.run_text(o.block("Step 5", anchor="ATTRIBUTION_FILES=()"), self.label("Step 5 Bash attribution slice"),
-                      "Attribution-log slice", capture=("ATTRIBUTION_LOG",))
+        block = o.block("Step 5", anchor="ATTRIBUTION_FILES=()")
+        if "REPOSITORY_PLAN=" not in block:
+            self.run_text(block, self.label("Step 5 Bash attribution slice"), "Attribution-log slice",
+                          capture=("ATTRIBUTION_LOG",))
 
     def manifest(self) -> None:
         o = self.o
@@ -567,7 +529,8 @@ class CommitRun:
                   f"git -C \"${{GIT_ROOT}}\" diff --cached --name-only\n"
                   + "\n".join(f'git -C "${{GIT_ROOT}}" add -- {shlex.quote(p)}' for p in cands) + "\n"
                   f"ACTUALLY_STAGED_PATHS=\"$(git -C \"${{GIT_ROOT}}\" diff --cached --name-only)\"\n"
-                  + commit.replace(tpl, msgfile).replace("<msgfile>", msgfile).replace("${MSGFILE}", msgfile).rstrip("\n") + "\n"
+                  + commit.replace(tpl, msgfile).replace("<msgfile>", msgfile).replace("${MSGFILE}", msgfile)
+                  .replace("<GIT_ROOT>", root).rstrip("\n") + "\n"
                   + reads.rstrip("\n") + "\n"
                   + 'printf \'{"repo_root": "%s", "branch": "%s", "commit_sha": "%s"}\\n\' "$GIT_ROOT" "$BRANCH" "$COMMIT_SHA"\n')
         c = sub.bash(script, "Phases 3-8: lock, stage, drift check, commit, descriptor",
