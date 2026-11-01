@@ -1,14 +1,16 @@
 """
 tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration.
 
-Verifies all three required registration sites for AC5:
-  1. 'graphify' in CP_AGENTS (hooks/pretool-cp-checkin.py)
-  2. 'graphify' in ALLOWED_AGENTS (scripts/spec-check.py)
-  3. 'graphify' in agent_types list (hooks/prompt-workflow.py:~598-603)
+Verifies AC5's registration through the one agent roster (hooks/lib/roster.py:
+the stems of the agents/*.md files with front matter, P1b row 18):
+  1. hooks/pretool-cp-checkin.py registers a graphify sentinel read
+  2. scripts/spec-check.py accepts graphify
+  3. graphify is a roster role, so the sentinel hook creates its registry sentinel
+Neither 1 nor 2 keeps a role list of its own.
 
-These registrations ensure the graphify.json sentinel file is created at
-UserPromptSubmit time, enabling the graphify subagent's mandatory FIRST ACTION
-Read to succeed (mirroring test-writer precedent).
+pretool-cp-checkin.py creates the graphify.json sentinel in the armed registry
+right before the graphify subagent's mandatory FIRST ACTION Read, so that Read
+succeeds (mirroring test-writer precedent).
 """
 
 import ast
@@ -20,92 +22,60 @@ import pytest
 _REPO_ROOT = Path(__file__).parent.parent
 
 
-def _read_file(relative_path: str) -> str:
-    """Read a file relative to the repo root."""
-    full_path = _REPO_ROOT / relative_path
-    assert full_path.exists(), f"Required file not found: {relative_path}"
-    return full_path.read_text(encoding="utf-8")
+def _load(name: str, relative_path: str):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(name, _REPO_ROOT / relative_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestCPAgentsRegistration:
-    """'graphify' must appear in CP_AGENTS in hooks/pretool-cp-checkin.py."""
+    """A graphify sentinel read registers graphify (pretool-cp-checkin.py)."""
 
-    def test_graphify_in_cp_agents(self):
-        source = _read_file("hooks/pretool-cp-checkin.py")
-        # CP_AGENTS is a set literal — check that 'graphify' appears in the file
-        assert "graphify" in source, (
-            "'graphify' not found in hooks/pretool-cp-checkin.py; "
-            "AC5 requires graphify in CP_AGENTS"
-        )
-
-    def test_cp_agents_block_contains_graphify(self):
-        """The string 'graphify' must appear within the CP_AGENTS definition block."""
-        source = _read_file("hooks/pretool-cp-checkin.py")
-        # Find the CP_AGENTS block and verify graphify is in it
-        cp_agents_idx = source.find("CP_AGENTS")
-        assert cp_agents_idx != -1, "CP_AGENTS definition not found in pretool-cp-checkin.py"
-
-        # Extract a window after CP_AGENTS definition to check the set contents
-        window = source[cp_agents_idx:cp_agents_idx + 1200]
-        assert "graphify" in window, (
-            "'graphify' not found within 1200 chars of CP_AGENTS definition; "
-            "it must be registered in the CP_AGENTS set"
-        )
+    def test_graphify_sentinel_read_registers(self):
+        hook = _load("cp_checkin_under_test", "hooks/pretool-cp-checkin.py")
+        payload = {"tool_name": "Read", "agent_id": "agent-graphify",
+                   "tool_input": {"file_path": "/p/.claude/dev-registry/dev-20260601-000000/graphify.json"}}
+        assert hook._extract_dev_sentinel(payload) == ("dev-20260601-000000", "graphify")
+        cp_read = dict(payload, tool_input={"file_path": "/p/.claude/specs/s1/cp-state-graphify.json"})
+        assert hook._extract_cp_state_target(cp_read) == ("s1", "graphify")
 
 
 class TestAllowedAgentsRegistration:
-    """'graphify' must appear in ALLOWED_AGENTS in scripts/spec-check.py."""
+    """spec-check.py accepts graphify."""
 
     def test_graphify_in_allowed_agents(self):
-        source = _read_file("scripts/spec-check.py")
-        assert "graphify" in source, (
-            "'graphify' not found in scripts/spec-check.py; "
-            "AC5 requires graphify in ALLOWED_AGENTS"
-        )
-
-    def test_allowed_agents_block_contains_graphify(self):
-        """The string 'graphify' must appear within the ALLOWED_AGENTS definition block."""
-        source = _read_file("scripts/spec-check.py")
-        allowed_idx = source.find("ALLOWED_AGENTS")
-        assert allowed_idx != -1, "ALLOWED_AGENTS definition not found in scripts/spec-check.py"
-
-        window = source[allowed_idx:allowed_idx + 1200]
-        assert "graphify" in window, (
-            "'graphify' not found within 1200 chars of ALLOWED_AGENTS definition; "
-            "it must be registered in the ALLOWED_AGENTS tuple"
-        )
+        spec_check = _load("spec_check_under_test", "scripts/spec-check.py")
+        assert "graphify" in spec_check._allowed_agents()
 
 
 class TestPromptWorkflowRegistration:
-    """'graphify' must appear in agent_types list in hooks/prompt-workflow.py."""
+    """'graphify' is a role of the agent roster the sentinel hook registers and creates."""
 
-    def test_graphify_in_agent_types(self):
-        source = _read_file("hooks/prompt-workflow.py")
-        assert "graphify" in source, (
-            "'graphify' not found in hooks/prompt-workflow.py; "
-            "AC5 requires graphify in agent_types list so sentinel file is created"
-        )
-
-    def test_agent_types_block_contains_graphify(self):
-        """'graphify' must appear within the agent_types definition in prompt-workflow.py."""
-        source = _read_file("hooks/prompt-workflow.py")
-        agent_types_idx = source.find("agent_types")
-        assert agent_types_idx != -1, "agent_types variable not found in prompt-workflow.py"
-
-        window = source[agent_types_idx:agent_types_idx + 1000]
-        assert "graphify" in window, (
-            "'graphify' not found within 1000 chars of agent_types definition; "
-            "it must be in the agent_types list so graphify.json sentinel is created at UserPromptSubmit"
+    def test_graphify_in_roster(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "roster_under_test", _REPO_ROOT / "hooks" / "lib" / "roster.py")
+        roster = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(roster)
+        assert "graphify" in roster.roles(), (
+            "agents/graphify.md must carry front matter: pretool-cp-checkin.py creates "
+            "a registry sentinel only for a roster role, graphify.json among them"
         )
 
 
 class TestSymmetricRegistration:
-    """CP_AGENTS and ALLOWED_AGENTS must both contain 'graphify' (arch-2 symmetry requirement)."""
+    """Both registration sites read the one roster (arch-2 symmetry by
+    construction): every roster role registers at both, nothing else does."""
 
-    def test_both_registration_sites_have_graphify(self):
-        checkin_source = _read_file("hooks/pretool-cp-checkin.py")
-        spec_check_source = _read_file("scripts/spec-check.py")
-        assert "graphify" in checkin_source and "graphify" in spec_check_source, (
-            "graphify must be registered symmetrically in BOTH CP_AGENTS and ALLOWED_AGENTS "
-            "(arch-2 requirement mirrors test-writer precedent)"
-        )
+    def test_both_registration_sites_take_the_roster(self):
+        roster = _load("roster_under_test", "hooks/lib/roster.py")
+        hook = _load("cp_checkin_under_test", "hooks/pretool-cp-checkin.py")
+        spec_check = _load("spec_check_under_test", "scripts/spec-check.py")
+        roles = roster.roles()
+        assert spec_check._allowed_agents() == sorted(roles)
+        for name in sorted(roles) + ["wizard"]:
+            payload = {"tool_name": "Read", "agent_id": "a",
+                       "tool_input": {"file_path": f"/p/.claude/dev-registry/sid/{name}.json"}}
+            assert (hook._extract_dev_sentinel(payload)[1] == name) is (name in roles), name

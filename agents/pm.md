@@ -295,12 +295,15 @@ this explicitly and fall back to doc-based core_flow_steps.
 
 1. Read the overnight state file at the provided path
 2. Extract:
-   - `cycle_count` -- how many cycles have completed
    - `addressed_issues` -- already tested/fixed (avoid retesting)
    - `failed_attempts` -- repeatedly failed (deprioritize)
    - `focus` -- user-specified priority hint
+   The cycle number is the `Cycle number:` of your prompt, which the orchestrator
+   reads through `~/.claude/hooks/lib/overnight.py cycle-index <state file>` (the
+   first cycle with no `retro-report-cycle<N>.json`); the state file holds no
+   cycle count, and the cycles completed are that number minus one.
 3. If the state file does not exist (first cycle), use defaults:
-   - cycle_count: 0, addressed_issues: [], failed_attempts: {}
+   - cycle 1, addressed_issues: [], failed_attempts: {}
    - focus: ""
 4. Read all previous `retro-report-cycle*.json` from
    `docs/dev/overnight/<session_id>/` for cross-cycle continuity.
@@ -371,25 +374,28 @@ For each specialist under consideration (`ui-specialist`, `architect`, `user`, `
 
 The policy file is `~/.claude/policies/specialist-degradation.v1.json` (Draft-7 JSON). Per-specialist override keys (`low_yield_threshold`, `clean_sweep_threshold`, `history_window`, `degradation_actions`, `escalation_after_actions`) live there — PM MUST NOT hard-code thresholds.
 
-This is a HARD requirement: omitting `degradation_check` from any `recommended_specialists[]` entry is a defective test plan and will be rejected by the orchestrator's plan-validation gate.
+This is a HARD requirement: a `recommended_specialists[]` entry without `degradation_check` fails `schemas/test-plan.v1.json`, and G2 returns the plan to you at your stop.
 
 ### Step 6: Write Test Plan
 
 Generate `plan_id` using current UTC time:
 `tp-YYYYMMDD-HHMMSS`.
 
-Write to output directory as
-`test-plan-YYYYMMDD-HHMMSS.json`.
+Write it to the path your dispatch's obligation block declares
+(`docs/dev/overnight/<session_id>/test-plan.json`), with `task_id` set to the
+obligation's `task_id`. G2 checks the file against `schemas/test-plan.v1.json`
+when you stop and returns a missing or invalid plan to you.
 
 #### Test Plan Schema
 
 ```json
 {
   "plan_id": "tp-YYYYMMDD-HHMMSS",
+  "task_id": "<your obligation's task_id>",
   "version": 1,
   "timestamp": "ISO-8601",
   "session_id": "<from input>",
-  "cycle_number": "<cycle_count + 1>",
+  "cycle_number": "<Cycle number from your prompt>",
   "app_context": {
     "url": "<extracted from CLAUDE.md>",
     "test_email": "<extracted or null>",
@@ -598,7 +604,7 @@ After Step 3 (Live-Evidence) and BEFORE Step 5 (Tier Classification), classify e
 - `pipe_category: "user_need"` — issue is on the user-need path; eligible for pipeline creation (proceed to Step 2 tiering).
 - `pipe_category: "security"` — path-external but security-relevant (Section 5.4 rule 2: security holes are exceptions — must be fixed even when outside the user-need path); eligible for pipeline creation (Tier 1 by default).
 - `pipe_category: "dependency"` — path-external code that the user-need path actually depends on (utils / types / adjacent modules per Section 5.4 rule 1); eligible for pipeline creation when the dependency materially affects user-need success.
-- `pipe_category: "out_of_scope_observation"` — path-external, non-security, non-dependency. **Does NOT become a pipeline.** Routed to the triage report's `out_of_scope_observations[]` array (see triage-report schema below) for the cycle's BA / observations-ledger handoff. Tier and pipeline_recommendation fields are not applied.
+- `pipe_category: "out_of_scope_observation"` — path-external, non-security, non-dependency. **Does NOT become a pipeline.** Routed to the triage report's `out_of_scope_observations[]` array (see triage-report schema below) for the cycle's BA handoff. Tier and pipeline_recommendation fields are not applied.
 
 **Specialists' free exploration is preserved** (per spec-20260503-091826 Section 5.7 anti-pattern #5): this filter constrains pipelines, NOT specialists' discovery. Specialists continue to scan broadly; PM Step 4 governs only what becomes a pipeline.
 
@@ -666,12 +672,16 @@ Set `pipeline_blocked: true` and populate `block_reasons` when ANY of:
 
 ### Step 9: Write Triage Report
 
-Write to output directory as
-`triage-report-cycle<N>.json`.
+Write it to the path your dispatch's obligation block declares
+(`docs/dev/overnight/<session_id>/triage-report-cycle<N>.json`), with `task_id`
+set to the obligation's `task_id`. G2 checks the file against
+`schemas/triage-report.v1.json` when you stop and returns a missing or invalid
+report to you.
 
 ```json
 {
   "triage_id": "tr-YYYYMMDD-HHMMSS",
+  "task_id": "<your obligation's task_id>",
   "plan_id": "<matching test-plan plan_id>",
   "session_id": "<session_id>",
   "cycle_number": 1,
@@ -743,7 +753,7 @@ next-cycle strategy.
 1. Read own triage report for this cycle
 2. Read all pipeline QA/Dev reports from this cycle
 3. Read ALL previous retro reports (for cumulative tracking)
-4. **Quick state snapshot**: Run `bash ~/.claude/scripts/overnight-status.sh` for instant session metrics (cycle count, fix rate, unresolved count) without parsing JSON manually.
+4. **Quick state snapshot**: Run `bash ~/.claude/scripts/overnight-status.sh` for instant session metrics (cycle number, window, fix rate, unresolved count) without parsing JSON manually.
 
 ### Step 2: Verify Build Status
 
@@ -851,12 +861,16 @@ stats across all cycles.
 
 ### Step 9: Write Retro Report
 
-Write to output directory as
-`retro-report-cycle<N>.json`.
+Write it to the path your dispatch's obligation block declares
+(`docs/dev/overnight/<session_id>/retro-report-cycle<N>.json`), with `task_id`
+set to the obligation's `task_id` and `is_final_cycle` set to your prompt's
+`FINAL_CYCLE`. G2 checks the file against `schemas/retro-report.v1.json` when
+you stop and returns a missing or invalid report to you.
 
 ```json
 {
   "retro_id": "rr-YYYYMMDD-HHMMSS",
+  "task_id": "<your obligation's task_id>",
   "session_id": "<id>",
   "cycle_number": 1,
   "timestamp": "ISO-8601",
@@ -1040,12 +1054,10 @@ When an `Overnight spec file:` path is provided in your prompt, you are operatin
 
 ### RETRO Mode with Spec
 
-**When spec paths are provided**, read each spec file and update:
+**When spec paths are provided**, read each spec file; do not write it (a `/spec` spec has one writer, `scripts/spec-write.py`, and a pipeline spec one writer, the orchestrator's copy of the template). Record per unresolved pipeline, in your retro report's `unresolved_issues` (RETRO Step 4; the next cycle's PLAN reads it, Step 2: Read Session History):
 
-- **Section 7 (What Must Be Done)**: For each unresolved pipeline, append prescriptive next steps under the appropriate cycle header. Be specific: name the file, line, and concrete action. Do NOT write generic advice like "investigate further" or "try a different approach".
-- **Section 8 (Attention Notes)**: Append issue-specific traps, warnings, and patterns noticed. Examples: "This component re-renders on every state change -- test with React DevTools profiler", "The CSS specificity war between global.css and module.css causes unpredictable overrides".
-
-**Format for appending**: Add a new cycle subsection header (e.g., `### Cycle 2`) under the appropriate section, then write your content below it.
+- **What Must Be Done**: prescriptive next steps. Be specific: name the file, line, and concrete action. Do NOT write generic advice like "investigate further" or "try a different approach".
+- **Attention Notes**: issue-specific traps, warnings, and patterns noticed. Examples: "This component re-renders on every state change -- test with React DevTools profiler", "The CSS specificity war between global.css and module.css causes unpredictable overrides".
 
 ---
 
@@ -1194,5 +1206,5 @@ PM MUST NOT generate a test scenario or pipeline with a concrete pass/fail crite
 - Keep all outputs focused and actionable
 - Do not invent context that does not exist in CLAUDE.md
 - All extracted values must come from actual project documentation
-- Do not modify any files other than your designated output file and overnight spec files
+- Do not modify any files other than your designated output file
 - Integer step numbering only (Step 1, Step 2 -- never 1.1, 1.2)

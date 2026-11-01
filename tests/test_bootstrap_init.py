@@ -294,6 +294,22 @@ def test_init_output_names_overlay_keys_never_their_values(home, case):
         assert not (home.tmp / STAND_IN).exists() and not (home.clone / STAND_IN).exists()
 
 
+def test_a_settings_file_the_load_finds_unusable_stops_init_with_its_reason(home):
+    # init reads settings.json through the one load of a settings file (hooks/lib/claude_home.py
+    # load_settings): made unparseable at the same size, the render (step 3) refuses with the
+    # load's reason, and so does step 4's env.TMPDIR read; the file stays as it is.
+    assert home.bootstrap("--yes", "--no-doctor").returncode == 0
+    settings = home.clone / "settings.json"
+    data = b"{" * settings.stat().st_size
+    settings.write_bytes(data)
+    for step, line in (("3", "render-settings: render refused: settings.json: not valid JSON ("),
+                       ("4", f"bootstrap: env.TMPDIR not read: {home.h}/settings.json: not valid JSON (")):
+        result = home.bootstrap("--steps", step, check=False)
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert line in result.stdout + result.stderr, result.stdout + result.stderr
+    assert settings.read_bytes() == data
+
+
 def test_module_question_reads_one_line_and_defaults_to_no(home):
     # One clone, the overlay removed before each run. Every "off" answer comes
     # first: turning the module off after it was on would leave its entries in
@@ -308,6 +324,16 @@ def test_module_question_reads_one_line_and_defaults_to_no(home):
         overlay = json.loads(home.overlay.read_text(encoding="utf-8"))
         assert overlay["modules"] == {"paseo": enabled}, answers
         assert ("mcp__paseo__*" in home.settings()["permissions"]["allow"]) is enabled, answers
+
+
+def test_the_overlay_writer_init_seeds_through_never_clobbers(home):
+    # Step 2 writes a new overlay through render-settings' one writer (migrate and the landing
+    # use it too); one created meanwhile is kept byte for byte.
+    home.overlay.write_text('{"modules": {}}\n', encoding="utf-8")
+    result = _run([sys.executable, str(home.clone / "scripts" / "install" / "render-settings"),
+                   "seed", "--claude-home", home.h, "paseo=on"], home.env, check=False)
+    assert result.returncode == 1 and "seed refused" in result.stderr
+    assert home.overlay.read_text(encoding="utf-8") == '{"modules": {}}\n'
 
 
 def test_foreign_pre_commit_is_kept_as_local_and_chained(home):

@@ -109,7 +109,6 @@ mkdir -p "$CLONE/hooks/lib" "$CLONE/policies" "$CLONE/scripts" "$CLONE/scripts/i
 # settings.json is the tracked CLEAN FORM below (what a fresh clone checks out).
 cp -a "$REPO/hooks/lib/." "$CLONE/hooks/lib/" 2>/dev/null
 cp -a "$REPO/hooks/pretool-tool-policy.py" "$CLONE/hooks/" 2>/dev/null
-cp -a "$REPO/hooks/stop-spec-coverage-enforce.py" "$CLONE/hooks/" 2>/dev/null
 cp -a "$REPO/hooks/session-promote-hook.sh" "$CLONE/hooks/" 2>/dev/null
 cp -a "$REPO/policies/." "$CLONE/policies/" 2>/dev/null
 
@@ -213,74 +212,9 @@ else
   record tool-policy clean_exit 0 "allow_rc=$arc neg_rc=$rc stderr_clean=$(stderr_is_clean "$aerr" && echo 1 || echo 0)"
 fi
 
-# ════════════════════════════════════════════════════════════════════════════
-# GUARD 2 — stop-spec-coverage-enforce (the blocking Stop hook)
-# ════════════════════════════════════════════════════════════════════════════
-SC_HOOK="$CLONE/hooks/stop-spec-coverage-enforce.py"
-SPEC_TS="20260616-120000"; SPEC_ID="spec-$SPEC_TS"; SID="ws2-smoke-session"
-
-# Build a /spec session inside a home: workflow bookmark + transcript + views/ +
-# monolith. with_verifier toggles the REQUIRED spec-verify helper; vexit is its
-# simulated exit (nonzero => under-covered).
-build_spec_home() {  # <home> <with_verifier:0|1> <vexit>
-  local home="$1" wv="$2" vexit="$3"
-  mkdir -p "$home/hooks/lib" "$home/policies" "$home/scripts" \
-           "$home/.claude" "$home/docs/dev/specs/$SPEC_TS/views"
-  echo '{}' > "$home/settings.json"
-  cp -a "$CLONE/hooks/stop-spec-coverage-enforce.py" "$home/hooks/" 2>/dev/null
-  cp -a "$CLONE/hooks/lib/claude_home.py" "$home/hooks/lib/" 2>/dev/null
-  printf '{"command":"spec"}' > "$home/.claude/workflow-$SID.json"
-  printf '# view\n' > "$home/docs/dev/specs/$SPEC_TS/views/dev.md"
-  printf '# Monolith\n\nSome spec body.\n' > "$home/docs/dev/specs/$SPEC_ID.md"
-  printf '{"message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"docs/dev/specs/%s.md"}}]}}\n' "$SPEC_ID" \
-    > "$home/transcript.jsonl"
-  if [ "$wv" -eq 1 ]; then
-    mkdir -p "$home/scripts/spec-verify"
-    printf 'import sys\nprint("coverage: simulated")\nsys.exit(%s)\n' "$vexit" \
-      > "$home/scripts/spec-verify/spec-verify.py"
-  fi
-  chmod -R a+rX "$home" 2>/dev/null || true
-}
-run_stop() {  # <home>
-  local home="$1"
-  printf '{"session_id":"%s","transcript_path":"%s","stop_hook_active":false}' "$SID" "$home/transcript.jsonl" \
-    | run_probe "$home" HOME="$home" CLAUDE_PROJECT_DIR="$home" -- python3 "$home/hooks/stop-spec-coverage-enforce.py" 2>&1 1>/dev/null
-}
-
-# DEGRADE/SKIP: REQUIRED verifier ABSENT + a spec was touched -> ALLOW the stop
-# (exit 0, baseline advisory skip). The absent-verifier case is advisory, NOT a
-# fail-closed block (reverted from the over-scoped WS1 exit-2 flip in 20260618-
-# 082520). Genuine enforcement is proven by the under-covered POSITIVE below.
-SH_NOVER="$TMP_BASE/specnover/dot-claude"; build_spec_home "$SH_NOVER" 0 0
-serr="$(run_stop "$SH_NOVER")"; src=$?
-if [ "$src" -eq 0 ] && stderr_is_clean "$serr"; then
-  record stop-spec-coverage negative 1 "verifier-absent skips (exit 0, advisory baseline) — not a fail-closed block"
-else
-  record stop-spec-coverage negative 0 "src=$src err=$(printf '%s' "$serr" | head -c 200)"
-fi
-
-# POSITIVE (own-helper): verifier PRESENT but under-covered (vexit=1) -> BLOCK (2)
-# with the < 100% coverage marker proving the guard ran THIS clone's verifier and
-# acted on its result (not a different guard's block).
-SH_UNDER="$TMP_BASE/specunder/dot-claude"; build_spec_home "$SH_UNDER" 1 1
-uerr="$(run_stop "$SH_UNDER")"; urc=$?
-if [ "$urc" -eq 2 ] && printf '%s' "$uerr" | grep -q "< 100% coverage"; then
-  record stop-spec-coverage positive 1 "ran clone verifier; under-covered blocked exit 2"
-else
-  record stop-spec-coverage positive 0 "urc=$urc err=$(printf '%s' "$uerr" | head -c 200)"
-fi
-
-# CLEAN-EXIT: verifier PRESENT + full coverage (vexit=0) -> ALLOW stop (0) with
-# clean stderr; and the two blocking cases were exactly 2, never 1/126/127.
-SH_OK="$TMP_BASE/specok/dot-claude"; build_spec_home "$SH_OK" 1 0
-okerr="$(run_stop "$SH_OK")"; okrc=$?
-if [ "$okrc" -eq 0 ] && stderr_is_clean "$okerr" \
-   && [ "$src" != 1 ] && [ "$src" != 126 ] && [ "$src" != 127 ] \
-   && [ "$urc" != 1 ] && [ "$urc" != 126 ] && [ "$urc" != 127 ]; then
-  record stop-spec-coverage clean_exit 1 "covered=0 blocked=2 no 1/126/127 clean stderr"
-else
-  record stop-spec-coverage clean_exit 0 "ok_rc=$okrc nover_rc=$src under_rc=$urc"
-fi
+# GUARD 2 (stop-spec-coverage-enforce) is retired: the hook is an exit-0 stub and its rule,
+# spec-verify.py on the /spec split, is G2's at the spec subagent's own stop (P1b row 8;
+# hooks/tests/test_g2_spec_views.py runs it).
 
 # ════════════════════════════════════════════════════════════════════════════
 # GUARD 3 — claude_home resolver: REQUIRED fail-closed (the security primitive)

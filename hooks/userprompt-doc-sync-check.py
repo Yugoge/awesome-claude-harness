@@ -3,8 +3,9 @@
 UserPromptSubmit Hook: Periodic file deletion detection for doc-sync.
 
 Compares current file lists in watched directories against cached state.
-If deletions detected, regenerates INDEX.md for affected directories
-by invoking posttool-doc-sync.py via subprocess.
+If deletions detected, re-runs posttool-doc-sync.py via subprocess for the
+affected directories (it updates their marked INDEX.md), and removes the
+INDEX.md of a directory left empty.
 
 Hook type: UserPromptSubmit
 Exit codes: 0 always (never blocks)
@@ -169,10 +170,14 @@ def main() -> None:
                 if remaining:
                     trigger_file: str = str(remaining[0])
                 else:
-                    # Directory empty or gone, just remove INDEX.md
+                    # Directory empty or gone: remove its INDEX.md through the one writer of
+                    # that file (run as a file, so this hook still imports nothing of doc_sync).
                     idx: Path = dir_path / 'INDEX.md'
                     if idx.exists():
-                        idx.unlink()
+                        subprocess.run(
+                            ['python3', str(hook_dir / 'doc_sync' / 'folder_doc.py'), '--remove', str(idx)],
+                            capture_output=True, timeout=5,
+                        )
                     continue
 
                 fake_input: str = json.dumps({
