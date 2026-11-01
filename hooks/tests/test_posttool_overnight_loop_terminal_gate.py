@@ -6,7 +6,11 @@ The reset decides only from the all-completed todo list and the overnight
 window. An obligation whose declared artifact is missing, or a lane whose dev
 report is absent or not terminal, is decided where it is made: G2 at its
 producer's own stop, G3 at the next dispatch. CLAUDE_OBLIGATION_TERMINAL,
-whatever its value, changes nothing.
+whatever its value, changes nothing, and the reset prints nothing per family:
+it exits 0 with nothing on stderr (P4 R10, decided by the arm-overnight replay
+with and without a per-family print: at each compliant reset every pipeline
+family was at chain_pass, and a print over the span's families flagged the
+PM's and the specialists' own task ids; the session-end predicate is P5's).
 
 Run: pytest hooks/tests/test_posttool_overnight_loop_terminal_gate.py -v
 """
@@ -121,8 +125,38 @@ def test_reset_continues_whatever_the_artifacts(tmp_path, cycle, mode):
     result = _run_loop(payload, project_dir, home, mode=mode)
 
     assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
     assert "Cycle 3 complete (PM retro filed). Starting cycle 4." in result.stdout
     assert "BLOCKED" not in result.stdout
+    assert state_path.read_bytes() == before
+    assert _written_logs(home) == []
+
+
+def test_in_flight_state_with_a_terminal_gate_reason_resets(tmp_path):
+    """Live landing (P4 R10, the pop decided by this test): a record the old
+    G4 block left carries terminal_gate_blocked_reason. Nothing reads the
+    field and the record has one writer (lib.overnight.write_state), so the
+    reset neither pops it nor stops on it: the continuation prints and the
+    record is left as it was."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    session_id = "overnight-sess-inflight"
+    transcript, issues = _lanes("completed", "blocked")(tmp_path, project_dir)
+    state_path = _state_path(project_dir, session_id)
+    state = fx.write_overnight_state(state_path, session_id, cycle_count=2, current_issues=issues)
+    state["terminal_gate_blocked_reason"] = "lane 1 (ts-1): dev report status 'blocked' is not terminal"
+    state_path.write_text(json.dumps(state, indent=2))
+    _retro_reports(project_dir, session_id, 2)
+    before = state_path.read_bytes()
+    payload = fx.all_completed_todo_payload(session_id, transcript_path=transcript)
+
+    result = _run_loop(payload, project_dir, home, mode="block")
+
+    assert result.returncode == 0, result.stderr
+    assert "Cycle 2 complete (PM retro filed). Starting cycle 3." in result.stdout
+    assert "BLOCKED" not in result.stdout + result.stderr
     assert state_path.read_bytes() == before
     assert _written_logs(home) == []
 
