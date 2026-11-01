@@ -70,7 +70,7 @@ DISPATCH_ID = "toolu_g1_dispatch"
 # (command, a role its dispatch templates declare an obligation for) (TC-41, D7).
 DECLARING_SPANS = (
     ("dev", "ba"), ("redev", "ba"), ("dev-command", "ba"), ("dev-overnight", "pm"),
-    ("close", "qa"), ("commit", "changelog-analyst"), ("commit", "dev"), ("spec", "spec"),
+    ("close", "qa"), ("close", "dev"), ("commit", "changelog-analyst"), ("commit", "dev"), ("spec", "spec"),
     ("merge", "merge-analyst"), ("push", "push-analyst"),
 )
 
@@ -615,14 +615,13 @@ def test_G1_gated_span_producer_without_block_rejects(tmp_path, command, role):
 
 
 @pytest.mark.parametrize("command,subagent_type", [
-    ("do", "dev"), ("close", "dev"), ("close", "ba"), ("commit", "ba"), ("merge", "dev"), ("push", "qa"),
+    ("do", "dev"), ("close", "ba"), ("commit", "ba"), ("merge", "dev"), ("push", "qa"),
 ])
 def test_G1_role_the_active_command_declares_no_template_for_passes(tmp_path, command, subagent_type):
     """No list of commands requires a block: /do's text declares no template,
-    /close's none for dev or ba, /commit's none for ba (another command's
-    template for that role does not count; /commit's own dev template, the
-    re-dispatch of an unclosed /do task, does), /merge's and /push's none but
-    their analyst's.
+    /close's and /commit's none for ba (another command's template for that
+    role does not count; their own dev template, the dev that completes a /do
+    task's work, does), /merge's and /push's none but their analyst's.
     Each such dispatch without a block passes in block mode."""
     home, project = _dirs(tmp_path)
     payload = _dispatch_payload(project, _unique_sid("g1nodecl"), _span_records(command),
