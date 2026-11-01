@@ -684,8 +684,8 @@ dot-claude/
 │   ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 │   ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
 │   ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
-│   ├── `test_ac_deviation_fanout_consumer.py` - records and the lifecycle presentation of ``pass_with_exceptions``
-│   ├── `test_ac_deviation_record_chain.py` - A dev report that legitimately records an acceptance-criteria deviation is
+│   ├── `test_ac_deviation_fanout_consumer.py` - fan-out lanes that stop short of ``completed`` and the lifecycle row of a chain, under strict pass
+│   ├── `test_ac_deviation_record_chain.py` - A dev report that records an acceptance-criteria deviation fails the chain like any other blocked report
 │   ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
 │   ├── `test_aggregate_dev_report_superseded_rounds.py` - aggregate dev-report's ownership-completeness check over a multi-lane,
 │   ├── `test_apply_permissions.py` - /dev and /dev-command apply the permissions QA validated with the line their permission step
@@ -705,7 +705,7 @@ dot-claude/
 │   ├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
 │   ├── `test_completeness_span_accounting.py` - halves on one code path
 │   ├── `test_conftest_hermetic.py` - conftest.py removes CLAUDE_PROJECT_DIR, PASEO_CONFIG_DIR, CLAUDE_HOME, CODEX_HOME,
-│   ├── `test_declared_vocab_readers.py` - (P1b row 19 rule 7): the chain resolver's disclosed-exception
+│   ├── `test_declared_vocab_readers.py` - (P1b row 19 rule 7): readers that take a set from its declaration instead of a copy
 │   ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
 │   ├── `test_dev_todo_accounting.py` - Python script
 │   ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
