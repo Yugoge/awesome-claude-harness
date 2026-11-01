@@ -449,12 +449,16 @@ jobs:
         # it the static half; 50 s wall on a free CPU) and the unmutated check it
         # compares with 54 s: 4 at a time on 4 CPUs, about 4 minutes (411 s on a
         # 4-CPU machine shared at a load of 9), each worker holding the replays in
-        # about 1.7 GB.
+        # about 1.7 GB. With 4 workers the hosted runner was shut down 2 minutes
+        # into this step (a4d3186), so it runs 2 at a time: about 5 minutes.
         if: ${{ !cancelled() }}
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           ARTIFACT_GRAPH_WORK: ${{ runner.temp }}/artifact-graph
-        run: python3 -m pytest tests/artifact_graph/test_mutations.py -q -p no:cacheprovider -s
+          ARTIFACT_GRAPH_JOBS: "2"
+        run: |
+          free -m
+          python3 -m pytest tests/artifact_graph/test_mutations.py -q -p no:cacheprovider -s
 
       - name: Upload the check's timing and violations
         # if: always(): a failing check's timing is the one the budget question needs.

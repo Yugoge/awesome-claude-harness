@@ -35,6 +35,10 @@ these names and semantics):
     load_settings(path)        -> (dict|None, str|None)
                                                 (the one load of a settings file;
                                                  see its docstring)
+    settings_env(*keys, any_session=False) -> dict
+                                                (P7b R7: keys a running session's env
+                                                 lacks, from the settings.json env)
+    settings_switch(key, default) -> str        (one such key, a gate switch's value)
 
 The split mirrors the shell helper ``require_security_file`` / ``resolve_optional_file``.
 """
@@ -227,18 +231,30 @@ def project_dir() -> Path:
     return Path.cwd()
 
 
-def settings_env(*keys: str) -> dict[str, str]:
+def settings_env(*keys: str, any_session: bool = False) -> dict[str, str]:
     """P7b R7: a Claude Code process (CLAUDECODE or CLAUDE_PROJECT_DIR set) whose env lacks
     CLAUDE_HOME started before its settings carried the overlay: the keys it lacks come from the
-    harness home's current settings.json env. {} for any other process or an unreadable file."""
-    if os.environ.get("CLAUDE_HOME") or not (os.environ.get("CLAUDECODE")
-                                             or os.environ.get("CLAUDE_PROJECT_DIR")):
+    harness home's current settings.json env. {} for any other process or an unreadable file.
+
+    any_session=True takes them from there also when the env has CLAUDE_HOME (a session started
+    since the landing): for a key whose current value must reach every running session, since a
+    session keeps the env it started with (P1b E4, CLAUDE_OBLIGATION_STOPGATE)."""
+    if (os.environ.get("CLAUDE_HOME") and not any_session) or not (
+            os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_PROJECT_DIR")):
         return {}
     try:
-        env = json.loads((resolve() / "settings.json").read_text(encoding="utf-8"))["env"]
+        settings, _problem = load_settings(resolve() / "settings.json")
+        env = (settings or {}).get("env") or {}
         return {k: env[k] for k in keys if k not in os.environ and isinstance(env.get(k), str)}
     except Exception:
         return {}
+
+
+def settings_switch(key: str, default: str) -> str:
+    """A gate switch's value as a running session meets it when its process env lacks the key: the
+    harness home's settings.json env at run time (settings_env, any_session), stripped and
+    lowercased; `default` when that env does not set it either (P1b E4)."""
+    return settings_env(key, any_session=True).get(key, default).strip().lower()
 
 
 def _main(argv: list[str]) -> int:

@@ -276,25 +276,26 @@ clean_merge_reports() {
   STYLE_REPORT="${CLEAN_OUTPUT_DIR}/style-report-${REQUEST_ID}.json"
   PROMPT_REPORT="${CLEAN_OUTPUT_DIR}/prompt-report-${REQUEST_ID}.json"
 
-  # All three reports are required -- prompt-inspector is MANDATORY on every
-  # /clean run (commands/clean.md Step 10A), so its report is required here on
-  # the same footing as the other two.
-  for report in "$CLEANLINESS_REPORT" "$STYLE_REPORT" "$PROMPT_REPORT"; do
-    if ! jq empty "$report" 2>/dev/null; then
-      echo "Error: Missing or invalid report: $report" >&2
-      exit 1
-    fi
-  done
+  # The main agent writes the style report itself (/clean Step 9) and runs this merge,
+  # so the merge checks it. The cleanliness and prompt reports are each checked at their
+  # inspector's own stop (G2, the report its dispatch's obligation declares), so the
+  # merge takes them as they are and decides nothing on them.
+  if ! jq empty "$STYLE_REPORT" 2>/dev/null; then
+    echo "Error: Missing or invalid report: $STYLE_REPORT" >&2
+    exit 1
+  fi
+  # An inspector's report as it is: its first JSON value, or null where it holds none.
+  inspector_report() { jq -c -n 'try input catch null' "$1" 2>/dev/null; }
 
   # Merge reports
   COMBINED_OUTPUT="${CLEAN_OUTPUT_DIR}/combined-report-${REQUEST_ID}.json"
 
   jq -n \
     --arg request_id "$REQUEST_ID" \
-    --slurpfile cleanliness "$CLEANLINESS_REPORT" \
+    --argjson c "$(inspector_report "$CLEANLINESS_REPORT")" \
     --slurpfile style "$STYLE_REPORT" \
-    --slurpfile prompt "$PROMPT_REPORT" \
-    '$cleanliness[0] as $c | $style[0] as $s | $prompt[0] as $p | {
+    --argjson p "$(inspector_report "$PROMPT_REPORT")" \
+    '$style[0] as $s | {
       request_id: $request_id,
       timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
       cleanliness_report: $c,

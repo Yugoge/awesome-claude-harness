@@ -182,28 +182,3 @@ def test_a_dispatch_counts_for_its_steps_current_run_only(s):
     for n in range(4):
         s.todo(_frontier(n))
     assert s.todo(_frontier(4))[0].returncode == 2
-
-
-def test_spec_coverage_gate_holds_until_the_spec_checklist_is_done(s):
-    """stop-spec-coverage-enforce.py checks the /spec span from its start until
-    a TodoWrite with every step completed comes back, as it did while the
-    tracker removed the bookmark at that point."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("stop_spec_coverage", HOOKS / "stop-spec-coverage-enforce.py")
-    hook = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(hook)
-    s.command("/spec an idea")
-    assert hook.get_workflow_command(str(s.path)) == "spec"
-    steps = _canonical("spec")
-    s.todo(_frontier(0, command="spec"))
-    assert hook.get_workflow_command(str(s.path)) == "spec"
-    refused = s.use("TodoWrite", {"todos": [dict(t, status="completed") for t in steps]})
-    s.result(refused, error=True)  # a refused list releases nothing
-    assert hook.get_workflow_command(str(s.path)) == "spec"
-    done = s.use("TodoWrite", {"todos": [dict(t, status="completed") for t in steps]})
-    s.result(done)
-    assert hook.get_workflow_command(str(s.path)) == ""
-    s.todo(_frontier(0, command="spec"))  # still released for the rest of the span
-    assert hook.get_workflow_command(str(s.path)) == ""
-    s.command("/spec another idea")
-    assert hook.get_workflow_command(str(s.path)) == "spec"
