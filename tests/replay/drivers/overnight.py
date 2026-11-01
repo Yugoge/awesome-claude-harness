@@ -87,6 +87,9 @@ Driver arguments (cli.py --arg K=V):
   then=idle       with variant=stop, X8's /stop replay: no Stop is driven after stop.md's last step (the
                   wake's CronDelete); the session idles two wake intervals (facts.json "wake"); stop_at
                   defaults to 2
+  wake=late       X6's replay of the wake's two gates (variant plain): Step 0 marked completed before
+                  the CronCreate (refused; the CronCreate, then the completion), and the Stop after
+                  end_time before the CronDelete (refused naming the job; the CronDelete, then the Stop)
   wake=after-stop with then=idle: /stop's turn meets a usage limit after its wrapper, before its
                   CronDelete; the wake fires inside /stop's span (facts.json "wake after /stop": what
                   the hooks issued), then the agent's next turn deletes it
@@ -750,6 +753,10 @@ class Night:
             spec = json.loads(cmdtext.block(o.text, "Step 0", lang="json"))
         except cmdtext.TextNotFound:
             return  # a text without the wake (your base's): nothing is scheduled
+        if self.rp.args.get("wake") == "late":  # X6: the completion before the CronCreate, refused
+            refused = o.advance("C1 TodoWrite Step 0 done before the CronCreate")
+            if refused.blocked:
+                o.todos[0]["status"], o.todos[1]["status"] = "in_progress", "pending"
         call = self.rp.cron.tool_create(o.s, spec, "C1 Step 0 CronCreate wake",
                                         deviation=o.devs.at("C1 Step 0 CronCreate wake"))
         self.wake_job = call.response.get("id") if call.ok else None
@@ -1568,7 +1575,7 @@ class Night:
         s.say(o.bind(keep, rules + [(r"^isolation_kind$", str(st.get("isolation_kind"))),
                                     (r"^worktree_branch$", str(st.get("worktree_branch"))),
                                     (r"^worktree_path$", str(st.get("worktree_path")))]))
-        if "Delete the wake" in sec:  # the branch's last step
+        if "Delete the wake" in sec and self.rp.args.get("wake") != "late":  # the branch's last step
             self.delete_wake(s, f"{self.L}Step 21 CronDelete wake")
         i = o.current()
         o.todos[i]["status"] = "completed"
@@ -1578,10 +1585,13 @@ class Night:
         """The session's Stop after end_time: /dev-overnight's terminal is reached when the summary is
         written, this Stop meets no block and, where Step 0 scheduled the wake, the wake was deleted
         before it and none fires in the two wake intervals the session then idles."""
-        live = sorted(self.rp.cron.jobs)
+        def late(s, _ev):  # wake=late: the refused Stop's next round is the CronDelete, then the Stop
+            self.delete_wake(s, f"{self.L}Step 21 CronDelete wake (after the refused Stop)")
+            return True
         ev = self.o.s.stop("Overnight development session complete; the summary is written.",
-                           label=f"{self.L}Stop after end_time")
-        stopped = utc_now()
+                           label=f"{self.L}Stop after end_time",
+                           on_block=late if self.rp.args.get("wake") == "late" else None)
+        live, stopped = sorted(self.rp.cron.jobs), utc_now()
         fired = self.after_terminal("after the terminal: wake")
         summary = os.path.join(self.project, getattr(self, "summary_rel", "") or "-")
         self.rp.terminal("dev-overnight", os.path.isfile(summary) and not live and not fired, ev,
