@@ -137,10 +137,11 @@ from . import dev as devdrv
 PIPELINE = "dev-overnight"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
-# (qa-fail: measured beside plain on the P1b working tree at effa0ec, scaled by plain's 813; unattended:
-# its untraced runs beside plain's on P2's working tree, scaled the same way; it also holds its slot for
-# its `window`, about the time a traced replay of its one cycle takes on CI)
-COST = {"plain": 813, "stop": 345, "qa-fail": 524, "unattended": 520}
+# (qa-fail: measured beside plain on the P1b working tree at effa0ec, scaled by plain's 813). unattended
+# takes about 520 CPU seconds the same way (its untraced runs beside plain's on P2's working tree), but
+# each of its replays holds its slot for its window and the closeout after it (about 660 s): it declares
+# that slot time at CI's rate (2 x 660 s x 2.40 / 4 slots), so the shard plan schedules it as it runs.
+COST = {"plain": 813, "stop": 345, "qa-fail": 524, "unattended": 790}
 FOCUS = "harden the toy package's public functions"
 END_TIME = "8h"
 WORK_BRANCH = "night-work"
@@ -1392,6 +1393,7 @@ class Night:
         d2 = self.dispatch_ba(dict(fields, prompt=pr), p, label + " (decision)", experiment=dict(EXPERIMENT, question=q))
         self.carried.append({"where": label + " (decision)", "line": line, "prompt": d2.player.b.prompt})
         self.own |= {self.L + label, self.L + label + " (decision)"}
+        self.probe_stop(f"{self.L}Step 8 (injected) Stop after a forged ESCALATION_ACK line")  # in the window
 
     def gate_line(self, p: Pipe) -> str:
         """The stand-in user gate at pipeline 0's dev dispatch, decided once (Clause B: as Hard Rule 5
@@ -1567,8 +1569,6 @@ class Night:
             if self.meets_decisions(p):  # dev wrote its producer question instead of its report
                 self.dev_decided_by_default(p)
             self.read(f"docs/dev/dev-report-{p.sfx}.json", f"Step 13 Read dev-report {p.index}")
-        if self.unattended and self.cycle == 1:  # every decision made: a Stop after a forged line, in the window
-            self.probe_stop(f"{self.L}Step 13 (injected) Stop after a forged ESCALATION_ACK line")
 
     # ------------------------------------------------------------ Steps 14-18
     def step14(self) -> None:
