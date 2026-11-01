@@ -12,8 +12,8 @@ payload on stdin and decides, in order:
       expansion, a scheduled prompt or a wakeup); a plain prompt continues it;
   (4) the overnight time-lock, whatever the span and the mode: block while
       overnight.window_open(payload); after end_time (closeout_gaps empty) or
-      the owner's /stop, block while the wake's CronCreate has no later
-      CronDelete, naming its id;
+      the owner's /stop, block while the wake's CronCreate (overnight.WAKE_PROMPT)
+      has no later CronDelete (overnight.open_wakes), naming its id;
   (5) no gated span (stop-commands.json's GATED_COMMANDS): allow;
   (6) the gaps: the todo half and the command's predicate; an exception is
       the gap `gate instrument failure: <type>: <message>`, never an allow;
@@ -341,44 +341,52 @@ PREDICATES = {
 
 
 # ---------------------------------------------------------------- the time-lock (4)
-def _open_wake(transcript: str) -> str | None:
-    """The id of a recurring CronCreate after the latest /dev-overnight opener
-    with no later CronDelete of it (P1c X8), else None."""
-    starts = [line for line, command, _args in command_span.openers(transcript) if command == "dev-overnight"]
-    if not starts:
-        return None
-    scheduled = {}
-    for use, record in command_span.Span("dev-overnight", "", starts[-1], transcript).returns("CronCreate", "CronDelete"):
-        if use.name == "CronCreate" and use.ok and use.input.get("recurring"):
-            ident = ((record or {}).get("toolUseResult") or {}).get("id")
-            scheduled.update({ident: True} if ident else {})
-        elif use.name == "CronDelete" and use.ok:
-            scheduled.pop(use.input.get("id"), None)
-    return next(iter(scheduled), None)
+def window_lock(payload, record):
+    """(2, the block text, None) while the session's overnight window is open
+    (P2's overnight.window_open), else None."""
+    if _lib("overnight").window_open(payload):
+        return (2, f"COMMAND_GATE time-lock: overnight window open until {record.get('end_time')}; "
+                   "continue the remaining pipelines\n", None)
+    return None
 
 
-def timelock(payload) -> tuple[str | None, str | None]:
-    """Step (4): (its block line, None), or (None, the session's terminal
-    time-lock status once its window has closed: completed_by_deadline after
-    end_time with the closeout complete, cancelled_by_user after the human's
-    /stop), or (None, None) for a session with no overnight record or an
-    incomplete closeout. Codex-native Stop owns overnight isolation in Codex
-    roots, so the Codex runtime meets none."""
+def wake_lock(transcript: str):
+    """(2, the block text naming the job, None) while the session's wake
+    (a CronCreate of overnight.WAKE_PROMPT) has no later CronDelete
+    (overnight.open_wakes, P1c X8), else None: a wake left scheduled would
+    fire into the ended session."""
+    jobs = _lib("overnight").open_wakes(transcript)
+    if jobs:
+        return (2, f"COMMAND_GATE time-lock: the session's wake, CronCreate job {', '.join(jobs)}, has no later "
+                   "CronDelete; call CronDelete with that id, then end the session\n", None)
+    return None
+
+
+def time_lock(payload) -> tuple:
+    """Step (4) as (exit code, stderr text, terminal status): a block while
+    the window is open, or after it has closed (end_time with the closeout
+    complete, or the human's /stop) while the wake is scheduled; else exit 0
+    with the session's terminal time-lock status once its window has closed
+    (completed_by_deadline, or cancelled_by_user after /stop), None for a
+    session with no overnight record or an incomplete closeout. Codex-native
+    Stop owns overnight isolation in Codex roots, so the Codex runtime meets
+    none."""
     if os.environ.get("CLAUDE_COMPAT_RUNTIME") == "codex":
-        return None, None
+        return 0, "", None
     overnight, transcript = _lib("overnight"), payload.get("transcript_path") or ""
     _state_file, record = overnight.locate(payload.get("session_id"), payload)
     if record is None:
-        return None, None
-    if overnight.window_open(payload):
-        return f"overnight window open until {record.get('end_time')}; continue the remaining pipelines", None
+        return 0, "", None
+    lock = window_lock(payload, record)
+    if lock:
+        return lock
     released = command_span.timelock_released(transcript)
     if not released and overnight.closeout_gaps(record, overnight.working_root(record)):
-        return None, None
-    wake = _open_wake(transcript)
-    if wake:
-        return f"overnight wake {wake} is still scheduled; delete it (CronDelete id {wake})", None
-    return None, "cancelled_by_user" if released else "completed_by_deadline"
+        return 0, "", None
+    lock = wake_lock(transcript)
+    if lock:
+        return lock
+    return 0, "", "cancelled_by_user" if released else "completed_by_deadline"
 
 
 # ---------------------------------------------------------------- the decision
@@ -415,15 +423,16 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     span = command_span.active_span(transcript) if transcript else None  # (3)
     gated = span is not None and span.command in command_span.GATED_COMMANDS
     try:  # (4)
-        lock, terminal = timelock(payload)
+        lock = time_lock(payload)
     except Exception as exc:
         if not gated:
             return 0, f"COMMAND_GATE time-lock: gate instrument failure: {type(exc).__name__}: {exc}\n", None
-        lock, terminal, failure = None, None, [f"gate instrument failure: {type(exc).__name__}: {exc}"]
+        lock, failure = (0, "", None), [f"gate instrument failure: {type(exc).__name__}: {exc}"]
     else:
         failure = []
-    if lock:
-        return 2, f"COMMAND_GATE time-lock: {lock}\n", None
+    if lock[0] == 2:
+        return lock
+    terminal = lock[2]
     if not gated:  # (5)
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
@@ -436,7 +445,9 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if not gaps:  # (7)
         return 0, "", terminal
     text = _block_text(span.command, gaps)
-    return (0, "would block\n" + text, terminal) if mode == "advisory" else (2, text, None)
+    if mode == "advisory":
+        return 0, "would block\n" + text, terminal
+    return 2, text, None
 
 
 def main(argv=None) -> int:

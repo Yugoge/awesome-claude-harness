@@ -40,6 +40,7 @@ sys.path.insert(0, str(REPO))
 from hooks.lib import obligation as chain_obligation  # noqa: E402  (the module the chain's reader imports)
 command_span = gate.command_span
 obligation = gate._lib("obligation")
+REAL_OVERNIGHT = gate._lib("overnight")
 todo_canonical = gate._lib("todo_canonical")
 
 T0 = datetime(2026, 11, 1, 9, 0, 0, tzinfo=timezone.utc)
@@ -138,12 +139,14 @@ def gap(artifact, problem, message, lane=None):
 
 def overnight_fake(record=None, window=False, closeout=()):
     """P2's overnight.locate(session_id, payload), window_open(payload),
-    closeout_gaps(state, working_root) and working_root(state)."""
+    closeout_gaps(state, working_root) and working_root(state); the wake's
+    reader (open_wakes, P1c X8) is this base's own."""
     module = types.ModuleType("lib.overnight")
     module.locate = lambda session_id, payload=None: (Path("state.json"), record) if record else (None, None)
     module.window_open = lambda payload: bool(record) and window
     module.closeout_gaps = lambda state, working_root: list(closeout)
     module.working_root = lambda state: Path(state.get("worktree_path") or ".")
+    module.open_wakes = REAL_OVERNIGHT.open_wakes
     return module
 
 
@@ -756,10 +759,11 @@ def test_a12_an_open_window_blocks_any_span_in_any_mode_but_off(env, monkeypatch
     assert run(env) == (0, "")
 
 
-def overnight_session(env, wake=True):
+def overnight_session(env, wake=True, prompt=None):
     env.tx.command("dev-overnight", "--hours 1")
     if wake:
-        env.tx.tool("CronCreate", {"cron": "*/30 * * * *", "prompt": "resume", "recurring": True},
+        env.tx.tool("CronCreate", {"cron": "*/30 * * * *", "prompt": prompt or REAL_OVERNIGHT.WAKE_PROMPT,
+                                   "recurring": True},
                     extra={"toolUseResult": {"id": "cron-7", "recurring": True}})
 
 
@@ -772,6 +776,23 @@ def test_a12_after_the_window_a_live_wake_blocks_naming_its_id_until_deleted(env
     assert code == 2 and "cron-7" in text and "AskUserQuestion" not in text
     env.tx.tool("CronDelete", {"id": "cron-7"})
     assert gate.decision(env.payload) == (0, "", "cancelled_by_user")
+
+
+def test_a12_only_the_wakes_cron_create_is_the_wake(env, monkeypatch):
+    """The wake check reads overnight.open_wakes (a CronCreate of WAKE_PROMPT, P1c X8): another
+    recurring job the session scheduled is no wake, and a wake created before the latest
+    /dev-overnight opener still counts."""
+    monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake({"session_id": SID, "worktree_path":
+                                                                      str(env.project)}, window=False))
+    overnight_session(env, prompt="check the deploy")
+    env.tx.command("stop")
+    assert gate.decision(env.payload) == (0, "", "cancelled_by_user")
+    env.tx.tool("CronCreate", {"cron": "3 * * * *", "prompt": REAL_OVERNIGHT.WAKE_PROMPT, "recurring": True},
+                extra={"toolUseResult": {"id": "cron-9", "recurring": True}})
+    env.tx.command("dev-overnight", "--hours 1")
+    env.tx.command("stop")
+    code, text = run(env)
+    assert code == 2 and "cron-9" in text and "cron-7" not in text
 
 
 def test_a12_after_end_time_the_families_and_closeout_decide(env, monkeypatch):
@@ -796,6 +817,24 @@ def test_a12_no_terminal_status_without_an_overnight_record_or_with_an_open_clos
     assert gate.decision(env.payload) == (0, "", None)
     monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake({"session_id": SID}, closeout=["no summary"]))
     assert gate.decision(env.payload) == (0, "", None)
+
+
+# ---------------------------------------------------------------- the time-lock's state selection
+# Moved from test_laneb_stop_overnight_timelock_scoping.py (P5 R11): the time-lock selects only
+# the session's own record, the one P2's overnight.locate reads through session_state_file.
+def _state(root: Path, name: str, **fields) -> None:
+    (root / ".claude").mkdir(parents=True, exist_ok=True)
+    (root / ".claude" / f"overnight-state-{name}.json").write_text(json.dumps(fields))
+
+
+def test_the_locator_selects_only_the_sessions_own_record(tmp_path):
+    _state(tmp_path, "session-a", session_id="session-a", end_time="2099-01-01T00:00:00")
+    _state(tmp_path, "session-other", session_id="session-other")
+    _state(tmp_path, "session-c", session_id="session-d")  # its own session_id disagrees with its name
+    assert REAL_OVERNIGHT.session_state_file("session-a", (str(tmp_path),))[1]["session_id"] == "session-a"
+    assert REAL_OVERNIGHT.session_state_file("session-mine", (str(tmp_path),)) == (None, None)
+    assert REAL_OVERNIGHT.session_state_file("session-c", (str(tmp_path),)) == (None, None)
+    assert REAL_OVERNIGHT.session_state_file("", (str(tmp_path),)) == (None, None)
 
 
 # ---------------------------------------------------------------- R10: the reader's module

@@ -264,7 +264,7 @@ def test_the_wakes_gates_are_cleared_by_the_actors_next_action(replays, catalog,
     r = replays.get(key)
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     bl = blocks(r, catalog)
-    assert sorted(s.func for b in bl for s in b["sites"]) == ["_block_open_wake", "check_wake_step"], r.explain()
+    assert sorted(s.func for b in bl for s in b["sites"]) == ["check_wake_step", "wake_lock"], r.explain()
     assert all(catalog.of(s) == "G" for b in bl for s in b["sites"]), r.explain()
     bad = check_replay(r, catalog, compliant=False)
     assert not bad, "\n".join(bad)

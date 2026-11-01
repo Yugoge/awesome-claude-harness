@@ -22,7 +22,7 @@ SOURCE_ROOT = Path(__file__).resolve().parents[2]
 PROMPT = SOURCE_ROOT / "hooks" / "prompt-workflow.py"
 PRETOOL = SOURCE_ROOT / "hooks" / "pretool-workflow-gate.py"
 POSTTODO = SOURCE_ROOT / "hooks" / "posttool-todo-tracker.py"
-CLAUDE_STOP = SOURCE_ROOT / "hooks" / "stop-overnight-timelock.py"
+CLAUDE_STOP = SOURCE_ROOT / "hooks" / "stop-launch.py"  # the registered Stop hook (P5 R12)
 ACTIVE_CONFIGS = {
     "claude": SOURCE_ROOT / "settings.json",
 }
@@ -136,7 +136,7 @@ def _owner_command(runtime: str, event: str) -> str:
         "UserPromptSubmit": "prompt-workflow.py",
         "PreToolUse": "pretool-workflow-gate.py",
         "PostToolUse": "posttool-todo-tracker.py",
-        "Stop": "stop-workflow-coordinator.py",
+        "Stop": "stop-launch.py",
     }[event]
 
 
