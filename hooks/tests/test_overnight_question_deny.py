@@ -186,6 +186,16 @@ def test_stop_text_not_typed_by_the_human_lifts_nothing(project, store, record):
         assert _ask(project, tx.path, agent_id=agent_id).returncode == 2, agent_id
 
 
+def test_a_compaction_summary_lifts_nothing(project, store):
+    """An unattended session compacts: the CLI appends its summary as a user record with
+    isCompactSummary and no isMeta or origin (createUserMessage), not a typed prompt."""
+    tx = _overnight(store)
+    tx._add(isCompactSummary=True, isVisibleInTranscriptOnly=True,
+            message={"role": "user", "content": "This session is being continued from a previous conversation."})
+    for agent_id in ("", AGENT_ID):
+        assert _ask(project, tx.path, agent_id=agent_id).returncode == 2, agent_id
+
+
 def test_a_retyped_dev_overnight_opens_the_window_again(project, store):
     tx = _overnight(store)
     tx.command("stop")

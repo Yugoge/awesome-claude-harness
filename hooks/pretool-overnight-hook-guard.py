@@ -2090,7 +2090,8 @@ def _unattended(payload: dict) -> bool:
     latest = None
     try:
         for _number, record in command_span._records(path):
-            if stop_contract.is_human_prompt(record):
+            # A compaction's summary is a user record with no isMeta (the CLI's own prompt tests skip it).
+            if stop_contract.is_human_prompt(record) and not record.get('isCompactSummary'):
                 latest = record
     except (OSError, ValueError):
         return False
