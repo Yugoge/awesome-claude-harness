@@ -41,8 +41,9 @@ Then, in one session, the main agent:
     qa-fail: Step 16 marks each pipeline's phase in the pipelines file the iteration plan reads, and
     Step 17 iterates, see below);
   - Step 18: the permissions block; Step 19: the cycle log, the TIME CHECK, the per-cycle commit
-    (its failure logged); Step 20: PM RETRO, the retro Read; Step 21: marked completed, the loop
-    hook's reset (a fresh checklist, Step 1 done, Step 2 in progress);
+    where the text has one (the base's; its failure logged); Step 20: PM RETRO, the retro Read;
+    Step 21: marked completed, the loop hook's reset (a fresh checklist, Step 1 done, Step 2 in
+    progress);
 * the owner interrupts and types /stop; the main agent runs stop.md's Implementation block once
   and stops.
 
@@ -87,9 +88,10 @@ Respellings (row 7), driver only, each application recorded in blocks.json "resp
 drivers/dev.py's list, applied only where the text still has the old form (the /dev-overnight text
 of either tree has none of those forms), and, in a replay of the base kit's text (kit=base),
 STOP_RESPELLINGS below: /stop's wrapper call, whose failure (it unlocks nothing) leaves the
-time-lock refusing the session's end. Step 19's repository-relative `scripts/commit.sh` is not
-respelled: the text logs its failure and goes on (row 7 respells only a call whose failure ends the
-replay short of its terminal); nor are the agents' blast-radius tool calls (row 7: left to TC-44).
+time-lock refusing the session's end. The base text's Step 19 repository-relative
+`scripts/commit.sh` is not respelled: the text logs its failure and goes on (row 7 respells only a
+call whose failure ends the replay short of its terminal); nor are the agents' blast-radius tool
+calls (row 7: left to TC-44).
 
 Deviations: DEVIATIONS below, one entry per block the base tree's (2acc29b) replay meets, each with
 a comment quoting the hook's text; nothing else passes a block.
@@ -1476,6 +1478,8 @@ class Night:
                  .replace("{fixed_count}", str(len(self.pipes))).replace("{parked_count}", "0"))
         entry = re.sub(r"^\*\*Assumptions \(Clause A\)\*\*:.*$", "**Assumptions (Clause A)**: none", entry, flags=re.M)
         entry = re.sub(r"^\*\*Parked\*\*:.*$", "**Parked**: none", entry, flags=re.M)
+        entry = re.sub(r"^\*\*Decisions made without the owner\*\*:.*$", "**Decisions made without the owner**: none",
+                       entry, flags=re.M)
         entry = entry.replace("<timestamp>", utc_now())
         path = os.path.join(self.project, self.log_rel)
         old = agents.peek(self.rp, "main", path) if os.path.exists(path) else ""
@@ -1489,9 +1493,16 @@ class Night:
         tc = self.bash(cmd, "TIME CHECK", "Step 19 Bash TIME CHECK")
         self.expired = not tc.ok
         o.s.say(tc.response.get("stdout", "").strip() if tc.ok else f"TIME CHECK: {tc.error[:300]}")
-        # Per-cycle commit (a command that runs git: the actor env first).
-        commit = next(c for c in cmdtext.inline_codes(o.text, "Step 19", "chore(overnight)")
-                      if "commit.sh" in c and "chore(overnight)" in c)
+        # Per-cycle commit, where the text has one (the base's; a text without it keeps the cycle's
+        # work in refs/checkpoints/<branch> until the owner's post-loop flow). A command that runs
+        # git: the actor env first.
+        try:
+            codes = cmdtext.inline_codes(o.text, "Step 19", "chore(overnight)")
+        except cmdtext.TextNotFound:
+            codes = []
+        commit = next((c for c in codes if "commit.sh" in c and "chore(overnight)" in c), None)
+        if commit is None:
+            return
         cc = self.bash(self.git(o.bind(commit)), "End-of-cycle commit", "Step 19 Bash end-of-cycle commit")
         if not cc.ok:  # "log the failure to the cycle log and continue"
             path = os.path.join(self.project, self.log_rel)

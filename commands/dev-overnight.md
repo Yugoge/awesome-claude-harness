@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 **Philosophy**: Explore autonomously, discover real issues, fix them systematically, loop until time expires, then summarize everything.
 
-This command runs an unattended development loop. When `spec_mode == "autonomous"`, you are fully autonomous -- no user input is needed or expected inside the time-lock window. When `spec_mode == "user-provided"`, honor the orchestrator view's Hard Rule 10 user gates by parking the pipelines they gate (IMPORTANT RULES, Hard Rule 5); never auto-resolve such a gate yourself. You discover issues yourself by scanning the codebase, fix each one through a simplified dev cycle, and keep going until the specified end time in both modes; after it, each parked question is asked and its pipeline finished (Hard Rule 5).
+This command runs an unattended development loop: nobody is asked and nothing waits for the owner, inside the time-lock window or after `end_time`. Every decision a pipeline meets is made in the session and recorded (IMPORTANT RULES, Hard Rule 5). When `spec_mode == "user-provided"`, the orchestrator view's Hard Rule 10 user gates are decided the same way and listed first in the summary. You discover issues yourself by scanning the codebase, fix each one through a simplified dev cycle, and keep going until the specified end time in both modes. The session commits nothing: the owner lands its work after the session (Step 21, Post-loop flow).
 
 **Quick status utility**: Use `bash ~/.claude/scripts/overnight-status.sh` for instant session status (zero LLM cost). Use this instead of reading/parsing the state JSON manually. Optionally pass session_id as argument.
 
@@ -112,19 +112,19 @@ Step 1: Read state file + cd into the working root (first run only)
 ## IMPORTANT RULES
 
 1. **Autonomy is gated by `spec_mode`**, with a third clause for autonomy-directive override.
-   - **Clause A** — `spec_mode == "autonomous"`: do NOT ask the user anything inside the time-lock window; make routine decisions yourself and record each assumption (Hard Rule 5). A genuine owner decision parks its pipeline (Hard Rule 5).
-   - **Clause B** — `spec_mode == "user-provided"` AND focus does NOT contain autonomy-directive tokens: honor the spec's user gates (orchestrator view Hard Rule 10). Inside the window a spec-defined user gate parks the pipeline it gates exactly as Hard Rule 5 parks a genuine owner decision: the gate's decision is recorded as a parked question (task id, need, options, default), the gated family stays incomplete and lands nothing, and the loop continues with the other pipelines. Never resolve the gate yourself; after `end_time` it is asked with AskUserQuestion (Hard Rule 5).
-   - **Clause C (autonomy-directive override)** — `spec_mode == "user-provided"` AND focus contains any of `\b(autonomously|manual\s+interrupt|don.?t\s+ask|no\s+questions)\b` (case-insensitive): treat the run as autonomous regardless of spec_mode. The orchestrator MUST NOT emit `<options>` XML or interrogative endings. When genuine deadlock occurs (e.g., META-DEADLOCK where a hook blocks the very fix needed), the orchestrator MUST: (a) park the deadlocked pipeline (Hard Rule 5), with the decision the deadlock needs as its parked question; (b) continue with the next pipeline; (c) record every owner question as a parked question for the overnight summary, to be asked with AskUserQuestion after `end_time`. Asking the user mid-cycle is a Clause-C violation.
-2. **Loop continuously until `end_time`**. After each fix cycle the todo completion hook handles looping; this is non-negotiable. When `spec_mode == "user-provided"`, a spec-defined user gate does not pause the loop: inside the window the pipeline it gates parks (Hard Rule 5) and the loop continues with the other pipelines; after `end_time` the gate's question is asked with AskUserQuestion and that pipeline is finished.
+   - **Clause A** — `spec_mode == "autonomous"`: do NOT ask the user anything; make each decision yourself and record it (Hard Rule 5).
+   - **Clause B** — `spec_mode == "user-provided"` AND focus does NOT contain autonomy-directive tokens: honor the spec's user gates (orchestrator view Hard Rule 10) as decision points, never passed over silently. Nobody answers a gate overnight: it is decided without the owner and recorded exactly as Hard Rule 5 decides a producer question, it is listed first in the summary's "Decisions made without the owner", and the pipeline it gates continues with the chosen option.
+   - **Clause C (autonomy-directive override)** — `spec_mode == "user-provided"` AND focus contains any of `\b(autonomously|manual\s+interrupt|don.?t\s+ask|no\s+questions)\b` (case-insensitive): treat the run as autonomous regardless of spec_mode. The orchestrator MUST NOT emit `<options>` XML or interrogative endings. When genuine deadlock occurs (e.g., META-DEADLOCK where a hook blocks the very fix needed), the decision the deadlock needs is decided without the owner and recorded (Hard Rule 5), the deadlocked pipeline continues with the chosen option, and the other pipelines continue meanwhile. Asking the user is a Clause-C violation.
+2. **Loop continuously until `end_time`**. After each fix cycle the todo completion hook handles looping; this is non-negotiable. When every pipeline is done before `end_time`, the time-lock still holds until `end_time` and the next cycle's PM plans more work; `/stop` is the human control that ends a session early. A spec-defined user gate does not pause the loop (Clause B).
 3. **Cycles are user-pathway-filtered and priority-driven** (per spec-20260503-091826 Section 5.5 decision #2 — same user-need-centric philosophy as `/dev`, with explore-mode compatibility preserved per Section 5.7 anti-pattern #5). Specialists' free exploration behavior is unchanged — they continue to discover broadly. PM triage applies the user-need path-relevance filter (agents/pm.md Step 4): in **user-provided mode**, the user spec's Section 5 user-need IS the path; pipelines are gated to user-pathway-relevant findings. In **autonomous mode**, only Tier 1 blockers AND multi-agent-consensus findings get pipelines; remaining findings route to the cycle's `out_of_scope_observations` array (per agents/pm.md schema). Within the gated pipeline set, ordering remains by tier: Tier 1 (blockers) first, Tier 2 (major), Tier 3 (minor/cosmetic). Specialists continue to explore broadly — the gating is purely on what becomes a pipeline, not on what specialists are allowed to discover.
 4. **ALL exploration and fixes via subagents**. Use Agent tool for ALL scanning, analysis, and implementation work. Main context only handles TodoWrite and loop control.
-5. **Producer questions are answered under Clause A or parked; nothing is ever skipped**. A BA or dev producer that needs a real, specific owner decision, one that the request, the code or a sensible default cannot settle, writes `docs/dev/producer-question-<task_id>-<role>.json` (schema producer-question.v1: `task_id` and `role` exactly as in its obligation, `need`, 2-4 `options` of `{label, description}`, a `default` that is one of the labels, `why`) instead of its report, and ends. That artifact is a subagent's only question path. QA has no question path: a QA fail or warning is a process step that sends the pipeline back to dev (Step 17). Inside the time-lock window the orchestrator never asks the owner; for each question it either:
-   - **answers it** when the choice is routine and Clause A covers it: it re-dispatches the same role fresh and synchronously (same `subagent_type`, `task_id`, pipeline, profile and obligation template, a fresh `dispatched_at`) with the chosen option and the line `Assumption (orchestrator, Clause A): <label> — <why>`, and writes the same assumption into the cycle log (Step 19); or
-   - **parks the pipeline** when the question is a genuine owner decision: set the pipeline's `status = "parked"` and record the question (task id, need, options, default) for the overnight summary's "Parked questions" section. A parked family stays incomplete and lands nothing, no further step of this window dispatches for it, and the loop continues with the other pipelines.
-   After `end_time`, once the summary is written (Step 21), the orchestrator asks each parked question with one AskUserQuestion (the question's options become the dialog's options, its default the recommended option), re-dispatches the role that asked with the answer as above (for a Clause B gate or a Clause C deadlock: continues the parked pipeline from where it stopped), and finishes that family until QA passes.
+5. **Inside /dev-overnight a producer question is decided without the owner and recorded; nothing waits for the owner. Nothing is ever skipped**. A BA or dev producer that needs a real, specific decision, one that the request, the code or a sensible default cannot settle, writes `docs/dev/producer-question-<task_id>-<role>.json` (schema producer-question.v1: `task_id` and `role` exactly as in its obligation, `need`, 2-4 `options` of `{label, description}`, a `default` that is one of the labels, `why`) instead of its report, and ends. That artifact is a subagent's only question path. QA has no question path: a QA fail or warning is a process step that sends the pipeline back to dev (Step 17). Nobody is asked, in the window or after `end_time`: `hooks/pretool-overnight-hook-guard.py` denies AskUserQuestion to every caller in this session until the next human-typed prompt. Each question is decided:
+   - **by experiment** when one can settle it: the orchestrator re-dispatches the producer that asked with the decision, its options and the experiment to run; the producer runs it, takes the option its result supports and records the decision, the options, the experiment, its result and the chosen option in its report;
+   - **else by the question's `default`**: the orchestrator re-dispatches that producer with the line `Decision without the owner: <need>; options <labels>; the question's default; chosen <default label>`.
+   Each re-dispatch is fresh and synchronous (same `subagent_type`, `task_id`, pipeline, profile and obligation template, a fresh `dispatched_at`). The orchestrator writes each decision into the cycle log (Step 19) and the summary's "Decisions made without the owner" (Step 21) as it was recorded when made: its own from the re-dispatch line, a subagent's (an experiment's result, or a decision the subagent made on its own) copied from that subagent's report when the orchestrator collects it. The pipeline continues with the chosen option until QA passes.
 6. **Track everything**. Use TodoWrite for per-cycle progress. Do NOT write to `.claude/overnight-state-<sid>.json` from the main agent — that file is owned by the orchestrator hooks. See `docs/dev/state-file-write-policy.md` for the full per-field write matrix.
-7. **The Stop hook prevents premature exit**. The time-lock hook will block conversation termination until end-time. Do not try to circumvent it.
-8. **Git checkpoint vs HEAD commit are distinct semantic layers**. The existing posttool-git-checkpoint.sh hook writes mid-cycle Write/Edit snapshots to `refs/checkpoints/*` only — these are NOT merge-ready commits and they do NOT advance any branch HEAD. They exist for crash recovery and audit, not for shipping. End-of-cycle Step 19 lands a real HEAD commit on the session's working branch (`worktree_branch` from the state file — the branch the checkout was already on under `in_place`, the created worktree branch otherwise) by calling `commit.sh "chore(overnight): end-of-cycle commit for <branch>"` directly via Bash (single positional arg, CC-valid `chore` type, `(overnight)` scope identifies automated context) — that HEAD commit IS merge-ready and is the only artifact `/merge` consumes. See `~/.claude/CLAUDE.md` (Auto-Commit Mechanism section) for the full checkpoint-ref vs HEAD-commit contract. Do NOT conflate "checkpoint after fix" (refs/checkpoints/*, recovery-only) with "ship upstream" (HEAD commit + `/merge`, distribution).
+7. **The Stop hook prevents premature exit**. The time-lock hook will block conversation termination until end-time, and after it until the session's closeout is on disk (Step 21). Do not try to circumvent it.
+8. **Git checkpoints hold the session's work; nothing commits per cycle**. The existing posttool-git-checkpoint.sh hook writes each Write/Edit snapshot to `refs/checkpoints/<branch>` only; a snapshot never advances a branch HEAD. The session makes no commit of its own: its work stays in the working tree at `worktree_path`, snapshotted in `refs/checkpoints/<worktree_branch>`, until the owner lands it after the session with `/close --auto`, `/commit --auto`, `/merge <worktree_branch>` (isolated modes only) and `/push` (Step 21, Post-loop flow). The session runs none of these four. See `~/.claude/CLAUDE.md` (Auto-Commit Mechanism section) for the checkpoint mechanism.
 9. **Cycle-end deploy is autonomous-mode only** (canonical overnight Hard Rule 9). When `spec_mode == "autonomous"`, every cycle MUST end with QA rebuilding and redeploying via `docker compose build` and `docker compose up -d` for the project's own services (identified from `docker-compose.yml`); deploy verification is REQUIRED in this mode. When `spec_mode == "user-provided"`, deploy is NOT mandatory at the engine level — the user spec dictates whether to deploy (the orchestrator view's Pipeline Workflow may instruct deploy, may instruct skip, or may defer to a user gate). Regular `/dev` (single-pass, NOT `/dev-overnight`) MUST NOT auto-deploy regardless of spec_mode — `/dev` is a single-feature implementation pass, not an overnight cycle. Do NOT touch unrelated services or infrastructure.
 10. **Deduplicate**. Check the state file's cycle_log before starting a fix -- do not re-fix issues already addressed.
 11. **One issue per subagent, no exceptions**. Each BA subagent analyzes exactly ONE pipeline issue. Each Dev subagent implements exactly ONE pipeline fix. Each QA subagent verifies exactly ONE pipeline fix. The orchestrator launches N parallel subagents for N pipelines -- but each individual subagent handles only its own single pipeline. NEVER bundle multiple pipeline issues into one subagent prompt.
@@ -210,23 +210,23 @@ CURRENT_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 [ -n "$CURRENT_SESSION_ID" ] || { echo "ERROR: no session id in environment" >&2; exit 1; }
 
 # 2. Bind the main root and STATE_FILE together, to the canonical ABSOLUTE path of
-#    THIS session's state file. CLAUDE_PROJECT_DIR is a HINT, never a precondition:
+#    the state file of THIS session. CLAUDE_PROJECT_DIR is a HINT, never a precondition:
 #    it is measured UNSET in this harness (while CLAUDE_CODE_SESSION_ID is set), and
 #    a STALE value must not veto the fallback — so BOTH it and $PWD are tried, in
 #    that order. Each start walks UP, because the state file lives at
 #    <main_root>/.claude/ and every default working root sits UNDER that root
 #    (in_place == main root; .claude/worktrees/<n>; .claude/overnight-fresh-clones/<n>).
 #    Selection is by exact session-keyed FILENAME and then a parsed field check, so
-#    it cannot be fooled by another session's file or by JSON whitespace drift.
+#    it cannot be fooled by the file of another session or by JSON whitespace drift.
 #    The walk DISCOVERS the record; it does NOT define the root. Take the root
 #    from what the record SAYS about itself, never from the directory the record
 #    happens to sit in: the launcher writes the record under its own resolved
-#    project dir but the dev-registry under the git toplevel (`main_root`), and
+#    project dir but the dev-registry under the git toplevel (main_root), and
 #    those DIFFER whenever the session was launched from a SUBDIRECTORY — the
-#    ordinary case, since the launcher's own resolution falls back to `$PWD`.
+#    ordinary case, since the resolution of the launcher falls back to PWD.
 #    Binding to the containing directory is what made Step 1 hard-abort with
 #    "verify: directory does not exist: <subdir>/.claude/dev-registry/<sid>".
-#    The state's one reading (hooks/lib/overnight.py) does the walk and the field
+#    The one reader of the state (hooks/lib/overnight.py) does the walk and the field
 #    checks and prints both paths, canonical; it exits 1 with the reason otherwise.
 PROJECT_DIR=""; STATE_FILE=""
 { read -r STATE_FILE; read -r PROJECT_DIR; } < <(python3 ~/.claude/hooks/lib/overnight.py \
@@ -382,7 +382,8 @@ for retry signals:
 
 - **Retry phrasing** in the iteration prompt or triage report: "again",
   "still", "didn't fix", "Nth time", "again", "still broken", "not fixed"
-- **Recent related commits from this overnight run** (example query: `git log --oneline --grep="<keyword>" HEAD~30..HEAD`)
+- **Recent related commits** (example query: `git log --oneline --grep="<keyword>" HEAD~30..HEAD`);
+  this run commits nothing (Hard Rule 8), so its own earlier attempts are the specs and QA reports below
 - **Existing BA specs from earlier iterations**: files matching
   `docs/dev/ticket-*.md` (or legacy `docs/dev/ba-spec-*.md`) with keywords from the current issue
 - **Prior-cycle QA fail reports**: any QA report with a fail verdict in an
@@ -418,17 +419,14 @@ When BA's Contract D novelty check finds that no candidate fix differs
 from every prior attempt, BA writes its producer question artifact
 `docs/dev/producer-question-<task_id>-ba.json` (options: the candidate
 layers; default: BA's recommendation) instead of its report, and ends.
-The orchestrator handles it like every producer question (Hard Rule 5):
+It is decided without the owner like every producer question (Hard Rule 5):
 
-- Answer it under Clause A when the choice is routine (for example BA's
-  default is a deeper layer, which the Step 17 layer-escalation gate
-  already requires): re-dispatch BA with
-  the chosen layer and record the assumption in the re-dispatch and the
-  cycle log
-- Otherwise park the pipeline: the question goes to the overnight
-  summary's "Parked questions", the family stays incomplete and lands
-  nothing, and the loop continues with the other pipelines
-- Never re-dispatch BA with the same input and no answer, and never mark
+- By an experiment when one can settle the layer, else by BA's default
+  (often a deeper layer, which the Step 17 layer-escalation gate already
+  requires)
+- BA is re-dispatched with the chosen layer, and the decision is recorded
+  in the re-dispatch, the cycle log and the summary
+- Never re-dispatch BA with the same input and no decision, and never mark
   the issue blocked or skipped
 
 ### Layer vocabulary (shared with BA)
@@ -538,7 +536,7 @@ Use Agent tool with:
   - If `pm_experience.app_not_running` is true: acceptable (app was not running,
     PM fell back to doc-based planning)
 
-If validation fails, re-invoke PM (a fresh dispatch: same obligation template, fresh `dispatched_at`; maximum 2 retries). If still failing, proceed to Step 3 without a test plan (specialists will discover context themselves).
+If validation fails, re-invoke PM (a fresh dispatch: same obligation template, fresh `dispatched_at`) until the plan passes; a failed check is a process step with no retry cap.
 
 #### After PM-Plan Completes: Extract Priority Context
 
@@ -685,12 +683,11 @@ Launching specialist subagents...
 
 **If validation fails** for any report:
 - Log which reports failed and why
-- Re-invoke only the failed subagent(s): the dispatch whose obligation declared each failed report, as a fresh dispatch (same obligation template, fresh `dispatched_at`) (maximum 2 retries)
-- If still failing after retries, proceed with available reports
+- Re-invoke only the failed subagent(s): the dispatch whose obligation declared each failed report, as a fresh dispatch (same obligation template, fresh `dispatched_at`), until each report passes; there is no retry cap
 
 **If zero issues found across all RELEVANT specialist reports** (reports from launched specialists only — skipped specialists do not count as clean):
 - Log a "clean sweep" entry
-- After 2 consecutive clean sweeps: generate summary and allow termination
+- A clean sweep does not end the session: the time-lock holds until `end_time`, and the next cycle's PM plans further work (Hard Rule 2)
 
 **Core Flow Gate Check**:
 
@@ -784,9 +781,7 @@ Use Agent tool with:
 - Has `pipeline_order` array
 - Each issue has `tier`, `pipeline_recommendation`, and required fields
 
-If validation fails, re-invoke PM-Triage (a fresh dispatch: same obligation template, fresh `dispatched_at`; maximum 2 retries); its return runs the TRIAGE contract writer (`hooks/posttool-subagent-track.py`) again, which writes this cycle's contract from the report it reads. If still failing, fall back
-to the legacy mechanical sort in Step 6 (read the RELEVANT specialist reports only — per
-`specialists_assessed` — merge, sort by severity).
+If validation fails, re-invoke PM-Triage (a fresh dispatch: same obligation template, fresh `dispatched_at`) until the report passes, with no retry cap; each return runs the TRIAGE contract writer (`hooks/posttool-subagent-track.py`) again, which writes this cycle's contract from the report it reads.
 
 **Check pipeline_blocked**: Read the triage report's `pipeline_blocked` field.
 - If `pipeline_blocked: true`: log `block_reasons` to the cycle log file, skip Steps 6-19, jump directly to Step 20 (PM Retrospective) with context that the pipeline was blocked. PM RETRO will analyze the block and recommend next steps. Then loop to Step 2 for the next cycle.
@@ -836,7 +831,7 @@ Read specialist reports. For each pipeline whose spec is your copy of the templa
 1. Use `pipeline_order` from triage report as the authoritative ordering
 2. For each issue in `pipeline_order`:
    - If `pipeline_recommendation` is `"fix"`: create a pipeline
-   - If `pipeline_recommendation` is `"skip"` or `"defer"`: create no pipeline; add it to the cycle's triage-deferred list with PM's reason. This is a planning decision taken before any pipeline starts, not a pipeline exit, and it is counted and reported apart from parked pipelines
+   - If `pipeline_recommendation` is `"skip"` or `"defer"`: create no pipeline; add it to the cycle's triage-deferred list with PM's reason. This is a planning decision taken before any pipeline starts, not a pipeline exit, and it is counted and reported apart from the pipelines
 3. Filter out any issue already in `addressed_issues` from state file
 
 **If triage report is missing or invalid** (fallback to legacy behavior):
@@ -997,7 +992,7 @@ Agent(subagent_type: "ba")
 
 **Wait for ALL N BA subagents to complete** before proceeding.
 
-**Producer questions (Hard Rule 5)**: Inside the time-lock window there is no BA clarification loop with the owner. If a BA writes `docs/dev/producer-question-{pipeline.timestamp_suffix}-ba.json` instead of its report, answer it under Clause A and re-dispatch that BA with the chosen option and the recorded assumption, or park the pipeline. Do NOT ask the user before `end_time`.
+**Producer questions (Hard Rule 5)**: there is no BA clarification loop with the owner. If a BA writes `docs/dev/producer-question-{pipeline.timestamp_suffix}-ba.json` instead of its report, the question is decided without the owner (by experiment, else its default) and recorded, and that BA is re-dispatched with the decision.
 
 **Fallback**: If the Agent tool cannot handle N simultaneous calls, batch them in groups of 4 and wait for each batch to complete before starting the next.
 
@@ -1019,9 +1014,7 @@ Read BA output files:
 **If validation finds a gap for pipeline[i]**:
 - Re-invoke only that pipeline's BA with specific feedback about what's missing (a fresh dispatch: same obligation template, fresh `dispatched_at`)
 - Validate again; the BA output passing validation is the only way forward, and the pipeline is never dropped here
-- A BA producer question is handled by Hard Rule 5 (answered under Clause A, or the pipeline parks)
-
-**If every pipeline is parked**: continue at Step 19 (log results).
+- A BA producer question is handled by Hard Rule 5 (decided without the owner and recorded; BA is re-dispatched with the decision)
 
 ### Step 10: QA Validates BA Conclusions (All Pipelines, Parallel)
 
@@ -1178,7 +1171,7 @@ Use Agent tool with:
 **This is the single shared precondition that enforces the B2-INV invariant: graphify enrichment MUST have run — against the SAME context Dev will consume — for a pipeline BEFORE EVERY `Agent(subagent_type: "dev")` dispatch in `/dev-overnight`.** It is the overnight sibling of `commands/dev.md` Step 9 enrichment (mirror by reference — do NOT duplicate dev.md's full prose). It is keyed on the **Dev-dispatch boundary**, NOT on "Step 12": Dev is dispatched from THREE sites and any future site MUST also route through this precondition immediately before its Dev `Agent` call:
 
 - **Step 12** parallel Dev loop (`### Step 12`, the `For each active pipeline[i]` loop) — reached by the BA-QA PASS branch AND the Continuation/Resume path (`current_phase: implementing -> Step 12`).
-- **Step 13** dev re-invoke (`### Step 13`, "Re-invoke only that pipeline's dev subagent") — after a validation gap or an answered dev question; may follow a context refinement.
+- **Step 13** dev re-invoke (`### Step 13`, "Re-invoke only that pipeline's dev subagent") — after a validation gap or a decided dev question; may follow a context refinement.
 - **Step 17** per-pipeline iteration-loop Dev dispatch (`### Step 17`, `Agent(subagent_type: "dev")` with the pipeline's own context and its failing QA report, at the pipeline's new `iteration`).
 
 The word "validated" MUST NOT gate this precondition — it fires for every pipeline about to be dispatched to Dev, at every Dev-dispatch site above (mirrors the resolved `/dev` post-BA-QA → enrichment decision). BA-QA `pass` is the only way a pipeline reaches Step 12.
@@ -1274,7 +1267,7 @@ Read dev report: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`
 - [ ] Git rationale references root cause
 - [ ] Files exist that were reported as created/modified
 
-**If dev wrote a producer question for pipeline[i]** (`docs/dev/producer-question-{pipeline.timestamp_suffix}-dev.json` instead of its report): apply Hard Rule 5 — answer it under Clause A and re-dispatch dev with the answer as below, or park the pipeline.
+**If dev wrote a producer question for pipeline[i]** (`docs/dev/producer-question-{pipeline.timestamp_suffix}-dev.json` instead of its report): apply Hard Rule 5 — the question is decided without the owner and recorded, and dev is re-dispatched with the decision as below.
 
 **If validation finds a gap for pipeline[i]**:
 - Name the gap (missing information, an undocumented task, a reported file that does not exist) in the re-dispatch prompt; the context stays BA's (the orchestrator never writes it)
@@ -1299,7 +1292,7 @@ Read dev report: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`
    - Run `docker compose build` then `docker compose up -d` for the affected services. Wait for services to be healthy.
    - When `spec_mode == "user-provided"`, skip the rebuild unless the spec's Pipeline Workflow explicitly requires it.
 
-**If Docker rebuild fails (autonomous mode)**: CYCLE BLOCKER. Debug and retry (max 3 attempts).
+**If Docker rebuild fails (autonomous mode)**: a process step, not an exit. Debug and rebuild until the services are healthy; there is no attempt cap.
 Do NOT proceed to QA with stale containers.
 
 ### Step 15: Run All QA Subagents (Parallel)
@@ -1373,7 +1366,6 @@ ELIF qa.status == "warning" OR qa.status == "fail":
 ```
 Pipelines passed: {count} of {total}
 Pipelines needing iteration: {count}
-Pipelines parked: {count}
 ```
 
 **If all pipelines are done (no qa_failed)**: Skip Step 17, proceed to Step 18.
@@ -1410,10 +1402,9 @@ layer used in each attempt for that pipeline. Rules:
    given pipeline (genuine edge case), BA MUST explicitly argue this with
    evidence, as its producer question artifact (options: retry at the same
    layer, and the deeper candidate layers; default: BA's recommendation)
-   written instead of its report. Inside the time-lock window the
-   orchestrator MUST NOT override the gate: it parks the pipeline (Hard
-   Rule 5), and after `end_time` the question is asked with
-   AskUserQuestion and the pipeline is finished at the chosen layer.
+   written instead of its report. The orchestrator MUST NOT pass over the
+   gate: the question is decided without the owner and recorded (Hard
+   Rule 5), and the pipeline continues at the chosen layer.
 
 **Loop exit**: QA `pass` is the only exit from a pipeline's Dev→QA loop. A QA fail or warning is a process step that sends the pipeline back to dev; there is no iteration cap.
 
@@ -1431,7 +1422,7 @@ For each entry in `iteration_plan[]`, the orchestrator runs the Dev+QA inner loo
 Loop termination:
 - `qa.status == "pass"` → set `phase=done`, `status=fixed`, BREAK. This is the only exit.
 - `qa.status == "warning"` or `"fail"` → run the next iteration (dispatch dev with the QA report, then QA).
-- A producer question from BA or dev → Hard Rule 5: answered under Clause A (the loop continues), or the pipeline is parked (`status = "parked"`) and leaves the loop for this window.
+- A producer question from BA or dev → Hard Rule 5: decided without the owner and recorded; the loop continues with the chosen option.
 
 ### Step 18: Update Settings.json Permissions (Aggregated)
 
@@ -1468,30 +1459,27 @@ The aggregator filters QA reports to those whose `timestamp_suffix` matches a `s
 
 ### Step 19: Log All Cycle Results and Check Time
 
-**Aggregate results from ALL pipelines** by tallying fixed vs parked counts.
+**Aggregate results from ALL pipelines**: a pipeline leaves Step 17 only on a QA pass, so the tally is the cycle's fixed pipelines and their iterations.
 
 **Append to running log** at `docs/dev/overnight-log-<date>.md`:
 
 ```markdown
-### Cycle <N>: {total_pipelines} pipelines ({fixed_count} fixed, {parked_count} parked)
+### Cycle <N>: {total_pipelines} pipelines ({fixed_count} fixed)
 
 | Pipeline | Issue | Status | Iterations |
 |----------|-------|--------|------------|
 | 0 | {description} | Fixed | 1 |
-| 1 | {description} | Parked | 2 |
+| 1 | {description} | Fixed | 2 |
 | ... | ... | ... | ... |
 
-**Assumptions (Clause A)**: <task_id>: <chosen label> — <why> (one line per question the orchestrator answered, Hard Rule 5)
-**Parked**: <task_id>: <need> (one line per parked pipeline; the question itself goes to the summary)
+**Decisions made without the owner**: <pipeline> <task_id>: <decision>; options <labels>; <experiment and its result, or "the question's default">; chosen <label> (one line per decision of this cycle, spec-declared user gates first, each as recorded when it was made, Hard Rule 5; "none" when there was none)
 
 **Time**: <timestamp>
 ```
 
 **TIME CHECK**: invoke `~/.claude/scripts/overnight-status.sh <MAIN_ROOT>/.claude/overnight-state-<session_id>.json`; it reads the record through `hooks/lib/overnight.py`, reports the window verdict with the wall-time remaining to `end_time`, and exits non-zero once the window has closed. If expired, proceed to Step 21 (session ending). Otherwise, mark Step 21 as completed via TodoWrite to trigger the loop reset.
 
-**Per-cycle commit**:
-
-After the time check, land a HEAD commit on the session's working branch (`worktree_branch` from the state file — under `in_place` that is the branch the checkout was already on, not a session-created one) covering this cycle's accumulated changes. Call `scripts/commit.sh "chore(overnight): end-of-cycle commit for <worktree_branch>"` (repo-relative path, run from the project root) directly via Bash (single positional arg; `chore` is a valid CC type so M3 lint passes; `(overnight)` scope identifies the automated context). The CAS engine and content-bound ledger still apply. If the invocation exits non-zero (empty ledger for this session, disk content changed, or other CAS refusal), log the failure to the cycle log and continue — per-fix `refs/checkpoints/*` snapshots remain intact and the operator can promote them manually.
+**No commit**: the cycle's work stays in the working tree, snapshotted in `refs/checkpoints/<worktree_branch>`, until the owner lands it after the session (Hard Rule 8, Step 21's Post-loop flow).
 
 If time expired: proceed to Step 20 (PM Retro) then Step 21 for final summary.
 If time remains: proceed to Step 20 (PM Retro), then mark Step 21 as completed via TodoWrite. The posttool-overnight-loop.py hook will detect all todo steps completed (it checks every todo's status, including the letter-suffix Step 11g, not a fixed count), reset todos to pending, and inject continuation instructions.
@@ -1567,7 +1555,7 @@ Use Agent tool with:
 - Has `cycle_stats` object
 - If `FINAL_CYCLE: true` (the report's `is_final_cycle`): has `final_summary` object
 
-If that check refuses the report (its message names the path and the failing rule), re-invoke PM-Retro (a fresh dispatch: same obligation template, fresh `dispatched_at`; maximum 2 retries). If it still fails, log a warning and proceed (retro is informational, not blocking).
+If that check refuses the report (its message names the path and the failing rule), re-invoke PM-Retro (a fresh dispatch: same obligation template, fresh `dispatched_at`) until the report passes, with no retry cap: each cycle's retro report is part of the session's closeout (Step 21).
 
 **Check qa_rerun_required**: Read the retro report's `qa_rerun_required` field.
 - If `qa_rerun_required: true`: re-invoke QA for the pipelines listed in `qa_rerun_reasons`. Use the same QA invocation pattern as Step 14-16, but pass additional context: `"This is a PM-requested QA re-run. Reasons: <qa_rerun_reasons>. Focus on the specific concerns raised."` After QA re-run completes, proceed to Step 21 (do NOT re-invoke RETRO — avoid infinite loops).
@@ -1606,14 +1594,20 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 |--------|-------|
 | Issues found | <issues_found> |
 | Issues fixed | <issues_fixed> |
-| Issues parked | <issues_parked> |
 | Issues deferred by PM triage (skip/defer) | <issues_triage_deferred> |
 | Fix rate | <percentage>% |
+
+## Decisions made without the owner
+
+| Pipeline | Task id | Decision | Options | Evidence or experiment | Chosen option |
+|----------|---------|----------|---------|------------------------|---------------|
+| <index> | <task_id> | User gate: <gate> | <labels> | <experiment and its result, or "the question's default"> | <label> |
+| <index> | <task_id> | <decision> | <labels> | <experiment and its result, or "the question's default"> | <label> |
 
 ## Cycle Details
 
 ### Cycle 1: <issue>
-- **Status**: Fixed / Parked
+- **Status**: Fixed
 - **Location**: <file>
 - **Changes**: <summary>
 - **Iterations**: <N>
@@ -1630,26 +1624,21 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 <Patterns noticed during exploration that need human decision-making>
 ```
 
-**Parked pipelines (after `end_time`)**: once the summary is written, finish every parked pipeline as Hard Rule 5 describes (one AskUserQuestion per parked question, the answer re-dispatched to the role that asked, the family run until QA passes), then update the summary's counts and that question's entry, before the announcement below.
+**Decisions made without the owner** lists every decision of the session, one row each, spec-declared user gates first (Hard Rule 1, Clause B), each as recorded when it was made (Hard Rule 5): the orchestrator's from its re-dispatch line, a subagent's copied from that subagent's report. Write "None" under the heading when the session made none.
 
-**CRITICAL: DO NOT auto-merge to $DEFAULT_BRANCH.**
+**After `end_time` nobody is asked and nothing waits for the owner.** The time-lock (`hooks/stop-overnight-timelock.py`) lets the session end once its closeout is on disk: the retro report of each cycle (`docs/dev/overnight/<session_id>/retro-report-cycle<N>.json`, Step 20) and this summary, written after the session started. Until both exist, its block names what is missing.
 
-DO NOT squash merge. DO NOT manually copy files. DO NOT create a single commit on $DEFAULT_BRANCH with this session's changes. DO NOT cherry-pick commits. Under `registered_worktree` / `fresh_clone_checkout` the worktree branch preserves full commit history, and a proper `git merge` brings all commits to $DEFAULT_BRANCH with their original authorship and messages intact. Under `in_place` the cycles already committed to the checkout's own working branch, so there is no session-created branch to merge and nothing for the session to promote. In every mode, only the USER decides what happens next, after reviewing the changes.
-
-The overnight session does NOT merge anything. Under `registered_worktree` / `fresh_clone_checkout` it preserves the worktree for user review; under `in_place` it leaves the cycle commits on the working branch it launched from.
+**The session lands nothing.** DO NOT merge, squash, cherry-pick, commit or manually copy files. `/close`, `/commit`, `/merge` and `/push` are human-typed commands (`disable-model-invocation: true`, and `settings.json` denies their `Skill` calls), so the session runs none of them; the owner types them after the session (Post-loop flow below). Until then the work stays in the working tree at `worktree_path`, snapshotted in `refs/checkpoints/<worktree_branch>`. Under `registered_worktree` / `fresh_clone_checkout` the worktree is preserved: `/commit --auto` commits the work on `<worktree_branch>`, and `/merge` brings those commits to $DEFAULT_BRANCH with their history intact. Under `in_place` there is no session-created branch: the commits land on the working branch the checkout was already on.
 
 **State file cleanup**: Under `registered_worktree` / `fresh_clone_checkout`, `hooks/merge.sh` deletes the state file after a successful `/merge` keyed on the worktree branch. Under `in_place` there is no worktree branch to merge, so no automatic cleanup path fires — the record at `<project_dir>/.claude/overnight-state-<session_id>.json` stays until the user removes it.
 
 **Default-branch resolver** (run BEFORE producing the announcement):
 
-Detects the repository's default branch dynamically (`main`, `master`, or any other) by reading `refs/remotes/origin/HEAD`. The announcement below references `$DEFAULT_BRANCH` rather than a hardcoded literal. Same resolver pattern as `/merge`. Per spec-20260424-233926 Section 5.2.1.1, all command-execution paths must derive the default branch dynamically.
+Detects the repository's default branch dynamically (`main`, `master`, or any other) by reading `refs/remotes/origin/HEAD`, which every launch has resolved (the launcher refuses to start without it). The announcement below references `$DEFAULT_BRANCH` rather than a hardcoded literal. Per spec-20260424-233926 Section 5.2.1.1, all command-execution paths must derive the default branch dynamically.
 
 ```bash
 # Detect default branch dynamically (handles main/master/any other)
 DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
-if [ -z "$DEFAULT_BRANCH" ]; then
-  DEFAULT_BRANCH="$(git remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')"
-fi
 if [ -z "$DEFAULT_BRANCH" ]; then
   DEFAULT_BRANCH="master"  # final fallback
 fi
@@ -1663,7 +1652,7 @@ Overnight development session complete.
 
 Duration: <hours>h <minutes>m
 Cycles: <cycle index - 1>
-Fixed: <issues_fixed> | Parked: <issues_parked>
+Fixed: <issues_fixed> | Decisions made without the owner: <decision_count> (listed in the summary)
 
 Summary: docs/dev/overnight-summary-<date>.md
 Log: docs/dev/overnight-log-<date>.md
@@ -1672,64 +1661,52 @@ Branch: <worktree_branch>
 Path:   <worktree_path>
 <If isolation_kind != 'in_place', add the line: "--- Worktree preserved for review ---">
 
-To review changes:
-  git log <base_ref>..<worktree_branch> --oneline
-  git diff <base_ref>...<worktree_branch>
-  (base_ref is $DEFAULT_BRANCH under registered_worktree / fresh_clone_checkout.
-   Under in_place the branch pre-dates the session, so use the first cycle
-   commit's parent — $DEFAULT_BRANCH would also list pre-session work.)
+Nothing is committed yet: the work is in the working tree at <worktree_path>,
+snapshotted in refs/checkpoints/<worktree_branch>. To review it first:
+  git -C <worktree_path> status
+  git -C <worktree_path> diff
+
+To land it, type these commands yourself, in this order. This session runs none of them.
 
 <If isolation_kind != 'in_place', include:>
-To merge (when ready):
-  /merge <worktree_branch>
-
-Use the audited /merge command as the default and preferred merge path.
-Do NOT recommend manual git merge as the primary workflow. The merge command
-must run its audit first and stop on blocked files or predicted conflicts.
-
-To ship the worktree end-to-end after overnight completes, see the
-"Post-loop manual flow (human-in-the-loop)" subsection below. The user
-manually runs three independent commands in this order:
-  /commit -m "<summary>"   (optional — only for master-side touch-ups)
+In a session opened at <worktree_path>:
+  /close --auto
+  /commit --auto
+Then in the main checkout (<main_root>):
   /merge <worktree_branch>
   /push
 
 <If isolation_kind == 'in_place', include instead:>
-Nothing was created, so there is no worktree to preserve and no branch to merge —
-the cycle commits are already on <worktree_branch> in this checkout. To ship, see the
-"Post-loop manual flow (human-in-the-loop)" subsection below. The user
-manually runs two independent commands in this order:
-  /commit -m "<summary>"   (optional — only if work is left uncommitted)
+In this checkout (<worktree_path>):
+  /close --auto
+  /commit --auto
   /push
+There is no session-created branch, so there is nothing to /merge.
 
-independent so the user can inspect state between each step.
-
-The time-lock has been released. The session can now end normally.
+The closeout is on disk; the time-lock lets the session end.
 ```
 
-### Post-loop manual flow (human-in-the-loop)
+### Post-loop flow (typed by the owner)
 
-After all overnight cycles complete, the user is expected to review results and run the following commands MANUALLY, in this order — **three** under `registered_worktree` / `fresh_clone_checkout`, and **two** under `in_place`, where step 2 does not apply because the cycles already landed on the checkout's own working branch:
+After the whole overnight session has ended, the owner lands its work once, typing each command himself, in this order: four commands under `registered_worktree` / `fresh_clone_checkout`, three under `in_place`, which has no branch to merge. The overnight session runs none of them.
 
-1. **`/commit -m "<session summary>"`** (optional)
-   - Under `registered_worktree` / `fresh_clone_checkout`: use this if the user has master-branch touch-ups OUTSIDE the worktree cycles (e.g. README updates, doc fixes)
-   - Under `in_place`: there is no master-side / worktree-side distinction — use it only if work is left uncommitted after the final cycle's end-of-cycle commit
-   - Skip if there's nothing to commit beyond what overnight cycles produced
-   - The commit message MUST be a real session summary the agent writes (not a placeholder); per redev6 P-MSG, `-m` is REQUIRED in non-bridge modes
-   - For `--force` overrides on `/commit` (e.g., spec-only commits without ceremony artifacts), see `commands/commit.md`
+1. **`/close --auto`** — always first. Under `registered_worktree` / `fresh_clone_checkout`: in a session opened at `<worktree_path>`. Under `in_place`: in the checkout.
+   - Discovers every task waiting to be closed (`close_pending`) and closes each through the normal `/close` route, one after another
 
-2. **`/merge <worktree-branch>`** — `registered_worktree` / `fresh_clone_checkout` ONLY; **skip entirely under `in_place`**
-   - Merges the overnight worktree branch back into master
+2. **`/commit --auto`** — not optional; in the same place as `/close --auto`
+   - Discovers every task waiting to be committed (`commit_pending`) and walks each through the normal `/commit` route, batched the way `/close --auto` batches; this is where the session's work becomes commits on `<worktree_branch>`
+
+3. **`/merge <worktree_branch>`** — `registered_worktree` / `fresh_clone_checkout` ONLY, in the main checkout; **skip entirely under `in_place`**
+   - Merges the overnight worktree branch into $DEFAULT_BRANCH
    - The blessed-bridge env-var (`CLAUDE_MERGE_COMMAND_ACTIVE=1`) handles privilege-guard authorization
-   - If merge conflicts arise, the user resolves manually before continuing
+   - If merge conflicts arise, the user resolves them before continuing
    - Under `in_place` no session-created branch exists, so this step has no operand and the blessed-bridge authorization is never needed
 
-3. **`/push`**
-   - Under `registered_worktree` / `fresh_clone_checkout`: pushes master to origin
-   - Under `in_place`: pushes the checkout's own working branch to origin — never master, which the launcher refused to start on
-   - Requires clean working tree (post-merge in the isolated modes) and commits ahead of upstream
+4. **`/push`**
+   - Under `registered_worktree` / `fresh_clone_checkout`: in the main checkout; pushes $DEFAULT_BRANCH to origin
+   - Under `in_place`: in the checkout; pushes the checkout's own working branch to origin — never master, which the launcher refused to start on
+   - Requires clean working tree and commits ahead of upstream
    - The push wrapper writes its own grant manifest; no further user action required
-
 
 ---
 
@@ -1755,8 +1732,8 @@ The state file is created by `create-overnight-state.sh` during session initiali
 
 ## Edge Cases
 
-- **No issues found** — see Step 4 (clean-sweep handling, 2 consecutive sweeps end the session).
-- **A pipeline that needs an owner decision** — answered under Clause A or parked (Hard Rule 5); a QA fail or warning sends it back to dev (Step 17) until QA passes.
+- **No issues found** — see Step 3 (a clean sweep is logged; the time-lock holds until `end_time`, and the next cycle's PM plans further work).
+- **A pipeline that meets a decision** — decided without the owner and recorded (Hard Rule 5); a QA fail or warning sends it back to dev (Step 17) until QA passes.
 - **Very short time remaining (< 5 minutes)** — see Step 6 (severity-aware time guard).
 - **State file corruption** — create a fresh state file preserving `end_time`, continue.
 - **Working root missing or invalid on continuation** — HARD ABORT (see the Step 1 WORKING-ROOT GUARD). Under `--worktree` the launch refuses outright when no durable isolation can be produced rather than silently downgrading to in-place. Under the `in_place` default there is no worktree to create or lose, and running in the main checkout is the intended behavior, not a failure.
@@ -1767,13 +1744,13 @@ The state file is created by `create-overnight-state.sh` during session initiali
 
 - **prompt-workflow.py** (UserPromptSubmit): Creates overnight-state-<session_id>.json (complete with worktree_path, worktree_branch, view_paths, spec detection) on /dev-overnight detection; injects continuation context with the mode-neutral working-root guard
 - **posttool-overnight-loop.py** (PostToolUse:TodoWrite): Detects all-completed state, resets todos for new cycle if end_time is future
-- **pretool-overnight-hook-guard.py** (PreToolUse): Blocks Write/Edit/Bash targeting .claude/hooks/ during overnight sessions
+- **pretool-overnight-hook-guard.py** (PreToolUse): Blocks Write/Edit/Bash targeting .claude/hooks/ during overnight sessions; denies AskUserQuestion to every caller in the session until the next human-typed prompt
 - **pretool-workflow-gate.py** (PreToolUse): Gates tools until TodoWrite is called
 - **posttool-todo-count.py** (PostToolUse:TodoWrite): Enforces step count
 - **posttool-todo-sequence.py** (PostToolUse:TodoWrite): Enforces step ordering
 - **codex_native_harness.py / stop-overnight-timelock.py** (Stop): Active Stop-chain workflow enforcement; do not cite absent legacy workflow-enforce hooks as active
-- **stop-overnight-timelock.py** (Stop): Blocks stop until end_time reached
-- **posttool-git-checkpoint.sh** (PostToolUse:Write|Edit): Auto-commits changes
+- **stop-overnight-timelock.py** (Stop): Blocks stop until end_time, then until the closeout (each cycle's retro report and the summary) is on disk; a human-typed `/stop` releases it
+- **posttool-git-checkpoint.sh** (PostToolUse:Write|Edit): Snapshots each change to `refs/checkpoints/<branch>`; never advances HEAD
 
 ### Loop Mechanism (v3)
 - When all todo steps are marked completed via TodoWrite (every todo, including the letter-suffix Step 11g), the posttool-overnight-loop.py hook fires
