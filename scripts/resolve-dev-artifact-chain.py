@@ -2303,6 +2303,32 @@ def do_report_gaps(
     return gaps
 
 
+def disposition_lines(
+    project_root: Path | str, task_id: str, stage: str, transcript: str | None = None
+) -> list[str]:
+    """The task's disposition at ``stage`` as the Stop gate prints it (P5
+    R7): no line for chain_pass (D2: nothing else passes), else one gap_line
+    per gap, where an artifact no dispatch declared yet also names the
+    canonical todo step the DDR says owes it. ``transcript`` reaches the do
+    branch (do_report_gaps). Raises on an instrument failure, as disposition
+    does; disposition and gap_line are P3's."""
+    outcome = disposition(project_root, task_id, stage, transcript=transcript)
+    if outcome["disposition"] == "chain_pass":
+        return []
+    harness = str(Path(__file__).resolve().parent.parent)
+    if harness not in sys.path:
+        sys.path.insert(0, harness)
+    from hooks.lib import obligation
+
+    lines = []
+    for gap in outcome["gaps"]:
+        owner = obligation.declaring_dispatch(task_id, gap["artifact"], project_root) \
+            if gap["lane"] is None and gap["artifact"] else None
+        step = owner.get("step") if isinstance(owner, dict) and owner.get("source") == "todo_step" else None
+        lines.append(gap_line(gap) + (f" step={json.dumps(step, ensure_ascii=False)}" if step else ""))
+    return lines or [f"{stage} {task_id}: disposition {outcome['disposition']!r}, needs 'chain_pass'"]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = StableArgumentParser(prog="resolve-dev-artifact-chain.py")
     parser.add_argument("--task-id", required=True)

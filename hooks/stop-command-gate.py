@@ -82,29 +82,12 @@ def _repository(root) -> None:
 
 # ---------------------------------------------------------------- P3's disposition
 def disposition(root, task: str, stage: str, transcript: str | None = None) -> list[str]:
-    """The task's disposition at ``stage`` as gap lines, [] for chain_pass
-    (D2: nothing else passes). The one adapter to P3's
-    `disposition(project_root, task_id, stage)`; the do branch also takes the
-    session transcript (R8). Its instrument failure raises."""
-    resolver = _script("scripts/resolve-dev-artifact-chain.py")
-    found = resolver.disposition(root, task, stage, **({"transcript": transcript} if transcript else {}))
-    if found.get("disposition") == "chain_pass":
-        return []
-    gaps = found.get("gaps") or []
-    if not gaps:
-        return [f"{stage} {task}: disposition {found.get('disposition')!r}, needs 'chain_pass'"]
-    return [_gap_line(resolver, root, task, gap) for gap in gaps]
-
-
-def _gap_line(resolver, root, task: str, gap: dict) -> str:
-    """A gap as the disposition reports it; an artifact no dispatch declared
-    yet names the canonical todo step the DDR says owes it."""
-    line = resolver.gap_line(gap)
-    if gap.get("lane") is None and gap.get("artifact"):
-        owner = _lib("obligation").declaring_dispatch(task, gap["artifact"], root)
-        if isinstance(owner, dict) and owner.get("source") == "todo_step" and owner.get("step"):
-            line += f" step={json.dumps(owner['step'], ensure_ascii=False)}"
-    return line
+    """The task's disposition at ``stage`` as gap lines, [] for chain_pass:
+    the one adapter, the chain's own disposition_lines (over P3's
+    `disposition(project_root, task_id, stage)`), used verbatim; the do
+    branch also takes the session transcript (R8). Its instrument failure
+    raises."""
+    return _script("scripts/resolve-dev-artifact-chain.py").disposition_lines(root, task, stage, transcript)
 
 
 # ---------------------------------------------------------------- the todo half

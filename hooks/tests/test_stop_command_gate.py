@@ -35,6 +35,9 @@ def _load(path: Path, name: str):
 
 
 gate = _load(HOOKS / "stop-command-gate.py", "stop_command_gate_under_test")
+resolver = _load(REPO / "scripts" / "resolve-dev-artifact-chain.py", "resolver_under_test")
+sys.path.insert(0, str(REPO))
+from hooks.lib import obligation as chain_obligation  # noqa: E402  (the module the chain's reader imports)
 command_span = gate.command_span
 obligation = gate._lib("obligation")
 todo_canonical = gate._lib("todo_canonical")
@@ -110,7 +113,8 @@ class TX:
 
 # ---------------------------------------------------------------- fakes for P2, P3, P4
 class Disposition:
-    """P3's disposition(project_root, task_id, stage) and gap_line(gap): a
+    """P3's disposition(project_root, task_id, stage) and gap_line(gap), set
+    into the chain's module, whose own disposition_lines the gate calls: a
     table of answers per (task, stage); every call is recorded."""
 
     def __init__(self, answers=None):
@@ -156,8 +160,10 @@ def env(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_COMPAT_RUNTIME", raising=False)
     monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake())
     fake = Disposition()
-    monkeypatch.setitem(gate._SCRIPTS, "scripts/resolve-dev-artifact-chain.py", fake)
-    monkeypatch.setattr(obligation, "declaring_dispatch", lambda task, path, root, roots=None: None)
+    for name in ("disposition", "gap_line"):
+        monkeypatch.setattr(resolver, name, getattr(fake, name), raising=False)
+    monkeypatch.setitem(gate._SCRIPTS, "scripts/resolve-dev-artifact-chain.py", resolver)
+    monkeypatch.setattr(chain_obligation, "declaring_dispatch", lambda task, path, root, roots=None: None)
     ns = types.SimpleNamespace(project=project, state=state, fake=fake, tmp=tmp_path,
                                tx=TX(tmp_path / f"{SID}.jsonl"))
     ns.payload = {"session_id": SID, "transcript_path": str(ns.tx.path), "cwd": str(project),
@@ -190,7 +196,7 @@ def test_a2_dev_at_one_step_blocks_naming_open_todos_and_the_missing_dispatch(en
     steps = dev_span(env, done=1)
     qa = f"docs/dev/qa-report-{FAMILY}.json"
     env.fake.answers[(FAMILY, "dev")] = [gap(qa, "MISSING_ARTIFACT", "absent")]
-    monkeypatch.setattr(obligation, "declaring_dispatch", lambda task, path, root, roots=None: {
+    monkeypatch.setattr(chain_obligation, "declaring_dispatch", lambda task, path, root, roots=None: {
         "source": "todo_step", "step": "Step 9: QA validation", "command": "dev"})
     code, text = run(env)
     assert code == 2
@@ -361,7 +367,6 @@ def test_a4_the_gate_creates_and_deletes_no_file(env):
 
 
 # R8: the do branch's write-set helper and Span.write_set, on the real readers
-resolver = _load(REPO / "scripts" / "resolve-dev-artifact-chain.py", "resolver_under_test")
 
 
 def do_report(env, modified=(), created=()):
@@ -723,11 +728,11 @@ def test_todo_half_without_a_canonical_list_needs_the_last_list_completed(env, c
 
 # ---------------------------------------------------------------- instrument failures (step 6)
 def test_an_absent_producer_function_is_an_instrument_failure_never_an_allow(env, monkeypatch):
-    monkeypatch.setitem(gate._SCRIPTS, "scripts/resolve-dev-artifact-chain.py", types.SimpleNamespace())
+    monkeypatch.delattr(resolver, "disposition")  # P3's function absent from the chain's module
     steps = dev_span(env, done=0)
     env.tx.todos(steps, len(steps))
     code, text = run(env)
-    assert code == 2 and "- gate instrument failure: AttributeError:" in text
+    assert code == 2 and "- gate instrument failure: NameError: name 'disposition' is not defined" in text
 
 
 def test_an_unloadable_close_rating_is_an_instrument_failure(env, monkeypatch):
