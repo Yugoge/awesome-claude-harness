@@ -366,9 +366,7 @@ class Span:
         return {family for _call, doc in self.obligations() if (family := canonical(doc.get("task_id")))}
 
 
-def _obligation():
-    """hooks/lib/obligation.py, imported when first asked: a span reader that
-    needs no obligation loads none of it."""
+def _obligation():  # imported when first asked: a reader that needs none loads none of it
     try:
         from . import obligation
     except ImportError:

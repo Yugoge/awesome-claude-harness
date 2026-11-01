@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """PostToolUse(AskUserQuestion): the one writer of the owner's close rating (D9a).
 
-A row (lib/close_rating.append_rating) only when the main agent (no agent_id)
-asked the close-rating question (metadata.source close-rating:<task-id>, one
-question) and the dialog's answer is exactly one of the four labels. The answer
-is read from the CLI's tool_response, never from the model's tool_input: the
-CLI drops answers the model writes into its input before the dialog runs.
-Skip, free text, a decline, an error result and an AFK auto-continue write
-nothing. It prints nothing and exits 0 on every path: the rating never blocks.
+A row only for the main agent's (no agent_id) one close-rating question (metadata.source
+close-rating:<task-id>) answered with exactly one of the four labels, read from the CLI's
+tool_response: the CLI drops answers the model writes into its own input before the dialog.
+Skip, free text, a decline, an error and an AFK auto-continue write nothing. Silent, exit 0.
 """
 import json
 import sys
@@ -21,12 +18,10 @@ def _rating(payload: dict, close_rating):
     tool_input, response = payload.get("tool_input"), payload.get("tool_response")
     task_id = close_rating.source_task(tool_input)
     if payload.get("agent_id") or payload.get("tool_name") != "AskUserQuestion" or not task_id \
-            or not isinstance(response, dict) or response.get("afkTimeoutMs") or response.get("response") \
-            or response.get("followUp"):
+            or not isinstance(response, dict) or any(response.get(k) for k in ("afkTimeoutMs", "response", "followUp")):
         return None
     questions, answers = tool_input.get("questions"), response.get("answers")
-    if not isinstance(questions, list) or len(questions) != 1 or not isinstance(questions[0], dict) \
-            or not isinstance(answers, dict):
+    if not isinstance(questions, list) or len(questions) != 1 or not isinstance(answers, dict):
         return None
     answer = answers.get(questions[0].get("question"))
     rating = close_rating.LABEL_TO_RATING.get(answer) if isinstance(answer, str) else None
