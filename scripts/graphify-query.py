@@ -34,7 +34,6 @@ import json
 import os
 import re
 import sys
-import time
 from pathlib import Path
 
 _PROJECT_DIR = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())).resolve()
@@ -50,7 +49,7 @@ from graphify_lib import (
     check_cache_available, contains_sensitive_fragment, empty_graph_context,
     get_cache_dir, get_repo_key, graph_json_path, is_graphify_enabled,
     load_graph, run_graphify_cmd, scrub_sensitive, should_exclude_path,
-    write_json_locked,
+    write_validated,
 )
 
 # Implicit reference trigger words that signal ambiguity — per spec §5
@@ -58,6 +57,8 @@ IMPLICIT_REFERENCE_WORDS = [
     "\u4e4b\u524d", "\u5df2\u6709", "\u73b0\u6709", "\u539f\u6765\u7684",  # Chinese (Unicode escapes; runtime-equivalent to CJK glyphs)
     "previous", "existing", "original",  # English
 ]
+
+PREQUERY_SCHEMA = "graphify-prequery.v1"  # pre_query.json's schema: checked before every write
 
 # Hard token cap for structural_context
 HARD_TOKEN_CAP = 2000
@@ -264,7 +265,7 @@ def main() -> int:
     if args.no_graphify or not is_graphify_enabled():
         result = empty_graph_context(STATUS_SKIPPED, "graphify disabled by flag or CLAUDE_GRAPHIFY_ENABLED=0")
         result.update({"task_id": args.task_id, "generated_at": _now_iso()})
-        write_json_locked(output_path, result)
+        write_validated(output_path, result, PREQUERY_SCHEMA)
         print(f"graphify-query: skipped (status={STATUS_SKIPPED})")
         return 0
 
@@ -276,7 +277,7 @@ def main() -> int:
     if not available:
         result = empty_graph_context(STATUS_UNAVAILABLE, reason)
         result.update({"task_id": args.task_id, "generated_at": _now_iso()})
-        write_json_locked(output_path, scrub_sensitive(result))
+        write_validated(output_path, scrub_sensitive(result), PREQUERY_SCHEMA)
         print(f"graphify-query: status=unavailable ({reason})")
         return 0
 
@@ -285,7 +286,7 @@ def main() -> int:
     if not req_path.exists():
         result = empty_graph_context(STATUS_UNAVAILABLE, f"requirement file not found: {req_path}")
         result.update({"task_id": args.task_id, "generated_at": _now_iso()})
-        write_json_locked(output_path, scrub_sensitive(result))
+        write_validated(output_path, scrub_sensitive(result), PREQUERY_SCHEMA)
         return 0
 
     requirement_text = req_path.read_text(encoding="utf-8")
@@ -367,8 +368,7 @@ def main() -> int:
             "graph_json": str(graph_file),
         },
     }
-    result = scrub_sensitive(result)
-    write_json_locked(output_path, result)
+    status = write_validated(output_path, scrub_sensitive(result), PREQUERY_SCHEMA)["status"]
     print(f"graphify-query: status={status}, anchors={len(candidate_anchors)}, "
           f"query_cli={query_cli_status}, output={output_path}")
     return 0

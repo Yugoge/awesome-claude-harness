@@ -78,7 +78,7 @@ from graphify_lib import (
     check_cache_available, contains_sensitive_fragment,
     get_cache_dir, get_repo_key, graph_json_path,
     is_graphify_enabled, load_graph, resolve_paths_to_node_ids, run_graphify_cmd,
-    scrub_sensitive, should_exclude_path, write_json_locked, read_json_safe,
+    scrub_sensitive, should_exclude_path, write_json_locked, write_validated, read_json_safe,
 )
 
 
@@ -594,7 +594,7 @@ def main() -> int:
         resolved_node_ids, unresolved_paths, affected_records, affected_cli_status)
     _write_outputs(output_dir, run_manifest, focused)
 
-    print(f"graphify-enrich: status={status}, nodes={len(subgraph.get('nodes', []))}, "
+    print(f"graphify-enrich: status={run_manifest['status']}, nodes={len(subgraph.get('nodes', []))}, "
           f"edges={len(subgraph.get('edges', []))}, resolved={len(resolved_node_ids)}, "
           f"affected_cli={affected_cli_status}")
     return 0
@@ -602,9 +602,12 @@ def main() -> int:
 
 def _write_outputs(output_dir: Path, run_manifest: dict, focused: dict | None = None) -> None:
     """Write the run record, after the focused subgraph when there is one, so a
-    run record that reports ok or degraded never names a file not yet on disk."""
+    run record that reports ok or degraded never names a file not yet on disk. A
+    focused subgraph its schema rejects is written as failed, and so is the run."""
     if focused is not None:
-        write_json_locked(output_dir / "focused-subgraph.json", focused)
+        written = write_validated(output_dir / "focused-subgraph.json", focused, "graphify-focused-subgraph.v1")
+        if written["status"] == STATUS_FAILED:
+            run_manifest.update(status=STATUS_FAILED, error_detail=written["error_detail"])
     write_json_locked(output_dir / "graphify-run.json", run_manifest)
 
 
