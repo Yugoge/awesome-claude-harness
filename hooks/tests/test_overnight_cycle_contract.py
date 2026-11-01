@@ -14,6 +14,9 @@
 - E1 for the dev and the QA pair: a report shaped like the agents/dev.md and
   agents/qa.md templates passes the collection check and G2; one invalid
   against its obligation's schema is refused by both.
+- A producer question (BA at Step 8, dev at Step 12) is decided at collection
+  by G2's one rule: fresh and valid it stands in, invalid it is refused, stale
+  it stands in for nothing.
 """
 from __future__ import annotations
 
@@ -325,3 +328,52 @@ def test_e1_template_shaped_reports_pass_and_invalid_ones_stop_at_g2(
     assert report in stopped.stderr
     refused = _run("posttool-overnight-file-check.py", working, dispatch)
     assert refused.returncode == 2 and report in refused.stderr
+
+
+# --------------------------------------------------------------------------
+# R12: a producer question at collection, by G2's one rule
+# --------------------------------------------------------------------------
+
+def _ba_dispatch() -> dict:
+    """An overnight Step 8 BA dispatch whose obligation declares its context and ticket."""
+    obligation = {"task_id": TASK, "lane": None, "lane_set": None, "role": "ba", "pipeline": "dev-overnight",
+                  "profile": "overnight", "dispatched_at": _iso(0), "artifacts": [
+                      {"kind": "json", "path": f"docs/dev/context-{TASK}.json", "schema": "context.v1",
+                       "identity": {"task_id": TASK}},
+                      {"kind": "markdown", "path": f"docs/dev/ticket-{TASK}.md", "identity_anchor": TASK}]}
+    return _agent("ba", f'You are the ba subagent.\n<obligation v="1">{json.dumps(obligation)}</obligation>')
+
+
+@pytest.mark.parametrize("role, label, declared", [
+    ("ba", "8", f"docs/dev/context-{TASK}.json"), ("dev", "12", DEV[2])])
+def test_a_producer_question_is_decided_at_collection_as_at_g2(main_root, tmp_path, role, label, declared):
+    """A fresh, valid question the dispatch's role wrote in place of its report stands in for
+    the declared artifacts at collection and at G2; an invalid one is refused by both, naming
+    why; a stale one stands in for nothing, so both name the declared artifact it lacks."""
+    working = _session(main_root, main_root)
+    assert _triage(working).returncode == 0
+    _checklist(working, label)
+    dispatch = _ba_dispatch() if role == "ba" else _dispatch(*DEV)
+    prompt = dispatch["tool_input"]["prompt"]
+    question = working / f"docs/dev/producer-question-{TASK}-{role}.json"
+    question.parent.mkdir(parents=True, exist_ok=True)
+    record = {"task_id": TASK, "role": role, "need": "whether bool counts as a number",
+              "options": [{"label": "accept", "description": "a"}, {"label": "reject", "description": "r"}],
+              "default": "reject", "why": "the request does not say"}
+    question.write_text(json.dumps(record))
+    collected = _run("posttool-overnight-file-check.py", working, dispatch)
+    assert collected.returncode == 0 and "producer question valid" in collected.stdout, collected.stderr
+    assert _g2(working, tmp_path / "home", role, prompt).returncode == 0
+    question.write_text(json.dumps(dict(record, default="maybe")))
+    for refused in (_run("posttool-overnight-file-check.py", working, dispatch),
+                    _g2(working, tmp_path / "home", role, prompt)):
+        assert refused.returncode == 2, refused.stderr
+        assert f"{question.relative_to(working)}: " in refused.stderr
+        assert "default 'maybe' is not one of the option labels" in refused.stderr
+    question.write_text(json.dumps(record))
+    earlier = datetime.now(timezone.utc).timestamp() - 3600
+    os.utime(question, (earlier, earlier))
+    for refused in (_run("posttool-overnight-file-check.py", working, dispatch),
+                    _g2(working, tmp_path / "home", role, prompt)):
+        assert refused.returncode == 2 and declared in refused.stderr, refused.stderr
+        assert "producer-question" not in refused.stderr

@@ -70,10 +70,11 @@ except ImportError:  # pragma: no cover - architect confirmed availability
 try:
     from . import schema_registry
     from . import overnight
+    from . import obligation
 except ImportError:  # pragma: no cover - direct spec import in focused tests
     import sys as _sys
     _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from lib import schema_registry  # type: ignore
+    from lib import schema_registry, obligation  # type: ignore
     import overnight  # type: ignore
 
 
@@ -991,6 +992,41 @@ def validate_artifact_for_obligation(path, schema_id: str) -> dict:
         'fail', schema_id, result.get('errors', []),
         'schema-invalid under obligation-supplied schema',
     )
+
+
+def producer_question(project_dir, ob: dict):
+    """TC-33: docs/dev/producer-question-<task_id>-<role>.json named by the
+    obligation's own task_id and role, the one rule G2 (the producer's stop) and
+    the overnight collection check both decide by. Which producers may ask is the
+    producer-question.v1 schema's role enum (ba and dev, D23), so a question
+    from any other role is schema-invalid. Returns None when absent or not
+    fresh against the obligation's dispatched_at (a file from an earlier
+    round; None freshness counts as stale), "valid" when it stands in for the
+    declared artifacts, else a failure naming why it is invalid."""
+    rel = f"docs/dev/producer-question-{ob.get('task_id')}-{ob.get('role')}.json"
+    full = Path(project_dir) / rel
+    try:
+        mtime = full.stat().st_mtime
+    except OSError:
+        return None
+    if obligation.artifact_freshness_satisfied("json", mtime, ob.get("dispatched_at")) is not True:
+        return None
+    result = validate_artifact_for_obligation(str(full), "producer-question.v1")
+    errors = list(result.get("errors", []))[:10] or [str(result.get("reason"))]
+    if result.get("status") == "pass":
+        try:
+            record = json.loads(full.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            record = None
+        record = record if isinstance(record, dict) else {}
+        labels = [o.get("label") for o in record.get("options", []) if isinstance(o, dict)]
+        errors = [f"{key}: obligation declares {ob.get(key)!r}, file has {record.get(key)!r}"
+                  for key in ("task_id", "role") if record.get(key) != ob.get(key)]
+        if record.get("default") not in labels:
+            errors.append(f"default {record.get('default')!r} is not one of the option labels {labels}")
+        if not errors:
+            return "valid"
+    return {"path": rel, "reason": "producer_question_invalid", "errors": errors}
 
 
 def validate_markdown_artifact_for_obligation(
