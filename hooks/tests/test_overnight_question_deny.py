@@ -22,6 +22,9 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+from tests.replay import hookrun  # noqa: E402
+
 HOOK = REPO_ROOT / "hooks" / "pretool-overnight-hook-guard.py"
 SID = "5f0c2d8e-1b7a-4c39-9e64-2a8d0b3f7c11"
 OTHER_SID = "9a4e6b10-73c2-4d5f-8e1b-c06f2a9d3e48"
@@ -201,3 +204,10 @@ def test_another_session_in_the_same_repository_asks_freely(project, store):
     assert _ask(project, store / "missing.jsonl", sid=OTHER_SID).returncode == 0
     assert _ask(project, tx.path).returncode == 2  # meanwhile the overnight session stays denied
 
+
+def test_shipped_settings_route_ask_user_question_to_the_guard():
+    """The CLI's matcher rule (hookrun.select, as runhook.py) sends a PreToolUse
+    AskUserQuestion payload to the guard."""
+    settings = json.loads((REPO_ROOT / "settings.json").read_text(encoding="utf-8"))
+    hooks = [h["hook"] for h in hookrun.select(settings, "PreToolUse", {"tool_name": "AskUserQuestion"})]
+    assert "hooks/pretool-overnight-hook-guard.py" in hooks
