@@ -325,18 +325,19 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   fi
   if [ "$TASK_REPORT" != "$TASK_DOCS_ROOT/do-report-$TASK_ID.json" ]; then
       # A failed chain check names its gaps in errors[]: each path is one
-      # finding, routed to the dispatch that owes it, then the SAME call is
+      # finding, routed to the dispatch that owes it with the errors the
+      # chain names on it (code: detail) verbatim, then the SAME call is
       # rerun until it passes; ARTIFACT_CHAIN is never blanked.
       while :; do
           ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py \
               --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")" && break
-          while IFS= read -r GAP_PATH; do
+          while IFS= read -r GAP_PATH && IFS= read -r GAP_ERRORS; do
               route_finding "$GAP_PATH" \
-                  "resolve-dev-artifact-chain.py reported $(jq -r --arg p "$GAP_PATH" '[.errors[]? | select((.path // .artifact) == $p) | (.code // "an error") + ": " + (.detail // "")] | join("; ") | if . == "" then "a non-zero exit" else . end' <<<"$ARTIFACT_CHAIN") during commit-time repository planning" \
+                  "resolve-dev-artifact-chain.py reported $GAP_ERRORS during commit-time repository planning" \
                   "resolve-dev-artifact-chain.py --task-id $TASK_ID --project-dir $TASK_PROJECT_ROOT"
           done < <(jq -r --arg report "$TASK_REPORT" \
-              '[.errors[]? | .path // .artifact // $report] | if length == 0 then [$report] else . end | unique[]' \
-              <<<"$ARTIFACT_CHAIN" 2>/dev/null || printf '%s\n' "$TASK_REPORT")
+              '[.errors[]? | {path: (.path // .artifact // $report), error: ((.code // "an error") + ": " + (.detail // "") | gsub("\n"; " "))}] | if length == 0 then [{path: $report, error: "a non-zero exit"}] else . end | group_by(.path)[] | .[0].path, (map(.error) | join("; "))' \
+              <<<"$ARTIFACT_CHAIN" 2>/dev/null || printf '%s\n%s\n' "$TASK_REPORT" "a non-zero exit")
       done
   else
       ARTIFACT_CHAIN=""
