@@ -42,29 +42,20 @@ Driver arguments (cli.py --arg K=V):
                      ref (the wrapper's "re-run via slash command to finish cleanup") goes through
                      Steps 0-5 again on the merged history (git's "Already up to date" path)
   ref=<ref>          type `/merge <ref>` (tier 1) instead of a bare `/merge` (tier 3)
-  sid=respelled|cli  how Step 1 binds SESSION_ID (see "Session id" below; default respelled)
   kept=<JSON>        [[hook, step, normalised text], ...]: the blocks the base kit's replay of the same
                      variant and settings recorded; given, a declared deviation passes only a block in
                      that list (drivers/dev.py KeptOnly); without it every declared deviation passes
 
-Session id. Step 1 binds `SESSION_ID="${CLAUDE_SESSION_ID}"` (commands/merge.md:87 on both trees) and
-aborts when it is empty; the CLI's Bash exports CLAUDE_CODE_SESSION_ID and no CLAUDE_SESSION_ID
-(landscape B-breakages.md:45; prompts/P1c.md X4's sub-measure, which P1c owns), so a replay of the
-text as written ends at Step 1's abort on either tree (`--arg sid=cli`). That is a failure, not a
-block: no DEVIATION passes it, and row 7's respellings name harness-script paths only. By default the
-driver binds Step 1's line as commands/push.md:158 spells the same binding,
-`SESSION_ID="${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"`, recorded in blocks.json
-"respellings" as "M-S session id" at each application, so the replay reaches the merge; the report
-lists it as a defect of both trees' text, not as a row 7 respelling.
+Session id. Step 1 binds `SESSION_ID="${CLAUDE_CODE_SESSION_ID}"`, the session variable the CLI's
+Bash exports (prompts/P1c.md X4's sub-measure, `env | cut -d= -f1 | grep -E '^CLAUDE'`: no
+CLAUDE_SESSION_ID), so the text runs as written.
 
 Respellings (row 7): none of the /merge text's harness-script calls needs one (Step 1's
 `bash ~/.claude/scripts/derive-default-branch.sh` and Step 5's `bash ~/.claude/hooks/merge.sh` already
 name the harness copy); the analyst's text names no harness script on the base, and its working-tree
 state-dir helper is already `~/.claude/hooks/lib/harness_state_dir.sh`.
 
-Deviations: DEVIATIONS below, one entry per block the base tree's (2acc29b) replay meets, each with a
-comment quoting the hook's text; nothing else passes a block. A block no declared deviation passes
-pauses the agent that met it (Subagent Hook Discipline): the main agent ends its turn reporting the
+Deviations: none (DEVIATIONS stays empty). A block pauses the agent that met it (Subagent Hook Discipline): the main agent ends its turn reporting the
 hook and its text; a paused merge-analyst writes no grant, so Step 3 aborts.
 
 Not replayed: a linked (registered_worktree) worktree, and /merge after a pipeline that left files in
@@ -80,8 +71,7 @@ import subprocess
 from datetime import datetime, timezone
 
 from .. import agents, cmdtext
-from ..pipeline import _ASSIGN_RE, _FOR_RE, _SHELL_SPECIAL, _VAR_RE, Deviations, Orchestrator, Respelling, parse_declare
-from ..replay import Deviation
+from ..pipeline import _ASSIGN_RE, _FOR_RE, _SHELL_SPECIAL, _VAR_RE, Deviations, Orchestrator, parse_declare
 from . import close as closedrv
 
 PIPELINE = "merge"
@@ -98,21 +88,8 @@ SUB_MAIN = "def sub(a,b): return a - b\n"   # variant conflict: the main line ch
 README_MAIN = "# toy\n\nAdd and subtract numbers.\n"
 SUB_RESOLVED = SUB_NEW
 
-SID_RESPELLING = Respelling(
-    "M-S session id", r'SESSION_ID="\$\{CLAUDE_SESSION_ID\}"',
-    'SESSION_ID="${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"',
-    "commands/merge.md Step 1 (:87): the CLI's Bash exports CLAUDE_CODE_SESSION_ID only (P1c X4)")
-
-# Blocks the base tree's replay meets, each passed by a deviation at the step it occurs on: the
-# refused call is applied as if allowed, so every later step runs and is traced.
-DEVIATIONS = Deviations([
-    # DEVIATION: "BLOCKED: removal-policy — FORBIDDEN_REMOVAL filesystem_removal:rm"
-    # pretool-bash-safety.sh refuses the base text's Step 3 consume of the grant
-    # (`rm -f "/tmp/agentic-commit/merge-analyst/${REPO_HASH}/${SESSION_ID}/${REQUEST_ID}.json"`).
-    ("/merge* Step 3 Bash consume grant", Deviation(
-        "hooks/pretool-bash-safety.sh", "FORBIDDEN_REMOVAL filesystem_removal:rm",
-        "Step 3's consume (unlink) of the grant as the base text spells it")),
-])
+# Blocks the replays meet: none (a compliant run needs no deviation).
+DEVIATIONS = Deviations([])
 
 
 class Paused(Exception):
@@ -171,13 +148,11 @@ def _phases(text: str) -> list:
 class MergeRun:
     """One /merge turn of the main agent (Steps 0-5) with the merge-analyst it dispatches."""
 
-    def __init__(self, rp, session=None, devs: Deviations | None = None, typed_ref: str = "", sid_mode: str = "respelled",
-                 tag: str = "/merge"):
-        self.rp, self.typed_ref, self.sid_mode, self.tag = rp, typed_ref, sid_mode, tag
+    def __init__(self, rp, session=None, devs: Deviations | None = None, typed_ref: str = "", tag: str = "/merge"):
+        self.rp, self.typed_ref, self.tag = rp, typed_ref, tag
         self.devs = closedrv.kept_only(rp, devs or DEVIATIONS)
         rp.deviation_at = self.devs.at  # the analyst's own calls take the same deviations by label
-        respellings = [SID_RESPELLING] if sid_mode == "respelled" else []
-        self.o = Orchestrator(rp, "merge", session=session, deviations=self.devs, respellings=respellings,
+        self.o = Orchestrator(rp, "merge", session=session, deviations=self.devs,
                               rules=self._rules())
         self.analyst_text = self.o.tree.agent_text(self.role())
         self.grant: dict = {}
@@ -710,22 +685,18 @@ def run(rp) -> None:
     variant = rp.args.get("variant", "plain")
     if variant not in VARIANTS:
         raise ValueError(f"unknown variant {variant!r}")
-    sid_mode = rp.args.get("sid", "respelled")
-    if sid_mode not in ("respelled", "cli"):
-        raise ValueError(f"sid must be respelled or cli, not {sid_mode!r}")
     ref = rp.args.get("ref", "")
-    rp.pipeline = "merge" + (f"/{variant}" if variant != "plain" else "") + ("/sid-cli" if sid_mode == "cli" else "")
+    rp.pipeline = "merge" + (f"/{variant}" if variant != "plain" else "")
     owner_setup(rp, variant)
     closedrv.fact(rp, "owner setup", toy_state(rp))
-    mr = MergeRun(rp, typed_ref=ref, sid_mode=sid_mode)
+    mr = MergeRun(rp, typed_ref=ref)
     mr.run(ref)
     last = mr
     if variant == "conflict" and mr.o.values.get("RESOLVED_REF"):
         st = toy_state(rp)
         if any(s[:2] in ("UU", "AA") for s in st["status"]):
             owner_resolve(rp)
-            again = MergeRun(rp, session=mr.o.s, typed_ref=ref or mr.o.values["RESOLVED_REF"], sid_mode=sid_mode,
-                             tag="/merge (2)")
+            again = MergeRun(rp, session=mr.o.s, typed_ref=ref or mr.o.values["RESOLVED_REF"], tag="/merge (2)")
             again.run(ref or mr.o.values["RESOLVED_REF"])
             last = again
     p = rp.layout.project
