@@ -111,11 +111,13 @@ jobs:
       - name: Run tests
         # tests/test_artifact_graph.py replays every pipeline traced in a sandbox;
         # the artifact-graph jobs below run it: shards with strace and a mount
-        # namespace, then the check over all of them. tests/replay/test_run_to_run.py
-        # replays one variant twice traced; the job artifact-graph-run-to-run runs it.
+        # namespace, then the check over all of them, and its mutation tests
+        # (tests/artifact_graph/test_mutations.py) over the same replays.
+        # tests/replay/test_run_to_run.py replays one variant twice traced; the job
+        # artifact-graph-run-to-run runs it.
         run: >-
           python3 -m pytest hooks/tests tests -q --ignore=tests/generated --ignore=tests/test_artifact_graph.py
-          --ignore=tests/replay/test_run_to_run.py
+          --ignore=tests/artifact_graph/test_mutations.py --ignore=tests/replay/test_run_to_run.py
 
       - name: Shell tests (checkpoint privacy gate, push guards, fresh-clone smoke)
         # Shell suites pytest does not collect, run as the runner's non-root user like
@@ -397,7 +399,8 @@ jobs:
     # derives the map over the union of the shards' replays and asserts every
     # replay exited 0 in both settings, no violation, and the static half's
     # determinism; a shard that is missing or ran another plan fails it. It runs
-    # when a shard fails too, so that failure is reported with the rest.
+    # when a shard fails too, so that failure is reported with the rest. Then the
+    # check's mutation tests (acceptance 3) run over the same replays.
     name: artifact check (traced replays)
     needs: [artifact-graph-plan, artifact-graph-shard]
     if: ${{ !cancelled() && needs.artifact-graph-plan.result == 'success' }}
@@ -434,6 +437,25 @@ jobs:
           ARTIFACT_GRAPH_WORK: ${{ runner.temp }}/artifact-graph
           ARTIFACT_GRAPH_REUSE: "1"
         run: python3 -m pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s
+
+      - name: Mutation tests (acceptance 3)
+        # Each test adds one file to a scratch copy of this tree (a second writer,
+        # a read nothing writes, a re-check outside the allowed positions, a role
+        # list, ...) and runs the check on the copy: the static half on the copy,
+        # the derivation over the replays above. Nothing in the tree runs the added
+        # file, so no pipeline's replay runs again. Each must make the check fail
+        # with a violation naming the artifact, the component and its file:line.
+        # It runs when the check above fails too, so both are reported.
+        # On 6367dba's 60 replays each mutation took 49-53 s of CPU (two thirds of
+        # it the static half; 50 s wall on a free CPU) and the unmutated check it
+        # compares with 54 s: 4 at a time on 4 CPUs, about 4 minutes (411 s on a
+        # 4-CPU machine shared at a load of 9), each worker holding the replays in
+        # about 1.7 GB.
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          ARTIFACT_GRAPH_WORK: ${{ runner.temp }}/artifact-graph
+        run: python3 -m pytest tests/artifact_graph/test_mutations.py -q -p no:cacheprovider -s
 
       - name: Upload the check's timing and violations
         # if: always(): a failing check's timing is the one the budget question needs.
