@@ -58,18 +58,13 @@ def is_session_mismatch(current_id: str, state: dict) -> bool:
     return current_id != state_id
 
 
-_CLOSEOUT_ARTIFACTS = {
-    'retro_status': 'no docs/dev/overnight/<session_id>/retro-report-cycle*.json (Step 20, PM RETRO)',
-    'final_summary': 'no docs/dev/overnight-summary-*.md written after start_time (Step 21)',
-}
-
-
 def _block_closeout_artifacts(session_id: str, cycle_id_str: str, blockers: list[str]) -> None:
     sys.stderr.write(
         "\n CLOSEOUT GATE: final overnight artifacts are incomplete.\n"
         f" session={session_id} cycle={cycle_id_str}\n"
         f" missing={', '.join(blockers)}\n"
-        + "".join(f" {b}: {_CLOSEOUT_ARTIFACTS[b]}\n" for b in blockers)
+        " final_summary: no non-empty docs/dev/overnight-summary-*.md written after start_time"
+        " (Step 21's summary).\n"
     )
     sys.exit(2)
 
@@ -132,8 +127,8 @@ def _enforce_timelock(session_id: str, state: dict, project_dir: Path | None = N
     # A subagent's report is checked at that subagent's own stop (G2) and at
     # its collection (posttool-overnight-file-check.py), never again here.
     if end_time_expired:
-        # The closeout is what Steps 20 and 21 leave on disk (overnight.closeout_gaps); the
-        # record holds no closeout field, since no session step writes one.
+        # The closeout is Step 21's summary on disk (overnight.closeout_gaps); the record holds
+        # no closeout field, since no session step writes one.
         blockers = overnight.closeout_gaps(state)
         if blockers:
             # The completed cycles, as master's cycle_count was (cycle_index is the one in progress).

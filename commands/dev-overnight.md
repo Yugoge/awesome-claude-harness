@@ -1536,7 +1536,7 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 **If time expired** (session ending):
 **Read the full state file** (start time, end time, isolation) and the cycle data, which the state file does not hold: the PM retro reports (`docs/dev/overnight/<session_id>/retro-report-cycle*.json`) and the cycle log.
 
-**Generate summary report** at `docs/dev/overnight-summary-<date>.md`, one Bash call (Hard Rule 4): `cat > docs/dev/overnight-summary-<date>.md <<'SUMMARY'`, the report below, `SUMMARY`. The time-lock lets the session end after `end_time` once this summary and a PM retro report are on disk.
+**Generate summary report** at `docs/dev/overnight-summary-<date>.md`, one Bash call (Hard Rule 4): `cat > docs/dev/overnight-summary-<date>.md <<'SUMMARY'`, the report below, `SUMMARY`. The time-lock lets the session end after `end_time` once this summary is on disk.
 
 ```markdown
 # Overnight Development Summary

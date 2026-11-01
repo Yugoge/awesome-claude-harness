@@ -201,22 +201,19 @@ def cycle_index(state, written=()):
 
 
 def closeout_gaps(state):
-    """What the session has not written that its end needs, read from disk: `retro_status`
-    without a PM retrospective (Step 20's retro-report-cycle*.json in the session directory),
-    `final_summary` without Step 21's docs/dev/overnight-summary-*.md under the working root
-    written after start_time (any one, when start_time does not parse)."""
-    gaps = []
+    """What the session's end needs and has not written, read from disk: `final_summary` until
+    Step 21's docs/dev/overnight-summary-*.md under the working root is written after start_time
+    (any, when start_time does not parse) and not empty. The main agent writes it, so its own Stop
+    decides on it; the PM retro report is decided at PM's stop (G2) and not re-checked here."""
     try:
-        if not any(session_dir(state).glob('retro-report-cycle*.json')):
-            gaps.append('retro_status')
         start = _parse_end_time(state.get('start_time'))
         since = start.timestamp() if start else 0.0
-        if not any(p.stat().st_mtime > since
-                   for p in (working_root(state) / 'docs' / 'dev').glob('overnight-summary-*.md')):
-            gaps.append('final_summary')
+        for p in sorted((working_root(state) / 'docs' / 'dev').glob('overnight-summary-*.md')):
+            if p.stat().st_mtime > since and p.read_text(errors='replace').strip():
+                return []
     except (OSError, ValueError, TypeError, AttributeError):
-        return gaps or ['final_summary']
-    return gaps
+        pass
+    return ['final_summary']
 
 
 def candidate_project_dirs(project_dir=None):
