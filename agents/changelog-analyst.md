@@ -558,7 +558,7 @@ real staged index measured AFTER Phase 5. The ordering is:
    return to item 0's "before EACH group" steps for the NEXT group, until every group has
    been processed.
 2. **Inside** the fd-9 flock (same held lock, continuing from item 1, still per group):
-   run `git commit -F "${MSGFILE}"` for THIS group → `git rev-parse HEAD` to capture this
+   run `git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"` (the literal path of THIS group's MSGFILE Write) for THIS group → `git rev-parse HEAD` to capture this
    group's `COMMIT_SHA` → append `{commit_sha, source_key, sources, paths}` to this
    repository's `commits[]` result list → set `CURRENT_EXPECTED_HEAD` to `COMMIT_SHA`
    (item 0) → proceed to the next group (back to item 0), or — once every group is
@@ -1276,13 +1276,13 @@ while ITERATION < MAX_ITERATIONS:
         # a message FILE via the Write tool (rules CP-1/CP-2) — NOT into a shell variable that
         # inlines `$(git diff --stat --cached)` on the command line, and NOT via heredoc. The
         # diff-stat body is captured in Phase 6 and embedded into the FILE content; the commit
-        # is the minimal `git -C "${GIT_ROOT}" commit -F "${MSGFILE}"` with nothing chained.
+        # is the minimal `git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"` with nothing chained.
         # BULK mode REQUIRES the auto-bulk: prefix (dispatched via commit.md Step 7);
         # this prefix is checked by BLESSED_BRIDGE_RE in pretool-git-privilege-guard.py
         # alongside the bulk-commit sentinel written by /commit --bulk Step 5.
         # Without the prefix the privilege guard will block the commit.
         # NOTE (CP-1/CP-2 compatibility): the auto-bulk: prefix lives in the MSGFILE, NOT on the
-        # bash command line — `git commit -F "${MSGFILE}"` is the authorized commit form and the
+        # bash command line — `git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"` is the authorized commit form and the
         # privilege guard's commit-grant path allows the `-F` invocation. This is the SAME
         # message-in-file arrangement the prior `git commit -F "${TMPFILE}"` already used (the
         # subject was never on the command line before either), so routing the message through the
