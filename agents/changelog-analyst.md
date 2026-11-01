@@ -21,7 +21,7 @@ your job is to classify, stage, commit, and write the push-gate token.
 
 ```
 CONTROL_ROOT=$HOME          # resolved control root (parent-repo working-tree root), supplied by the /commit Step 7 dispatch — NOT an author-absolute literal; fallback for dev-report lookup when subproject search yields nothing; close-report and ticket I/O always use CONTROL_ROOT
-NESTED_REPO=$(realpath ~/.claude)   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
+NESTED_REPO=$(realpath "${CLAUDE_HOME:-$HOME/.claude}")   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
 REPOSITORY_PLAN=<JSON>      # normal-mode authority emitted by resolve-commit-repos.py; empty only in bulk mode
 ARTIFACT_CHAIN=<JSON>       # normal /dev artifact authority emitted by resolve-dev-artifact-chain.py; empty for bulk/source=do
 ATTRIBUTION_LOG=<JSON>      # write-time attribution journal slice emitted by verify-attribution-chain.py, scoped to REPOSITORY_PLAN's owned paths; main-path attribution authority for the staging decision (see "Attribution and staging decision" below); empty object in bulk mode
@@ -94,7 +94,7 @@ file may be cleaned up in a SEPARATE later bash step (`rm -f <msgfile>`); it mus
 onto the commit.
 
 **Rule CP-3 — the push-gate token reaches disk only through its one writer, in a SEPARATE step.**
-Run `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`
+Run `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`
 (see Phase 10) — never the Write tool, an inline `python3 -c`, a heredoc, `echo` or a redirect.
 The writer resolves the token's path itself, so its command line carries neither the token
 JSON nor its destination. The push-gate write is ALWAYS a distinct step from the `git commit`
@@ -180,7 +180,7 @@ instead of the canonical name, the equality check above (`canonical_dev_report
 (AC-15), and still names the original file. This mismatch is accepted ONLY
 after changelog-analyst itself independently re-verifies it -- never trusted
 from `REPOSITORY_PLAN`'s shape alone: dynamically load
-`os.path.expanduser('~/.claude/scripts/late-repair-controller.py')` and call
+`os.path.join(os.environ.get('CLAUDE_HOME') or os.path.expanduser('~/.claude'), 'scripts/late-repair-controller.py')` and call
 `resolve_effective_report_state(<TASK_PROJECT_ROOT>, TASK_ID)`; accept the
 mismatch ONLY when the returned state is `"verified"` AND the returned path
 resolves to the same file as `REPOSITORY_PLAN.report_path`. Any other
@@ -377,7 +377,7 @@ would-be staged set):
   absolute path to a repo-relative path directly.
 - Note: `~/.claude` may be a symlink to the actual harness-home checkout (on the
   author machine, the nested repo). When operating on the nested repo,
-  `os.path.realpath(os.path.expanduser("~/.claude"))` is the canonical root;
+  `os.path.realpath(os.environ.get("CLAUDE_HOME") or os.path.expanduser("~/.claude"))` is the canonical root;
   dev-report paths like `~/.claude/agents/foo.md` must be realpath-resolved to
   check repo membership.
 
@@ -385,7 +385,7 @@ would-be staged set):
 If `TASK_ID` is non-empty, resolve the dev-report path using the subproject path-walk:
 
 Pipe the `git status --porcelain=v1` output for the repo being committed into
-`python3 ~/.claude/scripts/resolve-dev-report.py` with three required
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-report.py"` with three required
 flags: `--task-id ${TASK_ID}`, `--git-root ${GIT_ROOT}` (absolute path from
 `git rev-parse --show-toplevel`), and `--control-root ${CONTROL_ROOT}`. The
 script normalizes each changed path relative to `GIT_ROOT`, strips workflow
@@ -568,7 +568,7 @@ real staged index measured AFTER Phase 5. The ordering is:
    commit] and `commits` [the full per-group list]) and exit the Bash process (releasing
    fd 9) — only now, after every group's commit.
 3. **After** the flock is released: write the push-gate token with its one writer (CP-3,
-   Phase 10): `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<repo_root>"
+   Phase 10): `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<repo_root>"
    --branch "<branch>" --commit "<commit_sha>"`, from the descriptor. The writer checks,
    before it writes, that the commit is live HEAD (exit 3: HEAD moved since the commit —
    return `commit_status: failed` with `failure_code: push_gate_race`) and that no other
@@ -620,7 +620,7 @@ flock -w 30 -x 9 || {
 # every group's own commit, and `init` must re-seed from the NEW head each time, or the
 # next group's `export`/commit_gate call below would fail-closed on `head_moved` against
 # a HEAD this session itself just advanced.
-eval "$(python3 "${CLAUDE_PROJECT_DIR}/.claude/scripts/session-index.py" init --git-root "${GIT_ROOT}")" || {
+SESSION_INDEX_ENV="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/session-index.py" init --git-root "${GIT_ROOT}")" && eval "$SESSION_INDEX_ENV" || {
     echo "ERROR: session-index.py init failed for ${GIT_ROOT} — see SESSION-INDEX REFUSED line above"
     exit 1
 }
@@ -637,7 +637,7 @@ correct. Immediately before each group's `git commit`, re-run
 gate: it re-verifies the private index and that HEAD has not moved since the most recent
 `init` (the same HEAD-stability property Phase 3's own re-check already requires,
 enforced a second way). After EACH group's commit, run
-`python3 "${CLAUDE_PROJECT_DIR}/.claude/scripts/session-index.py" sync-shared --git-root
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/session-index.py" sync-shared --git-root
 "${GIT_ROOT}"` so the shared index's entries for that group's committed paths catch up to
 the new HEAD (left alone, `git status` elsewhere would show the commit as reverted); a
 path it reports `left_foreign` was concurrently staged there by a peer using the shared
@@ -697,7 +697,7 @@ uses for every other candidate (the file is untracked, and this route authentica
 report-digest-bound attestation grounds the journal-based decision does not need):
 
 ```bash
-python3 ~/.claude/scripts/stage-owned-hunks.py \
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/stage-owned-hunks.py" \
     --git-root "${GIT_ROOT}" \
     --file "<repo-rel-path>" \
     --untracked-modified-report "<resolved dev_report_path>" \
@@ -1170,7 +1170,7 @@ is released (Phase 3 reconciliation note), write the push-gate token with its on
 using the repository root, branch and FINAL commit sha from the Phase 3 descriptor:
 
 ```bash
-python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
 ```
 
 The writer resolves the token's path itself under the hook state directory (the one
@@ -1580,7 +1580,7 @@ attribution by hook-written record, not proof of identity.
 2. The candidate set is empty after exclusions (there is genuinely nothing to commit).
 3. `git rev-parse --verify HEAD` succeeds (not unborn, not detached).
 4. **No token exists at `token_path`**, the path
-   `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}" --print-path`
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}" --print-path`
    prints (it writes nothing). If a token is present, this path does NOT run —
    whether it belongs to `PUSH_GATE_SID` (already tokenized; nothing to reconcile) or to a
    peer session (rule 7 forbids touching it; report `push_gate_collision` as before). Rule 7
@@ -1589,7 +1589,7 @@ attribution by hook-written record, not proof of identity.
    This is the ONLY attribution test. Run:
 
    ```
-   python3 ~/.claude/hooks/lib/commit_journal.py query \
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/commit_journal.py" query \
      --repo-root "${GIT_ROOT}" --head "${HEAD_SHA}" \
      --task-id "${TASK_ID}" --session-id "${PUSH_GATE_SID}"
    ```
@@ -1689,7 +1689,7 @@ attribution by hook-written record, not proof of identity.
    configured the command errors; treat that as "not published" and continue.
 
 **Action.** Write the token for `HEAD_SHA` exactly as Phase 10 does, with its one writer:
-`python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}"`.
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}"`.
 A HEAD move before or during the write yields `push_gate_race` (exit 3); a token that appeared
 at `token_path` in the meantime yields `push_gate_collision` (exit 4).
 
@@ -1799,7 +1799,7 @@ task cycle files. `baseline_head_sha` is the value of `git rev-parse HEAD` captu
 start before any write operations in this invocation (it comes from the dev-report top-level
 `baseline_head_sha` field; if absent, fall back to `HEAD~1`):
 
-Run: `scripts/precommitted-recovery.sh scan-shas "${GIT_ROOT}" "${baseline_head_sha}" ${task_cycle_files}`
+Run: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" scan-shas "${GIT_ROOT}" "${baseline_head_sha}" ${task_cycle_files}`
 
 Capture the output lines as `precommitted_shas`.
 
@@ -1843,20 +1843,20 @@ git -C "${GIT_ROOT}" commit --allow-empty -F "/tmp/claude-scratch/changelog-anal
 ```
 
 In a SEPARATE later bash step, clean up: `rm -f "${MSGFILE}"`. (The
-`scripts/precommitted-recovery.sh execute-commit "${GIT_ROOT}" "${MSGFILE}"` helper, which
+`bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" execute-commit "${GIT_ROOT}" "${MSGFILE}"` helper, which
 internally runs this same minimal `git commit --allow-empty -F`, remains an acceptable
 equivalent — it keeps the message content in the FILE and the command line minimal.)
 
 **Recovery step 4: Capture recovery commit SHA**
 
-Run: `scripts/precommitted-recovery.sh capture-sha "${GIT_ROOT}"`
+Run: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" capture-sha "${GIT_ROOT}"`
 
 Capture the first field as `COMMIT_SHA` and the second as `BRANCH`.
 
 **Recovery step 5: Write push-gate token**
 
 Execute the Phase 10 push-gate write unchanged: run the token's one writer,
-`python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`,
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`,
 in a SEPARATE step (rule CP-3). Track whether the write actually occurred in a local variable
 `PUSH_GATE_WRITTEN`:
 
