@@ -1369,9 +1369,12 @@ class _Ctx:
             if not tasks:
                 continue
             first = None
-            for h in sorted(run.hooks, key=lambda h: h.get("t", 0)):
+            # a hook mints an id its output carries and its event's payload did not hand it (a
+            # PreToolUse rewrite of the call's input passes on the ids the call held)
+            for n, h in sorted(enumerate(run.hooks, 1), key=lambda p: p[1].get("t", 0)):
+                given = json.dumps((run.invocations.get(n) or {}).get("payload") or {})
                 for x in h.get("hooks", []):
-                    if any(t in (x.get("stdout") or "") for t in tasks):
+                    if any(t in (x.get("stdout") or "") and t not in given for t in tasks):
                         first = os.path.normpath(x["hook"])
                         break
                 if first:
