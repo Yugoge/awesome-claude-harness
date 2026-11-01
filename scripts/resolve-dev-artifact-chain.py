@@ -1499,14 +1499,14 @@ def _check_dev_chain(validator: ChainValidator, task_id: str, obligation: Module
         "singular": [(task_id, None)],
         "fanout": [(lane["task_id"], lane["worker"]) for lane in result["lanes"]],
     }.get(result["mode"], [])
+    roles = sorted(obligation._schema_enum("producer-question.v1", "role"))
     lanes: dict[str, str] = {}
     for unit, worker in units:
         paths = _parent_paths(dev_dir, unit)
         ba_qa = dev_dir / f"ba-qa-report-{unit}.json"
-        questions = {role: dev_dir / f"producer-question-{unit}-{role}.json" for role in ("ba", "dev")}
-        for path in (*paths.values(), ba_qa, *questions.values()):
-            if worker:
-                lanes[_rel(path, root)] = worker
+        questions = [(role, dev_dir / f"producer-question-{unit}-{role}.json") for role in roles]
+        if worker:
+            lanes.update((_rel(path, root), worker) for path in (*paths.values(), ba_qa, *dict(questions).values()))
         report = validator.read_json(ba_qa)
         if report is not None and obligation.terminal_status("ba-qa-report.v1", report) != "pass":
             validator.error(
@@ -1514,13 +1514,14 @@ def _check_dev_chain(validator: ChainValidator, task_id: str, obligation: Module
                 _rel(ba_qa, root),
                 f"verdict is {report.get('verdict')!r}; expected 'pass'",
             )
-        # A question is answered by its producer's next artifacts, written after it.
-        for role, answers in (("ba", ("ticket", "context")), ("dev", ("dev_report",))):
-            if questions[role].is_file() and not all(_newer(paths[key], questions[role]) for key in answers):
+        for role, question in questions:
+            # Answered once its producer's next artifacts are written after it.
+            answers = [paths["dev_report"]] if role == "dev" else [paths["ticket"], paths["context"]]
+            if question.is_file() and not all(_newer(answer, question) for answer in answers):
                 validator.error(
                     "unanswered",
-                    _rel(questions[role], root),
-                    f"no {' and '.join(paths[key].name for key in answers)} written after the question",
+                    _rel(question, root),
+                    f"no {' and '.join(answer.name for answer in answers)} written after the question",
                 )
     return lanes
 
@@ -1554,8 +1555,9 @@ def _do_minted(root: Path, task_id: str) -> bool:
     return False
 
 
-def _check_do_report(validator: ChainValidator, path: Path, obligation: ModuleType) -> None:
-    record, problem = _harness_lib("do_report").load(path)
+def _check_do_report(
+    validator: ChainValidator, path: Path, record: dict | None, problem: str | None, obligation: ModuleType
+) -> None:
     relative = _rel(path, validator.root)
     if not path.is_file():
         validator.error("MISSING_ARTIFACT", relative, problem)
@@ -1617,12 +1619,12 @@ def disposition(project_root: Path | str, task_id: str, stage: str) -> dict[str,
     report = validator.dev_dir / f"dev-report-{task_id}.json"
     do_path = validator.dev_dir / f"do-report-{task_id}.json"
     lanes: dict[str, str] = {}
-    do_record, _problem = _harness_lib("do_report").load(do_path)
+    do_record, do_problem = _harness_lib("do_report").load(do_path)
     if not report.is_file() and (
         (do_record is not None and do_record.get("source") == "do") or _do_minted(root, task_id)
     ):
         report = do_path
-        _check_do_report(validator, do_path, obligation)
+        _check_do_report(validator, do_path, do_record, do_problem, obligation)
     else:
         lanes = _check_dev_chain(validator, task_id, obligation)
     if stage != "dev":
