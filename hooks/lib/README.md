@@ -35,7 +35,7 @@
 - `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
 - `merge_grant.py` - The merge-analyst writes its grant with the Write tool at
 - `obligation.py` - Rollout step S2 of the converged zero-failure design
-- `overnight.py` - The state record `<project>/.claude/overnight-state-<sid>.json` has one producer,
+- `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` (main root: the parent of the git common dir) has one producer; the module holds the one end_time parser, the locator, window_open and closeout_gaps
 - `pol_degraded_removal_reference.ere` - ere file
 - `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 - `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
