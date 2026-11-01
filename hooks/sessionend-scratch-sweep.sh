@@ -22,14 +22,12 @@ set -u
 exec >&2   # SessionEnd hooks must not pollute stdout (harness JSON channel)
 
 ROOT="${TMPDIR:-/var/tmp/claude-scratch}"
-SID="${CLAUDE_CODE_SESSION_ID:-}"
-
 INPUT=$(cat 2>/dev/null || true)
-if [ -z "$SID" ]; then
-  SID=$(printf '%s' "$INPUT" | python3 -c \
-    "import json,sys; d=json.load(sys.stdin); print(d.get('session_id','') or '')" \
-    2>/dev/null || true)
-fi
+# The payload's id keys the project files, as their producer (prompt-workflow.py) keys them.
+PSID=$(printf '%s' "$INPUT" | python3 -c \
+  "import json,sys; d=json.load(sys.stdin); print(d.get('session_id','') or '')" \
+  2>/dev/null || true)
+SID="${CLAUDE_CODE_SESSION_ID:-$PSID}"
 if [ -z "$SID" ]; then
   echo "sessionend-scratch-sweep: no session id available — skipping"
   exit 0
@@ -38,9 +36,9 @@ fi
 # Charset guard: SID becomes a literal path component below and must never
 # carry a path separator or traversal sequence — this is the ONLY thing that
 # stands between "remove our own dir" and "remove something else."
-case "$SID" in
+case "$SID $PSID" in
   */*|*..*)
-    echo "sessionend-scratch-sweep: unsafe session id '$SID' — skipping"
+    echo "sessionend-scratch-sweep: unsafe session id '$SID $PSID' — skipping"
     exit 0
     ;;
 esac
@@ -48,7 +46,8 @@ esac
 # This session's own runtime files in the project (prompt-workflow.py's, keyed by
 # session id) go with it: the workflow bookmark, its start lock, its start replays.
 OWN="${CLAUDE_PROJECT_DIR:-$PWD}/.claude"
-rm -rf -- "$OWN/workflow-$SID.json" "$OWN/workflow-locks/$SID.lock" "$OWN/dev-start-replays/$SID" 2>/dev/null
+[ -n "$PSID" ] && rm -rf -- "$OWN/workflow-$PSID.json" "$OWN/workflow-locks/$PSID.lock" \
+  "$OWN/dev-start-replays/$PSID" 2>/dev/null
 
 if [ ! -d "$ROOT" ]; then
   echo "sessionend-scratch-sweep: root $ROOT absent — nothing to sweep"
