@@ -13,7 +13,8 @@ Switch CLAUDE_OBLIGATION_STOPGATE (the process env, else the harness home's
 settings.json env at run time, P1b E4):
   "block"    -- a failure exits 2 (OBLIGATION_STOPGATE_BLOCKED, each failing
                 path and check named to the producer);
-  "advisory" -- the default: exit 0;
+  "advisory" -- the default: the same reason on stderr
+                (OBLIGATION_STOPGATE_ADVISORY), exit 0;
   "off"      -- no obligation is read, so nothing is judged.
 
 A dispatch whose obligation does not resolve (its block fails the grammar or
@@ -22,8 +23,8 @@ declared-report check: each json report its block declares, read as
 declared, that states report_version yet fails its schema
 (contract_runtime.validate_report_artifact: dev, qa and do reports; every
 other kind skips) exits 2 (ARTIFACT_CONTRACT_BLOCKED) under
-ARTIFACT_CONTRACT_ENFORCE_MODE "block" (the default), or exits 0 under
-"advisory". It judges
+ARTIFACT_CONTRACT_ENFORCE_MODE "block" (the default), or prints the same
+reason (ARTIFACT_CONTRACT_ADVISORY) and exits 0 under "advisory". It judges
 a registered agent only (LOW-10: one the dev registry does not resolve is
 never blocked) and never a missing report.
 
@@ -670,7 +671,8 @@ def main() -> None:
                         f"again. Do NOT edit any other agent's artifact.\n"
                     )
                     sys.exit(2)
-                # advisory mode: never blocks (AC4/AC5).
+                # advisory mode: the would-block reason, never a block (AC4/AC5).
+                sys.stderr.write(f"OBLIGATION_STOPGATE_ADVISORY: {reason}")
                 sys.exit(0)
             # Unresolvable or NoObligationInPrompt: the declared-report check
             # below decides.
@@ -717,6 +719,7 @@ def main() -> None:
         reason += f"  report {p} violates schema {r.get('schema')!r}:\n"
         reason += "".join(f"    - {e}\n" for e in r.get("errors", [])[:10])
     if os.environ.get("ARTIFACT_CONTRACT_ENFORCE_MODE", "block").strip().lower() == "advisory":
+        sys.stderr.write(f"ARTIFACT_CONTRACT_ADVISORY: {reason}")
         sys.exit(0)
     sys.stderr.write(
         f"ARTIFACT_CONTRACT_BLOCKED: {reason}"

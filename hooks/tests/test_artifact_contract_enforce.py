@@ -9,8 +9,9 @@ report_version yet violates its schema (exit 2); no flag file arms it (P4 R8).
 A report is the producer's own only when its own dispatch record names it; a
 same-timestamp report the dispatch does not declare is not correlated.
 Everything else — unversioned legacy reports, missing reports, unregistered
-agents, ba_validation QA — passes through (exit 0). The hook writes no log
-and no record.
+agents, ba_validation QA — passes through (exit 0). An advisory switch prints
+the would-block reason on stderr and exits 0. The hook writes no log and no
+record.
 
 Models tests/test_subagentstop_e2e_enforce.py's fixture and invocation
 patterns (importlib for the hyphenated module, subprocess with
@@ -512,6 +513,9 @@ def test_advisory_mode_never_blocks(tmp_path):
     proc = _run_hook(project, home, "agent-qa-1", mode="advisory", session_id=session)
     assert proc.returncode == 0, proc.stderr
     assert "ARTIFACT_CONTRACT_BLOCKED" not in proc.stderr
+    # P4 R9: the would-block reason goes to stderr; nothing is written.
+    assert proc.stderr.startswith("ARTIFACT_CONTRACT_ADVISORY: "), proc.stderr
+    assert f"qa-report-{SESSION_TS}.json" in proc.stderr
     assert _written_logs(home) == []
 
 
@@ -814,7 +818,8 @@ def test_ac3_resolved_obligation_all_valid_bypasses_legacy_path(tmp_path):
 
 def test_ac4_advisory_mode_never_blocks(tmp_path):
     """AC4: the AC2 setup under advisory mode: the obligation resolves, yet
-    the stop exits 0 with no block message and nothing written."""
+    the stop exits 0 with no block message and nothing written; the
+    would-block reason is on stderr (P4 R9)."""
     harness_session = "harness-ac4"
     agent_id = "agent-dev-ac4"
     task_id = "20260101-000004"
@@ -830,6 +835,7 @@ def test_ac4_advisory_mode_never_blocks(tmp_path):
     proc = _run_hook(project, home, agent_id, session_id=harness_session)
     assert proc.returncode == 0, proc.stderr
     assert "OBLIGATION_STOPGATE_BLOCKED" not in proc.stderr
+    assert proc.stderr.startswith("OBLIGATION_STOPGATE_ADVISORY: "), proc.stderr
     assert _written_logs(home) == []
     assert isinstance(
         _resolution(home, project, harness_session, agent_id, "dev"), HOOK.obligation.Resolved
@@ -1080,6 +1086,7 @@ def test_markdown_ac5_advisory_mode_never_blocks(tmp_path):
     proc = _run_hook(project, home, agent_id, session_id=harness_session)
     assert proc.returncode == 0, proc.stderr
     assert "OBLIGATION_STOPGATE_BLOCKED" not in proc.stderr
+    assert proc.stderr.startswith("OBLIGATION_STOPGATE_ADVISORY: "), proc.stderr
     assert _written_logs(home) == []
     assert isinstance(
         _resolution(home, project, harness_session, agent_id, "dev"), HOOK.obligation.Resolved
@@ -1386,6 +1393,7 @@ def test_response_block_advisory_mode_never_blocks(tmp_path):
         last_assistant_message="no sentinels anywhere",
     )
     assert proc.returncode == 0, proc.stderr
+    assert "OBLIGATION_STOPGATE_ADVISORY: " in proc.stderr and "<response_block>" in proc.stderr
     assert _written_logs(home) == []
 
 
