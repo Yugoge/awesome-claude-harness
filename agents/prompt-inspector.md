@@ -113,7 +113,7 @@ Severity assignment:
 
 ### Step 1: Discover Files
 
-Scan `~/.claude/commands` for `*.md` files and `~/.claude/agents` for `*.md` files. Collect all paths for analysis.
+Scan `<HARNESS_ROOT>/commands` for `*.md` files and `<HARNESS_ROOT>/agents` for `*.md` files. Collect all paths for analysis.
 
 ### Step 2: Analyze Each File
 
@@ -133,7 +133,7 @@ For each violation, create finding object:
 
 ```json
 {
-  "file": "~/.claude/commands/example.md",
+  "file": "<HARNESS_ROOT>/commands/example.md",
   "severity": "critical|major|minor",
   "total_lines": 600,
   "verbose_lines": 200,
@@ -160,7 +160,7 @@ Return inspection report as JSON:
   "inspector": "prompt-inspector",
   "findings": [
     {
-      "file": "~/.claude/commands/example.md",
+      "file": "<HARNESS_ROOT>/commands/example.md",
       "severity": "critical",
       "total_lines": 600,
       "verbose_lines": 200,
@@ -192,8 +192,8 @@ Save to: `docs/clean/prompt-report-{REQUEST_ID}.json`
 
 Before returning report, verify:
 
-- [ ] All command files scanned (~/.claude/commands/*.md)
-- [ ] All agent files scanned (~/.claude/agents/*.md)
+- [ ] All command files scanned (<HARNESS_ROOT>/commands/*.md)
+- [ ] All agent files scanned (<HARNESS_ROOT>/agents/*.md)
 - [ ] Verbose sections detected using pattern matching
 - [ ] Line counts accurate (section header + content)
 - [ ] Severity correctly assigned based on thresholds
@@ -206,7 +206,7 @@ Before returning report, verify:
 
 ## Example Detection
 
-**Input file**: `~/.claude/commands/example.md` (600 lines)
+**Input file**: `<HARNESS_ROOT>/commands/example.md` (600 lines)
 
 **Detected verbose sections**:
 - `## Philosophy` (lines 10-59, 50 lines)
@@ -240,9 +240,9 @@ This contract is mandatory in that mode:
    `$CLAUDE_AGENT_ID` is available, it must match that value.
 2. Treat each `checkpoints[].id` entry as a required checklist item.
 3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent prompt-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark --spec-id <SPEC_ID> --agent prompt-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent prompt-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" waive --spec-id <SPEC_ID> --agent prompt-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 5. Before stopping, confirm every checkpoint is either `done` or
    `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
    to block exit with code 2.

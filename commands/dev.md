@@ -129,8 +129,8 @@ The spec-id may or may not keep the `spec-` filename prefix (new split artifacts
 
 ```bash
 if [ -n "$spec_path" ]; then
-  RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
-      --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
+  RESOLVED_JSON=$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" \
+      --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}") || {
     echo "spec-artifact resolution FAILED (path mismatch / present-but-invalid split). Re-finalize /spec before relying on per-agent views." >&2
     exit 1; }   # loud-fail guard: a present-but-invalid split never silently degrades to monolith mode
   ARTIFACT_ID=$(jq -r .artifact_id      <<<"$RESOLVED_JSON")
@@ -157,7 +157,7 @@ Pass `view_paths.ba`, `view_paths.qa`, `view_paths.dev`, etc. alongside (not in 
 **Initialize dev-registry (hook pre-done)**:
 
 The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) started this cycle and printed what it did in its output above. It has already:
-1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name) and `Task id: …` (the id this cycle's artifacts are named with, `$TASK_ID` below)
+1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name) and `Task id: …` (the id this cycle's artifacts are named with, `<TASK_ID>` below)
 2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
 4. Armed the enforcement flags: E2E, Codex when `--codex` was passed (both named in its output), and the producer-side report schema gate (`hooks/subagentstop-artifact-contract-enforce.py` blocks a dev/qa subagent from stopping with a versioned-but-schema-invalid report; same `contract_runtime` engine as `/close`'s "Artifact schema gate" section)
@@ -167,7 +167,7 @@ The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) started this cycle and 
 **When those lines are not in your context** (a compaction removed the hook output, or the hook failed and printed none), run the hook's own start function in this session with this command's text exactly as typed, and read the same lines from what it prints:
 
 ```bash
-python3 ~/.claude/hooks/prompt-workflow.py start <<'CMDEOF'
+python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/prompt-workflow.py" start <<'CMDEOF'
 <the command exactly as typed: /dev or /redev, then $ARGUMENTS>
 CMDEOF
 ```
@@ -175,10 +175,10 @@ CMDEOF
 It prints what the hook printed at this command's start, found through this session's bookmark (`$CLAUDE_CODE_SESSION_ID`); when the hook recorded no start of this command, it starts the cycle there exactly as the hook does, under a task id of its own (ids, registry, requirement document and flags). Never mint an id, pick a registry by name or age, or write a registry, requirement or flag file yourself.
 
 ```bash
-REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
+REGISTRY_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/dev-registry/$DEV_SESSION_ID"
 ```
 
-Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
+Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
 
 **Also reuse the resolver's `<SPEC_ID>` for cp-state checkpoint propagation.** `/spec` writes per-agent `cp-state-<agent>.json` files into the directory the resolver reports as `cp_dir` (`.claude/specs/<artifact_id>/`). Do NOT re-derive the id from `spec_path` — reuse the resolver output computed above so the producer and consumers agree byte-for-byte:
 
@@ -193,16 +193,16 @@ else
 fi
 ```
 
-When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a cp-state file MUST include a `SECOND ACTION` block (template under each Step's prompt below) instructing the subagent to read `$CLAUDE_PROJECT_DIR/$CP_STATE_DIR/cp-state-<agent>.json` and to mark each checkpoint via `~/.claude/scripts/spec-check.py mark` (or `waive` — auto-text records actor + ISO timestamp) before Stop. Agents SHOULD leave zero pending checkpoints before they Stop. (Note: `subagentstop-cp-enforce.py` **is** wired under `SubagentStop` in `settings.json` and fires when an agent stops with a cp-state file — it blocks (exit 2) on any `pending` checkpoint. Marking via `spec-check.py` is therefore both a discipline expectation and a hook-enforced block.) When `SPEC_ID` is empty (non-`/spec` invocation), or a particular agent has no cp-state file under that artifact id, the SECOND ACTION block is omitted — there are no checkpoints to mark for that launch.
+When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a cp-state file MUST include a `SECOND ACTION` block (template under each Step's prompt below) instructing the subagent to read `<PROJECT_ROOT>/$CP_STATE_DIR/cp-state-<agent>.json` and to mark each checkpoint via `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark` (or `waive` — auto-text records actor + ISO timestamp) before Stop. Agents SHOULD leave zero pending checkpoints before they Stop. (Note: `subagentstop-cp-enforce.py` **is** wired under `SubagentStop` in `settings.json` and fires when an agent stops with a cp-state file — it blocks (exit 2) on any `pending` checkpoint. Marking via `spec-check.py` is therefore both a discipline expectation and a hook-enforced block.) When `SPEC_ID` is empty (non-`/spec` invocation), or a particular agent has no cp-state file under that artifact id, the SECOND ACTION block is omitted — there are no checkpoints to mark for that launch.
 
-**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `VIEWS_AVAILABLE` is `true`, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view that the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (the views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
+**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `VIEWS_AVAILABLE` is `true`, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view that the resolver located — `<PROJECT_ROOT>/$VIEWS_DIR/orchestrator.md` (the views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
 
 ### Step 2: Graphify pre-BA Bash hydrator
 
 Run `scripts/graphify-query.py` as a direct Bash call (NOT a subagent — avoids adding an LLM interpretation layer that could propagate confirmation bias). This is advisory: if the binary is absent or cache is unavailable, the script exits 0 with `status=unavailable` and BA proceeds with its original flow.
 
 ```bash
-source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-query.py \
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-query.py" \
   --task-id "$DEV_SESSION_ID" \
   --requirement-file "$REQUIREMENT_DOC"
 ```
@@ -214,7 +214,7 @@ After the query above (still within Step 2), fire a second advisory, non-blockin
 ```bash
 # Auto-init (async, non-blocking): if no cached graph exists, launch a background
 # full build for the NEXT run. Returns immediately — never stalls /dev (R-7).
-source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py ensure-async || true
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-maintain.py" ensure-async || true
 ```
 
 If `--no-graphify` was passed in `$ARGUMENTS`, add `--no-graphify` to the `graphify-query.py` Bash call above and skip the `ensure-async` call entirely.
@@ -262,10 +262,10 @@ In the orchestrator's reasoning (and in BA's context JSON when BA is invoked nex
 Use Agent tool with:
 - description: "<Specialist role> consultation for: <requirement summary>"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<specialist-name>.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/<specialist-name>.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
 
-  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-<specialist-name>.json to discover your atomic checkpoints (cp-01, cp-02, ...).
+  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-<specialist-name>.json to discover your atomic checkpoints (cp-01, cp-02, ...).
 
   CHECKPOINT MARKING: see agents/<specialist-name>.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
@@ -287,7 +287,7 @@ Pass all specialist findings (and the full `specialists_assessed` block) to the 
 ## Four Contracts Awareness (Orchestrator Role)
 
 The BA subagent enforces four domain-agnostic contracts (see
-`~/.claude/agents/ba.md` §Four Contracts). The orchestrator MUST
+`<HARNESS_ROOT>/agents/ba.md` §Four Contracts). The orchestrator MUST
 complement BA by surfacing context before delegation and verifying
 compliance after BA returns. The orchestrator does NOT re-do BA's work —
 it prepares inputs and validates outputs.
@@ -384,7 +384,7 @@ If dev changed L1 when spec called for L3, treat as failed implementation.
 
 **Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
 
-Run `bash ~/.claude/scripts/score-inject.sh --agent ba` and capture stdout into a variable `BA_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the BA dispatch — i.e. right between "You are the BA subagent." and the "Requirement:" / task body. The injection shows the rank+range (NOT exact score) and last 3 events.
+Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/score-inject.sh" --agent ba` and capture stdout into a variable `BA_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the BA dispatch — i.e. right between "You are the BA subagent." and the "Requirement:" / task body. The injection shows the rank+range (NOT exact score) and last 3 events.
 
 **Use Task tool to invoke BA subagent for requirements analysis and context building**:
 
@@ -392,10 +392,10 @@ Run `bash ~/.claude/scripts/score-inject.sh --agent ba` and capture stdout into 
 Use Task tool with:
 - description: "Analyze requirement and build development context"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
 
-  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-ba.json to discover your atomic checkpoints (cp-01, cp-02, ...).
+  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-ba.json to discover your atomic checkpoints (cp-01, cp-02, ...).
 
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
@@ -463,10 +463,10 @@ Use Task tool with:
 Use Task tool with:
 - description: "Continue BA analysis with clarification answers"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
 
-  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-ba.json to discover your atomic checkpoints (cp-01, cp-02, ...).
+  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-ba.json to discover your atomic checkpoints (cp-01, cp-02, ...).
 
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
@@ -520,10 +520,10 @@ Use Agent tool with:
 - subagent_type: "qa"
 - description: "Validate BA analysis quality (not code)"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
 
-  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-qa.json to discover your atomic checkpoints (cp-01, cp-02, ...).
+  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-qa.json to discover your atomic checkpoints (cp-01, cp-02, ...).
 
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
@@ -617,10 +617,10 @@ Use Agent tool with:
 - subagent_type: "ba"
 - description: "Re-investigate: address QA objections on analysis quality"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
 
-  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-ba.json to discover your atomic checkpoints (cp-01, cp-02, ...).
+  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-ba.json to discover your atomic checkpoints (cp-01, cp-02, ...).
 
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
@@ -670,11 +670,11 @@ Use Agent tool with:
 - subagent_type: "graphify"
 - description: "Graphify enrichment: extract focused subgraph for task"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/graphify.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/graphify.json to register with the enforcement system. Do this BEFORE any other tool call.
 
   You are the graphify subagent. Follow agents/graphify.md instructions precisely.
 
-  Run: source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py --task-id <DEV_SESSION_ID> --context-file <context_json_path>
+  Run: source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-enrich.py" --task-id <DEV_SESSION_ID> --context-file <context_json_path>
 
   This is advisory — if the binary is absent or blast-radius-map is missing, exit 0 with status=skipped.
   "
@@ -699,7 +699,7 @@ When `test_writer_expected == true`, dispatch the test-writer subagent BEFORE De
 Use Task tool with:
 - description: "Generate pytest skeletons from acceptance criteria"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/test-writer.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/test-writer.json to register with the enforcement system. Do this BEFORE any other tool call.
 
   You are the test-writer subagent. Follow agents/test-writer.md instructions precisely.
 
@@ -723,15 +723,15 @@ After test-writer completes (or is skipped), the manifest path is passed onward 
 
 **Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
 
-Run `bash ~/.claude/scripts/score-inject.sh --agent dev` and capture stdout into a variable `DEV_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the Dev dispatch.
+Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/score-inject.sh" --agent dev` and capture stdout into a variable `DEV_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the Dev dispatch.
 
 **Pre-dispatch baseline capture** (run BEFORE invoking the dev subagent):
 
 ```bash
-baseline_head_sha=$(git -C "$CLAUDE_PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo "")
+baseline_head_sha=$(git -C "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" rev-parse HEAD 2>/dev/null || echo "")
 # baseline_dirty_snapshot is intentionally captured once before Dev dispatch;
 # see agents/dev.md for its point-in-time / concurrency semantics.
-baseline_dirty_snapshot=$(git -C "$CLAUDE_PROJECT_DIR" status --porcelain 2>/dev/null || echo "")
+baseline_dirty_snapshot=$(git -C "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" status --porcelain 2>/dev/null || echo "")
 ```
 
 Both values MUST be passed into the dev dispatch payload body (see below). If the repo has no commits yet, `baseline_head_sha` will be empty — pass it as empty string, not omitted.
@@ -742,10 +742,10 @@ Both values MUST be passed into the dev dispatch payload body (see below). If th
 Use Task tool with:
 - description: "Implement development changes based on BA context"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/dev.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/dev.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
 
-  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-dev.json to discover your atomic checkpoints (cp-01, cp-02, ...).
+  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-dev.json to discover your atomic checkpoints (cp-01, cp-02, ...).
 
   CHECKPOINT MARKING: see agents/dev.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
@@ -805,7 +805,7 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 
 **Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
 
-Run `bash ~/.claude/scripts/score-inject.sh --agent qa` and capture stdout into a variable `QA_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the QA dispatch.
+Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/score-inject.sh" --agent qa` and capture stdout into a variable `QA_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the QA dispatch.
 
 **Use Task tool to invoke QA subagent with file paths only**:
 
@@ -813,10 +813,10 @@ Run `bash ~/.claude/scripts/score-inject.sh --agent qa` and capture stdout into 
 Use Task tool with:
 - description: "Verify implementation quality against standards"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
 
-  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read $CLAUDE_PROJECT_DIR/.claude/specs/<SPEC_ID>/cp-state-qa.json to discover your atomic checkpoints (cp-01, cp-02, ...).
+  SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-qa.json to discover your atomic checkpoints (cp-01, cp-02, ...).
 
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
@@ -864,7 +864,7 @@ This post-decision-tree pass applies the canonical score-update events for this 
 
 After the verdict is known, apply score-update events based on QA outcome and iteration count:
 
-- First-round PASS (iteration 0 + qa.status=pass) → `bash ~/.claude/scripts/score-update.sh --agent dev --event qa_first_pass --note "<task_id>"` AND `--agent ba --event qa_first_pass`. (dev 0, ba 0, qa 0 — Path A rebalance task 20260524-205206 M1; per-iteration nudge collapsed into close events.)
+- First-round PASS (iteration 0 + qa.status=pass) → `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/score-update.sh" --agent dev --event qa_first_pass --note "<task_id>"` AND `--agent ba --event qa_first_pass`. (dev 0, ba 0, qa 0 — Path A rebalance task 20260524-205206 M1; per-iteration nudge collapsed into close events.)
 - Second-or-later-round PASS (iteration ≥1 + qa.status=pass) → `--agent dev --event qa_second_pass --note "<task_id>"`. (dev 0 — Path A rebalance task 20260524-205206 M1.)
 - FAIL (qa.status=fail) — read `qa.failures[].primary_cause` to attribute the rejection:
   - Any failure with `primary_cause = "dev_implementation"` → `score-update.sh --agent dev --event qa_reject_dev --note "<task_id>"`. (dev -12.)
@@ -888,7 +888,7 @@ Each score-update call is independent; failures are non-blocking (a failed score
 ```
 
 ```bash
-python3 ~/.claude/scripts/aggregate-permissions.py docs/dev/qa-report-<timestamp>.json | bash ~/.claude/scripts/apply-permissions.sh /dev/stdin .claude/settings.json
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/aggregate-permissions.py" docs/dev/qa-report-<timestamp>.json | bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json
 ```
 
 The aggregator reads the validated list from the QA report; the applier merges each entry into `.permissions.<section>` (allow/ask/deny), skipping patterns already present. A missing `.claude/settings.json` is an empty object to the merge, so the applier creates it when it adds an entry; a file it cannot parse fails the merge (non-zero exit) and stays unchanged.
@@ -897,13 +897,13 @@ The aggregator reads the validated list from the QA report; the applier merges e
 
 1. **Scripts created** → Add to "allow":
    - `"Bash(scripts/<script-name>.sh:*)"`
-   - `"Bash(~/.claude/scripts/<script-name>.sh:*)"`
+   - `"Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/<script-name>.sh\":*)"`
 
 2. **Python scripts** → Add to "allow":
-   - `"Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/<script>.py:*)"`
+   - `"Bash(source \"${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate\" && python3 \"${CLAUDE_HOME:-$HOME/.claude}/scripts/todo/<script>.py\":*)"`
 
 3. **Hooks created** → Add to "allow":
-   - `"Bash(~/.claude/hooks/<hook-name>.sh:*)"`
+   - `"Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/<hook-name>.sh\":*)"`
 
 4. **Commands created** → Already allowed via "SlashCommand"
 
@@ -1058,7 +1058,7 @@ Summarise score-update events from Step 14 and any user-rating events from `/clo
 | ba    | qa_first_pass | 0  | 50 → 50 |
 | dev   | qa_first_pass | 0  | 50 → 50 |
 
-The current rank+range per agent is read by injecting `bash ~/.claude/scripts/score-inject.sh --agent <name>` (rank+range only — exact score is intentionally hidden per spec 5.1 line 112).
+The current rank+range per agent is read by injecting `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/score-inject.sh" --agent <name>` (rank+range only — exact score is intentionally hidden per spec 5.1 line 112).
 
 ## Next Steps
 
@@ -1077,8 +1077,8 @@ Before `/dev` or `/redev` may be treated as complete, invoke the shared read-onl
 resolver from the project root and retain its JSON as `ARTIFACT_CHAIN`:
 
 ```bash
-ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py \
-  --task-id "$TASK_ID" --project-dir "$CLAUDE_PROJECT_DIR")" || exit 2
+ARTIFACT_CHAIN="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-artifact-chain.py" \
+  --task-id "<TASK_ID>" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}")" || exit 2
 ```
 
 The fixed entrypoint contract is
@@ -1377,7 +1377,7 @@ if __name__ == "__main__":
 
 ## Orchestrator Prompt Purity (MANDATORY)
 
-> Enforcement hook: `~/.claude/hooks/pretool-orchestrator-prompt-purity.py` (PreToolUse `Agent` matcher). The same rule lives in the global `CLAUDE.md`. A HOW-prescription pressures a subagent into dodging a blocking hook, so state end-states, never tools.
+> Enforcement hook: `<HARNESS_ROOT>/hooks/pretool-orchestrator-prompt-purity.py` (PreToolUse `Agent` matcher). The same rule lives in the global `CLAUDE.md`. A HOW-prescription pressures a subagent into dodging a blocking hook, so state end-states, never tools.
 
 ### The rule
 

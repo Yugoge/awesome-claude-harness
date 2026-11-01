@@ -153,9 +153,10 @@ def emptied_home(tmp_path, harness_writer=None):
 def run_relay(home, tmp_path):
     environment = env(HOME=str(home), TMPDIR=str(tmp_path),
                       PATH=os.path.dirname(sys.executable) + os.pathsep + os.environ.get('PATH', ''))
-    for name in ('CLAUDE_PROJECT_DIR', 'CLAUDE_DOC_SYNC_ROOTS', 'CLAUDE_DOC_SYNC_STATE_ROOT'):
+    for name in ('CLAUDE_PROJECT_DIR', 'CLAUDE_DOC_SYNC_ROOTS', 'CLAUDE_DOC_SYNC_STATE_ROOT', 'CLAUDE_CONFIG_DIR'):
         environment.pop(name, None)
-    return subprocess.run([sys.executable, str(RELAY_HOOK)], capture_output=True, text=True, env=environment,
+    installed = shutil.copy(RELAY_HOOK, home / '.claude' / 'hooks' / RELAY_HOOK.name)  # runs its siblings
+    return subprocess.run([sys.executable, str(installed)], capture_output=True, text=True, env=environment,
                           cwd=str(home), timeout=120)
 
 

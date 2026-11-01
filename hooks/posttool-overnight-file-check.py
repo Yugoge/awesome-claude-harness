@@ -21,12 +21,15 @@ in: the PM retrospective (Step 20) returns with the report that ends its
 cycle, and that report is checked against that cycle's contract.
 
 HARD CUTOVER: when the cycle has no ``cycle-contract.json`` (before PM TRIAGE
-returns, or outside /dev-overnight), exit 0 silently.
+returns, or outside /dev-overnight), exit 0 silently. A contract file that
+holds no JSON object is no passthrough: the dispatch is refused naming it
+(Case M), since the next PM TRIAGE return replaces it.
 
 Exit codes:
   0 — Not an overnight session, window closed, no contract, no matching
       entry, no obligation, or every declared artifact valid.
-  2 — A declared artifact missing or invalid (hard gate).
+  2 — A declared artifact missing or invalid, or the contract malformed
+      (hard gate).
 """
 
 from __future__ import annotations
@@ -80,8 +83,8 @@ def _emit_block(agent_type: str, session_id: str, cycle_id: int, errors: list[st
     )
     for item in errors:
         sys.stderr.write(f'    - {item}\n')
-    sys.stderr.write('  Required artifact missing or schema-invalid. '
-                     'Re-run the subagent or escalate.\n\n')
+    sys.stderr.write('  Re-dispatch the subagent: it writes each artifact its obligation '
+                     'declares, where it declares it.\n\n')
 
 
 def _run_check(data: dict) -> int:
@@ -91,7 +94,7 @@ def _run_check(data: dict) -> int:
     agent_type = ti.get('subagent_type', '')
     prompt = ti.get('prompt', '')
     session_id = data.get('session_id', '')
-    state = overnight.session_state(session_id)
+    state = contract_runtime.session_record(session_id, data)
     if state is None or not overnight.state_verdicts(state).window_live:
         return 0
     parsed = obligation.parse_obligation(prompt)
@@ -104,9 +107,16 @@ def _run_check(data: dict) -> int:
     cycle_id = overnight.cycle_index(state, written=[root / a['path'] for a in artifacts
                                                      if isinstance(a.get('path'), str) and a['path']])
     contract = contract_runtime.load_contract(session_id, cycle_id, state)
-    if not isinstance(contract, dict):
+    if contract is None:
         # Hard cutover: no contract for this cycle yet — silent passthrough.
         return 0
+    if not isinstance(contract, dict):
+        sys.stderr.write(
+            f'\nOVERNIGHT FILE CHECK BLOCK (contract): Case M: '
+            f'{contract_runtime.contract_path(state, cycle_id)} holds no JSON object.\n'
+            '  Mark the PM TRIAGE step in progress and re-dispatch PM TRIAGE: its return '
+            'replaces the contract.\n\n')
+        return 2
     entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt))
     if entry is None:
         return 0

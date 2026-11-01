@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # stop.sh - wrapper for /stop slash command
 #
-# Cancels every active overnight time-lock + workflow-enforce by:
-#   1. Backdating end_time on each active overnight-state-*.json file
-#   2. Marking every todo in the corresponding todos file as "completed"
-#
-# After this runs, both Stop hooks (stop-overnight-timelock.py + stop-
-# workflow-enforce.py) release on the next stop attempt and the session
-# can terminate normally.
+# The human-typed /stop record in the session's transcript is what releases the
+# /dev-overnight time-lock (stop-overnight-timelock.py, through
+# lib/stop_contract.py timelock_released); this wrapper releases nothing. It runs
+# break-overnight-lock.py, which records current_phase=completed in the stopping
+# session's own overnight state and, with the /stop helper-auth token, releases
+# its isolation fields. It never writes end_time.
 #
 # Sentinel guard: pretool-wrapper-userintent.py
 # enforces that this script is only invocable via /stop slash command.

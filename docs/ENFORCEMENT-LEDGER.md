@@ -15,7 +15,7 @@ than leaving the reader to assume all of them — is the whole point of publishi
 
 **Three columns are derived.** <!-- published-columns:derived:begin -->`event_class`, `matcher`
 and `hook`<!-- published-columns:derived:end --> are recomputed from
-the checked-out `settings.json` (the row set was last reconciled against `@ef6e9037`) by
+the checked-out `settings.json` (the row set was last reconciled against `@2a806c79`) by
 `scripts/check-enforcement-evidence.py --claims`, which
 compares the derived triple set against the published rows and fails on **either** symmetric
 difference. That check runs inside the already required `baseline` CI job via
@@ -227,7 +227,7 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | H-037 | PreToolUse | TodoWrite | pretool-todo-validate.py | none | advisory | unexercised | source-level | hooks/pretool-todo-validate.py:1 @4c33f2f5 | none yet |
 | H-038 | PreToolUse | Write | pretool-write-guard.sh | none | advisory | unexercised | source-level | hooks/pretool-write-guard.sh:1 @4c33f2f5 | none yet |
 | H-039 | PreToolUse | Write\|Edit\|MultiEdit | pretool-quality-gate.py | none | advisory | unexercised | source-level | hooks/pretool-quality-gate.py:1 @4c33f2f5 | none yet |
-| H-040 | PreToolUse | Write\|Edit\|MultiEdit\|Bash | pretool-overnight-hook-guard.py | none | advisory | unexercised | source-level | hooks/pretool-overnight-hook-guard.py:1 @4c33f2f5 | none yet |
+| H-040 | PreToolUse | Write\|Edit\|MultiEdit\|Bash\|AskUserQuestion | pretool-overnight-hook-guard.py | none | advisory | unexercised | source-level | hooks/pretool-overnight-hook-guard.py:1 @4c33f2f5 | none yet |
 | H-041 | PreToolUse | Write\|Edit\|MultiEdit\|NotebookEdit\|Bash | pretool-cp-state-write-guard.py | none | advisory | unexercised | source-level | hooks/pretool-cp-state-write-guard.py:1 @4c33f2f5 | none yet |
 | H-042 | PreToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | pretool-subagent-code-block.py | none | advisory | unexercised | source-level | hooks/pretool-subagent-code-block.py:1 @4c33f2f5 | none yet |
 | H-043 | PreToolUse | mcp__playwright__browser_run_code | pretool-runcode-watchdog.py | none | advisory | unexercised | source-level | hooks/pretool-runcode-watchdog.py:1 @4c33f2f5 | none yet |
@@ -266,7 +266,7 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | H-080 | PostToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | posttool-lane-completeness-watch.py | acts only when the written file is a lane dev-report shard whose own lane_set is a non-empty list: it then runs scripts/aggregate-dev-report.py for that task, the canonical aggregate's one producer (whether every lane has reported is G3's check, H-021); exits 0 on every path | detected | unexercised | source-level | hooks/posttool-lane-completeness-watch.py:1 @ef6e9037 | none yet |
 | H-082 | Stop | (universal) | stop-do-report-gate.py | blocking when DO_REPORT_GATE_MODE is unset (the default): only for a session with a /do task sidecar, exits 2 while its docs/dev do-report is missing or not a well-formed terminal report, force-allowing after 2 blocks for the same task; allows under =advisory, skipped under =off; internal errors exit 0 | advisory | unexercised | source-level | hooks/stop-do-report-gate.py:1 @ef6e9037 | hooks/tests/test_stop_do_report_gate.py |
 | H-083 | Stop | (universal) | stop-obligation-gate.py | exit-0 stub kept at its registered path: reads nothing and exits 0 on every path; each declared artifact is decided at its producer's own stop (H-086) and at the next dispatch (H-021) | advisory | unexercised | source-level | hooks/stop-obligation-gate.py:1 @ef6e9037 | hooks/tests/test_stop_obligation_gate.py |
-| H-084 | Stop | (universal) | stop-workflow-coordinator.py | runs the four Stop phases S-004 – S-007 (section 4) in fixed order; only timelock and coverage may block, and a block relays failed_phase and the last 4 KB of that phase's stderr; an auto_commit or cleanup failure, or a coverage failure other than exit 2, is recorded in its result JSON and allowed, and the later phases still run; a timelock instrument failure blocks only while the human-typed command is /dev-overnight (a typed /stop releases it), else it is recorded and allowed; exits 0 without running any phase when the payload carries an agent_id or no session_id; LANEB_COORDINATOR_PHASES_JSON may replace the phase commands (exit 2 if malformed or reordered); resource finalisation runs only when both LANEB_SESSION_RESOURCE_TRUST_KEY and LANEB_SESSION_RESOURCE_TRUST_ROOT are set | advisory | unexercised | source-level | hooks/stop-workflow-coordinator.py:1 @ef6e9037 | none yet |
+| H-084 | Stop | (universal) | stop-workflow-coordinator.py | runs the four Stop phases S-004 – S-007 (section 4) in fixed order; only timelock and coverage may block, and a block relays failed_phase and the last 4 KB of that phase's stderr; an auto_commit or cleanup failure, or a coverage failure other than exit 2, is recorded in its result JSON and allowed, and the later phases still run; a timelock instrument failure blocks, naming /stop, while the human-typed command is /dev-overnight or, whatever the command, while the session's time-lock window is open (lib/overnight.py window_open), else it is recorded and allowed; exits 0 without running any phase when the payload carries an agent_id or no session_id; LANEB_COORDINATOR_PHASES_JSON may replace the phase commands (exit 2 if malformed or reordered); resource finalisation runs only when both LANEB_SESSION_RESOURCE_TRUST_KEY and LANEB_SESSION_RESOURCE_TRUST_ROOT are set | advisory | unexercised | source-level | hooks/stop-workflow-coordinator.py:1 @ef6e9037 | none yet |
 | H-085 | SessionEnd | (universal) | sessionend-scratch-sweep.sh | removes only `$TMPDIR/<own-session-id>/`, and only when it is a real directory directly under that root whose `.owner` sid equals the session id; skips otherwise; best-effort, exits 0 on every path | detected | unexercised | source-level | hooks/sessionend-scratch-sweep.sh:1 @ef6e9037 | hooks/tests/test_scratch_lifecycle.py |
 | H-086 | SubagentStop | * | subagentstop-artifact-contract-enforce.py | subagent stops only (agent_id present). Obligation path: advisory when CLAUDE_OBLIGATION_STOPGATE is unset (the default), exits 2 on a failed obligated artifact only under =block, skipped under =off. Legacy path (reached unless the obligation path resolved and checked the agent's own obligation): blocking when ARTIFACT_CONTRACT_ENFORCE_MODE is unset (the default), exits 2 when a json report the agent's own dispatch declares (read as declared even when its block fails the grammar) declares report_version but fails its schema, only while the cycle's artifact-contract-enforce.json is enabled; allows under =advisory | advisory | unexercised | source-level | hooks/subagentstop-artifact-contract-enforce.py:1 @ef6e9037 | none yet |
 
@@ -311,12 +311,16 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
   coordinator exits 2, relaying `failed_phase` and the phase's stderr tail. Any other failure —
   another non-zero exit, a timeout (30 s; 120 s for `auto_commit`), a launch error or a missing
   script — is recorded in the coordinator's result JSON and allowed, and the later phases still
-  run; for `timelock` it is an instrument failure, which blocks only while the human-typed command
-  is `/dev-overnight` (a typed `/stop` releases it). Per phase, from each script's own source at
-  `@ef6e9037`:
-  - **S-004 `timelock`** (`stop-overnight-timelock.py`): acts only when
-    `.claude/overnight-state-<session_id>.json` exists for this session; exits 2 before that
-    state's end time, and after it while closeout artifacts are missing.
+  run; for `timelock` it is an instrument failure, which blocks while the human-typed command
+  is `/dev-overnight` or, whatever the command, while the session's time-lock window is open
+  (`hooks/lib/overnight.py` `window_open`); a typed `/stop` releases it. Per phase, from each
+  script's own source at `@ef6e9037`:
+  - **S-004 `timelock`** (`stop-overnight-timelock.py`): acts only when the stopping session's
+    own `<main root>/.claude/overnight-state-<session_id>.json` exists (`hooks/lib/overnight.py`'s
+    one locator); exits 2 while its window is open (end time ahead, no human-typed `/stop` since
+    the session's `/dev-overnight`), and after the end time while `overnight.closeout_gaps` names
+    a gap: no PM retrospective report, or no overnight summary written since `start_time`; a
+    human-typed `/stop` releases it at once, with no closeout check; no state field releases it.
   - **S-005 `coverage`** (`stop-spec-coverage-enforce.py`): acts only when the transcript's active
     command span is `/spec` and no TodoWrite in it has come back with every step completed, and
     the spec the session last wrote (`hooks/lib/spec_path.py`) has a views directory; exits 2 when

@@ -6,6 +6,7 @@ posttool-overnight-file-check) plus check-overnight-reports.py and
 lib/closeout.py.
 
 Public surface:
+    session_record(session_id, payload=None) -> dict | None   # the session's state record
     contract_path(state, cycle_id) -> Path   # the contract's one path
     load_contract(session_id, cycle_id, state=None) -> dict | None
     overnight_steps() -> [(label, subagent_call)]   # scripts/todo/dev-overnight.py _STEPS
@@ -29,7 +30,8 @@ The cycle contract has one writer, the PM TRIAGE handler in
 hooks/posttool-subagent-track.py, and one path,
 ``<working root>/docs/dev/overnight/<sid>/cycle-<N>/cycle-contract.json``; no
 hook rewrites it after it is written. ``load_contract`` returns ``None`` when the
-session has no overnight state or the cycle has no contract yet.
+session has no overnight state or the cycle has no contract yet, and a value
+that is no dict when the file holds no JSON object (Case M).
 
 Custom keyword ``required_when_ui``: if the validated record has
 ``ui_pipeline == True``, every key listed in
@@ -92,23 +94,47 @@ PLAN_MODE = 'PLAN'
 TRIAGE_MODE = 'TRIAGE'
 
 
+def session_record(session_id: str, payload: Optional[dict] = None) -> Optional[dict]:
+    """The overnight state record of ``session_id``, the contract hooks' one lookup.
+
+    The record sits at ``<main root>/.claude/``; overnight's one locator
+    (``overnight.locate``) reaches it from the session's project dir or the hook
+    payload's ``cwd``, so a session rooted in a worktree or a fresh clone finds
+    the main root's record too. None when none reaches it.
+    """
+    return overnight.locate(session_id, payload)[1]
+
+
 def contract_path(state: dict, cycle_id: int) -> Path:
     """The cycle contract's one path, under the session's working root."""
     return overnight.session_dir(state) / f'cycle-{cycle_id}' / 'cycle-contract.json'
 
 
 def load_contract(session_id: str, cycle_id: int, state: Optional[dict] = None) -> Optional[dict]:
-    """Return the parsed cycle contract for ``session_id``/``cycle_id``."""
+    """The cycle contract of ``session_id``/``cycle_id``: None when the session has
+    no overnight state or the cycle no contract file; else the file's JSON value,
+    or its text when it is no JSON, so a file that holds no JSON object reaches
+    the hooks as a value that is no dict (Case M), never as no contract."""
     if not session_id or cycle_id is None:
         return None
     if state is None:
-        state = overnight.session_state(session_id)
+        state = session_record(session_id)
     if state is None:
         return None
     try:
-        return json.loads(contract_path(state, int(cycle_id)).read_text(encoding='utf-8'))
-    except (OSError, ValueError, TypeError):
+        path = contract_path(state, int(cycle_id))
+    except (TypeError, ValueError):
         return None
+    try:
+        text = path.read_text(encoding='utf-8')
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except (OSError, ValueError):
+        return ''
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
 
 
 def overnight_steps() -> list[tuple[str, dict]]:
@@ -144,12 +170,23 @@ def exploration_calls(steps: list[tuple[str, dict]]) -> list[dict]:
     return [call_entry(label, call) for label, call in steps[first:last + 1]]
 
 
+# The steps after PM TRIAGE that dispatch again what an earlier step dispatched
+# (commands/dev-overnight.md): a gap in BA's output (9) or a BA-QA fail (11)
+# re-dispatches the pipeline's BA, a gap in dev's (13) its dev, and a QA fail
+# (17) its dev, then its QA.
+_REDISPATCHES = {'9': ('8',), '11': ('8',), '13': ('12',), '17': ('12', '15')}
+
+
 def post_triage_steps(steps: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
-    """The dispatching steps after PM TRIAGE, which its contract renders."""
+    """The dispatches after PM TRIAGE, which its contract renders, in step order:
+    each dispatching step's, and each re-dispatch of an earlier step's call."""
     last = _mode_index(steps, TRIAGE_MODE)
     if last is None:
         return []
-    return [(label, call) for label, call in steps[last + 1:] if call]
+    call_of = dict(steps)
+    return [(label, each) for label, call in steps[last + 1:]
+            for each in ([call] if call else [call_of.get(s) for s in _REDISPATCHES.get(label, ())])
+            if each]
 
 
 def triage_call(steps: list[tuple[str, dict]]) -> dict:

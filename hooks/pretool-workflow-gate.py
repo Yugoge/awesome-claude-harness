@@ -58,11 +58,11 @@ CODEX_RUNTIME_ENV = 'CLAUDE_COMPAT_RUNTIME'
 # running. Enforcing the pairing here too would duplicate that authority in
 # a second place that could drift from it.
 _HARNESS_HOME = str(Path(os.path.abspath(__file__)).parent.parent)  # install location
-_RESTART_HELPER_COMMAND_RE = re.compile(
-    r'^(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
+_RESTART_HELPER_COMMAND_RE = re.compile(  # the venv form, or commands/restart.md's quoted CLAUDE_HOME channel
+    r'^(?:(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
     r'/venv/bin/python3?\s+'
     r'(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
-    r'/scripts/restart-subagents\.py\s+'
+    r'/scripts/restart-subagents\.py|python3\s+"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/restart-subagents\.py")\s+'
     r'(?:prepare|status|finalize)'
     r'(?:\s+--cross-account)?'
     r'(?:\s+--wait-seconds\s+\d+)?'
@@ -101,18 +101,15 @@ def official_todos_path(session_id: str) -> Path:
 
 
 def run_canonical_todos(cmd_name: str, project_dir: Path, prompt: str = '') -> list:
-    """Run the canonical todo script and return the full step list.
+    """Run the harness's canonical todo script (never the project's own
+    scripts/todo) in project_dir and return the full step list.
 
     prompt is forwarded as CLAUDE_TODO_PROMPT so argument-aware scripts
     (e.g. close.py --force path) return the correct step-count variant.
     """
-    todo_script = project_dir / 'scripts' / 'todo' / f'{cmd_name}.py'
+    todo_script = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
-        global_todo = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
-        if global_todo.exists():
-            todo_script = global_todo
-        else:
-            return []
+        return []
     env = {**os.environ}
     if prompt:
         env['CLAUDE_TODO_PROMPT'] = prompt

@@ -115,17 +115,30 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
-    def test_naive_future_end_time_is_local_time(self) -> None:
-        """A zone-less end_time is local time (lib/overnight.py's window rule)."""
-        future_naive = (datetime.now() + timedelta(hours=1)).isoformat()
-        self.assertNotIn('+', future_naive)
-        self.assertFalse(future_naive.endswith('Z'))
-        result, tmp = _exec_case(future_naive, 'test-naive-future')
-        try:
-            self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertNotIn('OVERNIGHT SESSION COMPLETE', result.stdout)
-        finally:
-            tmp.cleanup()
+    def test_naive_end_time_is_utc_in_any_timezone(self) -> None:
+        """A zone-less end_time is UTC (lib/overnight.py parse_end_time), so
+        UTC now+1h is ahead and UTC now-1h has passed under TZ=Asia/Shanghai
+        (UTC+8) and TZ=America/Los_Angeles (UTC-7/-8) alike."""
+        utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        for tz in ('Asia/Shanghai', 'America/Los_Angeles'):
+            for delta, complete in ((1, False), (-1, True)):
+                naive = (utc_now + timedelta(hours=delta)).isoformat()
+                self.assertNotIn('+', naive)
+                with self.subTest(tz=tz, delta=delta):
+                    tmp = tempfile.TemporaryDirectory()
+                    try:
+                        tmpdir = Path(tmp.name)
+                        _write_state(tmpdir, 'test-naive', naive)
+                        env = {**os.environ, 'CLAUDE_PROJECT_DIR': str(tmpdir), 'TZ': tz}
+                        result = subprocess.run(
+                            [sys.executable, str(HOOK_PATH)], input=json.dumps(_build_payload('test-naive')),
+                            capture_output=True, text=True, env=env, timeout=10)
+                        self.assertEqual(result.returncode, 0, msg=result.stderr)
+                        self.assertEqual('OVERNIGHT SESSION COMPLETE' in result.stdout, complete, result.stdout)
+                        if not complete:
+                            self.assertIn('Time remaining: 0h 59m', result.stdout)
+                    finally:
+                        tmp.cleanup()
 
     def test_cycle_number_is_read_from_the_retrospectives(self) -> None:
         """The loop writes no state: the cycle that ended is the last one

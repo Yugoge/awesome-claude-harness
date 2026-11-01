@@ -7,7 +7,8 @@ to avoid code duplication.
 AF1 fix: the todo script runs in a process of its own, never in the hook's: a
 new interpreter (subprocess.run), or for the harness's own scripts a fork of
 the hook that runs them as that interpreter would (_forkable).
-AF2 fix: Checks project dir first, then home dir (matches other hooks).
+AF2 fix (P2 R3): the todo script is the harness's own, next to this file; a
+product repository's scripts/todo is never run.
 
 checklist() is the one reading of a command's checklist state (P1b E7): the
 transcript records every TodoWrite the CLI ran, so the hooks that gate on the
@@ -26,16 +27,11 @@ from pathlib import Path
 
 
 def _find_todo_script(cmd_name):
-    """Locate the canonical todo script (project dir first, home fallback)."""
+    """The harness's canonical todo script (None when it has none) and the
+    project dir it runs in."""
     project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    candidates = [
-        project_dir / 'scripts' / 'todo' / f'{cmd_name}.py',
-        Path(__file__).resolve().parents[2] / 'scripts' / 'todo' / f'{cmd_name}.py',
-    ]
-    for path in candidates:
-        if path.exists():
-            return path, project_dir
-    return None, project_dir
+    path = _HARNESS_TODO_DIR / f'{cmd_name}.py'
+    return (path if path.exists() else None), project_dir
 
 
 def _parse_script_output(result):
@@ -150,9 +146,8 @@ def _run_forked(script_path, project_dir, env):
 def run_todo_script(cmd_name, prompt=''):
     """Load canonical todos from todo script via subprocess.
 
-    Search order (AF2 fix -- matches posttool-todo-count.py):
-      1. {CLAUDE_PROJECT_DIR}/scripts/todo/{cmd_name}.py
-      2. ~/.claude/scripts/todo/{cmd_name}.py
+    The script is the harness's scripts/todo/{cmd_name}.py (AF2 fix), run in
+    the project dir ({CLAUDE_PROJECT_DIR}, else the cwd).
 
     prompt is forwarded as CLAUDE_TODO_PROMPT so argument-aware scripts
     (e.g. close.py --force path) can vary their step list.

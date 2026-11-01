@@ -487,7 +487,7 @@ class CommitRun:
     def resolve_report(self, sub, root: str, order: int) -> str:
         """Phase 2's dev-report resolution: git status piped into resolve-dev-report.py with the three flags."""
         sec = cmdtext.section(self.analyst_text, "Phase 2: File classification")
-        m = re.search(r"into\s+`([^`]*resolve-dev-report\.py)`", sec)
+        m = re.search(r"into\s+`([^`]*resolve-dev-report\.py\"?)`", sec)
         if not m:
             return ""
         script = m.group(1)

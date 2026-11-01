@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """The /dev-overnight session state: its one reading, its one write, its cycle index.
 
-The state record `<project>/.claude/overnight-state-<sid>.json` has one producer,
+The state record `<main root>/.claude/overnight-state-<sid>.json` has one producer,
 the launcher's write path `write_state`: scripts/create-overnight-state.sh
 publishes the record through it at launch, and scripts/break-overnight-lock.py
-writes the owner's /stop through it. Every reader that decides on the record
-calls `state_verdicts` and acts on what it returns, so each verdict has one rule:
+records the owner's /stop through it. Every reader finds it by one locator
+(`locate`, `session_state_file`) and decides on it through `state_verdicts`, so
+each verdict has one rule; end_time and every other time is read by
+`parse_end_time`, in UTC:
 
-  window_live     the session's window is open (current_phase is not
-                  complete/completed and end_time has not passed; a missing or
-                  malformed end_time counts as passed, so a half-written record
-                  is never a live session);
+  before_end      end_time is ahead (a missing or malformed end_time counts as
+                  passed); no other field counts. With no human-typed /stop
+                  after the session's /dev-overnight, it is the time-lock's
+                  window (`window_open`);
+  window_live     before_end and current_phase is not complete/completed: the
+                  session-agnostic exemption of `is_overnight_active`;
   isolation_held  the isolation guarantee still binds (isolation_released_at is
                   unset and isolation_active_until, else end_time, has not
                   passed; a missing or malformed window keeps it held, so the
@@ -25,9 +29,11 @@ The git keystone and the overnight policy shim run this module as a script
 
 `is_overnight_active` is deliberately session-agnostic: ANY live record under a
 candidate project dir counts. The "except dev-overnight" policy exempts the whole
-overnight CONTEXT, the orchestrator AND the subagents it dispatches, and those
-subagents carry DIFFERENT session_ids than the orchestrator that wrote the state
-file (see hooks/lib/allowlist.py). Forgery of the state file is out of scope for
+overnight CONTEXT, the orchestrator AND the subagents it dispatches. A subagent's
+hook payload carries its parent's session_id and main transcript_path, plus its
+own agent_id, so the session-keyed readers (`locate`, `window_open`) reach the
+orchestrator's record from either; this check takes a project dir, not a
+session id. Forgery of the state file is out of scope for
 this guardrail: writes to .claude/overnight-state-*.json are blocked by
 pretool-overnight-hook-guard.py, and the /do and /allow escape hatches exist for
 everything else.
@@ -53,37 +59,24 @@ class Verdicts(NamedTuple):
     released: bool
     end_time: Optional[datetime]
     record: dict
+    before_end: bool = False
 
 
-def _parse_end_time(value):
-    """The window's end_time as a datetime (naive stays naive-as-local), else None."""
+def parse_end_time(value):
+    """The one end_time parser: an aware UTC datetime (`Z` and offsets honoured,
+    a naive value read as UTC), else None for a missing or malformed value,
+    which every caller treats as passed."""
     try:
-        return datetime.fromisoformat(str(value).replace('Z', '+00:00'))
-    except (ValueError, TypeError, AttributeError):
+        end = datetime.fromisoformat(str(value).strip().replace('Z', '+00:00'))
+        return end.replace(tzinfo=timezone.utc) if end.tzinfo is None else end.astimezone(timezone.utc)
+    except (ValueError, TypeError, OverflowError):
         return None
-
-
-def _passed(end):
-    if end.tzinfo is None:
-        return datetime.now() > end
-    return datetime.now(timezone.utc) > end
-
-
-def _end_time_passed(end_str):
-    """True iff end_str (ISO-8601) is in the past, or is missing/unparseable."""
-    end = _parse_end_time(end_str)
-    return True if end is None else _passed(end)
 
 
 def _isolation_window_passed(value):
     """True iff the isolation window has passed; missing or malformed keeps it open."""
-    if not isinstance(value, str) or not value:
-        return False
-    try:
-        end = datetime.fromisoformat(value.replace('Z', '+00:00'))
-    except ValueError:
-        return False
-    return _passed(end)
+    end = parse_end_time(value) if value else None
+    return end is not None and datetime.now(timezone.utc) > end
 
 
 def read_state(sf):
@@ -102,14 +95,14 @@ def state_verdicts(record):
     """The one decision on an overnight-state record (see the module docstring)."""
     if not isinstance(record, dict):
         return Verdicts(False, False, False, None, {})
-    window_live = (record.get('current_phase', '') not in ('complete', 'completed')
-                   and not _end_time_passed(record.get('end_time', '')))
+    end = parse_end_time(record.get('end_time'))
+    before_end = end is not None and datetime.now(timezone.utc) < end
+    window_live = before_end and record.get('current_phase', '') not in ('complete', 'completed')
     window = record.get('isolation_active_until') or record.get('end_time', '')
     isolation_held = (not record.get('isolation_released_at')
                       and not _isolation_window_passed(window))
     released = record.get('isolation_released_at') is not None
-    return Verdicts(window_live, isolation_held, released,
-                    _parse_end_time(record.get('end_time', '')), record)
+    return Verdicts(window_live, isolation_held, released, end, record, before_end)
 
 
 def write_state(path, record):
@@ -130,35 +123,120 @@ def state_path(session_id, project_dir=None):
     return root / '.claude' / f'overnight-state-{session_id}.json'
 
 
-def session_state(session_id, project_dir=None):
-    """One session's record: its state file whose own session_id is
+def _own_record(session_id, root):
+    """The record in `root`'s state file of `session_id` whose own session_id is
     `session_id` (no scan of other sessions' files), else None."""
     if not isinstance(session_id, str) or not session_id:
         return None
-    record = read_state(state_path(session_id, project_dir))
-    if record is None or record.get('session_id') != session_id:
+    record = read_state(state_path(session_id, root))
+    return record if record is not None and record.get('session_id') == session_id else None
+
+
+def session_state(session_id, project_dir=None):
+    """One session's record (`_own_record`), else None. With no project_dir the
+    record is found by `locate`, which selects through `_own_record`, never this
+    function: no call here cycles back, so the artifact check's static half
+    follows a write through the located path to `write_state` in any order."""
+    return locate(session_id)[1] if project_dir is None else _own_record(session_id, project_dir)
+
+
+def _git(where, *args):
+    """git's one-line answer in directory `where`, else None."""
+    try:
+        out = subprocess.run(['git', '-C', str(where), *args], capture_output=True, text=True, timeout=5)
+    except (OSError, ValueError, subprocess.SubprocessError):
         return None
-    return record
+    return (out.stdout.strip() or None) if out.returncode == 0 else None
+
+
+def _roots(start):
+    """Where a session's record may sit, seen from `start`: the start itself,
+    the main root of its repository (the parent of the git common dir, so a
+    linked worktree reaches the main checkout) and, for a fresh clone checkout
+    (its own .git, a local clone of the main repository, wherever
+    OVERNIGHT_FRESH_CLONE_ROOT put it), the main root of its origin."""
+    yield start
+    common = _git(start, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    if common is None:
+        return
+    yield Path(common).parent
+    origin = _git(start, 'config', '--get', 'remote.origin.url')
+    if origin and os.path.isabs(origin):
+        common = _git(origin, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+        if common is not None:
+            yield Path(common).parent
 
 
 def session_state_file(session_id, starts):
-    """The canonical state file of `session_id` and its record, found by walking up
-    from each start in turn: the record sits at <main root>/.claude/ and every
-    working root lies under the main root. Selection is the record's own
-    (`session_state`: the session-keyed file name, then its session_id field).
-    (None, None) when no start reaches one."""
+    """The one locator: the state file of `session_id` and its record at
+    <main root>/.claude/, reached from each start in turn (`_roots`).
+    Selection is the record's own (`_own_record`: the session-keyed file
+    name, then its session_id field). (None, None) when no start reaches one."""
     for start in starts:
-        if not start:
-            continue
         try:
-            d = Path(start).resolve(strict=True)
+            d = Path(start).resolve(strict=True) if start else None
         except (OSError, RuntimeError):
             continue
-        for p in (d, *d.parents):
-            record = session_state(session_id, p)
+        for root in _roots(d) if d else ():
+            record = _own_record(session_id, root)
             if record is not None:
-                return state_path(session_id, p).resolve(), record
+                return state_path(session_id, root).resolve(), record
     return None, None
+
+
+def locate(session_id, payload=None):
+    """(state file, record) of `session_id` from CLAUDE_PROJECT_DIR, then the
+    hook payload's cwd (else the process cwd); (None, None) when none."""
+    try:
+        cwd = (payload.get('cwd') if isinstance(payload, dict) else None) or os.getcwd()
+    except OSError:  # the process cwd was removed
+        cwd = None
+    return session_state_file(session_id, (os.environ.get('CLAUDE_PROJECT_DIR'), cwd))
+
+
+def window_open(payload):
+    """The time-lock's window for a hook payload: the payload's session owns a
+    record whose end_time is ahead (`before_end`) and no human-typed /stop
+    follows its /dev-overnight (stop_contract.timelock_released). No state
+    field (status, terminal_status, current_phase) and no token decides it."""
+    try:
+        _sf, record = locate(payload.get('session_id'), payload)
+        if record is None or not state_verdicts(record).before_end:
+            return False
+        try:
+            from . import stop_contract
+        except ImportError:  # hooks/lib itself is on sys.path
+            import stop_contract
+        return not stop_contract.timelock_released(payload.get('transcript_path'))
+    except Exception:
+        return False
+
+
+def closeout_gaps(state, working_root):
+    """What the session's closeout lacks on disk, one fact per gap: a PM
+    retrospective (retro-report-cycle*.json under
+    <working root>/docs/dev/overnight/<sid>/) and an overnight summary
+    (overnight-summary-*.md under <working root>/docs/dev/) written at or after
+    start_time (any, when start_time is unreadable). No tree or checkpoint term."""
+    state = state if isinstance(state, dict) else {}
+    docs = Path(working_root) / 'docs' / 'dev'
+    retro = docs / 'overnight' / str(state.get('session_id') or 'unknown')
+    start = parse_end_time(state.get('start_time'))
+    since = start.timestamp() if start else float('-inf')
+
+    def written(path):
+        try:
+            return path.stat().st_mtime >= since
+        except OSError:
+            return False
+
+    gaps = []
+    if not any(retro.glob('retro-report-cycle*.json')):
+        gaps.append(f'{retro}/retro-report-cycle*.json: no PM retrospective report')
+    if not any(written(p) for p in docs.glob('overnight-summary-*.md')):
+        gaps.append(f'{docs}/overnight-summary-*.md: no summary written since start_time '
+                    f'{state.get("start_time")}')
+    return gaps
 
 
 def working_root(state):
@@ -259,13 +337,13 @@ def _main(argv):
       write-state FILE SOURCE      publish the record in SOURCE as FILE
       session-root SID START...    this session's state file and the main root its
                                    record names (a directory), one per line, found
-                                   walking up from each START in turn; exit 1 with
-                                   the reason when there is none
+                                   by the locator from each START in turn; exit 1
+                                   with the reason when there is none
     """
     if len(argv) >= 2 and argv[0] == 'session-root':
         sf, record = session_state_file(argv[1], argv[2:])
         if sf is None:
-            print(f'ERROR: no readable overnight-state file for session {argv[1]} at or above '
+            print(f'ERROR: no readable overnight-state file for session {argv[1]} found from '
                   + ' or '.join(a or '<unset>' for a in argv[2:]), file=sys.stderr)
             return 1
         root = record.get('main_root')

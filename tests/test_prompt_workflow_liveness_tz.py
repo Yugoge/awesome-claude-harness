@@ -27,15 +27,17 @@ hook and the registered ``$HOME/.claude/hooks`` path are the same inode).
 from __future__ import annotations
 
 import ast
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -223,20 +225,26 @@ def prompt_payload(session_id: str | None, prompt: str = 'continue') -> dict:
 
 
 class TestAC1Truthtable(unittest.TestCase):
-    """AC1 -- 21-row truth table, zone pinned per row group."""
+    """AC1 -- 21-row truth table, zone pinned per row group. Each row's end_time
+    sits in the session's own record; the continuation reader
+    (find_any_overnight_state, deciding by lib/overnight.window_open, P2 R1)
+    finds the record in the window or gives nothing."""
 
     def _assert_rows(self, module, rows):
-        for n, state, expected in rows:
-            with self.subTest(row=n, state=state):
-                try:
-                    actual = module._is_active_state(state)
-                except BaseException as exc:  # noqa: BLE001 - AC1 forbids escape
-                    self.fail(f'row {n}: exception escaped _is_active_state: {exc!r}')
-                self.assertEqual(
-                    expected, actual,
-                    f'row {n}: end_time={state.get("end_time", "__KEY_ABSENT__")!r} '
-                    f'expected {expected}, got {actual}',
-                )
+        with temp_project() as (project, _home):
+            module.PROJECT_DIR = project
+            for n, state, expected in rows:
+                with self.subTest(row=n, state=state):
+                    write_state(project / '.claude', 'AAAA', {'session_id': 'AAAA', **state})
+                    try:
+                        actual = module.find_any_overnight_state('AAAA')[0] is not None
+                    except BaseException as exc:  # noqa: BLE001 - AC1 forbids escape
+                        self.fail(f'row {n}: exception escaped find_any_overnight_state: {exc!r}')
+                    self.assertEqual(
+                        expected, actual,
+                        f'row {n}: end_time={state.get("end_time", "__KEY_ABSENT__")!r} '
+                        f'expected {expected}, got {actual}',
+                    )
 
     def test_group_a_utc(self):
         """Rows 1-13 under TZ=UTC. Row 13 discriminates tzinfo-stripping."""
@@ -264,13 +272,14 @@ class TestAC1Truthtable(unittest.TestCase):
             self._assert_rows(module, rows)
 
     def test_group_b_asia_shanghai(self):
-        """Rows 14-16 under TZ=Asia/Shanghai. 14/15 pin naive-as-local; 16 kills stripping."""
+        """Rows 14-16 under TZ=Asia/Shanghai. 14/15 pin naive-as-UTC (lib/overnight
+        parse_end_time, P2 row 7); 16 kills stripping."""
         with pinned_tz('Asia/Shanghai'):
             module = load_hook_module()
-            naive_local = datetime.now()
+            naive_utc = datetime.now(timezone.utc).replace(tzinfo=None)
             rows = [
-                (14, {'end_time': (naive_local + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, True),
-                (15, {'end_time': (naive_local - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, False),
+                (14, {'end_time': (naive_utc + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, True),
+                (15, {'end_time': (naive_utc - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, False),
                 (16, {'end_time': future_z(1)}, True),
             ]
             self._assert_rows(module, rows)
@@ -386,10 +395,10 @@ class TestAC4FailClosed(unittest.TestCase):
                         # clean rejection from an escaping AttributeError, because
                         # main() swallows generic exceptions and exits 0.
                         try:
-                            live = module._is_active_state(state)
+                            found = module.find_any_overnight_state(sid)
                         except BaseException as exc:  # noqa: BLE001
-                            self.fail(f'{case!r}: exception escaped _is_active_state: {exc!r}')
-                        self.assertFalse(live)
+                            self.fail(f'{case!r}: exception escaped find_any_overnight_state: {exc!r}')
+                        self.assertEqual((None, None), found)
                         self.assertIsNone(module.check_overnight_continuation(sid))
             finally:
                 if previous_home is not None:
@@ -421,7 +430,10 @@ class TestAC5SessionBinding(unittest.TestCase):
         self.assertEqual(0, result.returncode)
         self.assertIn('OVERNIGHT CONTINUATION', result.stdout)
         self.assertIn(f'OVERNIGHT CONTINUATION - Cycle {cycles_done + 1}', result.stdout)
-        self.assertIn(f'overnight-state-{owner_sid}.json', result.stdout)
+        # The block names the record's absolute path (the locator's), never a
+        # path relative to wherever the session happens to be rooted.
+        self.assertRegex(result.stdout, rf'(?m)^Read /.*/\.claude/overnight-state-'
+                                        rf'{re.escape(owner_sid)}\.json and resume from phase="')
 
     def _assert_zero(self, result):
         self.assertEqual(0, result.returncode)
@@ -569,28 +581,31 @@ class TestAC6ProcessBoundary(unittest.TestCase):
 
 
 class TestAC7OneWindowRule(unittest.TestCase):
-    """AC7 -- the predicate parses nothing itself. Whether the window is live is
-    lib/overnight.py's state_verdicts verdict, the one rule every overnight
-    reader decides by, so there is no except clause here that could widen."""
+    """AC7 -- the reader parses and reads nothing itself (P2 R1). Whether the
+    window is open is lib/overnight.py's window_open, the one window decider,
+    and the record is its locator's, so there is no except clause here that
+    could widen and no state field that could decide."""
 
     def test_predicate_delegates_to_the_one_window_rule(self):
         tree = ast.parse(HOOK_PATH.read_text())
         target = next((node for node in tree.body
-                       if isinstance(node, ast.FunctionDef) and node.name == '_is_active_state'),
+                       if isinstance(node, ast.FunctionDef) and node.name == 'find_any_overnight_state'),
                       None)
-        self.assertIsNotNone(target, '_is_active_state not found at module top level')
+        self.assertIsNotNone(target, 'find_any_overnight_state not found at module top level')
         self.assertEqual([], [n for n in ast.walk(target) if isinstance(n, ast.ExceptHandler)])
         called = {n.func.attr for n in ast.walk(target)
                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
-        self.assertIn('state_verdicts', called)
-        self.assertNotIn('fromisoformat', called)
+        self.assertTrue({'window_open', 'locate'} <= called, called)
+        self.assertFalse({'fromisoformat', 'state_verdicts', 'read_text', 'get'} & called, called)
+        self.assertNotIn('_is_active_state', {node.name for node in tree.body
+                                              if isinstance(node, ast.FunctionDef)})
 
 
 class TestAC8PatchScope(unittest.TestCase):
     """AC8 -- only the four permitted symbols may differ inside the hook."""
 
-    PERMITTED = ['_is_active_state', 'find_any_overnight_state',
-                 'check_overnight_continuation', 'handle_phase_b']
+    PERMITTED = ['find_any_overnight_state', 'check_overnight_continuation',
+                 'handle_phase_b', 'root_lines']
 
     def test_each_permitted_symbol_defined_exactly_once(self):
         tree = ast.parse(HOOK_PATH.read_text())
@@ -614,6 +629,116 @@ class TestAC8PatchScope(unittest.TestCase):
         self.assertIsNotNone(body)
         self.assertIn('check_overnight_continuation(session_id)', body,
                       'handle_phase_b must thread the submitting session id through')
+
+
+def typed(text: str, **fields) -> dict:
+    """A transcript record of a prompt the human typed (stop_contract's
+    is_human_prompt); ``fields`` mark one the human did not type."""
+    record = {'type': 'user', 'origin': {'kind': 'human'},
+              'message': {'role': 'user', 'content': text}}
+    record.update(fields)
+    return record
+
+
+def command(name: str, args: str = '', **fields) -> dict:
+    """A slash command record as the CLI writes a typed one."""
+    return typed(f'<command-message>{name}</command-message>\n<command-name>/{name}</command-name>\n'
+                 f'<command-args>{args}</command-args>', **fields)
+
+
+class TestR1WindowOpenDecides(unittest.TestCase):
+    """P2 R1, acceptance 6 and 8: the continuation reader decides by
+    lib/overnight.window_open on what the hook has (the session id, the
+    transcript_path it received, its project dir), finds the main root's record
+    from a worktree or a fresh clone, and leads the block with the roots the
+    re-sent command text's Read paths start from."""
+
+    def test_end_time_an_hour_ahead_continues_in_any_timezone(self):
+        for zone in ('Asia/Shanghai', 'America/Los_Angeles'):
+            with pinned_tz(zone):  # the launcher's zone: an aware local end_time
+                local = (datetime.now().astimezone() + timedelta(hours=1)).isoformat(timespec='seconds')
+            for form, end_time in (('Z', future_z(1)), ('local offset', local)):
+                with self.subTest(zone=zone, form=form, end_time=end_time), \
+                        temp_project() as (project, home):
+                    write_state(project / '.claude', 'AAAA', build_state('AAAA', end_time))
+                    result = run_hook(project, home, prompt_payload('AAAA'), {'TZ': zone})
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertIn('OVERNIGHT CONTINUATION - Cycle 4', result.stdout.splitlines())
+
+    def test_only_a_typed_stop_ends_the_continuation(self):
+        stop = command('stop')['message']['content']
+        cases = {
+            'no /stop': ([], True),
+            'typed /stop': ([command('stop')], False),
+            'typed /stop, then a plain prompt': ([command('stop'), typed('go on')], False),
+            'typed /stop as text': ([typed('/stop')], False),
+            'isMeta /stop': ([typed(stop, isMeta=True)], True),
+            'Skill-produced /stop': ([typed(stop, isMeta=True, sourceToolUseID='toolu_01')], True),
+            'scheduled /stop': ([typed(stop, origin={'kind': 'scheduled'})], True),
+            '/stop, then a new /dev-overnight': ([command('stop'), command('dev-overnight', '2h')], True),
+        }
+        for name, (after, continues) in cases.items():
+            with self.subTest(case=name), temp_project() as (project, home):
+                write_state(project / '.claude', 'AAAA', build_state('AAAA', future_z(1)))
+                transcript = project.parent / 'transcript.jsonl'
+                transcript.write_text(''.join(json.dumps(r) + '\n'
+                                              for r in [command('dev-overnight', '8h'), *after]))
+                payload = {**prompt_payload('AAAA'), 'transcript_path': str(transcript)}
+                result = run_hook(project, home, payload)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(continues, 'OVERNIGHT CONTINUATION' in result.stdout, result.stdout[:300])
+
+    def test_a_worktree_or_clone_rooted_session_finds_the_main_roots_record(self):
+        with temp_project() as (main, home):
+            env = {**os.environ, 'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.invalid',
+                   'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@example.invalid'}
+
+            def git(*args):
+                subprocess.run(['git', '-c', 'commit.gpgsign=false', *args], cwd=str(main),
+                               env=env, check=True, capture_output=True)
+
+            git('init', '-q', '-b', 'main')
+            (main / 'README.md').write_text('toy\n')
+            git('add', 'README.md')
+            git('commit', '-q', '-m', 'init')
+            worktree = main.parent / 'wt'
+            clone = main / '.claude' / 'overnight-fresh-clones' / 'night-1'
+            git('worktree', 'add', '-q', '-b', 'overnight-wt', str(worktree))
+            git('clone', '-q', '--local', str(main / '.git'), str(clone))
+            # The harness's own command document, so the heavy half is
+            # delivered and its marker written beside the record it describes.
+            (home / '.claude' / 'commands').mkdir(parents=True)
+            (home / '.claude' / 'commands' / 'dev-overnight.md').write_text(COMMAND_DOC.read_text())
+            harness = os.path.realpath(home / '.claude')
+            for name, root in (('linked worktree', worktree), ('fresh clone', clone)):
+                with self.subTest(isolation=name):
+                    write_state(main / '.claude', 'AAAA', build_state('AAAA', future_z(1), worktree=str(root)))
+                    marker = main / '.claude' / 'overnight-delivery-AAAA.json'
+                    marker.unlink(missing_ok=True)
+                    result = run_hook(root, home, {**prompt_payload('AAAA'), 'cwd': str(root)})
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual(['OVERNIGHT CONTINUATION - Cycle 4', f'PROJECT_ROOT={root}',
+                                      f'HARNESS_ROOT={harness}'], result.stdout.splitlines()[:3])
+                    self.assertIn('--- COMMAND SPECIFICATION ---', result.stdout)
+                    state_file = (main / '.claude' / 'overnight-state-AAAA.json').resolve()
+                    self.assertIn(f'Read {state_file} and resume from phase=', result.stdout)
+                    self.assertTrue(marker.is_file())
+                    self.assertFalse((root / '.claude' / 'overnight-delivery-AAAA.json').exists())
+
+    def test_the_block_and_print_roots_name_the_same_roots(self):
+        """One rule for the roots: the block's two lines are what /dev-overnight
+        printed at its start for the same record."""
+        with temp_project() as (project, home):
+            module = load_hook_module()
+            module.PROJECT_DIR = project
+            write_state(project / '.claude', 'AAAA',
+                        build_state('AAAA', future_z(1), worktree=str(project / 'wt')))
+            printed = io.StringIO()
+            with redirect_stdout(printed):
+                module.print_roots('dev-overnight', 'AAAA')
+            block = module.check_overnight_continuation('AAAA')
+        self.assertEqual(printed.getvalue().splitlines(), block.splitlines()[1:3])
+        self.assertEqual(f'PROJECT_ROOT={project / "wt"}', block.splitlines()[1])
 
 
 STUB_LAUNCHER = '''#!/usr/bin/env bash

@@ -206,7 +206,7 @@ def execute(sb: str, run_dir: str, units: list[dict], schemas: dict | None = Non
     with open(os.path.join(work, "units.json"), "w") as fh:
         json.dump({"units": units, "schemas": schemas or {}, "workers": workers,
                    "layout": lay.to_json()}, fh)
-    env_inner = {"PATH": f"{lay.harness}/venv/bin:{os.environ.get('PATH', '/usr/bin:/bin')}", "HOME": lay.home,
+    env_inner = {"PATH": lay.path, "HOME": lay.home,
                  "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": lay.sb}
     t0 = time.monotonic()
     rc = sandbox.launch(sb, lay, [lay.python, "-m", "replay.differential", lay.sb + "/differential/units.json"],

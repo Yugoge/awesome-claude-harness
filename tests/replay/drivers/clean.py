@@ -458,7 +458,7 @@ class CleanRun:
             s4 = cmdtext.section(text, "Step 4: Generate INDEX.md")
             if "ORCHESTRATOR_KEY_FOLDERS" in s4:
                 # the folders clean-inspect checks: the script the step names, read for its default list
-                orch = os.path.join(o.harness, re.search(r"`~/\.claude/(scripts/[\w.-]+\.sh) clean-inspect`", s4).group(1))
+                orch = os.path.join(o.harness, re.search(r"`(?:~/\.claude|<HARNESS_ROOT>)/(scripts/[\w.-]+\.sh) clean-inspect`", s4).group(1))
                 sub.read(orch, label=f"{sub.role} Read orchestrator.sh")
                 dflt = re.search(r"ORCHESTRATOR_KEY_FOLDERS:-([\w,/.-]+)\}", agents.peek(self.rp, sub.role, orch)).group(1)
                 index_dirs = [f for f in dflt.split(",") if os.path.isdir(self.abs(f))]
@@ -604,8 +604,9 @@ class CleanRun:
                 key = _finding_key(title, findings)
                 exc = re.search(r"\*\*Exception list\*\*[^\n]*\n((?:\s*-\s+`[^`]+`[^\n]*\n?)+)", part)
                 skip = set(re.findall(r"`([^`]+)`", exc.group(1))) if exc else set()
-                for cmd in re.findall(r"(?:\bRun|\bexecute)\s+`(~/\.claude/scripts/[^`]+\"\$PROJECT_ROOT\")`", part):
-                    name = os.path.basename(cmd.split()[0])
+                for cmd in re.findall(r"(?:\bRun|\bexecute)\s+`((?:~/\.claude/|bash \"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/)"
+                                      r"scripts/[^`]+\"\$PROJECT_ROOT\")`", part):
+                    name = re.search(r"scripts/([\w.-]+)", cmd).group(1)
                     c = sub.bash(cmd.replace('"$PROJECT_ROOT"', shlex.quote(self.project)), name,
                                  label=f"{sub.role} Bash {name}")
                     out = _json_out(c.response.get("stdout", "") if c.ok else "")

@@ -365,7 +365,7 @@ class DevCycle:
     def _rules(self):
         return [
             (r"^DEV_SESSION_ID$", lambda m: self.reg),
-            (r"^(?:timestamp|task_id|task-id)$", lambda m: self.tid),
+            (r"^(?:timestamp|task_id|task-id|TASK_ID)$", lambda m: self.tid),
             (r"^(?:YYYYMMDD-HHMMSS|same timestamp)$", lambda m: self.digits),
             (r"^(?:requirement from Step 1|original requirement|requirement)$", lambda m: self.sc.requirement),
             (r"^spec_path or null$", "null"),

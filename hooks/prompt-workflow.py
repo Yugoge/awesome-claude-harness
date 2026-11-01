@@ -3,16 +3,20 @@
 UserPromptSubmit Hook: Checklist Injection for Slash Commands
 
 Phase A (slash command detected):
-  - Runs scripts/todo/<command>.py to get the step list
+  - Runs the harness's scripts/todo/<command>.py to get the step list
   - Starts the bookmark .claude/workflow-{session_id}.json: the command, its
     arguments and the workflow instance. The Codex plan path of
     pretool-workflow-gate.py and posttool-subagent-track.py update it; every
     write goes through lib.todo_canonical.write_bookmark, its one writer
   - If /dev-overnight: creates overnight-state-<session_id>.json with parsed end-time
   - Prints checklist-ready message + exact first TodoWrite call to use
+  - For every harness command (stop_contract.harness_commands), first prints
+    PROJECT_ROOT=<abs> and HARNESS_ROOT=<abs>, the roots its text's Read paths
+    start from
 
 Phase B (subsequent prompts, no slash command):
-  - If any overnight-state-*.json exists with future end_time: inject continuation
+  - While the session's overnight window is open (lib/overnight.window_open):
+    inject continuation, led by the PROJECT_ROOT and HARNESS_ROOT lines
   - Reads the checklist from the transcript (lib.todo_canonical.checklist)
   - Injects current progress + exact next TodoWrite call template
 
@@ -105,45 +109,19 @@ def overnight_state_path(session_id: str = 'default') -> Path:
     return PROJECT_DIR / '.claude' / f'overnight-state-{session_id}.json'
 
 
-def _is_active_state(state: dict) -> bool:
-    """Return True if the record's window is live.
-
-    The verdict is lib/overnight.py's state_verdicts, the one rule every
-    overnight reader decides by: a missing, empty, non-string or unparseable
-    end_time is not live (fail closed), a zoned end_time is compared in UTC
-    and a zone-less one as local time, and a completed session is not live.
-    """
-    import overnight  # hooks/lib is on sys.path (see the WS1 block above)
-    return overnight.state_verdicts(state).window_live
-
-
 def find_any_overnight_state(session_id: str = '') -> tuple:
-    """Return the live overnight state OWNED BY session_id, else (None, None).
-
-    Strict identity binding: the record is resolved from the submitting
-    session_id alone -- no project-wide glob and no fallback scan -- and the
-    record's own session_id must equal that id before liveness is considered.
-    A foreign, blank or absent id on either side injects nothing.
-
-    Deliberately stricter than the posttool-overnight-loop.py:156-159 mirror,
-    whose `if state_session_id and ...` guard still broadcasts a record carrying
-    a blank/absent session_id to every session. The previous project-wide glob
-    returned the first live match, so a second live session was served the first
-    one's state, and any session -- including one with no overnight of its own --
-    received the full continuation block.
-    """
-    if not isinstance(session_id, str) or not session_id:
+    """(record, state file) of the submitting session's overnight while its
+    window is open, else (None, None). lib/overnight decides both on the payload
+    this hook received: `locate` finds the session's own record (its file name
+    and session_id field; from a worktree or a fresh clone, the main root's),
+    and `window_open` closes at end_time or at the human's typed /stop. No
+    glob, no other session's record, no state field."""
+    import overnight  # hooks/lib is on sys.path (see the WS1 block above)
+    payload = {'session_id': session_id, 'transcript_path': CURRENT_TRANSCRIPT_PATH, 'cwd': str(PROJECT_DIR)}
+    if not overnight.window_open(payload):
         return None, None
-    p = overnight_state_path(session_id)
-    try:
-        state = json.loads(p.read_text())
-    except Exception:
-        return None, None
-    if not isinstance(state, dict) or state.get('session_id') != session_id:
-        return None, None
-    if not _is_active_state(state):
-        return None, None
-    return state, p
+    state_path, state = overnight.locate(session_id, payload)
+    return state, state_path
 
 
 def extract_command_name(user_input: str) -> str:
@@ -307,13 +285,10 @@ def resolve_command_spec_path(cmd_name: str) -> Path | None:
 
 
 def run_todo_script(cmd_name: str, user_input: str = "") -> list:
-    todo_script = PROJECT_DIR / 'scripts' / 'todo' / f'{cmd_name}.py'
+    # The harness's own todo script; a product repository's scripts/todo never runs.
+    todo_script = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
-        global_todo = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
-        if global_todo.exists():
-            todo_script = global_todo
-        else:
-            return []
+        return []
     # Forward the raw user prompt to the todo script via env var so
     # argument-aware scripts (e.g. spec.py) can distinguish modes.
     # Other todo scripts don't read this var; setting it is harmless.
@@ -565,17 +540,6 @@ def create_overnight_state(end_time: str, focus: str = '', spec_path: str = '', 
     except Exception as exc:
         print(f'overnight state creation failed: {exc}', file=sys.stderr)
         return False
-
-
-def load_overnight_state(session_id: str = '') -> dict | None:
-    """Load overnight state file. Returns None if missing or corrupt."""
-    sp = overnight_state_path(session_id)
-    if not sp.exists():
-        return None
-    try:
-        return json.loads(sp.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
 
 
 def _build_worktree_instruction(state: dict) -> str:
@@ -1077,7 +1041,8 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
     overnight_todos = _load_overnight_todos()
     step_count = len(overnight_todos) or 22
     step_labels = '; '.join(str(item.get('content', '')) for item in overnight_todos)
-    parts = [f'OVERNIGHT CONTINUATION - Cycle {cycle}', '']
+    # The roots the re-sent command text's Read paths start from (print_roots').
+    parts = [f'OVERNIGHT CONTINUATION - Cycle {cycle}', root_lines(state), '']
     if include_spec and spec_delivered:
         parts += [OVERNIGHT_SPEC_HEADER, '', cmd_spec, '']
     parts += [
@@ -1093,7 +1058,7 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
         'the system automatically resets for a new cycle.',
         f'Canonical steps: {step_labels}',
         'Do NOT create state file.',
-        f'Read .claude/overnight-state-{state.get("session_id", "default")}.json and resume from phase="{phase}".',
+        f'Read {overnight.locate(state.get("session_id"), {"cwd": str(PROJECT_DIR)})[0]} and resume from phase="{phase}".',
         # Phase->step map MUST match the markdown Continuation-Mode map in
         # commands/dev-overnight.md (### Continuation Mode), the single source of
         # truth. implementing->Step 12 lands on the shared Step 11g Dev-dispatch
@@ -1650,6 +1615,8 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
 
 def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: str = '') -> None:
     """Phase A: slash command detected -- setup todos, state, emit checklist."""
+    if cmd_name != 'dev-overnight':
+        print_roots(cmd_name, sid)
     if cmd_name in ("commit", "stop"):
         _write_userintent_sentinel(cmd_name, sid)
     if cmd_name == "do":
@@ -1686,8 +1653,30 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
                   'command spec injected.', file=sys.stderr)
             _cleanup_overnight_partials(sid)
             raise SystemExit(2)
+        print_roots(cmd_name, sid)  # after the launcher: worktree_path exists now
     _write_bookmark(cmd_name, sid, _extract_arguments(user_input, cmd_name))
     emit_checklist_message(cmd_name, todos)
+
+
+def print_roots(cmd_name: str, sid: str) -> None:
+    """The root lines (root_lines) for a harness command only; in /dev-overnight
+    from the session's record, found by lib/overnight's locator."""
+    try:
+        from stop_contract import harness_commands  # hooks/lib: the one list of them
+    except ImportError:  # the checklist after this never waits on the roots
+        return
+    if cmd_name in harness_commands():
+        import overnight  # hooks/lib is on sys.path (see the WS1 block above)
+        state = overnight.locate(sid, {'cwd': str(PROJECT_DIR)})[1] if cmd_name == 'dev-overnight' else None
+        print(root_lines(state))
+
+
+def root_lines(state) -> str:
+    """PROJECT_ROOT (with an overnight record, its worktree_path: the command's
+    <PROJECT_ROOT>; its <MAIN_ROOT> is Step 1's) and HARNESS_ROOT (this hook's
+    install), the roots a command text's Read paths start from."""
+    project = state.get('worktree_path') if isinstance(state, dict) else None
+    return f'PROJECT_ROOT={project or PROJECT_DIR}\nHARNESS_ROOT={Path(__file__).resolve().parent.parent}'
 
 
 def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
@@ -1816,6 +1805,7 @@ def cli(argv: list) -> int:
             print('prompt-workflow.py start: needs CLAUDE_CODE_SESSION_ID and the '
                   '/dev, /dev-command or /redev command text on stdin', file=sys.stderr)
             return 2
+        print_roots(cmd_name, sid)
         recorded = _recorded_start(cmd_name, user_input, sid)
         if recorded:
             sys.stdout.write(recorded)

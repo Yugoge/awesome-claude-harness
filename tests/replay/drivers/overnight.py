@@ -20,12 +20,13 @@ Then, in one session, the main agent:
     one at a time, each prompt built from the text's bullet list ("Each subagent receives ..."),
     the report validation the text asks for (the base's check-overnight-reports.sh and its sanity
     Reads), the core-flow gate Read of the user report;
-  - Step 4: the cycle number as the text reads it (`overnight.py cycle-index <STATE_FILE>`, or the
-    state record's cycle_count), PM TRIAGE from the template, the pipeline_blocked Read; on a text
-    with the "Cycle Contract Manifest" (the base), the orchestrator's contract: its primary and
-    mirror Writes and the cycle-current.json symlink, its fields from the section's bullets, its
-    BA/dev/QA/graphify entries from the section's inline examples, the entries of the other
-    dispatches the cycle commits to from those dispatches' own templates;
+  - Step 4: the cycle number as the text reads it (`overnight.py cycle-index <STATE_FILE>`, the `Cycle:`
+    line of overnight-status.sh, or the state record's cycle_count), PM TRIAGE from the template, the
+    pipeline_blocked Read; on a text with the "Cycle Contract Manifest" (the base), the
+    orchestrator's contract: its primary and mirror Writes and the cycle-current.json symlink, its
+    fields from the section's bullets, its BA/dev/QA/graphify entries from the section's inline
+    examples, the entries of the other dispatches the cycle commits to from those dispatches' own
+    templates;
   - Step 5: the template Read and one spec copy per pipeline, the text's replacements made;
   - Step 6: the pipeline builder block; Step 7: the focus criteria;
   - Step 8 per pipeline: the pre-BA retry signals (Four Contracts Awareness), the graphify
@@ -40,8 +41,9 @@ Then, in one session, the main agent:
     qa-fail: Step 16 marks each pipeline's phase in the pipelines file the iteration plan reads, and
     Step 17 iterates, see below);
   - Step 18: the permissions block; Step 19: the cycle log, the TIME CHECK, the per-cycle commit
-    (its failure logged); Step 20: PM RETRO, the retro Read; Step 21: marked completed, the loop
-    hook's reset (a fresh checklist, Step 1 done, Step 2 in progress);
+    where the text has one (the base's; its failure logged); Step 20: PM RETRO, the retro Read;
+    Step 21: marked completed, the loop hook's reset (a fresh checklist, Step 1 done, Step 2 in
+    progress);
 * the owner interrupts and types /stop; the main agent runs stop.md's Implementation block once
   and stops.
 
@@ -86,9 +88,10 @@ Respellings (row 7), driver only, each application recorded in blocks.json "resp
 drivers/dev.py's list, applied only where the text still has the old form (the /dev-overnight text
 of either tree has none of those forms), and, in a replay of the base kit's text (kit=base),
 STOP_RESPELLINGS below: /stop's wrapper call, whose failure (it unlocks nothing) leaves the
-time-lock refusing the session's end. Step 19's repository-relative `scripts/commit.sh` is not
-respelled: the text logs its failure and goes on (row 7 respells only a call whose failure ends the
-replay short of its terminal); nor are the agents' blast-radius tool calls (row 7: left to TC-44).
+time-lock refusing the session's end. The base text's Step 19 repository-relative
+`scripts/commit.sh` is not respelled: the text logs its failure and goes on (row 7 respells only a
+call whose failure ends the replay short of its terminal); nor are the agents' blast-radius tool
+calls (row 7: left to TC-44).
 
 Deviations: DEVIATIONS below, one entry per block the base tree's (2acc29b) replay meets, each with
 a comment quoting the hook's text; nothing else passes a block.
@@ -961,10 +964,14 @@ class Night:
     def cycle_number(self) -> None:
         o = self.o
         sec = o.section("Step 4")
-        m = re.search(r"`(~/\.claude/hooks/lib/overnight\.py cycle-index <STATE_FILE>)`", sec)
+        # `overnight.py cycle-index <STATE_FILE>`, or the `Cycle:` line overnight-status.sh prints for it
+        m = re.search(r"`(~/\.claude/hooks/lib/overnight\.py cycle-index <STATE_FILE>)`", sec) or re.search(
+            r"the `Cycle:` line of `(bash \"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/overnight-status\.sh\" <STATE_FILE>)`", sec)
         if m:
             c = self.bash(o.bind(m.group(1)), "Read the cycle number", "Step 4 Bash cycle-index")
             out = c.response.get("stdout", "").strip() if c.ok else ""
+            line = re.search(r"^\s*Cycle:\s*(\d+)\s*$", out, re.M)
+            out = line.group(1) if line else out
             self.n = int(out) if out.isdigit() else self.cycle
         else:  # the base text: Cycle number <cycle_count + 1>, from the state record
             self.read(self.state_file, "Step 4 Read state record (cycle_count)")
@@ -1080,7 +1087,7 @@ class Night:
         self.todo_to(5)
         sec = o.section("Step 5")
         tpl = re.search(r"Copy the template from `([^`]+)`", sec).group(1)
-        tpl_path = tpl.replace("~", self.rp.layout.home, 1)
+        tpl_path = tpl.replace("~", self.rp.layout.home, 1) if tpl.startswith("~/") else o.bind(tpl)
         self.read(tpl_path, "Step 5 Read spec template")
         text = agents.peek(self.rp, "main", tpl_path)
         sec5 = "Replace Section 5's `_Not yet populated._`" in sec
@@ -1323,7 +1330,7 @@ class Night:
                 self.failed.append(p)
         passed = len(self.pipes) - len(self.failed)
         self.o.s.say(f"Pipelines passed: {passed} of {len(self.pipes)}\nPipelines needing iteration: "
-                     f"{len(self.failed)}\nPipelines parked: 0")
+                     f"{len(self.failed)}")
         if self.failed and self.variant != "qa-fail":
             raise RuntimeError("a QA did not pass outside variant qa-fail")
         if self.failed:
@@ -1462,22 +1469,32 @@ class Night:
                  .replace("{fixed_count}", str(len(self.pipes))).replace("{parked_count}", "0"))
         entry = re.sub(r"^\*\*Assumptions \(Clause A\)\*\*:.*$", "**Assumptions (Clause A)**: none", entry, flags=re.M)
         entry = re.sub(r"^\*\*Parked\*\*:.*$", "**Parked**: none", entry, flags=re.M)
+        entry = re.sub(r"^\*\*Decisions made without the owner\*\*:.*$", "**Decisions made without the owner**: none",
+                       entry, flags=re.M)
         entry = entry.replace("<timestamp>", utc_now())
         path = os.path.join(self.project, self.log_rel)
         old = agents.peek(self.rp, "main", path) if os.path.exists(path) else ""
         self.write(self.log_rel, (old.rstrip("\n") + "\n\n" if old else "") + entry.strip("\n") + "\n", "Step 19 Write cycle log")
         # TIME CHECK.
         code = next(c for c in cmdtext.inline_codes(o.text, "Step 19", "TIME CHECK")
-                    if c.startswith("~/.claude/scripts/overnight-status.sh"))
+                    if c.startswith(("~/.claude/scripts/overnight-status.sh",
+                                     'bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh"')))
         cmd = o.bind(code)
         if cmd.strip() == "~/.claude/scripts/overnight-status.sh" and "against the state file" in sec:
             cmd += " " + shlex.quote(self.state_file)
         tc = self.bash(cmd, "TIME CHECK", "Step 19 Bash TIME CHECK")
         self.expired = not tc.ok
         o.s.say(tc.response.get("stdout", "").strip() if tc.ok else f"TIME CHECK: {tc.error[:300]}")
-        # Per-cycle commit (a command that runs git: the actor env first).
-        commit = next(c for c in cmdtext.inline_codes(o.text, "Step 19", "chore(overnight)")
-                      if "commit.sh" in c and "chore(overnight)" in c)
+        # Per-cycle commit, where the text has one (the base's; a text without it keeps the cycle's
+        # work in refs/checkpoints/<branch> until the owner's post-loop flow). A command that runs
+        # git: the actor env first.
+        try:
+            codes = cmdtext.inline_codes(o.text, "Step 19", "chore(overnight)")
+        except cmdtext.TextNotFound:
+            codes = []
+        commit = next((c for c in codes if "commit.sh" in c and "chore(overnight)" in c), None)
+        if commit is None:
+            return
         cc = self.bash(self.git(o.bind(commit)), "End-of-cycle commit", "Step 19 Bash end-of-cycle commit")
         if not cc.ok:  # "log the failure to the cycle log and continue"
             path = os.path.join(self.project, self.log_rel)

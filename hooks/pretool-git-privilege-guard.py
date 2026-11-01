@@ -364,10 +364,10 @@ def _collect_commit_grant_candidates():
     a repository mismatch (docs/dev/peer-review-grant-parity.md CRITICAL).
 
     The any-SID glob is a superset of the SID-specific glob, so one glob covers
-    both the fast path and the subagent SID-propagation fallback (a subagent's
-    PreToolUse session_id differs from the orchestrator's CLAUDE_SESSION_ID the
-    grant was written under). A spent grant no longer exists, so every match is
-    unspent.
+    the session's own grants and one written under another id (the writer takes
+    --sid or the env's id); a subagent's PreToolUse payload carries its parent's
+    session_id and main transcript_path, plus agent_id. A spent grant no longer
+    exists, so every match is unspent.
     """
     pattern = os.path.join(harness_state_dir(), 'claude-commit-grant-*-*.json')
     try:
@@ -992,10 +992,10 @@ def _has_bulk_commit_sentinel(data):
     expiry), the one rule the Stop cleanup's reap also takes.
 
     SID fallback rationale (mirrors _collect_commit_grant_candidates for regular commits):
-    changelog-analyst subagents carry a different session_id than the
-    orchestrator that wrote the sentinel. The SID-specific glob is tried
-    first (fast path); the global glob is the fallback so subagents can
-    always find the sentinel written by the user's orchestrator session.
+    a changelog-analyst subagent's payload carries its orchestrator's
+    session_id (plus agent_id), so the SID-specific glob (fast path) finds
+    the session's sentinel; the global glob is the fallback for a sentinel
+    written under another id (its writer takes --sid or the env's id).
     Acceptable because: (a) sentinels require user-invoked /commit --bulk
     to be created at all; (b) 30-min TTL bounds exposure; (c) the kind and
     origin test prevents other JSON files in the state dir from matching.
