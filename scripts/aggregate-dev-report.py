@@ -28,7 +28,8 @@ dev-report on disk is re-aggregated from the shards found, with `shrunk_from`.
 Exit codes:
     0   Success (action: aggregated | validated | skipped)
     1   Shard load/validation mismatch, uncovered shrink, same-cycle
-        completeness gap, or I/O error (itemized reasons on stderr)
+        completeness gap (its canonical is still written), or I/O error
+        (itemized reasons on stderr)
     2   Bad arguments
 
 stdout (on exit 0):
