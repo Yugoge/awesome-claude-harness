@@ -98,7 +98,7 @@ from lib.allowlist import (  # noqa: E402
 from lib.overnight import is_overnight_active  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
     _segments, _basename, _WRAPPERS, _ENV_ASSIGN_RE,
-    _command_token_index, _GIT_GLOBAL_VALUE, _git_subcommand,
+    _command_token_index, _git_subcommand,
 )
 
 

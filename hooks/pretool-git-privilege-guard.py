@@ -185,7 +185,7 @@ from lib.git_command_classifier import (  # noqa: E402
     _segments as _shell_segments,
     _command_token_index as _cmd_token_index,
     _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,
-    _GIT_GLOBAL_VALUE as _GIT_GLOBAL_VALUE,
+    GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS,
 )
 # Commit-grant provenance contract (minted_by / expected_consumer) and the
 # hook-written changelog-analyst dispatch attestation. Shared with
@@ -199,13 +199,20 @@ from lib import commit_journal  # noqa: E402
 
 BLESSED_BRIDGE_RE = re.compile(r'auto-bulk:\s*end-of-cycle commit for\b')
 
-GIT_GLOBAL_OPTION_RE = (
-    r'(?:\s+(?:-[Cc]\s+\S+|-[Cc]\S+|'
-    r'--(?:git-dir|work-tree|namespace|exec-path|super-prefix|config-env)'
-    r'(?:=\S+|\s+\S+)|'
-    r'--(?:bare|no-pager|paginate|no-replace-objects|literal-pathspecs|'
-    r'glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|'
-    r'-[pP]))*'
+
+def _option_alternation(opts):
+    return '|'.join(re.escape(o) for o in sorted(opts, key=lambda o: (-len(o), o)))
+
+
+# git's global options between `git` and the subcommand, built from the
+# classifier's option table: a value option and its value (the next word, or
+# `=value` for a long one) or a flag (`=value` allowed: `--exec-path=<dir>`). Git
+# rejects the attached `-C<dir>` / `-cname=value`; the guard still reads them as
+# `-C <dir>` / `-c <name>=<value>`.
+GIT_GLOBAL_OPTION_RE = r'(?:\s+(?:(?:%s)\s*\S+|(?:%s)(?:=\S+|\s+\S+)|(?:%s)(?:=\S+)?))*' % (
+    _option_alternation(o for o in GIT_GLOBAL_VALUE_OPTS if not o.startswith('--')),
+    _option_alternation(o for o in GIT_GLOBAL_VALUE_OPTS if o.startswith('--')),
+    _option_alternation(GIT_GLOBAL_FLAGS),
 )
 GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 
@@ -587,7 +594,7 @@ def _iter_commit_invocations(command):
         i = 0
         while i < len(after_git):
             a = after_git[i]
-            if a in _GIT_GLOBAL_VALUE:
+            if a in GIT_GLOBAL_VALUE_OPTS:
                 i += 2
                 continue
             if a.startswith('-'):

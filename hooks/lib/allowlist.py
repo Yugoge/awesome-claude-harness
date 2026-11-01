@@ -285,12 +285,13 @@ def _bash_subcommands(command: str) -> list[str]:
 
 
 # git global options that may be skipped when locating the subcommand for grant
-# matching. DELIBERATELY NARROWER than git_command_classifier._GIT_GLOBAL_VALUE:
-# that set is for *classification* (identify the verb no matter what), while this
-# one gates *authorization*. Only options that retarget the repository or toggle
-# a no-op are listed; every option carrying a code-execution vector is omitted on
-# purpose, so a command bearing one never inherits a shorter grant and instead
-# fails closed:
+# matching: a subset of git_command_classifier's git global-option table (a test
+# pins it; the core install profile ships this module without the classifier),
+# DELIBERATELY NARROWER: the table is for *classification* (identify the verb no
+# matter what), while this subset gates *authorization*. Only options that
+# retarget the repository or toggle a no-op are listed; every option carrying a
+# code-execution vector is omitted on purpose, so a command bearing one never
+# inherits a shorter grant and instead fails closed:
 #   -c <k=v> / --config-env=  -> core.pager, alias.*, core.sshCommand,
 #                                uploadpack.packObjectsHook => arbitrary exec
 #   --exec-path[=<p>]         -> redirects the git subcommand binaries
@@ -304,7 +305,8 @@ def _bash_subcommands(command: str) -> list[str]:
 # which DO have a real `=`-joined attached form. So `-C` is deliberately
 # excluded from _GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES — including it would
 # model a syntax that does not exist (harmless, since git itself fails closed
-# on that token before running anything, but incorrect domain modeling).
+# on that token before running anything, but incorrect domain modeling). The
+# table says the same: only its long value options take `=<value>`.
 _GRANT_SKIPPABLE_GIT_VALUE_OPTS = frozenset({
     '-C', '--git-dir', '--work-tree', '--namespace',
 })

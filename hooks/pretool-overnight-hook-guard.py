@@ -33,6 +33,7 @@ from lib.bash_write_targets import (  # noqa: E402
 )
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib import overnight  # noqa: E402
+from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
 
 try:  # T2.4: optional contract runtime + agent resolver for self_repair grant.
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -1100,17 +1101,6 @@ def _config_key_redirects_keystone(key: str) -> bool:
     return k.startswith('includeif.') and k.endswith('.path')
 
 
-# Git GLOBAL options that consume the FOLLOWING token as a separate operand
-# (e.g. `git -C <dir> -c include.path=… status`). The scanner MUST skip the
-# operand so it does not mistake it for the subcommand boundary and stop before a
-# later config injection (codex F2 — the realistic `git -C <worktree> -c …`
-# shape). `-c` / `--config-env` are handled specially above; these are the other
-# value-taking globals that may legitimately precede the injection.
-_GIT_GLOBAL_OPTS_WITH_OPERAND = frozenset({
-    '-C', '--git-dir', '--work-tree', '--namespace', '--super-prefix',
-})
-
-
 def _git_invocation_injects_keystone_config(subtoks: list[str]) -> bool:
     """Token-aware config-firewall over ONE git invocation's argv (the tokens
     AFTER the `git` word, as produced by `_iter_git_invocations`). Scans only the
@@ -1160,15 +1150,16 @@ def _git_invocation_injects_keystone_config(subtoks: list[str]) -> bool:
         # follow, so stop scanning.
         if t == '--':
             break
-        # A value-taking git global option (`-C <dir>`, `--git-dir <d>`, …):
-        # skip BOTH the option and its operand so a later `-c` injection is still
-        # reached (codex F2). The glued `-C<dir>` / `--git-dir=<d>` forms carry
-        # the value in-token and consume no separate operand.
-        if t in _GIT_GLOBAL_OPTS_WITH_OPERAND:
+        # Any other value-taking git global option (`-C <dir>`, `--git-dir <d>`,
+        # …, from the classifier's option table): skip BOTH the option and its
+        # operand so a later `-c` injection is still reached (codex F2). The
+        # glued `-C<dir>` / `--git-dir=<d>` forms carry the value in-token and
+        # consume no separate operand.
+        if t in GIT_GLOBAL_VALUE_OPTS:
             j += 2
             continue
         if (t.startswith('-C') and len(t) > 2) or any(
-                t.startswith(o + '=') for o in _GIT_GLOBAL_OPTS_WITH_OPERAND):
+                t.startswith(o + '=') for o in GIT_GLOBAL_VALUE_OPTS):
             j += 1
             continue
         # Reaching the first non-option token ends the git global-option region:
