@@ -20,10 +20,8 @@ Driver arguments this module reads (cli.py --arg K=V; inner.py installs it when 
         Every block passes, recorded in blocks.json as a deviation would record it, so the replay goes
         on past it as the base replay does. The test compares the two replays' blocks afterwards (same
         hook, same step by its normalised label: a todo step by its content, same refusal by its
-        normalised first line).
-    blocks_keep=<hook>
-        With `blocks=pass`: a SubagentStop block of that registered hook (hooks/<file>) is never passed;
-        it goes back to the stopping agent as on the base (an injected fault's own rounds).
+        normalised first line). A stop block naming an artifact an injected fault (faults.py) left
+        unrepaired is not passed: it goes back to that agent, as on the base (the fault's own rounds).
 
 facts.json "landing" records where the home landed, the commit before and after, and the stores of the
 base G2's no-progress round found on disk at that moment.
@@ -128,6 +126,13 @@ class _Pass:
         return True
 
 
+def _fault_round(rp, ev) -> bool:
+    """A subagent's stop block naming an artifact an injected fault left unrepaired (faults.py)."""
+    text = "\n".join((h.get("stderr") or "") + (h.get("stdout") or "") for h in ev.blocks)
+    return ev.event == "SubagentStop" and any(path and path in text and not f["rec"]["repaired"]
+                                              for path, f in (getattr(rp, "fault_pending", None) or {}).items())
+
+
 def install(rp) -> None:
     """Register what the arguments `land` and `blocks` ask for on rp (see the module text)."""
     spec = rp.args.get("land")
@@ -154,12 +159,11 @@ def install(rp) -> None:
         raise ValueError(f"blocks wants pass, not {rp.args['blocks']!r}")
     if rp.args.get("blocks") != "pass":
         return
-    keep = rp.args.get("blocks_keep") or None
     settle = rp.settle
     passes = _Pass("live landing: every block passes, recorded (compared with the base replay's after the run)")
 
     def settle_passing(ev, label, deviation=None):
-        if ev is None or not ev.blocks or (ev.event == "SubagentStop" and any(b["hook"] == keep for b in ev.blocks)):
+        if ev is None or not ev.blocks or _fault_round(rp, ev):
             return settle(ev, label, deviation)
         devs = [] if deviation is None else list(deviation) if isinstance(deviation, (list, tuple)) else [deviation]
         return settle(ev, label, devs + [passes])
