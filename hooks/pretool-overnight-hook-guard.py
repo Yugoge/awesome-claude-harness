@@ -1230,6 +1230,9 @@ _GIT_TOKEN_RE = re.compile(r'(?<![\w./-])(?:/[\w./-]*/)?git\b')
 _DANGEROUS_GIT_OP_RE = re.compile(
     r'\b(checkout|switch|reset|restore|clean|stash|update-ref|symbolic-ref|'
     r'branch|merge|rebase|pull|cherry-pick|am|worktree)\b')
+# P2 R6: a command names a harness script through the CLAUDE_HOME channel; the operand scan
+# reads it at the path the shell expands it to (CLAUDE_HOME, else the home this hook runs from).
+_CHANNEL_RE = re.compile(r'^\$\{CLAUDE_HOME:-\$HOME/\.claude\}(?=/)')
 
 
 # Per-request working root of the record GOVERNING this actor, for `in_place`
@@ -1398,8 +1401,9 @@ def _scan_script_files_for_main_git(command: str, main_real: str) -> bool:
         return False
     # If the command itself names main_root + a dangerous git op, the inline scan
     # already covers it; here we focus on file operands.
+    home = os.environ.get('CLAUDE_HOME') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for tok in command.split():
-        t = tok.strip('\'"')
+        t = _CHANNEL_RE.sub(lambda _m: home, tok.strip('\'"'))
         if not t or t.startswith('-'):
             continue
         # heuristically a script operand: a path ending in a known script ext OR
