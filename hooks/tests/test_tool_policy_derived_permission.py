@@ -335,11 +335,12 @@ def test_the_hook_never_opens_the_transcript_for_such_a_write(tmp_path):
 
 def test_the_declarable_shapes_are_read_from_the_command_files(tmp_path, monkeypatch):
     policy = _policy()
-    from lib import stop_contract
+    from lib import command_span, stop_contract
 
     commands = tmp_path / "commands"
     commands.mkdir()
     monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+    monkeypatch.setattr(command_span, "COMMANDS_DIR", commands)  # harness_commands' own (P5 R10)
     forms = lambda target: policy._target_forms(target, {"cwd": str(PROJECT)})  # noqa: E731
     # No command file: only the producer question's shape (G2's rule) remains.
     shapes = policy._declarable_shapes()
@@ -968,7 +969,7 @@ def test_a_value_that_takes_a_part_back_is_read_from_the_prompt(tmp_path, monkey
     # without the tail, which the prompt then holds; a segment binding two is read whatever the prompt
     # holds. Every decision equals the full reading's, and both kinds of template make a denial.
     policy = _policy("tool_policy_back")
-    from lib import declared_paths, stop_contract
+    from lib import command_span, declared_paths, stop_contract
 
     one = ("subagent_type: worker\nPart C: <c>\n", '{"role": "worker", "profile": "singular", "artifacts": '
            '[{"kind": "markdown", "path": "docs/dev/s-<c>.md", "identity_anchor": "<c>"}]}')
@@ -988,6 +989,7 @@ def test_a_value_that_takes_a_part_back_is_read_from_the_prompt(tmp_path, monkey
         commands = tmp_path / f"commands{n}"
         commands.mkdir()
         monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+        monkeypatch.setattr(command_span, "COMMANDS_DIR", commands)  # harness_commands' own (P5 R10)
         (commands / "x.md").write_text("---\nname: x\n---\n```\n" + fence + "<obligation v=\"1\">\n" + example
                                        + "\n</obligation>\n```\n", encoding="utf-8")
         s = Session(tmp_path / f"projects{n}")
@@ -1070,7 +1072,7 @@ def test_the_template_bounds_hold_every_commands_template_shapes(tmp_path, monke
     # an opener with no close, two openers before one close, blocks outside any fence, spaces around
     # the JSON that only a Unicode-aware strip removes, and a path of any shape (then both are _ANY).
     policy = _policy("tool_policy_bounds")
-    from lib import declared_paths, stop_contract
+    from lib import command_span, declared_paths, stop_contract
 
     def check():
         declared_paths._FENCE_SHAPES.clear()
@@ -1095,6 +1097,7 @@ def test_the_template_bounds_hold_every_commands_template_shapes(tmp_path, monke
     commands = tmp_path / "commands"
     commands.mkdir()
     monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+    monkeypatch.setattr(command_span, "COMMANDS_DIR", commands)  # harness_commands' own (P5 R10)
     example = '{"role": "ba", "profile": "singular", "artifacts": [{"kind": "markdown", "path": "docs/dev/%s-<t>.md"}]}'
     (commands / "a.md").write_text(
         "---\n---\n```\nsubagent_type: ba\n<obligation v=\"1\">  " + example % "one" + "　\n</obligation>\n```\n"
@@ -1228,7 +1231,7 @@ def test_the_declarable_shapes_decode_only_an_escaped_value(tmp_path, monkeypatc
     # A path value with no backslash is taken as written; json.loads gave the same (or refused a control
     # character, and the raw text was taken). The shapes equal the ones decoding every value gave.
     policy = _policy("tool_policy_shape_values")
-    from lib import declared_paths, stop_contract
+    from lib import command_span, declared_paths, stop_contract
 
     def decoded_every_value():
         shapes = {declared_paths._shape(declared_paths._QUESTION_PATH)}
@@ -1245,6 +1248,7 @@ def test_the_declarable_shapes_decode_only_an_escaped_value(tmp_path, monkeypatc
     commands = tmp_path / "commands"
     commands.mkdir()
     monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+    monkeypatch.setattr(command_span, "COMMANDS_DIR", commands)  # harness_commands' own (P5 R10)
     (commands / "x.md").write_text('"path": "a/b\\u002ec"\n"path": "d/e\\/f.md"\n"path": "g/h\tij.json"\n'
                                    '"path": "k/<l>\\\\m"\n"path": "n/\\q"\n', encoding="utf-8")
     with declared_paths.decision():

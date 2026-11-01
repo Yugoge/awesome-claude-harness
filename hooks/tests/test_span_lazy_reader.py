@@ -276,7 +276,7 @@ def _forward_span(path):
         number += 1
         if any(n in raw for n in command_span._USER_RECORD) and command_span._RESULT_BLOCK not in raw:
             record = command_span._decode(raw)
-            opener = command_span.stop_contract.span_opener(record, command_span.stop_contract.harness_commands()) \
+            opener = command_span.span_opener(record, command_span.harness_commands()) \
                 if record else None
             if opener:
                 found = (opener[0], opener[1], number)

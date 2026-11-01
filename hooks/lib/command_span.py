@@ -1,19 +1,28 @@
-"""Read-only span reader for a main-session transcript (TC-4).
+"""Read-only span reader for a main-session transcript (TC-4), and the one
+rule of which transcript record is a prompt the human typed.
 
 The span is the records after the latest human-typed harness command outside
-stop_contract.CONTROL_COMMANDS. Every plain prompt continues it; built-in and
-plugin commands, CONTROL commands and every record not typed by the human
-(Skill-tool expansions, subagent records, tool results, queue-operation and
-attachment records) never change it. The opener rule lives in stop_contract.
-P1 ships the span itself, whose command G1 reads. P1b's E7 added the span's
-calls() and last_todos(): every TodoWrite and Agent call the CLI ran is in the
-record, so the checklist readers take them from here and no hook keeps a copy
-of them in a file.
+CONTROL_COMMANDS. Every plain prompt continues it; built-in and plugin
+commands, CONTROL commands and every record not typed by the human
+(Skill-tool expansions, scheduled prompts, subagent records, tool results,
+queue-operation and attachment records) never change it. P1 ships the span
+itself, whose command G1 reads. P1b's E7 added the span's calls() and
+last_todos(): every TodoWrite and Agent call the CLI ran is in the record, so
+the checklist readers take them from here and no hook keeps a copy of them in
+a file.
 
 write_set() is TC-46's one write-set reader, for any transcript (a main
 session's from its span opener on, or a subagent's whole file): the record the
 CLI writes of the agent's own tool calls, never an agent's report of them.
 P1b's E6 took it as the producer of "which files this agent wrote".
+
+Stdlib only, importing no harness module (P5 R10): the Stop launcher loads
+this module alone, so a broken stop_contract.py or coordinator leaves it
+loadable. stop_contract.py re-exports the human-record rule from here. The
+command sets live in stop-commands.json beside this file, which the launcher
+reads too. Only human-typed records count; no CLI error or cancellation
+record is read (D4c), and nothing an agent writes opens, replaces or closes a
+span.
 """
 from __future__ import annotations
 
@@ -24,10 +33,118 @@ import stat
 from collections import namedtuple
 from pathlib import Path
 
-try:  # imported as hooks.lib.command_span (tests) or lib.command_span (hooks)
-    from . import stop_contract
-except ImportError:  # hooks/lib placed directly on sys.path
-    import stop_contract  # type: ignore[no-redef]
+COMMANDS_DIR = Path(__file__).resolve().parent.parent.parent / "commands"
+COMMAND_SETS_FILE = Path(__file__).resolve().parent / "stop-commands.json"
+
+
+def _command_sets() -> tuple[tuple, tuple]:
+    sets = json.loads(COMMAND_SETS_FILE.read_text(encoding="utf-8"))
+    return tuple(sets["GATED_COMMANDS"]), tuple(sets["CONTROL_COMMANDS"])
+
+
+# The commands a Stop gate guards, and the commands that never open a span.
+GATED_COMMANDS, CONTROL_COMMANDS = _command_sets()
+
+# Markers a typed prompt never carries: a Skill-tool expansion (isMeta,
+# sourceToolUseID), a subagent's own records (isSidechain), a tool result.
+_NON_HUMAN_KEYS = ("isMeta", "isSidechain", "sourceToolUseID", "toolUseResult")
+# The CLI records a typed command as <command-message>..</command-message>
+# <command-name>/x</command-name><command-args>..</command-args> at the start.
+_CMD_TAG_RE = re.compile(
+    r"\s*(?:<command-message>.*?</command-message>\s*)?<command-name>/?([A-Za-z0-9:_-]+)</command-name>", re.S
+)
+_ARGS_TAG_RE = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+_SLASH_RE = re.compile(r"\s*/([A-Za-z0-9:_-]+)(?:\s+(.*))?\Z", re.S)
+
+
+def harness_commands() -> frozenset:
+    """commands/*.md stems of this harness, INDEX and README excluded."""
+    try:
+        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.stem not in ("INDEX", "README"))
+    except OSError:
+        return frozenset()
+
+
+def prompt_text(record) -> str | None:
+    """Text of a human-typed prompt record, else None (TC-4)."""
+    if not isinstance(record, dict) or record.get("type") != "user":
+        return None
+    if any(record.get(key) for key in _NON_HUMAN_KEYS):
+        return None
+    for key in ("origin", "turnOrigin"):  # a typed prompt records origin kind "human"
+        value = record.get(key)
+        kind = value.get("kind") if isinstance(value, dict) else value
+        if kind is not None and kind != "human":
+            return None
+    message = record.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list) or any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+        return None
+    return "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text") or None
+
+
+def is_human_prompt(record) -> bool:
+    return prompt_text(record) is not None
+
+
+def slash_command(text: str) -> tuple[str, str] | None:
+    """(name, args) of a slash command typed as ``/x`` or recorded as
+    ``<command-name>/x</command-name>``, else None."""
+    match = _CMD_TAG_RE.match(text)
+    if match:
+        args = _ARGS_TAG_RE.search(text)
+        return match.group(1), (args.group(1).strip() if args else "")
+    match = _SLASH_RE.match(text)
+    return (match.group(1), (match.group(2) or "").strip()) if match else None
+
+
+def span_opener(record, commands: frozenset) -> tuple[str, str] | None:
+    """(command, args) when ``record`` is a human-typed harness command outside
+    CONTROL_COMMANDS; built-in and plugin commands never qualify."""
+    text = prompt_text(record)
+    found = slash_command(text) if text is not None else None
+    if found and found[0] in commands and found[0] not in CONTROL_COMMANDS:
+        return found
+    return None
+
+
+def active_command(transcript_path) -> str | None:
+    """The latest human-typed harness command outside CONTROL_COMMANDS in the
+    whole transcript, or None (no such prompt, or the file is unreadable)."""
+    found = openers(transcript_path)
+    return found[-1][1] if found else None
+
+
+def openers(transcript_path, commands: frozenset | None = None) -> list[tuple[int, str, str]]:
+    """(line, command, args) of each human-typed harness command outside
+    CONTROL_COMMANDS in the whole transcript, in order; [] when it cannot be
+    read. ``commands`` defaults to this harness's commands/*.md stems."""
+    commands = harness_commands() if commands is None else commands
+    found = []
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as handle:
+            for number, line in enumerate(handle, 1):
+                if '"user"' not in line:
+                    continue
+                try:
+                    opener = span_opener(json.loads(line), commands)
+                except ValueError:
+                    continue
+                if opener:
+                    found.append((number, opener[0], opener[1]))
+    except (OSError, TypeError, ValueError):
+        return []
+    return found
+
+
+def timelock_released(transcript_path) -> bool:
+    """True iff the latest human-typed /stop or /dev-overnight record of the
+    transcript is /stop: the human's /stop follows the session's latest
+    /dev-overnight."""
+    span = active_span(transcript_path, frozenset(("stop", "dev-overnight")))
+    return span is not None and span.command == "stop"
 
 
 class Call(namedtuple("Call", "id name input line result_line ok")):
@@ -399,7 +516,7 @@ def _last_opener(data: bytes, lo: int, hi: int, commands: frozenset):
             end = hi if end < 0 else end
             if any(data.find(needle, begin, end) >= 0 for needle in _USER_RECORD):
                 record = _decode(data[begin:end])
-                opener = stop_contract.span_opener(record, commands) if record else None
+                opener = span_opener(record, commands) if record else None
                 if opener:
                     return begin, end, opener
         pos = data.rfind(_USER_WORD, lo, begin)
@@ -427,7 +544,7 @@ def active_span(transcript_path: str | Path, commands: frozenset | None = None) 
     are neither read nor decoded. A span longer than those chunks is searched
     in one read of the whole file, as copying ever larger chunks together
     would cost more than reading the file once."""
-    commands = stop_contract.harness_commands() if commands is None else commands
+    commands = harness_commands() if commands is None else commands
     try:
         handle = open(transcript_path, "rb")
         info = os.fstat(handle.fileno())
