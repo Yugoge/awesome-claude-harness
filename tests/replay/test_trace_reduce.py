@@ -141,3 +141,27 @@ def test_git_reading_a_work_tree_against_its_index_is_not_its_callers_read(tmp_p
     assert ("toy.py", "read") not in kept and ("toy.py", "write") in kept    # a write is never left out
     assert ("notes.md", "read") in kept
     assert stats["stat_reads"] == 3
+
+
+def _namespaced(translated: bool) -> list[str]:
+    """Hook a's shell (200) runs bubblewrap with --unshare-pid (300, the overnight guard's write
+    boundary), whose child in the new PID namespace (301 here, 2 there) writes a file."""
+    ret = "2 /* 301 in strace's PID NS */" if translated else "2"
+    return [run(100, "/usr/bin/python3", "python3", "-m", "replay.inner"), mark(100, 1, "event"),
+            "100 vfork() = 200", run(200, "/bin/bash", "bash", f"{H}/hooks/a.sh"),
+            "200 clone(child_stack=NULL, flags=CLONE_NEWNS|CLONE_NEWPID|SIGCHLD) = 300",
+            f"300 clone(child_stack=NULL, flags=SIGCHLD) = {ret}",
+            opn(301, f"{P}/out.txt", "O_WRONLY|O_CREAT|O_TRUNC, 0644"),
+            "301 +++ exited with 0 +++", "300 +++ exited with 0 +++", "200 +++ exited with 0 +++",
+            "100 +++ exited with 0 +++"]
+
+
+def test_a_fork_inside_another_pid_namespace_keeps_its_parent(tmp_path):
+    """A fork inside another PID namespace returns the child's pid there; with --pidns-translation
+    strace adds the pid the trace lines carry, and the child is its parent's process (hook a's), not
+    an orphan the driver ("cli") is charged with."""
+    assert "--pidns-translation" in trace.strace_argv("/dev/null")
+    events, _stats = reduce(tmp_path, _namespaced(True), [("event", "1")])
+    assert {c for c, _op in comps_of(events, f"{P}/out.txt")} == {"hooks/a.sh"}
+    events, _stats = reduce(tmp_path, _namespaced(False), [("event", "1")])
+    assert {c for c, _op in comps_of(events, f"{P}/out.txt")} == {"cli"}

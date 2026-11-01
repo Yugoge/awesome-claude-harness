@@ -577,6 +577,7 @@ class Actor:
             self._result(tid, f"PreToolUse:{name} hook error: {text}", error=True)
             self.rp.after(step, call)
             return call
+        tinput = updated_input(call.pre, tinput)
         perform = step["perform"] or _default_perform(self, name, tinput)
         try:
             with self.rp.acting(self.role):
@@ -729,6 +730,18 @@ class Actor:
 
 
 # ---------------------------------------------------------------- tool effects
+
+def updated_input(pre: Event | None, tinput: dict) -> dict:
+    """The input the tool runs with: a PreToolUse hook that allows the call may print
+    hookSpecificOutput.updatedInput, whose fields replace the model's (the CLI's hooks reference,
+    PreToolUse decision control), and PostToolUse sees the input the tool ran with.
+    pretool-overnight-hook-guard.py rewrites an overnight actor's Bash command into its bubblewrap
+    re-exec this way (hookrun keeps it as "updated_input"). The transcript keeps the model's tool_use."""
+    for h in (pre.hooks if pre else []):
+        if h["verdict"] == "ok" and h.get("updated_input"):
+            tinput = dict(tinput, **h["updated_input"])
+    return tinput
+
 
 def _result_text(resp) -> str:
     if isinstance(resp, dict):

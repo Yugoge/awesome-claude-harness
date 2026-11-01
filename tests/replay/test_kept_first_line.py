@@ -175,3 +175,32 @@ def test_an_old_blocks_json_still_loads(tmp_path, kit, capsys):
     rp = make_replay(tmp_path, "tree", kit)
     call = plan_call(rp, "ARTIFACT_CHAIN=$(resolve); echo short", KeptOnly(DEVS, kept))
     assert not call.blocked and rp.blocks[0]["passed_by_deviation"]
+
+
+REWRITE = r'''
+import json, sys
+json.load(sys.stdin)
+new = "echo rewritten > rewritten.txt  # " + "x" * 5000
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": {"command": new}}}))
+'''
+
+
+def test_a_pretool_input_rewrite_is_what_the_tool_runs(tmp_path, kit):
+    """A PreToolUse hook that allows a call may rewrite its input (hookSpecificOutput.updatedInput, as
+    pretool-overnight-hook-guard.py re-execs an overnight actor's Bash call inside bubblewrap): the
+    tool runs the rewritten input, kept whole even past the output tail; the transcript keeps the
+    model's tool_use."""
+    (kit / "hooks" / "rewrite.py").write_text(REWRITE, encoding="utf-8")
+    rp = make_replay(tmp_path, "rewrite", kit)
+    rp.settings = settings(kit, "rewrite.py")
+    s = rp.session(start=None)
+    call = s.main.tool("Bash", {"command": "echo original > original.txt"}, label="step")
+    assert call.ok and not call.blocked
+    project = Path(rp.layout.project)
+    assert (project / "rewritten.txt").read_text() == "rewritten\n" and not (project / "original.txt").exists()
+    hook = call.pre.hooks[0]
+    assert len(hook["stdout"]) == hookrun.TAIL and hook["updated_input"]["command"].startswith("echo rewritten")
+    with open(s.tpath) as fh:
+        uses = [c for r in map(json.loads, fh) for c in (r.get("message") or {}).get("content") or []
+                if isinstance(c, dict) and c.get("type") == "tool_use"]
+    assert uses[-1]["input"]["command"] == "echo original > original.txt"
