@@ -33,12 +33,12 @@ All agents communicate via JSON in `tests/reports/`.
 Load TodoList checklist:
 
 ```bash
-source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/test.py
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/todo/test.py"
 ```
 
 Set up working directory: create `tests/reports/`, generate `REQUEST_ID="test-$(date +%Y%m%d-%H%M%S)"` and `TIMESTAMP` in ISO-8601 format.
 
-**Test folder structure**: If `tests/` does not exist, initialize it by creating subdirectories `tests/{scripts,instructions,data/fixtures,data/mocks,reports}` and copying template files from `~/.claude/tests/` (README.md, INDEX.md, and instructions/*.md).
+**Test folder structure**: If `tests/` does not exist, initialize it by creating subdirectories `tests/{scripts,instructions,data/fixtures,data/mocks,reports}` and copying template files from `<HARNESS_ROOT>/tests/` (README.md, INDEX.md, and instructions/*.md).
 
 ### Step 2: Analyze Git History for Edge Cases
 
@@ -46,7 +46,7 @@ Analyze git history to identify real edge cases from bug fix commits:
 
 ```bash
 # Run git edge case analyzer
-~/.claude/scripts/analyze-git-edge-cases.sh \
+bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/analyze-git-edge-cases.sh" \
   --project-root "$(pwd)" \
   --since-date "90.days.ago" \
   --output "docs/test/edge-case-analysis.json"
@@ -74,7 +74,7 @@ Check if old `test/` folder exists and migrate to `tests/`:
 if [[ -d "test" ]] && [[ ! -d "tests" || "test" -nt "tests" ]]; then
   echo "Found test/ folder - migrating to tests/ (Python standard naming)"
 
-  ~/.claude/scripts/migrate-test-to-tests.sh --project-root "$(pwd)"
+  bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/migrate-test-to-tests.sh" --project-root "$(pwd)"
 
   if [[ $? -eq 0 ]]; then
     echo "✅ Migration complete - review tests/ folder"
@@ -82,7 +82,7 @@ if [[ -d "test" ]] && [[ ! -d "tests" || "test" -nt "tests" ]]; then
   fi
 elif [[ -d "test" ]] && [[ -d "tests" ]]; then
   echo "⚠️  Both test/ and tests/ exist - manual review recommended"
-  echo "   Run: ~/.claude/scripts/migrate-test-to-tests.sh --project-root $(pwd)"
+  echo "   Run: bash ${CLAUDE_HOME:-$HOME/.claude}/scripts/migrate-test-to-tests.sh --project-root $(pwd)"
 fi
 ```
 
@@ -100,7 +100,7 @@ Remove validators that don't correspond to edge cases found in git history:
 if [[ -f "docs/test/edge-case-analysis.json" ]] && [[ -d "tests" ]]; then
   echo "Cleaning tests/ folder based on git history analysis..."
 
-  ~/.claude/scripts/cleanup-tests-folder.sh \
+  bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/cleanup-tests-folder.sh" \
     --project-root "$(pwd)" \
     --edge-case-analysis "docs/test/edge-case-analysis.json"
 
@@ -203,7 +203,7 @@ Create comprehensive JSON context for validator subagent:
   "context": {
     "project_root": "/absolute/path/to/project",
     "test_directory": "/absolute/path/to/project/tests",
-    "venv_path": "~/.claude/venv",
+    "venv_path": "<HARNESS_ROOT>/venv",
     "validators": [
       {
         "type": "script",
@@ -262,7 +262,7 @@ Create comprehensive JSON context for executor subagent:
   "context": {
     "project_root": "/absolute/path/to/project",
     "test_directory": "/absolute/path/to/project/tests",
-    "venv_path": "~/.claude/venv",
+    "venv_path": "<HARNESS_ROOT>/venv",
     "validators": [
       {
         "type": "script",
@@ -294,7 +294,7 @@ Before execution, create a safety checkpoint on `refs/checkpoints/<branch>`
 handles the no-changes case (exit 0) internally, so no guard is needed here.
 
 ```bash
-bash ~/.claude/hooks/checkpoint.sh "Before /test execution"
+bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/checkpoint.sh" "Before /test execution"
 
 # Record checkpoint ref in context (refs/checkpoints/<branch>, not HEAD)
 CURRENT_BRANCH=$(git branch --show-current)
@@ -335,7 +335,7 @@ Use Task tool with:
   7. Write execution report to: tests/reports/execution-report-${REQUEST_ID}.json
 
   Execution requirements:
-  - Activate venv: source ~/.claude/venv/bin/activate
+  - Activate venv: source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate"
   - Pass --project-root parameter to all script validators
   - Capture stdout (JSON), stderr (errors), exit codes
   - Timeout: 30 seconds per validator
@@ -391,7 +391,7 @@ Format and display failures:
 - commands/clean.md:36
 - commands/dev.md:23
 
-**Recommendation**: Use `source ~/.claude/venv/bin/activate && python3` pattern for all Python invocations
+**Recommendation**: Use `source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3` pattern for all Python invocations
 
 **Fix Command**:
 Manual fix: edit each affected file and update venv usage to match the project's activation pattern.
@@ -491,11 +491,11 @@ Create `tests/reports/completion-{REQUEST_ID}.md` summarizing: request ID, proje
 
 ## Test Folder Initialization
 
-If project has no `tests/` directory, initialize it: create subdirectories `{scripts,instructions,data/fixtures,data/mocks,reports}`, copy template README.md and INDEX.md from `~/.claude/tests/`, and copy instruction templates from `~/.claude/tests/instructions/`. Implement validators per `docs/test/edge-case-analysis.json`.
+If project has no `tests/` directory, initialize it: create subdirectories `{scripts,instructions,data/fixtures,data/mocks,reports}`, copy template README.md and INDEX.md from `<HARNESS_ROOT>/tests/`, and copy instruction templates from `<HARNESS_ROOT>/tests/instructions/`. Implement validators per `docs/test/edge-case-analysis.json`.
 
 ## Scripts
 
-- `~/.claude/scripts/todo/test.py` — Workflow checklist
-- `~/.claude/scripts/analyze-git-edge-cases.sh` — Git history edge case analyzer
-- `~/.claude/scripts/cleanup-tests-folder.sh` — Remove non-git validators
-- `~/.claude/scripts/migrate-test-to-tests.sh` — Migrate test/ to tests/
+- `<HARNESS_ROOT>/scripts/todo/test.py` — Workflow checklist
+- `<HARNESS_ROOT>/scripts/analyze-git-edge-cases.sh` — Git history edge case analyzer
+- `<HARNESS_ROOT>/scripts/cleanup-tests-folder.sh` — Remove non-git validators
+- `<HARNESS_ROOT>/scripts/migrate-test-to-tests.sh` — Migrate test/ to tests/

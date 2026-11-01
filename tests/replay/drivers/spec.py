@@ -275,19 +275,21 @@ class SpecText:
                 self.create_block = b.text
         self.writer = self.create_block is not None
 
-    def heredoc(self) -> tuple[str, str, str]:
-        """(prefix before `spec-write.py`, heredoc opener, delimiter) of the text's create block."""
+    def heredoc(self) -> tuple[str, str, str, str]:
+        """(prefix before `spec-write.py`, the quote closing its path, heredoc opener, delimiter) of the
+        text's create block."""
         first = self.create_block.split("\n")[0]
-        m = re.match(r"^(.*?)spec-write\.py create --spec \S+\s*(<<'?(\w+)'?)\s*$", first)
+        m = re.match(r"^(.*?)spec-write\.py(\"?) create --spec \S+\s*(<<'?(\w+)'?)\s*$", first)
         if not m:
             raise cmdtext.TextNotFound("Step 3's writer block has no `spec-write.py create --spec ... <<'X'` line")
-        return m.group(1), m.group(2), m.group(3)
+        return m.group(1), m.group(2), m.group(3), m.group(4)
 
     def call(self, inline: str, body: str) -> str:
         """A writer command: the text's inline call (`spec-write.py append --spec <spec_path> ...`),
         placeholders bound, behind the create block's interpreter, with `body` as its heredoc."""
-        prefix, opener, delim = self.heredoc()
-        return f"{prefix}{self.o.bind(inline)} {opener}\n{body.rstrip(chr(10))}\n{delim}"
+        prefix, quote, opener, delim = self.heredoc()
+        inline = self.o.bind(inline).replace("spec-write.py", "spec-write.py" + quote, 1)
+        return f"{prefix}{inline} {opener}\n{body.rstrip(chr(10))}\n{delim}"
 
     def inline(self, heading: str, anchor: str, section_arg: str) -> str:
         """The inline writer call of the item holding `anchor` whose --section is `section_arg`."""
@@ -820,13 +822,13 @@ class SpecRun:
         o, s, rp = self.o, self.s, self.rp
         sec = o.section("Step 3")
         tpl_rel = re.search(r"Read the template at `([^`]+)`", sec).group(1)
-        tpl = tpl_rel.replace("~", rp.layout.home, 1)
+        tpl = tpl_rel.replace("<HARNESS_ROOT>", rp.layout.harness, 1).replace("~", rp.layout.home, 1)
         s.read(tpl, label="Step 3 Read template", deviation=o.devs.at("Step 3 Read template"))
         text = _read(rp, tpl)
         self.ts = utc_now().replace("-", "").replace(":", "").replace("T", "-").rstrip("Z")
         rp.task(self.ts)
         path_line = next(b.text for b in cmdtext.blocks(o.text, "Step 3") if "docs/dev/specs/spec-" in b.text).strip()
-        path_line = re.sub(r"\$\{CLAUDE_PROJECT_DIR:-\$\(pwd\)\}", self.project, path_line)
+        path_line = re.sub(r"\$\{CLAUDE_PROJECT_DIR:-\$\((?:pwd|git rev-parse --show-toplevel)\)\}", self.project, path_line)
         self.path = o.bind(path_line)
         # Step 3 item 3: the placeholders it names, Section 5 the requirement verbatim.
         pop = sec[sec.index("Populate the template"):sec.index("Write the spec")]

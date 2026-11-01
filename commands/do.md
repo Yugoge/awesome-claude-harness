@@ -54,7 +54,7 @@ Enforcement: `hooks/stop-do-report-gate.py` (Stop hook) checks this report again
 
 **Resolve `TASK_ID` deterministically for the CURRENT session** — do NOT list the newest `claude-orchestrator-consent-*.flag` in the state dir (that returns the globally-newest flag, so two concurrent `/do` sessions alias onto ONE id and silently overwrite each other's do-reports — the cross-task data-loss bug this resolution exists to prevent). Instead:
 1. `SID = $CLAUDE_CODE_SESSION_ID` (fallback `$CLAUDE_SESSION_ID`).
-2. Read the session-keyed sidecar `claude-do-task-$SID.json` in the state dir, the path the `/do` consent hook in `hooks/prompt-workflow.py` printed when it minted it (the state dir is `$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`: `. ~/.claude/hooks/lib/harness_state_dir.sh; harness_state_dir`) and use its `task_id` field — a globally-unique, reservation-backed `YYYYMMDD-HHMMSS` timestamp. The hook is the only mint: it writes the sidecar in the same step as the consent flag, so never mint an id yourself.
+2. Read the session-keyed sidecar `claude-do-task-$SID.json` in the state dir, the path the `/do` consent hook in `hooks/prompt-workflow.py` printed when it minted it (the state dir is `$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`: `. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"; harness_state_dir`) and use its `task_id` field — a globally-unique, reservation-backed `YYYYMMDD-HHMMSS` timestamp. The hook is the only mint: it writes the sidecar in the same step as the consent flag, so never mint an id yourself.
 
 Use this `TASK_ID` for the do-report filename AND every downstream `/close $TASK_ID` / `/commit $TASK_ID`.
 

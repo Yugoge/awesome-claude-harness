@@ -6,7 +6,7 @@ disable-model-invocation: true
 # Push Command
 
 `/push` is the validated wrapper for normal branch publication. Note: pretool-git-privilege-guard.py is REGISTERED in settings.json (PreToolUse, Bash matcher) and enforces commit authorization — agents must hold a valid commit grant or use the `auto-bulk:` bridge prefix to commit. The wrapper
-script `~/.claude/hooks/push.sh` produces a valid push grant recognized by the guard.
+script `<HARNESS_ROOT>/hooks/push.sh` produces a valid push grant recognized by the guard.
 
 The slash entry has `disable-model-invocation: true` to prevent the model
 from autonomously self-dispatching `/push` via SlashCommand. It does NOT
@@ -218,13 +218,13 @@ validate-push and the actual push MUST be a
 sentinel at
 `<state dir>/agentic-commit/push-analyst/<REPO_HASH>/<BRANCH_ENCODED>-chainB.validated.sentinel.json`
 (atomic temp+rename, mtime ≤ 60s, bound to `request_id` + `head` + `branch` + `remote`)
-and then `os.execv`s `~/.claude/hooks/push.sh` so both run as ONE PID. The sentinel
+and then `os.execv`s `<HARNESS_ROOT>/hooks/push.sh` so both run as ONE PID. The sentinel
 is read ONLY once from inside push.sh; missing / expired / FAIL / mismatched sentinel
 triggers `exit 1` BEFORE any `git push` is reached.
 
 ```bash
 # Without --auto:
-python3 ~/.claude/scripts/execute-push.py \
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/execute-push.py" \
   --repo-hash "${REPO_HASH}" \
   --branch "${BRANCH}" \
   --remote "${RESOLVED_REMOTE}" \
@@ -232,7 +232,7 @@ python3 ~/.claude/scripts/execute-push.py \
   --repo-root "${REPO_ROOT}"
 
 # With --auto (only when /push was invoked with --auto):
-python3 ~/.claude/scripts/execute-push.py \
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/execute-push.py" \
   --repo-hash "${REPO_HASH}" \
   --branch "${BRANCH}" \
   --remote "${RESOLVED_REMOTE}" \

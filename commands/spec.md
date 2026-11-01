@@ -40,11 +40,11 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
 
 ### Step 3: Write first spec + dispatch background Explore
 
-1. Read the template at `~/.claude/templates/overnight-spec.md`. If missing, report error and stop.
+1. Read the template at `<HARNESS_ROOT>/templates/overnight-spec.md`. If missing, report error and stop.
 
 2. Generate the output path:
    ```
-   ${CLAUDE_PROJECT_DIR:-$(pwd)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md
+   ${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md
    ```
    Specs always land in the parent project directory, never inside an overnight worktree. Store the resulting absolute path as `spec_path` for reuse in Step 4. A fresh `/spec` invocation in a new session creates a new timestamped file; within-session follow-ups append to the same file.
 
@@ -56,10 +56,10 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
      keep their `<!-- consumers: [all] -->` line + `_Not yet populated._` placeholder
      until their own first entry — see the Design & Evidence Capture Routine below)
 
-4. Write the spec through its one writer, `~/.claude/scripts/spec-write.py`, naming it by its absolute path (the `UserPromptSubmit` hook of a later `/dev`, `/dev-command` or `/dev-overnight` in this session takes this session's last spec write as that run's spec, and reads the path from the line the writer prints). It creates `docs/dev/specs/` if needed and refuses an existing file:
+4. Write the spec through its one writer, `<HARNESS_ROOT>/scripts/spec-write.py`, naming it by its absolute path (the `UserPromptSubmit` hook of a later `/dev`, `/dev-command` or `/dev-overnight` in this session takes this session's last spec write as that run's spec, and reads the path from the line the writer prints). It creates `docs/dev/specs/` if needed and refuses an existing file:
 
    ```bash
-   python3 ~/.claude/scripts/spec-write.py create --spec <spec_path> <<'SPEC_TEXT'
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-write.py" create --spec <spec_path> <<'SPEC_TEXT'
    <the populated template>
    SPEC_TEXT
    ```
@@ -167,10 +167,10 @@ design and evidence are first-class material and MUST NOT be silently dropped (M
    path — the centralization lint (Step 6 sub-step 6) flags inline derivation:
 
    ```bash
-   RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
-       --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR")
+   RESOLVED_JSON=$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" \
+       --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}")
    SPEC_DIR_ID=$(jq -r '.candidates[0]' <<<"$RESOLVED_JSON")   # de-prefixed id
-   BOUND_ROOT="$CLAUDE_PROJECT_DIR/docs/dev/specs/$SPEC_DIR_ID"
+   BOUND_ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/dev/specs/$SPEC_DIR_ID"
    ```
 
    On the FIRST arriving design/evidence material, create the bound artifact root and its
@@ -307,12 +307,12 @@ Only proceed to Step 6 when a STRONG signal fires.
    - subagent_type: "spec"
    - description: "Spec agent: split + checkpoints for <spec-id>"
    - prompt: "
-     You are the spec subagent. Read and follow the instructions in ~/.claude/agents/spec.md EXACTLY.
+     You are the spec subagent. Read and follow the instructions in <HARNESS_ROOT>/agents/spec.md EXACTLY.
      Spec id: <spec-id>
      Monolith: <spec_path>
      Monolith lines: <MONOLITH_LINES>
      Output folder: docs/dev/specs/<spec-id>/
-     Project dir: <$CLAUDE_PROJECT_DIR>
+     Project dir: <PROJECT_ROOT>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
      Obligation block (instantiate per dispatch: <spec-id> is this split's de-prefixed id, dispatched_at the UTC time captured immediately before this Agent call; never hand-invented):
@@ -344,7 +344,7 @@ Only proceed to Step 6 when a STRONG signal fires.
      2. AGENT SELECTION: Are the selected agents consistent with the spec's defined
         pipeline? Flag any agent that was included but isn't in the spec's pipeline,
         or any pipeline agent that was excluded.
-     3. COVERAGE: Locate the verifier portably under the harness home — `VERIFIER="$(bash ~/.claude/hooks/lib/claude_home.sh optional scripts/spec-verify/spec-verify.py 2>/dev/null || true)"`. If `$VERIFIER` is non-empty and the file exists, run `source ~/.claude/venv/bin/activate && python3 "$VERIFIER" --monolith <spec_path> --views-dir docs/dev/specs/<spec-id>/views/`. If the verifier is absent, SKIP coverage and note "spec-verify.py not found — manual coverage check required" — do NOT block (baseline behavior; reverted from the WS1 fail-closed flip, which changed a rule beyond pure path-cleanup). The path is resolved portably; only the absent-verifier decision is the baseline skip.
+     3. COVERAGE: Locate the verifier portably under the harness home — `VERIFIER="$(bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/claude_home.sh" optional scripts/spec-verify/spec-verify.py 2>/dev/null || true)"`. If `$VERIFIER` is non-empty and the file exists, run `source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "$VERIFIER" --monolith <spec_path> --views-dir docs/dev/specs/<spec-id>/views/`. If the verifier is absent, SKIP coverage and note "spec-verify.py not found — manual coverage check required" — do NOT block (baseline behavior; reverted from the WS1 fail-closed flip, which changed a rule beyond pure path-cleanup). The path is resolved portably; only the absent-verifier decision is the baseline skip.
         Report the result.
      4. CONTENT RELEVANCE: Spot-check 3 random content blocks in each view.
         Is the content relevant to that agent's role?
@@ -392,12 +392,12 @@ Only proceed to Step 6 when a STRONG signal fires.
    - subagent_type: "spec"
    - description: "Spec agent re-split (round <N>) addressing QA feedback for <spec-id>"
    - prompt: "
-     You are the spec subagent. Read and follow the instructions in ~/.claude/agents/spec.md EXACTLY.
+     You are the spec subagent. Read and follow the instructions in <HARNESS_ROOT>/agents/spec.md EXACTLY.
      Spec id: <spec-id>
      Monolith: <spec_path>
      Monolith lines: <MONOLITH_LINES>
      Output folder: docs/dev/specs/<spec-id>/
-     Project dir: <$CLAUDE_PROJECT_DIR>
+     Project dir: <PROJECT_ROOT>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
      Obligation block (instantiate per dispatch: <spec-id> is this split's de-prefixed id, dispatched_at the UTC time captured immediately before this Agent call; never hand-invented):
@@ -440,8 +440,8 @@ Only proceed to Step 6 when a STRONG signal fires.
 5. **guard — Finalize-time consumer-path assertion (MANDATORY, blocks on failure)**: After the split marker is written, run the SAME resolver that every `/dev*` consumer uses against the just-written monolith, and assert it resolves to a PRESENT-AND-VALID de-prefixed split at the EXACT path `/dev` will read. This catches a producer that accidentally wrote a prefixed split dir, a manifest whose `monolith_path` does not point back at this monolith, or a missing/stale marker — at creation time, not at `/dev` time:
 
    ```bash
-   RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
-       --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
+   RESOLVED_JSON=$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" \
+       --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}") || {
      echo "FINALIZE BLOCKED: resolver reports the split is present-but-invalid / mismatched for $spec_path." >&2
      echo "The split /dev would consume does not validate. Fix the split before finalizing." >&2
      exit 1; }
@@ -464,10 +464,10 @@ Only proceed to Step 6 when a STRONG signal fires.
 6. **Centralization lint (advisory — surfaces inline spec-id re-derivation regressions)**: run `scripts/lint-spec-id-centralization.py` over the `/dev*`/`/spec` command files that consume the resolver. This is NON-BLOCKING here (a WARNING only) — finalize must not hard-fail on an unrelated command-file edit. The authoritative hard gate for this lint belongs at the `.claude`-repo commit boundary (a pre-commit check on staged `commands/*.md` / `scripts/*.sh`), the only place command-file edits actually land; this advisory is a safety-net that makes a regression visible at every finalize.
 
    ```bash
-   ~/.claude/scripts/lint-spec-id-centralization.py --paths \
-       ~/.claude/commands/dev.md ~/.claude/commands/dev-command.md \
-       ~/.claude/commands/dev-overnight.md ~/.claude/commands/close.md \
-       ~/.claude/commands/spec.md \
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/lint-spec-id-centralization.py" --paths \
+       "${CLAUDE_HOME:-$HOME/.claude}/commands/dev.md" "${CLAUDE_HOME:-$HOME/.claude}/commands/dev-command.md" \
+       "${CLAUDE_HOME:-$HOME/.claude}/commands/dev-overnight.md" "${CLAUDE_HOME:-$HOME/.claude}/commands/close.md" \
+       "${CLAUDE_HOME:-$HOME/.claude}/commands/spec.md" \
      || echo "WARNING: centralization lint flagged inline spec-id derivation in a consumer command file — a /dev*/spec command re-derives the spec-id in prose instead of calling resolve-spec-artifacts.py. Fix before the next commit that touches those files." >&2
    ```
 
@@ -508,10 +508,10 @@ Usage:
 
 ## Important Rules
 
-- **Read the template at runtime** from `~/.claude/templates/overnight-spec.md`. Never hardcode template content.
+- **Read the template at runtime** from `<HARNESS_ROOT>/templates/overnight-spec.md`. Never hardcode template content.
 - **Preserve template structure exactly** — only replace designated placeholders and `_Not yet populated._` markers.
 - **Do not modify any existing files** except the spec file being created, and that
-  one only through `~/.claude/scripts/spec-write.py` — with ONE scoped carve-out for
+  one only through `<HARNESS_ROOT>/scripts/spec-write.py` — with ONE scoped carve-out for
   design/evidence capture (M9): at design/evidence capture time (the Design & Evidence
   Capture Routine) `/spec` MAY create/write ONLY
   `docs/dev/specs/<de-prefixed-id>/design/*` and
@@ -528,7 +528,7 @@ Usage:
   artifacts are created by `/spec` itself at design/evidence capture time (the Design &
   Evidence Capture Routine, M9), and `.split-complete` by `/spec` in Step 6 sub-step 4.
   Legacy specs lacking an output folder remain valid — `/dev*` falls back gracefully.
-- **Todo script**: `~/.claude/scripts/todo/spec.py` (realpath may differ by install/symlink layout) exposes the 7-step Spec Creation Mode todo list with `blocking_count = 3` (Steps 1-3 must complete before Claude can stop; Steps 4-7 are session-duration).
+- **Todo script**: `<HARNESS_ROOT>/scripts/todo/spec.py` (realpath may differ by install/symlink layout) exposes the 7-step Spec Creation Mode todo list with `blocking_count = 3` (Steps 1-3 must complete before Claude can stop; Steps 4-7 are session-duration).
 - **Workflow update**: Step 7 emits a temp update for the next phase using
   `/spec-update --temp`. It must be compact, reference existing artifacts by path,
   and suggest the exact next command (`/dev` in this session, or `/dev --spec

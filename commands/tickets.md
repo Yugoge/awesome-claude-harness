@@ -27,9 +27,9 @@ Unfuddle; verbatim original preserved in that ticket file).
    other token in `$ARGUMENTS` is ignored (this command takes no task-id).
 2. Run:
    ```bash
-   PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-   source ~/.claude/venv/bin/activate 2>/dev/null || true
-   python3 ~/.claude/scripts/dev-lifecycle.py scan --format "$FORMAT" --project-dir "$PROJECT_ROOT"
+   PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
+   source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" 2>/dev/null || true
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" scan --format "$FORMAT" --project-dir "$PROJECT_ROOT"
    ```
 3. Print the command's stdout verbatim to the user. Do not re-interpret,
    summarize, or filter the rows — this command's entire job is to surface the

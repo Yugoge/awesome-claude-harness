@@ -245,7 +245,8 @@ class PushRun:
         named = m.group(1)
         if os.path.normpath(self.rp.bash_env.get("CLAUDE_STATE_DIR", "")) == os.path.normpath(named):
             return []
-        return [Respelling("P-SD state dir", r"(?m)^python3 (~/\.claude/scripts/execute-push\.py)\b",
+        return [Respelling("P-SD state dir",
+                           r"(?m)^python3 ((?:~/\.claude|\"\$\{CLAUDE_HOME:-\$HOME/\.claude\})/scripts/execute-push\.py\"?)(?=\s)",
                            f"CLAUDE_STATE_DIR={named} python3 \\1",
                            "commands/push.md Step 5 (:214, :222-236 at 2acc29b): the sentinel directory the text "
                            "names, which execute-push.py writes and push.sh reads only through CLAUDE_STATE_DIR")]

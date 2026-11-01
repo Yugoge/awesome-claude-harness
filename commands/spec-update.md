@@ -44,12 +44,12 @@ Resolve the target spec:
    `spec_file` / `user_spec_path` only when all populated values agree. A
    fan-out cycle does not need, and this command must not create, a parent
    context merely to resolve the spec.
-3. Else create a new spec from `~/.claude/templates/overnight-spec.md` at
-   `${CLAUDE_PROJECT_DIR:-$(pwd)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md`
+3. Else create a new spec from `<HARNESS_ROOT>/templates/overnight-spec.md` at
+   `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md`
    through the one writer (below): `spec-write.py create --spec <path>` with the
    populated template on stdin.
 
-Every write of a spec runs through `~/.claude/scripts/spec-write.py`, the one
+Every write of a spec runs through `<HARNESS_ROOT>/scripts/spec-write.py`, the one
 writer of `docs/dev/specs/*.md` (`/spec` writes through it too); never Write or
 Edit a spec file. `create --spec <path>` takes the whole new file on stdin;
 `append --spec <path> --section <N>` (or `<N>.<M>` for a `### N.M` subsection)
@@ -61,11 +61,11 @@ loses the last one); a refusal stops the chain there, the sections before it
 stay written, and only the refused append and those after it run again:
 
 ```bash
-python3 ~/.claude/scripts/spec-write.py append --spec /abs/path/docs/dev/specs/spec-<ts>.md --section 2 <<'SPEC_BLOCK' &&
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-write.py" append --spec /abs/path/docs/dev/specs/spec-<ts>.md --section 2 <<'SPEC_BLOCK' &&
 ### Cycle <N>
 <content>
 SPEC_BLOCK
-python3 ~/.claude/scripts/spec-write.py append --spec /abs/path/docs/dev/specs/spec-<ts>.md --section 3 <<'SPEC_BLOCK'
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-write.py" append --spec /abs/path/docs/dev/specs/spec-<ts>.md --section 3 <<'SPEC_BLOCK'
 ### Cycle <N>
 <content>
 SPEC_BLOCK
@@ -75,7 +75,7 @@ Gather source artifacts from the active task-id when available. For `/dev`
 work, take the `ARTIFACT_CHAIN` the invoking command already holds from its
 one chain call (`/dev`'s and `/dev-command`'s end, `/close` Step 0, `/commit`
 Step 5), verbatim; only a `/spec-update` typed on its own runs
-`python3 ~/.claude/scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-artifact-chain.py" --task-id <id> --project-dir <root>`.
 Retain that JSON even when `status == "fail"`: a failed continuation is
 precisely where `errors[]` and the existing lane matrix are useful. Use the
 existing paths named by `artifact_paths`, `report_paths`, `qa_inputs`, and

@@ -713,7 +713,7 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
     assert (HOOKS / "lib" / "subagent_restart.py").is_file()
     assert "`subagent_restart.py`" in lib_index and "`subagent_restart.py`" in lib_readme
     assert "SID=" not in command
-    assert "$HOME/.claude/venv/bin/python" in command
+    assert 'python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py"' in command
     assert "## Why this preserves content" not in command
     config = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
     assert config["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
