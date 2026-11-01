@@ -7,6 +7,9 @@ terminals.json, whether its pipeline reached its terminal (the Stop ending it pa
 
     --arg case=<name>
 
+The leading underscore keeps it out of the artifact check's driver set (tests/artifact_graph/
+runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs it, not the check.
+
   do-report       Step 5's Write of the do-report is not made before the Stop: the do-report gate
                   refuses the Stop; the main agent's next action is that Write, then it stops again.
   do-report-ask   as do-report, and between the refused Stop and the Write the main agent asks one

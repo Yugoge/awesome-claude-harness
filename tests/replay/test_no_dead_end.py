@@ -16,7 +16,7 @@ beside each site):
 
 A G site is shown cleared by a replay that reaches it: after the block, the same actor's next event
 of the same kind (its next stop, its next tool call) passes every hook, and the replay reaches its
-terminal (exit 0). This file's own replays (drivers/deadend.py, and fault replays of /dev through
+terminal (exit 0). This file's own replays (drivers/_deadend.py, and fault replays of /dev through
 tests/replay/faults.py) reach the gates of the pipelines' own flows.
 
 (iii) Two refusals hold: the /do Stops after an AskUserQuestion answer, with the do-report still
@@ -39,9 +39,9 @@ from tests.replay import sites, suite
 
 DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock")
 PLAIN_CASES = ("bg-dispatch", "stale-worktree", "obligation", "forged-ack")
-CASES = {c: suite.Scenario(f"dead end: {c}", "deadend", (("case", c),),
+CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
-CASES["dev-early"] = suite.Scenario("dead end: dev-early", "deadend", (("case", "dev-early"),), ("dev",), 100)
+CASES["dev-early"] = suite.Scenario("dead end: dev-early", "_deadend", (("case", "dev-early"),), ("dev",), 100)
 ARMED_CASES = ("obligation", "forged-ack")  # G1 and G2 block only armed (CLAUDE_OBLIGATION_*=block)
 DEV = next(s for s in suite.COMPLIANT if s.name == "/dev singular")
 FAULTS = {"dev report missing": "missing@agent:dev Write docs/dev/dev-report-*",
