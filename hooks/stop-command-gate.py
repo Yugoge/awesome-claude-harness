@@ -39,6 +39,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -119,16 +120,26 @@ def _canonical(task: str) -> str:
     return _lib("obligation").canonical_task_id(task) or task
 
 
-def _targets(span, root, action: str) -> list[str]:
-    """The typed task; with --auto, dev-lifecycle's --auto target function at
-    the opener's cut-off (a fresh scan, no cached listing); else the families
-    the span's dispatches named."""
-    args = span.args.split()
+def _targets(span, root, action: str) -> list[str] | None:
+    """The typed tasks as close.md's Task-id resolution and commit.md's Step 1
+    read them (shell quoting; --reason's value is no task; a path names the id
+    its basename holds from the timestamp on), else the families the span's
+    dispatches named; None: no task. --auto: the parents dev-lifecycle's --auto
+    target function lists at the opener's cut-off (a fresh scan) and the
+    families the span walked, which it stops listing once done; [] had none."""
+    args = shlex.split(span.args)
     if "--auto" in args:
         lifecycle = _script("scripts/dev-lifecycle.py")
-        return lifecycle.auto_targets(Path(root), action, span.opened_at())
-    typed = [_canonical(a) for a in args if not a.startswith("-")]
-    return typed or sorted(span.session_families())
+        return sorted(set(lifecycle.auto_targets(Path(root), action, span.opened_at())) | span.session_families())
+    typed = []
+    for k, arg in enumerate(args):
+        if arg.startswith("-") or args[k - 1:k] == ["--reason"]:
+            continue
+        if arg.endswith((".md", ".json")) or "/" in arg:
+            name = os.path.basename(arg).removesuffix(".md").removesuffix(".json")
+            arg = name[name.find(_lib("obligation").task_stamp(name) or name):]
+        typed.append(_canonical(arg))
+    return typed or sorted(span.session_families()) or None
 
 
 def p_dev(span, root, payload) -> list[str]:
@@ -169,7 +180,7 @@ def p_close(span, root, payload) -> list[str]:
     """/close: --stage close per target, and the close-rating question asked
     (D9b: asked, not answered) where it is required."""
     targets = _targets(span, root, "close")
-    if not targets:
+    if targets is None:
         return ["close: no target task resolved"]
     close_rating = _lib("close_rating")  # P4's
     gaps = []
@@ -222,7 +233,7 @@ def p_commit(span, root, payload) -> list[str]:
         return [f"commit --bulk: changelog-analyst reports {block.get('commit_status')!r}: "
                 f"{block.get('failure_code')} {block.get('failure_reason') or ''}".rstrip()] if "failure_code" in block else []
     targets = _targets(span, root, "commit")
-    if not targets:
+    if targets is None:
         return ["commit: no target task resolved"]
     return [g for task in targets for g in disposition(root, task, "commit")]
 

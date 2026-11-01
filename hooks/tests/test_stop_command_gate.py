@@ -699,6 +699,83 @@ def test_a8_auto_targets_leave_out_a_task_registered_after_the_cut_off():
     assert lifecycle.auto_targets(Path("."), "close", None, rows) == sorted(r["task_id"] for r in rows)
 
 
+# Self-check finding: an --auto run's targets were dev-lifecycle's list at the Stop, which no longer
+# lists a parent once its step is done (or has left it unlanded), so every run ended `no target task
+# resolved`; one with nothing to do as well. These run dev-lifecycle's real scan over the project.
+AUTO = "20261031-120000"  # minted before the opener in any time zone
+
+
+def auto_task(env, command, outcome):
+    """A /do parent as the real scan reads it, close_pending (/close) or commit_pending (/commit),
+    then, after the --auto opener: `not walked`, or walked (the span's dispatch names it) and
+    `landed` (CLOSE: YES; its Task-id commit) or `left unlanded` (CLOSE: NO; a commit with its
+    owned file dirty again)."""
+    dev = env.project / "docs" / "dev"
+    (env.project / "owned.txt").write_text("cycle\n")
+    (dev / f"do-report-{AUTO}.json").write_text(json.dumps({"task_id": AUTO, "source": "do", "do": {
+        "status": "completed", "summary": "done", "files_modified": ["owned.txt"]}}))
+    report = dev / f"close-report-{AUTO}.md"
+    if command == "commit":
+        report.write_text(f"# Close\nTask-id: {AUTO}\n\nCLOSE: YES\n")
+    env.tx.command(command, "--auto")
+    if command == "close":
+        env.tx.todos(canonical("close", "--auto"), len(canonical("close", "--auto")))
+    if outcome == "not walked":
+        return
+    env.tx.dispatch(AUTO, role="style-inspector" if command == "close" else "changelog-analyst", pipeline=command,
+                    profile="singular" if command == "close" else "commit-landing")
+    if command == "close":
+        report.write_text(f"# Close\nTask-id: {AUTO}\n\n{'CLOSE: YES' if outcome == 'landed' else 'CLOSE: NO - x'}\n")
+        return
+    git(env.project, "add", "-A")
+    git(env.project, "commit", "-q", "-m", f"the cycle\n\nTask-id: {AUTO}")
+    if outcome == "left unlanded":
+        (env.project / "owned.txt").write_text("changed after the commit\n")
+
+
+@pytest.mark.parametrize("command", ["close", "commit"])
+@pytest.mark.parametrize("outcome,code", [("landed", 0), ("left unlanded", 2), ("not walked", 2)])
+def test_a8_auto_targets_the_parents_it_walked_and_those_still_listed(env, repo, monkeypatch, command, outcome, code):
+    """Fake disposition (P3): it answers for the targets the gate names; the scan is the real one."""
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    auto_task(env, command, outcome)
+    listed = gate._script("scripts/dev-lifecycle.py").auto_targets(env.project, command)
+    assert listed == ([AUTO] if outcome == "not walked" else [])
+    if code:
+        env.fake.answers[(AUTO, command)] = [gap(".", "NOT_LANDED", f"the {command} of {AUTO} has not landed")]
+    got, text = run(env)
+    assert got == code and (code == 0 or f"the {command} of {AUTO} has not landed" in text), text
+    assert [c[1:3] for c in env.fake.calls] == [(AUTO, command)]
+
+
+@pytest.mark.parametrize("command", ["close", "commit"])
+def test_a8_an_auto_run_with_nothing_to_do_has_no_gap(env, monkeypatch, command):
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    later = "20261102-120000"  # minted after the opener in any time zone: not this run's
+    (env.project / "docs" / "dev" / f"do-report-{later}.json").write_text(json.dumps({
+        "task_id": later, "source": "do", "do": {"status": "completed", "summary": "x", "files_modified": []}}))
+    env.tx.command(command, "--auto")
+    if command == "close":
+        env.tx.todos(canonical("close", "--auto"), len(canonical("close", "--auto")))
+    assert run(env) == (0, "") and env.fake.calls == []
+
+
+@pytest.mark.parametrize("args", [f"docs/dev/ticket-{FAMILY}.md", f"docs/dev/do-report-{FAMILY}.json",
+                                  f'--force --reason "hand edit" {FAMILY}', f"--codex dev-{FAMILY}"])
+def test_a8_close_arguments_name_the_task_close_md_resolves(env, monkeypatch, args):
+    """Self-check finding: the arguments were split on spaces and each word taken as a task id, so a
+    path or a quoted --reason named no task; they are read as close.md's Task-id resolution reads them."""
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    env.tx.command("close", args)
+    env.tx.todos(canonical("close", args), len(canonical("close", args)))
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    code, text = run(env)
+    assert code == 2 and f"close-report-{FAMILY}.md" in text
+    env.fake.answers.clear()
+    assert run(env) == (0, "")
+    assert {c[1:3] for c in env.fake.calls} == {(FAMILY, "close")}
+
+
 # ---------------------------------------------------------------- A11: modes
 def test_a11_advisory_reports_would_block_and_allows(env):
     dev_span(env, done=1)
