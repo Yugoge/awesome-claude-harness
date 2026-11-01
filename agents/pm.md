@@ -299,8 +299,8 @@ this explicitly and fall back to doc-based core_flow_steps.
    - `failed_attempts` -- repeatedly failed (deprioritize)
    - `focus` -- user-specified priority hint
    The cycle number is the `Cycle number:` of your prompt, which the orchestrator
-   reads through `<HARNESS_ROOT>/hooks/lib/overnight.py cycle-index <state file>` (the
-   first cycle with no `retro-report-cycle<N>.json`); the state file holds no
+   reads from the `Cycle:` line of `<HARNESS_ROOT>/scripts/overnight-status.sh <state file>`
+   (the first cycle with no `retro-report-cycle<N>.json`); the state file holds no
    cycle count, and the cycles completed are that number minus one.
 3. If the state file does not exist (first cycle), use defaults:
    - cycle 1, addressed_issues: [], failed_attempts: {}
