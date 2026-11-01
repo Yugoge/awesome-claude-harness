@@ -15,6 +15,8 @@ The owner's ruling D27 (2026-11-01, DECISIONS.md): "5天必须完成". The owner
 - Before a PR merges, merge `origin/master` into it with a merge commit. Resolve conflicts by keeping both sides' behaviour.
 - A stream starts its next phase on a new branch from `origin/master` as soon as its current PR is open. It does not wait for the merge.
 
+**Branches.** Build a stream's first phase on the branch your session was assigned. For each later phase, create `repair/<phase>` (for example `repair/P5`) from `origin/master`; the owner allows these branches and pushes to them. Never push to master, to another stream's branch or to the planning branch.
+
 The short prompts are `prompts/short/<phase>.md`. Where the rules below and a prompt differ, the rules win.
 
 ## Kept: these protect the result
