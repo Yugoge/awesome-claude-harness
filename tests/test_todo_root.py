@@ -106,11 +106,9 @@ def test_overnight_project_root_is_the_records_worktree_path(product, tmp_path, 
 
 
 def test_lib_todo_canonical_runs_the_harness_script(product):
-    sys.path.insert(0, str(ROOT / "hooks"))
-    try:
-        from lib import todo_canonical
-    finally:
-        sys.path.remove(str(ROOT / "hooks"))
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from hooks.lib import todo_canonical
     for command in ("dev", "close"):
         assert todo_canonical.run_todo_script(command) == _harness_list(command, product)
     assert todo_canonical.run_todo_script("status") is None  # the harness has none

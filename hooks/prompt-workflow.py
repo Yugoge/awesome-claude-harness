@@ -10,8 +10,9 @@ Phase A (slash command detected):
     write goes through lib.todo_canonical.write_bookmark, its one writer
   - If /dev-overnight: creates overnight-state-<session_id>.json with parsed end-time
   - Prints checklist-ready message + exact first TodoWrite call to use
-  - For every harness command (a commands/*.md stem), prints PROJECT_ROOT=<abs>
-    and HARNESS_ROOT=<abs>, the roots its text's Read paths start from
+  - For every harness command (stop_contract.harness_commands), first prints
+    PROJECT_ROOT=<abs> and HARNESS_ROOT=<abs>, the roots its text's Read paths
+    start from
 
 Phase B (subsequent prompts, no slash command):
   - If any overnight-state-*.json exists with future end_time: inject continuation
