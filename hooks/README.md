@@ -27,7 +27,7 @@
 - `post_tool_use.sh` - PostToolUse Hook - Code quality hints after file modifications
 - `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 - `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
-- `posttool-close-rating.py` - A row only for the main agent's (no agent_id) one close-rating question (metadata.source
+- `posttool-close-rating.py` - main agent's (no agent_id) one close-rating question (metadata.source close-rating:<task-id>) ans...
 - `posttool-codex-skill-ledger.py` - Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
 - `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 - `posttool-doc-sync.py` - PostToolUse Hook: keep the marked INDEX.md, README.md and CLAUDE.md sections in sync
