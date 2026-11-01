@@ -16,8 +16,10 @@ failure (exit outside {0, 2}, timeout, launch error, missing file) is decided by
 stdlib fallback on the transcript reader (`fallback`). Cleanup runs only on an allowed
 Stop; a block returns before it. The finalizer runs only when every phase allowed cleanly.
 
-The gate's mode comes from the process environment only (CLAUDE_COMMAND_GATE, `gate_mode`):
-`off` skips completion, and with it the overnight time-lock the gate holds.
+The gate's mode comes from the process environment only (`gate_mode`): CLAUDE_COMMAND_GATE=off
+skips completion, and with it the overnight time-lock the gate holds; else the gate blocks when
+the launcher ran this coordinator (its LAUNCHER_MARK) and runs advisory when a session that
+loaded an older hook list runs it directly (arming option 1).
 
 The terminal receipt (P1b row 15): the gate prints the terminal time-lock status of an
 allowed Stop as one stdout line, and this coordinator alone publishes the receipt from it
@@ -73,14 +75,21 @@ class Phase:
     timeout: float = 30.0
 
 
+# hooks/stop-launch.py sets it for the coordinator it runs (arming option 1, P5 "Arming").
+LAUNCHER_MARK = "CLAUDE_STOP_LAUNCHER"
+
+
 def gate_mode(environment: Mapping[str, str]) -> str:
-    """The Stop gate's mode, from the process environment only: CLAUDE_COMMAND_GATE=off
-    is off; any other value, or none, is advisory (P5-b)."""
-    value = environment.get("CLAUDE_COMMAND_GATE", "")
-    return "off" if value == "off" else ("block" if value == "block" else "advisory")
+    """The Stop gate's mode, from the process environment only: CLAUDE_COMMAND_GATE=off is
+    off; any other value, or none, blocks (P5-d) when the launcher ran this coordinator. A
+    session that loaded an older hook list runs it directly, unmarked: completion runs
+    advisory there and the time-lock still blocks; a forged mark only arms."""
+    if environment.get("CLAUDE_COMMAND_GATE", "") == "off":
+        return "off"
+    return "block" if environment.get(LAUNCHER_MARK) == "1" else "advisory"
 
 
-def _default_phases(mode: str = "advisory") -> list[Phase]:
+def _default_phases(mode: str = "block") -> list[Phase]:
     return [
         Phase(
             "coverage", (sys.executable, str(HOOKS / "stop-spec-coverage-enforce.py"))
@@ -224,8 +233,8 @@ def _publish_receipt(root: Path, session_id: str, terminal: str, payload: Mappin
     try:
         from lib import overnight
 
-        _state_file, state = overnight.session_state_file(
-            session_id, (os.environ.get("CLAUDE_PROJECT_DIR"), str(root), payload.get("cwd"))
+        _state_file, state = overnight.session_state_file(  # as the gate's time-lock found it
+            session_id, (os.environ.get("CLAUDE_PROJECT_DIR"), payload.get("cwd") or str(root))
         )
         if state is None:
             return "no overnight state record"

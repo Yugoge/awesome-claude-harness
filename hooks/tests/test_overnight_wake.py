@@ -225,12 +225,12 @@ GATE = _gate()
 
 @pytest.fixture
 def lock(night, monkeypatch):
-    """The gate's time-lock on the night's payload. P2's overnight.locate, window_open and
+    """The gate's time-lock on the night's payload. P2's overnight.window_open and
     closeout_gaps(state, working_root) are not on this base: a fake with their signatures over
-    this base's readers (re-run once P2 merges); open_wakes is the real one."""
+    this base's readers (re-run once P2 merges); session_state_file and open_wakes are real."""
     import types
     fake = types.ModuleType("lib.overnight")
-    fake.locate = lambda sid, payload=None: overnight.session_state_file(sid, (str(night.project),))
+    fake.session_state_file = overnight.session_state_file
     fake.window_open = lambda payload: False  # every case here is past end_time
     fake.closeout_gaps = lambda state, root: overnight.closeout_gaps(state)
     fake.working_root = overnight.working_root

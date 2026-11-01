@@ -374,7 +374,10 @@ def time_lock(payload) -> tuple:
     if os.environ.get("CLAUDE_COMPAT_RUNTIME") == "codex":
         return 0, "", None
     overnight, transcript = _lib("overnight"), payload.get("transcript_path") or ""
-    _state_file, record = overnight.locate(payload.get("session_id"), payload)
+    # The session's own record, as P2's overnight.locate finds it (session_state_file from
+    # CLAUDE_PROJECT_DIR, then the payload's cwd): a session with none meets no window rule.
+    _state_file, record = overnight.session_state_file(
+        payload.get("session_id"), (os.environ.get("CLAUDE_PROJECT_DIR"), payload.get("cwd") or os.getcwd()))
     if record is None:
         return 0, "", None
     lock = window_lock(payload, record)

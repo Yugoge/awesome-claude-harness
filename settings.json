@@ -794,14 +794,6 @@
             "timeout": 300
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/stop-do-report-gate.py\""
-          }
-        ]
       }
     ],
     "SessionEnd": [

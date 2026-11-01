@@ -5,7 +5,8 @@ file), decide alone on the two stdlib modules loaded by path, the transcript rea
 (hooks/lib/command_span.py: the latest human-typed command, read over the whole transcript) and
 the overnight window (hooks/lib/overnight.py's window_open), so a broken coordinator or
 stop_contract.py leaves this file deciding: CLAUDE_COMMAND_GATE=off allows; an open window, or a
-gated latest command in block mode, blocks naming the failure and /stop; else allow. Stated loss: a
+gated latest command, blocks naming the failure and /stop; else allow. The coordinator it runs is
+marked (CLAUDE_STOP_LAUNCHER=1), which arms its gate (arming option 1). Stated loss: a
 broken module it loads is the one case it cannot decide; its checks then count as not holding."""
 import importlib.util
 import json
@@ -37,8 +38,7 @@ def _holds(check) -> bool:
 
 
 def fallback(raw: bytes, reason: str) -> int:
-    mode = os.environ.get("CLAUDE_COMMAND_GATE", "")
-    if mode == "off":
+    if os.environ.get("CLAUDE_COMMAND_GATE", "") == "off":
         return 0
     try:
         payload = json.loads(raw)
@@ -47,8 +47,7 @@ def fallback(raw: bytes, reason: str) -> int:
     payload = payload if isinstance(payload, dict) else {}
     reader, overnight = _load("command_span"), _load("overnight")
     window = _holds(lambda: overnight.window_open(payload))
-    gated = mode == "block" and _holds(
-        lambda: reader.active_command(payload.get("transcript_path")) in reader.GATED_COMMANDS)
+    gated = _holds(lambda: reader.active_command(payload.get("transcript_path")) in reader.GATED_COMMANDS)
     if window or gated:
         sys.stderr.write(f"COMMAND_GATE instrument failure: {reason}. The gate is broken; the human can type /stop\n")
         return 2
@@ -62,7 +61,8 @@ def main() -> int:
         return fallback(raw, f"{name} is missing")
     try:
         done = subprocess.run([sys.executable, str(HOOKS / "stop-workflow-coordinator.py")], input=raw,
-                              capture_output=True, timeout=COORDINATOR_TIMEOUT)
+                              capture_output=True, timeout=COORDINATOR_TIMEOUT,
+                              env={**os.environ, "CLAUDE_STOP_LAUNCHER": "1"})  # it arms the gate
     except subprocess.TimeoutExpired:
         return fallback(raw, f"{name} ran past {COORDINATOR_TIMEOUT} s")
     except OSError as exc:

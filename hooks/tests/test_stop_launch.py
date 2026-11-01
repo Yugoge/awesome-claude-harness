@@ -128,13 +128,22 @@ def test_a10_a11_off_allows_even_a_broken_coordinator_and_an_open_window(tmp_pat
         assert _stop(tmp_path, hooks, *commands, gate="off").returncode == 0
 
 
-def test_a11_advisory_fallback_blocks_only_the_window(tmp_path):
-    """Before P5-d an unset CLAUDE_COMMAND_GATE is advisory: a broken coordinator under a
-    gated span allows, the open window still blocks."""
+@pytest.mark.parametrize("gate", [None, "advisory", "block"])
+def test_a11_after_p5_d_any_value_but_off_blocks(tmp_path, gate):
+    """A11 (P5-d): unset, `advisory` or `block`, a broken coordinator under a gated span
+    blocks naming /stop; the human's /stop allows."""
     hooks = _scratch(tmp_path, BROKEN)
-    assert _stop(tmp_path, hooks, "dev", gate=None).returncode == 0
-    hooks = _scratch(tmp_path / "w", BROKEN, window=True)
-    assert _stop(tmp_path / "w", hooks, "spec", gate=None).returncode == 2
+    assert _stop(tmp_path, hooks, "dev", gate=gate).returncode == 2
+    assert _stop(tmp_path, hooks, "dev", "stop", gate=gate).returncode == 0
+
+
+def test_a11_the_launcher_marks_the_coordinator_it_runs(tmp_path):
+    """Arming option 1: the coordinator the launcher runs carries CLAUDE_STOP_LAUNCHER=1, which
+    arms its gate; a session that loaded an older hook list runs the coordinator unmarked."""
+    probe = "import os, sys\nsys.stdin.read()\nprint(os.environ.get('CLAUDE_STOP_LAUNCHER'))\n"
+    hooks = _scratch(tmp_path, probe)
+    done = _stop(tmp_path, hooks, "dev")
+    assert (done.returncode, done.stdout) == (0, "1\n")
 
 
 def test_a10_a_broken_stop_contract_leaves_the_launcher_deciding(tmp_path):
@@ -177,18 +186,20 @@ def test_a10_the_launcher_loads_only_stdlib_and_the_two_modules_and_copies_no_ru
 
 
 # ---------------------------------------------------------------- A22: the Stop registration, the stubs
-def test_a22_the_stop_group_runs_the_launcher_with_timeout_300():
+def test_a22_the_stop_group_is_one_entry_the_launcher_with_timeout_300():
     settings = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))
     hooks = [h for group in settings["hooks"]["Stop"] for h in group["hooks"]]
     launcher = [h for h in hooks if h["command"] == 'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/stop-launch.py"']
     assert len(launcher) == 1 and launcher[0]["timeout"] == 300
     text = (REPO / "settings.json").read_text(encoding="utf-8")
-    for retired in ("stop-completion-gate", "stop-obligation-gate", "stop-workflow-coordinator",
+    assert len(settings["hooks"]["Stop"]) == 1 and len(hooks) == 1
+    for retired in ("stop-completion-gate", "stop-obligation-gate", "stop-do-report-gate", "stop-workflow-coordinator",
                     "stop-overnight-timelock", "CLAUDE_COMMAND_GATE"):  # the todo hooks: lane E's R19
         assert retired not in text, retired
 
 
-@pytest.mark.parametrize("stub", ["stop-overnight-timelock.py", "stop-obligation-gate.py", "stop-completion-gate.py"])
+@pytest.mark.parametrize("stub", ["stop-overnight-timelock.py", "stop-obligation-gate.py", "stop-completion-gate.py",
+                                  "stop-do-report-gate.py"])
 def test_a22_each_retired_stop_hook_is_a_one_line_stub_exiting_0(stub):
     text = (HOOKS / stub).read_text(encoding="utf-8")
     assert sum(line.startswith("# STUB:") for line in text.splitlines()) == 1

@@ -139,10 +139,12 @@ def gap(artifact, problem, message, lane=None):
 
 def overnight_fake(record=None, window=False, closeout=()):
     """P2's overnight.locate(session_id, payload), window_open(payload),
-    closeout_gaps(state, working_root) and working_root(state); the wake's
-    reader (open_wakes, P1c X8) is this base's own."""
+    closeout_gaps(state, working_root) and working_root(state), and the
+    session_state_file locate reads through; the wake's reader (open_wakes,
+    P1c X8) is this base's own."""
     module = types.ModuleType("lib.overnight")
     module.locate = lambda session_id, payload=None: (Path("state.json"), record) if record else (None, None)
+    module.session_state_file = lambda session_id, starts: module.locate(session_id)
     module.window_open = lambda payload: bool(record) and window
     module.closeout_gaps = lambda state, working_root: list(closeout)
     module.working_root = lambda state: Path(state.get("worktree_path") or ".")

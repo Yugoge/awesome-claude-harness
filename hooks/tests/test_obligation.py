@@ -588,7 +588,7 @@ def test_unreadable_schemas_are_no_import_error(tmp_path):
 
 @pytest.mark.parametrize("record, expected", [
     ({"do": {"status": "completed"}}, "completed"),
-    ({"do": {"status": "blocked"}}, "blocked"),
+    ({"do": {"status": "blocked"}}, None),  # P5 R21: completed is the one terminal value
     ({"do": {"status": "pending"}}, None),
     ({"do": {"status": "in_progress"}}, None),
     ({"do": {}}, None),
@@ -610,9 +610,12 @@ def test_terminal_status_reads_each_declared_field():
 
 
 def test_do_report_vocabulary_has_no_pending():
-    # E8: nothing writes a pending do-report, so the schema declares no pending.
+    # E8: nothing writes a pending do-report, so the schema declares no pending; P5 R21 (D2:
+    # one terminal) leaves completed the one value, the vocabulary read from the schema.
     assert "pending" not in obligation.TERMINAL_VOCABULARY["do-report.v1"]["do.status"]
     assert "pending" not in _enum_at(_schema("do-report.v1"), "do.status")
+    assert obligation.TERMINAL_VOCABULARY["do-report.v1"]["do.status"] == frozenset(
+        _enum_at(_schema("do-report.v1"), "do.status")) == {"completed"}
 
 
 def test_terminal_vocabulary_dev_report_single_completed_status():

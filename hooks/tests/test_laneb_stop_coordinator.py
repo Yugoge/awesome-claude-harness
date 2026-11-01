@@ -717,12 +717,16 @@ def _payload(root: Path, transcript: Path) -> dict:
     }
 
 
-def _stop(tmp_path: Path, root: Path, phases: list, transcript: Path, gate: str | None = "block",
-          extra: dict | None = None) -> subprocess.CompletedProcess:
+def _stop(tmp_path: Path, root: Path, phases: list, transcript: Path, gate: str | None = None,
+          extra: dict | None = None, marked: bool = True) -> subprocess.CompletedProcess:
     """One Stop through the coordinator's main(), the phases passed through its
-    LANEB_COORDINATOR_PHASES_JSON override, CLAUDE_COMMAND_GATE=``gate``."""
+    LANEB_COORDINATOR_PHASES_JSON override, CLAUDE_COMMAND_GATE=``gate`` (None:
+    unset), run as the launcher runs it (``marked``) or directly by an older hook
+    list."""
     environment = _plain_environment(tmp_path, root, gate)
     environment.update(extra or {})
+    if marked:
+        environment[coordinator.LAUNCHER_MARK] = "1"
     environment["LANEB_COORDINATOR_PHASES_JSON"] = json.dumps(
         [{"name": p.name, "argv": list(p.argv), "timeout": p.timeout} for p in phases]
     )
@@ -781,20 +785,19 @@ def test_a9_completion_instrument_failure_blocks_a_gated_span_naming_stop(
 
 @pytest.mark.parametrize("failure", sorted(INSTRUMENT_FAILURES))
 @pytest.mark.parametrize(
-    ("transcript", "gate"),
-    [("dev-then-stop", "block"), ("dev-overnight-then-stop", "block"), ("no-command", "block"),
-     ("dev", None)],
+    ("transcript", "marked"),
+    [("dev-then-stop", True), ("dev-overnight-then-stop", True), ("no-command", True), ("dev", False)],
 )
-def test_a9_completion_instrument_failure_outside_a_gated_block_mode_span_is_recorded_and_allowed(
-    tmp_path: Path, transcript: str, gate: str | None, failure: str
+def test_a9_completion_instrument_failure_outside_a_gated_armed_span_is_recorded_and_allowed(
+    tmp_path: Path, transcript: str, marked: bool, failure: str
 ) -> None:
-    """A9: after the human's /stop (the gate still failing), with no typed command, or in
-    advisory mode (unset before P5-d), a gate instrument failure with no open window is
-    recorded and allowed, and cleanup runs."""
+    """A9: after the human's /stop (the gate still failing), with no typed command, or run
+    directly by an older hook list (advisory, arming option 1), a gate instrument failure
+    with no open window is recorded and allowed, and cleanup runs."""
     root, path = _project(tmp_path, transcript)
     status, returncode, reason = INSTRUMENT_FAILURES[failure]
 
-    proc = _stop(tmp_path, root, _phases(root, failure, target="completion"), path, gate)
+    proc = _stop(tmp_path, root, _phases(root, failure, target="completion"), path, marked=marked)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stderr == ""
@@ -818,14 +821,16 @@ def _window(monkeypatch: pytest.MonkeyPatch, is_open: bool) -> None:
     monkeypatch.setattr(lib, "overnight", fake, raising=False)
 
 
-@pytest.mark.parametrize("gate", ["block", None])
+@pytest.mark.parametrize("marked", [True, False])
 def test_a9_an_open_window_blocks_a_failed_gate_whatever_the_latest_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gate: str | None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, marked: bool
 ) -> None:
     """A9: the window open (P2's window_open faked) and the latest human command /spec:
-    a crashing gate still blocks, in either mode; the window closed, it allows."""
+    a crashing gate still blocks, armed or run directly by an older hook list; the window
+    closed, it allows."""
     root, transcript = _project(tmp_path, "spec")
-    environment = _plain_environment(tmp_path, root, gate)
+    environment = _plain_environment(tmp_path, root)
+    environment.update({coordinator.LAUNCHER_MARK: "1"} if marked else {})
     for is_open, code in ((True, 2), (False, 0)):
         _window(monkeypatch, is_open)
         result, exit_code = coordinator.run_coordinator(
@@ -864,9 +869,20 @@ def test_a11_the_mode_comes_from_the_process_environment_only(tmp_path: Path) ->
     second = _stop(tmp_path, root, phases, transcript, extra={"CLAUDE_HOME": str(machine.parent)})
     assert first.returncode == second.returncode == 2
     assert first.stderr == second.stderr == "COMMAND_GATE /dev: not complete\n- todo: not completed: x\n"
-    assert {"advisory": "advisory", "": "advisory", "block": "block", "off": "off"} == {
-        value: coordinator.gate_mode({"CLAUDE_COMMAND_GATE": value}) for value in ("advisory", "", "block", "off")}
-    assert coordinator.gate_mode({}) == "advisory"
+
+
+def test_a11_after_p5_d_any_value_but_off_blocks_and_only_the_launchers_mark_arms() -> None:
+    """A11 (P5-d), arming option 1: launched, unset, `advisory`, `block` or any other value
+    blocks and `off` is off; run directly by an older hook list (no mark), the gate runs
+    advisory and `off` is still off; a forged mark only arms."""
+    mark = {coordinator.LAUNCHER_MARK: "1"}
+    for value, launched, direct in (("", "block", "advisory"), ("advisory", "block", "advisory"),
+                                    ("block", "block", "advisory"), ("on", "block", "advisory"),
+                                    ("off", "off", "off")):
+        gate = {"CLAUDE_COMMAND_GATE": value} if value else {}
+        assert coordinator.gate_mode({**gate, **mark}) == launched, value
+        assert coordinator.gate_mode(gate) == direct, value
+    assert coordinator._default_phases().pop(COMPLETION).argv[-1] == "block"
 
 
 def test_completion_block_relays_the_gates_whole_stderr_first(tmp_path: Path) -> None:
@@ -887,14 +903,15 @@ def test_completion_block_relays_the_gates_whole_stderr_first(tmp_path: Path) ->
 
 
 def test_an_allowed_completions_stderr_is_relayed(tmp_path: Path) -> None:
-    """A11 (advisory): the gate's `would block` text on an allowed Stop reaches the
-    coordinator's stderr; the Stop is allowed and cleanup runs."""
+    """A11, A21 (advisory, run directly by an older hook list): the gate's `would block`
+    text on an allowed Stop reaches the coordinator's stderr; the Stop is allowed and
+    cleanup runs."""
     root, transcript = _project(tmp_path, "dev")
     text = "would block\nCOMMAND_GATE /dev: not complete\n- todo: not completed: x\n"
     phases = _phases(root)
     phases[COMPLETION] = _completion(root, f"sys.stderr.write({text!r})")
 
-    proc = _stop(tmp_path, root, phases, transcript, gate=None)
+    proc = _stop(tmp_path, root, phases, transcript, marked=False)
 
     assert proc.returncode == 0 and proc.stderr == text, proc.stdout
     assert _logged(root) == list(coordinator.PHASE_ORDER)
@@ -937,7 +954,7 @@ def test_non_completion_failure_is_recorded_and_allowed_and_later_phases_run(
     result, exit_code = coordinator.run_coordinator(
         _payload(root, transcript),
         project_dir=root,
-        environment=_plain_environment(tmp_path, root, "block"),
+        environment={**_plain_environment(tmp_path, root), coordinator.LAUNCHER_MARK: "1"},
         phases=_phases(root, failure, target=phase),
     )
 
