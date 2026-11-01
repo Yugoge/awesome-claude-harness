@@ -119,6 +119,7 @@ hooks/
 │   ├── `test_contract_runtime_declared_vocab.py` - schema that declares them (P1b row 19 rule 7): the QA statuses the v1
 │   ├── `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
 │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+│   ├── `test_cp_enforce_own_slot.py` - subagentstop-cp-enforce.py (CP_ENFORCE_MODE=block): a stopping agent is held only on its
 │   ├── `test_cycle_registry.py` - hooks/prompt-workflow.py mints the task id at UserPromptSubmit and arms the
 │   ├── `test_declaring_dispatch.py` - of who owes an artifact of a task, from the task's dispatch records in every
 │   ├── `test_dispatch_template.py` - A dispatch's template is the fence of its command's file that names its
@@ -225,8 +226,8 @@ hooks/
 ├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
 ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark
-├── `posttool-todo-count.py` - PostToolUse Hook: Enforce canonical todo count immediately after TodoWrite
-├── `posttool-todo-sequence.py` - PostToolUse Hook: Enforce one-step-at-a-time progression in workflow checklists
+├── `posttool-todo-count.py` - PostToolUse hook (TodoWrite step count), retired to a no-op.
+├── `posttool-todo-sequence.py` - PostToolUse hook (TodoWrite step sequence), retired to a no-op.
 ├── `posttool-todo-tracker.py` - PostToolUse Hook: Output checklist progress after every TodoWrite call
 ├── `pre-commit-check.sh` - pre-commit-check.sh - Detect untracked files before commit
 ├── `pre_slashcommand_validate.sh` - pre_slashcommand_validate.sh

@@ -13,8 +13,8 @@
 #
 # WHAT IT DOES
 #   1. renders the verbatim user-requirement document from the record and hands
-#      it, with the session id and the flags the record asks for (e2e always,
-#      codex when codex_required), to the registry's one producer:
+#      it, with the session id and the flag the record asks for (codex when
+#      codex_required), to the registry's one producer:
 #      hooks/prompt-workflow.py's `arm-registry`, the same function that arms a
 #      /dev registry (one sentinel per agent role, the requirement document,
 #      the flags through write-enforce-flag.sh)
@@ -153,7 +153,7 @@ if [[ "$VERIFY_ONLY" != "1" ]]; then
   [[ -x "$INIT_PYTHON" ]] || INIT_PYTHON="$(command -v python3 || true)"
   [[ -n "$INIT_PYTHON" ]] || _die "no python3 interpreter available to arm the registry"
   ARM_ARGS=(arm-registry --name "$SESSION_ID" --source-command dev-overnight
-            --project-dir "$PROJECT_ROOT" --flag e2e)
+            --project-dir "$PROJECT_ROOT")
   [[ "$CODEX_REQUIRED" == "true" ]] && ARM_ARGS+=(--flag codex)
   _render_requirement_doc | "$INIT_PYTHON" "$SCRIPT_DIR/../hooks/prompt-workflow.py" "${ARM_ARGS[@]}" \
     || _die "the registry could not be armed: $REGISTRY_DIR"

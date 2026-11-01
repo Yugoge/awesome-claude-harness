@@ -161,9 +161,10 @@ def _dev_command_product_file(file_path: str, data: dict) -> bool:
         span = command_span.active_span(transcript)
         if span is None or span.command != 'dev-command':
             return False
-        agent_transcript, meta = declared_paths._agent_files(transcript, data['agent_id'])
+        agent_transcript = declared_paths._agent_files(transcript, data['agent_id'])[0]
         prompt = obligation.read_first_record_prompt(agent_transcript)
-        call_id = json.loads(meta.read_text()).get('toolUseId')
+        # the CLI's meta of the subagent, read by the one reader every gate takes its call id from
+        call_id = obligation._read_meta_tool_use_id(agent_transcript)
         parsed = obligation.parse_obligation(prompt)
         return (isinstance(parsed, obligation.ParsedObligation) and parsed.obligation.get('role') == 'dev'
                 and any(c.id == call_id and c.input.get('prompt') == prompt

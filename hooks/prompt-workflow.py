@@ -1356,7 +1356,7 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
     ``write`` is _write_new_file for a registry reserved just now and
     _atomic_write_bytes for an overnight one, which a relaunch in the same
     session writes again. Returns the flag writer's error output, '' when it
-    succeeded."""
+    succeeded (or no flag was asked for)."""
     import roster  # hooks/lib is on sys.path (see the WS1 block above)
     if not roster.roles():
         # With no roster the sentinel hook registers no subagent, and every
@@ -1364,6 +1364,8 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
         # instead, naming the missing input.
         raise RuntimeError(f'no agent roster under {roster.AGENTS_DIR}')
     write(project_dir / 'docs' / 'dev' / f'user-requirement-{name}.md', requirement)
+    if not flags:
+        return ''
     command = [str(Path(__file__).resolve().parent.parent / 'scripts' / 'write-enforce-flag.sh'),
                '--source-command', cmd_name, '--session-id', name]
     for flag in flags:
@@ -1380,9 +1382,10 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
 
 def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, project_dir: Path) -> str:
     """Reserve a /dev, /dev-command or /redev task id and arm its registry
-    (_arm_registry) with the cleaned requirement and the E2E and
-    artifact-contract flags, plus codex under --codex. The artifact-contract
-    flag arms hooks/subagentstop-artifact-contract-enforce.py, the producer-side
+    (_arm_registry) with the cleaned requirement and the artifact-contract
+    flag, plus codex under --codex (the E2E gate needs no flag: it judges every
+    cycle's QA). The artifact-contract flag arms
+    hooks/subagentstop-artifact-contract-enforce.py, the producer-side
     port of /close's Artifact schema gate. A flag that cannot be written is
     reported and the start goes on (fail-open). Returns the task id."""
     # Reserving the directory with mkdir(exist_ok=False) is the allocation
@@ -1407,7 +1410,7 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     # Also strip inline --spec=<path> form
     clean_requirement = re.sub(r'(?:--|[–—])spec\s+\S+', '', ' '.join(clean_tokens)).strip()
 
-    flags = ['e2e', 'artifact-contract'] + (['codex'] if '--codex' in tokens else [])
+    flags = ['artifact-contract'] + (['codex'] if '--codex' in tokens else [])
     error = _arm_registry(cmd_name, dev_session_id, clean_requirement.encode('utf-8'),
                           claude_session_id, project_dir, flags, _write_new_file)
     if error:

@@ -760,10 +760,13 @@ class DevCycle:
         c = o.run(mk, "Create the temp update note", "Step 17 Bash mktemp update note")
         path = c.response.get("stdout", "").strip() if c.ok else ""
         if path:
-            m = re.search(r"update-([A-Za-z0-9]+)\.md$", path)
+            m = re.search(r"update-([A-Za-z0-9]+)(?:\.md)?$", path)
             if m:
                 self.rp.rand(m.group(1))
-            o.s.read(path, label="Step 17 Read update note", deviation=o.devs.at("Step 17 Read update note"))
+            if " -d " in f" {mk} ":  # the text's private directory: the note is the new file update.md in it
+                path = os.path.join(path, "update.md")
+            else:  # the earlier text: the empty file mktemp made, Read before it is written
+                o.s.read(path, label="Step 17 Read update note", deviation=o.devs.at("Step 17 Read update note"))
             note = su.block("Temp-note mode", anchor="# Update")
             note = su.bind(note, [(r"^ISO-8601$", utc_now()), (r'id or "unknown"', self.tid),
                                   (r"^spec\|dev\|close", "dev"), (r"exact next command", f"/close {self.tid}"),

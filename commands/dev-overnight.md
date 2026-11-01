@@ -324,7 +324,7 @@ Beginning autonomous exploration...
 
 Re-run it verbatim on every continuation cycle. The actor never runs the MUTATING form — the launcher ran it before publishing the record — and the actor's `--verify-only` writes nothing and checks nothing: it only prints the values below. If the last line is not `OVERNIGHT_INIT_OK` (no readable record, an unsafe session id, or a spec that does not resolve), ABORT — do not attempt the individual steps by hand.
 
-The mutating form, in one invocation: renders the verbatim user-requirement document including Section 5 and hands it to the registry's one writer, `hooks/prompt-workflow.py arm-registry`, which creates `.claude/dev-registry/<session_id>/` with one sentinel JSON per roster role (each `agents/*.md` file with front matter), the requirement document, the always-on `e2e` enforcement flag and `codex` when the record sets `codex_required`; and resolves the spec artifacts.
+The mutating form, in one invocation: renders the verbatim user-requirement document including Section 5 and hands it to the registry's one writer, `hooks/prompt-workflow.py arm-registry`, which creates `.claude/dev-registry/<session_id>/` with one sentinel JSON per roster role (each `agents/*.md` file with front matter), the requirement document and the `codex` enforcement flag when the record sets `codex_required`; and resolves the spec artifacts.
 
 Bind these from its `KEY=VALUE` output — they are the only initialization values you need:
 

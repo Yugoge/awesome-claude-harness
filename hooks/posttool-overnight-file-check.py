@@ -111,7 +111,7 @@ def _run_check(data: dict) -> int:
     if not isinstance(contract, dict):
         # Hard cutover: no contract for this cycle yet — silent passthrough.
         return 0
-    entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt))
+    entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt, agent_type))
     if entry is None:
         return 0
     errors = [error for artifact in artifacts for error in _artifact_errors(artifact, root)]

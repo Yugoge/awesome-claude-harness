@@ -56,6 +56,9 @@ def main(argv=None) -> int:
     if rp.args.get("fault"):  # P1c: the injected faults of the suite (tests/replay/faults.py)
         from . import faults
         faults.install(rp, rp.args["fault"])
+    if rp.args.get("land") or rp.args.get("blocks"):  # P1c A11: the live landing (tests/replay/landing.py)
+        from . import landing
+        landing.install(rp)
     t0, err = time.time(), ""
     rp.mark("run", "begin")
     try:

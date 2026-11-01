@@ -78,8 +78,10 @@ def dispatch_of(agent_transcript: str | Path) -> tuple[str, str, str] | None:
 def _fences(text: str):
     """Each fence of a command file as (body, subagent_type, roles, profiles,
     worked example): the roles and profiles its worked example or its "embed
-    ... here with role=..." sentence declares; its subagent_type the one it
-    names before its obligation, else the one role it declares. G1 refuses a
+    ... here with role=..." sentence declares; as its worked example, that
+    sentence's obligation when it has no example of its own (_sentence); its
+    subagent_type the one it names before its obligation, else the one role it
+    declares. G1 refuses a
     dispatch whose role is not its subagent_type, so a fence that names no type
     (dev.md's "Use Task tool with:", close.md's QA, whose type its prose
     names) dispatches that role."""
@@ -96,7 +98,11 @@ def _fences(text: str):
             subagent_type = next(iter(roles))
         else:
             subagent_type = DEFAULT_SUBAGENT_TYPE
-        yield body, subagent_type, roles, profiles, block.group(1) if block else None
+        example = block.group(1) if block else None
+        if example is not None and not _json_object(example):
+            sentence = _sentence(body)  # most templates' form: no worked example of their own
+            example = json.dumps(sentence) if sentence else example
+        yield body, subagent_type, roles, profiles, example
 
 
 # A hook that reads every dispatch of a long session asks for the same command
@@ -249,6 +255,26 @@ def template_of(command: str, subagent_type: str, prompt: str,
     (_template); None when none was."""
     found = _template(command, subagent_type, prompt, commands_dir)
     return found[0] if found else None
+
+
+def _json_object(text: str) -> bool:
+    try:
+        return isinstance(json.loads(text), dict)
+    except ValueError:
+        return False
+
+
+def _sentence(body: str) -> dict | None:
+    """What a template's "embed `<obligation v="1">{...}</obligation>` here with role=..., pipeline=...,
+    artifacts=[...]" sentence declares (most templates' form, with no worked example of their own):
+    its role, pipeline and artifacts; None when it names no artifact list."""
+    at = body.find("artifacts=[")
+    try:
+        artifacts = json.JSONDecoder().raw_decode(body, at + len("artifacts="))[0] if at >= 0 else None
+    except ValueError:
+        return None
+    fields = dict(re.findall(r'\b(role|pipeline)="([^"<]+)"', body[:at]))
+    return dict(fields, artifacts=artifacts) if isinstance(artifacts, list) else None
 
 
 def template_obligation(command: str, subagent_type: str, prompt: str,

@@ -231,14 +231,17 @@ def _subagent_types(step):
 def _resumed(state, sid):
     """(offset, call) of each Agent call of the span that never came back but
     whose agent the /restart recovery resumed (the span's SendMessage to it,
-    placed there; offset: that resume's result) and finalized (its journal
-    record): that call is its step's dispatch, with no replacement call
+    placed there; offset: that resume's result), saw come back (its journal
+    record) and finalized (an ok finalize call of restart.md's helper after it
+    in the span): that call is its step's dispatch, with no replacement call
     (commands/restart.md, Lesson 16)."""
-    from lib.subagent_restart import finalized_resumes
-    journal = finalized_resumes(sid)
+    from lib.subagent_restart import completed_resumes, is_helper_invocation
+    journal = completed_resumes(sid)
     cut = {c.id: c for c in state.span.uses('Agent', 'Task') if not c.ok} if journal else {}
+    done = [b.result_at for b in state.span.uses('Bash') if b.ok and str(b.input.get('command')).split()[2:3]
+            == ['finalize'] and is_helper_invocation({'tool_name': 'Bash', 'tool_input': b.input})] if cut else []
     return [(m.result_at, cut[journal[str(m.input.get('to'))]]) for m in state.span.uses('SendMessage')
-            if cut and m.ok and journal.get(str(m.input.get('to'))) in cut]
+            if cut and m.ok and journal.get(str(m.input.get('to'))) in cut and any(t > m.result_at for t in done)]
 
 
 def _started_at(state, content):
@@ -356,6 +359,13 @@ def main():
         if last is None and initial_status_violations(new_todos):
             emit_block(cmd, initial_status_violations(new_todos), state.canonical)
         sys.exit(0)
+    # Past the first list and with its length unchanged, a session's list keeps the text and the
+    # order of the list it holds (content pairing is for the canonical list a length change
+    # compares against, P1c row 17): a step moved or reworded is refused here, before the step
+    # rules, which a reordered list would otherwise satisfy step by step.
+    if [t.get('content') for t in new_todos] != [t.get('content') for t in last]:
+        emit_block(cmd, ['Todo steps must keep the text and the order of the list the session holds; '
+                         're-send that list and change only statuses'], last)
     paired = by_content(last, new_todos)
     violations = validate(paired, new_todos)
     if violations:

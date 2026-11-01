@@ -274,6 +274,20 @@ def test_exploration_steps_pass_and_a_wrong_role_is_refused(session):
     assert before_triage.returncode == 2 and "Case A" in before_triage.stderr
 
 
+def test_a_pm_prompt_without_a_mode_is_plan_as_pm_md_reads_it(session):
+    """P1c A11: a session still running the base's Step 2 text dispatches PM PLAN with no PM_MODE line;
+    agents/pm.md reads a missing PM_MODE as PLAN, and so does the dispatch check. A mode the prompt
+    does carry is still compared, and only a PM prompt defaults."""
+    assert contract_runtime.detect_mode("You are the PM subagent.", "pm") == "PLAN"
+    assert contract_runtime.detect_mode("You are the PM subagent.", "architect") == ""
+    assert contract_runtime.detect_mode("PM_MODE: TRIAGE", "pm") == "TRIAGE"
+    _bookmark(session, "2")
+    base = "You are the PM subagent. Follow agents/pm.md instructions precisely.\nOutput test plan to: x"
+    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 0
+    refused = _run("pretool-subagent-enforce.py", session, _agent("pm", "PM_MODE: RETRO"))
+    assert refused.returncode == 2 and "mode='RETRO'" in refused.stderr
+
+
 def test_a_wrong_role_is_refused_in_the_second_cycle_too(session):
     """The cycle-1 checklist all completed, then reset for cycle 2: the step
     is still read, so the dispatch check keeps refusing a wrong role."""
@@ -309,6 +323,23 @@ def test_triage_handler_writes_the_contract_and_the_dispatch_hook_reads_it(sessi
     path.unlink()
     assert _run("posttool-subagent-track.py", session, _agent("pm", "PM_MODE: PLAN")).returncode == 0
     assert not path.exists()
+
+
+def test_triage_handler_reads_the_report_its_dispatch_names(session):
+    """P1c A11: a session still running the base's text numbers its cycle by the record's cycle_count,
+    which no hook advances since P1b; in cycle 2 its TRIAGE is told to write triage-report-cycle1.json.
+    The contract of the cycle in progress (2) is rendered from the report that dispatch names, so the
+    cycle's dispatches find their entries."""
+    out = session / "docs" / "dev" / "overnight" / SID
+    out.mkdir(parents=True)
+    (out / "retro-report-cycle1.json").write_text("{}")
+    _triage_report(session, 1, fixes=1)
+    prompt = f"PM_MODE: TRIAGE\nCycle number: 1\nWrite triage report to: docs/dev/overnight/{SID}/triage-report-cycle1.json"
+    written = _run("posttool-subagent-track.py", session, _agent("pm", prompt))
+    assert written.returncode == 0 and "cycle 2, 1 pipeline(s)" in written.stdout, written.stdout + written.stderr
+    assert (out / "cycle-2" / "cycle-contract.json").is_file()
+    _bookmark(session, "8", _todos(None, done="all"))
+    assert _run("pretool-subagent-enforce.py", session, _agent("ba", "analyse")).returncode == 0
 
 
 def test_triage_handler_writes_nothing_without_a_triage_report(session):

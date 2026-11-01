@@ -8,7 +8,9 @@ selected tests name, REPLAY_WORKERS at a time, so the replays of one job run sid
 REPLAY_SHARD=i/n (CI) keeps the tests of the replays shard i of n owns: each replay goes, costliest
 first, to the shard with the least cost so far (each replay whole in one shard), and the tests that
 replay nothing (unit tests) to shard 1; a test marked `every_shard` (it reads the replays its shard
-ran) to every shard. REPLAY_WORK keeps the runs (default: pytest's temp dir).
+ran) to every shard. A test may carry several `replay` markers (it reads every one of those
+replays): the replays one test names, and those any other test names with one of them, go to one
+shard together. REPLAY_WORK keeps the runs (default: pytest's temp dir).
 """
 from __future__ import annotations
 
@@ -24,9 +26,9 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "every_shard: the test reads whatever replays its shard ran; it runs in every shard")
 
 
-def _key(item):
-    m = item.get_closest_marker("replay")
-    return (m.args[0], m.args[1] if len(m.args) > 1 else 100) if m else None
+def _keys(item) -> list:
+    """(key, cost) of every replay the test reads (its `replay` markers)."""
+    return [(m.args[0], m.args[1] if len(m.args) > 1 else 100) for m in item.iter_markers("replay")]
 
 
 def pytest_collection_modifyitems(config, items):
@@ -36,20 +38,31 @@ def pytest_collection_modifyitems(config, items):
     i, _, n = shard.partition("/")
     i, n = int(i), int(n)
     costs: dict = {}
+    group: dict = {}  # replay key -> the key standing for every replay read together with it
+
+    def root(k):
+        while group.setdefault(k, k) != k:
+            k = group[k]
+        return k
     for it in items:
-        k = _key(it)
-        if k:
-            costs[k[0]] = max(costs.get(k[0], 0), k[1])
+        ks = _keys(it)
+        for k, c in ks:
+            costs[k] = max(costs.get(k, 0), c)
+            group[root(k)] = root(ks[0][0])
+    groups: dict = {}
+    for k, c in costs.items():
+        groups.setdefault(root(k), []).append(k)
     load = [0.0] * n
     owner = {}
-    for key, cost in sorted(costs.items(), key=lambda kv: (-kv[1], str(kv[0]))):
+    for keys in sorted(groups.values(), key=lambda ks: (-sum(costs[k] for k in ks), str(sorted(ks)))):
         j = min(range(n), key=lambda x: (load[x], x))
-        owner[key] = j + 1
-        load[j] += cost
+        for k in keys:
+            owner[k] = j + 1
+        load[j] += sum(costs[k] for k in keys)
     keep, drop = [], []
     for it in items:
-        k = _key(it)
-        mine = it.get_closest_marker("every_shard") or (owner.get(k[0]) if k else 1) == i
+        ks = _keys(it)
+        mine = it.get_closest_marker("every_shard") or (owner.get(ks[0][0]) if ks else 1) == i
         (keep if mine else drop).append(it)
     if drop:
         config.hook.pytest_deselected(items=drop)
@@ -65,9 +78,9 @@ def runner(tmp_path_factory, request):
     r = suite.Runner(work, log=lambda *a: print(*a, flush=True))
     keys = []
     for it in request.session.items:
-        k = _key(it)
-        if k and k[0] not in keys:
-            keys.append(k[0])
+        for k, _cost in _keys(it):
+            if k not in keys and k in suite.REGISTRY:  # a test with its own runner: not prefetched
+                keys.append(k)
     r.prefetch_keys = keys
     yield r
     r.guard.close()

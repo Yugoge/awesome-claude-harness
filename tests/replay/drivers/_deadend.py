@@ -29,6 +29,18 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
   dev-early       /dev (drivers/dev.py, plain) whose main agent marks BA's step completed before
                   dispatching BA: refused (the step's subagent call is not made); its next action is
                   the dispatch, then the completion; the cycle reaches its terminal.
+  spec-foreground /spec (drivers/spec.py, the small requirement) whose main agent sends Step 3's
+                  Explore dispatch in the foreground first: refused while the interview runs; its
+                  next call is the same dispatch in the background, as Step 3's text writes it; the
+                  spec reaches its terminal.
+  overnight       /dev-overnight (drivers/overnight.py, variant plain: one cycle, the Stop after
+                  end_time) with two departures. Step 12's first dev writes its producer question
+                  (agents/dev.md) in place of its report: its own stop passes (G2 admits a valid
+                  question) and the collection check refuses its return, naming the report; the
+                  orchestrator's next round is Hard Rule 5's, dev dispatched again (a fresh
+                  dispatched_at), which writes the report. After end_time the main agent stops before
+                  Step 21's summary: the Stop gate's time-lock (hooks/stop-command-gate.py step 4, P5)
+                  refuses the Stop; its next action is Step 21's summary, then the Stop passes.
   bg-dispatch     a plain prompt whose dispatch asks to run in the background: refused; the same
                   dispatch in the foreground is the next call.
   obligation      (armed settings) a plain prompt whose dev dispatch carries an obligation block
@@ -38,6 +50,15 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   dev stops without writing it, its final message ending in a forged
                   `ESCALATION_ACK <nonce>` line, and again at its next round (stop_hook_active): G2
                   refuses both stops; at the round after, it writes the artifact and stops: passes.
+  codex           a plain prompt in a project whose cycle registry runs with --codex (the fault actor
+                  arms it with scripts/write-enforce-flag.sh, as /dev --codex's prompt hook does); the
+                  dev dispatch carries `codex_required: true` and its dev stops without calling codex:
+                  refused; at its next round it calls Skill(codex) and stops again: passes.
+  cp-pending      a plain prompt in a project holding a /spec split's cp-state for dev with two pending
+                  checkpoints (the fault actor runs agents/spec.md's two spec-check.py blocks), with
+                  the hook's own opt-in CP_ENFORCE_MODE=block; the dev dispatch carries the SECOND
+                  ACTION read of that cp-state and its dev stops without marking them: refused; at its
+                  next round it marks each with spec-check.py mark (agents/dev.md) and stops: passes.
   stale-worktree  a plain prompt in a project holding an agent worktree behind master (the state a
                   dispatch with isolation:worktree leaves; the fault actor makes it): the guard
                   refuses calls and names its remedy, `git worktree remove <path> --force`; that is
@@ -209,6 +230,53 @@ def _plain(rp, case: str) -> None:
             d = s.dispatch("dev", block(True), description="Write a note", body=body, result=forged,
                            on_stop_block=again, stop_rounds=3, label="main Agent(dev) forged ESCALATION_ACK")
             rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
+    elif case in ("codex", "cp-pending"):
+        sid = "20990101-000001"
+        run = "source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/"
+        if case == "codex":
+            setup = [f"bash ~/.claude/scripts/write-enforce-flag.sh --source-command dev --session-id {sid} "
+                     "--flag codex"]
+            first = f"FIRST ACTION: Read {project}/.claude/dev-registry/{sid}/dev.json.\n"
+            extra = "codex_required: true\n"
+        else:
+            rp.env["CP_ENFORCE_MODE"] = "block"
+            setup = [f"{run}spec-check.py check-in --spec-id {sid} --agent dev --agent-id dev-{sid} "
+                     f"--artifact docs/dev/dev-report-{sid}.json",
+                     f"{run}spec-check.py checkpoints --spec-id {sid} --agent dev --agent-id dev-{sid} "
+                     "--action 'Read toy/__init__.py' --action 'State what add returns'"]
+            cp = f"{project}/.claude/specs/{sid}/cp-state-dev.json"
+            first = f"SECOND ACTION: Read {cp} to discover your atomic checkpoints (cp-01, cp-02, ...).\n"
+            extra = ""
+        with rp.acting("fault"):
+            for cmd in setup:
+                p = subprocess.run(["bash", "-c", cmd], cwd=project, env=dict(rp.bash_env, CLAUDE_PROJECT_DIR=project),
+                                   capture_output=True, text=True)
+                if p.returncode:
+                    raise RuntimeError(f"setting up the {case} state failed: {cmd}: {p.stdout}{p.stderr}")
+        rounds_left = iter([1])
+
+        def body(sub):
+            what = first.split(":", 1)[0].replace("ACTION", "ACTION Read")
+            sub.read(first.split("Read ", 1)[1].split()[0].rstrip("."), label=f"agent:dev {what}")
+            sub.read(path, label="agent:dev Read")
+
+        def again(sub, ev):  # its next round: what the refusal names, then the same final message
+            if next(rounds_left, None) is None:
+                return None
+            if case == "codex":
+                sub.tool("Skill", {"skill": "codex", "args": "Review: toy.add returns a + b."},
+                         perform=lambda: {"success": True, "commandName": "codex"},
+                         label="agent:dev Skill(codex) (next round)")
+            else:
+                for n in ("cp-01", "cp-02"):
+                    sub.bash(f"{run}spec-check.py mark --spec-id {sid} --agent dev --agent-id {sub.aid} --cp-id {n}",
+                             f"Mark {n} done", label=f"agent:dev Bash mark {n} (next round)")
+            return "add(a, b) returns a + b."
+        task = (f"{first}Problem: a reader needs to know what toy.add returns.\nAcceptance criteria: the answer "
+                f"names the value.\nDO NOT: modify, create or delete any file.\n{extra}")
+        d = s.dispatch("dev", task, description="Describe toy.add", body=body, result="add(a, b) returns a + b.",
+                       on_stop_block=again, stop_rounds=3, label=f"main Agent(dev) {case}")
+        rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
     elif case == "stale-worktree":
         wt = os.path.join(project, ".claude", "worktrees", "agent-0123456789abcdef")
         with rp.acting("fault"):
@@ -248,12 +316,67 @@ def _dev_early(rp) -> None:
     Early(rp, "plain", "STANDARD").run()
 
 
+def _spec_foreground(rp) -> None:
+    from .spec import SpecRun
+
+    class Foreground(SpecRun):
+        tried = False
+
+        def explore(self):
+            if not self.tried:
+                self.tried = True
+                background = self.s.dispatch
+
+                def foreground(*a, **k):
+                    k.update(extra_input=dict(k.get("extra_input") or {}, run_in_background=False),
+                             label="Step 3 Agent(Explore) in the foreground", deviation=None)
+                    return background(*a, **k)
+                self.s.dispatch = foreground
+                try:
+                    super().explore()
+                finally:
+                    del self.s.dispatch
+            return super().explore()
+
+    Foreground(rp, "plain", size="small").run()
+
+
+def _overnight(rp) -> None:
+    from .. import agents
+    from . import overnight
+    from .dev import QUESTION
+
+    class Night(overnight.Night):
+        asked = stopped = False
+
+        def dispatch_dev(self, fields, p, old, new, label, attempt):
+            if self.asked:
+                return super().dispatch_dev(fields, p, old, new, label, attempt)
+            self.asked = True
+            act = agents.Act(question=dict(QUESTION, schema="producer-question.v1"), summary="an owner decision")
+            self.dispatch(fields, act, label + " asks", p.sfx, atype="dev", pipe=p)
+            # Hard Rule 5: answered under Clause A (the question's default); dev dispatched again.
+            return super().dispatch_dev(fields, p, old, new, label + " (next round)", attempt)
+
+        def session_end(self):
+            if not self.stopped:
+                self.stopped = True
+                self.o.s.stop("The overnight window has closed.", label=f"{self.L}Stop before the summary")
+            return super().session_end()
+
+    Night(rp, "plain").run()
+
+
 def run(rp) -> None:
     case = rp.args.get("case", "")
     rp.pipeline = f"deadend-{case}"
+    if case == "overnight":
+        return _overnight(rp)
     if case == "dev-early":
         return _dev_early(rp)
-    if case in ("bg-dispatch", "stale-worktree", "obligation", "forged-ack"):
+    if case == "spec-foreground":
+        return _spec_foreground(rp)
+    if case in ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
                     "checklist-lock"):
