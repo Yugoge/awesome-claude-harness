@@ -461,7 +461,7 @@
         ]
       },
       {
-        "matcher": "Write|Edit|MultiEdit|Bash",
+        "matcher": "Write|Edit|MultiEdit|Bash|AskUserQuestion",
         "hooks": [
           {
             "type": "command",
