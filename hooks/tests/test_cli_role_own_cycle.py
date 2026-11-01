@@ -23,6 +23,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -40,12 +41,12 @@ SESSION = "p6-r4-session"
 class Cycle:
     """A project, its transcript store and the hooks run against them."""
 
-    def __init__(self, tmp_path: Path, session: str = SESSION):
-        self.project = tmp_path / "project"
+    def __init__(self, tmp_path: Path, session: str = SESSION, name: str = "project"):
+        self.project = tmp_path / name
         self.project.mkdir(parents=True, exist_ok=True)
         self.config = tmp_path / "home" / ".claude"
         self.session = session
-        slug = str(self.project.resolve()).replace("/", "-")
+        slug = re.sub(r"[^A-Za-z0-9]", "-", str(self.project.resolve()))  # Claude Code's folder name
         self.store = self.config / "projects" / slug
         self.env = {**os.environ, "CLAUDE_PROJECT_DIR": str(self.project), "HOME": str(tmp_path / "home"),
                     "CLAUDE_CONFIG_DIR": str(self.config), "PYTHONDONTWRITEBYTECODE": "1"}
@@ -92,10 +93,11 @@ class Cycle:
             payload["agent_transcript_path"] = str(transcript)
         return self.hook(name, payload)
 
-    def codex_call(self, agent_id: str, role: str) -> subprocess.CompletedProcess:
+    def codex_call(self, agent_id: str, role: str, **extra) -> subprocess.CompletedProcess:
         return self.hook("posttool-codex-skill-ledger.py", {
             "hook_event_name": "PostToolUse", "agent_id": agent_id, "agent_type": role, "tool_name": "Skill",
-            "tool_input": {"skill": "codex"}, "tool_response": {"output": "ok"}, "tool_use_id": "toolu_codex"})
+            "tool_input": {"skill": "codex"}, "tool_response": {"output": "ok"}, "tool_use_id": "toolu_codex",
+            **extra})
 
 
 def _obligation(role: str, profile: str, schema: str, path: str, task: str = TS, pipeline: str = "dev") -> str:
@@ -140,6 +142,30 @@ def test_codex_dev_is_bound_without_an_index_entry_and_its_skill_call_releases_i
     entry = json.loads((registry / "codex-ledger" / "a-dev1.json").read_text(encoding="utf-8"))
     assert (entry["dev_session_id"], entry["agent_type"]) == (CYCLE, "dev")
     released = cycle.stop("subagentstop-codex-enforce.py", "a-dev1", "dev", transcript)
+    assert released.returncode == 0, released.stderr
+
+
+@pytest.mark.parametrize("found_by", ["folder_name", "transcript_path"])
+def test_codex_ledger_on_a_project_path_claude_code_renames(tmp_path, found_by):
+    """Claude Code names a project's transcript folder by replacing every
+    non-alphanumeric character of its path with "-", not only "/". On a
+    my_proj path the codex call of a dev its obligation binds is stamped in
+    the ledger and its stop passes, whether its transcript is found by that
+    folder name (no transcript_path) or, as a PostToolUse payload carries it,
+    through the session's own transcript_path (here in a folder no name rule
+    gives)."""
+    cycle = Cycle(tmp_path, name="my_proj")
+    cycle.store = cycle.config / "projects" / (
+        re.sub(r"[^A-Za-z0-9]", "-", str(cycle.project.resolve())) if found_by == "folder_name" else "relocated")
+    assert cycle.store.name != str(cycle.project.resolve()).replace("/", "-")
+    registry = cycle.arm()
+    transcript = cycle.dispatch("a-dev5", "dev", _dev_prompt())
+    extra = {"transcript_path": str(cycle.store / f"{cycle.session}.jsonl")} if found_by == "transcript_path" else {}
+
+    assert cycle.codex_call("a-dev5", "dev", **extra).returncode == 0
+    entry = json.loads((registry / "codex-ledger" / "a-dev5.json").read_text(encoding="utf-8"))
+    assert (entry["dev_session_id"], entry["agent_type"]) == (CYCLE, "dev")
+    released = cycle.stop("subagentstop-codex-enforce.py", "a-dev5", "dev", transcript)
     assert released.returncode == 0, released.stderr
 
 

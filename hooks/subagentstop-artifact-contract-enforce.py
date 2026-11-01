@@ -92,7 +92,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_agent_type, resolve_dev_registry_entry
-from lib import claude_home, command_span
+from lib import claude_home, command_span, subagent_restart
 from lib.claude_home import settings_switch
 from lib import contract_runtime
 from lib import dispatch_template
@@ -310,12 +310,14 @@ def _tree_rel(path: Path) -> tuple:  # (git work tree holding path, path in it);
 
 
 def _recorded(transcript):
-    """(written, named) resolved paths of a transcript, None if unreadable. Read on "/" to keep other
+    """(written, named) resolved paths of a transcript over every account root's copy (each a partial view,
+    subagent_restart._child_transcript_copies), None if none is readable. Read on "/" to keep other
     repositories' paths, so the excluded trees are dropped here, in each path's own repository."""
-    found = command_span.write_set(transcript, "/") if transcript else None
+    copies = subagent_restart._child_transcript_copies(transcript) if transcript else []
+    found = [s for s in (command_span.write_set(c, "/") for c in copies) if s is not None]
     keep = lambda rels: {p for p in (Path("/", r).resolve() for r in rels)
                          if not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)}
-    return found and (keep(found.written), keep(found.named))
+    return tuple(keep(set().union(*(s[i] for s in found))) for i in (0, 1)) if found else None
 
 
 def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, deadline: float) -> list:
@@ -326,17 +328,20 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
         return []
     (written, named), unreadable = own, []
     ours = ("dev", ob.get("lane"), obligation.canonical_task_id(ob.get("task_id")))
-    mine = obligation.parse_iso8601(ob.get("dispatched_at"))
+    # A stamp without a zone reads as UTC (parse_iso8601's "Z"), so an aware and a naive one compare.
+    stamp = lambda v: (d := obligation.parse_iso8601(v)) and (d if d.tzinfo else d.replace(tzinfo=timezone.utc))
+    mine = stamp(ob.get("dispatched_at"))
 
     def inherit():  # _task_records reads the sessions modified since a day before the id's stamp
         for rec in obligation._task_records(ob.get("task_id"), project_dir, None):
             other = rec["obligation"]
-            at = obligation.parse_iso8601(other.get("dispatched_at"))
+            at = stamp(other.get("dispatched_at"))
             if (rec["prompt"] == resolution.prompt or (mine and at and at > mine) or ours != (
                     other.get("role"), other.get("lane"), obligation.canonical_task_id(other.get("task_id")))):
                 continue
-            meta = obligation._lib_module("subagent_restart")._metadata_by_tool_use(rec["transcript"])
-            sets = _recorded((meta.get(rec["tool_use_id"]) or {}).get("agent_transcript_path"))
+            meta = next((m for c in subagent_restart._child_transcript_copies(rec["transcript"])  # any root's
+                         if (m := subagent_restart._metadata_by_tool_use(c).get(rec["tool_use_id"]))), {})
+            sets = _recorded(meta.get("agent_transcript_path"))
             if sets is None:
                 unreadable.append(f"dev dispatch {rec['tool_use_id']} in session {rec['transcript'].stem}")
             else:
@@ -353,8 +358,9 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     missing, extra = set(raw) - written - named, {}
     for p in written - set(raw):  # nothing to land (unchanged, ignored, gone, outside a tree): nothing to declare
         tree, rel = _tree_rel(p)
-        out = tree and subprocess.run(["git", "--no-optional-locks", "-C", str(tree), "status", "--porcelain",
-                                       "-uall", "--", rel], capture_output=True, text=True, timeout=10).stdout
+        out = tree and subprocess.run(["git", "--no-optional-locks", "--literal-pathspecs", "-C", str(tree),
+                                       "status", "--porcelain", "-uall", "--", rel],  # rel is a path, never a glob
+                                      capture_output=True, text=True, timeout=10).stdout
         if out:
             extra[p] = "files_created" if out[:2] == "??" or out[0] == "A" else "files_modified"
     if not missing and not extra:

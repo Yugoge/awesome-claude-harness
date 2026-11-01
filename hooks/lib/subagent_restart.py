@@ -836,7 +836,8 @@ ACCOUNTS_ROOT: Path | None = Path(_ACCOUNTS_ROOT_ENV) if _ACCOUNTS_ROOT_ENV else
 
 
 def project_slug(project_dir: str | Path) -> str:
-    return str(Path(project_dir).resolve()).replace("/", "-")
+    # Claude Code's folder name: every non-alphanumeric character becomes "-", not only "/".
+    return re.sub(r"[^A-Za-z0-9]", "-", str(Path(project_dir).resolve()))
 
 
 def account_project_roots() -> list[Path]:

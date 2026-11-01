@@ -54,8 +54,8 @@ class Cycle:
     """A toy repository (gen.py, CLAUDE.md and src/app.py committed) and the
     transcript store of the sessions that dispatch devs into it."""
 
-    def __init__(self, tmp_path: Path):
-        self.project, self.home = tmp_path / "toyproj", tmp_path / "home"
+    def __init__(self, tmp_path: Path, name: str = "toyproj"):
+        self.project, self.home = tmp_path / name, tmp_path / "home"
         self.home.mkdir(parents=True)
         self.project.mkdir()
         _git(self.project, "init", "-q", "-b", "main")
@@ -105,14 +105,14 @@ class Cycle:
         return {"session": session, "agent_id": agent_id, "task": task_id, "lane": lane, "lane_set": lane_set,
                 "report": f"docs/dev/dev-report-{task_id}.json", "transcript": str(own)}
 
-    def stop(self, d: dict, modified, created, hook=None) -> subprocess.CompletedProcess:
+    def stop(self, d: dict, modified, created, hook=None, env=None) -> subprocess.CompletedProcess:
         """dev writes its schema-valid report with these lists and stops."""
         report = base._l2_dev_report(d["task"], lane=d["lane"], lane_set=d["lane_set"])
         report["owned_edits"], report["pre_edit_snapshots"] = {}, {}
         report["dev"].update(files_modified=list(modified), files_created=list(created))
         base._write(self.project / d["report"], report)
         return base._run_hook(self.project, self.home, d["agent_id"], session_id=d["session"],
-                              stopgate_mode="block", hook_path=hook,
+                              stopgate_mode="block", hook_path=hook, extra_env=env,
                               extra_payload={"agent_type": "dev", "agent_transcript_path": d["transcript"]})
 
 
@@ -266,6 +266,83 @@ def test_a10_redispatch_inherits_the_cycles_writes(tmp_path, warning, second_ses
             "files_modified: []; files_created: generated.txt, src/extra.py, src/new.py")
     _blocked(c.stop(d, [], ["src/extra.py", "generated.txt"]), *args)
     _warned(c.stop(d, [], ["src/extra.py", "generated.txt"], warning), *args)
+
+
+@pytest.mark.parametrize("name", ["toy_proj", "toy.proj"])
+def test_a10_redispatch_inherits_on_a_project_path_claude_code_renames(tmp_path, name):
+    """Claude Code names a project's transcript folder by replacing every
+    non-alphanumeric character of its path with "-", not only "/": on a
+    project path holding "_" or "." round 2 still finds round 1's session."""
+    c = Cycle(tmp_path, name)
+    c.store = c.home / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(c.project.resolve()))
+    assert c.store.name != str(c.project.resolve()).replace("/", "-")
+    c.dispatch("session-a", "agent-round1", _t6(c))
+    base._write(c.project / "src" / "extra.py", "extra = 1\n")
+    d = c.dispatch("session-a", "agent-round2",
+                   [("Write", {"file_path": c.path("src/extra.py"), "content": "extra = 1\n"}, True)])
+    _clean(c.stop(d, [], ["src/new.py", "generated.txt", "src/extra.py"]))
+
+
+def _move_to_other_root(c: Cycle, accounts: Path, session: str, agent_id: str) -> Path:
+    """Another account login's root holds the agent's meta file and transcript
+    (its copy of the session), the one the dispatching parent sits in not."""
+    other = accounts / "acct-b" / "claude" / "projects" / c.store.name / session / "subagents"
+    other.mkdir(parents=True, exist_ok=True)
+    for f in (c.store / session / "subagents").glob(f"agent-{agent_id}.*"):
+        f.rename(other / f.name)
+    return other
+
+
+def test_a10_writes_in_another_account_roots_copy_are_the_devs(tmp_path):
+    """Each account login keeps its own partial copy of a session
+    (subagent_restart._child_transcript_copies): a write recorded only in
+    another root's copy of this dev's transcript, and an earlier round whose
+    meta file and transcript only that root holds, are in the written set."""
+    c = Cycle(tmp_path)
+    accounts, env = tmp_path / "accounts", {"CLAUDE_RESTART_ACCOUNTS_ROOT": str(tmp_path / "accounts")}
+    base._write(c.project / "src" / "new.py", "def new():\n    return 1\n")
+    write = ("Write", {"file_path": c.path("src/new.py"), "content": "def new():\n    return 1\n"}, True)
+    d = c.dispatch("session-one", "agent-solo", [write], task="20261012-030000")
+    other = _move_to_other_root(c, accounts, "session-one", "agent-solo")
+    shutil.copy(other / "agent-agent-solo.meta.json", c.store / "session-one" / "subagents")
+    # This root's copy holds the dispatch prompt only; the other root's also the Write.
+    Path(d["transcript"]).write_text((other / "agent-agent-solo.jsonl").read_text().splitlines()[0] + "\n")
+    _blocked(c.stop(d, [], ["src/new.py"]), d["report"], "src/new.py", "(none)",
+             "files_modified: []; files_created: []")
+    _clean(c.stop(d, [], ["src/new.py"], env=env))
+
+    c.dispatch("session-a", "agent-round1", _t6(c))
+    _move_to_other_root(c, accounts, "session-a", "agent-round1")
+    base._write(c.project / "src" / "extra.py", "extra = 1\n")
+    d = c.dispatch("session-a", "agent-round2",
+                   [("Write", {"file_path": c.path("src/extra.py"), "content": "extra = 1\n"}, True)])
+    _clean(c.stop(d, [], ["src/new.py", "generated.txt", "src/extra.py"], env=env))
+
+
+def test_a10_dispatch_stamp_without_a_zone_still_inherits(tmp_path):
+    """A round whose dispatched_at carries no zone reads as UTC: the earlier
+    round still compares and is inherited, and a list missing its file blocks."""
+    c = Cycle(tmp_path)
+    c.dispatch("session-a", "agent-round1", _t6(c))
+    c.at = c.at.replace(tzinfo=None)
+    d = c.dispatch("session-a", "agent-round2", [("Bash", {"command": "ls -l src/app.py"}, True)])
+    _clean(c.stop(d, [], ["src/new.py", "generated.txt"]))
+    _blocked(c.stop(d, [], ["generated.txt"]), d["report"], "(none)", "src/new.py",
+             "files_modified: []; files_created: generated.txt, src/new.py")
+
+
+def test_written_path_with_glob_characters_is_matched_literally(tmp_path):
+    """app/[id]/page.tsx is a path, not a pattern: another session's change to
+    app/i/page.tsx is not a change of the file dev rewrote with its own bytes."""
+    c = Cycle(tmp_path)
+    for rel in ("app/[id]/page.tsx", "app/i/page.tsx"):
+        base._write(c.project / rel, "page\n")
+    _git(c.project, "add", ".")
+    _git(c.project, "commit", "-q", "-m", "pages")
+    base._write(c.project / "app" / "i" / "page.tsx", "a peer's change\n")
+    d = c.dispatch("session-glob", "agent-globdev",
+                   [("Write", {"file_path": c.path("app/[id]/page.tsx"), "content": "page\n"}, True)])
+    _clean(c.stop(d, [], []))
 
 
 def test_a10_redev_mints_a_new_task_and_inherits_nothing(tmp_path, warning):

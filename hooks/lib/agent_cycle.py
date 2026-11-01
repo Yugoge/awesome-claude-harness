@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import obligation  # imported as lib.agent_cycle (hooks) or hooks.lib.agent_cycle
 from .agent_resolver import resolve_dev_registry_entry
+from .commit_pipeline import _sibling_transcript
 
 
 def own_resolution(payload: dict, project_dir: str):
@@ -22,7 +23,9 @@ def own_resolution(payload: dict, project_dir: str):
     from the hook payload, its obligation when Resolved else {})."""
     resolution = obligation.resolve_own_obligation(
         session_id=payload.get("session_id") or payload.get("sessionId"), agent_id=payload.get("agent_id"),
-        project_dir=project_dir, payload_agent_transcript_path=payload.get("agent_transcript_path"))
+        project_dir=project_dir, payload_agent_transcript_path=payload.get("agent_transcript_path")
+        # A PostToolUse payload has none; the session transcript_path it carries sits beside the agent's own.
+        or _sibling_transcript(payload.get("transcript_path"), payload.get("agent_id")))
     return resolution, resolution.obligation if isinstance(resolution, obligation.Resolved) else {}
 
 

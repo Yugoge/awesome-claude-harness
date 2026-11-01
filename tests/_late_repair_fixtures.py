@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 TASK_ID = "20260101-000000"
@@ -89,7 +90,7 @@ def declare_stage_dispatches(root: Path, task_id: str) -> None:
     """The BA, dev and QA dispatch records of the task, in a session transcript
     of the store the test's CLAUDE_CONFIG_DIR names: record-stage takes a
     stage report's role from the dispatch that declared it."""
-    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / str(Path(root).resolve()).replace("/", "-")
+    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(Path(root).resolve()))
     store.mkdir(parents=True, exist_ok=True)
 
     def dispatch(role: str, artifacts: list) -> dict:

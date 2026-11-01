@@ -86,7 +86,7 @@ def _obligation_prompt(project: Path) -> str:
 
 
 def _store(home: Path, project: Path, prompt: str, subagent_type: str | None) -> None:
-    slug = str(project.resolve()).replace("/", "-")
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(project.resolve()))  # Claude Code's folder name
     session_dir = home / ".claude" / "projects" / slug / SESSION
     (session_dir / "subagents").mkdir(parents=True, exist_ok=True)
     agent = session_dir / "subagents" / f"agent-{AGENT}.jsonl"
