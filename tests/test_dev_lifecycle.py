@@ -10,6 +10,7 @@ broader/standalone suite named in the BA ticket's files_to_create list.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -331,6 +332,37 @@ def test_list_actionable_commit_selects_without_the_chain(tmp_path):
     assert row["invoke_resolver"] is False
     assert "artifact_chain" not in row
     assert _list_actionable(project, "commit") == [task_id]
+
+
+def _private_index_commit(project, paths, message):
+    """A commit through a session-private index, as /commit's changelog-analyst makes it:
+    the shared index stays behind HEAD."""
+    env = dict(os.environ, GIT_INDEX_FILE=str(project / ".git" / "session.index"))
+    for args in (["read-tree", "HEAD"], ["add", "--", *paths], ["commit", "-q", "-m", message]):
+        subprocess.run(["git", *args], cwd=project, env=env, check=True, capture_output=True)
+
+
+@pytest.mark.parametrize("landed, expected", [
+    (None, ("commit_pending", "commit", None)),  # closed, not committed: its owned paths dirty
+    ("all", ("committed", "none", None)),  # committed through a private index
+    ("docs", ("blocked", "inspect", "PARTIAL_COMMIT")),  # a Task-id commit, the product edit left out
+], ids=["closed-uncommitted", "private-index-commit", "partial-commit"])
+def test_commit_detection_of_a_closed_task(tmp_path, landed, expected):
+    project = make_project(tmp_path)
+    init_git_repo(project)
+    (project / "owned.txt").write_text("v1\n", encoding="utf-8")
+    git_commit_all(project, "base\n")
+    (project / "owned.txt").write_text("v2\n", encoding="utf-8")
+    task_id = "20260101-000014"
+    docs = [f"docs/dev/dev-report-{task_id}.json", f"docs/dev/close-report-{task_id}.md"]
+    write_json(project / docs[0], dev_report(task_id, files_modified=["owned.txt"], files_created=docs))
+    write_text(project / docs[1], close_report_text(task_id, "CLOSE: YES"))
+    if landed:
+        paths = docs + (["owned.txt"] if landed == "all" else [])
+        _private_index_commit(project, paths, f"feat: cycle\n\nTask-id: {task_id}\n")
+    row = dlc.derive_state(project, task_id)
+    assert (row["state"], row["next_action"], row.get("blocker")) == expected
+    assert _list_actionable(project, "commit") == ([task_id] if landed is None else [])
 
 
 # --------------------------------------------------------------------------

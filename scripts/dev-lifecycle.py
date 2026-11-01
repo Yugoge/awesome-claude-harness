@@ -26,9 +26,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional
@@ -135,7 +137,8 @@ def ba_qa_verdict(doc: dict) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------
-# do-report lite preflight (mirrors commands/close.md:157-162,224-233)
+# do-report shape check (a /do task's row; the disposition's own do-report
+# check is resolve-dev-artifact-chain.py's _check_do_report)
 # --------------------------------------------------------------------------
 
 
@@ -201,20 +204,21 @@ def _head_reachable_trailer(repo_root: Path, trailer_line: str) -> bool:
 
 
 def _porcelain_dirty(repo_root: Path, owned_paths: list[str]) -> bool:
+    """Whether an owned path in the worktree differs from HEAD, read through a
+    throwaway index read from HEAD: a commit through /commit's session-private
+    index (scripts/lib/session_index.py) can leave the shared index behind."""
     if not owned_paths:
         return False
+    git = ["git", "-C", str(repo_root)]
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "status", "--porcelain", "--", *owned_paths],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, "GIT_INDEX_FILE": os.path.join(tmp, "index")}
+            subprocess.run([*git, "read-tree", "HEAD"], env=env, capture_output=True, timeout=10, check=True)
+            status = subprocess.run([*git, "status", "--porcelain", "--", *owned_paths], env=env,
+                                    capture_output=True, text=True, timeout=10, check=True)
     except (OSError, subprocess.SubprocessError):
         return True  # fail closed: unknown state is treated as dirty
-    if proc.returncode != 0:
-        return True
-    return bool(proc.stdout.strip())
+    return bool(status.stdout.strip())
 
 
 def _combine_commit_repo_statuses(per_repo: list[str]) -> dict:
@@ -222,7 +226,8 @@ def _combine_commit_repo_statuses(per_repo: list[str]) -> dict:
     without requiring a multi-repository git fixture per call site.
 
     case (a) every repo "committed" -> committed
-    case (b) every repo "no_evidence" -> commit_pending, commit_evidence=unknown
+    case (b) every repo "no_evidence" (no Task-id commit yet, its owned changes
+             dirty or not) -> commit_pending, commit_evidence=unknown
     case (c) anything else (mixed, or any "mismatch") -> blocked/PARTIAL_COMMIT
              -- a trailer match with dirty owned content NEVER counts as
              committed (objection 5's negative fixture).
@@ -269,18 +274,12 @@ def commit_detection(
     per_repo: list[str] = []
     for repo in plan["repositories"]:
         root = Path(repo["repo_root"])
-        owned = repo["owned_paths"]
-        has_trailer = _head_reachable_trailer(root, trailer_line)
-        dirty = _porcelain_dirty(root, owned)
-        if has_trailer and not dirty:
-            per_repo.append("committed")
-        elif not has_trailer and not dirty:
+        if not _head_reachable_trailer(root, trailer_line):
             per_repo.append("no_evidence")
+        elif _porcelain_dirty(root, repo["owned_paths"]):
+            per_repo.append("mismatch")  # a Task-id commit, owned changes still outside HEAD
         else:
-            # trailer present but dirty owned content -- NEVER a false
-            # `committed`; also covers "trailer absent but dirty" as a
-            # genuine partial/ambiguous state.
-            per_repo.append("mismatch")
+            per_repo.append("committed")
 
     return _combine_commit_repo_statuses(per_repo)
 
@@ -316,8 +315,8 @@ def derive_state(project_root: Path, task_id: str) -> dict:
     ba-qa-report's PRESENCE takes precedence over a do-report's presence,
     because a ba-qa-report is direct evidence of an in-progress /dev-track
     attempt for this id. A do-report is a deliberate /do-track substitute for
-    the ENTIRE dev-chain (BA-QA included by design -- commands/close.md's
-    do-report lite preflight applies no ticket/context/QA checks), so it is
+    the ENTIRE dev-chain (BA-QA included by design -- the disposition checks a
+    /do task's do-report alone, no ticket/context/QA), so it is
     consulted only when no ba-qa-report exists either. This keeps AC-L1/L2/L3
     (ba-qa-report-driven) and AC-L9/L10 (do-report-driven, real corpus has no
     ba-qa-report for that id) both satisfied without contradiction.
