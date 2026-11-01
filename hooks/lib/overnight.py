@@ -123,18 +123,21 @@ def state_path(session_id, project_dir=None):
     return root / '.claude' / f'overnight-state-{session_id}.json'
 
 
-def session_state(session_id, project_dir=None):
-    """One session's record: its state file whose own session_id is
-    `session_id` (no scan of other sessions' files), else None. With no
-    project_dir the record is found by `locate`."""
+def _own_record(session_id, root):
+    """The record in `root`'s state file of `session_id` whose own session_id is
+    `session_id` (no scan of other sessions' files), else None."""
     if not isinstance(session_id, str) or not session_id:
         return None
-    if project_dir is None:
-        return locate(session_id)[1]
-    record = read_state(state_path(session_id, project_dir))
-    if record is None or record.get('session_id') != session_id:
-        return None
-    return record
+    record = read_state(state_path(session_id, root))
+    return record if record is not None and record.get('session_id') == session_id else None
+
+
+def session_state(session_id, project_dir=None):
+    """One session's record (`_own_record`), else None. With no project_dir the
+    record is found by `locate`, which selects through `_own_record`, never this
+    function: no call here cycles back, so the artifact check's static half
+    follows a write through the located path to `write_state` in any order."""
+    return locate(session_id)[1] if project_dir is None else _own_record(session_id, project_dir)
 
 
 def _git(where, *args):
@@ -167,7 +170,7 @@ def _roots(start):
 def session_state_file(session_id, starts):
     """The one locator: the state file of `session_id` and its record at
     <main root>/.claude/, reached from each start in turn (`_roots`).
-    Selection is the record's own (`session_state`: the session-keyed file
+    Selection is the record's own (`_own_record`: the session-keyed file
     name, then its session_id field). (None, None) when no start reaches one."""
     for start in starts:
         try:
@@ -175,7 +178,7 @@ def session_state_file(session_id, starts):
         except (OSError, RuntimeError):
             continue
         for root in _roots(d) if d else ():
-            record = session_state(session_id, root)
+            record = _own_record(session_id, root)
             if record is not None:
                 return state_path(session_id, root).resolve(), record
     return None, None
