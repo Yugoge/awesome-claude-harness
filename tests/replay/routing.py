@@ -140,6 +140,8 @@ def assert_routed(r, *, typed: str, source: str, check: str, path: str | None = 
             f"the re-dispatch's obligation differs beyond dispatched_at:\n{old['obligation']}\n{new['obligation']}"
         assert new["obligation"]["dispatched_at"] > old["obligation"]["dispatched_at"], (old, new)
         assert new["session"] != old["session"], "the re-dispatch is not the later session's"
+        if source == "writer":  # E6: the dispatch whose own agent wrote the product file
+            assert any(w.endswith("/" + path) for w in f["writes"].get(ans["tool_use_id"], ())), (ans, path)
     # The repair was written by that dispatch's own agent.
     wrote = f["writes"].get(routed[0]["tool_use_id"], set())
     assert any(w.endswith("/" + path) for w in wrote), f"the re-dispatch did not write {path}: {sorted(wrote)}"
