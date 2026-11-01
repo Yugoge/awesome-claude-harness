@@ -647,20 +647,21 @@ def is_contract_deliverable(path, src_task_id, repo_root=None, project_dir=None)
 COMMIT_LANDING_PROFILE = 'commit-landing'
 
 
-def commit_landing_task_id(prompt):
-    """E5 (2): the task a commit-landing dispatch lands, or None.
-
-    Read from the dispatch's own obligation, parsed as G1 parses it; a block
-    that does not parse is G1's finding and admits nothing here.
-    """
+def own_obligation(prompt):
+    """The dispatch's own obligation, parsed as G1 parses it, or {}: a block
+    that does not parse is G1's finding and admits nothing here."""
     try:
         parsed = obligation.parse_obligation(
             prompt, known_schema_ids=frozenset(schema_registry.load_registry()))
     except Exception:
-        return None
-    if not isinstance(parsed, obligation.ParsedObligation):
-        return None
-    doc = parsed.obligation
+        return {}
+    return parsed.obligation if isinstance(parsed, obligation.ParsedObligation) else {}
+
+
+def commit_landing_task_id(prompt):
+    """E5 (2): the task a commit-landing dispatch lands, or None, read from
+    the dispatch's own obligation."""
+    doc = own_obligation(prompt)
     task_id = doc.get('task_id')
     if doc.get('profile') != COMMIT_LANDING_PROFILE or not isinstance(task_id, str):
         return None
@@ -697,8 +698,9 @@ def is_report_of_task(report_rel, task_id, repo_root):
 
 
 def get_repo_root():
-    """Derive repo root from this file's location (hooks/ is one level below root)."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    """The project the dispatch works in (CLAUDE_PROJECT_DIR), whose docs/dev reports and .gitignore
+    the rule reads; this file's own repository (hooks/ is one level below its root) without one."""
+    return os.environ.get('CLAUDE_PROJECT_DIR') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def is_gitignored(path, repo_root):
@@ -740,12 +742,18 @@ def gitignored_deliverables(prompt):
     repo_root = get_repo_root()
     landed_task_id = None
     findings = []
+    # E6 (P1c X6): a report the dispatch's own obligation declares is what it
+    # writes: its producer dispatched again (the round this rule's refusal
+    # names) rewrites it, so it is no manifest of work the dispatch ships.
+    own = {a.get('path') for a in own_obligation(prompt).get('artifacts') or [] if isinstance(a, dict)}
 
     for match in matches:
         if _in_any_span(match.start(), audit_spans):
             continue
 
         report_rel = match.group(0)
+        if report_rel in own:
+            continue
 
         if (cycle_task_id is not None
                 and _in_any_span(match.start(), lane_spans)
@@ -823,11 +831,14 @@ def main():
         sys.exit(0)
 
     tool_input = data.get('tool_input') or data.get('toolInput') or {}
-    blocked = [path for _, paths in gitignored_deliverables(tool_input.get('prompt', ''))
-               for path in paths]
-    if blocked:
-        msg = 'BLOCKED: gitignored deliverables detected: ' + ', '.join(blocked)
-        print(msg, file=sys.stderr)
+    findings = gitignored_deliverables(tool_input.get('prompt', ''))
+    if findings:
+        print('BLOCKED: gitignored deliverables detected: '
+              + ', '.join(path for _, paths in findings for path in paths), file=sys.stderr)
+        for report, paths in findings:
+            print(f'  {report}: its dev.files_modified/files_created list {", ".join(paths)}, which .gitignore '
+                  'matches (git would not ship them). Dispatch that report\'s dev again (its declaring '
+                  'dispatch, a fresh dispatched_at); it rewrites its report.', file=sys.stderr)
         sys.exit(2)
 
     sys.exit(0)

@@ -15,9 +15,10 @@ At the first tool step whose label matches the glob (a subagent's Write of an ar
               stop after that
 
 The agent keeps what it meant to write. When its stop is blocked and a block's text names that
-artifact's path, it repairs it at its next stop (the next round, stop_hook_active true): it writes
-what it meant to, as the agent text tells it to, and stops again. No other actor repairs anything,
-and nothing outside the faulted agent acts on the block (Replay.on_stop_block_default).
+artifact's path (or a pattern the path matches), it repairs it at its next stop (the next round,
+stop_hook_active true): it writes what it meant to, as the agent text tells it to, and stops again.
+No other actor repairs anything, and nothing outside the faulted agent acts on the block
+(Replay.on_stop_block_default).
 
     cut@<label glob>, limit@<label glob>
 
@@ -32,6 +33,11 @@ F7b); the subagent still does the work the rendered prompt asks for:
                  pre-P1 template's did (the grammar refuses the block: invalid_obligation)
     noblock      the prompt carries no obligation block at all
 
+A dispatch a collection check (G3) refuses at its PreToolUse, naming an artifact an earlier dispatch
+declared (an artifact a write fault spoiled), goes back to that declaring dispatch: the orchestrator
+dispatches it again (a fresh dispatched_at), its agent writes the artifact as it meant to, and the
+refused dispatch is sent again (_collection_round).
+
 With `=defer` the subagent's stop comes after the next dispatch's, as two lanes of one parallel batch
 interleave (R-P1: the compliant sibling stops while this lane's report is on disk). A write fault
 given beside a dispatch fault applies only to the agent the earlier template started. A dispatch so
@@ -43,8 +49,10 @@ what the tree's template asks for.
 
 Before the step whose label matches, the fault (actor "fault") writes `path` (project-relative;
 `{task}` is the cycle's task id, the shortest task id the run learned) with `content kind`:
-`qa-report.v1` (a stale schema-v1 QA report: F3b) or `junk`. Nothing in the pipeline produced it, so no producer is asked to repair it; the
-pipeline must reach its terminal past it.
+`qa-report.v1` (a stale schema-v1 QA report: F3b), `junk`, or `absent` (the file removed). A path
+nothing in the pipeline produced is no producer's to repair; the pipeline must reach its terminal past
+it. One a producer wrote before is that producer's artifact, spoiled: a gate that refuses the next
+dispatch naming it returns it to its producer (_collection_round).
 
     lock@<label glob>=live|stale
 
@@ -175,6 +183,15 @@ def _write_fault(rp, kind: str, glob: str, what: str) -> callable:
     return fn
 
 
+_GLOB = re.compile(r"[\w./-]*\*[\w./*-]*")
+
+
+def _names(text: str, path: str) -> bool:
+    """Whether a block's text names `path`: the path itself, or a pattern it matches (a gate that knows
+    the report's form, not its name: `docs/dev/qa-report-*.json`)."""
+    return path in text or any(fnmatch.fnmatchcase(path, g) for g in _GLOB.findall(text) if "/" in g)
+
+
 def _earlier_template(prompt: str, kind: str) -> str:
     m = _BLOCK.search(prompt)
     if not m:
@@ -237,6 +254,77 @@ def _dispatch_fault(rp, kind: str, glob: str, what: str) -> callable:
     return fn
 
 
+def _collection_round(rp) -> callable:
+    """G3's next round (P1c "Next round"): a dispatch refused at its PreToolUse by a block that names an
+    artifact an earlier dispatch's obligation declared goes back to that declaring dispatch. The
+    orchestrator dispatches it again (same subagent_type, prompt and obligation template, a fresh
+    dispatched_at); that agent writes the faulted artifact as it meant to and ends with the message its
+    first round ended with; then the refused dispatch is sent again, a fresh dispatched_at, and its
+    outcome stands for the refused one."""
+    sent: list = []      # the dispatches that came back, in order (their after-step)
+    meant: dict = {}     # label -> the result the dispatch was made with (its after-step holds the Dispatch)
+
+    def fn(rp_, phase, step):
+        if step.get("kind") != "dispatch":
+            return
+        if phase == "before":
+            meant[step["label"]] = (step["body"], step["result"])
+            return
+        d = step.get("result")
+        if not getattr(d, "blocked", False):
+            if getattr(d, "agent_id", None):
+                sent.append(step)
+            return
+        if step["label"].endswith("(next round)") or d.pre is None:
+            return
+        text = "\n".join((h.get("stderr") or "") + (h.get("stdout") or "") for h in d.pre.blocks)
+        proj = rp.layout.project + "/"
+        named = {n[len(proj):] if n.startswith(proj) else n for n in re.findall(r"[\w./-]+\.json", text)}
+
+        def declared(p):  # the artifacts p's obligation declares that the block names, or lane reports of them
+            return [a["path"] for a in _obligation(p["prompt"]).get("artifacts") or [] if a.get("path") and (
+                a["path"] in named or any(a["path"].startswith(n[:-len(".json")] + "-") for n in named))]
+        prev = next((p for p in reversed(sent) if declared(p)), None)
+        if prev is None:
+            return
+        actor, paths = step["actor"], declared(prev)
+        final = "".join(c.get("text", "") for c in prev["result"].response.get("content") or [])
+
+        def rewrite(sub):
+            """Each artifact again: a spoiled one as its producer meant it, an intact one (a lane report of
+            a missing canonical, dev.md Step 11) as this round's report, its `timestamp` this round's."""
+            from . import agents
+            for path in paths:
+                full, f = os.path.join(rp.layout.project, path), rp.fault_pending.get(path)
+                if f is not None and not f["rec"]["repaired"]:
+                    f["rec"]["rounds"] += 1
+                    agents.put(sub, full, f["meant"], f"{sub.role} Write {path} (next round)")
+                    f["rec"]["repaired"] = True
+                    _record(rp, f["rec"])
+                elif os.path.isfile(full):
+                    doc = json.loads(agents.peek(rp, sub.role, full))
+                    if "timestamp" in doc:
+                        doc["timestamp"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    agents.put(sub, full, json.dumps(doc, indent=2) + "\n", f"{sub.role} Write {path} (next round)")
+        actor.dispatch(prev["subagent_type"], _fresh(prev["prompt"]), description=prev["description"], body=rewrite,
+                       result=final, label=prev["label"] + " (next round)", extra_input=prev["extra_input"])
+        body, result = meant[step["label"]]
+        again = actor.dispatch(step["subagent_type"], _fresh(step["prompt"]), description=step["description"],
+                               body=body, result=result, label=step["label"] + " (next round)",
+                               deviation=step["deviation"], extra_input=step["extra_input"])
+        for k in ("blocked", "agent_id", "actor", "stop", "post", "response", "ok", "tool_use_id"):
+            setattr(d, k, getattr(again, k, None))
+    return fn
+
+
+def _obligation(prompt: str) -> dict:
+    m = _BLOCK.search(prompt or "")
+    try:
+        return json.loads(m.group(1)) if m else {}
+    except ValueError:
+        return {}
+
+
 def _plant(rp, glob: str, what: str) -> callable:
     done: list = []
     path_t, _, content = what.partition(":")
@@ -256,13 +344,22 @@ def _plant(rp, glob: str, what: str) -> callable:
         else:
             text = "junk\n"
         full = os.path.join(rp.layout.project, rel)
+        rec = {"kind": "plant", "label": step["label"], "path": rel, "content": content}
         with rp.acting("fault"):
+            meant = open(full).read() if os.path.isfile(full) else None
             os.makedirs(os.path.dirname(full), exist_ok=True)
-            with open(full, "w") as fh:
-                fh.write(text)
-            old = os.path.getmtime(full) - 3600
-            os.utime(full, (old, old))
-        _record(rp, {"kind": "plant", "label": step["label"], "path": rel, "content": content})
+            if content == "absent":
+                if meant is not None:
+                    os.remove(full)
+            else:
+                with open(full, "w") as fh:
+                    fh.write(text)
+                old = os.path.getmtime(full) - 3600
+                os.utime(full, (old, old))
+        if meant is not None and content != "absent":  # its producer's next round writes it as it meant to
+            rec.update(agent=None, repaired=False, rounds=0)
+            rp.fault_pending[rel] = {"meant": meant, "faulted": text, "rec": rec, "forged": False}
+        _record(rp, rec)
     return fn
 
 
@@ -377,7 +474,7 @@ def on_stop_block(sub, ev):
     rp = sub.rp
     text = "\n".join((h.get("stderr") or "") + (h.get("stdout") or "") for h in ev.blocks)
     mine = [(p, f) for p, f in rp.fault_pending.items()
-            if p and p in text and not f["rec"]["repaired"] and f["rec"].get("agent") == sub.aid]
+            if p and _names(text, p) and not f["rec"]["repaired"] and f["rec"].get("agent") == sub.aid]
     if not mine:
         return None
     from . import agents
@@ -423,6 +520,7 @@ def install(rp, spec: str) -> None:
             rp.faults += [(glob, inject), ("*", observe)]
         else:
             rp.faults.append((glob, _write_fault(rp, kind, glob, what)))
+    rp.faults.append(("*", _collection_round(rp)))
     rp.on_stop_block_default = on_stop_block
 
 

@@ -16,8 +16,10 @@ beside each site):
 
 A G site is shown cleared by a replay that reaches it: after the block, the same actor's next event
 of the same kind (its next stop, its next tool call) passes every hook, and the replay reaches its
-terminal (exit 0). This file's own replays (drivers/_deadend.py, and fault replays of /dev through
-tests/replay/faults.py) reach the gates of the pipelines' own flows.
+terminal (exit 0). This file's own replays (drivers/_deadend.py, and fault replays of the pipelines
+through tests/replay/faults.py) reach the gates of the pipelines' own flows, and every G site must be
+reached and cleared by one of the session's replays (test_every_gate_site_is_reached_and_cleared;
+no site is exempt).
 
 (iii) Two refusals hold: the /do Stops after an AskUserQuestion answer, with the do-report still
 missing, are refused (D23); a dev stop ending in a forged `ESCALATION_ACK <nonce>` line is refused
@@ -37,15 +39,41 @@ import pytest
 
 from tests.replay import sites, suite
 
-DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock")
-PLAIN_CASES = ("bg-dispatch", "stale-worktree", "obligation", "forged-ack")
+DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
+            "todo-first")
+PLAIN_CASES = ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending")
 CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
 CASES["dev-early"] = suite.Scenario("dead end: dev-early", "_deadend", (("case", "dev-early"),), ("dev",), 100)
+CASES["spec-foreground"] = suite.Scenario("dead end: spec-foreground", "_deadend", (("case", "spec-foreground"),),
+                                          ("spec",), 110)
+CASES["overnight"] = suite.Scenario("dead end: overnight", "_deadend", (("case", "overnight"),), ("dev-overnight",), 600)
 ARMED_CASES = ("obligation", "forged-ack")  # G1 and G2 block only armed (CLAUDE_OBLIGATION_*=block)
 DEV = next(s for s in suite.COMPLIANT if s.name == "/dev singular")
-FAULTS = {"dev report missing": "missing@agent:dev Write docs/dev/dev-report-*",
-          "qa report missing": "missing@agent:qa Write docs/dev/qa-report-*"}
+FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
+MERGE = next(s for s in suite.COMPLIANT if s.name == "/merge")
+QA_WRITE = "agent:qa Write docs/dev/qa-report-*"
+QA_DISPATCH = "Step 13 Agent(qa)"
+SKIP = "qa.e2e_enforcement.status:skipped_without_justification"
+# fault -> (the pipeline's compliant scenario, settings, what the replay injects: tests/replay/faults.py)
+FAULTS = {
+    "dev report missing": (DEV, "armed", "missing@agent:dev Write docs/dev/dev-report-*"),
+    "qa report missing": (DEV, "armed", f"missing@{QA_WRITE}"),
+    "qa e2e not an object": (DEV, "shipped", f"invalid@{QA_WRITE}=qa.e2e_enforcement:performed"),
+    "qa e2e absent": (DEV, "shipped", f"invalid@{QA_WRITE}=-qa.e2e_enforcement"),
+    "qa e2e unjustified skip": (DEV, "shipped", f"invalid@{QA_WRITE}={SKIP}"),
+    "qa report missing, no obligation": (DEV, "shipped", f"noblock@{QA_DISPATCH};missing@{QA_WRITE}"),
+    "qa e2e unjustified skip, no obligation": (DEV, "shipped", f"noblock@{QA_DISPATCH};invalid@{QA_WRITE}={SKIP}"),
+    "dev report lists an ignored file": (DEV, "armed", "invalid@agent:dev Write docs/dev/dev-report-*="
+                                         'dev.files_created:["toy/__pycache__/__init__.cpython-312.pyc"]'),
+    "dev report spoiled before QA": (DEV, "armed", f"plant@{QA_DISPATCH}=docs/dev/dev-report-{{task}}.json:junk"),
+    "canonical aggregate missing before QA": (FANOUT, "shipped",
+                                              "plant@Step 13 [[]l1] Agent(qa)=docs/dev/dev-report-{task}.json:absent"),
+    "merge grant invalid": (MERGE, "shipped", "invalid@agent:merge-analyst Write grant=nonce:0000"),
+    # test_faults.py's F7 (shipped): a lane dispatched from the pre-P1 template, its report needs_review
+    "lane from the pre-P1 template": (FANOUT, "shipped", "pretemplate@Step 10 [[]l1] Agent(dev);"
+                                      "invalid@agent:dev Write docs/dev/dev-report-*-l1.json=dev.status:needs_review"),
+}
 FORGED = re.compile(r"^ESCALATION_ACK [0-9a-f]+\s*$", re.M)
 
 
@@ -54,7 +82,17 @@ def case_key(case: str) -> str:
 
 
 def fault_key(fault: str) -> str:
-    return suite.replay_key(DEV, "armed", (("fault", FAULTS[fault]),))
+    scn, settings, spec = FAULTS[fault]
+    return suite.replay_key(scn, settings, (("fault", spec),))
+
+
+def _reads_every_replay_of_this_file(test):
+    """Mark `test` with every replay this file's tests read: the session runner replays them all before
+    it runs, and a CI shard that runs it runs them all (conftest.py groups them)."""
+    for key, cost in [(case_key(c), CASES[c].cost) for c in CASES] + \
+            [(fault_key(f), FAULTS[f][0].cost) for f in FAULTS]:
+        test = pytest.mark.replay(key, cost)(test)
+    return test
 
 
 # ---------------------------------------------------------------- the catalog
@@ -209,18 +247,53 @@ def test_gate_is_cleared_by_the_actors_next_action(replays, catalog, case):
                 f"the stop ending in a forged ESCALATION_ACK line passed: {ev['label']}"
 
 
-@pytest.mark.parametrize("fault", [pytest.param(f, id=f.replace(" ", "-"),
-                                                marks=pytest.mark.replay(fault_key(f), DEV.cost)) for f in FAULTS])
-def test_fault_gate_is_cleared_by_its_producers_next_stop(replays, catalog, fault):
+@pytest.mark.parametrize("fault", [pytest.param(f, id=re.sub(r"\W+", "-", f),
+                                                marks=pytest.mark.replay(fault_key(f), FAULTS[f][0].cost)) for f in FAULTS])
+def test_fault_gate_is_cleared_by_its_producers_next_round(replays, catalog, fault):
+    """A fault replay (tests/replay/faults.py) meets the gate its fault spoils, and the actor the gate
+    returns it to clears it at its next round: the faulted agent's next stop (a SubagentStop gate), its
+    next call (a PostToolUse gate), or the declaring dispatch sent again before the refused one (a
+    collection check at dispatch); the pipeline reaches its terminal."""
     r = replays.get(fault_key(fault))
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     bl = blocks(r, catalog)
     print(f"\n{fault}: " + "; ".join(f"{b['ev']['label']!r} -> {', '.join(s.id + ' ' + catalog.of(s) for s in b['sites'])}"
                                      for b in bl))
-    assert bl and all(b["ev"]["event"] == "SubagentStop" for b in bl), \
-        f"{fault}: expected the faulted agent's stop to be refused:\n{r.explain()}"
+    assert bl, f"{fault}: the fault met no gate:\n{r.explain()}"
+    assert all(catalog.of(s) == "G" for b in bl for s in b["sites"]), \
+        f"{fault} met a block at a site other than a G site:\n{r.explain()}"
     bad = check_replay(r, catalog, compliant=False)
     assert not bad, "\n".join(bad)
+
+
+# ---------------------------------------------------------------- every G site, reached and cleared
+
+@_reads_every_replay_of_this_file
+def test_every_gate_site_is_reached_and_cleared(replays, catalog):
+    """X6 (ii): each enumerated G site is reached by a replay of the session, and in a replay reaching it
+    the same actor's next event of the same kind passes every hook and the replay exits 0 at its
+    terminal. A site no replay reaches fails here: give it a replay, or delete it with its proof (U)."""
+    cleared_by, failed = collections.defaultdict(set), collections.defaultdict(set)
+    for (key, _settings, _faults), r in replays._results.items():
+        if not r.summary:
+            continue
+        evs = events(r)
+        ok = r.rc == 0 and not r.summary.get("driver_error") and r.reached()
+        for b in blocks(r, catalog):
+            for s in b["sites"]:
+                name = f"{r.scenario.name} ({r.settings}{', ' + _faults[0][1] if _faults else ''})"
+                (cleared_by if ok and cleared(evs, b["ev"]) else failed)[s.id].add(name)
+    rows, unreached = [], []
+    for s in catalog.sites:
+        if catalog.of(s) != "G":
+            continue
+        rows.append({"site": s.id, "function": s.func, "cleared by": "; ".join(sorted(cleared_by[s.id])) or "-",
+                     "reached, not cleared": "; ".join(sorted(failed[s.id])) or "-"})
+        if not cleared_by[s.id]:
+            unreached.append(f"{s.id} {s.func}: " + ("reached by " + "; ".join(sorted(failed[s.id])) +
+                                                     " but not cleared" if failed[s.id] else "no replay reaches it"))
+    print("\nG sites, the replays that reach them and clear them:\n" + suite.table(rows))
+    assert not unreached, "G sites with no replay that reaches and clears them:\n  " + "\n  ".join(unreached)
 
 
 # ---------------------------------------------------------------- (iv) recall over the session
@@ -228,22 +301,13 @@ def test_fault_gate_is_cleared_by_its_producers_next_stop(replays, catalog, faul
 @pytest.mark.every_shard
 def test_every_block_of_the_session_maps_to_a_site(replays, catalog):
     results = [(key, r) for key, r in replays._results.items() if r.summary]
-    bad, reached = [], collections.defaultdict(set)
-    n = 0
+    bad, n = [], 0
     for (key, _settings, faults), r in results:
         is_compliant = r.scenario in suite.COMPLIANT and key == r.scenario.key and not faults
-        for b in blocks(r, catalog):
-            n += 1
-            for s in b["sites"]:
-                ok = cleared(events(r), b["ev"]) is not None and r.rc == 0 and r.reached()
-                reached[s.id].add(f"{r.scenario.name} ({r.settings}){'' if ok else ' NOT CLEARED'}")
+        n += len(blocks(r, catalog))
         bad += check_replay(r, catalog, compliant=is_compliant)
     print(f"\nrecall: {n} blocks in {len(results)} replays of this session, each mapped to an enumerated site"
           if not bad else f"\nrecall: {n} blocks in {len(results)} replays")
-    print("G sites with the replays that reach and clear them:")
-    for s in catalog.sites:
-        if catalog.of(s) == "G":
-            print(f"  {s.id} {s.func}: {'; '.join(sorted(reached.get(s.id, ()))) or 'no replay of this session reaches it'}")
     assert not bad, "\n".join(bad)
 
 
