@@ -352,7 +352,7 @@ class TestAC3BlockComposition(unittest.TestCase):
                 write_state(project / '.claude', sid,
                             build_state(sid, future_z(1), cycles_done=3,
                                         worktree=str(project / 'wt')))
-                spec = module.read_command_spec('dev-overnight')
+                spec = module._resolve_command_spec('dev-overnight')[1]
                 todos = module._load_overnight_todos()
                 block = module.check_overnight_continuation(sid)
             finally:

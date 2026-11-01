@@ -205,7 +205,7 @@ def _try_read_spec(path: Path) -> str | None:
 
 
 def _command_spec_candidates(cmd_name: str) -> list[Path]:
-    """The paths read_command_spec searches, in its order.
+    """The paths _resolve_command_spec searches, in its order.
 
     Extracted so the self-heal pointer degrades to "look in these places", not
     to nothing, when NONE resolves: a block with neither the document nor a
@@ -213,8 +213,6 @@ def _command_spec_candidates(cmd_name: str) -> list[Path]:
     Code's user command directory (its configuration directory: the document
     Claude Code expanded), then this harness's own commands/, for a
     configuration directory without one (a per-account CLAUDE_CONFIG_DIR).
-    read_command_spec keeps its own copy of this list;
-    test_candidate_list_matches_read_command_spec guards the two against drift.
     """
     return [
         PROJECT_DIR / '.claude' / 'commands' / f'{cmd_name}.md',
@@ -223,26 +221,11 @@ def _command_spec_candidates(cmd_name: str) -> list[Path]:
     ]
 
 
-def read_command_spec(cmd_name: str) -> str:
-    """Read the command .md file, stripping YAML frontmatter."""
-    for search_path in [
-        PROJECT_DIR / '.claude' / 'commands' / f'{cmd_name}.md',
-        Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'commands' / f'{cmd_name}.md',
-        Path(__file__).resolve().parent.parent / 'commands' / f'{cmd_name}.md',
-    ]:
-        if not search_path.exists():
-            continue
-        result = _try_read_spec(search_path)
-        if result is not None:
-            return result
-    return ''
-
-
 def _resolve_command_spec(cmd_name: str) -> tuple[Path | None, str, str]:
     """Path, decoded text and pre-read fingerprint, as ONE operation.
 
     Resolving separately from reading was a defect, not an optimisation:
-    read_command_spec falls through when a candidate EXISTS but cannot be read,
+    the read falls through when a candidate EXISTS but cannot be read,
     so a resolver that stopped at the first candidate that merely existed named
     a different file from the one that supplied the emitted bytes. Both things
     built on that answer were then wrong together -- the self-heal pointer sent
@@ -276,11 +259,7 @@ def _resolve_command_spec(cmd_name: str) -> tuple[Path | None, str, str]:
 
 
 def resolve_command_spec_path(cmd_name: str) -> Path | None:
-    """The file read_command_spec actually reads, or None if none of them does.
-
-    Same search order AND the same readability test as read_command_spec, so
-    this can never name a candidate that function would skip.
-    """
+    """The file whose text _resolve_command_spec returns, or None if none reads."""
     return _resolve_command_spec(cmd_name)[0]
 
 

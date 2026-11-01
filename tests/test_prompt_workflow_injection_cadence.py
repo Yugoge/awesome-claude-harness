@@ -66,7 +66,7 @@ OTHER_SID = 'zzzzzzzz-9999-8888-7777-666666666666'
 
 
 def spec_body_probe(length: int = 400) -> str:
-    """A prefix of the spec AS INJECTED -- read_command_spec strips frontmatter."""
+    """A prefix of the spec AS INJECTED -- _try_read_spec strips frontmatter."""
     text = COMMAND_DOC.read_text()
     if text.startswith('---'):
         end = text.find('\n---', 3)
@@ -714,7 +714,7 @@ class TestAC6SessionIsolation(unittest.TestCase):
 class TestAC8SelfHealPointer(unittest.TestCase):
     """AC-8 -- the pointer names the resolved path, never a literal."""
 
-    def test_pointer_equals_read_command_spec_resolution(self):
+    def test_pointer_equals_the_resolved_spec_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp)
             block = fixture.call_direct()
@@ -726,8 +726,8 @@ class TestAC8SelfHealPointer(unittest.TestCase):
             resolved = module.resolve_command_spec_path('dev-overnight')
             self.assertIsNotNone(resolved)
             self.assertIn(f'{SELF_HEAL_PREFIX}{resolved}', block)
-            # The resolved path is the file read_command_spec actually reads.
-            self.assertEqual(module.read_command_spec('dev-overnight'),
+            # The resolved path is the file whose text the resolver returns.
+            self.assertEqual(module._resolve_command_spec('dev-overnight')[1],
                              module._try_read_spec(resolved))
             # ...and it is NOT the repository literal.
             self.assertNotIn(str(COMMAND_DOC), block)
@@ -960,32 +960,6 @@ class TestDeliveryReceiptIsTrustworthy(unittest.TestCase):
                 self.assertFalse(module.commit_overnight_delivery(SID, light))
             self.assertFalse(fixture.marker_path().exists())
 
-    def test_candidate_list_matches_read_command_spec(self):
-        """The self-heal fallback must name the paths actually searched.
-
-        read_command_spec keeps its own copy of this list (rewriting it is
-        outside this lane's scope), so a pointer built from a drifted copy
-        would send the orchestrator to the wrong place -- worse than absent.
-
-        The two list expressions are compared whole, not by their path
-        literals: candidates that differ only in their base (the hook's own
-        location against $HOME, say) share every literal, so a literal-only
-        comparison would pass a copy that searches a different directory.
-        """
-        source = ast.parse(HOOK_PATH.read_text())
-        bodies = {node.name: node for node in source.body
-                  if isinstance(node, ast.FunctionDef)}
-        self.assertIn('_command_spec_candidates', bodies)
-
-        def candidate_list(name: str) -> str:
-            lists = [element for element in ast.walk(bodies[name])
-                     if isinstance(element, ast.List)]
-            self.assertEqual(1, len(lists), f'{name}: expected one list literal')
-            return ast.dump(lists[0])
-
-        self.assertEqual(candidate_list('_command_spec_candidates'),
-                         candidate_list('read_command_spec'))
-
 
 class TestPerAccountConfigDirStillFindsTheSpec(unittest.TestCase):
     """REG-E: a CLAUDE_CONFIG_DIR without commands/ must not lose the spec.
@@ -1029,7 +1003,7 @@ class TestPerAccountConfigDirStillFindsTheSpec(unittest.TestCase):
                         os.environ.update(env)
                         self.assertEqual(harness_spec,
                                          module.resolve_command_spec_path('dev-overnight'))
-                        self.assertTrue(module.read_command_spec('dev-overnight')
+                        self.assertTrue(module._resolve_command_spec('dev-overnight')[1]
                                         .startswith(spec_body_probe()))
 
                     first = fixture.run(extra_env=env).stdout
@@ -1051,13 +1025,13 @@ class TestPerAccountConfigDirStillFindsTheSpec(unittest.TestCase):
                 os.environ.update(env)
                 self.assertEqual(account_spec,
                                  module.resolve_command_spec_path('dev-overnight'))
-                self.assertIn('PER-ACCOUNT COPY', module.read_command_spec('dev-overnight'))
+                self.assertIn('PER-ACCOUNT COPY', module._resolve_command_spec('dev-overnight')[1])
 
 
 class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
     """The resolver must never name a file the reader would skip.
 
-    read_command_spec falls through to the next candidate when one exists but
+    The spec read falls through to the next candidate when one exists but
     cannot be READ. A resolver that stops at the first candidate that merely
     EXISTS therefore answered a different file, and both things built from that
     answer were wrong at once: the self-heal pointer sent the orchestrator to a
@@ -1171,7 +1145,7 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
                         self.assertIsNotNone(resolved)
                         # The one operation: whatever the resolver names must
                         # be the file whose decoded bytes the reader returns.
-                        self.assertEqual(module.read_command_spec('dev-overnight'),
+                        self.assertEqual(module._resolve_command_spec('dev-overnight')[1],
                                          module._try_read_spec(resolved))
 
 
@@ -1274,14 +1248,20 @@ class TestScopeConfinement(unittest.TestCase):
 class TestSlashChecklistDoesNotResendTheCommandFile(unittest.TestCase):
     """Claude Code already expands a slash command's body into the prompt, so
     the Phase A checklist must not append the same command file a second time
-    (about 108 KB for /dev and 120 KB for /close). The overnight continuation
-    re-send is a different delivery and is pinned by the cases above.
+    (tens of KB each). The overnight continuation re-send is a different
+    delivery and is pinned by the cases above.
 
     Judged on what the real UserPromptSubmit hook prints across the main()
     process boundary, so a re-send from any code path counts, with or without
     a COMMAND SPECIFICATION header."""
 
     LONG_LINE = 80  # the checklist never quotes a command-file line this long
+    # Measured when set, PROJECT_ROOT and HARNESS_ROOT lines included: /dev
+    # printed 3,222 chars and /close 1,188, against 89,968 in commands/dev.md
+    # and 64,308 in commands/close.md. The bound is near the geometric mean of
+    # the largest output and the smallest file, about 4x from each, so a
+    # re-send in any shape (re-wrapped, unheaded) fails on its size alone.
+    MAX_STDOUT_CHARS = 14_000
 
     def test_dev_and_close_hook_output_carries_no_command_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1296,22 +1276,35 @@ class TestSlashChecklistDoesNotResendTheCommandFile(unittest.TestCase):
             with fixture.module() as module:
                 for cmd in ('dev', 'close'):
                     # The document resolves, so a re-send would have content.
-                    self.assertTrue(module.read_command_spec(cmd))
+                    self.assertTrue(module._resolve_command_spec(cmd)[1])
             resent = []
             for cmd in ('dev', 'close'):
-                result = fixture.run(session_id=f'{cmd}-checklist-{SID}',
-                                     prompt=f'/{cmd} probe requirement')
+                envelope = {'session_id': f'{cmd}-checklist-{SID}',
+                            'prompt': f'/{cmd} probe requirement'}
+                result = fixture.run(**envelope)
                 self.assertEqual(0, result.returncode, result.stderr)
-                out = result.stdout
-                self.assertIn(f'CHECKLIST PRE-INITIALIZED for /{cmd.upper()}:', out)
+                outputs = [(f'/{cmd}', result.stdout)]
+                if cmd == 'dev':
+                    # The same envelope delivered again replays the start record
+                    # verbatim, task id included, so nothing is masked: the
+                    # replay prints exactly what the first delivery printed.
+                    again = fixture.run(**envelope)
+                    self.assertEqual(0, again.returncode, again.stderr)
+                    outputs.append(('/dev replayed', again.stdout))
+                    if again.stdout != result.stdout:
+                        resent.append(f'/dev replayed differs ({len(result.stdout)} '
+                                      f'-> {len(again.stdout)} chars)')
                 spec = (fixture.home / '.claude' / 'commands' / f'{cmd}.md').read_text()
-                quoted = [line for line in spec.splitlines()
-                          if len(line.strip()) >= self.LONG_LINE and line in out]
-                # Collected, not asserted inline: a 100 KB repr per command
-                # would bury which commands still re-send their file.
-                if 'COMMAND SPECIFICATION' in out or quoted:
-                    resent.append(f'/{cmd} ({len(out)} chars, '
-                                  f'{len(quoted)} command-file lines)')
+                for label, out in outputs:
+                    self.assertIn(f'CHECKLIST PRE-INITIALIZED for /{cmd.upper()}:', out)
+                    quoted = [line for line in spec.splitlines()
+                              if len(line.strip()) >= self.LONG_LINE and line in out]
+                    # Collected, not asserted inline: a 100 KB repr per command
+                    # would bury which commands still re-send their file.
+                    if ('COMMAND SPECIFICATION' in out or quoted
+                            or len(out) > self.MAX_STDOUT_CHARS):
+                        resent.append(f'{label} ({len(out)} chars, '
+                                      f'{len(quoted)} command-file lines)')
             self.assertEqual([], resent)
 
 
