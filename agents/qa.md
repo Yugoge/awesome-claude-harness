@@ -204,8 +204,8 @@ NOT emit `multi_issue_fanout_requested` merely because `mode == "fanout"` or
 `lanes` has multiple rows.
 
 In that close-only mode:
-- require the supplied chain to have `status == "pass"` (the resolver's only
-  passing status; any other status is not closeable) and consume its `mode`,
+- require the prompt's `Disposition: chain_pass` (the resolver's one closeable
+  disposition, from the Step 0 run that printed this chain) and consume its `mode`,
   `lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
   `qa_inputs` as one authoritative snapshot;
 - read every lane matrix row and QA input, and fail the parent close if the

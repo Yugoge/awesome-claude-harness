@@ -169,11 +169,11 @@ def test_close_qa_accepts_one_parent_lane_matrix_without_fake_parents() -> None:
     assert "parent ticket/context/QA are optional" in flat
     assert "MUST NOT request, create, or pretend" in flat
 
-    # P3 R4: the resolver passes a chain only with status "pass" (its
-    # exit_status is 0 on nothing else), so the close gate requires exactly
-    # that status and consumes no disclosed-exceptions field.
-    assert 'status == "pass"' in section
-    assert "any other status is not closeable" in flat
+    # P3 R4 / P4 R3: close QA closes only on Step 0's chain_pass, the one
+    # closeable disposition (its CHAIN line carries data fields, no status),
+    # and consumes no disclosed-exceptions field.
+    assert "`Disposition: chain_pass`" in section
+    assert "the resolver's one closeable" in flat
     assert "status in {" not in section
     assert "disclosed_exceptions" not in section
     assert "_exceptions" not in text
