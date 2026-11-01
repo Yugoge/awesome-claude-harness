@@ -605,8 +605,14 @@ class CloseRun:
                 raise agents.PlayError(f"Step 0 still {out['disposition'] or 'unread'} after {k} routing round(s): "
                                        f"{[(g['artifact'], g['problem']) for g in out['gaps']]}")
             k += 1
-            for g in out["gaps"]:
-                self.route_path(g["artifact"], f"{g['problem']}: {g['message']}", f"Step 0 round {k}")
+            # what the main agent's own step reads when the reader names one (own_work): the gaps as errors
+            self.chain = {"errors": [{"code": g["problem"], "path": g["artifact"], "detail": g["message"]}
+                                     for g in out["gaps"]]}
+            by_artifact: dict = {}
+            for g in out["gaps"]:  # each artifact the GAP lines name, with all of its problems at once
+                by_artifact.setdefault(g["artifact"], []).append(f"{g['problem']}: {g['message']}")
+            for art, problems in by_artifact.items():
+                self.route_path(art, "; ".join(problems), f"Step 0 round {k}")
             out = self.disposition(f"{label} round {k} re-run")
 
     def cp_state(self) -> None:
