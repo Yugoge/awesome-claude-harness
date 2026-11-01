@@ -996,7 +996,7 @@ class CloseRun:
     def run(self) -> str:
         self.start(self.tid)
         last = self.body()
-        self.outcome = last or (f"OPERATION_STALLED: {self.stalled}" if self.stalled else "")
+        self.outcome = last or ("stalled at Step 0 (the line above)" if self.stalled else "")
         self.o.s.stop(f"/close {self.tid}: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
         return last
 
