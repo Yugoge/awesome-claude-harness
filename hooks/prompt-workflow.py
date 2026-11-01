@@ -3,13 +3,15 @@
 UserPromptSubmit Hook: Checklist Injection for Slash Commands
 
 Phase A (slash command detected):
-  - Runs scripts/todo/<command>.py to get the step list
+  - Runs the harness's scripts/todo/<command>.py to get the step list
   - Starts the bookmark .claude/workflow-{session_id}.json: the command, its
     arguments and the workflow instance. The Codex plan path of
     pretool-workflow-gate.py and posttool-subagent-track.py update it; every
     write goes through lib.todo_canonical.write_bookmark, its one writer
   - If /dev-overnight: creates overnight-state-<session_id>.json with parsed end-time
   - Prints checklist-ready message + exact first TodoWrite call to use
+  - For every harness command (a commands/*.md stem), prints PROJECT_ROOT=<abs>
+    and HARNESS_ROOT=<abs>, the roots its text's Read paths start from
 
 Phase B (subsequent prompts, no slash command):
   - If any overnight-state-*.json exists with future end_time: inject continuation
@@ -307,13 +309,10 @@ def resolve_command_spec_path(cmd_name: str) -> Path | None:
 
 
 def run_todo_script(cmd_name: str, user_input: str = "") -> list:
-    todo_script = PROJECT_DIR / 'scripts' / 'todo' / f'{cmd_name}.py'
+    # The harness's own todo script; a product repository's scripts/todo never runs.
+    todo_script = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
-        global_todo = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
-        if global_todo.exists():
-            todo_script = global_todo
-        else:
-            return []
+        return []
     # Forward the raw user prompt to the todo script via env var so
     # argument-aware scripts (e.g. spec.py) can distinguish modes.
     # Other todo scripts don't read this var; setting it is harmless.
@@ -1650,6 +1649,8 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
 
 def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: str = '') -> None:
     """Phase A: slash command detected -- setup todos, state, emit checklist."""
+    if cmd_name != 'dev-overnight':
+        print_roots(cmd_name, sid)
     if cmd_name in ("commit", "stop"):
         _write_userintent_sentinel(cmd_name, sid)
     if cmd_name == "do":
@@ -1686,8 +1687,21 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
                   'command spec injected.', file=sys.stderr)
             _cleanup_overnight_partials(sid)
             raise SystemExit(2)
+        print_roots(cmd_name, sid)  # after the launcher: worktree_path exists now
     _write_bookmark(cmd_name, sid, _extract_arguments(user_input, cmd_name))
     emit_checklist_message(cmd_name, todos)
+
+
+def print_roots(cmd_name: str, sid: str) -> None:
+    """PROJECT_ROOT (in /dev-overnight the record's worktree_path, the command's
+    <PROJECT_ROOT>; its <MAIN_ROOT> is Step 1's) and HARNESS_ROOT (this hook's
+    install), for a harness command only."""
+    harness = Path(__file__).resolve().parent.parent
+    if cmd_name not in {p.stem for p in (harness / 'commands').glob('*.md')}:
+        return
+    state = load_overnight_state(sid) if cmd_name == 'dev-overnight' else None
+    project = state.get('worktree_path') if isinstance(state, dict) else None
+    print(f'PROJECT_ROOT={project or PROJECT_DIR}\nHARNESS_ROOT={harness}')
 
 
 def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
@@ -1816,6 +1830,7 @@ def cli(argv: list) -> int:
             print('prompt-workflow.py start: needs CLAUDE_CODE_SESSION_ID and the '
                   '/dev, /dev-command or /redev command text on stdin', file=sys.stderr)
             return 2
+        print_roots(cmd_name, sid)
         recorded = _recorded_start(cmd_name, user_input, sid)
         if recorded:
             sys.stdout.write(recorded)
