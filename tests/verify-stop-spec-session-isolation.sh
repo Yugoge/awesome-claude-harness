@@ -1,302 +1,37 @@
 #!/usr/bin/env bash
-# QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
-# Covers AC1-AC5 + critical regression checks from dev-20260424-093644.
+# Checks stop-spec-coverage-enforce.py, an exit-0 stub: G2 checks the split at the spec subagent's stop.
+# Its rule (spec-verify.py on the /spec split) moved into the spec subagent's dispatch
+# obligation, which hooks/subagentstop-artifact-contract-enforce.py checks at that
+# subagent's own stop (P1b row 8; hooks/tests/test_g2_spec_views.py). The Stop
+# coordinator still runs this file as its coverage phase, so it stays at its path and
+# allows every Stop: here on a /spec session whose split is under-covered, the case the
+# hook blocked before, and on an empty payload.
 #
-# Exit 0 = all tests passed, non-zero = failure count.
+# Exit 0 = all checks passed, non-zero = failure count.
 
 set -uo pipefail
 
-# The hook under test is the one in this checkout (this script lives at <repo>/tests/).
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/hooks/stop-spec-coverage-enforce.py"
 WORK="$(mktemp -d -t stop-spec-qa-XXXXXX)"
-_cleanup_work() { rm -rf "$WORK" 2>/dev/null; }
-trap '_cleanup_work' EXIT
-trap '_cleanup_work; exit 130' INT
-trap '_cleanup_work; exit 143' TERM
+trap 'rm -rf "$WORK" 2>/dev/null' EXIT
 export CLAUDE_PROJECT_DIR="$WORK"
-mkdir -p "$WORK/.claude"
-mkdir -p "$WORK/docs/dev/specs/spec-20260423-080000/views"
-mkdir -p "$WORK/docs/dev/specs/spec-20260424-090315-test"  # no views/ dir
-# Put a monolith file for the views-present spec so spec-verify is reachable
-cat > "$WORK/docs/dev/specs/spec-20260423-080000.md" <<'EOF'
-# Fake monolith for spec-20260423-080000
-Content that does not appear in views.
-EOF
-# And a view file (deliberately not matching monolith -> spec-verify should fail)
-cat > "$WORK/docs/dev/specs/spec-20260423-080000/views/ba.md" <<'EOF'
-# Unrelated view content
-EOF
-cat > "$WORK/docs/dev/specs/spec-20260424-090315-test.md" <<'EOF'
-# Fake monolith for spec-20260424-090315-test (no views dir)
-EOF
-
-PASS=0
-FAIL=0
-declare -a FAILS
-
-log_pass() { echo "PASS: $1"; PASS=$((PASS+1)); }
-log_fail() { echo "FAIL: $1  -- $2"; FAIL=$((FAIL+1)); FAILS+=("$1"); }
-
-make_bookmark() {
-  local sid="$1" cmd="$2"
-  cat > "$WORK/.claude/workflow-${sid}.json" <<EOF
-{"command": "${cmd}", "todo_acknowledged": true, "last_todos": []}
-EOF
-}
-
-# The workflow is the command of the transcript's human-typed span opener
-# (lib/command_span). A write is an ok tool_use: its tool_result, not an
-# error, follows it (hooks/lib/spec_path.py, the rule the hook shares with
-# prompt-workflow.py).
-make_transcript_with_spec() {
-  local path="$1" file_path="$2" tool_name="${3:-Write}" cmd="${4:-spec}"
-  cat > "$path" <<EOF
-{"type": "user", "message": {"role": "user", "content": "/${cmd}"}}
-{"message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}}
-{"message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "${tool_name}", "input": {"file_path": "${file_path}", "content": "stuff"}}]}}
+mkdir -p "$WORK/docs/dev/specs/spec-20260423-080000/views" "$WORK/.claude/projects/-root"
+printf '# Fake monolith\nContent that does not appear in views.\n' > "$WORK/docs/dev/specs/spec-20260423-080000.md"
+printf '# Unrelated view content\n' > "$WORK/docs/dev/specs/spec-20260423-080000/views/ba.md"
+TS="$WORK/.claude/projects/-root/session.jsonl"
+cat > "$TS" <<JSONL
+{"type": "user", "message": {"role": "user", "content": "/spec"}}
+{"message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Write", "input": {"file_path": "$WORK/docs/dev/specs/spec-20260423-080000.md", "content": "stuff"}}]}}
 {"message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "done"}]}}
-EOF
+JSONL
+
+FAIL=0
+check() {  # <name> <stdin>
+  local out rc
+  out="$(printf '%s' "$2" | python3 "$HOOK" 2>&1)"; rc=$?
+  if [[ "$rc" == "0" && -z "$out" ]]; then echo "PASS: $1"; else echo "FAIL: $1 -- rc=$rc out=$out"; FAIL=$((FAIL+1)); fi
 }
-
-make_transcript_empty() {
-  local path="$1"
-  cat > "$path" <<EOF
-{"type": "user", "message": {"role": "user", "content": "/spec"}}
-{"message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
-{"message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}}
-EOF
-}
-
-run_hook() {
-  local stdin_json="$1"
-  echo "$stdin_json" | python3 "$HOOK" >/dev/null 2>"$WORK/stderr.log"
-  echo $?
-}
-
-# ==================================================================
-# Test 1: Cross-session isolation (the original bug)
-# ==================================================================
-
-SID_A="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-SID_B="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-make_bookmark "$SID_A" "spec"
-make_bookmark "$SID_B" "spec"
-
-TSA="$WORK/.claude/projects/-root/${SID_A}.jsonl"
-TSB="$WORK/.claude/projects/-root/${SID_B}.jsonl"
-mkdir -p "$(dirname "$TSA")"
-# Session A touched spec-20260424-090315-test (no views/ dir)
-make_transcript_with_spec "$TSA" "/root/docs/dev/specs/spec-20260424-090315-test.md"
-# Session B wrote spec-20260423-080000 (has views/ dir, will fail coverage)
-make_transcript_with_spec "$TSB" "/proj/docs/dev/specs/spec-20260423-080000.md"
-
-# Session A stop: should exit 0 (no views/ for its spec) — NOT be blocked by B's spec
-RC=$(run_hook "{\"session_id\":\"$SID_A\",\"transcript_path\":\"$TSA\",\"stop_hook_active\":false}")
-if [[ "$RC" == "0" ]]; then
-  log_pass "cross_session_isolation_A: session A with no-views spec exits 0 (not blocked by B)"
-else
-  log_fail "cross_session_isolation_A" "expected rc=0, got rc=$RC; stderr: $(cat "$WORK/stderr.log")"
-fi
-
-# Session B: must target spec-20260423-080000 (its own spec via transcript) — breadcrumb should say so
-RC=$(run_hook "{\"session_id\":\"$SID_B\",\"transcript_path\":\"$TSB\",\"stop_hook_active\":false}")
-STDERR_B="$(cat "$WORK/stderr.log")"
-if grep -q "target spec: spec-20260423-080000" <<<"$STDERR_B"; then
-  log_pass "cross_session_isolation_B: session B correctly derived spec-20260423-080000 from own transcript"
-else
-  log_fail "cross_session_isolation_B" "expected breadcrumb 'target spec: spec-20260423-080000'; got: $STDERR_B"
-fi
-
-# Critical: session A MUST NOT trigger coverage against spec-20260423-080000
-STDERR_A_LOG="$WORK/stderr_a.log"
-echo "{\"session_id\":\"$SID_A\",\"transcript_path\":\"$TSA\",\"stop_hook_active\":false}" | python3 "$HOOK" >/dev/null 2>"$STDERR_A_LOG"
-if grep -q "spec-20260423-080000" "$STDERR_A_LOG"; then
-  log_fail "cross_session_isolation_A_no_leak" "session A stderr mentions spec-20260423-080000 — leak: $(cat $STDERR_A_LOG)"
-else
-  log_pass "cross_session_isolation_A_no_leak: session A's stop did NOT reference spec-20260423-080000"
-fi
-
-# ==================================================================
-# Test 2: No-spec-touched — hook exits 0
-# ==================================================================
-SID_C="cccccccc-cccc-cccc-cccc-cccccccccccc"
-make_bookmark "$SID_C" "spec"
-TSC="$WORK/.claude/projects/-root/${SID_C}.jsonl"
-make_transcript_empty "$TSC"
-
-RC=$(run_hook "{\"session_id\":\"$SID_C\",\"transcript_path\":\"$TSC\",\"stop_hook_active\":false}")
-if [[ "$RC" == "0" ]]; then
-  log_pass "no_spec_touched: rc=0"
-else
-  log_fail "no_spec_touched" "expected rc=0, got rc=$RC; stderr: $(cat "$WORK/stderr.log")"
-fi
-
-# ==================================================================
-# Test 3: Transcript missing file
-# ==================================================================
-SID_D="dddddddd-dddd-dddd-dddd-dddddddddddd"
-make_bookmark "$SID_D" "spec"
-RC=$(run_hook "{\"session_id\":\"$SID_D\",\"transcript_path\":\"/nonexistent/path.jsonl\",\"stop_hook_active\":false}")
-if [[ "$RC" == "0" ]]; then
-  log_pass "transcript_missing: rc=0"
-else
-  log_fail "transcript_missing" "expected rc=0, got rc=$RC; stderr: $(cat "$WORK/stderr.log")"
-fi
-
-# ==================================================================
-# Test 4: stop_hook_active re-entrance guard
-# ==================================================================
-# Should exit 0 regardless of other fields
-RC=$(run_hook "{\"session_id\":\"$SID_B\",\"transcript_path\":\"$TSB\",\"stop_hook_active\":true}")
-if [[ "$RC" == "0" ]]; then
-  log_pass "stop_hook_active: re-entrance guard exits 0"
-else
-  log_fail "stop_hook_active" "expected rc=0 (guard), got rc=$RC; stderr: $(cat "$WORK/stderr.log")"
-fi
-
-# ==================================================================
-# Test 5: Non-spec workflow — hook exits 0
-# ==================================================================
-SID_E="eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
-make_bookmark "$SID_E" "dev"  # not 'spec'
-TSE="$WORK/.claude/projects/-root/${SID_E}.jsonl"
-make_transcript_with_spec "$TSE" "/proj/docs/dev/specs/spec-20260423-080000.md" Write dev
-RC=$(run_hook "{\"session_id\":\"$SID_E\",\"transcript_path\":\"$TSE\",\"stop_hook_active\":false}")
-if [[ "$RC" == "0" ]]; then
-  log_pass "non_spec_workflow: rc=0"
-else
-  log_fail "non_spec_workflow" "expected rc=0, got rc=$RC; stderr: $(cat "$WORK/stderr.log")"
-fi
-
-# ==================================================================
-# Test 6 (bonus): transcript_path absent in stdin (AC5)
-# ==================================================================
-RC=$(run_hook "{\"session_id\":\"$SID_B\",\"stop_hook_active\":false}")
-if [[ "$RC" == "0" ]]; then
-  log_pass "transcript_path_absent: rc=0"
-else
-  log_fail "transcript_path_absent" "expected rc=0, got rc=$RC; stderr: $(cat "$WORK/stderr.log")"
-fi
-
-# ==================================================================
-# Test 7 (bonus): Spec in transcript, views/ missing (AC4)
-# ==================================================================
-# Session A already tests this — assert specifically.
-RC=$(run_hook "{\"session_id\":\"$SID_A\",\"transcript_path\":\"$TSA\",\"stop_hook_active\":false}")
-if [[ "$RC" == "0" ]]; then
-  log_pass "spec_touched_no_views_dir: rc=0"
-else
-  log_fail "spec_touched_no_views_dir" "expected rc=0, got rc=$RC"
-fi
-
-# ==================================================================
-# Test 8 (bonus): corrupted/non-JSON line in transcript — should fallthrough None
-# ==================================================================
-SID_F="ffffffff-ffff-ffff-ffff-ffffffffffff"
-make_bookmark "$SID_F" "spec"
-TSF="$WORK/.claude/projects/-root/${SID_F}.jsonl"
-cat > "$TSF" <<'EOF'
-this is not json
-{not valid either
-{"message": {"role": "assistant", "content": "not a list"}}
-EOF
-RC=$(run_hook "{\"session_id\":\"$SID_F\",\"transcript_path\":\"$TSF\",\"stop_hook_active\":false}")
-if [[ "$RC" == "0" ]]; then
-  log_pass "corrupt_transcript_lines: rc=0 (exceptions contained)"
-else
-  log_fail "corrupt_transcript_lines" "expected rc=0, got rc=$RC"
-fi
-
-# ==================================================================
-# Test 9 (bonus): long transcript — 1000 lines, the spec write only at the
-# end, should still find it.
-# ==================================================================
-SID_G="99999999-9999-9999-9999-999999999999"
-make_bookmark "$SID_G" "spec"
-TSG="$WORK/.claude/projects/-root/${SID_G}.jsonl"
-python3 - <<PYEOF
-import json
-with open("$TSG", "w") as f:
-    f.write(json.dumps({"type":"user","message":{"role":"user","content":"/spec"}}) + "\n")
-    for i in range(1000):
-        f.write(json.dumps({"message":{"role":"user","content":[{"type":"text","text":f"line {i}"}]}}) + "\n")
-    # last lines: the spec write and its ok result
-    f.write(json.dumps({"message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Write","input":{"file_path":"/proj/docs/dev/specs/spec-20260423-080000.md"}}]}}) + "\n")
-    f.write(json.dumps({"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t9","content":"ok"}]}}) + "\n")
-PYEOF
-
-RC=$(run_hook "{\"session_id\":\"$SID_G\",\"transcript_path\":\"$TSG\",\"stop_hook_active\":false}")
-STDERR_G="$(cat "$WORK/stderr.log")"
-if grep -q "target spec: spec-20260423-080000" <<<"$STDERR_G"; then
-  log_pass "long_transcript_finds_last_write: the scan reaches the last-line spec write"
-else
-  log_fail "long_transcript_finds_last_write" "expected breadcrumb; got: $STDERR_G"
-fi
-
-# ==================================================================
-# Test 10: Ordering-bug regression — Write(own) then Read(foreign)
-# must target own-spec, not the more-recently-Read foreign spec.
-# (Regression for commit ad9759c; see close-report-20260424-133333.md)
-# ==================================================================
-SID_H="11111111-1111-1111-1111-111111111111"
-make_bookmark "$SID_H" "spec"
-TSH="$WORK/.claude/projects/-root/${SID_H}.jsonl"
-# Transcript order: Write(own-new-spec) first, then Read(foreign-spec views).
-# Reverse scan must ignore the Read and return spec-20260424-111111.
-# spec-20260424-111111 has no monolith and no views/ dir in $WORK,
-# so AC3/AC4 applies: hook exits 0 even after correct targeting.
-cat > "$TSH" <<'EOF'
-{"type": "user", "message": {"role": "user", "content": "/spec"}}
-{"message": {"role": "assistant", "content": [{"type": "tool_use", "id": "w1", "name": "Write", "input": {"file_path": "/proj/docs/dev/specs/spec-20260424-111111.md", "content": "own spec"}}]}}
-{"message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "w1", "content": "done"}]}}
-{"message": {"role": "assistant", "content": [{"type": "tool_use", "id": "r1", "name": "Read", "input": {"file_path": "/proj/docs/dev/specs/spec-20260423-080000.md"}}]}}
-{"message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "r1", "content": "text"}]}}
-EOF
-
-RC=$(run_hook "{\"session_id\":\"$SID_H\",\"transcript_path\":\"$TSH\",\"stop_hook_active\":false}")
-STDERR_H="$(cat "$WORK/stderr.log")"
-if [[ "$RC" != "0" ]]; then
-  log_fail "ordering_bug_write_then_read_foreign" "expected rc=0, got rc=$RC; stderr: $STDERR_H"
-elif grep -q "spec-20260423-080000" <<<"$STDERR_H"; then
-  log_fail "ordering_bug_write_then_read_foreign" "foreign spec leaked into stderr — Read overrode Write: $STDERR_H"
-elif grep -q "⛔ SPEC COVERAGE ENFORCEMENT" <<<"$STDERR_H"; then
-  log_fail "ordering_bug_write_then_read_foreign" "hook emitted blocking message when it should have exited 0: $STDERR_H"
-else
-  log_pass "ordering_bug_write_then_read_foreign: Read(foreign) ignored; Write(own) correctly drives target; rc=0"
-fi
-
-# ==================================================================
-# Test 11: a call of the one writer (scripts/spec-write.py) is a write of
-# the spec its output line names, as an Edit of the spec is.
-# ==================================================================
-SID_I="22222222-2222-2222-2222-222222222222"
-make_bookmark "$SID_I" "spec"
-TSI="$WORK/.claude/projects/-root/${SID_I}.jsonl"
-cat > "$TSI" <<'EOF'
-{"type": "user", "message": {"role": "user", "content": "/spec"}}
-{"message": {"role": "assistant", "content": [{"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "python3 ~/.claude/scripts/spec-write.py append --spec \"$spec_path\" --section 5 < block.md"}}]}}
-{"message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "b1", "content": "spec-write: append /proj/docs/dev/specs/spec-20260423-080000.md"}]}}
-EOF
-RC=$(run_hook "{\"session_id\":\"$SID_I\",\"transcript_path\":\"$TSI\",\"stop_hook_active\":false}")
-STDERR_I="$(cat "$WORK/stderr.log")"
-if grep -q "target spec: spec-20260423-080000" <<<"$STDERR_I"; then
-  log_pass "one_writer_call_is_a_spec_write: the spec-write.py call drives the target"
-else
-  log_fail "one_writer_call_is_a_spec_write" "expected breadcrumb; got: $STDERR_I"
-fi
-
-# ==================================================================
-# Cleanup
-# ==================================================================
-rm -rf "$WORK"
-
-echo ""
-echo "============================================"
-echo "Results: PASS=$PASS FAIL=$FAIL"
-echo "============================================"
-if (( FAIL > 0 )); then
-  echo "Failed tests:"
-  for f in "${FAILS[@]}"; do echo "  - $f"; done
-  exit "$FAIL"
-fi
-exit 0
+if grep -q '^# STUB:' "$HOOK"; then echo "PASS: stub_line"; else echo "FAIL: stub_line"; FAIL=$((FAIL+1)); fi
+check under_covered_spec_stop "{\"session_id\":\"s\",\"transcript_path\":\"$TS\",\"stop_hook_active\":false}"
+check empty_payload ""
+exit "$FAIL"

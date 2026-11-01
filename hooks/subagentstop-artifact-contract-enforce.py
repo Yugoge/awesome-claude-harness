@@ -92,6 +92,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_dev_registry_entry
+from lib.claude_home import settings_switch
 from lib import contract_runtime
 from lib import dispatch_template
 from lib import obligation
@@ -355,6 +356,16 @@ def _spec_views_failure(project_dir: str, art: dict):
     if not monolith.is_file() or not views.is_dir():
         return {"path": art["path"], "reason": "spec_views_missing",
                 "errors": [f"monolith {art['monolith']} or views directory {art['path']} does not exist"]}
+    # The split's own manifest and the views it references, by the predicates every /dev* consumer's
+    # resolver applies (resolve-spec-artifacts.py split_problem; P1b E4: /spec's finalize guard ran
+    # them in the orchestrator's call after this stop). A resolver that will not load checks nothing.
+    try:
+        problem = _load_script_module("resolve-spec-artifacts.py").split_problem(
+            str(views.parent), str(monolith.resolve()), project_dir)
+    except Exception:
+        problem = None
+    if problem:
+        return {"path": f"{art['path']}/manifest.json", "reason": "spec_manifest_invalid", "errors": [problem]}
     try:
         run = subprocess.run(
             [sys.executable, str(verifier), "--monolith", str(monolith), "--views-dir", str(views), "--strict"],
@@ -475,8 +486,13 @@ def main() -> None:
     # dispatch obligation names, ahead of the session-wide correlation guess
     # below. CLAUDE_OBLIGATION_STOPGATE is a DIFFERENT switch from
     # ARTIFACT_CONTRACT_ENFORCE_MODE, which continues to govern only the
-    # untouched legacy path.
-    stopgate_mode = os.environ.get("CLAUDE_OBLIGATION_STOPGATE", "advisory").strip().lower()
+    # untouched legacy path. A process whose env lacks the key takes it from
+    # the harness home's settings.json env at run time (P1b E4): a session
+    # keeps the env it started with, so a session started before the switch
+    # was set, with or without CLAUDE_HOME, meets its current value.
+    env_mode = os.environ.get("CLAUDE_OBLIGATION_STOPGATE")
+    stopgate_mode = (env_mode.strip().lower() if env_mode is not None
+                     else settings_switch("CLAUDE_OBLIGATION_STOPGATE", "advisory"))
     if stopgate_mode not in {"advisory", "block", "off"}:
         stopgate_mode = "advisory"
     resolution = None

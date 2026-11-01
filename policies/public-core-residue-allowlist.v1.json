@@ -666,13 +666,6 @@
       "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
     },
     {
-      "path": "hooks/stop-spec-coverage-enforce.py",
-      "fingerprint": "0e6f98041c058196",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "module docstring — prose/comment text; never read as a path at runtime."
-    },
-    {
       "path": "hooks/stop.sh",
       "fingerprint": "b1dc23ab42f945ea",
       "ordinal": 1,
@@ -1459,13 +1452,6 @@
     {
       "path": "tests/test_public_core_residue_gate.py",
       "fingerprint": "f4cc34833ce61dc2",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
-    },
-    {
-      "path": "tests/verify-stop-spec-session-isolation.sh",
-      "fingerprint": "6b597526c99b735d",
       "ordinal": 1,
       "class": "test_fixture",
       "rationale": "Synthetic test data in a test file: the path or address is an input the test feeds the code under test, never a real location or identity."
