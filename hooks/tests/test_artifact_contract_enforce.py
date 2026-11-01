@@ -1861,6 +1861,13 @@ def test_l2_ac4_unplannable_blocks_plannable_passes(tmp_path):
     _ledger_entangled()) -- "ghost.txt" is a plain-filesystem test write with
     no journal evidence, so it is now plannable too, not unplannable."""
     s = _l2_setup(tmp_path)
+    # The dev wrote both files it declares, so its lists match what Claude
+    # Code recorded (A3.a) and the plan alone decides this stop.
+    _write_obligation_transcript(
+        s.home, s.project, s.harness, s.agent_id,
+        f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>',
+        [("Edit", {"file_path": str(s.project / "src.txt"), "old_string": "alpha", "new_string": "beta"}, True),
+         ("Write", {"file_path": str(s.project / "ghost.txt"), "content": "ghost\n"}, True)])
     rep = _l2_dev_report(s.task)
     rep["dev"]["files_modified"] = ["src.txt", "ghost.txt"]
     _l2_write(s, rep)
@@ -2654,7 +2661,8 @@ def test_r14_in_flight_lane_dispatched_before_the_change_passes(tmp_path, echoed
         datetime.now(timezone.utc).timestamp() - 3600, timezone.utc).isoformat()
     _write_obligation_transcript(
         s.home, s.project, s.harness, s.agent_id,
-        f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>')
+        f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>',
+        [("Edit", {"file_path": str(s.project / "src.txt"), "old_string": "alpha", "new_string": "beta"}, True)])
     _l2_write(s, _l2_dev_report(s.task, lane="l2" if echoed else None, lane_set=["l1", "l2"]))
     proc = _l2_stop(s)
     assert proc.returncode == (0 if echoed else _R14_EXIT), proc.stderr
