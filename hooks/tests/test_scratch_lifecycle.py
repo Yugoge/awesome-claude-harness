@@ -126,6 +126,30 @@ class SessionEndScratchSweepTests(unittest.TestCase):
     def setUp(self):
         self.sandbox = Path(tempfile.mkdtemp(prefix="scratch-lifecycle-sweep-"))
         self.addCleanup(shutil.rmtree, self.sandbox, ignore_errors=True)
+        # The project the hook acts in (the CLI exports CLAUDE_PROJECT_DIR to hooks).
+        self.project = Path(tempfile.mkdtemp(prefix="scratch-lifecycle-project-"))
+        self.addCleanup(shutil.rmtree, self.project, ignore_errors=True)
+        os.environ["CLAUDE_PROJECT_DIR"] = str(self.project)
+        self.addCleanup(os.environ.pop, "CLAUDE_PROJECT_DIR", None)
+
+    def test_removes_own_runtime_files_in_the_project_siblings_survive(self):
+        claude = self.project / ".claude"
+        own = [claude / "workflow-own-sid.json", claude / "workflow-locks" / "own-sid.lock",
+               claude / "dev-start-replays" / "own-sid" / "d.json"]
+        kept = [claude / "workflow-sibling-sid.json", claude / "workflow-locks" / "sibling-sid.lock",
+                claude / "dev-start-replays" / "sibling-sid" / "d.json",
+                claude / "dev-registry" / "agent-index.json"]
+        for path in own + kept:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}\n")
+        result = _run_hook(
+            SESSION_SWEEP_HOOK,
+            {"TMPDIR": str(self.sandbox), "CLAUDE_CODE_SESSION_ID": "own-sid"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([p for p in own if p.exists()], [])
+        self.assertFalse((claude / "dev-start-replays" / "own-sid").exists())
+        self.assertEqual([p for p in kept if not p.exists()], [])
 
     def test_removes_own_dir_sibling_survives_byte_untouched(self):
         own = self.sandbox / "own-sid"
