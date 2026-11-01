@@ -11,12 +11,12 @@ file adds the variants A20 names, armed:
   passes with no other block.
 * a question round trip: /dev question (BA's producer question relayed with one AskUserQuestion
   inside the turn): the cycle completes with no blocked Stop between (no Stop at all before its end).
-* a main-agent producer write: /dev plain whose main agent itself writes the QA report QA wrote
+* a main-agent producer write: /dev plain whose main agent itself edits the QA report QA wrote
   (faults.py `foreign`): the D8 deny of pretool-tool-policy.py refuses it, and the cycle completes
   with no other block.
 
-The /dev gate's predicate is P3's disposition (scripts/resolve-dev-artifact-chain.py) and its
-time-lock reads P2's overnight window: the cases whose pass needs them wait for those merges.
+The /dev gate's predicate is P3's disposition (scripts/resolve-dev-artifact-chain.py): the passing
+Stops these cases end with wait for P3's merge.
 """
 from __future__ import annotations
 
@@ -70,6 +70,6 @@ def test_a20_a_main_agent_producer_write_is_denied_and_the_cycle_completes(repla
         done = [f for f in json.load(fh) if f.get("kind") == "foreign"]
     assert len(done) == 1 and done[0]["denied"] and done[0]["hooks"] == ["hooks/pretool-tool-policy.py"], done
     assert done[0]["path"].startswith("docs/dev/qa-report-"), done
-    denied = [b for b in r.blocks if b["step"].startswith("foreign Write")]
+    denied = [b for b in r.blocks if b["step"].startswith("foreign ")]
     assert len(denied) == 1 and "(D8)" in (denied[0].get("text") or ""), r.explain()
     assert len(r.blocks) == 1 and not r.hook_errors and r.reached(), r.explain()

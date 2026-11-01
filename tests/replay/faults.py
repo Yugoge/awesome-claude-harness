@@ -43,9 +43,9 @@ what the tree's template asks for.
 
 Before the first main-agent tool step whose label matches, the main agent itself writes `path`
 (project-relative; `{task}` as for plant; a glob names the newest file it matches), an artifact a
-producer's obligation declares (P5 A20: a
-main-agent producer write, which the D8 deny refuses). Its record keeps whether the Write was
-refused and by which hooks; nothing repairs it, and the pipeline goes on with its own step.
+producer's obligation declares: an Edit when the file exists, else a Write (P5 A20: a main-agent
+producer write, which the D8 deny refuses). Its record keeps whether the call was refused and by
+which hooks; nothing repairs it, and the pipeline goes on with its own step.
 
     plant@<label glob>=<path>:<content kind>
 
@@ -259,7 +259,13 @@ def _foreign(rp, glob: str, what: str) -> callable:
         if "*" in rel:  # the newest file the glob names: the one its producer wrote
             found = sorted(glob_mod.glob(os.path.join(rp.layout.project, rel)), key=os.path.getmtime)
             rel = os.path.relpath(found[-1], rp.layout.project) if found else rel
-        call = actor.write(os.path.join(rp.layout.project, rel), "{}\n", label=f"foreign Write {rel}")
+        full = os.path.join(rp.layout.project, rel)
+        if os.path.isfile(full):  # an Edit of the producer's file (a Write over it meets the write guard too)
+            with open(full) as fh:
+                first = fh.readline().rstrip("\n")
+            call = actor.edit(full, first, first + " ", label=f"foreign Edit {rel}")
+        else:
+            call = actor.write(full, "{}\n", label=f"foreign Write {rel}")
         _record(rp, {"kind": "foreign", "label": step["label"], "path": rel, "denied": call.blocked,
                      "hooks": [h["hook"] for h in (call.pre.blocks if call.pre else [])]})
     return fn
