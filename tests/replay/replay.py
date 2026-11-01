@@ -166,7 +166,8 @@ class Replay:
         self.roots = norm.Roots([(layout.harness, "<harness>"), (layout.project, "<project>"),
                                  (layout.origin, "<origin>"), (layout.state, "<state>"),
                                  (layout.home, "<home>"), (layout.sb, "<sb>")])
-        self.env = self._env(env_extra or {})
+        self.env_extra = dict(env_extra or {})  # the replay's own --env: it overrides settings.json's env
+        self.env = self._env(self.env_extra)
         # E5: the CLI exports CLAUDE_PROJECT_DIR to hooks only; its Bash tool leaves it unset.
         self.bash_env = {k: v for k, v in self.env.items() if k != "CLAUDE_PROJECT_DIR"}
         self.args: dict = {}  # the driver's arguments (cli.py --arg K=V)
