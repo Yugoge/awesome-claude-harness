@@ -29,9 +29,11 @@ The git keystone and the overnight policy shim run this module as a script
 
 `is_overnight_active` is deliberately session-agnostic: ANY live record under a
 candidate project dir counts. The "except dev-overnight" policy exempts the whole
-overnight CONTEXT, the orchestrator AND the subagents it dispatches, and those
-subagents carry DIFFERENT session_ids than the orchestrator that wrote the state
-file (see hooks/lib/allowlist.py). Forgery of the state file is out of scope for
+overnight CONTEXT, the orchestrator AND the subagents it dispatches. A subagent's
+hook payload carries its parent's session_id and main transcript_path, plus its
+own agent_id, so the session-keyed readers (`locate`, `window_open`) reach the
+orchestrator's record from either; this check takes a project dir, not a
+session id. Forgery of the state file is out of scope for
 this guardrail: writes to .claude/overnight-state-*.json are blocked by
 pretool-overnight-hook-guard.py, and the /do and /allow escape hatches exist for
 everything else.
