@@ -86,6 +86,15 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   master's CLAUDE.md Hook Discipline #5 ("honest terminal branch") contradicts this and "诚实终态永远不允许"; P9 rewrites
   it under D20 and D23.
 
+## Owner ruling of 2026-11-01 (latest; for the work left after P1b it takes precedence over D26's one-day cap and over the planner's process; it changes no requirement of D18-D25)
+
+- **D27 Five days.** "5天必须完成" [It must be finished in five days], on hearing that the split sub-phases add up to
+  about 55 days of work. Everything left after P1b is finished within five days, run as parallel workstreams on
+  several accounts under FAST-TRACK.md: one session per workstream, one PR per workstream, merged in order. The
+  planner's added process is cut: the sub-phase split, coverage and D24 tables, inventory regeneration, experiment
+  matrices, zero targets (they become ratchets), and repeated self-check rounds. The owner's rulings D18-D25, the
+  producer-side architecture, privacy and P11's one confirmation stay.
+
 ## Owner ruling of 2026-10-30 (it governs how work is cut and handed out; it changes no requirement of D18-D25)
 
 - **D26 Split heavy work into phases small enough to spread usage.** "下次这么重的任务分成多个phase……我要分散用量……你这一个花了我一周的用量……自己好好反思"
