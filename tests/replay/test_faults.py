@@ -22,6 +22,10 @@ session is cut while the dev subagent runs, after its Edit; the owner's /restart
 same agent through commands/restart.md's recovery and finalizes it; the main agent then completes the
 dev step with the resumed call (no replacement Agent call) and /dev reaches its terminal. Each runs
 with the tree's settings ("shipped") and armed (G1-G3 block).
+
+The held git index.lock (F4, F4c, F4s; R14, X7): the shared-index sync (scripts/session-index.py
+sync-shared, the changelog-analyst's step after each commit) waits while a process holds the lock and
+removes, once and saying so, a lock no process holds that is older than the sync.
 """
 from __future__ import annotations
 
@@ -272,3 +276,100 @@ def test_f5f_both_lanes_cut_resumed_by_one_restart(replays, key):
 @pytest.mark.parametrize("key", _restart_cases("/dev singular", "limit@agent:dev Edit toy/__init__.py"))
 def test_f6_usage_limit_mid_subagent_resumed_by_restart(replays, key):
     recovery.assert_resumed_to_terminal(replays.get(key), lanes=1)
+
+
+# ---------------------------------------------------------------- F4, F4c, F4s: a held git index.lock
+_DEV = next(s for s in suite.COMPLIANT if s.name == "/dev singular")
+_COMMIT = next(s for s in suite.COMPLIANT if s.name == "/commit")
+
+# F4: a live holder takes the lock at /dev's first tool call and releases it after /dev's Stop.
+# F4c: a live holder takes it before the changelog-analyst's commit and releases it 20 s after the
+#      shared-index sync starts (its commit modifies a tracked path and adds the cycle's files).
+# F4s: a stale lock (no process, an hour old) is in place from /commit's first tool call.
+_LOCK = {
+    "F4": (_DEV, "lock@TodoWrite canonical list=live"),
+    "F4c": (_COMMIT, "lock@agent:changelog-analyst Bash stage and commit*=live"),
+    "F4s": (_COMMIT, "lock@/commit --auto Bash discovery=stale"),
+}
+
+
+def _lock_key(fault: str, settings: str) -> str:
+    scn, spec = _LOCK[fault]
+    return suite.replay_key(scn, settings, (("fault", spec),), tag="~" + fault)
+
+
+def _cases(fault: str) -> list:
+    return [pytest.param(_lock_key(fault, s), id=f"{fault}-{s}",
+                         marks=pytest.mark.replay(_lock_key(fault, s), _LOCK[fault][0].cost + 30))
+            for s in suite.SETTINGS]
+
+
+def _lock_record(r) -> dict:
+    with open(os.path.join(r.run_dir, "faults.json")) as fh:
+        recs = [f for f in json.load(fh) if f.get("kind") == "lock"]
+    assert len(recs) == 1, f"one lock injection expected, faults.json has {recs}\n" + r.explain()
+    return recs[0]
+
+
+def _human_events_after(r, label: str) -> list:
+    """Human events from the injection's step on: a typed prompt, an AskUserQuestion, or an action by an
+    actor that is none of the agents, the driver (the replay's own records) and the fault."""
+    events = r.hook_events()
+    first = next(i for i, ev in enumerate(events) if ev.get("label") == label)
+    found = [f"{ev['event']} at {ev['label']!r}" for ev in events[first:]
+             if ev["event"] == "UserPromptSubmit" or ev.get("tool") == "AskUserQuestion"]
+    with open(os.path.join(r.run_dir, "markers.jsonl")) as fh:
+        marks = [json.loads(line) for line in fh]
+    start = next(m["seq"] for m in marks if m["kind"] == "step" and m["value"] == label)
+    found += [f"actor {m['value']!r}" for m in marks if m["seq"] > start and m["kind"] == "actor"
+              and m["value"] not in ("", "main", "driver", "fault") and not m["value"].startswith("agent:")]
+    return found
+
+
+def _completed(r, rec: dict) -> None:
+    """0 gate blocks, 0 hook errors, the terminal reached with no committed path left in `git status
+    --porcelain` after the last Stop, nothing reported synced that update-index did not write, and no
+    human event between the injection and the terminal."""
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    assert not r.blocks, "the held lock met a gate block:\n" + r.explain()
+    assert not r.hook_errors, "the held lock met a hook error:\n" + r.explain()
+    assert r.reached(), "the pipeline did not reach its terminal:\n" + r.explain()
+    left = {line.split(maxsplit=1)[-1].split(" -> ")[-1] for line in rec["porcelain"]}
+    assert not left & set(rec["head_paths"]), f"git status lists committed paths: {sorted(left & set(rec['head_paths']))}"
+    assert rec["synced_not_written"] == [], f"reported synced but not written: {rec['synced_not_written']}"
+    assert _human_events_after(r, rec["label"]) == []
+
+
+@pytest.mark.parametrize("key", _cases("F4"))
+def test_f4_lock_held_through_dev(replays, key):
+    """F4: index.lock held by a live process through a /dev cycle's checkpoints and its Stop: 0 blocks,
+    the checkpoint ref advances, and the holder's own release finds its lock (nothing removed it)."""
+    r = replays.get(key)
+    rec = _lock_record(r)
+    _completed(r, rec)
+    assert rec["held"] and rec["release"]["holder_unlink"] == "unlinked", rec
+    assert rec["checkpoint_after"] and rec["checkpoint_after"] != rec["checkpoint_before"], rec
+
+
+@pytest.mark.parametrize("key", _cases("F4c"))
+def test_f4c_live_lock_at_commit(replays, key):
+    """F4c: a live holder from before /commit's commit until 20 s after the shared-index sync starts:
+    the sync waits (its wait line names the holder), removes nothing, and completes after the release."""
+    r = replays.get(key)
+    rec = _lock_record(r)
+    _completed(r, rec)
+    assert rec["sync_seen"] and rec["release"]["holder_unlink"] == "unlinked", rec
+    assert any("SESSION-INDEX WAIT" in line and f"pid {rec['holder_pid']}" in line for line in rec["sync_lines"]), rec
+    assert not any("removed" in line for line in rec["sync_lines"]), rec
+    assert rec["sync_reports"] and rec["sync_reports"][-1]["synced"], rec
+
+
+@pytest.mark.parametrize("key", _cases("F4s"))
+def test_f4s_stale_lock_at_commit(replays, key):
+    """F4s: a stale index.lock at /commit (no process, older than the sync): the sync removes it once,
+    says so on stdout, and completes; no lock is left."""
+    r = replays.get(key)
+    rec = _lock_record(r)
+    _completed(r, rec)
+    assert sum("removed" in line for line in rec["sync_lines"]) == 1, rec
+    assert rec["sync_reports"] and not rec["lock_left_after_stop"], rec

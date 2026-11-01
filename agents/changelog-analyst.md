@@ -623,7 +623,7 @@ flock -w 30 -x 9 || {
 # the commit of every group, and init must re-seed from the NEW head each time, or the
 # export/commit_gate call of the next group below would fail-closed on head_moved against
 # a HEAD this session itself just advanced.
-eval "$(python3 "${CLAUDE_PROJECT_DIR}/.claude/scripts/session-index.py" init --git-root "${GIT_ROOT}")" || {
+eval "$(python3 ~/.claude/scripts/session-index.py init --git-root "${GIT_ROOT}")" || {
     echo "ERROR: session-index.py init failed for ${GIT_ROOT} — see SESSION-INDEX REFUSED line above"
     exit 1
 }
@@ -640,8 +640,7 @@ correct. Immediately before each group's `git commit`, re-run
 gate: it re-verifies the private index and that HEAD has not moved since the most recent
 `init` (the same HEAD-stability property Phase 3's own re-check already requires,
 enforced a second way). After EACH group's commit, run
-`python3 "${CLAUDE_PROJECT_DIR}/.claude/scripts/session-index.py" sync-shared --git-root
-"${GIT_ROOT}"` so the shared index's entries for that group's committed paths catch up to
+`python3 ~/.claude/scripts/session-index.py sync-shared --git-root "${GIT_ROOT}"` so the shared index's entries for that group's committed paths catch up to
 the new HEAD (left alone, `git status` elsewhere would show the commit as reverted); a
 path it reports `left_foreign` was concurrently staged there by a peer using the shared
 index directly and is intentionally not overwritten. Then re-run `init` (above) before

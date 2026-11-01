@@ -46,6 +46,17 @@ Before the step whose label matches, the fault (actor "fault") writes `path` (pr
 `qa-report.v1` (a stale schema-v1 QA report: F3b) or `junk`. Nothing in the pipeline produced it, so no producer is asked to repair it; the
 pipeline must reach its terminal past it.
 
+    lock@<label glob>=live|stale
+
+Before the step whose label matches, the fault puts the toy project's shared-index lock
+(.git/index.lock) in place: `live`, a process the fault starts creates it exclusively and holds its
+descriptor until the fault releases it (it then removes its own lock): 20 s after a shared-index sync
+(`session-index.py sync-shared`, seen in /proc working in the project) starts, else after the next
+main-agent Stop; `stale`, the empty file an hour old, no process. Its record keeps the checkpoint ref
+at injection and release, each SESSION-INDEX line and sync report a Bash call printed, the synced
+paths whose shared entry is not HEAD's, whether the holder's own unlink found its lock, and after
+each main-agent Stop the lock left, HEAD's paths and `git status --porcelain`.
+
 Each fault records what it did in faults.json beside blocks.json: kind, label, path, the faulted
 agent, and whether that agent repaired it (the number of returned stops it took).
 """
@@ -56,6 +67,10 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+import subprocess
+import sys
+import threading
+import time
 
 _FORGED = "ESCALATION_ACK 0123456789abcdef0123456789abcdef"
 _BLOCK = re.compile(r'<obligation\s+v="1"\s*>\s*(\{.*?\})\s*</obligation>', re.S)
@@ -251,6 +266,110 @@ def _plant(rp, glob: str, what: str) -> callable:
     return fn
 
 
+_HOLDER = ("import os, sys\nfd = os.open(sys.argv[1], os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)\n"
+           "print('held', flush=True)\nsys.stdin.readline()\n"
+           "try:\n    os.unlink(sys.argv[1]); print('unlinked', flush=True)\n"
+           "except FileNotFoundError:\n    print('gone', flush=True)\n")
+
+
+def _sync_running(proj) -> bool:
+    """A `session-index.py sync-shared` process working in the project (its cwd), read from /proc."""
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                argv = fh.read()
+            if b"session-index.py" in argv and b"sync-shared" in argv and \
+                    os.path.samestat(os.stat(f"/proc/{pid}/cwd"), proj):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _lock(rp, glob: str, holder: str) -> tuple:
+    proj = rp.layout.project
+    lock = os.path.join(proj, ".git", "index.lock")
+    st = {"proc": None, "rec": None, "released": threading.Event(), "once": threading.Lock()}
+
+    def git(*args) -> str:
+        return subprocess.run(["git", "-C", proj, *args], capture_output=True, text=True).stdout.strip()
+
+    def ref() -> str:
+        return git("rev-parse", "-q", "--verify", "refs/checkpoints/" + git("branch", "--show-current").replace("/", "-"))
+
+    def release(why: str) -> None:
+        p = st["proc"]
+        with st["once"]:  # the watcher thread and a Stop may both release
+            if p is None or st["released"].is_set():
+                return
+            st["released"].set()
+        p.stdin.write("go\n")
+        p.stdin.flush()
+        said = p.stdout.readline().strip()
+        p.wait()
+        with st["once"]:
+            st["rec"]["release"] = {"why": why, "holder_unlink": said}
+
+    def watch() -> None:
+        here = os.stat(proj)
+        while not st["released"].is_set():
+            if _sync_running(here):
+                with st["once"]:
+                    st["rec"]["sync_seen"] = True
+                time.sleep(20)
+                release("20 s after the shared-index sync started")
+                return
+            time.sleep(0.3)
+
+    def inject(rp_, phase, step):
+        if phase != "before" or st["rec"] is not None:
+            return
+        st["rec"] = rec = {"kind": "lock", "holder": holder, "label": step["label"], "path": ".git/index.lock",
+                           "checkpoint_before": ref(), "sync_lines": [], "sync_reports": [],
+                           "synced_not_written": [], "sync_seen": False}
+        with rp.acting("fault"):
+            if holder == "live":
+                st["proc"] = subprocess.Popen([sys.executable, "-c", _HOLDER, lock], stdin=subprocess.PIPE,
+                                              stdout=subprocess.PIPE, text=True, cwd=proj)
+                rec["holder_pid"] = st["proc"].pid
+                rec["held"] = st["proc"].stdout.readline().strip() == "held"
+                threading.Thread(target=watch, daemon=True).start()
+            else:
+                with open(lock, "w"):
+                    pass
+                old = time.time() - 3600
+                os.utime(lock, (old, old))
+        _record(rp, rec)
+
+    def observe(rp_, phase, step):
+        rec = st["rec"]
+        if phase != "after" or rec is None:
+            return
+        resp = getattr(step.get("result"), "response", None) or {}
+        lines = [ln for ln in (resp.get("stdout") or "").splitlines() if ln.startswith(("SESSION-INDEX", '{"left_'))]
+        for line in lines:
+            if line.startswith("SESSION-INDEX"):
+                rec["sync_lines"].append(rp.norm_text(line))
+                continue
+            rep = json.loads(line)
+            rec["sync_reports"].append(rep)
+            rec["synced_not_written"] += [p for p in rep.get("synced", []) if git("ls-files", "-s", "--", p).split()[1:2]
+                                          != git("ls-tree", "HEAD", "--", p).split()[2:3]]
+        stop = step["label"] == "Stop" or step["label"].endswith(" Stop")
+        if stop:
+            with rp.acting("fault"):
+                release("after the main agent's Stop")
+            rec["checkpoint_after"] = ref()
+            rec["lock_left_after_stop"] = os.path.exists(lock)
+            rec["head_paths"] = git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines()
+            rec["porcelain"] = git("status", "--porcelain").splitlines()
+        if lines or stop:
+            with rp.acting("driver"), st["once"]:  # the record as the watcher thread left it
+                with open(os.path.join(rp.layout.out, "faults.json"), "w") as fh:
+                    json.dump(rp.fault_records, fh, indent=1)
+    return inject, observe
+
+
 def on_stop_block(sub, ev):
     """The faulted agent's next round: when its stop's block names an artifact it faulted, it writes
     that artifact as it meant to and stops again (a forged fault first rewrites the same invalid
@@ -298,6 +417,10 @@ def install(rp, spec: str) -> None:
         elif kind in ("pretemplate", "noblock"):
             rp.earlier_templates = set()
             rp.faults.append((glob, _dispatch_fault(rp, kind, glob, what)))
+        elif kind == "lock":
+            glob, _, holder = rest.partition("=")
+            inject, observe = _lock(rp, glob, holder)
+            rp.faults += [(glob, inject), ("*", observe)]
         else:
             rp.faults.append((glob, _write_fault(rp, kind, glob, what)))
     rp.on_stop_block_default = on_stop_block
