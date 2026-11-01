@@ -185,3 +185,20 @@ def test_completed_resumes_reads_only_a_complete_journal_never_the_capability(cy
     restart.finalize(cycle.sid)
     assert restart.completed_resumes(cycle.sid) == {aid: cycle.cut_tid}
     assert restart.completed_resumes("not a session id!") == {}
+
+
+def test_a_reordered_list_is_refused_before_the_step_rules(cycle):
+    """Self-check finding: with the lists paired by content, swapping two steps (the in-progress one
+    moved) passed every step rule; a session's list keeps its text and order, so it is refused."""
+    todos = _frontier(9)
+    todos[9], todos[10] = todos[10], todos[9]
+    tid = cycle.use("TodoWrite", {"todos": todos})
+    payload = {"session_id": cycle.sid, "transcript_path": str(cycle.path), "hook_event_name": "PreToolUse",
+               "tool_name": "TodoWrite", "tool_input": {"todos": todos}, "tool_use_id": tid}
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(cycle.project), "HOME": str(cycle.tmp / "home"),
+           "CLAUDE_CONFIG_DIR": str(cycle.tmp / "home" / ".claude"), "PYTHONDONTWRITEBYTECODE": "1"}
+    p = subprocess.run([sys.executable, str(HOOKS / "pretool-todo-validate.py")], input=json.dumps(payload),
+                       capture_output=True, text=True, env=env, cwd=cycle.project, timeout=60)
+    assert p.returncode == 2, p.stderr
+    assert "keep the text and the order" in p.stderr
+

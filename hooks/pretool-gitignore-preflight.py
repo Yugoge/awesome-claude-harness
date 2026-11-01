@@ -669,13 +669,15 @@ def commit_landing_task_id(prompt):
 
 
 def _effective_report_state(repo_root, task_id):
-    """resolve_effective_report_state's (state, path) for task_id, the one
-    function /commit and the changelog-analyst take an effective report from;
-    ('invalid', None) when it cannot be run, which admits nothing."""
+    """resolve_effective_report_state's (state, path) for task_id in the project repo_root, the
+    one function /commit and the changelog-analyst take an effective report from, loaded from this
+    hook's own harness (a product repository has no scripts/); ('invalid', None) when it cannot be
+    run, which admits nothing."""
     try:
         spec = importlib.util.spec_from_file_location(
             'late_repair_controller',
-            os.path.join(repo_root, 'scripts', 'late-repair-controller.py'))
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         'scripts', 'late-repair-controller.py'))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module.resolve_effective_report_state(repo_root, task_id)

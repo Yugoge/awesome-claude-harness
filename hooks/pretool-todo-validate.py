@@ -373,6 +373,13 @@ def main():
     if last is None or len(last) != len(new_todos):
         validate_against_canonical_if_needed(cmd, new_todos, state.arguments)
         sys.exit(0)
+    # Past the first list and with its length unchanged, a session's list keeps the text and the
+    # order of the list it holds (content pairing is for the canonical list a length change
+    # compares against, P1c row 17): a step moved or reworded is refused here, before the step
+    # rules, which a reordered list would otherwise satisfy step by step.
+    if [t.get('content') for t in new_todos] != [t.get('content') for t in last]:
+        emit_block(cmd, ['Todo steps must keep the text and the order of the list the session holds; '
+                         're-send that list and change only statuses'], last)
     paired = by_content(last, new_todos)
     violations = validate(paired, new_todos)
     if violations:

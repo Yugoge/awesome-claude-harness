@@ -1233,11 +1233,14 @@ def test_e5_effective_report_belongs_to_the_task_resolve_verifies(landing_sandbo
 
 
 def test_e5_effective_report_state_is_the_controllers(tmp_path):
-    """_effective_report_state runs scripts/late-repair-controller.py's own
-    resolve_effective_report_state; a task with no run record is `none`."""
+    """_effective_report_state runs the harness's own scripts/late-repair-controller.py
+    resolve_effective_report_state on the project it is given; a task with no run record is
+    `none`, in the harness repository and in a product repository that has no scripts/ (P1c
+    self-check: the controller was loaded from the project, so a product repository's effective
+    report was never admitted)."""
     gate = load_gate_module()
     assert gate._effective_report_state(REPO_ROOT, LANDED) == ('none', None)
-    assert gate._effective_report_state(str(tmp_path), LANDED) == ('invalid', None)
+    assert gate._effective_report_state(str(tmp_path), LANDED) == ('none', None)
 
 
 def test_e1_e4_predicates_unchanged_when_e5_does_not_apply(sandbox):
