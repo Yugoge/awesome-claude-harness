@@ -1457,6 +1457,9 @@ def late_repair_eligible(result: dict[str, Any]) -> bool:
 # and message, and the lane of the dispatch that declared the artifact.  A
 # broken instrument raises instead, so it is never read as a gap.
 STAGES = ("dev", "close", "commit")
+# The chain's data fields the disposition prints for a /dev task (its CHAIN= line).
+CHAIN_FIELDS = ("mode", "lanes", "report_paths", "canonical_dev_report", "artifact_paths",
+                "commit_whitelist_artifacts", "qa_inputs")
 INSTRUMENT_CODES = frozenset({"AGGREGATE_IMPLEMENTATION_ERROR", "UNREADABLE_DEV_DIRECTORY"})
 # Python's own exit status for an unhandled exception, so a failure main()
 # catches and one it cannot (raised while the interpreter loads it) read alike.
@@ -1488,6 +1491,7 @@ def _check_dev_chain(validator: ChainValidator, task_id: str, obligation: Module
     gap takes when no dispatch declared its artifact."""
     root, dev_dir = validator.root, validator.dev_dir
     result = resolve_chain(root, task_id)
+    validator.chain = {key: result[key] for key in CHAIN_FIELDS}
     for error in result["errors"]:
         if error["code"] in INSTRUMENT_CODES:
             raise RuntimeError(f"{error['code']} at {error['path']}: {error['detail']}")
@@ -1656,6 +1660,7 @@ def disposition(project_root: Path | str, task_id: str, stage: str) -> dict[str,
         "stage": stage,
         "task_id": task_id,
         "gaps": gaps,
+        "chain": getattr(validator, "chain", None),
     }
 
 
@@ -1686,6 +1691,8 @@ def _print_disposition(project_dir: str, task_id: str, stage: str | None) -> int
     print(f"DISPOSITION={outcome['disposition']} STAGE={outcome['stage']} TASK={outcome['task_id']}")
     for gap in outcome["gaps"]:
         print(gap_line(gap))
+    if outcome.get("chain") is not None:
+        print("CHAIN=" + json.dumps(outcome["chain"], ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return 0
 
 
