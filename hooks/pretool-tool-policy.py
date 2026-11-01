@@ -63,19 +63,16 @@ NotebookEdit target and every Bash write target:
     lib/declared_paths, loaded only for a write; this file keeps the rule
     and the session transcript's reader (_Record).
 
-Grant binding (D8), beside the derived permission and for every caller alike:
-a file under <state dir>/agentic-commit/<name>/, <name> a role the policy
-lists (the push- and merge-analyst grant directories), is created or
-overwritten by that role only (_check_grant_writes). Removal is no write here:
-/merge's `rm -f` and execute-push.py's unlink stay.
+Grant binding (D8), beside it and for every caller alike: only <name> writes
+under <state dir>/agentic-commit/<name>/, <name> a listed role (the push- and
+merge-analyst grants); a removal is no write (_check_grant_writes).
 
 Behavior:
   - Main agent (no agent_id) -> exit 0 after the derived permission and the
     grant binding (the orchestrator gate handles the rest of the main agent).
-  - Subagent role unresolvable, or a role the policy does not list (Explore,
-    Plan, general-purpose, `<plugin>:<name>`) -> exit 0: no role row applies,
-    never is_allowed's "unknown role". An unresolved role is a NORMAL state
-    (agent_resolver LOW-10: callers MUST NOT hard-block on None).
+  - Subagent role unresolvable (a NORMAL state, agent_resolver LOW-10), or one
+    the policy does not list (Explore, Plan, general-purpose, `<plugin>:<name>`)
+    -> exit 0: no role row applies, never is_allowed's "unknown role".
   - Resolved role + denied tool/path -> exit 2 with structured stderr
     JSON: {"role", "tool", "target", "deny_reason"}.
   - Deny-logic import/bootstrap failure -> exit 2 (FAIL CLOSED, WS1): the
@@ -124,6 +121,7 @@ WRITE_TOOLS: set
 resolve_agent_type = None  # type: ignore[assignment]
 extract_bash_write_paths = None  # type: ignore[assignment]
 is_allowed = None  # type: ignore[assignment]
+harness_state_dir = None  # type: ignore[assignment]
 
 
 def _bootstrap_security() -> None:
@@ -132,11 +130,12 @@ def _bootstrap_security() -> None:
     This MUST be called from main() BEFORE any authorization decision and MUST
     NOT be wrapped by the blanket fail-open `except` in __main__.
     """
-    global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, is_allowed
+    global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, is_allowed, harness_state_dir
     try:
         from lib.agent_resolver import resolve_agent_type as _rat
         from lib.bash_write_targets import extract_bash_write_paths as _ebwp
         from lib.policy_registry import WRITE_TOOLS as _wt, is_allowed as _ia
+        from lib.harness_state_dir import harness_state_dir as _hsd
     except Exception as e:  # ImportError, bootstrap failure, resolver failure
         sys.stderr.write(
             "BLOCKED by tool-policy.v1: deny-logic bootstrap FAILED — the policy "
@@ -148,6 +147,7 @@ def _bootstrap_security() -> None:
     resolve_agent_type = _rat
     extract_bash_write_paths = _ebwp
     is_allowed = _ia
+    harness_state_dir = _hsd
 
 
 def _read_payload() -> dict:
@@ -206,12 +206,9 @@ def _role_temp_exceptions(role: str) -> list:
 
     An entry qualifies when it names tmp/var-tmp and is NOT one of the bare
     raw-temp grants.  These survive the raw-temp denial verbatim, for exactly
-    the role that holds each.  A CLAUDE_STATE_DIR below a temp root is the
-    harness's own directory, not arbitrary temp: the role's '*/' entries (what
-    its row admits under a state dir outside the temp roots, such as an
-    analyst's grant directory) hold beneath it too.
+    the role that holds each.  A CLAUDE_STATE_DIR below a temp root is no
+    arbitrary temp: the role's '*/' entries (an analyst's grants) hold in it.
     """
-    from lib.harness_state_dir import harness_state_dir
     from lib.policy_registry import get_role_policy
 
     allowed = get_role_policy(role).get("allowed_write_path_prefixes", []) or []
@@ -626,36 +623,23 @@ def _caller_label(role, data: dict) -> str:
     return data.get("agent_type") or "unresolved"
 
 
-_GRANT_DIR_RE = re.compile(r"/agentic-commit/([^/$`]+)/")
-
-
 def _check_grant_writes(role, tool_name: str, targets: list, data: dict) -> None:
-    """The grant binding: exit 2 when a caller other than <name> creates or
-    overwrites a file under <state dir>/agentic-commit/<name>/, <name> a role
-    the policy lists (an unreadable policy binds every <name>). An unexpanded
-    Bash word is judged by the directory it spells."""
-    if tool_name == "Bash":
-        found = targets[1:]
-    elif tool_name in WRITE_TOOLS:
-        found = targets[:1]
-    else:
-        return
+    """Exit 2 when a caller other than <name> creates or overwrites a file under
+    <state dir>/agentic-commit/<name>/, <name> a listed role (any, the policy
+    unreadable); an unexpanded Bash word is judged by the directory it spells."""
     from lib import policy_registry
-    from lib.harness_state_dir import harness_state_dir
 
-    base = _resolved(harness_state_dir()) / "agentic-commit"
+    base = f"{_resolved(harness_state_dir())}/agentic-commit/"
     roles = (policy_registry.load_policy() or {}).get("roles")
-    for target in found:
+    for target in targets[1:] if tool_name == "Bash" else targets[:1] if tool_name in WRITE_TOOLS else []:
         if not isinstance(target, str) or not target or "\x00" in target:
             continue
         if "$" in target or "`" in target:
-            match = _GRANT_DIR_RE.search(target)
+            match = re.search(r"/agentic-commit/([^/$`]+)/", target)
             owner = match.group(1) if match else None
         else:
-            try:
-                owner = (_resolved(target).relative_to(base).parts or (None,))[0]
-            except ValueError:
-                owner = None
+            path = f"{_resolved(target)}/"
+            owner = path[len(base):].split("/")[0] if path.startswith(base) else None
         if owner and owner != role and (roles is None or owner in roles):
             _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
                         f"write target {target} is in the {owner} grant directory; only the {owner} "
@@ -873,10 +857,9 @@ def main() -> None:
     from lib import policy_registry
 
     if not role or policy_registry.get_role_policy(role).get("_unknown_role"):
-        # An unresolved role is a NORMAL state, not an error (agent_resolver
-        # LOW-10: callers MUST NOT hard-block on None). The main agent and a
-        # role the policy does not list (a built-in or plugin agent type) have
-        # no role rows: the two checks above are all that applies to them.
+        # Unresolved is NORMAL (agent_resolver LOW-10: never hard-block on None);
+        # the main agent and an unlisted (built-in or plugin) role have no role
+        # rows: the two checks above are all that applies to them.
         sys.exit(0)
     _check_targets(role, tool_name, targets, data, own)
     sys.exit(0)

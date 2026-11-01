@@ -690,10 +690,9 @@ def select_dispatch_attestation(sids, grant_created_at: str, prompt_sha256: str,
     next repository of its plan finds the same attestation, and nothing is
     written to make that so.
 
-    Requires `caller_role` (the caller's CLI role) to equal the attestation's
-    `subagent_type`: an attestation is selected only by the role its dispatch
-    started. `prompt_why` is `caller_prompt_sha256`'s reason when it read no
-    prompt; a refusal names the role mismatch first, then that reason.
+    Requires `caller_role` (the caller's CLI role) to be the attestation's
+    `subagent_type`. A refusal names a role mismatch first, then `prompt_why`
+    (`caller_prompt_sha256`'s reason when it read no prompt).
     """
     now = now or datetime.now(timezone.utc)
     minted = _parse_iso(grant_created_at)
@@ -728,12 +727,9 @@ def select_dispatch_attestation(sids, grant_created_at: str, prompt_sha256: str,
             candidates.append((dispatched_at or now, path))
     if not candidates:
         if rejected_role:
-            return None, (
-                f"{rejected_role} live dispatch attestation(s) exist, dispatched as "
-                f"{CHANGELOG_ANALYST!r}, but the caller's role is "
-                f"{caller_role or 'unresolved'!r}: an attestation is selected only by the "
-                f"role its dispatch started, {CHANGELOG_ANALYST!r}"
-            )
+            return None, (f"{rejected_role} live dispatch attestation(s) exist, but the caller's role "
+                          f"is {caller_role or 'unresolved'!r}: an attestation is selected only by the "
+                          f"role its dispatch started, {CHANGELOG_ANALYST!r}")
         if prompt_why:
             return None, prompt_why
         if rejected_older:

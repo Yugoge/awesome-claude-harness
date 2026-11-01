@@ -123,6 +123,19 @@ def test_an_unlisted_role_gets_no_role_row(tmp_path, role):
         assert run(tool, tool_input, role, home) == (0, ""), (role, tool)
 
 
+@pytest.mark.parametrize("role", ["Explore", PLUGIN, "general-purpose"])
+def test_an_unlisted_role_still_meets_the_derived_permission(tmp_path, role):
+    """No role row is not no check: a path another dispatch declares stays that dispatch's (A5)."""
+    import test_tool_policy_derived_permission as derived  # noqa: PLC0415 (hooks/tests on sys.path)
+
+    s = derived.Session(tmp_path / "projects")
+    s.command("dev")
+    s.dispatch("You are the BA subagent.\n" + derived._block(derived._obligation("ba", "singular", derived.CONTEXT)))
+    other = s.dispatch("Look around the toy package.", role)
+    denial = derived._denial(s.run(tmp_path, "Write", derived._write(derived.CONTEXT), (other, role)))
+    assert denial["role"] == role and denial["deny_reason"].endswith("only that dispatch writes it")
+
+
 def test_general_purpose_keeps_todays_behaviour_and_a_listed_role_keeps_its_row(tmp_path):
     policy = json.loads((ROOT / "policies" / "tool-policy.v1.json").read_text())
     assert "general-purpose" not in policy["roles"]
@@ -139,8 +152,8 @@ def test_general_purpose_keeps_todays_behaviour_and_a_listed_role_keeps_its_row(
 FENCE = re.compile(r"^[ \t]*```([A-Za-z]*)[^\n]*\n(.*?)^[ \t]*```", re.M | re.S)
 
 
-def _bash_blocks(agent: str):
-    text = (ROOT / "agents" / f"{agent}.md").read_text(encoding="utf-8")
+def _bash_blocks(agent: str, kind: str = "agents"):
+    text = (ROOT / kind / f"{agent}.md").read_text(encoding="utf-8")
     return [m.group(2) for m in FENCE.finditer(text) if m.group(1) in ("bash", "sh")]
 
 
@@ -187,6 +200,15 @@ def test_a_never_registered_analyst_keeps_every_documented_step(tmp_path, state,
         code, err = run("Write", {"file_path": path, "content": "{}"}, agent, home, state)
         refused += [(path, err)] if code else []
     assert not refused
+
+
+@pytest.mark.parametrize("command", ["push", "merge"])
+def test_the_main_agents_push_and_merge_steps_pass(tmp_path, command):
+    """The main agent's own Bash steps of /push and /merge (execute-push.py, merge.sh) write no grant."""
+    blocks = _bash_blocks(command, "commands")
+    assert blocks
+    for block in blocks:
+        assert run("Bash", {"command": block}, MAIN, tmp_path / "home") == (0, ""), block[:80]
 
 
 # -- /push end to end: the grant its analyst wrote, execute-push.py, a local bare origin --------
