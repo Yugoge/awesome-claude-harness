@@ -690,9 +690,8 @@ def select_dispatch_attestation(sids, grant_created_at: str, prompt_sha256: str,
     next repository of its plan finds the same attestation, and nothing is
     written to make that so.
 
-    Requires `caller_role` (the caller's CLI role) to be the attestation's
-    `subagent_type`. A refusal names a role mismatch first, then `prompt_why`
-    (`caller_prompt_sha256`'s reason when it read no prompt).
+    `caller_role` (the caller's CLI role) must be the attestation's `subagent_type`;
+    a refusal names a role mismatch first, then `prompt_why` (why no prompt was read).
     """
     now = now or datetime.now(timezone.utc)
     minted = _parse_iso(grant_created_at)

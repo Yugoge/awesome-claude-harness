@@ -166,8 +166,9 @@ def _payload_pipeline_id(payload: dict) -> str:
     return m.group(1) if m else ''
 
 
-def _try_resolve_agent_type(payload: dict) -> str:
-    """Call lib.agent_resolver.resolve_agent_type; return '' on any failure."""
+def _resolve_role(payload: dict) -> str:
+    """The acting subagent's role through lib.agent_resolver alone ('' for the
+    main agent or on any failure): an environment variable is never a role."""
     if _resolve_agent_type is None or not isinstance(payload, dict):
         return ''
     try:
@@ -175,12 +176,6 @@ def _try_resolve_agent_type(payload: dict) -> str:
     except Exception:
         return ''
     return role if isinstance(role, str) else ''
-
-
-def _resolve_role(payload: dict) -> str:
-    """Resolve acting subagent role through agent_resolver alone: an
-    environment variable is never a role ('' for the main agent)."""
-    return _try_resolve_agent_type(payload)
 
 
 def _load_active_contract(state: dict) -> dict | None:
@@ -861,12 +856,10 @@ def _is_cwd_in_worktree(worktree_paths: list[str], cwd: str | None = None) -> bo
 
 
 def _resolve_child_session(payload: dict) -> dict | None:
-    """M9/round-3 overnight_child: the overnight state of the session a
-    subagent works for, the one that dispatched it (payload.session_id), where
-    its own dispatch obligation is recorded (P6 R4). An agent-index.json
-    dev_session_id written before the pull names it only for an agent whose
-    dispatch carries no obligation (the transcript is read only when such an
-    entry exists, so an ordinary call reads none)."""
+    """M9/round-3 overnight_child: the overnight state of the session that
+    dispatched the subagent (payload.session_id), which records its dispatch
+    obligation (P6 R4). A pre-pull agent-index.json dev_session_id names it only
+    for a dispatch without one (its transcript is read only for such an entry)."""
     if not isinstance(payload, dict):
         return None
     agent_id = payload.get('agent_id')
@@ -1069,14 +1062,6 @@ def _iter_git_invocations(command: str):
         first = toks[k].strip('\'"')
         if os.path.basename(first) == 'git':
             yield (toks[k + 1:], cwd_override, cwd_ambiguous)
-
-
-def _normalize_git_basename_cmds(command: str) -> list[str]:
-    """Back-compat shim: return only the subtoks for each git invocation.
-
-    Retained for any external caller / test; the shell-aware effective-cwd data
-    is consumed via `_iter_git_invocations`."""
-    return [subtoks for subtoks, _cwd, _amb in _iter_git_invocations(command)]
 
 
 _GIT_HOOK_SUPPRESS_RE = re.compile(

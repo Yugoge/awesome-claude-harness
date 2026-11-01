@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import agent_cycle, dispatch_template, obligation
+from lib import agent_cycle, dispatch_template
 from lib.agent_resolver import resolve_agent_type
 
 CODEX_REQUIRED_LINE = re.compile(r"^\s*codex_required:\s*true\s*$", re.M)
@@ -82,8 +82,7 @@ def main() -> None:
 
     # The agent's own obligation names its cycle (P6 R4); the role is Claude
     # Code's record of the agent.
-    resolution = agent_cycle.own_resolution(data, project_dir)
-    own = resolution.obligation if isinstance(resolution, obligation.Resolved) else {}
+    resolution, own = agent_cycle.own_resolution(data, project_dir)
     registry = agent_cycle.registry_dir(data, own, project_dir)
     if registry is None or not _read_json(registry / "codex-enforce.json").get("enabled"):
         # No cycle, or no (or a disabled) enforcement flag in it

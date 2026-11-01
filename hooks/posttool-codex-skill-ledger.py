@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import agent_cycle, obligation
+from lib import agent_cycle
 from lib.agent_resolver import resolve_agent_type
 
 
@@ -75,9 +75,7 @@ def main() -> None:
         sys.exit(0)
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
-    resolution = agent_cycle.own_resolution(data, project_dir)
-    own = resolution.obligation if isinstance(resolution, obligation.Resolved) else {}
-    registry = agent_cycle.registry_dir(data, own, project_dir)
+    registry = agent_cycle.registry_dir(data, agent_cycle.own_resolution(data, project_dir)[1], project_dir)
     if registry is None:
         sys.exit(0)
     dev_session_id = registry.name

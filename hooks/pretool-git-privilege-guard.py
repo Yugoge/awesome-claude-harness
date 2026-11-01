@@ -189,7 +189,6 @@ from lib import commit_pipeline  # noqa: E402
 # The per-event pointer a spent grant hands to the PostToolUse finalizer, which
 # appends the commit-event journal entry from it.
 from lib import commit_journal  # noqa: E402
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 
 BLESSED_BRIDGE_RE = re.compile(r'auto-bulk:\s*end-of-cycle commit for\b')
@@ -205,7 +204,7 @@ GIT_GLOBAL_OPTION_RE = (
 GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 
 # Matches a `git <global-options>* commit` invocation and CAPTURES the
-# global-options span (group 1) so `_extract_commit_dash_c_dir` can pull an
+# global-options span (group 1) so `_extract_dash_c_from_span` can pull an
 # explicit `-C <dir>` out of it. Reuses the exact GIT_GLOBAL_OPTION_RE grammar
 # above (kept in sync intentionally) so a change to one does not silently
 # desync from the other.
@@ -523,19 +522,6 @@ def _extract_dash_c_from_span(options_span, command_excerpt):
     return value
 
 
-def _extract_commit_dash_c_dir(command):
-    """Back-compat single-invocation `-C <dir>` extractor (whole command).
-
-    Retained for external/test callers; the live binding path now enumerates
-    EVERY commit invocation via `_iter_commit_invocations` and calls
-    `_extract_dash_c_from_span` per invocation.
-    """
-    m = GIT_COMMIT_INVOCATION_RE.search(command)
-    if not m:
-        return ''
-    return _extract_dash_c_from_span(m.group(1), command)
-
-
 def _ambient_git_redirect_present():
     """True iff the guard's OWN environment carries a GIT_DIR / GIT_WORK_TREE /
     GIT_COMMON_DIR redirect.
@@ -701,7 +687,7 @@ def _enforce_commit_grant_binding(grant, command):
 def _commit_target_git_output(target_dir, *args):
     """Like _git_output, but scoped to `target_dir` via `-C` when non-empty.
 
-    target_dir is the (possibly empty) result of _extract_commit_dash_c_dir.
+    target_dir is the (possibly empty) result of _extract_dash_c_from_span.
     Empty target_dir falls back to the hook's own CWD, matching the
     no-override push-grant precedent.
     """
@@ -923,12 +909,6 @@ def _extract_reset_target(invocation):
     except ValueError:
         pass
     return ''
-
-
-def _is_head_ref(ref):
-    if not ref:
-        return True
-    return ref == 'HEAD'
 
 
 def _end_time_passed(end_str):

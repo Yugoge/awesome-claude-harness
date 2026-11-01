@@ -296,9 +296,11 @@ def _wire_ledger_judgment(report: dict, project_dir: str, task_id: str, deadline
     return findings
 
 
-# P6 A3.a: dev's declared lists against the files Claude Code recorded it
-# writing; the warning commit prints the finding, the promotion flips this.
+# P6 A3.a (a dev's declared lists against the files Claude Code recorded it
+# writing) and F3.a (a live harness file its dev or test-writer broke): the
+# warning commit prints each finding, the promotion flips the check's constant.
 FILE_LISTS_BLOCK = False
+SYNTAX_BLOCK = False
 
 
 def _tree_rel(path: Path) -> tuple:  # (git work tree holding path, path in it); (None, "") outside every tree
@@ -307,9 +309,8 @@ def _tree_rel(path: Path) -> tuple:  # (git work tree holding path, path in it);
 
 
 def _recorded(transcript):
-    """(written, named) resolved paths of a transcript, None if unreadable. The
-    reader runs on root "/" to keep other repositories' paths, so its excluded
-    trees are dropped here, in each path's own repository."""
+    """(written, named) resolved paths of a transcript, None if unreadable. Read on "/" to keep other
+    repositories' paths, so the excluded trees are dropped here, in each path's own repository."""
     found = command_span.write_set(transcript, "/") if transcript else None
     keep = lambda rels: {p for p in (Path("/", r).resolve() for r in rels)
                          if not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)}
@@ -320,8 +321,7 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     """A3.a: each declared path written or named by this dev or an earlier dev
     dispatch of its task id and lane (QA loop, completion dispatch, any session
     of the project); each written path git has a change for declared."""
-    own = _recorded(getattr(resolution, "transcript_path", None))
-    if own is None:
+    if (own := _recorded(getattr(resolution, "transcript_path", None))) is None:
         return []
     (written, named), unreadable = own, []
     ours = ("dev", ob.get("lane"), obligation.canonical_task_id(ob.get("task_id")))
@@ -359,9 +359,8 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     if not missing and not extra:
         return []
     show = lambda p: p.relative_to(root).as_posix() if p.is_relative_to(root) else str(p)
-    expected = {key: [r for p, r in paths.items() if unreadable or p not in missing] for key, paths in declared.items()}
-    for p, key in extra.items():
-        expected[key].append(show(p))
+    expected = {key: [r for p, r in paths.items() if unreadable or p not in missing]
+                + [show(p) for p, k in extra.items() if k == key] for key, paths in declared.items()}
     listed = lambda paths: ", ".join(sorted(paths)) or "(none)"
     lines = [f"declared but not written by this dev: {listed(raw[p] for p in missing)}",
              f"written but not declared: {listed(map(show, extra))}", "set dev.files_modified and dev.files_created "
@@ -374,16 +373,10 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     return lines
 
 
-# P6 F3.a: a live harness file the stopping dev or test-writer wrote that no
-# longer parses; the warning commit prints it, the promotion flips this.
-SYNTAX_BLOCK = False
-
-
 def _harness_syntax(resolution) -> list:
-    """F3.a: each file of the agent's own written set (no inheritance) whose
-    realpath is under the live harness home's hooks/ or scripts/ and that, as it
-    stands now, Python's compiler (.py, python shebang) or `bash -n` (.sh, bash
-    shebang) rejects. Nothing is written: no py_compile, no __pycache__."""
+    """F3.a: each file of the agent's own written set (no inheritance) under the live harness home's
+    hooks/ or scripts/ (realpath) that Python's compiler (.py, python shebang) or `bash -n` (.sh, bash
+    shebang) rejects as it stands now. Nothing is written: no py_compile, no __pycache__."""
     home, findings = claude_home.resolve(), []
     roots = [(home / d).resolve() for d in ("hooks", "scripts")] if home else []
     try:

@@ -45,11 +45,10 @@ REGISTER_TIMEOUT_S = 20
 # workflows. These workflows produce no spec views, so VIEW_PATH_PATTERN never
 # fires for them. Root cause: commit e086ccb scoped enforcement to /spec only;
 # /dev sessions have no cp-state files, so the enforcement hook fails open.
-# Fix (ba-spec-20260424-110000.md): a subagent that reads
-# .claude/dev-registry/<session_id>/<agent>.json gets the agent type from the path
-# written to .claude/dev-registry/agent-index.json under its Claude-stdin agent_id,
-# only when the payload carries no agent_type (an older CLI): with one, the role
-# is the CLI's (lib/agent_resolver.py) and the read registers nothing.
+# Fix (ba-spec-20260424-110000.md): a subagent's Read of
+# .claude/dev-registry/<session_id>/<agent>.json writes <agent> under its Claude-stdin
+# agent_id into .claude/dev-registry/agent-index.json only when the payload carries
+# no agent_type (an older CLI; with one, the role is the CLI's, lib/agent_resolver.py).
 # The hook stays the sentinel's one producer: it creates the sentinel in the
 # cycle's armed registry right before that read (P1b goal 2).
 DEV_SENTINEL_PATTERN = re.compile(
@@ -222,9 +221,8 @@ def _ensure_dev_sentinel(file_path, agent, session_id):
 
 def _handle_dev_sentinel(data, project_dir):
     """Process a DEV_SENTINEL_PATTERN Read; create the sentinel, register UUID ->
-    agent_type only when the payload carries no agent_type: the role is then the
-    CLI's (lib/agent_resolver.py), and a path the agent chose to read must not
-    write a second, possibly different, one into the index.
+    agent_type only for a payload without agent_type (with one, the role is the CLI's
+    and a path the agent chose to read must not write a second, possibly different, one).
 
     Returns True when handled, False when the Read does not target a sentinel
     or the Claude-stdin agent_id is missing (main-agent Read is ignored).

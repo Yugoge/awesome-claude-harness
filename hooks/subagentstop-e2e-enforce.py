@@ -35,7 +35,6 @@ Exit codes:
 import glob
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -158,11 +157,8 @@ def _enforce_e2e_status(
     """Check a resolved QA report's e2e_enforcement.status.
 
     Exits 2 on any blocking outcome; returns normally when the status
-    passes. Shared by the registered resolution path and the obligation-
-    based fallback (ticket 20261001-161041-r06, M1) so the blocking rules
-    are defined exactly once. `session_context` is the only text that
-    differs between callers, preserving byte-identical output for the
-    pre-existing registered path (AC5).
+    passes. Shared by the declared-report and session-correlated paths so the
+    blocking rules are defined exactly once.
     """
     qa_report = _read_json(qa_report_path)
 
@@ -217,7 +213,7 @@ def _own_obligation(data: dict, project_dir: str) -> dict:
     fails the grammar (a pre-P1 template); {} when there is none or it cannot
     be read."""
     try:
-        resolution = agent_cycle.own_resolution(data, project_dir)
+        resolution = agent_cycle.own_resolution(data, project_dir)[0]
     except Exception:
         return {}
     if isinstance(resolution, obligation.Resolved):
