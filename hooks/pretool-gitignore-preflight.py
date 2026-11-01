@@ -22,10 +22,9 @@
 #      close-report the SAME dispatch declares as its deliverable, AND every
 #      path it would otherwise block was already recorded by an on-disk lane
 #      shard of that same cycle. See discriminator E4 below.
-#   9. The dispatch is a QA, close or commit producer reading the report of its
-#      own task: its obligation (profile commit-landing, commit-qa, do-close or
-#      final_verification) names that task as its task_id. See discriminator
-#      E5 below.
+#   9. The dispatch is a close or commit producer reading the report of its
+#      own task: its obligation (pipeline close or commit, a role other than
+#      dev) names that task as its task_id. See discriminator E5 below.
 #
 # Blocking condition (exits 2):
 #   Any path in dev.files_modified or dev.files_created is matched by .gitignore
@@ -362,9 +361,9 @@
 #         returns that path for in state `verified`, as the changelog-analyst
 #         accepts it.
 #   A report of any other task named in the same prompt keeps its verdict.
-#   P3 row 13 admits the other close and commit producers the same way:
-#   profiles commit-qa, do-close and final_verification beside commit-landing.
-#   A dev dispatch (singular, fanout-lane) keeps the guard.
+#   P3 row 13 admits the other close and commit producers the same way: every
+#   non-dev dispatch of the close or commit pipeline. A dev dispatch, and /dev's
+#   own final QA (pipeline dev), keep the guard.
 #
 # 2026-10-28 — P1b E3: E2 READS THE DECLARATION, NOT A LIST OF NAMES.
 #
@@ -646,13 +645,12 @@ def is_contract_deliverable(path, src_task_id, repo_root=None, project_dir=None)
     return False
 
 
-# E5: the profiles of the producers that read the dev report of the task they
-# verify or land: /do's close, /commit's QA and its changelog-analyst (Steps 6
-# and 7), and /close's QA. /dev's own final QA (Step 13) shares /close's
-# profile but is a dev-side dispatch, so final_verification is exempt only in
-# pipeline close: the guard's forward-path catch stays in /dev.
-EXEMPT_PROFILES = frozenset(('commit-landing', 'commit-qa', 'do-close'))
-CLOSE_ONLY_PROFILE = 'final_verification'
+# E5: the producers that read the dev report of the task they verify or land
+# (/close's QA, /do's close, /commit's QA and its changelog-analyst) are the
+# close and commit pipelines' non-dev dispatches, read from their own
+# obligation. /dev's own final QA (Step 13, pipeline dev) and every dev
+# dispatch keep the guard: its forward-path catch stays in /dev.
+READING_PIPELINES = ('close', 'commit')
 
 
 def exempt_task_id(prompt):
@@ -670,9 +668,7 @@ def exempt_task_id(prompt):
         return None
     doc = parsed.obligation
     task_id = doc.get('task_id')
-    profile = doc.get('profile')
-    exempt = profile in EXEMPT_PROFILES or (
-        profile == CLOSE_ONLY_PROFILE and doc.get('pipeline') == 'close')
+    exempt = doc.get('pipeline') in READING_PIPELINES and doc.get('role') != 'dev'
     if not exempt or not isinstance(task_id, str):
         return None
     return task_id
