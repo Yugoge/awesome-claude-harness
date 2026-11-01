@@ -665,14 +665,6 @@
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-todo-count.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-todo-sequence.py\""
-          },
-          {
-            "type": "command",
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-overnight-loop.py\""
           }
         ]

@@ -2,13 +2,15 @@
 """
 PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark.
 
-Bookkeeping (every workflow): locate the in_progress canonical todo via
-array-index (not label) and set
+Bookkeeping (the Codex plan's bookmark only): locate the in_progress todo of
+the bookmark's last_todos and set
     bookmark.subagent_calls[str(ip_index)] = True
 in the workflow bookmark as lib.todo_canonical.write_bookmark, its one writer,
-reads it at the write. This unblocks pretool-todo-validate.py at line 238 which
-reads `state.get('subagent_calls', {}).get(str(i), False)` where `i` is the
-canonical enumerate-index. Whether the dispatch produced its artifact is
+reads it at the write; validate_codex_transition in pretool-workflow-gate.py
+reads that marker. Only the Codex plan path (persist_codex_initialization)
+writes last_todos, so a Claude session's bookmark has none and this writes
+nothing there: its Gate 4 reads the Agent calls from the transcript
+(pretool-todo-validate.py). Whether the dispatch produced its artifact is
 decided by posttool-overnight-file-check.py at the same PostToolUse (G3) and
 by the producer's own stop (G2), not here.
 
@@ -104,8 +106,8 @@ def _content_to_step(content: str) -> str:
 def _current_in_progress_index(state: dict) -> int | None:
     """Return the 0-indexed array position of the in_progress todo in last_todos.
 
-    The validator at pretool-todo-validate.py around line 238 keys
-    `subagent_calls` on the canonical enumerate-index string form, so this
+    validate_codex_transition (pretool-workflow-gate.py) keys
+    `subagent_calls` on the plan's enumerate-index string form, so this
     writer must conform to the same indexing scheme (NOT the step label).
 
     Multi-in_progress guard (cycle 20260519-211515 Item H, OBJ-5 BLOCKER
@@ -183,8 +185,8 @@ def _find_earliest_unflipped_matching_step(
         if call_meta is None:
             continue
         # Normalize: subagent_call may be a dict (single subagent) or a list
-        # of dicts (multiple alternative subagents — supported by the
-        # validator's _format_subagent_names at pretool-todo-validate.py:244-248).
+        # of dicts (multiple alternative subagents — supported by
+        # pretool-todo-validate.py's _format_subagent_names).
         if isinstance(call_meta, dict):
             entries = [call_meta]
         elif isinstance(call_meta, list):

@@ -151,7 +151,7 @@ def test_a_resumed_call_of_another_role_does_not_meet_the_dev_step(cycle):
     aid = cycle.cut(role="qa")
     cycle.restart([aid])
     refused = cycle.complete_step_10()
-    assert refused.returncode == 2 and "requires a subagent call (dev) that has not been made" in refused.stderr
+    assert refused.returncode == 2 and "requires a subagent call (dev) made after the step went in_progress" in refused.stderr
 
 
 def test_finalized_resumes_reads_only_a_finalized_complete_journal(cycle):

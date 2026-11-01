@@ -37,7 +37,8 @@ import pytest
 
 from tests.replay import sites, suite
 
-DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock")
+DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
+            "checklist-lock")
 PLAIN_CASES = ("bg-dispatch", "stale-worktree", "obligation", "forged-ack")
 CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}

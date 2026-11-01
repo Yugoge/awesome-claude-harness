@@ -364,50 +364,6 @@ def build_completion_template(todos: list) -> str:
     return json.dumps(result, ensure_ascii=False, separators=(",", ": "))
 
 
-def build_sequence_fix_call(last_todos: list) -> str:
-    """For sequence violations: compute correct next state."""
-    if not last_todos:
-        return ''
-    try:
-        result = [t.copy() for t in last_todos]
-        idx = next(
-            (i for i, t in enumerate(result) if t.get('status') == 'in_progress'),
-            None,
-        )
-        if idx is not None:
-            result[idx]['status'] = 'completed'
-            _set_first_pending_ip(result[idx + 1:])
-        else:
-            _set_first_pending_ip(result)
-        return json.dumps(result, ensure_ascii=False, separators=(",", ": "))
-    except Exception:
-        return ''
-
-
-def _find_current_step(todos: list) -> str:
-    """Find the content of the current in_progress step."""
-    ip = next((t for t in todos if t.get('status') == 'in_progress'), None)
-    return ip["content"] if ip else "current step"
-
-
-def format_sequence_violation(todos: list, last_todos: list) -> str:
-    """Format locked message for sequence violations."""
-    if last_todos:
-        current = _find_current_step(last_todos)
-        fix_json = build_sequence_fix_call(last_todos)
-    else:
-        current = _find_current_step(todos)
-        fix_json = ''
-    lines = [
-        'WORKFLOW LOCKED (sequence_violation): Steps skipped or out of order.',
-        f'REQUIRED: complete "{current}" first, then advance ONE step.',
-        'Call TodoWrite to fix the sequence.',
-    ]
-    if fix_json:
-        lines += ['', 'Call TodoWrite with this exact todos array:', '', fix_json]
-    return '\n'.join(lines)
-
-
 def format_active_progress(todos: list, ack: bool) -> str:
     """Format progress message for active (non-locked) workflow."""
     total = len(todos)
@@ -431,16 +387,6 @@ def format_active_progress(todos: list, ack: bool) -> str:
         lines.append('Call TodoWrite NOW with this array (pass as array, NOT string):')
         lines.append(build_next_todowrite_call(todos, mark_first=False))
     return '\n'.join(lines)
-
-
-def format_progress(
-    todos: list, lock_reason: str = '', canonical: list = None,
-    todo_acknowledged: bool = False, last_todos: list = None,
-) -> str:
-    """Phase B: show current progress. Dispatches to formatters."""
-    if lock_reason == 'sequence_violation':
-        return format_sequence_violation(todos, last_todos or [])
-    return format_active_progress(todos, todo_acknowledged)
 
 
 # --- Overnight helpers ---
@@ -1213,11 +1159,7 @@ def handle_phase_b(session_id: str) -> None:
     todos = state.todos if state.todos is not None else state.canonical
     if all(t.get('status') == 'completed' for t in todos):
         return
-    lock = state.lock if state.lock != 'not_started' else ''
-    print(format_progress(
-        todos, lock_reason=lock, canonical=state.canonical,
-        todo_acknowledged=not state.lock, last_todos=state.accepted or [],
-    ))
+    print(format_active_progress(todos, state.todos is not None))
 
 
 def checklist_message(cmd_name: str, todos: list) -> str:

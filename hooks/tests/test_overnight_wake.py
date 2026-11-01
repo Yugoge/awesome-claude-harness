@@ -272,9 +272,7 @@ def test_a_list_started_before_step_0_keeps_running(night):
     refused = s.todo(_frontier(old, 2))  # Step 2, PM Plan, a subagent step: Gate 4 by content
     assert refused.returncode == 2 and "pm" in refused.stderr
     s.use("Agent", {"subagent_type": "pm", "prompt": "PLAN", "description": "pm plan"})
-    assert s.todo(_frontier(old, 2)).returncode == 0
-    count = s.todo(_frontier(old, 3), hook="posttool-todo-count.py", event="PostToolUse")
-    assert count.returncode == 0, count.stderr
+    assert s.todo(_frontier(old, 2)).returncode == 0  # its length, shorter than the canonical list, holds
     assert todo_canonical.checklist(str(s.path)).lock == ""
 
 

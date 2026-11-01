@@ -19,6 +19,9 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   dispatch is refused; the main agent's next action does Step 2 itself.
   todo-canonical  the first TodoWrite carries the canonical list with one step's text changed: refused;
                   the next TodoWrite carries the list the hook printed.
+  todo-first      the first TodoWrite carries the canonical list with its first step already completed:
+                  refused before it runs (pretool-todo-validate.py's first-list rule, P5 R18); the next
+                  TodoWrite carries the first call the refusal prints.
   todo-sequence   the first advance completes Step 1 and Step 2 in one TodoWrite: refused; the next
                   TodoWrite completes Step 1 only.
   checklist-lock  the main agent reads a file before its first TodoWrite: refused; it makes the
@@ -75,7 +78,7 @@ class Turn(DoTurn):
 
     def start(self) -> None:
         o = self.o
-        if self.case not in ("todo-canonical", "checklist-lock"):
+        if self.case not in ("todo-canonical", "todo-first", "checklist-lock"):
             return super().start()
         lead = self.label("Read before the first TodoWrite") if self.case == "checklist-lock" else None
         import re
@@ -92,6 +95,10 @@ class Turn(DoTurn):
             bad = [dict(t) for t in o.todos]
             bad[-1]["content"] = bad[-1]["content"] + " (and tidy up)"
             self.note(o.s.todo(bad, label=self.label("TodoWrite altered list")))
+        if self.case == "todo-first":
+            bad = [dict(t) for t in o.todos]
+            bad[0]["status"], bad[1]["status"] = "completed", "in_progress"
+            self.note(o.s.todo(bad, label=self.label("TodoWrite first list with Step 1 completed")))
         o._todo(self.label("TodoWrite canonical list"))
         if lead:
             self.note(o.s.read(path, label=self.label("Read after the TodoWrite")))
@@ -248,6 +255,7 @@ def run(rp) -> None:
         return _dev_early(rp)
     if case in ("bg-dispatch", "stale-worktree", "obligation", "forged-ack"):
         return _plain(rp, case)
-    if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock"):
+    if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
+                    "checklist-lock"):
         raise ValueError(f"unknown case {case!r}")
     Turn(rp, case).run()
