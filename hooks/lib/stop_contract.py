@@ -1,10 +1,11 @@
 """Stop contract: the commands a Stop gate guards, and which transcript record
 is a prompt the human typed (TC-4).
 
-Stdlib only, no harness imports: the Stop coordinator's fallback and
-command_span import it, and an import-free launcher may copy its tuples.
-Only human-typed records count; no CLI error or cancellation record is read
-(D4c), and nothing an agent writes can open, replace or close a span.
+Stdlib only: the Stop coordinator's fallback and command_span import it, and
+an import-free launcher may copy its tuples; its one harness import,
+command_span (stdlib only), is made inside timelock_released. Only
+human-typed records count; no CLI error or cancellation record is read (D4c),
+and nothing an agent writes can open, replace or close a span.
 """
 from __future__ import annotations
 
@@ -79,6 +80,19 @@ def span_opener(record, commands: frozenset) -> tuple[str, str] | None:
     if found and found[0] in commands and found[0] not in CONTROL_COMMANDS:
         return found
     return None
+
+
+def timelock_released(transcript_path) -> bool:
+    """True iff the latest human-typed /stop or /dev-overnight record of the
+    transcript is /stop: the human's /stop follows the session's latest
+    /dev-overnight. Read by command_span.active_span, the one transcript reader
+    (imported here, not at module level: it imports this module)."""
+    try:
+        from . import command_span
+    except ImportError:  # hooks/lib itself is on sys.path
+        import command_span  # type: ignore[no-redef]
+    span = command_span.active_span(transcript_path, frozenset(("stop", "dev-overnight")))
+    return span is not None and span.command == "stop"
 
 
 def active_command(transcript_path) -> str | None:

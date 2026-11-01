@@ -11,7 +11,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -75,6 +75,15 @@ def _publish(root: Path, binding: dict) -> None:
         workflow_instance_id=binding["workflow_instance_id"],
         workflow_generation=binding["workflow_generation"],
     )
+
+
+def _closeout_on_disk(root: Path, sid: str) -> None:
+    """The overnight closeout the time-lock reads after end_time (lib/overnight
+    closeout_gaps): Step 20's PM retrospective and Step 21's summary."""
+    retro = root / "docs" / "dev" / "overnight" / sid / "retro-report-cycle1.json"
+    retro.parent.mkdir(parents=True, exist_ok=True)
+    retro.write_text("{}")
+    (root / "docs" / "dev" / "overnight-summary-2026-11-01.md").write_text("done")
 
 
 def _tree_digest(path: Path) -> dict[str, str]:
@@ -157,23 +166,18 @@ def test_timelock_uses_exact_state_and_publishes_without_finalizing(
     root = tmp_path / "project"
     root.mkdir()
     sid = "claude-overnight"
-    binding = _binding("overnight", command="dev-overnight", session=sid)
+    # One cycle ended (its retrospective is on disk): the receipt's generation is 2.
+    binding = {**_binding("overnight", command="dev-overnight", session=sid), "workflow_generation": 2}
     provisioned = session_resources.provision(root, binding)
     scratch = Path(provisioned["scratch_path"])
     (scratch / "evidence").write_text("preserve")
     before = _tree_digest(scratch)
-    summary = root / "summary.md"
-    summary.write_text("done")
+    _closeout_on_disk(root, sid)
     state = {
         "session_id": sid,
         "dev_registry_session_id": binding["resource_session_id"],
         "cycle_count": 0,
-        "end_time": (datetime.now() - timedelta(seconds=5)).isoformat(),
-        "final_summary_path": str(summary),
-        "pm_retro_reports": ["retro"],
-        "artifact_checkpoint_status": "checkpointed",
-        "current_issues": [],
-        "unresolved_issues": [],
+        "end_time": (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
     }
     state_path = root / ".claude" / f"overnight-state-{sid}.json"
     state_path.write_text(json.dumps(state))
@@ -205,18 +209,15 @@ def test_timelock_phase_receipt_meets_finalize_and_no_other_phase_gets_a_key(
     root = tmp_path / "project"
     root.mkdir()
     sid = "claude-overnight"
-    binding = _binding("overnight", command="dev-overnight", session=sid)
+    # One cycle ended (its retrospective is on disk): the receipt's generation is 2.
+    binding = {**_binding("overnight", command="dev-overnight", session=sid), "workflow_generation": 2}
     provisioned = session_resources.provision(root, binding)
-    summary = root / "summary.md"
-    summary.write_text("done")
+    _closeout_on_disk(root, sid)
     state = {
         "session_id": sid,
         "dev_registry_session_id": binding["resource_session_id"],
         "cycle_count": 0,
-        "end_time": (datetime.now() - timedelta(seconds=5)).isoformat(),
-        "final_summary_path": str(summary),
-        "pm_retro_reports": ["retro"],
-        "artifact_checkpoint_status": "checkpointed",
+        "end_time": (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
     }
     (root / ".claude" / f"overnight-state-{sid}.json").write_text(json.dumps(state))
     phase_list = [coordinator.Phase("timelock", (sys.executable, str(TIMELOCK)))]
@@ -598,12 +599,14 @@ STOP_SESSION = "8b2f4c1d-6a3e-4f70-9d12-3c5e7a9b0f14"
 TRANSCRIPTS = {
     "dev-overnight": [("dev-overnight", "8h fix the flaky suite")],
     "dev-overnight-then-stop": [("dev-overnight", "8h fix the flaky suite"), ("stop", "")],
+    "dev-overnight-then-spec": [("dev-overnight", "8h fix the flaky suite"), ("spec", "add a flag")],
     "dev": [("dev", "fix the flaky suite")],
     "no-command": ["summarise the open issues"],
 }
 ACTIVE = {
     "dev-overnight": "dev-overnight",
     "dev-overnight-then-stop": "stop",
+    "dev-overnight-then-spec": "spec",
     "dev": "dev",
     "no-command": None,
 }
@@ -805,6 +808,39 @@ def test_timelock_instrument_failure_outside_dev_overnight_is_recorded_and_allow
     )
     assert all(p["status"] == "allow" and "failure" not in p for p in later)
     assert _logged(root)[-3:] == ["coverage", "auto_commit", "cleanup"]
+
+
+@pytest.mark.parametrize("failure", ["crash", "slow", "missing"])
+@pytest.mark.parametrize(
+    ("transcript", "window", "code"),
+    [
+        ("dev-overnight-then-spec", True, 2),  # a human /spec inside the window
+        ("dev-overnight-then-stop", True, 0),  # the human's /stop closes the window
+        ("no-command", False, 0),  # no window and no gated command
+    ],
+)
+def test_timelock_failure_blocks_while_the_window_is_open_whatever_the_command(
+    tmp_path: Path, failure: str, transcript: str, window: bool, code: int
+) -> None:
+    """P2 acceptance 9: copies of the plan's crash.py and slow.py (and a missing
+    phase file) as the timelock phase. While the session's time-lock window is
+    open (its state's end_time ahead, no human /stop since its /dev-overnight:
+    lib/overnight window_open) the failure blocks with the fixed line naming
+    /stop, whatever command the human typed last; after the human's /stop, or
+    with no window and no gated command, it is recorded and allowed."""
+    root, path = _project(tmp_path, transcript)
+    if window:
+        (root / ".claude").mkdir()
+        (root / ".claude" / f"overnight-state-{STOP_SESSION}.json").write_text(json.dumps({
+            "session_id": STOP_SESSION,
+            "end_time": (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }))
+    proc = _stop(tmp_path, root, _phases(root, failure, target="timelock"), path)
+    assert proc.returncode == code, proc.stdout + proc.stderr
+    reason = INSTRUMENT_FAILURES[failure][2]
+    assert proc.stderr == (
+        f"timelock instrument failure: {reason}; the human can type /stop\n" if code else ""
+    )
 
 
 @pytest.mark.parametrize(

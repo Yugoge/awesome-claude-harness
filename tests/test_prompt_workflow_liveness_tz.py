@@ -264,13 +264,14 @@ class TestAC1Truthtable(unittest.TestCase):
             self._assert_rows(module, rows)
 
     def test_group_b_asia_shanghai(self):
-        """Rows 14-16 under TZ=Asia/Shanghai. 14/15 pin naive-as-local; 16 kills stripping."""
+        """Rows 14-16 under TZ=Asia/Shanghai. 14/15 pin naive-as-UTC (lib/overnight
+        parse_end_time, P2 row 7); 16 kills stripping."""
         with pinned_tz('Asia/Shanghai'):
             module = load_hook_module()
-            naive_local = datetime.now()
+            naive_utc = datetime.now(timezone.utc).replace(tzinfo=None)
             rows = [
-                (14, {'end_time': (naive_local + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, True),
-                (15, {'end_time': (naive_local - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, False),
+                (14, {'end_time': (naive_utc + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, True),
+                (15, {'end_time': (naive_utc - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, False),
                 (16, {'end_time': future_z(1)}, True),
             ]
             self._assert_rows(module, rows)
