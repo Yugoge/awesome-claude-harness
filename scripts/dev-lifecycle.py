@@ -346,6 +346,10 @@ def derive_state(project_root: Path, task_id: str) -> dict:
                     _load_close_verdict_module(), _load_commit_repos_module(),
                 ))
                 return row
+            if do_report_lite_preflight(_read_json(do_report_path) or {}) == "do.status":
+                # Q7: dev's report concludes a /do task whose do-report is not completed (the disposition)
+                row.update(state="close_pending", next_action="close", invoke_resolver=False, chain_origin="do_report")
+                return row
             row.update(chain_state(task_id, _load_resolver_module().resolve_chain(project_root, task_id)))
             return row
 
@@ -369,7 +373,7 @@ def derive_state(project_root: Path, task_id: str) -> dict:
                 row.update(state="blocked", next_action="inspect", invoke_resolver=False, blocker="MALFORMED_DO_REPORT")
                 return row
             malformed_field = do_report_lite_preflight(do_doc)
-            if malformed_field is not None:
+            if malformed_field not in (None, "do.status"):  # not completed: /close routes it to dev (Q7)
                 row.update(
                     state="blocked", next_action="inspect", invoke_resolver=False,
                     blocker=f"MALFORMED_DO_REPORT_FIELD:{malformed_field}",

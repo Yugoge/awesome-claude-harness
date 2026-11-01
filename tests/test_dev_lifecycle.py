@@ -319,6 +319,21 @@ def test_list_actionable_close_hands_each_dev_parent_its_chain_result(tmp_path):
     assert lines[1] == "20260101-000012"  # a /do parent: no chain
 
 
+@pytest.mark.parametrize("with_dev", [False, True], ids=["no-dev-report", "dev-report"])
+def test_a_blocked_do_task_is_close_actionable_with_or_without_dev_s_report(tmp_path, with_dev):
+    # Q7: /close routes the do-report to dev, whose report concludes the task (the disposition's /do
+    # branch); neither row is blocked, nor run through the /dev chain, so /close --auto offers it.
+    project = make_project(tmp_path)
+    task_id = "20260101-000014"
+    write_json(dev_dir(project) / f"do-report-{task_id}.json", do_report(task_id, status="blocked"))
+    if with_dev:
+        write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id))
+    row = dlc.derive_state(project, task_id)
+    assert (row["state"], row["next_action"], row["invoke_resolver"]) == ("close_pending", "close", False)
+    assert "blocker" not in row and "artifact_chain" not in row
+    assert _list_actionable(project, "close") == [task_id]
+
+
 def test_list_actionable_commit_selects_without_the_chain(tmp_path):
     project = make_project(tmp_path)
     init_git_repo(project)
