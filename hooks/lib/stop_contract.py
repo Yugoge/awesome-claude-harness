@@ -18,8 +18,9 @@ CONTROL_COMMANDS = ("allow", "restart", "checkpoint", "tickets")
 
 COMMANDS_DIR = Path(__file__).resolve().parent.parent.parent / "commands"
 # Markers a typed prompt never carries: a Skill-tool expansion (isMeta,
-# sourceToolUseID), a subagent's own records (isSidechain), a tool result.
-_NON_HUMAN_KEYS = ("isMeta", "isSidechain", "sourceToolUseID", "toolUseResult")
+# sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
+# compaction's summary (isCompactSummary; no isMeta or origin).
+_NON_HUMAN_KEYS = ("isMeta", "isSidechain", "sourceToolUseID", "toolUseResult", "isCompactSummary")
 # The CLI records a typed command as <command-message>..</command-message>
 # <command-name>/x</command-name><command-args>..</command-args> at the start.
 _CMD_TAG_RE = re.compile(
