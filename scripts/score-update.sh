@@ -9,7 +9,7 @@
 #   2 = file/IO error or malformed JSONL in existing log
 #   3 = CAS conflict (--expected-prev-score supplied but does not match latest score)
 #   4 = --undo target not found OR ambiguous (no modification made)
-#   5 = close_success_* precondition unmet (close-report missing or its last line not class yes, or --note invalid)
+#   5 = close_success_* precondition unmet (--note invalid)
 #
 # Root cause addressed (M1/M1b/M2 — task 20260529-210616): orchestrator
 #   attempted to reverse a premature close_success_qa_fail_fixed score in
@@ -23,10 +23,10 @@
 # Root cause addressed (M3 — task 20260529-210616): same task 20260529-081014
 #   orchestrator issued close_success_qa_fail_fixed scoring BEFORE QA finalized
 #   verdict. M3 adds a script-side precondition: close_success_* events require
-#   --note matching ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$ (no / \ . traversal),
-#   docs/dev/close-report-<note>.md must exist and its last non-empty line must
-#   classify as 'yes' per hooks/lib/close-verdict.py, the one classifier.
-#   Decision logic delegated to scripts/close-scoring-decide.py.
+#   --note matching ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$ (no / \ . traversal). The
+#   events themselves are the ones scripts/close-scoring-decide.py returns from
+#   the close report's verdict (/close Step 3); the report and its verdict line
+#   are checked at close QA's own stop (G2), so this script reads neither (P1b E4).
 #
 # Root cause addressed: arch-7 phase 2 (task 20260525-050824) — replace
 # independent-flock overwrite model with append-only JSONL under single
@@ -67,9 +67,7 @@ Reversal modes (M1/M2 — task 20260529-210616):
 
 close_success_* precondition (M3 — both qa_pass and qa_fail_fixed):
   --note REQUIRED matching ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}\$ (no /, \\, ., ..).
-  <repo>/docs/dev/close-report-<note>.md MUST exist.
-  Last non-empty line MUST classify as 'yes' (hooks/lib/close-verdict.py).
-  Decision delegated to scripts/close-scoring-decide.py.
+  The event is one scripts/close-scoring-decide.py returned (/close Step 3).
 
 Score has no lower bound (negative scores accumulate), upper bound 100.
 Rank is recomputed from final score:
@@ -179,27 +177,6 @@ if [[ "${EVENT}" == "close_success_qa_pass" || "${EVENT}" == "close_success_qa_f
   # Safe-stem regex — first char alphanumeric, total length 3-81
   if ! [[ "${NOTE}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$ ]]; then
     echo "${SCRIPT_NAME}: --note '${NOTE}' fails safe-stem regex ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}\$ (precondition unmet)" >&2
-    exit 5
-  fi
-
-  # 2/3/4/5) Delegate to scripts/close-scoring-decide.py, which applies the one
-  # classifier to the report's last line and returns events=[] with a non-null
-  # skip_reason when that class is not yes. We pass
-  # qa_ever_rejected=false arbitrarily — the gate decision is identical for both
-  # close_success_qa_pass and close_success_qa_fail_fixed (both go through the
-  # same close-report YES check); we only inspect WHETHER events[] is non-empty.
-  # Canonical subshell-wrap (AC-10 / 20260520-221452): each python3 invocation
-  # MUST appear on the same line as `source "${REPO_ROOT}/venv/bin/activate" && python3`.
-  decide_out=""
-  if ! decide_out="$( ( source "${REPO_ROOT}/venv/bin/activate" && python3 "${REPO_ROOT}/scripts/close-scoring-decide.py" --task-id "${NOTE}" --qa-ever-rejected false --repo-root "${REPO_ROOT}" ) 2>&1)"; then
-    echo "${SCRIPT_NAME}: close-scoring-decide.py crashed: ${decide_out}" >&2
-    exit 5
-  fi
-  # Parse events[] from decide_out — canonical subshell-wrap.
-  events_count=$(printf '%s' "${decide_out}" | ( source "${REPO_ROOT}/venv/bin/activate" && python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('events') or []))" ) 2>/dev/null || echo "0")
-  skip_reason=$(printf '%s' "${decide_out}" | ( source "${REPO_ROOT}/venv/bin/activate" && python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('skip_reason') or '')" ) 2>/dev/null || echo "")
-  if [[ "${events_count}" != "1" ]]; then
-    echo "${SCRIPT_NAME}: close_success_* precondition unmet — ${skip_reason}" >&2
     exit 5
   fi
 fi

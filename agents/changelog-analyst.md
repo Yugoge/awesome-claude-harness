@@ -1989,10 +1989,10 @@ whitespace. The JSON payload occupies the lines between the two delimiters.
 No other content may appear between the delimiters.
 
 Consumers locate the block by scanning for the exact string
-`--- CHANGELOG-ANALYST-STATUS-BEGIN ---`. If the `BEGIN` sentinel is absent
-from the output, `/commit` treats the result as unparseable (non-retryable,
-manual intervention required — see `/commit` Step 7 status table for the
-"status unknown / unparseable" branch).
+`--- CHANGELOG-ANALYST-STATUS-BEGIN ---`. The block is the response block your
+dispatch's obligation declares: if it is absent or fails `changelog-status.v1`,
+the producer-stop gate (G2) returns your stop to you, naming the failing check,
+before `/commit` reads it.
 
 ---
 

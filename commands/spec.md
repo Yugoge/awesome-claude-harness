@@ -344,8 +344,9 @@ Only proceed to Step 6 when a STRONG signal fires.
      2. AGENT SELECTION: Are the selected agents consistent with the spec's defined
         pipeline? Flag any agent that was included but isn't in the spec's pipeline,
         or any pipeline agent that was excluded.
-     3. COVERAGE: Locate the verifier portably under the harness home — `VERIFIER="$(bash ~/.claude/hooks/lib/claude_home.sh optional scripts/spec-verify/spec-verify.py 2>/dev/null || true)"`. If `$VERIFIER` is non-empty and the file exists, run `source ~/.claude/venv/bin/activate && python3 "$VERIFIER" --monolith <spec_path> --views-dir docs/dev/specs/<spec-id>/views/`. If the verifier is absent, SKIP coverage and note "spec-verify.py not found — manual coverage check required" — do NOT block (baseline behavior; reverted from the WS1 fail-closed flip, which changed a rule beyond pure path-cleanup). The path is resolved portably; only the absent-verifier decision is the baseline skip.
-        Report the result.
+     3. COVERAGE: coverage, pairwise overlap and per-view uniqueness (`spec-verify.py --strict`)
+        were checked at the spec subagent's own stop (G2), which returned a failing split to it;
+        do not run the verifier again.
      4. CONTENT RELEVANCE: Spot-check 3 random content blocks in each view.
         Is the content relevant to that agent's role?
      5. FUNCTIONAL COMPLETENESS: For each agent view, verify it contains enough
@@ -437,29 +438,9 @@ Only proceed to Step 6 when a STRONG signal fires.
 
    If the loop exited via round-3 exhaustion (sub-step 3), also append `"warning: unresolved split-QA issues (<N>); see split-qa-unresolved.json"` so reviewers see the warning inline with the marker.
 
-5. **guard — Finalize-time consumer-path assertion (MANDATORY, blocks on failure)**: After the split marker is written, run the SAME resolver that every `/dev*` consumer uses against the just-written monolith, and assert it resolves to a PRESENT-AND-VALID de-prefixed split at the EXACT path `/dev` will read. This catches a producer that accidentally wrote a prefixed split dir, a manifest whose `monolith_path` does not point back at this monolith, or a missing/stale marker — at creation time, not at `/dev` time:
-
-   ```bash
-   RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
-       --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
-     echo "FINALIZE BLOCKED: resolver reports the split is present-but-invalid / mismatched for $spec_path." >&2
-     echo "The split /dev would consume does not validate. Fix the split before finalizing." >&2
-     exit 1; }
-   VIEWS_AVAILABLE=$(jq -r .views_available <<<"$RESOLVED_JSON")
-   ARTIFACT_ID=$(jq -r .artifact_id <<<"$RESOLVED_JSON")
-   # CONSUME the resolver's own de-prefixed id (candidates[0]) — do NOT re-derive it
-   # inline from the path. candidates[0] is the resolver's first candidate, which is
-   # always the de-prefixed stem (exactly one leading "spec-" stripped). Re-deriving
-   # the id by hand via path/suffix/prefix parameter-expansion is the precise
-   # prose-drift M4/M9 forbid (and the M9 lint now flags it).
-   EXPECT_ID=$(jq -r '.candidates[0]' <<<"$RESOLVED_JSON")
-   if [ "$VIEWS_AVAILABLE" != "true" ] || [ "$ARTIFACT_ID" != "$EXPECT_ID" ]; then
-     echo "FINALIZE BLOCKED: resolver did not return views_available=true at the de-prefixed id '$EXPECT_ID'" >&2
-     echo "(got views_available=$VIEWS_AVAILABLE artifact_id=$ARTIFACT_ID). The producer must write the split DE-prefixed so /dev can consume it." >&2
-     exit 1
-   fi
-   echo "Finalize guard OK: /dev will resolve $spec_path -> artifact_id=$ARTIFACT_ID, views_available=true." >&2
-   ```
+5. The split's own predicates (its manifest of this monolith and the views the manifest references)
+   were checked at the spec subagent's own stop (G2, with `resolve-spec-artifacts.py`'s own rule), which
+   returned a failing split to it; every `/dev*` consumer resolves the split with the same resolver.
 
 6. **Centralization lint (advisory — surfaces inline spec-id re-derivation regressions)**: run `scripts/lint-spec-id-centralization.py` over the `/dev*`/`/spec` command files that consume the resolver. This is NON-BLOCKING here (a WARNING only) — finalize must not hard-fail on an unrelated command-file edit. The authoritative hard gate for this lint belongs at the `.claude`-repo commit boundary (a pre-commit check on staged `commands/*.md` / `scripts/*.sh`), the only place command-file edits actually land; this advisory is a safety-net that makes a regression visible at every finalize.
 
