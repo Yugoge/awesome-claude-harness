@@ -400,6 +400,7 @@ class Analyzer:
         self.findings = findings
         self.chain_basename = chain_basename
         self.modules: dict[str, PyModule] = {}
+        self.retired: list[PyModule] = []    # embedded modules add_embedded replaced
         self.failed: dict[str, str] = {}
         self.summaries: dict[int, Summary] = {}
         self.in_progress: set[int] = set()
@@ -462,6 +463,12 @@ class Analyzer:
             for n in ast.walk(mod.tree):
                 if isinstance(n, ast.Constant) and isinstance(n.value, str) and "__sh_" in n.value:
                     n.value = pat.sub(fill, n.value)
+        if key in self.modules:
+            # the caches here key on id() of AST nodes: a replaced module (the same embedded code
+            # walked twice) stays referenced, so CPython never hands its freed nodes' addresses to
+            # a later module's nodes, whose evaluation would then hit a stale memo entry chosen by
+            # allocation order (which PYTHONHASHSEED changes)
+            self.retired.append(self.modules[key])
         self.modules[key] = mod
         return mod
 

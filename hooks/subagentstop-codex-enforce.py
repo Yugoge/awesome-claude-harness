@@ -22,7 +22,8 @@ Activation logic:
      dispatches that must consult codex (every BA / QA / dev dispatch under
      --codex, and any other whose template adds it); the agent's own file
      activates codex on it. No role list here says which agents are bound.
-     Unbound: exit 0. Bound: exit 2 with "CODEX_ENFORCE_BLOCKED" message.
+     A dispatch whose own obligation names pipeline close or commit is not
+     bound by the flag. Unbound: exit 0. Bound: exit 2 ("CODEX_ENFORCE_BLOCKED").
 
 Exit codes:
   0: Allow stop (pass-through).
@@ -118,6 +119,11 @@ def main() -> None:
         project_dir=project_dir,
         payload_agent_transcript_path=data.get("agent_transcript_path"),
     )
+    # /close and /commit dispatches share the task's registry, whose codex flag
+    # /dev --codex armed for /dev's own; the role is bound as G2 binds it.
+    own = resolution.obligation if isinstance(resolution, obligation.Resolved) else {}
+    if own.get("pipeline") in ("close", "commit") and (not agent_type or own.get("role") == agent_type):
+        sys.exit(0)
     if (not CODEX_REQUIRED_LINE.search(getattr(resolution, "prompt", "") or "")
             and not _template_asks(resolution, agent_type, data.get("agent_transcript_path"))):
         sys.exit(0)

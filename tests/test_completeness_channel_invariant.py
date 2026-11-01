@@ -15,8 +15,7 @@ One defect with a producer half and a consumer half:
   CONSUMER -- scripts/resolve-dev-artifact-chain.py had no completeness error
   class at all.  `blocking_issues` was therefore the gaps' ONLY resolver-visible
   consequence, as the anonymous "blocking_issues is not empty"
-  UNRESOLVED_BLOCKERS -- which is additionally a member of RECLASSIFIABLE_CODES
-  and so disclosable away.
+  UNRESOLVED_BLOCKERS.
 
 Fixing one half alone is strictly WORSE than fixing neither:
 
@@ -300,27 +299,6 @@ def test_the_gap_key_is_outside_the_freshness_projection():
     assert "blocking_issues" in AGG._canonical_projection(probe)
 
 
-def test_label_evidence_scan_reads_both_disclosure_channels(tmp_path):
-    """Moving the channel must not narrow `_label_has_terminal_trace`.
-
-    Its docstring commits to a deliberately permissive ANY-match scan whose
-    point is "to avoid discarding real evidence".  Completeness diagnostics
-    routinely name a lane label ("[snapshot=r02 order=r02]"), so a scan that
-    read only `blocking_issues` would have started discarding exactly that
-    evidence the moment the diagnostics moved.
-    """
-    gap = "scripts/x.py: [snapshot=r02 order=r02] replay produced 1 bytes"
-    empty_dev_dir = tmp_path / "docs" / "dev"
-    empty_dev_dir.mkdir(parents=True)
-    for key in ("blocking_issues", AGG.COMPLETENESS_GAPS_KEY):
-        assert AGG._label_has_terminal_trace(
-            empty_dev_dir, "20260101-000000", "dev-20260101-000000", "r02", {key: [gap]}
-        ) is True, f"evidence on {key} must count"
-    assert AGG._label_has_terminal_trace(
-        empty_dev_dir, "20260101-000000", "dev-20260101-000000", "r99", {"blocking_issues": [gap]}
-    ) is False
-
-
 def test_a_producer_half_revert_is_caught_at_runtime(tmp_path, monkeypatch):
     """The halves' agreement is COMPARED at runtime, not merely declared.
 
@@ -353,13 +331,6 @@ def test_a_producer_half_revert_is_caught_at_runtime(tmp_path, monkeypatch):
     # And the pre-existing symptom is back too, which is the point: that field
     # cannot hold a diagnostic and still converge.
     assert "STALE_CANONICAL" in codes
-
-
-def test_a_completeness_gap_is_not_a_disclosable_exception():
-    """An unattributed-bytes gap is a defect in the deliverable, never an
-    environmental exception, so neither new code may be reclassified away."""
-    assert GAP_CODE not in RESOLVER.RECLASSIFIABLE_CODES
-    assert CHANNEL_CODE not in RESOLVER.RECLASSIFIABLE_CODES
 
 
 def test_both_halves_call_one_implementation():

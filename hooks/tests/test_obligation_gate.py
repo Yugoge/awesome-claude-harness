@@ -754,3 +754,207 @@ def test_G1_declared_roles_follow_the_command_files(tmp_path, monkeypatch):
     assert gate._declared_roles("ship") == {"qa"}
     assert gate._declared_roles("reship") == {"qa"}
     assert gate._declared_roles("absent") == frozenset()
+
+
+# --------------------------------------------------------------------------
+# R17: dispatch order, read from the active span's record of each dispatch
+# and its returned result. A finding exits ORDER_EXIT (2 since the promotion
+# commit; 0 in the warning commit before it).
+# --------------------------------------------------------------------------
+
+ORDER_BANNER = "OBLIGATION GATE ORDER"
+ORDER_EXIT = 2
+LANES = ["l1", "l2"]
+
+
+def _returned(tool_use_id, refused=False):
+    """The record of a dispatch's returned result (refused: a hook's is_error refusal)."""
+    result = {"type": "tool_result", "tool_use_id": tool_use_id, "content": "returned"}
+    if refused:
+        result.update(content="PreToolUse hook refused the dispatch", is_error=True)
+    return {"type": "user", "isSidechain": False, "message": {"role": "user", "content": [result]}}
+
+
+def _stage(kind, task=TASK_ID, lane=None, extra=(), dispatched_at=None):
+    """(subagent_type, prompt) of a /dev stage dispatch as commands/dev.md's
+    templates write it: the input paths it names, its report path, its block."""
+    context, ticket = f"docs/dev/context-{task}.json", f"docs/dev/ticket-{task}.md"
+    dev_report = f"docs/dev/dev-report-{task}.json"
+
+    def report(path, schema):
+        return {"kind": "json", "path": path, "schema": schema, "identity": {"task_id": task}}
+
+    role, profile, artifacts, inputs = {
+        "ba": ("ba", "singular", [report(context, "context.v1"),
+                                  {"kind": "markdown", "path": ticket, "identity_anchor": task}], []),
+        "ba_qa": ("qa", "ba_validation", [report(f"docs/dev/ba-qa-report-{task}.json", "ba-qa-report.v1")],
+                  [ticket, context]),
+        "dev": ("dev", "singular", [report(dev_report, "dev-report.v2")], [context, ticket]),
+        "qa": ("qa", "final_verification", [report(f"docs/dev/qa-report-{task}.json", "qa-report.v2")],
+               [context, dev_report, ticket]),
+    }[kind]
+    doc = _obligation_doc(role=role, profile=profile, artifacts=artifacts, task_id=task,
+                          dispatched_at=dispatched_at)
+    if lane:
+        doc.update(lane=lane, lane_set=LANES, profile="fanout-lane" if role != "qa" else profile)
+    lines = [f"Input file: {path}" for path in list(inputs) + list(extra)]
+    return role, "\n".join(lines + [f"Write your report to: {artifacts[0]['path']}", _block(doc)])
+
+
+def _history(steps):
+    """Records of earlier dispatches: (id, stage, returned) each, in order;
+    returned is True, False (still running) or "refused"."""
+    records = []
+    for tool_use_id, (subagent_type, prompt), returned in steps:
+        records.append(_tool_use(tool_use_id, "Agent", {"subagent_type": subagent_type, "prompt": prompt}))
+        if returned:
+            records.append(_returned(tool_use_id, refused=returned == "refused"))
+    return records
+
+
+def _order_run(home, project, steps, stage, opener="dev", switch="block", tail=()):
+    subagent_type, prompt = stage
+    payload = _dispatch_payload(project, _unique_sid("r17"),
+                                _span_records(opener) + _history(steps) + list(tail),
+                                subagent_type=subagent_type, prompt=prompt)
+    return _run_hook(home, project, payload, switch=switch)
+
+
+QA_FIX = (f"docs/dev/qa-report-{TASK_ID}.json",)
+# A3/A12 (G1): the QA fail loops back to dev; the BA-QA fail loops back to BA.
+DEV_LOOP = [("toolu_ba", _stage("ba"), True), ("toolu_baqa", _stage("ba_qa"), True),
+            ("toolu_dev", _stage("dev"), True), ("toolu_qa", _stage("qa"), True)]
+BA_LOOP = [("toolu_ba", _stage("ba"), True), ("toolu_baqa", _stage("ba_qa"), True)]
+
+
+def test_R17_qa_before_redispatched_dev_returned_warns(tmp_path):
+    """A QA dispatch issued while the re-dispatched dev has not returned:
+    the warning names the dev-report and the dispatch declaring it."""
+    home, project = _dirs(tmp_path)
+    steps = DEV_LOOP + [("toolu_dev2", _stage("dev", extra=QA_FIX), False)]
+    result = _order_run(home, project, steps, _stage("qa"))
+    assert result.returncode == ORDER_EXIT, result.stderr
+    assert ORDER_BANNER in result.stderr and BLOCK_BANNER not in result.stderr
+    assert (f"reason=producer_not_stopped artifact=docs/dev/dev-report-{TASK_ID}.json: "
+            "declared by dispatch toolu_dev2 (dev), which has not returned") in result.stderr
+
+
+def test_R17_qa_after_redispatched_dev_returned_passes(tmp_path):
+    home, project = _dirs(tmp_path)
+    steps = DEV_LOOP + [("toolu_dev2", _stage("dev", extra=QA_FIX), True)]
+    result = _order_run(home, project, steps, _stage("qa"))
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+
+
+@pytest.mark.parametrize("ba2_returned", [True, False], ids=["ba_returned", "ba_running"])
+def test_R17_dev_while_verdict_predates_redispatched_ba_stop_warns(tmp_path, ba2_returned):
+    """A dev dispatch while the latest BA-QA verdict was issued before the
+    re-dispatched BA returned (or while that BA still runs) warns."""
+    home, project = _dirs(tmp_path)
+    steps = BA_LOOP + [("toolu_ba2", _stage("ba"), ba2_returned)]
+    result = _order_run(home, project, steps, _stage("dev"))
+    assert result.returncode == ORDER_EXIT, result.stderr
+    assert ORDER_BANNER in result.stderr
+    if ba2_returned:
+        assert (f"reason=verdict_not_after_producer_stop artifact=docs/dev/ba-qa-report-{TASK_ID}.json: "
+                "the latest verdict on") in result.stderr
+        assert "dispatch toolu_baqa (line" in result.stderr and "dispatch toolu_ba2 (ba)" in result.stderr
+    else:
+        assert "reason=producer_not_stopped artifact=docs/dev/context-" in result.stderr
+
+
+@pytest.mark.parametrize("baqa2_returned", [True, False], ids=["verdict_returned", "verdict_running"])
+def test_R17_dev_after_newer_verdict(tmp_path, baqa2_returned):
+    """After a newer BA-QA dispatch issued once the re-dispatched BA
+    returned: silent when it has returned, a finding while it runs."""
+    home, project = _dirs(tmp_path)
+    steps = BA_LOOP + [("toolu_ba2", _stage("ba"), True), ("toolu_baqa2", _stage("ba_qa"), baqa2_returned)]
+    result = _order_run(home, project, steps, _stage("dev"))
+    assert result.returncode == (0 if baqa2_returned else ORDER_EXIT)
+    if baqa2_returned:
+        assert result.stderr == "", result.stderr
+    else:
+        assert "dispatch toolu_baqa2 (line" in result.stderr and "not returned" in result.stderr
+
+
+def test_R17_compliant_sequence_never_warns(tmp_path):
+    """BA, BA-QA pass, dev, QA, then the QA-fail loop (dev, QA) and a
+    BA-QA re-validation of a re-dispatched BA: no dispatch warns."""
+    home, project = _dirs(tmp_path)
+    sequence = [("toolu_ba", _stage("ba")), ("toolu_baqa", _stage("ba_qa")),
+                ("toolu_dev", _stage("dev")), ("toolu_qa", _stage("qa")),
+                ("toolu_dev2", _stage("dev", extra=QA_FIX)), ("toolu_qa2", _stage("qa"))]
+    for index, (_id, stage) in enumerate(sequence):
+        history = [(tool_use_id, earlier, True) for tool_use_id, earlier in sequence[:index]]
+        result = _order_run(home, project, history, stage)
+        assert result.returncode == 0 and result.stderr == "", f"dispatch {index}: {result.stderr}"
+    result = _order_run(home, project, BA_LOOP + [("toolu_ba2", _stage("ba"), True)], _stage("ba_qa"))
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+
+
+def test_R17_fanout_lanes_dispatched_together_never_warn(tmp_path):
+    """Each lane's stage is dispatched while its sibling lane's runs: a lane
+    names only its own task id's artifacts, so no lane waits for another."""
+    home, project = _dirs(tmp_path)
+    one, two = (f"{TASK_ID}-{lane}" for lane in LANES)
+    done = []
+    for kind in ("ba", "ba_qa", "dev", "qa"):
+        sibling = (f"toolu_{kind}_l1", _stage(kind, one, "l1"), False)
+        result = _order_run(home, project, done + [sibling], _stage(kind, two, "l2"))
+        assert result.returncode == 0 and result.stderr == "", f"{kind}: {result.stderr}"
+        done += [(f"toolu_{kind}_l1", _stage(kind, one, "l1"), True),
+                 (f"toolu_{kind}_l2", _stage(kind, two, "l2"), True)]
+
+
+@pytest.mark.parametrize("command,kind", [("do", "dev"), ("close", "dev"), ("commit", "qa")])
+def test_R17_later_command_span_passes(tmp_path, command, kind):
+    """A /do, /close or /commit dispatch is compared with its own span's
+    dispatches only: the /dev span's re-dispatched BA without a newer
+    verdict (control: the same dispatch inside that /dev span warns)."""
+    home, project = _dirs(tmp_path)
+    steps = BA_LOOP + [("toolu_ba2", _stage("ba"), True)]
+    later = _typed_command(command) + [_assistant_text()]
+    result = _order_run(home, project, steps, _stage(kind), tail=later)
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+    control = _order_run(home, project, steps, _stage(kind))
+    assert ORDER_BANNER in control.stderr
+
+
+@pytest.mark.parametrize("switch", [None, "advisory", "off"])
+def test_R17_unarmed_gate_stays_silent(tmp_path, switch):
+    """The arming switch: R17 speaks only when G1 is armed (block); advisory
+    and off pass the violating QA dispatch silently, as every G1 finding."""
+    home, project = _dirs(tmp_path)
+    steps = DEV_LOOP + [("toolu_dev2", _stage("dev", extra=QA_FIX), False)]
+    result = _order_run(home, project, steps, _stage("qa"), switch=switch)
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+
+
+def test_R17_order_is_record_order_not_dispatched_at(tmp_path):
+    """No clock allowance: the dispatches' dispatched_at never decide. An
+    in-flight dev stamped two hours before the QA still warns; a returned
+    dev stamped after the QA's dispatched_at passes."""
+    home, project = _dirs(tmp_path)
+    later = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(timespec="seconds")
+    old = _stage("dev", extra=QA_FIX, dispatched_at=_two_hours_ago())
+    late = _stage("dev", extra=QA_FIX, dispatched_at=later.replace("+00:00", "Z"))
+    warned = _order_run(home, project, DEV_LOOP + [("toolu_dev2", old, False)], _stage("qa"))
+    assert "reason=producer_not_stopped" in warned.stderr and warned.returncode == ORDER_EXIT
+    passed = _order_run(home, project, DEV_LOOP + [("toolu_dev2", late, True)], _stage("qa"))
+    assert passed.returncode == 0 and passed.stderr == "", passed.stderr
+
+
+def test_R17_a_refused_redispatch_has_not_returned(tmp_path):
+    """A dev re-dispatch a hook refused (is_error result) ran nothing: a QA
+    after it would re-judge the previous round's report, so it is a finding;
+    so is a dev after a refused BA-QA re-dispatch."""
+    home, project = _dirs(tmp_path)
+    steps = DEV_LOOP + [("toolu_dev2", _stage("dev", extra=QA_FIX), "refused")]
+    result = _order_run(home, project, steps, _stage("qa"))
+    assert result.returncode == ORDER_EXIT
+    assert ("reason=producer_not_stopped artifact=docs/dev/dev-report-" in result.stderr
+            and "toolu_dev2 (dev), which has not returned a result" in result.stderr), result.stderr
+    steps = BA_LOOP + [("toolu_ba2", _stage("ba"), True), ("toolu_baqa2", _stage("ba_qa"), "refused")]
+    result = _order_run(home, project, steps, _stage("dev"))
+    assert result.returncode == ORDER_EXIT
+    assert "dispatch toolu_baqa2 (line" in result.stderr and "not returned" in result.stderr, result.stderr

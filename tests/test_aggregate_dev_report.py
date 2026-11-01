@@ -690,12 +690,9 @@ class TestStaleCanonical:
     def test_shrink_workers_list_in_canonical_exits_1(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
-        """ticket-20260930-132644-l8 Part C1 (M5): a canonical naming a
-        worker with no shard on disk AND no terminal trace anywhere must
-        become an explicit `status=blocked` record naming the missing
-        worker -- never silently refreshed as a plain match, but ALSO never
-        a hard exit with nothing written (the pre-ticket behavior this test
-        used to assert)."""
+        """P3 R3: a canonical naming a worker with no shard on disk AND no
+        completed trace anywhere is never refreshed and nothing is written:
+        exit 1, the missing worker named on stderr."""
         dev_dir = project_dir / "docs" / "dev"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
         _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
@@ -708,17 +705,14 @@ class TestStaleCanonical:
         before = canonical_path.read_bytes()
 
         assert main(["--task-id", BARE_TID]) == 1
-        assert canonical_path.read_bytes() != before
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert any("Z" in issue for issue in doc["blocking_issues"])
+        assert canonical_path.read_bytes() == before
+        assert "shard 'Z': no completed dev-report on disk" in capsys.readouterr().err
 
     def test_disjoint_workers_list_in_canonical_exits_1(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
-        """ticket-20260930-132644-l8 Part C1 (M5): neither declared worker
-        has a shard or any terminal trace -- blocked, naming both, still
-        written (never a hard exit with nothing written)."""
+        """P3 R3: neither declared worker has a shard or a completed trace --
+        nothing written, exit 1, both named on stderr."""
         dev_dir = project_dir / "docs" / "dev"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
         _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
@@ -731,11 +725,10 @@ class TestStaleCanonical:
         before = canonical_path.read_bytes()
 
         assert main(["--task-id", BARE_TID]) == 1
-        assert canonical_path.read_bytes() != before
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert any("X" in issue for issue in doc["blocking_issues"])
-        assert any("Y" in issue for issue in doc["blocking_issues"])
+        assert canonical_path.read_bytes() == before
+        err = capsys.readouterr().err
+        assert "shard 'X': no completed dev-report on disk" in err
+        assert "shard 'Y': no completed dev-report on disk" in err
 
     def test_message_names_only_worker_clause_when_only_worker_set_differs(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -974,6 +967,27 @@ class TestShardSHAMismatch:
         rc = main(["--task-id", BARE_TID])
         assert rc == 1
 
+    def test_disagreeing_heads_without_wave_declaration_write_nothing(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        """P3 A7 (aggregator): exit 1, the reason on stderr, and no canonical
+        (this used to write a 'blocked' canonical)."""
+        dev_dir = project_dir / "docs" / "dev"
+        shards = {"A": _good_shard(sha="sha1111"), "B": _good_shard(sha="sha9999")}
+        for label, shard in shards.items():
+            assert _mod.BASELINE_WAVE_KEY not in shard
+            _write(dev_dir, f"dev-report-{label}-{BARE_TID}.json", shard)
+
+        rc = main(["--task-id", BARE_TID])
+        captured = capsys.readouterr()
+        assert rc == 1
+        assert captured.out == ""
+        assert captured.err == (
+            "aggregate-dev-report: Shard validation failed:\n"
+            "  shard 'B': baseline_head_sha 'sha9999' != first shard 'sha1111'\n"
+        )
+        assert not (dev_dir / f"dev-report-{BARE_TID}.json").exists()
+
     def test_unit_validate_shards_catches_sha_mismatch(self):
         shards = [
             ("A", _good_shard(sha="sha1111")),
@@ -1003,36 +1017,29 @@ class TestDryRun:
 
 
 # ---------------------------------------------------------------------------
-# Disclosed-exception vocabulary (ticket 20260911-011232 M5): a shard's
-# dev.status=='needs_review' is a disclosed, narrower sibling of 'completed'
-# -- accepted by _validate_shards, and propagated into a synthesized
-# dev.status_rationale on the canonical by _build_aggregate.  'blocked' (and
-# any other status) must keep failing exactly as before (AC-6 mirrored here).
+# A shard whose dev.status is anything but 'completed' fails validation (P3
+# R3).  'needs_review' (with a status_rationale) is what pre-P1b lanes wrote;
+# it is rejected like any other non-terminal value.
 # ---------------------------------------------------------------------------
 
-def _needs_review_shard(
-    task_id: str = BARE_TID,
-    *,
-    classification: str = "pending_commit_handoff",
-    blocked_by: str = "commit verb forbidden to dev subagent",
-    forbidden_action: str = "agents/dev.md No Band-Aid Rule item 7",
-) -> dict:
+def _needs_review_shard(task_id: str = BARE_TID) -> dict:
     shard = _good_shard(task_id=task_id)
     shard["dev"]["status"] = "needs_review"
     shard["dev"]["status_rationale"] = {
-        "classification": classification,
-        "blocked_by": blocked_by,
-        "forbidden_action": forbidden_action,
+        "classification": "pending_commit_handoff",
+        "blocked_by": "commit verb forbidden to dev subagent",
+        "forbidden_action": "agents/dev.md No Band-Aid Rule item 7",
     }
     shard["blocking_issues"] = ["awaiting /commit hand-off"]
     return shard
 
 
 class TestNeedsReviewShard:
-    def test_unit_validate_shards_accepts_needs_review(self):
+    def test_unit_validate_shards_rejects_needs_review(self):
         shards = [("A", _good_shard()), ("B", _needs_review_shard())]
-        errors = _validate_shards(shards, BARE_TID)
-        assert errors == []
+        assert _validate_shards(shards, BARE_TID) == [
+            "shard 'B': dev.status is 'needs_review', expected 'completed'"
+        ]
 
     def test_unit_validate_shards_still_rejects_blocked(self):
         shards = [
@@ -1042,24 +1049,19 @@ class TestNeedsReviewShard:
         errors = _validate_shards(shards, BARE_TID)
         assert any("status" in e and "'blocked'" in e for e in errors)
 
-    def test_needs_review_shard_no_longer_blocks_aggregation_exit_code(
+    def test_needs_review_shard_exits_1_and_writes_nothing(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
-        # AC-P3 / M5: this is the exact wall the ticket's motivating example
-        # was stuck against -- aggregate-dev-report.py used to exit 1 here.
         dev_dir = project_dir / "docs" / "dev"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
         _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _needs_review_shard())
 
         rc = main(["--task-id", BARE_TID])
         captured = capsys.readouterr()
-        assert rc == 0, captured.err
-        out = json.loads(captured.out)
-        assert out["action"] == "aggregated"
-        canonical = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert canonical["dev"]["status"] == "needs_review"
-        assert canonical["dev"]["status_rationale"]["classification"] == "pending_commit_handoff"
-        assert "B" in canonical["dev"]["status_rationale"]["blocked_by"]
+        assert rc == 1
+        assert captured.out == ""
+        assert "shard 'B': dev.status is 'needs_review', expected 'completed'" in captured.err
+        assert not (dev_dir / f"dev-report-{BARE_TID}.json").exists()
 
     def test_build_aggregate_stays_completed_with_no_status_rationale_when_no_shard_needs_review(self):
         shards = [("A", _good_shard()), ("B", _good_shard(task_id=BARE_TID))]
@@ -1067,43 +1069,22 @@ class TestNeedsReviewShard:
         assert aggregate["dev"]["status"] == "completed"
         assert "status_rationale" not in aggregate["dev"]
 
-    def test_build_aggregate_synthesizes_needs_review_status_rationale(self):
-        shards = [("A", _good_shard()), ("B", _needs_review_shard())]
-        aggregate = _build_aggregate(shards, BARE_TID)
-        assert aggregate["dev"]["status"] == "needs_review"
-        rationale = aggregate["dev"]["status_rationale"]
-        assert rationale["classification"] == "pending_commit_handoff"
-        assert "B: commit verb forbidden to dev subagent" in rationale["blocked_by"]
-        assert rationale["forbidden_action"] == (
-            "see per-lane status_rationale in the referenced lane dev-report(s)"
-        )
-
-    def test_build_aggregate_diverging_classifications_fall_back_to_other_disclosed_handoff(self):
-        shards = [
-            ("A", _needs_review_shard(classification="pending_commit_handoff")),
-            ("B", _needs_review_shard(classification="pending_external_authorization")),
-        ]
-        aggregate = _build_aggregate(shards, BARE_TID)
-        assert aggregate["dev"]["status"] == "needs_review"
-        assert aggregate["dev"]["status_rationale"]["classification"] == "other_disclosed_handoff"
-        assert "A:" in aggregate["dev"]["status_rationale"]["blocked_by"]
-        assert "B:" in aggregate["dev"]["status_rationale"]["blocked_by"]
-
 
 # ---------------------------------------------------------------------------
-# R29 (spec-20260904-harness-fixes.md, task dev-20260914-035503):
-# shard-load / shard-validation mismatch must write a 'blocked' canonical
-# aggregate instead of zero artifact, per commands/dev.md Step 11's
-# construction rule. AC-01 (load failure), AC-02 (validation failure),
-# AC-03 (dry-run never writes), AC-06 (existing-canonical overwrite/preserve),
-# AC-08 (a previously-written blocked doc does not permanently wedge
-# recovery).
+# P3 R3: a shard-load or shard-validation mismatch writes nothing (it used to
+# write a 'blocked' canonical, spec-20260904-harness-fixes.md R29): exit 1,
+# "aggregate-dev-report: <headline>:" then one indented reason per line on
+# stderr, and an existing canonical is left byte for byte.
 # ---------------------------------------------------------------------------
 
-class TestBlockedAggregateOnMismatch:
-    # -- AC-01: shard-load failure -----------------------------------------
+def _canonical(dev_dir: Path) -> Path:
+    return dev_dir / f"dev-report-{BARE_TID}.json"
 
-    def test_load_failure_writes_blocked_aggregate_with_full_roster(
+
+class TestMismatchWritesNothing:
+    # -- shard-load failure --------------------------------------------------
+
+    def test_load_failure_exits_1_and_writes_nothing(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
         dev_dir = project_dir / "docs" / "dev"
@@ -1111,27 +1092,11 @@ class TestBlockedAggregateOnMismatch:
         (dev_dir / f"dev-report-B-{BARE_TID}.json").write_text("{broken: json")
 
         rc = main(["--task-id", BARE_TID])
+        err = capsys.readouterr().err
         assert rc == 1
-        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
-        assert canonical_path.exists()
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert sorted(doc["parallel_workers"]) == ["A", "B"]
-
-    def test_load_failure_blocking_issues_surfaces_real_parse_error(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
-        (dev_dir / f"dev-report-B-{BARE_TID}.json").write_text("{broken: json")
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        matching = [issue for issue in doc["blocking_issues"] if "'B'" in issue]
-        assert matching
-        assert any("Expecting" in issue for issue in matching)
-        assert not any(issue == "Failed to load shard 'B'" for issue in doc["blocking_issues"])
+        assert not _canonical(dev_dir).exists()
+        # The reason carries the real parse error, never a generic stand-in.
+        assert "aggregate-dev-report: Failed to load shard(s):\n  'B': Expecting" in err
 
     def test_load_failure_skips_cross_shard_validation_of_partial_set(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -1148,25 +1113,11 @@ class TestBlockedAggregateOnMismatch:
         (dev_dir / f"dev-report-B-{BARE_TID}.json").write_text("{broken: json")
 
         rc = main(["--task-id", BARE_TID])
+        err = capsys.readouterr().err
         assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert any("'B'" in issue and "Expecting" in issue for issue in doc["blocking_issues"])
-        assert not any("is not among the shards" in issue for issue in doc["blocking_issues"])
-
-    def test_load_failure_preserves_loaded_shards_own_blocking_issues(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        shard_a = _good_shard()
-        shard_a["blocking_issues"] = ["pre-existing shard-A issue"]
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
-        (dev_dir / f"dev-report-B-{BARE_TID}.json").write_text("{broken: json")
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert "pre-existing shard-A issue" in doc["blocking_issues"]
-        assert any("'B'" in issue for issue in doc["blocking_issues"])
+        assert "'B': Expecting" in err
+        assert "is not among the shards" not in err
+        assert not _canonical(dev_dir).exists()
 
     def test_load_failure_collects_all_failures_not_just_first(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -1176,69 +1127,36 @@ class TestBlockedAggregateOnMismatch:
         (dev_dir / f"dev-report-B-{BARE_TID}.json").write_text("not json at all")
 
         rc = main(["--task-id", BARE_TID])
+        err = capsys.readouterr().err
         assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert any("'A'" in issue for issue in doc["blocking_issues"])
-        assert any("'B'" in issue for issue in doc["blocking_issues"])
-        assert sorted(doc["parallel_workers"]) == ["A", "B"]
-        assert doc["baseline_head_sha"] == ""
-        assert doc["baseline_dirty_snapshot"] == ""
+        assert "\n  'A': " in err and "\n  'B': " in err
+        assert not _canonical(dev_dir).exists()
 
-    def test_load_failure_unions_sibling_dev_fields_from_loaded_shards(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        shard_a = _good_shard()
-        shard_a["dev"]["files_modified"] = ["unique/loaded/file.py"]
-        shard_a["dev"]["tasks_completed"] = [{"id": 1, "description": "did the thing"}]
-        shard_a["recommendations"] = ["do the other thing"]
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
-        (dev_dir / f"dev-report-B-{BARE_TID}.json").write_text("{broken: json")
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert "unique/loaded/file.py" in doc["dev"]["files_modified"]
-        assert {"id": 1, "description": "did the thing"} in doc["dev"]["tasks_completed"]
-        assert "do the other thing" in doc["recommendations"]
-
-    def test_load_failure_treats_non_object_json_root_as_failure(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
+    @pytest.mark.parametrize(
+        "content, reason",
+        [
+            (b"[]", "shard JSON root is list, expected an object"),
+            (b"\xff\xfe not valid utf8 \x00\x01", "'utf-8' codec can't decode"),
+        ],
+        ids=["non-object-root", "non-utf8"],
+    )
+    def test_unreadable_shard_is_an_itemized_reason_not_a_crash(
+        self, project_dir: Path, capsys: pytest.CaptureFixture, content: bytes, reason: str
     ):
         dev_dir = project_dir / "docs" / "dev"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
-        (dev_dir / f"dev-report-B-{BARE_TID}.json").write_text("[]")
+        (dev_dir / f"dev-report-B-{BARE_TID}.json").write_bytes(content)
 
         rc = main(["--task-id", BARE_TID])
-        captured = capsys.readouterr()
+        err = capsys.readouterr().err
         assert rc == 1
-        assert "Traceback" not in captured.err
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert any(
-            "'B'" in issue and ("not an object" in issue or "list" in issue)
-            for issue in doc["blocking_issues"]
-        )
+        assert "Traceback" not in err
+        assert f"\n  'B': {reason}" in err
+        assert not _canonical(dev_dir).exists()
 
-    # -- AC-02: shard-validation failure ------------------------------------
+    # -- shard-validation failure --------------------------------------------
 
-    def test_validation_failure_writes_blocked_aggregate(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="sha1111"))
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="sha9999"))
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
-        assert canonical_path.exists()
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert any("baseline_head_sha" in issue for issue in doc["blocking_issues"])
-        assert sorted(doc["parallel_workers"]) == ["A", "B"]
-
-    def test_validation_failure_blocking_issues_itemized_per_lane(
+    def test_validation_reasons_are_itemized_per_lane(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
         dev_dir = project_dir / "docs" / "dev"
@@ -1248,155 +1166,35 @@ class TestBlockedAggregateOnMismatch:
         _write(dev_dir, f"dev-report-{BARE_TID}-C.json", _good_shard(sha="shaAAA"))
 
         rc = main(["--task-id", BARE_TID])
+        err = capsys.readouterr().err
         assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert any(
-            "baseline_head_sha" in issue and "'B'" in issue for issue in doc["blocking_issues"]
-        )
-        assert any("duplicate worker labels" in issue for issue in doc["blocking_issues"])
+        assert err.startswith("aggregate-dev-report: Shard validation failed:\n  ")
+        assert "\n  duplicate worker labels are ambiguous: ['C']" in err
+        assert "\n  shard 'B': baseline_head_sha 'shaDIFFERENT' != first shard 'shaAAA'" in err
+        assert not _canonical(dev_dir).exists()
 
-    def test_validation_failure_no_status_rationale_populated(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
+    @pytest.mark.parametrize("malformed_first", [True, False])
+    def test_duplicate_label_with_malformed_dev_does_not_crash(
+        self, project_dir: Path, capsys: pytest.CaptureFixture,
+        monkeypatch: pytest.MonkeyPatch, malformed_first: bool,
     ):
         dev_dir = project_dir / "docs" / "dev"
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaAAA"))
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="shaBBB"))
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert doc["dev"].get("status_rationale") is None
-
-    def test_validation_failure_preserves_shards_own_blocking_issues(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        shard_a = _good_shard(sha="shaAAA")
-        shard_a["blocking_issues"] = ["pre-existing shard-A issue"]
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="shaBBB"))
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert "pre-existing shard-A issue" in doc["blocking_issues"]
-        assert any("baseline_head_sha" in issue for issue in doc["blocking_issues"])
-
-    def test_validation_failure_needs_review_shard_does_not_leak_status_rationale(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        needs_review = _needs_review_shard(task_id=BARE_TID)
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", needs_review)
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="a-different-sha"))
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert "status_rationale" not in doc["dev"]
-        assert "awaiting /commit hand-off" in doc["blocking_issues"]
-
-    def test_validation_failure_unions_sibling_dev_fields_from_loaded_shards(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        shard_a = _good_shard(sha="shaAAA")
-        shard_a["dev"]["files_created"] = ["new/file/created.py"]
-        shard_a["dev"]["scripts_created"] = [{"path": "scripts/new-script.sh", "purpose": "x"}]
-        shard_a["recommendations"] = ["consider doing X"]
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="shaBBB"))
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert "new/file/created.py" in doc["dev"]["files_created"]
-        assert {"path": "scripts/new-script.sh", "purpose": "x"} in doc["dev"]["scripts_created"]
-        assert "consider doing X" in doc["recommendations"]
-
-    def test_validation_failure_duplicate_label_needs_review_before_malformed_dev_does_not_crash(
-        self, project_dir: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        needs_review = _needs_review_shard()
-        needs_review["blocking_issues"] = ["needs-review own issue"]
-        needs_review["dev"]["files_modified"] = ["needs-review-unique.py"]
-        path_needs_review = _write(dev_dir, f"dev-report-A-{BARE_TID}.json", needs_review)
-
+        path_good = _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
         malformed = _good_shard()
         malformed["dev"] = ["not", "a", "dict"]
         path_malformed = _write(dev_dir, f"dev-report-{BARE_TID}-A.json", malformed)
-
-        # Force the discovery order: needs_review shard first, malformed
-        # second. Duplicate-label correlation must not depend on this order
-        # (codex round-4 finding 3) -- see the sibling test below for the
-        # reversed order.
-        monkeypatch.setattr(
-            _mod,
-            "_scan_shards",
-            lambda dev_dir_arg, bare_tid, original_task_id: [
-                ("A", path_needs_review),
-                ("A", path_malformed),
-            ],
-        )
+        order = [("A", path_malformed), ("A", path_good)]
+        if not malformed_first:
+            order.reverse()
+        monkeypatch.setattr(_mod, "_scan_shards", lambda *_args: order)
 
         rc = main(["--task-id", BARE_TID])
-        captured = capsys.readouterr()
+        err = capsys.readouterr().err
         assert rc == 1
-        assert "Traceback" not in captured.err
-
-        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
-        assert canonical_path.exists()
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert "status_rationale" not in doc["dev"]
-        assert any("duplicate worker labels" in issue for issue in doc["blocking_issues"])
-        assert any("dev.status is" in issue for issue in doc["blocking_issues"])
-        assert "needs-review own issue" in doc["blocking_issues"]
-        assert "needs-review-unique.py" in doc["dev"]["files_modified"]
-        assert doc["parallel_workers"] == ["A", "A"]
-
-    def test_validation_failure_duplicate_label_malformed_dev_before_needs_review_does_not_crash(
-        self, project_dir: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        needs_review = _needs_review_shard()
-        needs_review["blocking_issues"] = ["needs-review own issue"]
-        needs_review["dev"]["files_modified"] = ["needs-review-unique.py"]
-        path_needs_review = _write(dev_dir, f"dev-report-A-{BARE_TID}.json", needs_review)
-
-        malformed = _good_shard()
-        malformed["dev"] = ["not", "a", "dict"]
-        path_malformed = _write(dev_dir, f"dev-report-{BARE_TID}-A.json", malformed)
-
-        # Reversed order from the sibling test above: malformed shard first.
-        monkeypatch.setattr(
-            _mod,
-            "_scan_shards",
-            lambda dev_dir_arg, bare_tid, original_task_id: [
-                ("A", path_malformed),
-                ("A", path_needs_review),
-            ],
-        )
-
-        rc = main(["--task-id", BARE_TID])
-        captured = capsys.readouterr()
-        assert rc == 1
-        assert "Traceback" not in captured.err
-
-        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
-        assert canonical_path.exists()
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert "status_rationale" not in doc["dev"]
-        assert any("duplicate worker labels" in issue for issue in doc["blocking_issues"])
-        assert any("dev.status is" in issue for issue in doc["blocking_issues"])
-        assert "needs-review own issue" in doc["blocking_issues"]
-        assert "needs-review-unique.py" in doc["dev"]["files_modified"]
-        assert doc["parallel_workers"] == ["A", "A"]
-
-    # -- AC-03: --dry-run never writes on either mismatch path --------------
+        assert "Traceback" not in err
+        assert "duplicate worker labels are ambiguous: ['A']" in err
+        assert "shard 'A': dev.status is None, expected 'completed'" in err
+        assert not _canonical(dev_dir).exists()
 
     def test_dry_run_load_failure_does_not_write(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -1426,40 +1224,25 @@ class TestBlockedAggregateOnMismatch:
 
     # -- AC-06: an existing canonical is overwritten/preserved --------------
 
-    def test_existing_canonical_overwritten_blocked_on_load_failure(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
+    # -- an existing canonical is left as it is --------------------------------
+
+    @pytest.mark.parametrize("break_b", ["load", "validation"])
+    def test_existing_canonical_left_untouched_on_mismatch(
+        self, project_dir: Path, capsys: pytest.CaptureFixture, break_b: str
     ):
         dev_dir = project_dir / "docs" / "dev"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
+        path_b = _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard())
         assert main(["--task-id", BARE_TID]) == 0
         capsys.readouterr()
-        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
-        assert json.loads(canonical_path.read_text())["dev"]["status"] == "completed"
+        before = _canonical(dev_dir).read_bytes()
 
-        (dev_dir / f"dev-report-B-{BARE_TID}.json").write_text("{broken: json")
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-
-    def test_existing_canonical_overwritten_blocked_on_validation_failure(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaAAA"))
-        path_b = _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="shaAAA"))
-        assert main(["--task-id", BARE_TID]) == 0
-        capsys.readouterr()
-        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
-        assert json.loads(canonical_path.read_text())["dev"]["status"] == "completed"
-
-        bad_b = _good_shard(sha="shaZZZDIFFERENT")
-        path_b.write_text(json.dumps(bad_b))
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
+        if break_b == "load":
+            path_b.write_text("{broken: json")
+        else:
+            path_b.write_text(json.dumps(_good_shard(sha="shaZZZDIFFERENT")))
+        assert main(["--task-id", BARE_TID]) == 1
+        assert _canonical(dev_dir).read_bytes() == before
 
     def test_existing_canonical_dry_run_leaves_it_unchanged(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -1482,6 +1265,9 @@ class TestBlockedAggregateOnMismatch:
     # this class used to test -- _classify_sha_provenance/_sha_provenance --
     # is deleted entirely; recovery from a genuine sha conflict is now
     # uniformly manual, for every predecessor dev.status) --------------------
+
+    # -- no sha bypass survives for ANY predecessor status (Layer-Escalation
+    # Review revision 8); the predecessors here are what earlier code wrote --
 
     @pytest.mark.parametrize("existing_status", ["blocked", "completed", "needs_review"])
     def test_blocked_canonical_recovery_same_sha_refreshes_regardless_of_predecessor_status(
@@ -1575,14 +1361,10 @@ class TestBlockedAggregateOnMismatch:
     def test_written_aggregate_never_contains_sha_provenance_key(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
-        """Direct regression guard against reintroducing the removed
-        _classify_sha_provenance/_sha_provenance heuristic -- neither the
-        blocked-write path nor the ordinary refresh/fresh-build path may
-        ever write a `_sha_provenance` key (AC-08). Both shards agree on
-        sha throughout (the mismatch is B's dev.status), so the CANDIDATE
-        sha stays "shaA" -- unanimous -- across both runs; recovery is not
-        a sha-conflict case here, keeping this test's concern narrowly
-        scoped to the presence/absence of the removed key."""
+        """Regression guard against reintroducing the removed
+        _classify_sha_provenance/_sha_provenance heuristic (AC-08): the
+        mismatch run writes nothing, and the recovered run's canonical
+        carries no `_sha_provenance` key."""
         dev_dir = project_dir / "docs" / "dev"
         shard_a = _good_shard(sha="shaA")
         shard_b = _good_shard(sha="shaA")
@@ -1590,40 +1372,12 @@ class TestBlockedAggregateOnMismatch:
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
         path_b = _write(dev_dir, f"dev-report-B-{BARE_TID}.json", shard_b)
         assert main(["--task-id", BARE_TID]) == 1
-        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert "_sha_provenance" not in doc
+        assert not _canonical(dev_dir).exists()
 
         shard_b["dev"]["status"] = "completed"
         path_b.write_text(json.dumps(shard_b))
         assert main(["--task-id", BARE_TID]) == 0
-        doc = json.loads(canonical_path.read_text())
-        assert "_sha_provenance" not in doc
-
-    # -- dev-level codex consultation hardening (post-QA, pre-delivery) -----
-    # Three additional findings from an adversarial codex pass on this same
-    # implementation, each independently live-reproduced against the code
-    # BEFORE these tests/fixes existed, then verified fixed:
-
-    def test_load_failure_non_utf8_shard_does_not_crash(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        """A non-UTF-8 shard file raises UnicodeDecodeError (a ValueError
-        subclass, NOT an OSError) from Path.read_text() -- uncaught, this
-        crashed with zero artifact written, exactly the zero-artifact-on-crash
-        regression R29 exists to close (codex finding 1)."""
-        dev_dir = project_dir / "docs" / "dev"
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
-        (dev_dir / f"dev-report-B-{BARE_TID}.json").write_bytes(b"\xff\xfe not valid utf8 \x00\x01")
-
-        rc = main(["--task-id", BARE_TID])
-        captured = capsys.readouterr()
-        assert rc == 1
-        assert "Traceback" not in captured.err
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert any("'B'" in issue for issue in doc["blocking_issues"])
+        assert "_sha_provenance" not in json.loads(_canonical(dev_dir).read_text())
 
     def test_blocked_canonical_recovery_duplicate_worker_shrink_still_refused(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -1664,13 +1418,14 @@ class TestBlockedAggregateOnMismatch:
 
 
 # ---------------------------------------------------------------------------
-# AC-09 (Layer-Escalation Review, revision 8/9): write-time reconciliation
-# preserves a pre-existing canonical's own recorded baseline_head_sha and/or
-# parallel_workers across ANY mismatch write or the len(shards_info)<2
-# skip-branch extension, never silently discarding it.
+# An existing canonical is never rewritten on a mismatch, whatever it records
+# (the write-time reconciliation that used to merge its sha and roster into a
+# 'blocked' rewrite is gone with that rewrite), and a shrink is re-aggregated
+# only from shards that load and validate, when every missing lane has a
+# completed dev-report on disk.
 # ---------------------------------------------------------------------------
 
-class TestWriteTimeReconciliation:
+class TestExistingCanonicalOnMismatch:
     def _existing_canonical(self, **overrides) -> dict:
         base = {
             "task_id": BARE_TID,
@@ -1689,128 +1444,117 @@ class TestWriteTimeReconciliation:
         base.update(overrides)
         return base
 
-    def test_write_time_reconciliation_preserves_existing_nonempty_sha_over_unrelated_validation_failure(
+    @pytest.mark.parametrize(
+        "canonical_overrides, shards",
+        [
+            ({"baseline_head_sha": "shaY"}, {"A": ("shaX", "completed"), "B": ("shaX", "in_progress")}),
+            ({"dev": {"status": "blocked"}}, {"A": ("shaX", "completed"), "B": ("shaX", "in_progress")}),
+            ({}, {"A": ("shaX", "completed"), "B": ("shaY", "completed"), "C": ("shaY", "completed")}),
+            ({"parallel_workers": ["A", "A", "B"]}, {"A": ("shaA", "completed"), "B": ("shaB", "completed")}),
+            (None, {"A": ("shaA", "completed"), "B": ("shaB", "completed")}),
+            ({"baseline_head_sha": 12345, "parallel_workers": ["A", "A", "B"]},
+             {"A": ("shaX", "completed"), "B": ("shaY", "completed")}),
+            ({"baseline_head_sha": "shaY", "parallel_workers": "not-a-list"},
+             {"A": ("shaX", "completed"), "B": ("shaX", "in_progress")}),
+            ({"baseline_head_sha": "shaY"}, {"A": ("shaX", "completed"), "B": None}),
+        ],
+        ids=[
+            "sha-conflict-plus-invalid-status", "blocked-predecessor", "current-shas-disagree",
+            "duplicate-label-roster", "unreadable-canonical", "malformed-sha-field",
+            "malformed-roster-field", "load-failure",
+        ],
+    )
+    def test_mismatch_never_rewrites_the_existing_canonical(
+        self, project_dir: Path, capsys: pytest.CaptureFixture, canonical_overrides, shards
+    ):
+        dev_dir = project_dir / "docs" / "dev"
+        canonical_path = _canonical(dev_dir)
+        if canonical_overrides is None:
+            canonical_path.write_text("{not valid json")
+        else:
+            _write(dev_dir, canonical_path.name, self._existing_canonical(**canonical_overrides))
+        before = canonical_path.read_bytes()
+        for label, spec in shards.items():
+            path = dev_dir / f"dev-report-{label}-{BARE_TID}.json"
+            if spec is None:
+                path.write_text("{broken: json")
+                continue
+            shard = _good_shard(sha=spec[0])
+            shard["dev"]["status"] = spec[1]
+            path.write_text(json.dumps(shard))
+
+        assert main(["--task-id", BARE_TID]) == 1
+        assert canonical_path.read_bytes() == before
+        assert capsys.readouterr().err.startswith("aggregate-dev-report: ")
+
+    def test_len_below_2_shrink_without_completed_trace_writes_nothing(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
+        """The roster fact and the missing trace are each reported once."""
         dev_dir = project_dir / "docs" / "dev"
         canonical_path = _write(
             dev_dir,
             f"dev-report-{BARE_TID}.json",
-            self._existing_canonical(baseline_head_sha="shaY"),
+            self._existing_canonical(parallel_workers=["A", "B"], baseline_head_sha="shaAB"),
         )
+        before = canonical_path.read_bytes()
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaAB"))
+        # B's shard file is absent entirely.
 
-        shard_a = _good_shard(sha="shaX")
-        shard_b = _good_shard(sha="shaX")
-        shard_b["dev"]["status"] = "in_progress"  # unrelated to sha
+        assert main(["--task-id", BARE_TID]) == 1
+        err = capsys.readouterr().err
+        assert canonical_path.read_bytes() == before
+        assert err.count(
+            "shard 'B': existing canonical's parallel_workers records 1 occurrence(s)"
+        ) == 1
+        assert err.count(f"shard 'B': no completed dev-report on disk for task-id {BARE_TID!r}") == 1
+
+    def test_lane_named_only_in_an_old_canonicals_text_is_no_trace(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        """A canonical earlier code wrote naming the missing lane in its
+        blocking_issues used to count as that lane's trace and let the shrink
+        write a 'completed' canonical; the lane never completed."""
+        dev_dir = project_dir / "docs" / "dev"
+        canonical_path = _write(
+            dev_dir,
+            f"dev-report-{BARE_TID}.json",
+            self._existing_canonical(
+                parallel_workers=["A", "B"], baseline_head_sha="shaAB",
+                dev={"status": "blocked"},
+                blocking_issues=["shard 'B': dev.status is 'blocked'"],
+            ),
+        )
+        before = canonical_path.read_bytes()
+        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaAB"))
+
+        assert main(["--task-id", BARE_TID]) == 1
+        assert canonical_path.read_bytes() == before
+        assert "shard 'B': no completed dev-report on disk" in capsys.readouterr().err
+
+    def test_len_below_2_shrink_over_a_non_completed_shard_writes_nothing(
+        self, project_dir: Path, capsys: pytest.CaptureFixture
+    ):
+        """B has a completed trace, but the surviving A shard is not
+        completed: the shrink route used to write a 'completed' canonical
+        from it."""
+        dev_dir = project_dir / "docs" / "dev"
+        canonical_path = _write(
+            dev_dir,
+            f"dev-report-{BARE_TID}.json",
+            self._existing_canonical(parallel_workers=["A", "B"], baseline_head_sha="shaAB"),
+        )
+        before = canonical_path.read_bytes()
+        shard_a = _good_shard(sha="shaAB")
+        shard_a["dev"]["status"] = "in_progress"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", shard_b)
+        _write(dev_dir, f"dev-report-iter1-{BARE_TID}-B.json", _good_shard(sha="shaAB"))
 
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert doc["baseline_head_sha"] == "shaY"
-        assert any("shaY" in issue and "shaX" in issue for issue in doc["blocking_issues"])
+        assert main(["--task-id", BARE_TID]) == 1
+        assert canonical_path.read_bytes() == before
+        assert "shard 'A': dev.status is 'in_progress', expected 'completed'" in capsys.readouterr().err
 
-    def test_write_time_reconciliation_preserves_existing_empty_sha_across_intervening_failure(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        canonical_path = _write(
-            dev_dir,
-            f"dev-report-{BARE_TID}.json",
-            self._existing_canonical(baseline_head_sha="", dev={
-                "status": "blocked", "tasks_completed": [], "scripts_created": [],
-                "permissions_to_add": [], "files_modified": [], "files_created": [],
-                "observed_preexisting": [],
-            }),
-        )
-
-        shard_a = _good_shard(sha="shaX")
-        shard_b = _good_shard(sha="shaX")
-        shard_b["dev"]["status"] = "in_progress"
-        path_a = _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
-        path_b = _write(dev_dir, f"dev-report-B-{BARE_TID}.json", shard_b)
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["baseline_head_sha"] == ""  # NOT overwritten with shaX
-
-        # Third run: both now agree on shaX and both are otherwise valid.
-        shard_b["dev"]["status"] = "completed"
-        path_b.write_text(json.dumps(shard_b))
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1  # refused: existing "" != candidate "shaX"
-        assert json.loads(canonical_path.read_text())["baseline_head_sha"] == ""
-
-    def test_write_time_reconciliation_candidate_sha_is_empty_when_current_shards_disagree(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
-        assert not canonical_path.exists()
-
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaX"))
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="shaY"))
-        _write(dev_dir, f"dev-report-C-{BARE_TID}.json", _good_shard(sha="shaY"))
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["baseline_head_sha"] == ""
-
-        # A later run where all 3 agree on shaX is REFUSED, not silently
-        # accepted, because the written candidate was correctly "".
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="shaX"))
-        _write(dev_dir, f"dev-report-C-{BARE_TID}.json", _good_shard(sha="shaX"))
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        assert json.loads(canonical_path.read_text())["baseline_head_sha"] == ""
-
-    def test_write_time_reconciliation_roster_union_preserves_duplicate_label_occurrence(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        canonical_path = _write(
-            dev_dir,
-            f"dev-report-{BARE_TID}.json",
-            self._existing_canonical(parallel_workers=["A", "A", "B"], dev={
-                "status": "blocked", "tasks_completed": [], "scripts_created": [],
-                "permissions_to_add": [], "files_modified": [], "files_created": [],
-                "observed_preexisting": [],
-            }),
-        )
-
-        # Only one "A" shard + one "B" shard now; disagree on sha to trigger
-        # a validation-failure mismatch write.
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaA"))
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="shaB"))
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert sorted(doc["parallel_workers"]) == ["A", "A", "B"]
-        assert any("'A'" in issue and "occurrence" in issue for issue in doc["blocking_issues"])
-
-    def test_write_time_reconciliation_unreadable_existing_canonical_falls_back_to_fail_closed_sha(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
-        canonical_path.write_text("{not valid json")
-
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaA"))
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="shaB"))
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert doc["baseline_head_sha"] == ""
-        assert any("reconciliation" in issue.lower() for issue in doc["blocking_issues"])
-
-    def test_len_below_2_writes_blocked_aggregate_when_existing_canonical_establishes_larger_roster(
+    def test_len_below_2_shrink_with_completed_trace_is_reaggregated(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
         dev_dir = project_dir / "docs" / "dev"
@@ -1819,15 +1563,14 @@ class TestWriteTimeReconciliation:
             f"dev-report-{BARE_TID}.json",
             self._existing_canonical(parallel_workers=["A", "B"], baseline_head_sha="shaAB"),
         )
-
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaAB"))
-        # B's shard file is absent entirely.
+        _write(dev_dir, f"dev-report-iter1-{BARE_TID}-B.json", _good_shard(sha="shaAB"))
 
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
+        assert main(["--task-id", BARE_TID]) == 0
         doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert any("'B'" in issue for issue in doc["blocking_issues"])
+        assert doc["shrunk_from"] == ["B"]
+        assert doc["parallel_workers"] == ["A"]
+        assert doc["dev"]["status"] == "completed"
 
     def test_len_below_2_singular_dev_report_with_no_parallel_workers_key_is_skipped_untouched(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -1880,42 +1623,6 @@ class TestWriteTimeReconciliation:
             "a blocked aggregate"
         )
 
-    def test_len_below_2_existing_roster_usable_blocking_issues_has_no_duplicate_entries(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        """QA round-4 finding: in the existing_roster_usable sub-case, the
-        skip-branch's own pre-computed roster-diff message and
-        _reconcile_write_time's independently-recomputed roster-diff message
-        must not both land in blocking_issues -- the same fact about the same
-        missing shard must appear exactly once, not twice."""
-        dev_dir = project_dir / "docs" / "dev"
-        canonical_path = _write(
-            dev_dir,
-            f"dev-report-{BARE_TID}.json",
-            self._existing_canonical(parallel_workers=["A", "B"], baseline_head_sha="shaAB"),
-        )
-
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaAB"))
-        # B's shard file is absent entirely -- identical fixture shape to the
-        # sibling `any(...)` test above, which does not notice duplication.
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        b_missing_issues = [
-            issue
-            for issue in doc["blocking_issues"]
-            if "'B'" in issue and "occurrence" in issue
-        ]
-        assert len(b_missing_issues) == 1, (
-            "expected exactly one 'B' roster-diff disclosure, got "
-            f"{len(b_missing_issues)}: {b_missing_issues!r}"
-        )
-        assert len(doc["blocking_issues"]) == len(set(doc["blocking_issues"])), (
-            f"blocking_issues contains exact-duplicate entries: {doc['blocking_issues']!r}"
-        )
-
     def test_len_below_2_still_skips_when_no_existing_canonical(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
@@ -1954,82 +1661,18 @@ class TestWriteTimeReconciliation:
         doc = json.loads(canonical_path.read_text())
         assert doc["shrunk_from"] == ["A"]
 
-    def test_len_below_2_unreadable_existing_canonical_still_writes_blocked_aggregate_fail_closed(
+    def test_len_below_2_unreadable_existing_canonical_writes_nothing(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
         dev_dir = project_dir / "docs" / "dev"
         canonical_path = dev_dir / f"dev-report-{BARE_TID}.json"
         canonical_path.write_text("{not valid json")
-
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaA"))
         # No B shard at all.
 
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert doc["baseline_head_sha"] == ""
-        assert sorted(doc["parallel_workers"]) == ["A"]
-
-    def test_write_time_reconciliation_sha_field_malformed_does_not_block_roster_reconciliation(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        canonical_path = _write(
-            dev_dir,
-            f"dev-report-{BARE_TID}.json",
-            self._existing_canonical(baseline_head_sha=12345, parallel_workers=["A", "A", "B"]),
-        )
-
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaX"))
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="shaY"))
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["baseline_head_sha"] == ""
-        assert sorted(doc["parallel_workers"]) == ["A", "A", "B"]
-
-    def test_write_time_reconciliation_roster_field_malformed_does_not_block_sha_reconciliation(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        canonical_path = _write(
-            dev_dir,
-            f"dev-report-{BARE_TID}.json",
-            self._existing_canonical(baseline_head_sha="shaY", parallel_workers="not-a-list"),
-        )
-
-        shard_a = _good_shard(sha="shaX")
-        shard_b = _good_shard(sha="shaX")
-        shard_b["dev"]["status"] = "in_progress"
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", shard_b)
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["baseline_head_sha"] == "shaY"
-        assert sorted(doc["parallel_workers"]) == ["A", "B"]
-
-    def test_write_time_reconciliation_preserves_existing_sha_via_load_failure_call_site(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        dev_dir = project_dir / "docs" / "dev"
-        canonical_path = _write(
-            dev_dir,
-            f"dev-report-{BARE_TID}.json",
-            self._existing_canonical(baseline_head_sha="shaY"),
-        )
-
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard(sha="shaX"))
-        (dev_dir / f"dev-report-B-{BARE_TID}.json").write_text("{broken: json")
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads(canonical_path.read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert doc["baseline_head_sha"] == "shaY"
+        assert main(["--task-id", BARE_TID]) == 1
+        assert canonical_path.read_text() == "{not valid json"
+        assert "roster could not be confirmed" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -2257,31 +1900,6 @@ class TestLedgerFieldsCanonicalRefresh:
         out = json.loads(capsys.readouterr().out)
         assert out["action"] == "validated"
         assert canonical_path.read_bytes() == before
-
-
-class TestBlockedAggregateCarriesForwardOwnedEdits:
-    def test_blocked_aggregate_carries_forward_owned_edits(
-        self, project_dir: Path, capsys: pytest.CaptureFixture
-    ):
-        """AC-07: a shard-mismatch (mismatched baseline_head_sha) triggers
-        _write_blocked_aggregate, which reuses _build_aggregate UNMODIFIED --
-        so the blocked canonical must carry forward owned_edits/
-        pre_edit_snapshots with ZERO changes to that function's own 5-field
-        override list (dev.status, dev.status_rationale, blocking_issues,
-        baseline_head_sha, parallel_workers -- never the ledger fields)."""
-        dev_dir = project_dir / "docs" / "dev"
-        shard_a = _good_shard(sha="sha1111")
-        shard_a["owned_edits"] = {"shared.py": [{"old": "a", "new": "b"}]}
-        shard_a["pre_edit_snapshots"] = {"shared.py": "a"}
-        _write(dev_dir, f"dev-report-A-{BARE_TID}.json", shard_a)
-        _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _good_shard(sha="sha9999"))
-
-        rc = main(["--task-id", BARE_TID])
-        assert rc == 1
-        doc = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert doc["dev"]["status"] == "blocked"
-        assert doc["owned_edits"] == {"shared.py": [{"old": "a", "new": "b"}]}
-        assert doc["pre_edit_snapshots"] == {"shared.py": "a"}
 
 
 # ---------------------------------------------------------------------------
@@ -2732,8 +2350,11 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
         # 0); that is the parser, not a profile bypass -- G1 rejects such a
         # dispatch. The same qa dispatch with a registered profile is checked
         # and blocked.
-        _write(dev_dir, f"dev-report-{BARE_TID}.json",
-               {**_good_shard(), "parallel_workers": ["A", "B"]})
+        # The canonical the aggregator itself writes, so G3's own check of the
+        # canonical (P3 row 12(b), blocking while armed) passes and the
+        # dispatch reaches the barrier.
+        assert main(["--task-id", BARE_TID]) == 0
+        capsys.readouterr()
         monkeypatch.setattr(_hook_mod, "_run_obligation_barrier", real_barrier)
         monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
         missing_rel = "docs/dev/dev-report-missing-ac8.json"
@@ -3441,18 +3062,14 @@ class TestOutcomeAndLaneRoster:
         shard["dev"] = {**shard["dev"], "status": status}
         _write(dev_dir, f"dev-report-{BARE_TID}-{extra}.json", shard)
 
-    def test_needs_review_is_surfaced_on_stdout_and_validated_reuse(
+    def test_needs_review_lane_fails_with_nothing_on_stdout(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
         dev_dir = project_dir / "docs" / "dev"
         _write(dev_dir, f"dev-report-A-{BARE_TID}.json", _good_shard())
         _write(dev_dir, f"dev-report-B-{BARE_TID}.json", _needs_review_shard())
-        assert main(["--task-id", BARE_TID]) == 0
-        out = json.loads(capsys.readouterr().out)
-        assert out["dev_status"] == "needs_review" and out["needs_review_lanes"] == ["B"]
-        assert main(["--task-id", BARE_TID]) == 0
-        out = json.loads(capsys.readouterr().out)
-        assert out["action"] == "validated" and out["dev_status"] == "needs_review"
+        assert main(["--task-id", BARE_TID]) == 1
+        assert capsys.readouterr().out == ""
 
     def test_completed_has_no_needs_review_lanes(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -3476,18 +3093,14 @@ class TestOutcomeAndLaneRoster:
         assert out["excluded_non_lane_reports"][0]["label"] == "extra"
         assert out["excluded_non_lane_reports"][0]["declared_status"] == "completed"
 
-    def test_excluded_needs_review_still_folds_into_verdict(
+    def test_excluded_needs_review_still_fails_validation(
         self, project_dir: Path, capsys: pytest.CaptureFixture
     ):
         dev_dir = project_dir / "docs" / "dev"
         self._roster(dev_dir, status="needs_review")
-        assert main(["--task-id", BARE_TID]) == 0
-        out = json.loads(capsys.readouterr().out)
-        canonical = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
-        assert canonical["parallel_workers"] == ["r01", "r02", "r03"]
-        assert canonical["dev"]["status"] == out["dev_status"] == "needs_review"
-        assert "extra" in out["needs_review_lanes"]
-        assert out["needs_review_reports"][0]["label"] == "extra"
+        assert main(["--task-id", BARE_TID]) == 1
+        assert capsys.readouterr().out.strip() == ""
+        assert not (dev_dir / f"dev-report-{BARE_TID}.json").exists()
 
     def test_excluded_blocked_still_fails_validation(
         self, project_dir: Path, capsys: pytest.CaptureFixture
@@ -3565,4 +3178,4 @@ def test_terminal_trace_uses_the_one_vocabulary(tmp_path: Path):
         shard = _good_shard()
         shard["dev"]["status"] = status
         _write(dev_dir, f"dev-report-iter1-{BARE_TID}-A.json", shard)
-        assert _mod._label_has_terminal_trace(dev_dir, BARE_TID, BARE_TID, "A", None) is expected, status
+        assert _mod._label_has_terminal_trace(dev_dir, BARE_TID, BARE_TID, "A") is expected, status

@@ -87,6 +87,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -95,6 +96,7 @@ from lib.claude_home import settings_switch
 from lib import contract_runtime
 from lib import dispatch_template
 from lib import obligation
+from lib import schema_registry
 
 def _load_stdin() -> dict:
     try:
@@ -412,6 +414,52 @@ def _producer_question(project_dir: str, ob: dict):
     return {"path": rel, "reason": "producer_question_invalid", "errors": errors}
 
 
+# P3 R14: an artifact stands for this stop only when written for this dispatch,
+# and a lane's report echoes its dispatch's lane and roster. These checks block
+# like the rest (they warned in the commit that introduced them).
+DISPATCH_ECHO_BLOCKS = True
+
+
+def _declares_lane_echo(schema_id) -> bool:
+    try:
+        props = (schema_registry.get_schema(schema_id) or {}).get("properties", {})
+    except Exception:
+        return False
+    return "lane" in props and "lane_set" in props
+
+
+def _dispatch_echo_findings(project_dir: str, ob: dict, art: dict, record) -> list:
+    """R14 for one checked artifact: written before the dispatch (mtime, the
+    filesystem's clock, against dispatched_at; none counts as stale), and for
+    a json record whose schema declares lane and lane_set, a lane or roster
+    other than the obligation's (exact: the aggregator reads a reordered
+    roster as a conflict)."""
+    findings = []
+    try:
+        mtime = (Path(project_dir) / art["path"]).stat().st_mtime
+    except OSError:
+        mtime = None
+    if obligation.artifact_freshness_satisfied(art["kind"], mtime, ob.get("dispatched_at")) is not True:
+        written = datetime.fromtimestamp(mtime, timezone.utc).isoformat() if mtime is not None else None
+        findings.append({"path": art["path"], "reason": "stale_for_dispatch", "errors": [
+            f"written {written}, dispatched_at {ob.get('dispatched_at')!r}: not rewritten for this "
+            f"dispatch (slack {obligation.FILE_FRESHNESS_SLACK_SECONDS}s)"]})
+    if (isinstance(record, dict) and ob.get("lane") is not None and ob.get("lane_set") is not None
+            and _declares_lane_echo(art.get("schema"))):
+        same = {"lane": record.get("lane") == ob["lane"],
+                "lane_set": obligation.lane_sets_identical(record.get("lane_set"), ob["lane_set"])}
+        errors = [f"{key}: obligation declares {ob[key]!r}, file has {record.get(key)!r}"
+                  for key, ok in same.items() if not ok]
+        if errors:
+            findings.append({"path": art["path"], "reason": "lane_echo_mismatch", "errors": errors})
+    return findings
+
+
+def _finding_lines(findings: list) -> str:
+    return "".join(f"  - {f['path']}: {f['reason']}\n" + "".join(f"    {e}\n" for e in f.get("errors", [])[:10])
+                   for f in findings[:10])
+
+
 def main() -> None:
     data = _load_stdin()
     if not data:
@@ -479,6 +527,7 @@ def main() -> None:
                     + response_block_artifacts + spec_views_artifacts
                 )
                 failures = []
+                echo = []
                 question = _producer_question(project_dir, resolution.obligation)
                 if question == "valid":
                     # The question stands in for every declared artifact; nothing
@@ -520,6 +569,7 @@ def main() -> None:
                                     ],
                                 }
                             )
+                    echo += _dispatch_echo_findings(project_dir, resolution.obligation, art, record)
                 markdown_waived_paths: set[str] = set()
                 for art in markdown_artifacts:
                     # M3: markdown-kind entries get the same producer-side
@@ -556,6 +606,10 @@ def main() -> None:
                                 "errors": result.get("errors", [])[:10],
                             }
                         )
+                    elif result.get("status") == "pass":
+                        echo += _dispatch_echo_findings(project_dir, resolution.obligation, art, None)
+                if DISPATCH_ECHO_BLOCKS:
+                    failures, echo = failures + echo, []
                 for art in response_line_artifacts:
                     # response_line-kind entries (ticket 20261001-161041-r12,
                     # AC3): validated against this agent's OWN final
@@ -648,23 +702,23 @@ def main() -> None:
                         )
                     except Exception:
                         pass  # a crashed wire judges nothing (see its section comment)
+                who = (f"agent {agent_id} (role={resolution.obligation.get('role')}, "
+                       f"task_id={resolution.obligation.get('task_id')})")
+                if echo:
+                    sys.stderr.write(
+                        f"OBLIGATION_STOPGATE_WARNING: {who}: {len(echo)} artifact check(s) "
+                        f"failed that do not block yet:\n{_finding_lines(echo)}"
+                    )
                 if not failures:
                     # M3: all pass -- bypass the legacy correlation path
                     # entirely for this stop.
                     sys.exit(0)
                 if stopgate_mode == "block":
-                    detail_lines = ""
-                    for f in failures[:10]:
-                        detail_lines += f"  - {f['path']}: {f['reason']}\n"
-                        for err in f.get("errors", [])[:10]:
-                            detail_lines += f"    {err}\n"
                     sys.stderr.write(
-                        f"OBLIGATION_STOPGATE_BLOCKED: agent {agent_id} "
-                        f"(role={resolution.obligation.get('role')}, "
-                        f"task_id={resolution.obligation.get('task_id')}) declared "
+                        f"OBLIGATION_STOPGATE_BLOCKED: {who} declared "
                         f"{len(verified_artifacts)} obligated artifact(s); "
                         f"{len(failures)} failed verification:\n"
-                        f"{detail_lines}"
+                        f"{_finding_lines(failures)}"
                         f"Fix your OWN artifact(s) listed above, then stop "
                         f"again. Do NOT edit any other agent's artifact.\n"
                     )
