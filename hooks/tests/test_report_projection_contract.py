@@ -823,9 +823,20 @@ def test_projected_qa_is_accepted_by_permission_and_e2e_readers(
             "agent_type": "qa",
         },
     )
+    # The e2e reader judges the report the QA's own obligation declares (P4 R8).
+    monkeypatch.setattr(e2e_reader, "_own_obligation", lambda *_a: {
+        "role": "qa", "task_id": report["task_id"],
+        "artifacts": [{"kind": "json", "schema": "qa-report.v2",
+                       "path": "docs/dev/qa-report-20260101-120000-projection.json"}],
+    })
     with pytest.raises(SystemExit) as exc:
         e2e_reader.main()
     assert exc.value.code == 0
+    report["qa"]["e2e_enforcement"]["status"] = "skipped_without_justification"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        e2e_reader.main()
+    assert exc.value.code == 2
 
 
 HISTORICAL_QA_ARTIFACTS = {

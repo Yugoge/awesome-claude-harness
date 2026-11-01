@@ -1,44 +1,32 @@
 #!/usr/bin/env python3
 """SubagentStop Hook: Block QA subagents that did not perform E2E verification.
 
-Activation logic:
+What a QA owes is in its own dispatch obligation (P1b E7): the qa-report.v2
+artifact it declares, read from a resolved obligation or, when the block
+fails the grammar (an earlier template's), as declared. That report alone is
+judged, at exactly the declared path, never another report of the session or
+the task. Activation:
   1. Read agent_id from stdin. If absent, exit 0 (non-subagent stop).
-  2. Resolve agent entry via resolve_dev_registry_entry(agent_id, project_dir).
-     If None (agent not in agent-index.json -- skipped FIRST ACTION sentinel):
-       fall back to obligation.resolve_own_obligation() (registry-independent;
-       reads the agent's own dispatch transcript directly). On a Resolved
-       obligation declaring a qa-report.v2 artifact, apply the SAME
-       declared-report check as step 6 below against that artifact's exact
-       path. Otherwise (no resolvable obligation, role != qa,
-       or no qa-report.v2 artifact declared): exit 0, true fail-open (LOW-10
-       preserved; ticket 20261001-161041-r06).
-  3. If dev_session_id is None (legacy flat-string entry): exit 0 (fail-open).
-  4. If agent_type != "qa": exit 0 (scoped to QA only).
-  5. Check .claude/dev-registry/<dev_session_id>/e2e-enforce.json.
-     If absent or enabled != true: exit 0 (no enforcement for this session).
-  6. Read the QA's own dispatch obligation (P1b E7: the record of what it
-     owes). When the dispatch carries one, it decides alone: the qa-report.v2
-     artifact it declares is the report judged, at exactly the path declared
-     (missing: exit 2); one that declares none (BA validation, close QA) owes
-     no E2E evidence here: exit 0.
-  7. A dispatch without an obligation: find the session-correlated
-     qa-report-*.json in docs/dev/ within project_dir.
-     If none found: exit 2 (no QA report means no E2E evidence).
-  8. Read e2e_enforcement.status from the QA report.
-     If status is "performed", "legitimately_skipped" (with blocking_reason),
-     "ran", or "blocked_app_unavailable": exit 0.
-     If status is "skipped_without_justification" or field is absent:
-       exit 2 with "E2E_ENFORCE_BLOCKED" message.
+  2. A registered agent (resolve_dev_registry_entry) is judged only while its
+     session's .claude/dev-registry/<dev_session_id>/e2e-enforce.json is
+     enabled; one with no dev_session_id (legacy flat entry) is not judged.
+     An agent the registry does not resolve (a skipped FIRST ACTION read) is
+     judged on its obligation alone.
+  3. Both: an obligation whose role is "qa" and that declares a qa-report.v2
+     is enforced (_enforce_e2e_via_obligation); every other dispatch (none
+     declared, BA validation, close QA, another role) exits 0.
+  4. The declared report missing: exit 2. Its e2e_enforcement.status (under
+     qa.* or top level) passes when the schema's vocabulary lists it and it is
+     not "skipped_without_justification"; that value, another or none exits 2
+     (E2E_ENFORCE_BLOCKED).
 
 Exit codes:
   0: Allow stop (pass-through).
   2: Block stop (E2E_ENFORCE_BLOCKED -- QA must perform E2E verification).
 """
 
-import glob
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -75,98 +63,9 @@ def _read_json(path: Path) -> dict:
         return {}
 
 
-def _find_latest_qa_report(
-    project_dir: str,
-    dev_session_id: str | None = None,
-) -> Path | None:
-    """Find the most relevant QA report for a QA dispatch that carries no
-    obligation (one that carries one is judged on the report it declares).
-
-    session_ts: a timestamp extracted from dev_session_id, matched as a
-    substring against candidate filenames, then against candidates'
-    self-declared task_id/request_id content.
-
-    Returns None if nothing matches ("no correlation found -> reject"). Never
-    falls back to an unrelated/most-recent report when a session ID is
-    present.
-    """
-    pattern = os.path.join(project_dir, "docs", "dev", "qa-report-*.json")
-    matches = glob.glob(pattern)
-    if not matches:
-        return None
-    # Sort by filename (timestamp-based names sort chronologically)
-    matches.sort()
-
-    if dev_session_id:
-        # dev_session_id format: "dev-YYYYMMDD-HHMMSS"
-        # Extract YYYYMMDD-HHMMSS portion from any session ID format
-        session_ts = obligation.task_stamp(dev_session_id)
-        if session_ts:
-            # Check by filename match first (fastest)
-            for p in reversed(matches):
-                fname = os.path.basename(p)
-                if session_ts in fname:
-                    sys.stderr.write(
-                        f"QA_REPORT_RESOLUTION: path={p} branch=session_ts_filename_match\n"
-                    )
-                    return Path(p)
-            # Check by task_id/request_id inside recent reports (last 5)
-            for p in reversed(matches[-5:]):
-                try:
-                    data = json.loads(Path(p).read_text(encoding="utf-8"))
-                    report_id = data.get("task_id") or data.get("request_id") or ""
-                    if report_id and session_ts in report_id:
-                        sys.stderr.write(
-                            f"QA_REPORT_RESOLUTION: path={p} branch=session_ts_content_match\n"
-                        )
-                        return Path(p)
-                except Exception:
-                    continue
-        # No correlated report found; do not fall back to unrelated sessions
-        # or guess.
-        return None
-    # dev_session_id is None — legacy/direct-call mode (dead code in enforcement path)
-    return Path(matches[-1]) if matches else None
-
-
-def _qa_report_expected_absent(project_dir: str, dev_session_id: str | None) -> bool:
-    """True when this run's declared profile marks 'qa-report' expected-absent.
-
-    Source: the sibling do-report-*<session_ts>*.json of a QA dispatch that
-    carries no obligation (one that carries one declares what it owes).
-
-    Fails CLOSED on any internal error: returns False, never True, so an
-    I/O hiccup degrades to the PRE-EXISTING blocking behavior rather than
-    silently weakening E2E enforcement (Edge Case 2 -- the opposite polarity
-    from this module's own outer fail-open wrapper at the bottom of the file).
-    """
-    try:
-        stamp = obligation.task_stamp(dev_session_id)
-        if not stamp:
-            return False
-        from lib import do_report  # the report's one reading (E8)
-        for p in glob.glob(
-            os.path.join(project_dir, "docs", "dev", f"do-report-*{stamp}*.json")
-        ):
-            if "qa-report" in do_report.expected_absent(p):
-                return True
-        return False
-    except Exception:
-        return False
-
-
-def _enforce_e2e_status(
-    qa_report_path: Path, agent_id: str, agent_type: str, session_context: str
-) -> None:
-    """Check a resolved QA report's e2e_enforcement.status.
-
-    Exits 2 on any blocking outcome; returns normally when the status
-    passes. Shared by the registered resolution path and the obligation-
-    based fallback (ticket 20261001-161041-r06, M1) so the blocking rules
-    are defined exactly once. `session_context` is the only text that
-    differs between callers, preserving byte-identical output for the
-    pre-existing registered path (AC5).
-    """
+def _enforce_e2e_status(qa_report_path: Path, agent_id: str, task_id) -> None:
+    """Check the declared QA report's e2e_enforcement.status. Exits 2 on any
+    blocking outcome; returns normally when the status passes."""
     qa_report = _read_json(qa_report_path)
 
     # Navigate to e2e_enforcement field (may be nested under qa.*)
@@ -180,7 +79,7 @@ def _enforce_e2e_status(
     # Guard: e2e must be a dict; malformed value fails closed
     if e2e is not None and not isinstance(e2e, dict):
         sys.stderr.write(
-            f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={agent_type}) QA report "
+            f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) QA report "
             f"at {qa_report_path} has malformed e2e_enforcement field (expected dict, "
             f"got {type(e2e).__name__}).\n"
         )
@@ -188,7 +87,7 @@ def _enforce_e2e_status(
 
     if e2e is None:
         sys.stderr.write(
-            f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={agent_type}) QA report "
+            f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) QA report "
             f"at {qa_report_path} has no e2e_enforcement field.\n"
             f"Add e2e_enforcement.status to the QA report before stopping.\n"
         )
@@ -205,7 +104,7 @@ def _enforce_e2e_status(
     # status is skipped_without_justification, empty, or unrecognized
     blocking_reason = e2e.get("blocking_reason") or "(none provided)"
     sys.stderr.write(
-        f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={agent_type}) {session_context} "
+        f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={ENFORCED_AGENT_TYPE}) (task_id={task_id}) "
         f"has e2e_enforcement.status={status!r}.\n"
         f"blocking_reason: {blocking_reason}\n"
         f"E2E verification is required. Perform E2E testing and update "
@@ -225,8 +124,10 @@ def _own_obligation(data: dict, agent_id: str, project_dir: str) -> dict:
             agent_id=agent_id,
             project_dir=project_dir,
             payload_agent_transcript_path=data.get("agent_transcript_path"),
+            expected_role=ENFORCED_AGENT_TYPE,
         )
     except Exception:
+        # A resolver bug judges nothing: never a block on an internal error.
         return {}
     if isinstance(resolution, obligation.Resolved):
         return dict(resolution.obligation)
@@ -241,56 +142,16 @@ def _own_obligation(data: dict, agent_id: str, project_dir: str) -> dict:
 
 
 def _enforce_e2e_via_obligation(data: dict, agent_id: str, project_dir: str) -> None:
-    """Registry-independent fallback (ticket 20261001-161041-r06, M1).
-
-    Resolves THIS agent's own dispatch obligation directly from its
-    transcript (hooks/lib/obligation.py::resolve_own_obligation) instead of
-    agent-index.json, and -- only when that obligation declares a
-    qa-report.v2 artifact -- applies the SAME e2e_enforcement.status check
-    the registered path applies, against the obligation's own declared
-    artifact path (no glob-guessing).
-
-    Exits 2 on a block. Returns normally (never exits) when no resolvable
-    qa obligation exists, the role does not match "qa", or the obligation
-    declares no qa-report.v2 artifact -- in every such case the caller's
-    own unconditional exit 0 is the true fail-open (LOW-10 preserved, AC3).
-    """
-    try:
-        resolution = obligation.resolve_own_obligation(
-            session_id=data.get("session_id") or data.get("sessionId"),
-            agent_id=agent_id,
-            project_dir=project_dir,
-            payload_agent_transcript_path=data.get("agent_transcript_path"),
-            expected_role=ENFORCED_AGENT_TYPE,
-        )
-    except Exception:
-        # A resolver bug must degrade to the caller's fail-open, never
-        # crash the hook and never block on an internal error.
-        return
-
-    if not isinstance(resolution, obligation.Resolved):
-        # NoObligationInPrompt / Unresolvable (including role_mismatch):
-        # true fail-open, LOW-10 preserved (AC3).
-        return
-
-    _enforce_declared_report(
-        dict(resolution.obligation),
-        agent_id,
-        project_dir,
-        session_context=f"via obligation fallback (task_id={resolution.obligation.get('task_id')})",
-    )
-
-
-def _enforce_declared_report(
-    declared: dict, agent_id: str, project_dir: str, session_context: str
-) -> None:
     """Judge exactly the qa-report.v2 this QA's own dispatch obligation
-    declares, at the path it declares, never another report of the session or
-    the task (P1b row 3). Exits 2 on a block; returns when the dispatch
-    declares no such report (BA validation, close QA: no E2E evidence is owed
-    here) or its status passes. A declared path the grammar's path rule
-    refuses (only a block that fails the grammar carries one) is the
-    dispatch's defect, G1's to decide, and is never read."""
+    declares, at the path it declares (P1b row 3). Exits 2 on a block; returns
+    when the obligation's role is not qa, it declares no such report (BA
+    validation, close QA: no E2E evidence is owed here) or its status passes.
+    A declared path the grammar's path rule refuses (only a block that fails
+    the grammar carries one) is the dispatch's defect, G1's to decide, and is
+    never read."""
+    declared = _own_obligation(data, agent_id, project_dir)
+    if declared.get("role") != ENFORCED_AGENT_TYPE:
+        return
     qa_artifact = next(
         (
             a
@@ -315,89 +176,25 @@ def _enforce_declared_report(
         )
         sys.exit(2)
 
-    _enforce_e2e_status(qa_report_path, agent_id, ENFORCED_AGENT_TYPE, session_context)
+    _enforce_e2e_status(qa_report_path, agent_id, task_id)
 
 
 def main() -> None:
     data = _load_stdin()
-    if not data:
-        sys.exit(0)
-
     agent_id = data.get("agent_id")
     if not agent_id:
         sys.exit(0)
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
 
-    # Resolve agent entry (both agent_type and dev_session_id)
     entry = resolve_dev_registry_entry(agent_id, project_dir)
-    if entry is None:
-        # Agent not in index (e.g. a skipped/failed FIRST ACTION
-        # registration): fall back to the registry-independent obligation
-        # resolver (ticket 20261001-161041-r06, M1) before the true
-        # fail-open below.
-        _enforce_e2e_via_obligation(data, agent_id, project_dir)
-        sys.exit(0)
-
-    dev_session_id = entry.get("dev_session_id")
-    if not dev_session_id:
-        # Legacy flat-string entry: no session correlation, skip enforcement
-        sys.exit(0)
-
-    agent_type = entry.get("agent_type", "")
-    if agent_type != ENFORCED_AGENT_TYPE:
-        # Not a QA agent: bypass enforcement unconditionally
-        sys.exit(0)
-
-    # Check enforcement flag
-    enforce_path = (
-        Path(project_dir)
-        / ".claude"
-        / "dev-registry"
-        / dev_session_id
-        / "e2e-enforce.json"
-    )
-    if not enforce_path.exists():
-        # No enforcement flag for this session: fail-open
-        sys.exit(0)
-
-    enforce_data = _read_json(enforce_path)
-    if not enforce_data.get("enabled"):
-        # Enforcement explicitly disabled
-        sys.exit(0)
-
-    # What this QA owes is in its own dispatch obligation (P1b E7, row 3): a
-    # dispatch that carries one is judged on the report it declares alone.
-    declared = _own_obligation(data, agent_id, project_dir)
-    if declared:
-        _enforce_declared_report(
-            declared, agent_id, project_dir, session_context=f"in session {dev_session_id}"
-        )
-        sys.exit(0)
-
-    # A dispatch without an obligation: the session-correlated report.
-    qa_report_path = _find_latest_qa_report(project_dir, dev_session_id)
-    if qa_report_path is None:
-        if _qa_report_expected_absent(project_dir, dev_session_id):
-            sys.stderr.write(
-                f"subagentstop-e2e-enforce: qa-report expected absent for "
-                f"dev_session_id={dev_session_id} (do-profile expected_absent "
-                f"declares 'qa-report'); skipping missing-report block.\n"
-            )
+    if entry is not None:
+        # A registered agent is judged only while its session's flag arms the gate.
+        sid = entry.get("dev_session_id")
+        if not sid or not _read_json(
+                Path(project_dir) / ".claude" / "dev-registry" / sid / "e2e-enforce.json").get("enabled"):
             sys.exit(0)
-        sys.stderr.write(
-            f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={agent_type}) has no "
-            f"qa-report-*.json in {project_dir}/docs/dev/ under session {dev_session_id}.\n"
-            f"QA must produce a report with e2e_enforcement.status before stopping.\n"
-        )
-        sys.exit(2)
-
-    _enforce_e2e_status(
-        qa_report_path,
-        agent_id,
-        agent_type,
-        session_context=f"in session {dev_session_id}",
-    )
+    _enforce_e2e_via_obligation(data, agent_id, project_dir)
     sys.exit(0)
 
 

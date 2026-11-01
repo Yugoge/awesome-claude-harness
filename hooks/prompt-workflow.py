@@ -1395,11 +1395,9 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
 
 def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, project_dir: Path) -> str:
     """Reserve a /dev, /dev-command or /redev task id and arm its registry
-    (_arm_registry) with the cleaned requirement and the E2E and
-    artifact-contract flags, plus codex under --codex. The artifact-contract
-    flag arms hooks/subagentstop-artifact-contract-enforce.py, the producer-side
-    port of /close's Artifact schema gate. A flag that cannot be written is
-    reported and the start goes on (fail-open). Returns the task id."""
+    (_arm_registry) with the cleaned requirement and the E2E flag, plus codex
+    under --codex. A flag that cannot be written is reported and the start
+    goes on (fail-open). Returns the task id."""
     # Reserving the directory with mkdir(exist_ok=False) is the allocation
     # linearization point shared by concurrent sessions.  No existing family is
     # opened for replacement, even when the wall clock has only second precision.
@@ -1422,7 +1420,7 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     # Also strip inline --spec=<path> form
     clean_requirement = re.sub(r'(?:--|[–—])spec\s+\S+', '', ' '.join(clean_tokens)).strip()
 
-    flags = ['e2e', 'artifact-contract'] + (['codex'] if '--codex' in tokens else [])
+    flags = ['e2e'] + (['codex'] if '--codex' in tokens else [])
     error = _arm_registry(cmd_name, dev_session_id, clean_requirement.encode('utf-8'),
                           claude_session_id, project_dir, flags, _write_new_file)
     if error:

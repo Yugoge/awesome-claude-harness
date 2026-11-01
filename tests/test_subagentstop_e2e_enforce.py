@@ -6,11 +6,11 @@ its obligation declares, at the declared path, never on another report of the
 session or the task (P1b row 3): AC1 (cross-session pass), AC2b (the declared
 report missing exits 2), the declared report not shadowed by a same-session
 report either way, and a dispatch that declares no qa-report (BA validation,
-close QA) owing no E2E evidence. A QA dispatch without an obligation keeps the
-session_ts correlation (P1c row 10): AC2a (no correlation exits 2), AC3
-(same-timestamp match, with branch-identity proof via M9's stderr tag) and the
-/do-profile expected_absent skip (AC7/AC8). What a QA owes comes from its own
-dispatch obligation (P1b E7), never from a switch in qa.json.
+close QA) owing no E2E evidence. A QA dispatch without an obligation is not
+judged (P4 R8): the session_ts correlation, its missing-report block and the
+/do-profile expected_absent skip went with it (AC2a, AC3, AC8). What a QA owes
+comes from its own dispatch obligation (P1b E7), never from a switch in qa.json
+or a do-report.
 
 Models tests/test_resolve_dev_artifact_chain.py's
 importlib.util.spec_from_file_location pattern for loading a
@@ -138,52 +138,27 @@ def test_ac1_hook_exits_zero_cross_session(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# AC2a: fail-closed -- no correlation possible
+# AC2a (P4 R8): no obligation, nothing judged -- no report is guessed
 # ---------------------------------------------------------------------------
 
 
-def test_ac2a_no_anchor_no_session_correlation_exits_2(tmp_path):
-    """AC2a: no session_ts filename/content match, no task_id anchor, and no
-    qa-report-<task_id>.json for any candidate -> exit 2, E2E_ENFORCE_BLOCKED.
-    This is one of the two branches this hook exists for -- it must never be
-    weakened, so it gets its own dedicated assertion (not incidental
-    coverage from a pass-path test)."""
+def test_ac2a_no_obligation_is_not_judged(tmp_path):
+    """AC2a: a QA dispatch without an obligation names no report; another
+    task's report in docs/dev (failing or passing, matched to the session's
+    timestamp or not) does not count, and nothing blocks on its absence."""
     dev_session_id = "dev-20260101-000000"
     agent_id = "agent-no-correlation"
 
     _register_agent(tmp_path, agent_id, dev_session_id)
     _enable_e2e_enforcement(tmp_path, dev_session_id)
-    # No dispatch obligation: no task_id anchor.
-    # An unrelated report exists so the empty-glob short-circuit (AC2b) is
-    # NOT what is being exercised here -- this is genuinely "no correlation".
-    _write(
-        tmp_path / "docs" / "dev" / "qa-report-20269999-999999.json",
-        _qa_report("20269999-999999"),
-    )
-
-    proc = _run_hook(tmp_path, agent_id)
-
-    assert proc.returncode == 2
-    assert "E2E_ENFORCE_BLOCKED" in proc.stderr
-    assert "qa-report-*.json" in proc.stderr
-
-
-def test_ac2a_unit_no_match_returns_none_untagged(tmp_path, capsys):
-    """AC2a unit leg: _find_latest_qa_report itself returns None (not just
-    the wrapping hook's exit code) when the session timestamp matches
-    nothing, and emits no resolution-branch tag at all (M9 only tags
-    successful returns)."""
-    dev_session_id = "dev-20260101-000000"
-    _write(
-        tmp_path / "docs" / "dev" / "qa-report-20269999-999999.json",
-        _qa_report("20269999-999999"),
-    )
-
-    result = HOOK._find_latest_qa_report(str(tmp_path), dev_session_id)
-
-    assert result is None
-    captured = capsys.readouterr()
-    assert "branch=" not in captured.err
+    (tmp_path / "docs" / "dev").mkdir(parents=True, exist_ok=True)
+    assert _run_hook(tmp_path, agent_id).returncode == 0
+    for name in ("20269999-999999", "20260101-000000"):
+        _write(tmp_path / "docs" / "dev" / f"qa-report-{name}.json",
+               _qa_report(name, status="skipped_without_justification"))
+        proc = _run_hook(tmp_path, agent_id)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stderr == ""
 
 
 # ---------------------------------------------------------------------------
@@ -211,34 +186,9 @@ def test_ac2b_report_genuinely_missing_exits_2(tmp_path):
     assert f"docs/dev/qa-report-{task_id}.json but no such file exists" in proc.stderr
 
 
-def test_ac2b_unit_empty_glob_short_circuits_to_none(tmp_path):
-    """AC2b unit leg: an empty docs/dev/ (glob() returns zero matches)
-    short-circuits to None before the session_ts correlation runs."""
-    (tmp_path / "docs" / "dev").mkdir(parents=True, exist_ok=True)
-
-    result = HOOK._find_latest_qa_report(str(tmp_path), "dev-20260101-000000")
-
-    assert result is None
-
-
 # ---------------------------------------------------------------------------
 # AC3: unchanged behavior when session timestamp equals task timestamp
 # ---------------------------------------------------------------------------
-
-
-def test_ac3_session_ts_branch_resolves_without_obligation(tmp_path, capsys):
-    """AC3: a QA dispatch without an obligation -- the session_ts branch
-    resolves, tagged session_ts_filename_match."""
-    ts = "20260303-222222"
-    dev_session_id = f"dev-{ts}"
-    _write(tmp_path / "docs" / "dev" / f"qa-report-{ts}.json", _qa_report(ts))
-
-    result = HOOK._find_latest_qa_report(str(tmp_path), dev_session_id)
-
-    assert result is not None
-    assert result.name == f"qa-report-{ts}.json"
-    captured = capsys.readouterr()
-    assert "branch=session_ts_filename_match" in captured.err
 
 
 def test_ac3_hook_exits_zero_both_subcases(tmp_path):
@@ -251,7 +201,7 @@ def test_ac3_hook_exits_zero_both_subcases(tmp_path):
     _enable_e2e_enforcement(tmp_path, dev_session_id)
     _write(tmp_path / "docs" / "dev" / f"qa-report-{ts}.json", _qa_report(ts))
 
-    # Sub-case 1: no dispatch obligation, so no task_id anchor.
+    # Sub-case 1: no dispatch obligation, so nothing is judged.
     proc1 = _run_hook(tmp_path, agent_id)
     assert proc1.returncode == 0, proc1.stderr
 
@@ -349,51 +299,15 @@ def _write_do_report_skeleton(
 
 
 # ---------------------------------------------------------------------------
-# AC7/AC8: /do-profile expected_absent skip of the missing-qa-report block
-# (ticket-20260930-132644-l2)
+# AC8 (P4 R8): a do-report decides nothing here; the obligation does
 # ---------------------------------------------------------------------------
 
 
-def test_ac7_do_profile_expected_absent_qa_report_skips_block(tmp_path):
-    """AC7: for a QA dispatch without an obligation, a session-correlated
-    do-report sibling declaring 'qa-report' in its top-level expected_absent
-    array suppresses the qa_report_path is None branch's sys.exit(2) -- the
-    hook exits 0 instead."""
-    task_id = "20260202-111111"
-    dev_session_id = f"dev-{task_id}"
-    agent_id = "agent-do-profile"
-
-    _register_agent(tmp_path, agent_id, dev_session_id)
-    _enable_e2e_enforcement(tmp_path, dev_session_id)
-    (tmp_path / "docs" / "dev").mkdir(parents=True, exist_ok=True)
-    # Deliberately no qa-report-*.json anywhere.
-    _write_do_report_skeleton(
-        tmp_path,
-        task_id,
-        ["qa-report", "dev-report", "ticket", "context", "completion"],
-    )
-
-    proc = _run_hook(tmp_path, agent_id)
-
-    assert proc.returncode == 0, proc.stderr
-
-
-def test_ac7_unit_qa_report_expected_absent_true(tmp_path):
-    """AC7 unit leg: _qa_report_expected_absent itself returns True when the
-    session-correlated do-report skeleton declares 'qa-report' expected-absent."""
-    task_id = "20260202-111111"
-    _write_do_report_skeleton(tmp_path, task_id, ["qa-report"])
-
-    result = HOOK._qa_report_expected_absent(str(tmp_path), f"dev-{task_id}")
-
-    assert result is True
-
-
 def test_ac8_non_do_session_still_blocks_on_genuinely_missing_report(tmp_path):
-    """AC8 regression guard: the AC7 setup MINUS the do-report skeleton (an
-    ordinary /dev session) still exits 2 with the exact pre-existing
-    E2E_ENFORCE_BLOCKED message -- the fix must not weaken the common,
-    non-/do baseline."""
+    """AC8 regression guard: a QA whose obligation declares a qa-report that
+    is missing exits 2 (E2E_ENFORCE_BLOCKED) in an ordinary /dev session, and
+    a do-report declaring 'qa-report' absent beside it does not lift the
+    block."""
     dev_session_id = "dev-20260101-000000"
     task_id = "20260202-111111"
     agent_id = "agent-ordinary-dev"
@@ -408,14 +322,8 @@ def test_ac8_non_do_session_still_blocks_on_genuinely_missing_report(tmp_path):
 
     assert proc.returncode == 2
     assert "E2E_ENFORCE_BLOCKED" in proc.stderr
-
-
-def test_ac8_unit_qa_report_expected_absent_false_without_do_report(tmp_path):
-    """AC8 unit leg: with no do-report skeleton, _qa_report_expected_absent
-    returns False."""
-    result = HOOK._qa_report_expected_absent(str(tmp_path), "dev-20260202-111111")
-
-    assert result is False
+    _write_do_report_skeleton(tmp_path, task_id, ["qa-report"])
+    assert _run_hook(tmp_path, agent_id).returncode == 2
 
 
 # ---------------------------------------------------------------------------

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Tests for hooks/subagentstop-artifact-contract-enforce.py.
 
-The hook is the producer-side port of /close's Artifact schema gate
-(contract_runtime.validate_report_artifact): a registered dev/qa subagent in a
-session whose artifact-contract-enforce.json flag is enabled must not stop
-while its correlated report declares report_version yet violates its schema
-(exit 2). A report is the producer's own only when its own dispatch record
-names its task; a same-timestamp report the dispatch does not declare is not
-correlated. Everything else — unversioned legacy reports, missing reports,
-unregistered agents, absent flag, ba_validation QA — passes through (exit 0).
-The hook writes no log and no record.
+G2 checks the artifacts a subagent's own dispatch obligation declares at its
+stop. A dispatch whose obligation does not resolve meets the declared-report
+check (contract_runtime.validate_report_artifact): a registered dev/qa
+subagent must not stop while a report its own dispatch declares states
+report_version yet violates its schema (exit 2); no flag file arms it (P4 R8).
+A report is the producer's own only when its own dispatch record names it; a
+same-timestamp report the dispatch does not declare is not correlated.
+Everything else — unversioned legacy reports, missing reports, unregistered
+agents, ba_validation QA — passes through (exit 0). The hook writes no log
+and no record.
 
 Models tests/test_subagentstop_e2e_enforce.py's fixture and invocation
 patterns (importlib for the hyphenated module, subprocess with
@@ -69,14 +70,6 @@ def _register_agent(
         existing = json.loads(index_path.read_text(encoding="utf-8"))
     existing[agent_id] = {"agent_type": agent_type, "dev_session_id": dev_session_id}
     _write(index_path, existing)
-
-
-def _enable_flag(project_dir: Path, dev_session_id: str) -> None:
-    _write(
-        project_dir / ".claude" / "dev-registry" / dev_session_id
-        / "artifact-contract-enforce.json",
-        {"enabled": True},
-    )
 
 
 def _write_sentinel(
@@ -278,7 +271,6 @@ def _standard_setup(tmp_path: Path, agent_type: str, agent_id: str, **sentinel_e
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
     _register_agent(project, agent_id, SESSION, agent_type)
-    _enable_flag(project, SESSION)
     _write_sentinel(project, SESSION, agent_type, **sentinel_extra)
     return project, home
 
@@ -386,19 +378,28 @@ def test_unregistered_agent_allows(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-def test_flag_absent_allows_even_with_invalid_report(tmp_path):
+@pytest.mark.parametrize("flag", [None, {"enabled": True}, {"enabled": False}],
+                         ids=["no_flag", "flag_an_older_dev_wrote", "flag_disabled"])
+def test_artifact_contract_flag_decides_nothing(tmp_path, flag):
+    """P4 R8: the declared-report check reads no artifact-contract-enforce.json.
+    Without one, and with the one an older /dev wrote (enabled or not), a
+    report the dispatch declares that fails its schema blocks alike."""
     project = tmp_path / "project"
     home = tmp_path / "home"
     home.mkdir()
     _register_agent(project, "agent-qa-1", SESSION, "qa")
     _write_sentinel(project, SESSION, "qa")
+    if flag is not None:
+        _write(project / ".claude" / "dev-registry" / SESSION / "artifact-contract-enforce.json", flag)
     session = _declare_own(project, home, "agent-qa-1", "qa")
     _write(
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json",
         _invalid_qa_report(SESSION_TS),
     )
     proc = _run_hook(project, home, "agent-qa-1", session_id=session)
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode == 2, proc.stderr
+    assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr
+    assert f"qa-report-{SESSION_TS}.json" in proc.stderr
 
 
 def _pre_p1_qa_obligation(task_id: str, schema: str) -> str:
@@ -609,11 +610,6 @@ def test_task_id_anchor_not_shadowed_by_a_same_session_report(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _register_agent(project, "agent-qa-1", session, "qa")
-    _write(
-        project / ".claude" / "dev-registry" / session
-        / "artifact-contract-enforce.json",
-        {"enabled": True},
-    )
     _write_sentinel(project, session, "qa")
     _write_obligation_transcript(home, project, "harness-anchor", "agent-qa-1",
                                  "You are the QA subagent.\n" + _pre_p1_qa_obligation(task_id, "qa-report.v1"))
@@ -646,11 +642,6 @@ def test_task_id_anchor_blocks_when_session_ts_never_matches(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _register_agent(project, "agent-qa-1", session, "qa")
-    _write(
-        project / ".claude" / "dev-registry" / session
-        / "artifact-contract-enforce.json",
-        {"enabled": True},
-    )
     _write_sentinel(project, session, "qa")
     _write_obligation_transcript(home, project, "harness-anchor", "agent-qa-1",
                                  "You are the QA subagent.\n" + _pre_p1_qa_obligation(task_id, "qa-report.v1"))
@@ -872,13 +863,16 @@ def test_ac5_off_switch_never_calls_resolve_own_obligation(monkeypatch, tmp_path
     assert calls == []
 
 
-def test_ac6_internal_exception_falls_through_to_legacy_path(
-    monkeypatch, tmp_path, capsys
+@pytest.mark.parametrize("report,expected", [(_invalid_dev_report, 2), (_valid_dev_report_v1, 0)],
+                         ids=["declared_report_invalid", "declared_report_valid"])
+def test_ac6_m4_exception_names_itself_and_the_declared_report_check_decides(
+    monkeypatch, tmp_path, capsys, report, expected
 ):
-    """AC6: a forced exception inside validate_artifact_for_obligation falls
-    through; the legacy path's OWN
-    schema-invalid correlated report alone determines the final exit code
-    (proved by independently making the legacy path find one)."""
+    """AC6 / M4 (P4 R8, decided here): a forced exception inside the
+    obligation branch prints OBLIGATION_STOPGATE_FAULT and the declared-report
+    check decides the stop: the dispatch's own schema-invalid report blocks
+    (the producer can repair it), a valid one passes, so a fault the producer
+    cannot repair never holds its stop."""
     harness_session = "harness-ac6"
     agent_id = "agent-dev-ac6"
     task_id = "20260101-000006"
@@ -891,9 +885,9 @@ def test_ac6_internal_exception_falls_through_to_legacy_path(
         agent_id,
         _obligation_block(task_id, artifact_path, "dev-report.v1"),
     )
-    # The report the dispatch declares, at its declared path: the legacy
-    # check judges only the stopping producer's own reports.
-    _write(project / artifact_path, _invalid_dev_report(task_id))
+    # The report the dispatch declares, at its declared path: the check
+    # judges only the stopping producer's own reports.
+    _write(project / artifact_path, report(task_id))
 
     def _raise(*_args, **_kwargs):
         raise RuntimeError("forced obligation-mode failure")
@@ -910,9 +904,12 @@ def test_ac6_internal_exception_falls_through_to_legacy_path(
     )
     with pytest.raises(SystemExit) as exc_info:
         HOOK.main()
-    assert exc_info.value.code == 2
+    assert exc_info.value.code == expected
     captured = capsys.readouterr()
-    assert "ARTIFACT_CONTRACT_BLOCKED" in captured.err
+    assert "OBLIGATION_STOPGATE_FAULT" in captured.err
+    assert "forced obligation-mode failure" in captured.err
+    assert ("ARTIFACT_CONTRACT_BLOCKED" in captured.err) == (expected == 2)
+    assert "OBLIGATION_STOPGATE_BLOCKED" not in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -1415,7 +1412,6 @@ def test_dev_report_obligation_blocks_even_when_agent_index_entry_missing(
     home.mkdir(parents=True, exist_ok=True)
     # Deliberately NOT calling _register_agent: agent-index.json has no key
     # for agent_id, reproducing a skipped FIRST ACTION registry Read.
-    _enable_flag(project, SESSION)
     _write_sentinel(project, SESSION, "dev")
     _write_obligation_transcript(
         home,
@@ -2482,7 +2478,6 @@ def _fanout_landing_setup(tmp_path, l2_status: str):
     project = tmp_path / "project"
     home = tmp_path / "home"
     home.mkdir()
-    _enable_flag(project, SESSION)
     _write_sentinel(project, SESSION, "dev")
     tasks = {lane: f"{SESSION}-{lane}" for lane in _FANOUT_LANES}
     for lane, task in tasks.items():

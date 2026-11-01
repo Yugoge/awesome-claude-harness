@@ -160,7 +160,7 @@ The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) started this cycle and 
 1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name) and `Task id: …` (the id this cycle's artifacts are named with, `<TASK_ID>` below)
 2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
-4. Armed the enforcement flags: E2E, Codex when `--codex` was passed (both named in its output), and the producer-side report schema gate (`hooks/subagentstop-artifact-contract-enforce.py` blocks a dev/qa subagent from stopping with a versioned-but-schema-invalid report; same `contract_runtime` engine as `/close`'s "Artifact schema gate" section)
+4. Armed the enforcement flags: E2E, and Codex when `--codex` was passed (both named in its output)
 
 **Read `DEV_SESSION_ID` and `TASK_ID` from the hook output above** (lines `DEV_SESSION_ID pre-initialized by hook: …` and `Task id: …`). Store them for use in every Agent launch prompt below.
 

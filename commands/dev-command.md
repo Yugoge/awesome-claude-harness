@@ -124,7 +124,7 @@ The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) has already, for this c
 1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name, `dev-command-<timestamp>`) and `Task id: …` (the id this cycle's artifacts are named with, `<timestamp>` and `<TASK_ID>` below)
 2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
-4. Armed the enforcement flags: E2E, Codex when `--codex` was passed, and the producer-side report schema gate (see `commands/dev.md` Step 1)
+4. Armed the enforcement flags: E2E, and Codex when `--codex` was passed
 
 **Read `DEV_SESSION_ID` and `TASK_ID` from the hook output above.** Store them for use in every Agent launch prompt below.
 
