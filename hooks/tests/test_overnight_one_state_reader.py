@@ -478,23 +478,38 @@ def test_launcher_record_carries_no_cycle_counter(tmp_path):
 
 
 def test_stop_writes_through_the_launchers_write_path(tmp_path, monkeypatch):
+    """/stop's helper records the stop in the stopping session's own record,
+    through the launcher's write path, and never writes end_time (P2 R14): with
+    the /stop helper-auth token it releases the isolation fields too. Another
+    session's record is left byte for byte."""
     import importlib.util
     claude = tmp_path / ".claude"
     claude.mkdir()
     state_file = claude / f"overnight-state-{SID}.json"
     state_file.write_text(json.dumps(_record()))
+    other = claude / "overnight-state-other.json"
+    other.write_text(json.dumps(_record(session_id="other")))
+    other_bytes = other.read_bytes()
+    end_time = json.loads(state_file.read_text())["end_time"]
     inode = state_file.stat().st_ino
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_SESSION_ID", SID)
     spec = importlib.util.spec_from_file_location("break_lock_one_writer", REPO / "scripts" / "break-overnight-lock.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    past = _iso(-1)
-    assert module._backdate(state_file, past, release_isolation=True) == SID
+    tokens = tmp_path / "tokens"
+    tokens.mkdir()
+    monkeypatch.setattr(module, "_SENTINEL_DIR", str(tokens))
+    (tokens / f"claude-stop-helper-auth-{SID}.json").write_text(json.dumps({"expires_at": 2 ** 40}))
+    assert module.main() == 0
     after = json.loads(state_file.read_text())
-    assert (after["end_time"], after["current_phase"], after["isolation_active_until"]) == (
-        past, "completed", past)
+    assert (after["end_time"], after["current_phase"]) == (end_time, "completed")
     assert after["isolation_released_at"]
+    assert overnight.parse_end_time(after["isolation_active_until"]) < datetime.now(timezone.utc)
     assert state_file.stat().st_ino != inode
-    assert sorted(p.name for p in claude.iterdir()) == [state_file.name]
+    assert other.read_bytes() == other_bytes
+    assert sorted(p.name for p in claude.iterdir()) == sorted([state_file.name, other.name])
+    assert list(tokens.iterdir()) == []
     verdicts = overnight.state_verdicts(after)
     assert (verdicts.window_live, verdicts.isolation_held, verdicts.released) == (False, False, True)
+    assert verdicts.before_end
