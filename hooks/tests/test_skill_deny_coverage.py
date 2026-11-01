@@ -1,17 +1,26 @@
-"""P5 R5: every harness command outside CONTROL is denied to the agent's Skill tool.
+"""P5 R5: every human-only harness command is denied to the agent's Skill tool.
 
 `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>:*)` entry in
 settings.json's permissions.deny is the barrier against an agent invoking a command itself (CLAUDE.md
 lesson 15). Each commands/*.md stem (INDEX and README are no command) outside stop_contract's
-CONTROL_COMMANDS needs its entry, so a new command file without one fails here.
+CONTROL_COMMANDS needs its entry, so a new command file without one fails here, unless the harness's
+own command or agent text invokes it through the Skill tool (`Skill(skill="<stem>")`): such a command
+is the agents' by design, and a deny would refuse the call that text makes. The set is read from the
+texts at test time, never listed here. Today it is codex: agents run the codex consultation under
+`--codex`, and its ledger entry, which subagentstop-codex-enforce.py requires at each bound
+subagent's stop, is written only by the Skill call's PostToolUse; a deny would leave every `--codex`
+run's stops refused with no action that clears them (D25, D15).
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
+import re
 
 ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONTROL = {"allow", "restart", "checkpoint", "tickets"}
+_SKILL_CALL = re.compile(r"""Skill\(skill=["']([a-z0-9_-]+)["']""")
 
 
 def _deny() -> set:
@@ -24,12 +33,28 @@ def _stems() -> set:
             if name.endswith(".md") and name[:-3] not in ("INDEX", "README")}
 
 
-def test_every_command_outside_control_has_its_skill_deny():
-    missing = sorted(s for s in _stems() - CONTROL if f"Skill({s}:*)" not in _deny())
-    assert not missing, "commands/*.md stems outside CONTROL without a Skill(<stem>:*) deny: " + ", ".join(missing)
+def _agent_invoked() -> set:
+    """Command stems the harness's own command, agent and skill texts call through the Skill tool."""
+    found = set()
+    for path in glob.glob(os.path.join(ROOT, "agents", "*.md")) + glob.glob(os.path.join(ROOT, "commands", "*.md")) \
+            + glob.glob(os.path.join(ROOT, "skills", "**", "*.md"), recursive=True):
+        with open(path, encoding="utf-8") as fh:
+            found.update(_SKILL_CALL.findall(fh.read()))
+    return found
 
 
-def test_control_is_the_stop_contracts_and_codex_is_denied():
+def test_every_human_only_command_has_its_skill_deny():
+    human_only = _stems() - CONTROL - _agent_invoked()
+    missing = sorted(s for s in human_only if f"Skill({s}:*)" not in _deny())
+    assert not missing, "human-only commands/*.md stems without a Skill(<stem>:*) deny: " + ", ".join(missing)
+
+
+def test_no_command_the_texts_invoke_through_skill_is_denied():
+    denied = sorted(s for s in _agent_invoked() & _stems() if f"Skill({s}:*)" in _deny())
+    assert not denied, "commands the harness's own texts call with Skill(skill=...) are denied: " + ", ".join(denied)
+
+
+def test_control_is_the_stop_contracts():
     import sys
 
     sys.path.insert(0, os.path.join(ROOT, "hooks"))
@@ -38,5 +63,3 @@ def test_control_is_the_stop_contracts_and_codex_is_denied():
     finally:
         sys.path.pop(0)
     assert set(stop_contract.CONTROL_COMMANDS) == CONTROL
-    assert "Skill(codex:*)" in _deny()
-    assert "codex" in _stems()
