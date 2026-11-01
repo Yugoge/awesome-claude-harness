@@ -97,10 +97,10 @@ TRIAGE_MODE = 'TRIAGE'
 def session_record(session_id: str, payload: Optional[dict] = None) -> Optional[dict]:
     """The overnight state record of ``session_id``, the contract hooks' one lookup.
 
-    The record sits at ``<main root>/.claude/``, above every working root, so it
-    is found walking up from the session's project dir, the hook payload's
-    ``cwd`` and the process's directory: a session rooted in a worktree or a
-    fresh clone under the main root finds it too. None when none reaches it.
+    The record sits at ``<main root>/.claude/``; overnight's locator reaches it
+    from the session's project dir, the hook payload's ``cwd`` or the process's
+    directory, so a session rooted in a worktree or a fresh clone finds the main
+    root's record too. None when none reaches it.
     """
     starts = [os.environ.get('CLAUDE_PROJECT_DIR'),
               payload.get('cwd') if isinstance(payload, dict) else None]
