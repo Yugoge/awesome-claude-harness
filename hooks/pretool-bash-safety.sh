@@ -1765,7 +1765,7 @@ _EB_DECISION=''
 if [ -r "$_EB_PY" ]; then
   _EB_OUT=$(
     ulimit -v "${CLAUDE_HOOK_BOUNDARY_MEM_KB:-524288}" 2>/dev/null || true
-    CMD_INPUT="$COMMAND" timeout "${CLAUDE_HOOK_BOUNDARY_TIMEOUT:-5s}" \
+    printf '%s' "$INPUT" | CMD_INPUT="$COMMAND" CMD_PAYLOAD=stdin timeout "${CLAUDE_HOOK_BOUNDARY_TIMEOUT:-5s}" \
       "$PYTHON_BIN" "$_EB_PY" 2>/dev/null
   )
   if [ $? -eq 0 ]; then
@@ -1794,7 +1794,7 @@ case "$_EB_DECISION" in
   "DENY "*)
     echo "BLOCKED: removal-policy — ${_EB_DECISION#DENY }" >&2
     echo "Command: $COMMAND" >&2
-    echo "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. git rm --cached, docker container rm); this command has a boundary that is neither." >&2
+    echo "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no submodule); this command has a boundary that is none of these." >&2
     exit 2 ;;
   *)
     # DEGRADED MODE. The analyzer is missing, crashed, timed out, or hit the
