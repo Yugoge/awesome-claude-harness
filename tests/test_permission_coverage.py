@@ -274,10 +274,24 @@ def test_a_running_session_keeps_the_old_spellings_it_loaded():
     before = old_rules(rules)
     asks = []
     for where, line, simple in rewritten_commands():
-        for old in zip(old_spellings(line), old_spellings(simple)):
-            if covering(before, *old) and covering(rules, *old) is None:
-                asks.append(f"{where}: {old[1]}")
+        old = (old_spellings(line)[0], old_spellings(simple)[0])
+        if covering(before, *old) and covering(rules, *old) is None:
+            asks.append(f"{where}: {old[1]}")
     assert not asks, "\n".join(asks)
+
+
+def test_each_kept_old_spelling_covers_a_line_only_it_covers():
+    """Each kept entry covers the old spelling (as written, or with the script run directly, as the
+    old text ran it) of a line the texts run, which no other entry covers."""
+    allow = _allow()
+    rows = list(rewritten_commands())
+    for entry in RUNNING_SESSION_SPELLINGS:
+        others = bash_rules([e for e in allow if e != entry])
+        needed = [where for where, line, simple in rows
+                  for old in zip(old_spellings(line), old_spellings(simple))
+                  if rule_covers(entry[5:-1], old[0]) or rule_covers(entry[5:-1], old[1])
+                  if covering(others, *old) is None]
+        assert needed, f"{entry} covers no old spelling a running session holds"
 
 
 def test_the_prefix_rule_model():
