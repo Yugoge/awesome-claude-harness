@@ -10,6 +10,7 @@ Enforcement layers:
   1. Global: Block modifications to .claude/hooks/ and overnight-state files.
   2. Session: Block file writes where path lacks "worktree" string.
   3. Session: Block file writes outside the worktree realpath boundary.
+  4. Actor: Block Write/Edit of its checkout's git config (the keystone).
   AskUserQuestion: denied to the /dev-overnight session's main agent and
   subagents until a human-typed prompt follows its /dev-overnight (D20).
 
@@ -1963,6 +1964,18 @@ def _command_is_worktree_local(command: str, main_root: str, worktree_path: str,
     return True
 
 
+def _targets_git_config(file_path: str) -> bool:
+    """R13: file_path is the config or config.worktree of the git dir or common dir of the
+    checkout it lies in, which the bwrap rebind keeps Bash off; an Edit runs outside bwrap."""
+    real = os.path.realpath(os.path.abspath(file_path))
+    probe = os.path.dirname(real)
+    while not os.path.isdir(probe):
+        probe = os.path.dirname(probe)
+    dirs = _git_query(['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], probe)
+    return any(real == os.path.join(os.path.realpath(d), leaf)
+               for d in dirs.splitlines() for leaf in ('config', 'config.worktree'))
+
+
 def _emit_command_rewrite(new_command: str) -> None:
     """Emit the Claude Code PreToolUse command-rewrite and exit 0. The runtime
     replaces tool_input.command with `new_command` (the bwrap re-exec)."""
@@ -2159,6 +2172,11 @@ def main():
             # non-git, non-interpreter command is left to the worktree-boundary
             # enforcement below.
             _fail_closed_worktree_context(tool_input.get('command', ''))
+    target = str(tool_input.get('file_path') or '') if tool_name in ('Write', 'Edit', 'MultiEdit') else ''
+    if classification in ('overnight_owner', 'overnight_child', 'worktree_context') and gov_state is not None \
+            and target and _targets_git_config(target):
+        _block('\nOVERNIGHT GIT CONFIG PROTECTION: the repository\'s git config holds the keystone '
+               f'(core.hooksPath); an overnight actor leaves it as it is.\nBlocked: {tool_name} to {target}\n')
 
     if wt_paths:
         apply_global_worktree_enforcement(tool_name, tool_input, wt_paths)
