@@ -64,6 +64,8 @@ NotebookEdit target and every Bash write target:
     and the session transcript's reader (_Record).
 
 Behavior:
+  - Every caller, first: a protected file's write, delete or rename, and a
+    ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
   - Main agent (no agent_id, no subagent_type) -> exit 0 after the derived
     permission (the orchestrator gate handles the rest of the main agent).
   - Subagent role unresolvable -> exit 0 (defer to the backstop shim). An
@@ -749,7 +751,7 @@ def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, tran
         tasks = sorted({str(d[2]) for d in covering if d[2]})
         reason = (f"write target {target} is declared by the obligation of the "
                   f"{', '.join(roles)} dispatch" + (f" for task {', '.join(tasks)}" if tasks else "")
-                  + "; only that dispatch writes it")
+                  + f"; only {' or '.join(roles)} writes this artifact (D8)")
         check_tool = "Write" if tool_name == "Bash" else tool_name
         _emit_block(_caller_label(role, data), check_tool, target, reason)
         sys.exit(2)
@@ -806,6 +808,96 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
                 sys.exit(2)
 
 
+# -- protected paths (P5 R2, R3; D11/D12) -------------------------------------
+# No caller, /do or not, writes, deletes or renames a file the settings filter,
+# the commit checks or a Stop decision reads. The harness home's are its own
+# (a product repository's of the same names stay writable); a transcript's
+# agent meta counts with it, since the derived permission above reads it.
+# What a script or interpreter writes is not seen.
+_HOME_PROTECTED = ("settings.machine.json", "private-literals.txt", "scripts/check-public-core.sh",
+                   "scripts/install/render-settings", "hooks/git-hooks/pre-commit", ".git/config",
+                   ".git/hooks", ".gitattributes")
+
+
+def _below(path: str, root) -> str | None:
+    """``path`` relative to ``root``, either taken as written or real; None outside it."""
+    for p in {os.path.normpath(path), os.path.realpath(path)}:
+        for r in {os.path.normpath(root), os.path.realpath(root)}:
+            rel = os.path.relpath(p, r)
+            if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+                return rel
+    return None
+
+
+def _protected(path: str, removed: bool, home, config: str, state: str) -> str | None:
+    """What protected file absolute ``path`` is, else None; deleting or
+    renaming (``removed``) a directory takes the protected files beneath it."""
+    from fnmatch import fnmatchcase
+
+    rel, name = (_below(path, home) if home else None), os.path.basename(path)
+    if rel and any(rel == p or rel.startswith(p + "/") for p in _HOME_PROTECTED):
+        return f"the harness home's {rel}"
+    if _below(path, config) and (name.endswith(".jsonl") or fnmatchcase(name, "agent-*.meta.json")):
+        return "a session transcript or its subagent meta"
+    if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
+        return "a /do task sidecar"
+    held = [os.path.join(home, p) for p in _HOME_PROTECTED] if home else []
+    if removed and any(_below(p, path) for p in held + [config]):
+        return "a directory holding the harness home's protected files or the session transcripts"
+    return None
+
+
+def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data: dict) -> None:
+    from lib import claude_home
+    from lib.bash_write_targets import extract_bash_touched_paths
+    from lib.harness_state_dir import harness_state_dir
+
+    found = [(t, False) for t in _write_targets(tool_name, targets)]
+    if tool_name == "Bash" and isinstance(tool_input, dict):
+        try:  # on a failure the frozen extractor's targets still count, and the rules below still run
+            found += extract_bash_touched_paths(tool_input.get("command") or "")
+        except Exception:
+            pass
+    if not found:
+        return
+    base = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    roots = (claude_home.resolve(), os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
+                                                 "projects"), harness_state_dir())
+    for target, removed in dict.fromkeys(found):  # a variable the hook's environment holds is the shell's
+        word = os.path.expandvars(re.sub(r"\$\{(\w+):-([^}]*)\}", lambda m: os.environ.get(m[1]) or m[2], target))
+        what = not any(c in word for c in "$`\x00") and _protected(os.path.join(base, os.path.expanduser(word)), removed, *roots)
+        if what:
+            _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
+                        f"{target} is {what}: no agent writes, deletes or renames it (D11/D12)")
+            sys.exit(2)
+
+
+# -- scheduled prompts (P5 R5) ------------------------------------------------
+# P1's capture (COV-7, CLI 2.1.303) measured a fired CronCreate prompt's record
+# (isMeta, turnOrigin "scheduled"): stop_contract.is_human_prompt excludes it.
+# A ScheduleWakeup prompt's record is unmeasured, so one typing a harness
+# command outside CONTROL is refused, the overnight wake's own text aside.
+def _check_scheduled_prompt(role, tool_name: str, tool_input: dict, data: dict) -> None:
+    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
+    if tool_name != "ScheduleWakeup" or not isinstance(prompt, str):
+        return
+    from lib import stop_contract
+
+    found = stop_contract.slash_command(prompt)
+    if not found or found[0] not in stop_contract.harness_commands() or found[0] in stop_contract.CONTROL_COMMANDS:
+        return
+    try:
+        from lib import overnight
+
+        wake = overnight.WAKE_PROMPT
+    except Exception:  # no wake text on this tree: nothing to exempt
+        wake = None
+    if prompt.strip() != wake:
+        _emit_block(_caller_label(role, data), tool_name, f"/{found[0]}",
+                    f"a {tool_name} prompt that types /{found[0]}: only the human types a harness command")
+        sys.exit(2)
+
+
 def main() -> None:
     # WS1: bootstrap the deny-logic FIRST, fail-closed (exit 2) on import error.
     _bootstrap_security()
@@ -818,6 +910,8 @@ def main() -> None:
     tool_input = data.get("tool_input") or {}
     role = resolve_agent_type(data)
     targets = _extract_targets(tool_name, tool_input)
+    _check_protected(role, tool_name, tool_input, targets, data)
+    _check_scheduled_prompt(role, tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
     if not role:
         # An unresolved role is a NORMAL state, not an error: Claude Code may

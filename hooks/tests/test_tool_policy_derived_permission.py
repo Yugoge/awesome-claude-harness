@@ -158,7 +158,7 @@ def test_any_other_caller_is_denied_whatever_a_prefix_allows(tmp_path, cycle, ca
     assert denial == {"role": "main" if caller == "main" else caller,
                       "tool": "Write" if tool == "Bash" else tool, "target": target,
                       "deny_reason": f"write target {target} is declared by the obligation of the ba "
-                                     f"dispatch for task {TASK}; only that dispatch writes it"}
+                                     f"dispatch for task {TASK}; only ba writes this artifact (D8)"}
 
 
 def test_the_denial_offers_no_workaround(tmp_path, cycle):
@@ -1280,3 +1280,66 @@ def test_a_hook_process_ends_with_the_status_and_output_it_decided(tmp_path, cyc
     assert len(denied.stderr.splitlines()) == 1
     allowed = cycle.run(tmp_path, "Write", _write("docs/dev/notes.md"), None)
     assert (allowed.returncode, allowed.stderr, allowed.stdout) == (0, "", "")
+
+
+# P5 R1, A14: each pipeline's producer artifact, written by the main agent or by a subagent its
+# obligation does not name, is denied with the D8 text; the extractor reads the heredoc and jq forms.
+QA_REPORT = f"docs/dev/qa-report-{TASK}.json"
+
+
+def _producers(tmp_path) -> Session:
+    s = Session(tmp_path / "producers")
+    s.command("dev")
+    s.qa = s.dispatch("You are QA.\n" + _block(_obligation("qa", "final_verification", QA_REPORT)), "qa")
+    s.ba = s.dispatch("You are the BA subagent.\n" + _block(_obligation("ba", "singular", CONTEXT,
+                                                                          f"docs/dev/ba-spec-{TASK}.md")), "ba")
+    s.baqa = s.dispatch("You are QA.\n" + _block(_obligation("qa", "ba_validation", f"docs/dev/ba-qa-report-{TASK}.json")),
+                        "qa")
+    s.tw = s.dispatch("You write tests.\n" + _block(_obligation("test-writer", "singular",
+                                                                  f"tests/generated/{TASK}/manifest.json")), "test-writer")
+    s.pm = s.dispatch("You are the PM.\n" + _block(_obligation(
+        "pm", "overnight", "docs/dev/overnight/sess-x/retro-report-cycle1.json")), "pm")
+    s.dev = s.dispatch("You are the dev subagent.\n" + _block(_obligation("dev", "singular", REPORT)), "dev")
+    s.gp = s.dispatch("Describe the toy package. DO NOT modify files.", "general-purpose")
+    return s
+
+
+@pytest.mark.parametrize("path,role", [
+    (QA_REPORT, "qa"), (f"docs/dev/ba-spec-{TASK}.md", "ba"), (f"tests/generated/{TASK}/manifest.json", "test-writer"),
+    ("docs/dev/overnight/sess-x/retro-report-cycle1.json", "pm")])
+def test_the_main_agent_is_denied_each_producers_artifact(tmp_path, path, role):
+    denial = _denial(_producers(tmp_path).run(tmp_path, "Write", _write(path), None))
+    assert denial["role"] == "main" and denial["target"] == str(PROJECT / path)
+    assert denial["deny_reason"].endswith(f"; only {role} writes this artifact (D8)"), denial
+
+
+def test_a_subagent_its_obligation_does_not_name_is_denied(tmp_path):
+    s = _producers(tmp_path)
+    assert "only qa writes" in _denial(s.run(tmp_path, "Write", _write(QA_REPORT), (s.gp, "general-purpose")))[
+        "deny_reason"]
+    ba_qa = f"docs/dev/ba-qa-report-{TASK}.json"
+    assert "only qa writes" in _denial(s.run(tmp_path, "Write", _write(ba_qa), (s.ba, "ba")))["deny_reason"]
+    assert s.run(tmp_path, "Write", _write(ba_qa), (s.baqa, "qa")).returncode == 0
+    assert s.run(tmp_path, "Write", _write(REPORT), (s.dev, "dev")).returncode == 0
+
+
+@pytest.mark.parametrize("command", [
+    f"echo x > {CONTEXT}",
+    f"cat > {QA_REPORT} <<'EOF'\n{{\"a\": 1}}\nEOF",
+    f"cat <<EOF > {QA_REPORT}\n{{}}\nEOF",
+    f"jq '.a = 1' {QA_REPORT} > {QA_REPORT}.tmp && mv {QA_REPORT}.tmp {QA_REPORT}",
+    f"jq -n '{{}}' | tee {QA_REPORT} >/dev/null",
+    f"jq '.a = 1' docs/dev/x.json > {QA_REPORT}",
+])
+def test_the_extractor_reads_heredoc_and_jq_writes(tmp_path, command):
+    denial = _denial(_producers(tmp_path).run(tmp_path, "Bash", {"command": command}, None))
+    assert denial["deny_reason"].endswith("writes this artifact (D8)"), denial
+
+
+def test_what_no_dispatch_declares_stays_the_main_agents(tmp_path):
+    s = _producers(tmp_path)
+    for path in (f"docs/dev/do-report-{TASK}.json", "src/manifest.json"):
+        assert s.run(tmp_path, "Write", _write(path), None).returncode == 0, path
+    do = Session(tmp_path / "do")
+    do.command("do")
+    assert do.run(tmp_path, "Write", _write(f"docs/dev/do-report-{TASK}.json"), None).returncode == 0
