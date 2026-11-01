@@ -34,7 +34,8 @@ turn-1-one-shot-blueprint.md:36-50,147-165), first match wins:
        - Rejection (malformed block, unregistered schema id, OR
          tool_input.prompt absent/non-string -- hooks/lib/obligation.py's own
          bad_prompt case): UNCONDITIONAL.
-     On a violation advisory mode exits 0; block mode prints the
+     On a violation advisory mode prints the reason on one stderr line
+     (OBLIGATION GATE ADVISORY) and exits 0; block mode prints the
      three-element stderr message and exits 2.
      A valid block in block mode is then held to dispatch order (R17,
      _order_findings): ORDER_EXIT decides the exit of a finding.
@@ -53,7 +54,8 @@ parse_obligation() -- this hook never re-implements obligation-block
 grammar or field validation (ticket-20260930-132644-l1 constraint).
 
 Exit codes:
-  0 -- allow (pass-through, valid block, or a violation in advisory mode).
+  0 -- allow (pass-through, valid block, or a violation in advisory mode,
+       its reason on stderr; nothing is written).
   2 -- reject (block mode only: missing block where step 2 requires one, or any
        malformed/invalid block, role mismatch, out-of-bound clock, bad prompt).
 """
@@ -228,6 +230,8 @@ def _evaluate(data: dict, mode: str) -> None:
     if mode == "block":
         _emit_block(session_id, subagent_type, reason)
         sys.exit(2)
+    sys.stderr.write(f"OBLIGATION GATE ADVISORY (pretool-obligation-gate): would block "
+                     f"session={session_id} subagent_type={subagent_type} reason={reason}\n")
 
 
 def main() -> None:

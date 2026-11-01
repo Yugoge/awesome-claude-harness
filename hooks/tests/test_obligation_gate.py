@@ -63,12 +63,14 @@ SUBAGENT_ENV_KEYS = (
 )
 
 BLOCK_BANNER = "OBLIGATION GATE BLOCK"
+# P4 R9: the advisory switch's one stderr line, the would-block reason.
+ADVISORY_BANNER = "OBLIGATION GATE ADVISORY"
 TASK_ID = "20261019-103000"
 DISPATCH_ID = "toolu_g1_dispatch"
 # (command, a role its dispatch templates declare an obligation for) (TC-41, D7).
 DECLARING_SPANS = (
     ("dev", "ba"), ("redev", "ba"), ("dev-command", "ba"), ("dev-overnight", "pm"),
-    ("close", "qa"), ("commit", "changelog-analyst"), ("spec", "spec"),
+    ("close", "qa"), ("commit", "changelog-analyst"), ("commit", "dev"), ("spec", "spec"),
     ("merge", "merge-analyst"), ("push", "push-analyst"),
 )
 
@@ -304,7 +306,8 @@ def test_AC_L1_01_valid_block_always_passes(tmp_path):
 
 def test_AC_L1_02_missing_block_active_session_advisory_passes(tmp_path):
     """AC-L1-02: no block, advisory, active /dev span (no dev-registry dir
-    anywhere) -> exit 0, no block message, nothing written."""
+    anywhere) -> exit 0, no block message, the would-block reason on one
+    stderr line, nothing written."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("ac02")
     payload = _dispatch_payload(project, sid, _span_records("dev"), prompt="do work, no block")
@@ -312,6 +315,8 @@ def test_AC_L1_02_missing_block_active_session_advisory_passes(tmp_path):
     result = _run_hook(home, project, payload)
     assert result.returncode == 0
     assert BLOCK_BANNER not in result.stderr
+    assert result.stderr.startswith(ADVISORY_BANNER) and result.stderr.count("\n") == 1, result.stderr
+    assert "reason=missing_block" in result.stderr
     assert _written_logs(home) == []
 
 
@@ -346,8 +351,8 @@ def test_AC_L1_04_missing_block_active_session_block_mode_rejects(tmp_path):
 
 def test_AC_L1_05_malformed_block_advisory_passes(tmp_path):
     """AC-L1-05: malformed block, advisory, active /dev span -> exit 0, no
-    block message, nothing written (AC-L1-06 pins the validator's reason in
-    block mode)."""
+    block message, the validator's reason on the advisory stderr line,
+    nothing written (AC-L1-06 pins the reason in block mode)."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("ac05")
     payload = _dispatch_payload(project, sid, _span_records("dev"),
@@ -355,6 +360,7 @@ def test_AC_L1_05_malformed_block_advisory_passes(tmp_path):
     result = _run_hook(home, project, payload)
     assert result.returncode == 0
     assert BLOCK_BANNER not in result.stderr
+    assert ADVISORY_BANNER in result.stderr and "reason=missing_field" in result.stderr, result.stderr
     assert _written_logs(home) == []
 
 
@@ -579,15 +585,19 @@ def test_G1_block_mode_rejects_violation(tmp_path, case_id):
 
 @pytest.mark.parametrize("case_id", sorted(VIOLATION_CASES))
 def test_G1_switch_unset_advisory_passes_violation(tmp_path, case_id):
-    """Acceptance 3 (k): the same cases with CLAUDE_OBLIGATION_GATE unset ->
-    exit 0, no block message, nothing written."""
+    """Acceptance 3 (k): the same cases with CLAUDE_OBLIGATION_GATE unset or
+    advisory -> exit 0, no block message, the reason the block would name on
+    one stderr line (P4 R9), nothing written."""
     home, project = _dirs(tmp_path)
-    sid = _unique_sid("g1adv")
-    payload, _, _ = _violation_payload(project, sid, case_id)
-    result = _run_hook(home, project, payload)
-    assert result.returncode == 0, f"{case_id}: {result.stderr}"
-    assert BLOCK_BANNER not in result.stderr
-    assert _written_logs(home) == []
+    for switch in (None, "advisory"):
+        sid = _unique_sid("g1adv")
+        payload, subagent_type, reason = _violation_payload(project, sid, case_id)
+        result = _run_hook(home, project, payload, switch=switch)
+        assert result.returncode == 0, f"{case_id}: {result.stderr}"
+        assert BLOCK_BANNER not in result.stderr
+        assert result.stderr.startswith(ADVISORY_BANNER), result.stderr
+        assert f"reason={reason}" in result.stderr and f"subagent_type={subagent_type}" in result.stderr
+        assert _written_logs(home) == []
 
 
 @pytest.mark.parametrize("command,role", DECLARING_SPANS)
@@ -605,12 +615,14 @@ def test_G1_gated_span_producer_without_block_rejects(tmp_path, command, role):
 
 
 @pytest.mark.parametrize("command,subagent_type", [
-    ("do", "dev"), ("close", "dev"), ("close", "ba"), ("commit", "dev"), ("merge", "dev"), ("push", "qa"),
+    ("do", "dev"), ("close", "dev"), ("close", "ba"), ("commit", "ba"), ("merge", "dev"), ("push", "qa"),
 ])
 def test_G1_role_the_active_command_declares_no_template_for_passes(tmp_path, command, subagent_type):
     """No list of commands requires a block: /do's text declares no template,
-    /close's and /commit's none for dev or ba (another command's template for
-    that role does not count), /merge's and /push's none but their analyst's.
+    /close's none for dev or ba, /commit's none for ba (another command's
+    template for that role does not count; /commit's own dev template, the
+    re-dispatch of an unclosed /do task, does), /merge's and /push's none but
+    their analyst's.
     Each such dispatch without a block passes in block mode."""
     home, project = _dirs(tmp_path)
     payload = _dispatch_payload(project, _unique_sid("g1nodecl"), _span_records(command),

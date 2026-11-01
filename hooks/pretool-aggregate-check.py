@@ -42,7 +42,8 @@ reports and its canonical; worker labels in NON_WORKER_LABELS (bare "iter",
 lanes (iter2 FINDING-3).
 
 The obligation barrier and the gitignore rule below block only when
-CLAUDE_OBLIGATION_BARRIER=block.
+CLAUDE_OBLIGATION_BARRIER=block; while it is advisory the barrier prints each
+would-block finding on stderr (OBLIGATION BARRIER ADVISORY) and writes nothing.
 
 Fail-open contract: parsing failures, missing stdin, missing project dir,
 unexpected exceptions -> exit 0. Never crash the orchestrator on a self-bug.
@@ -559,18 +560,16 @@ def _run_obligation_barrier(data):
                 ok, violation = _verify_prior_artifact(entry, project_dir)
                 if ok:
                     continue
+                line = _format_barrier_violation(
+                    violation["code"], violation["path"], violation["problem"], role, lane,
+                    "regenerate or repair the named artifact before dispatching "
+                    "this later pipeline stage",
+                )
                 if mode == "block":
-                    sys.stderr.write(
-                        "\n"
-                        + _format_barrier_violation(
-                            violation["code"], violation["path"], violation["problem"],
-                            role, lane,
-                            "regenerate or repair the named artifact before dispatching "
-                            "this later pipeline stage",
-                        )
-                        + "\n"
-                    )
+                    sys.stderr.write("\n" + line + "\n")
                     sys.exit(2)
+                # Advisory: the would-block reason, never a block; nothing is written.
+                sys.stderr.write(f"OBLIGATION BARRIER ADVISORY (pretool-aggregate-check): would block {line}\n")
     except Exception:
         pass  # fail open: an internal error never blocks a dispatch
 
