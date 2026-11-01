@@ -105,7 +105,7 @@
 - `stop-do-report-gate.py` - A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) at
 - `stop-obligation-gate.py` - It re-validated, at the orchestrating session's Stop, the json artifacts its
 - `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
-- `stop-spec-coverage-enforce.py` - Stop Hook: Block spec agent from exiting with < 100% monolith coverage
+- `stop-spec-coverage-enforce.py` - It ran spec-verify.py on the views of the spec the /spec session last wrote, at
 - `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7: the registered Stop hook, running the four former Stop
 - `stop.sh` - stop.sh - wrapper for /stop slash command
 - `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification

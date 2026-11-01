@@ -2,7 +2,7 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-10-29T06:24:47Z*
-**Total entries**: 769
+**Total entries**: 768
 **Convention**: kebab
 
 ## Tree
@@ -382,7 +382,7 @@ dot-claude/
 │   ├── `stop-do-report-gate.py` - A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) at
 │   ├── `stop-obligation-gate.py` - It re-validated, at the orchestrating session's Stop, the json artifacts its
 │   ├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
-│   ├── `stop-spec-coverage-enforce.py` - Stop Hook: Block spec agent from exiting with < 100% monolith coverage
+│   ├── `stop-spec-coverage-enforce.py` - It ran spec-verify.py on the views of the spec the /spec session last wrote, at
 │   ├── `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7: the registered Stop hook, running the four former Stop
 │   ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 │   ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
@@ -512,8 +512,7 @@ dot-claude/
 │   ├── `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 │   ├── `check-file-references.sh` - File reference detection script - used by /clean command
 │   ├── `check-late-repair-provenance.py` - Takes ONLY ``--task-id`` and ``--project-dir`` (never a caller-supplied file
-│   ├── `check-overnight-reports.py` - Description: Validates that every report a /dev-overnight cycle's dispatches
-│   ├── `check-overnight-reports.sh` - Validates the reports a /dev-overnight cycle's dispatches declared in the
+│   ├── `check-overnight-reports.sh` - STUB: each specialist's dispatch obligation declares its report and schema, and G2
 │   ├── `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 │   ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 │   ├── `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
@@ -752,7 +751,7 @@ dot-claude/
 │   ├── `test_verify_claims_tracked_form.py` - On an initialised home the claude-settings filter leaves the machine form in the
 │   ├── `test_write_qa_mode.py` - Each QA dispatch's obligation now declares the report it owes, so no qa_mode
 │   ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
-│   └── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
+│   └── `verify-stop-spec-session-isolation.sh` - Checks stop-spec-coverage-enforce.py, an exit-0 stub: G2 checks the split at the spec subagent's stop.
 ├── tools/
 │   └── demo/
 │       ├── `audit.mjs` - mjs file
