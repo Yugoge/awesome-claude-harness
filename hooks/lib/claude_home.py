@@ -32,6 +32,9 @@ these names and semantics):
     project_dir()              -> Path          (CLAUDE_PROJECT_DIR, else the
                                                  resolved home, else cwd —
                                                  never the literal /root)
+    load_settings(path)        -> (dict|None, str|None)
+                                                (the one load of a settings file;
+                                                 see its docstring)
 
 The split mirrors the shell helper ``require_security_file`` / ``resolve_optional_file``.
 """
@@ -51,12 +54,52 @@ _SENTINEL_FILE = "settings.json"
 _SENTINEL_DIRS = ("hooks", "policies", "scripts")
 
 
+def load_settings(path) -> tuple[Optional[dict], Optional[str]]:
+    """The one load of a Claude Code settings file (a settings.json or settings.local.json:
+    the harness home's, the config home's, a project's) for every harness decider.
+
+    Returns (object, None) for a usable file, with the shapes the deciders rely on: permissions
+    an object whose allow, ask and deny are lists of strings; env and hooks objects; each hooks
+    event a list. (None, None) when the file is absent; (None, reason) when it is unusable. A
+    decider takes this verdict on a missing or unusable file instead of a test of its own.
+    """
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, f"{path}: cannot read ({exc.strerror})"
+    try:
+        settings = json.loads(data.decode("utf-8"))
+    except ValueError as exc:  # UnicodeDecodeError and JSONDecodeError
+        return None, f"{path}: not valid JSON ({exc})"
+    if not isinstance(settings, dict):
+        return None, f"{path}: not a JSON object"
+    perms = settings.get("permissions", {})
+    if not isinstance(perms, dict):
+        return None, f"{path}: permissions is not an object"
+    for name in ("allow", "ask", "deny"):
+        entries = perms.get(name, [])
+        if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
+            return None, f"{path}: permissions.{name} is not a list of strings"
+    for key in ("env", "hooks"):
+        if not isinstance(settings.get(key, {}), dict):
+            return None, f"{path}: {key} is not an object"
+    for event, groups in settings.get("hooks", {}).items():
+        if not isinstance(groups, list):
+            return None, f"{path}: hooks.{event} is not a list"
+    return settings, None
+
+
 def _is_sentinel(d: Path) -> bool:
-    """True iff ``d`` contains the full structural sentinel set."""
+    """True iff ``d`` contains the full structural sentinel set. settings.json is judged by
+    load_settings: only its "absent" verdict fails the set (an unusable file still marks the
+    home)."""
     try:
         return (
-            (d / _SENTINEL_FILE).is_file()
-            and all((d / sub).is_dir() for sub in _SENTINEL_DIRS)
+            all((d / sub).is_dir() for sub in _SENTINEL_DIRS)
+            and load_settings(d / _SENTINEL_FILE) != (None, None)
         )
     except OSError:
         return False
@@ -103,13 +146,11 @@ def resolve() -> Optional[Path]:
         except OSError:
             walk_real = walk_root
         for hint in _env_hint_candidates():
-            if not _is_sentinel(hint):
-                continue
             try:
                 hint_real = hint.resolve()
             except OSError:
                 continue
-            if hint_real == walk_real:
+            if hint_real == walk_real:  # the walk root itself: no second probe of the set
                 return hint  # honor the (possibly symlinked) user-facing form
         return walk_root
 
@@ -223,7 +264,17 @@ def _main(argv: list[str]) -> int:
     if cmd == "env":  # shell assignments of settings_env(), for eval
         print("".join(f"{k}={shlex.quote(v)}\n" for k, v in settings_env(*argv[2:]).items()), end="")
         return 0
-    sys.stderr.write(f"claude_home.py: unknown subcommand '{cmd}' (resolve|require|optional|env)\n")
+    if cmd == "settings":  # load_settings() for shell deciders: exit 1 (reason on stderr) if
+        # unusable, else exit 0 with the object as JSON on stdout, or nothing when absent
+        settings, problem = load_settings(argv[2] if len(argv) > 2 else "")
+        if problem:
+            sys.stderr.write(problem + "\n")
+            return 1
+        if settings is not None:
+            print(json.dumps(settings))
+        return 0
+    sys.stderr.write(f"claude_home.py: unknown subcommand '{cmd}' "
+                     "(resolve|require|optional|env|settings)\n")
     return 2
 
 

@@ -1,72 +1,55 @@
 #!/usr/bin/env python3
 """PreToolUse Hook (Agent matcher): Enforce canonical aggregate dev-report
 existence before allowing the orchestrator to dispatch the QA subagent in
-parallel-dev cycles.
+parallel-dev cycles. G3, the collection check at the next dispatch.
 
-Predicate: BLOCK (exit 2) iff
-  (a) docs/dev/ contains >=2 files matching dev-report-<role>-<task-id>.json
-      sharing the same <task-id>, AND
-  (b) the canonical singular dev-report-<task-id>.json is absent for that
-      task-id.
-Otherwise: silent exit 0.
+Fan-out collection check (QA dispatches only). A lane report declares a
+fan-out by its own `lane_set` naming two or more lanes. For each fan-out in the
+dispatch's scope it BLOCKS (exit 2), in every mode as on master, while every
+lane has reported and the canonical aggregate dev-report-<task-id>.json is
+missing. Two more rules block only when CLAUDE_OBLIGATION_BARRIER=block, since
+G3 stays advisory until P2 arms it:
+  (a) a lane its lane_set declares has no lane report (the roster check that
+      hooks/posttool-lane-completeness-watch.py used to make, which never
+      blocked);
+  (b) the canonical's parallel_workers does not name every declared lane (it
+      predates the last lane report).
+A report without a lane_set declares no fan-out: a singular cycle, or one of
+the overnight pipelines' dev-report-<ts>-<N>.json, which the filenames alone
+would read as lanes of task <ts>. The canonical's one producer is the lane
+completeness watch, which runs the harness's aggregator whenever a lane report
+is written; a lane report's is its lane's dev.
 
-Triggers ONLY for Agent tool calls dispatching subagent_type=qa. Other Agent
-dispatches (ba, dev, specialists, etc.) are not gated -- the rule is that
-the aggregate must exist BEFORE QA reads it.
+Task-id scoping (BUG-AGGCHK-2): the check covers the cycle of the task the
+QA dispatch's own obligation names. A shard family is in scope when its id and
+that task id name the same cycle under the one task-id rule
+(obligation.canonical_task_id): equal, or the task id extends the family's by a
+suffix (a lane, a pipeline index). A task id mentioned anywhere else in the
+prompt does not move the scope. A QA dispatch without an obligation keeps the
+conservative global scan, which demands only (b)'s canonical, of each fan-out
+whose lanes have all reported.
+
+Filename patterns (lib/dev_report_shard_patterns.py) find a family's lane
+reports and its canonical; worker labels in NON_WORKER_LABELS (bare "iter",
+"iter2", "draft", "retry", "fix", ...) are within-shard iteration markers, not
+lanes (iter2 FINDING-3).
+
+The obligation barrier and the gitignore rule below block only when
+CLAUDE_OBLIGATION_BARRIER=block.
 
 Fail-open contract: parsing failures, missing stdin, missing project dir,
 unexpected exceptions -> exit 0. Never crash the orchestrator on a self-bug.
-
-Filename patterns:
-  Prefixed:   dev-report-dev-<task-id>-<worker>.json
-  Prefixed canonical: dev-report-dev-<task-id>.json
-  Role-first:  dev-report-<role>-<task-id>.json
-    role     := alphanumeric (no dashes), e.g. R1, ba, qa
-    task-id  := \\d{8}-\\d{6} (YYYYMMDD-HHMMSS)
-  Task-first:  dev-report-<task-id>-<worker>.json
-    task-id  := \\d{8}-\\d{6} (YYYYMMDD-HHMMSS)
-    worker   := alphanumeric+dot (e.g. T3.2, T3.6-iter2 -> the part after
-                the task-id, no anchored format restriction beyond
-                "non-canonical, non-trivial")
-  Canonical:   dev-report-<task-id>.json   (the aggregate singleton)
-
-The canonical singular MUST be excluded from per-worker matches; it is the
-target of the aggregate write that this hook gates.
-
-Task-id scoping (BUG-AGGCHK-2 fix; iter2 FINDING-1 hardened): the hook
-extracts the current cycle's task-id(s) from the QA dispatch prompt body
-by scanning ONLY pattern-anchored references in priority order:
-  1. context-<task-id>.json
-  2. dev-report-<task-id>.json
-  3. ticket-<task-id>.md (legacy: ba-spec-<task-id>.md — both prefixes accepted)
-The first task-id wins for the "primary" scope, but distinct anchored
-references for OTHER task-ids do NOT vote against it -- they ADD to the
-scope (union semantics). This resists prompt manipulation: an attacker
-mentioning a stale task-id N times in the prompt body cannot scope away
-a current-task-id violation. When ZERO pattern-anchored references are
-present, the conservative global scan is retained.
-
-Iteration-suffix filter (iter2 FINDING-3): worker labels in
-NON_WORKER_LABELS (bare "iter", "iter2", "draft", "retry", "fix", ...)
-are NOT classified as workers. They are within-shard iteration markers
-emitted by real cycles (e.g. dev-report-<task-id>-iter2.json) and
-treating them as separate workers triggered false BLOCKs.
-
-Authoritative construction rule for the aggregate: commands/dev.md lines
-613-670. See also docs/dev/dev-report-20260426-122733.json for a canonical
-exemplar written in Phase 1.
 """
 
+import importlib.util
 import json
 import os
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.allowlist import read_grant  # noqa: E402
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
 from lib import obligation as obligation_lib  # noqa: E402
 from lib import contract_runtime  # noqa: E402
 from lib.dev_report_shard_patterns import (  # noqa: E402
@@ -87,38 +70,6 @@ from lib.dev_report_shard_patterns import (  # noqa: E402
 # 20261001-161041-r05 M2. Re-exported here as module attributes (not just used
 # locally) so existing callers/tests referencing them via this module's own
 # namespace keep working unchanged.
-
-# Task-id reference patterns inside QA dispatch prompts. Used to scope the
-# aggregate check to only the current cycle's task-id (BUG-AGGCHK-2).
-# Accepts BOTH `ba-spec-` (legacy 90 historical artifacts) and `ticket-` (new
-# active-write site, post-rename per spec-20260503-091826.md M10).
-TASK_ID_REF_PATTERNS = (
-    re.compile(r"context-(?P<task_id>dev-\d{8}-\d{6})(?:-[A-Za-z0-9.\-]+)?\.json"),
-    re.compile(r"dev-report-(?P<task_id>dev-\d{8}-\d{6})(?:-[A-Za-z0-9.\-]+)?\.json"),
-    re.compile(r"(?:ba-spec|ticket)-(?P<task_id>dev-\d{8}-\d{6})(?:-[A-Za-z0-9.\-]+)?\.md"),
-    re.compile(r"context-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.json"),
-    re.compile(r"dev-report-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.json"),
-    # /do path: a QA close dispatch for /do-developed work references its
-    # do-report-<task-id>.json (NOT dev-report-). Without this pattern the /do
-    # QA prompt has ZERO anchored refs -> conservative global scan -> an
-    # unrelated parallel-dev cycle's orphaned shards falsely BLOCK it. Scoping
-    # to the do-report's own task-id (which has no worker shards) clears it.
-    re.compile(r"do-report-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.json"),
-    re.compile(r"(?:ba-spec|ticket)-(?P<task_id>\d{8}-\d{6}(?:-[A-Za-z0-9.\-]+)?)\.md"),
-)
-
-# Retry contexts (`context-iter<N>-<task-id>-<lane>.json`) are recognized for
-# TASK-SCOPING ONLY: without this pattern a retry QA prompt would fall through
-# to the conservative global docs/dev scan. It carries NO gate of its own — the
-# hook never blocks on iteration/promotion evidence.
-ITERATION_CONTEXT_RE = re.compile(
-    r"context-iter(?P<iteration>[1-9][0-9]*)-"
-    r"(?P<task_id>dev-\d{8}-\d{6})-"
-    r"(?P<lane>[A-Za-z0-9][A-Za-z0-9.\-]*)\.json"
-)
-
-# Path to dev.md construction-rule citation
-DEV_MD_REF = "commands/dev.md lines 613-670"
 
 
 def _load_stdin():
@@ -163,20 +114,20 @@ def _classify_filename(name):
 
 
 def _scan_dev_dir(dev_dir):
-    """Return ({task_id: [worker_label,...]}, {task_id: True}).
+    """Return ({task_id: {label: path}}, {task_id: path}): the lane-shaped
+    reports of each task family in docs/dev, and each family's canonical.
 
-    Worker labels combine role-first roles and task-first workers (both
-    are equivalent evidence of a per-worker shard). Canonical singletons
-    are excluded from worker counts via _classify_filename ordering.
+    Canonical singletons are excluded from the lane reports via
+    _classify_filename ordering.
     """
-    per_worker = defaultdict(list)
-    canonical_present = {}
+    lane_reports = defaultdict(dict)
+    canonicals = {}
     if not dev_dir.exists() or not dev_dir.is_dir():
-        return per_worker, canonical_present
+        return lane_reports, canonicals
     try:
         children = list(dev_dir.iterdir())
     except OSError:
-        return per_worker, canonical_present
+        return lane_reports, canonicals
     for child in children:
         if not child.is_file():
             continue
@@ -184,10 +135,17 @@ def _scan_dev_dir(dev_dir):
         if result is None:
             continue
         if result[0] == "canonical":
-            canonical_present[result[1]] = True
+            canonicals[result[1]] = child
         else:
-            per_worker[result[1]].append(result[2])
-    return per_worker, canonical_present
+            lane_reports[result[1]][result[2]] = child
+    return lane_reports, canonicals
+
+
+def _read_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def _qa_prompt_body(data):
@@ -201,119 +159,101 @@ def _qa_prompt_body(data):
     return prompt if isinstance(prompt, str) else ""
 
 
-def _scan_pattern_for_task_ids(prompt, pattern, idx, seen):
-    """Helper: walk one regex over the prompt; record first-seen positions."""
-    for m in pattern.finditer(prompt):
-        tid = m.group("task_id")
-        if not tid:
-            continue
-        if tid not in seen:
-            seen[tid] = (idx, m.start())
+def _scope_task_id(data):
+    """The task id this QA dispatch's own obligation names, or None (no
+    obligation: the conservative global scan)."""
+    obligation = _parsed_obligation(_qa_prompt_body(data))
+    task_id = obligation.get("task_id") if obligation else None
+    return task_id if isinstance(task_id, str) and task_id else None
 
 
-def _collect_anchored_task_ids(prompt):
-    """Scan prompt for pattern-anchored task-id refs.
-
-    Returns a list of distinct task-id strings ordered by
-    (pattern-priority, first-character-offset). TASK_ID_REF_PATTERNS encodes
-    priority: context- first, dev-report- second, ticket-/ba-spec- third.
-
-    FINDING-1 fix: replaces the prior most-frequent heuristic. Frequency
-    cannot scope away a violation any longer; all distinct pattern-anchored
-    task-ids contribute to scope (union semantics in caller).
-    """
-    seen = {}
-    for idx, pattern in enumerate(TASK_ID_REF_PATTERNS):
-        _scan_pattern_for_task_ids(prompt, pattern, idx, seen)
-    return [tid for tid, _ in sorted(seen.items(), key=lambda kv: kv[1])]
+def _same_cycle(family_task_id, scope_task_id):
+    """True when a shard family's id and the dispatch's task id name one cycle:
+    their canonical ids (obligation.canonical_task_id) are equal, or the task
+    id extends the family's by a suffix (a lane, a pipeline index)."""
+    family = obligation_lib.canonical_task_id(family_task_id)
+    scope = obligation_lib.canonical_task_id(scope_task_id)
+    return bool(family) and bool(scope) and (scope == family or scope.startswith(family + "-"))
 
 
-def _collect_iteration_context_refs(prompt):
-    """Return distinct, explicitly named retry contexts in prompt order."""
-    refs = []
-    seen = set()
-    for match in ITERATION_CONTEXT_RE.finditer(prompt):
-        ref = (
-            match.group("task_id"),
-            match.group("lane"),
-            int(match.group("iteration")),
-        )
-        if ref not in seen:
-            seen.add(ref)
-            refs.append(ref)
-    return refs
+def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None):
+    """Return [(code, path, problem, lane)] for each fan-out in scope whose
+    collection is incomplete; lane is None for the canonical's findings.
 
-
-def _extract_current_task_ids(data):
-    """Return list of distinct pattern-anchored task-ids in QA prompt, or None.
-
-    None signals "fall back to conservative global scan" (the prompt has
-    ZERO pattern-anchored refs). Single match -> 1-element list. Multiple
-    distinct matches -> all of them (union for scope, no majority-vote).
-
-    FINDING-1 (replaces _extract_current_task_id): an attacker mentioning a
-    stale task-id N times in the prompt body cannot scope the hook away
-    from a current-task-id violation. Each anchored ref counts once; all
-    contribute to the scope-set.
-    """
-    prompt = _qa_prompt_body(data)
-    if not prompt:
-        return None
-    task_ids = _collect_anchored_task_ids(prompt)
-    for task_id, _, _ in _collect_iteration_context_refs(prompt):
-        if task_id not in task_ids:
-            task_ids.append(task_id)
-    return task_ids if task_ids else None
-
-
-def _normalize_task_id_prefix(task_id):
-    """Return the scanner key of a possibly-suffixed task-id.
-
-    The hook indexes per_worker / canonical_present by the bare timestamp
-    (file regexes capture only the YYYYMMDD-HHMMSS group). Prompts may
-    carry a fuller task-id like "20260427-130000-bugfix"; this maps it
-    back to the timestamp prefix used as the dict key.
-    """
-    if not isinstance(task_id, str):
-        return None
-    m = re.match(r"^(?P<prefix>dev-)?(?P<stamp>\d{8}-\d{6})", task_id)
-    if not m:
-        return None
-    return (m.group("prefix") or "") + m.group("stamp")
-
-
-def _find_violations(per_worker, canonical_present, scope_task_id=None):
-    """Return list of (task_id, [labels]) tuples that violate the predicate.
-
-    Violation = >=2 per-worker reports for same task-id AND no canonical.
+    A family is a fan-out only when one of its lane reports declares it: its
+    own lane_set names two or more lanes. A lane counts as reported when a
+    report of the family carries its label or names it as its `lane`. Only
+    once every declared lane has reported is the canonical due: it must exist
+    and name each declared lane in parallel_workers.
 
     BUG-AGGCHK-2: when scope_task_id is provided, restrict the result to
-    that task-id only. When None, scan globally (legacy conservative
-    behavior preserved for cases where the QA prompt has no task-id ref).
+    that task's cycle (_same_cycle). When None (a QA dispatch without an
+    obligation names no cycle), the conservative global scan keeps only the
+    canonical's presence for each fan-out whose lanes have all reported: an
+    unrelated cycle's abandoned lane is not this dispatch's to collect, and
+    the scan never blocks more than the filename rule it replaces did.
     """
     violations = []
-    for task_id, roles in per_worker.items():
-        if scope_task_id is not None and task_id != scope_task_id:
+    for task_id, reports in sorted(lane_reports.items()):
+        if scope_task_id is not None and not _same_cycle(task_id, scope_task_id):
             continue
-        if len(roles) >= 2 and not canonical_present.get(task_id):
-            violations.append((task_id, sorted(roles)))
+        declared, reported = {}, set(reports)
+        for label, path in sorted(reports.items()):
+            report = _read_json(path)
+            if not isinstance(report, dict):
+                continue
+            if isinstance(report.get("lane"), str):
+                reported.add(report["lane"])
+            lane_set = report.get("lane_set")
+            lanes = [x for x in lane_set if isinstance(x, str) and x] if isinstance(lane_set, list) else []
+            if len(set(lanes)) >= 2:
+                for lane in lanes:
+                    declared.setdefault(lane, path.name)
+        if not declared:
+            continue
+        missing = [lane for lane in sorted(declared) if lane not in reported]
+        if scope_task_id is not None:
+            for lane in missing:
+                violations.append((
+                    "lane_report_missing", dev_dir / f"dev-report-{task_id}-{lane}.json",
+                    f"lane {lane}, which the lane_set of {declared[lane]} declares, has no report", lane,
+                ))
+        if missing:
+            continue
+        canonical = canonicals.get(task_id) or dev_dir / f"dev-report-{task_id}.json"
+        if not canonical.is_file():
+            violations.append((
+                "canonical_missing", canonical,
+                f"the canonical aggregate of lanes {', '.join(sorted(declared))} is missing", None,
+            ))
+            continue
+        if scope_task_id is None:
+            continue
+        aggregate = _read_json(canonical)
+        workers = aggregate.get("parallel_workers") if isinstance(aggregate, dict) else None
+        workers = workers if isinstance(workers, list) else []
+        unnamed = [lane for lane in sorted(declared) if lane not in workers]
+        if unnamed:
+            violations.append((
+                "canonical_stale", canonical,
+                f"its parallel_workers {workers} do not name lane(s) {', '.join(unnamed)} "
+                "the lane_set declares", None,
+            ))
     return violations
 
 
-def _emit_block(violations, dev_dir):
-    """Print BLOCK message to stderr and exit 2."""
-    lines = ["", "BLOCKED Agent dispatch (qa): canonical aggregate dev-report missing."]
-    for task_id, roles in violations:
-        canonical = dev_dir / f"dev-report-{task_id}.json"
-        lines.append("")
-        lines.append(f"  task-id: {task_id}")
-        lines.append(f"  per-worker reports present: {', '.join(roles)}")
-        lines.append(f"  missing canonical aggregate: {canonical}")
-    lines.append("")
-    lines.append(
-        f"REQUIRED: orchestrator must write the canonical aggregate before "
-        f"dispatching QA. See {DEV_MD_REF} for the construction rule."
-    )
+def _emit_block(violations):
+    """Print the BLOCK message to stderr and exit 2: each failing artifact's
+    path and check, and its producer."""
+    lines = ["", "BLOCKED Agent dispatch (qa): a fan-out's lane reports and canonical "
+                 "aggregate are not all collected."]
+    for code, path, problem, lane in violations:
+        producer = (
+            f"dev (lane {lane})" if lane is not None else
+            "hooks/posttool-lane-completeness-watch.py, which runs the aggregator "
+            "whenever a lane report of the task is written"
+        )
+        lines.append(f"  [{code}] {path}: {problem} | producer: {producer}")
     lines.append("")
     sys.stderr.write("\n".join(lines) + "\n")
     sys.exit(2)
@@ -323,50 +263,6 @@ def _resolve_dev_dir():
     """Resolve docs/dev under CLAUDE_PROJECT_DIR, fail-open if absent."""
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     return Path(project_dir) / "docs" / "dev"
-
-
-def _resolve_scope_task_ids(raw_task_ids):
-    """Normalize a list of raw task-ids to the YYYYMMDD-HHMMSS prefix set.
-
-    Returns None when the input is None or every entry fails normalization
-    (signaling "no anchored refs -- fall back to global scan"). Otherwise
-    returns the deduped list of normalized prefixes, preserving order.
-    """
-    if not raw_task_ids:
-        return None
-    normalized = []
-    seen = set()
-    for raw in raw_task_ids:
-        n = _normalize_task_id_prefix(raw)
-        if n and n not in seen:
-            seen.add(n)
-            normalized.append(n)
-    return normalized if normalized else None
-
-
-def _aggregate_one_task(per_worker, canonical_present, tid, seen_keys, out):
-    """Helper: append unique violations for a single task-id into `out`."""
-    for entry in _find_violations(per_worker, canonical_present, tid):
-        if entry[0] in seen_keys:
-            continue
-        seen_keys.add(entry[0])
-        out.append(entry)
-
-
-def _collect_violations(per_worker, canonical_present, scope_task_ids):
-    """Return aggregated violations across all scope_task_ids.
-
-    When scope_task_ids is None, scan globally (legacy conservative
-    behavior). When it is a list, scan once per task-id in the list and
-    union the results (FINDING-1 union semantics on ambiguous prompt).
-    """
-    if scope_task_ids is None:
-        return _find_violations(per_worker, canonical_present, None)
-    aggregated = []
-    seen_keys = set()
-    for tid in scope_task_ids:
-        _aggregate_one_task(per_worker, canonical_present, tid, seen_keys, aggregated)
-    return aggregated
 
 
 #  ---------------------------------------------------------------------------
@@ -384,9 +280,6 @@ def _collect_violations(per_worker, canonical_present, scope_task_ids):
 #  ---------------------------------------------------------------------------
 
 OBLIGATION_BARRIER_ENV = "CLAUDE_OBLIGATION_BARRIER"
-OBLIGATION_ADVISORY_LOG = os.path.join(
-    "~", ".claude", "logs", "obligation-barrier-advisory.jsonl"
-)
 
 
 def _dispatch_prompt_body(data):
@@ -457,9 +350,8 @@ def _verify_prior_artifact(entry, project_dir):
     violation kind: artifact_missing / not_valid_json / schema_invalid
     (AC11) / identity_mismatch (AC9) for kind=="json"; artifact_missing /
     identity_anchor_missing (AC10) / terminal_line_mismatch (AC12) for
-    kind=="markdown". Any other kind (response_block/response_line, W3) is
-    never a violation -- (True, None), defensively, even though the only
-    caller already filters these out before calling.
+    kind=="markdown". Any other kind (response_block/response_line, W3, has
+    no on-disk file to check) is never a violation -- (True, None).
     """
     if not isinstance(entry, dict):
         return (True, None)
@@ -544,25 +436,13 @@ def _format_barrier_violation(code, path, problem, role, lane, action):
     return f"[{code}] {path}: {problem} | role: {role_s}({lane_s}) | fix: {action}"
 
 
-def _log_barrier_advisory(record):
-    """Best-effort append to the G3 advisory log. Never raises."""
-    try:
-        log_path = os.path.expanduser(OBLIGATION_ADVISORY_LOG)
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record) + "\n")
-    except Exception:
-        pass
-
-
 def _run_obligation_barrier(data):
     """G3 collection barrier orchestrator (ticket M1-M9).
 
     Entire body wrapped in its own try/except (layered ON TOP of this
     file's outer __main__ try/except, which is silent): any unexpected
-    exception here is advisory-logged with reason "gate_error" and
-    swallowed -- the caller (main()) always proceeds to its own
-    sys.exit(0) afterward.
+    exception here is swallowed -- the caller (main()) always proceeds to
+    its own sys.exit(0) afterward.
     """
     try:
         mode = os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower()
@@ -598,24 +478,11 @@ def _run_obligation_barrier(data):
             role = obligation.get("role")
             lane = obligation.get("lane")
             for entry in artifacts:
-                if not isinstance(entry, dict) or entry.get("kind") not in (
-                    "json", "markdown",
-                ) or entry.get("path") in redeclared:
-                    # response_block/response_line (AC6, W3) and unknown
-                    # kinds have no on-disk representation to check.
+                if not isinstance(entry, dict) or entry.get("path") in redeclared:
                     continue
                 ok, violation = _verify_prior_artifact(entry, project_dir)
                 if ok:
                     continue
-                record = {
-                    "reason": "obligation_barrier_violation",
-                    "code": violation["code"],
-                    "path": violation["path"],
-                    "problem": violation["problem"],
-                    "role": role,
-                    "lane": lane,
-                    "task_id": task_id,
-                }
                 if mode == "block":
                     sys.stderr.write(
                         "\n"
@@ -628,9 +495,48 @@ def _run_obligation_barrier(data):
                         + "\n"
                     )
                     sys.exit(2)
-                _log_barrier_advisory(record)
     except Exception:
-        _log_barrier_advisory({"reason": "gate_error"})
+        pass  # fail open: an internal error never blocks a dispatch
+
+
+#  ---------------------------------------------------------------------------
+# G3's rule on a dev report a dispatch names (P1b row 6): a path in its
+# dev.files_modified or dev.files_created that `git check-ignore` matches, with
+# no gitignore_waiver, blocks the dispatch; /commit's changelog-analyst landing
+# of the report's own task is admitted from its obligation (profile
+# commit-landing). The rule is hooks/pretool-gitignore-preflight.py's
+# gitignored_deliverables(), called here, so the two never disagree; that hook
+# keeps blocking on it while this switch is advisory in the tracked settings.
+#  ---------------------------------------------------------------------------
+
+GITIGNORE_RULE_PATH = Path(__file__).parent / "pretool-gitignore-preflight.py"
+
+
+def _gitignored_deliverables(prompt):
+    spec = importlib.util.spec_from_file_location("pretool_gitignore_preflight", GITIGNORE_RULE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.gitignored_deliverables(prompt)
+
+
+def _run_gitignore_rule(data):
+    """Apply the gitignore rule to an Agent/Task dispatch; blocks only when
+    CLAUDE_OBLIGATION_BARRIER=block (it does nothing while advisory)."""
+    try:
+        if os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower() != "block":
+            return
+        if not isinstance(data, dict) or data.get("tool_name") not in ("Agent", "Task"):
+            return
+        findings = _gitignored_deliverables(_dispatch_prompt_body(data))
+    except Exception:
+        return  # fail open: an internal error never blocks a dispatch
+    if findings:
+        sys.stderr.write("".join(
+            f"\n[gitignored_deliverable] {report}: {', '.join(paths)} declared in its "
+            "dev.files_modified/files_created match .gitignore and it carries no gitignore_waiver"
+            for report, paths in findings
+        ) + "\n")
+        sys.exit(2)
 
 
 def main():
@@ -639,40 +545,30 @@ def main():
         sys.exit(0)
 
     if _is_qa_dispatch(data):
-        # /do bypass: main-agent-only
-        try:
-            if not data.get('agent_id'):
-                sid = (data.get('session_id') or
-                       os.environ.get('CLAUDE_SESSION_ID', '') or 'default')
-                flag = Path(f'{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag')
-                if flag.exists() and flag.read_text().strip() == 'true':
-                    sys.exit(0)
-        except Exception:
-            pass
+        if has_do_consent(data):
+            sys.exit(0)
 
         # /allow bypass: if allowlist pattern matches "Agent" dispatch, pass
         try:
             if not data.get('agent_id'):
                 _sid = (data.get('session_id') or
                         os.environ.get('CLAUDE_SESSION_ID', '') or 'default')
-                if read_grant('Agent', _sid):
+                if match_sentinel_grant_for_tool(_sid, 'Agent') is not None:
                     sys.exit(0)
         except Exception:
             pass
 
         dev_dir = _resolve_dev_dir()
-        per_worker, canonical_present = _scan_dev_dir(dev_dir)
-        # FINDING-1: extract the LIST of pattern-anchored task-ids. None = no
-        # anchored refs -> conservative global scan. List = scope detection
-        # to the union of the listed task-ids (each scanned once, results
-        # unioned). No frequency / majority-vote weighting.
-        raw_task_ids = _extract_current_task_ids(data)
-        scope_task_ids = _resolve_scope_task_ids(raw_task_ids)
-        violations = _collect_violations(per_worker, canonical_present, scope_task_ids)
+        lane_reports, canonicals = _scan_dev_dir(dev_dir)
+        violations = _find_violations(lane_reports, canonicals, dev_dir, _scope_task_id(data))
+        if os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower() != "block":
+            # Advisory G3 keeps master's one always-on block; (a) and (b) wait for P2's arming.
+            violations = [v for v in violations if v[0] == "canonical_missing"]
         if violations:
-            _emit_block(violations, dev_dir)
+            _emit_block(violations)
 
     _run_obligation_barrier(data)
+    _run_gitignore_rule(data)
     sys.exit(0)
 
 

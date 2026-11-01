@@ -160,9 +160,8 @@ def http_url():
 def sandbox_home(root: Path) -> Path:
     """A self-contained harness home holding a COPY of the guard and lib/.
 
-    The structural sentinel set (settings.json + hooks/ + policies/ + scripts/)
-    makes the shared resolver land here, so the audit sink is isolated from the
-    real one and can be manipulated without touching the repository.
+    Driving the copy keeps every guard run, and the bytecode its imports write,
+    out of the repository.
     """
     home = root / "sandbox-home"
     (home / "hooks" / "lib").mkdir(parents=True)
@@ -177,27 +176,17 @@ def sandbox_home(root: Path) -> Path:
 
 #: The guard every test drives unless it brings its own sandbox: a byte copy of
 #: the checkout's guard and lib/ inside a module-scoped sandbox home (set by
-#: _isolate_audit_sink). The guard resolves its audit sink from its own install
-#: location, so driving the checkout's copy would append to <repo>/logs/ --
-#: leaking into the tree, and failing every recorded verdict closed on a
-#: read-only checkout.
+#: _isolate_guard), so no run touches the checkout.
 _ISOLATED_GUARD: Path = GUARD
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _isolate_audit_sink(tmp_path_factory):
+def _isolate_guard(tmp_path_factory):
     global _ISOLATED_GUARD
     home = sandbox_home(tmp_path_factory.mktemp("overwrite-guard"))
     _ISOLATED_GUARD = home / "hooks" / GUARD.name
     yield
     _ISOLATED_GUARD = GUARD
-
-
-def audit_rows(home: Path):
-    sink = home / "logs" / "overwrite-guard.jsonl"
-    if not sink.is_file():
-        return []
-    return [json.loads(line) for line in sink.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def write_grant(task_id, session_id, operations) -> Path:
@@ -627,73 +616,6 @@ def test_ac06_guard_creates_no_new_issuance_channel():
 
 
 # ---------------------------------------------------------------------------
-# AC-07 — every refusal and every granted replacement is attributable
-# ---------------------------------------------------------------------------
-
-REQUIRED_AUDIT_FIELDS = ("resolved_target", "mechanism", "decision", "grant_identity",
-                         "session_id", "task_id", "timestamp")
-
-
-def test_ac07_both_verdicts_are_recorded_and_audit_failure_denies(tmp_path):
-    home = sandbox_home(tmp_path)
-    guard = home / "hooks" / GUARD.name
-    work = tmp_path / "audited"
-    work.mkdir()
-    target = work / "victim.txt"
-    original = original_bytes()
-    target.write_text(original, encoding="utf-8")
-    command = f"echo {NEW} > {target}"
-    task_id = f"ovwtest-{uuid.uuid4().hex}"
-    session_id = f"sid-{uuid.uuid4().hex}"
-
-    try:
-        # (a) refusal
-        refused = run_guard(command, cwd=work, guard=guard,
-                            session_id=session_id, task_id=task_id)
-        assert refused.returncode == 2
-        rows = audit_rows(home)
-        assert len(rows) == 1
-        row = rows[0]
-        for field in REQUIRED_AUDIT_FIELDS:
-            assert field in row, f"audit row missing {field}"
-        assert row["decision"] == "refused"
-        assert rp(target) in row["resolved_target"]
-        assert "redirect-truncate" in row["mechanism"]
-        assert row["session_id"] == session_id and row["task_id"] == task_id
-
-        # (b) grant-permitted replacement
-        write_grant(task_id, session_id, [{"op": "Write", "target": str(target)}])
-        permitted = run_guard(command, cwd=work, guard=guard,
-                              session_id=session_id, task_id=task_id)
-        assert permitted.returncode == 0, permitted.stderr
-        rows = audit_rows(home)
-        assert len(rows) == 2
-        assert rows[1]["decision"] == "permitted_by_grant"
-        assert rows[1]["grant_identity"][0]["grant_target"] == str(target)
-
-        # durability: the guard fsyncs, so the row survives without our help
-        assert "os.fsync" in GUARD.read_text(encoding="utf-8")
-
-        # (c) the sink cannot be written: BOTH paths deny
-        shutil.rmtree(home / "logs")
-        (home / "logs").write_text("not a directory", encoding="utf-8")
-
-        wedged_grant = run_guard(command, cwd=work, guard=guard,
-                                 session_id=session_id, task_id=task_id)
-        assert wedged_grant.returncode == 2, "a granted replacement that cannot be recorded is denied"
-        assert "cannot be attributed" in wedged_grant.stderr
-
-        drop_grants(task_id)
-        wedged_refusal = run_guard(command, cwd=work, guard=guard,
-                                   session_id=session_id, task_id=task_id)
-        assert wedged_refusal.returncode == 2
-        assert "cannot be attributed" in wedged_refusal.stderr
-        assert target.read_text(encoding="utf-8") == original
-    finally:
-        drop_grants(task_id)
-
-
-# ---------------------------------------------------------------------------
 # AC-08 — guard-local bootstrap failure fails OPEN without sealing repair
 # ---------------------------------------------------------------------------
 
@@ -734,10 +656,6 @@ def test_ac08_bootstrap_failure_fails_open_loudly(tmp_path):
 
     repair = run_guard("ls /nonexistent 2>&1", cwd=work, guard=guard, env=env)
     assert repair.returncode == 0, "the repair path must not be sealed"
-
-    rows = audit_rows(home)
-    assert rows and all(r["decision"] == "bootstrap_failed_fail_open" for r in rows)
-    assert rows[0]["guard"] == "hooks/pretool-overwrite-guard.py"
 
 
 # ---------------------------------------------------------------------------

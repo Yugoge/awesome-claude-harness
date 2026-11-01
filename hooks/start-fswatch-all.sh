@@ -54,11 +54,6 @@ for repo in "${REPOS[@]}"; do
     # Create logs directory if not exists
     mkdir -p "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs"
 
-    # Remove old lock file if exists
-    . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-      || harness_state_dir() { printf '%s\n' /tmp; }
-    rm -f "$(harness_state_dir)/git-fswatch-${USER}.lock" 2>/dev/null
-
     nohup bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/git-fswatch.sh" "$repo" \
         > "$log_file" 2>&1 &
 

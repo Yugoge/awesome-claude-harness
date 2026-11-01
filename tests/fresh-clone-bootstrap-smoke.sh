@@ -219,21 +219,23 @@ fi
 SC_HOOK="$CLONE/hooks/stop-spec-coverage-enforce.py"
 SPEC_TS="20260616-120000"; SPEC_ID="spec-$SPEC_TS"; SID="ws2-smoke-session"
 
-# Build a /spec session inside a home: workflow bookmark + transcript + views/ +
-# monolith. with_verifier toggles the REQUIRED spec-verify helper; vexit is its
-# simulated exit (nonzero => under-covered).
+# Build a /spec session inside a home: transcript (the typed /spec, then the
+# spec Write) + views/ + monolith. with_verifier toggles the REQUIRED spec-verify
+# helper; vexit is its simulated exit (nonzero => under-covered).
 build_spec_home() {  # <home> <with_verifier:0|1> <vexit>
   local home="$1" wv="$2" vexit="$3"
-  mkdir -p "$home/hooks/lib" "$home/policies" "$home/scripts" \
+  mkdir -p "$home/hooks/lib" "$home/policies" "$home/scripts" "$home/commands" \
            "$home/.claude" "$home/docs/dev/specs/$SPEC_TS/views"
   echo '{}' > "$home/settings.json"
   cp -a "$CLONE/hooks/stop-spec-coverage-enforce.py" "$home/hooks/" 2>/dev/null
-  cp -a "$CLONE/hooks/lib/claude_home.py" "$home/hooks/lib/" 2>/dev/null
-  printf '{"command":"spec"}' > "$home/.claude/workflow-$SID.json"
+  cp -a "$CLONE/hooks/lib/." "$home/hooks/lib/" 2>/dev/null
+  cp -a "$REPO/commands/spec.md" "$home/commands/" 2>/dev/null
   printf '# view\n' > "$home/docs/dev/specs/$SPEC_TS/views/dev.md"
   printf '# Monolith\n\nSome spec body.\n' > "$home/docs/dev/specs/$SPEC_ID.md"
-  printf '{"message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"docs/dev/specs/%s.md"}}]}}\n' "$SPEC_ID" \
-    > "$home/transcript.jsonl"
+  { printf '{"type":"user","message":{"role":"user","content":"/spec smoke"}}\n'
+    printf '{"type":"assistant","cwd":"%s","message":{"content":[{"type":"tool_use","id":"tu-spec","name":"Write","input":{"file_path":"%s/docs/dev/specs/%s.md"}}]}}\n' "$home" "$home" "$SPEC_ID"
+    printf '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu-spec","content":"ok"}]}}\n'
+  } > "$home/transcript.jsonl"
   if [ "$wv" -eq 1 ]; then
     mkdir -p "$home/scripts/spec-verify"
     printf 'import sys\nprint("coverage: simulated")\nsys.exit(%s)\n' "$vexit" \

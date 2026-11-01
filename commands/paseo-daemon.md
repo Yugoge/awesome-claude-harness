@@ -355,8 +355,8 @@ per-event inbox drain above — is safety-ordered: run
 `scripts/paseo-daemon-timers.py drain --registry-dir <registry> --ledger-root
 <ledger>`. Watchdog is paused FIRST (a watchdog fire mid-teardown would judge
 the controller dead and escalate), then sweep, tick, reinject. Each timer is
-paused, never deleted, via backup → temp-write → parse-validate → atomic
-`os.replace`. The final step calls the ledger CLI's `teardown-declare`
+paused, never deleted, via temp-write → parse-validate → atomic
+`os.replace` (`resume` undoes a pause). The final step calls the ledger CLI's `teardown-declare`
 exactly once, journaling the fleet teardown alongside the session-end
 declaration above.
 

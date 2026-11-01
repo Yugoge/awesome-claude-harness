@@ -46,7 +46,7 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
    ```
    ${CLAUDE_PROJECT_DIR:-$(pwd)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md
    ```
-   Specs always land in the parent project directory, never inside an overnight worktree. Create `docs/dev/specs/` if it does not exist. Store the resulting path as `spec_path` for reuse in Step 4. A fresh `/spec` invocation in a new session creates a new timestamped file; within-session follow-ups append to the same file.
+   Specs always land in the parent project directory, never inside an overnight worktree. Store the resulting absolute path as `spec_path` for reuse in Step 4. A fresh `/spec` invocation in a new session creates a new timestamped file; within-session follow-ups append to the same file.
 
 3. Populate the template:
    - `<issue_description>` → short summary of the user's requirement
@@ -56,7 +56,15 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
      keep their `<!-- consumers: [all] -->` line + `_Not yet populated._` placeholder
      until their own first entry — see the Design & Evidence Capture Routine below)
 
-4. Write the spec.
+4. Write the spec through its one writer, `~/.claude/scripts/spec-write.py`, naming it by its absolute path (the `UserPromptSubmit` hook of a later `/dev`, `/dev-command` or `/dev-overnight` in this session takes this session's last spec write as that run's spec, and reads the path from the line the writer prints). It creates `docs/dev/specs/` if needed and refuses an existing file:
+
+   ```bash
+   python3 ~/.claude/scripts/spec-write.py create --spec <spec_path> <<'SPEC_TEXT'
+   <the populated template>
+   SPEC_TEXT
+   ```
+
+   Every later write of this spec runs through the same script: `spec-write.py append --spec <spec_path> --section <N>` (or `<N>.<M>` for a `### N.M` subsection) adds the text on stdin at the end of that section, or in place of its lone `_Not yet populated._` line. Never Write or Edit a spec file.
 
    **Design & Evidence Capture (early capture)** (un-numbered — part of writing the first
    spec, not a separate Step): Run the **Design & Evidence Capture Routine** (defined below,
@@ -105,7 +113,7 @@ After the capture precondition has run, branch on the turn's requirement/closure
   persisted any design/evidence carried by this closing turn (so a turn like "here is the
   runbook screenshot, thanks" is captured before finalize, never dropped). Now proceed to
   Step 6 (Finalize).
-- **Another requirement** → append to `spec_path` under Section 5 as a new sub-section:
+- **Another requirement** → append to `spec_path` under Section 5 as a new sub-section (`spec-write.py append --spec <spec_path> --section 5` with this block on stdin):
   ```
   ### 5.N: <brief title extracted from the message>
   <verbatim requirement text>
@@ -118,7 +126,7 @@ After the capture precondition has run, branch on the turn's requirement/closure
   Section 5 at all — the design/evidence is already persisted to Section 9 + companion files,
   so there is nothing left to record. Simply loop back to wait. This turn shape is now fully
   captured — it can never fall through uncaptured.
-- **Exploration findings arrive** → integrate into Section 1 (Before) silently. If a finding contradicts the user's description, surface one targeted question — for example, "I looked at X and found Y — does that match?" — then loop back. Never gate the loop on exploration.
+- **Exploration findings arrive** → integrate into Section 1 (Before) silently (`spec-write.py append --spec <spec_path> --section 1`). If a finding contradicts the user's description, surface one targeted question — for example, "I looked at X and found Y — does that match?" — then loop back. Never gate the loop on exploration.
 - **Mid-loop vague input** → apply Step 2 logic (max 3 rounds) to that single message before appending, then loop back. (The capture precondition already handled any design/evidence in the triggering turn.) Each clarification RESPONSE collected by Step 2 is itself a fresh Step 4 user turn: run the capture precondition (the Design & Evidence Capture Routine) on it FIRST, before re-evaluating Step 2 / appending — do NOT process a clarification answer in a bypass path that skips capture, or design/evidence supplied in a clarification reply would be dropped.
 
 Maintain `turn_count` internally (not user-visible), increment after each user response. No hard turn cap — termination is signal-driven.
@@ -166,20 +174,17 @@ design and evidence are first-class material and MUST NOT be silently dropped (M
    ```
 
    On the FIRST arriving design/evidence material, create the bound artifact root and its
-   two subfolders, and write the binding marker (M2):
+   two subfolders (M2). Neither is one of the split's artifact names (views/ /
+   manifest.json / .split-complete), so the resolver still classifies the folder ABSENT
+   (legacy-monolith fallback intact):
 
    ```bash
    mkdir -p "$BOUND_ROOT/design" "$BOUND_ROOT/evidence"
-   # .spec-binding.json ties this early folder to THIS spec-id so the splitter's later
-   # views/ creation does not merge into a stale/foreign folder. It is NOT one of the
-   # reserved artifact names (views/ / manifest.json / .split-complete), so the resolver
-   # still classifies the folder ABSENT (legacy-monolith fallback intact) — verified.
-   printf '{"spec_id":"%s","monolith_path":"%s","bound_at":"%s"}\n' \
-       "$SPEC_DIR_ID" "$spec_path" "$(date -Iseconds)" > "$BOUND_ROOT/.spec-binding.json"
    ```
 
-   Do NOT create `views/`, `manifest.json`, or `.split-complete` here — those remain
-   spec-subagent-owned at finalize (M9).
+   Do NOT create `views/` or `manifest.json` (the spec subagent writes them at finalize),
+   or `.split-complete` (this command writes it in Step 6 sub-step 4, after the split QA's
+   last verdict) here (M9).
 
 3. **Safe target naming (M13).** Compute deterministic, safe target names. Reject any name
    containing `..`, an absolute path, or control characters — never write outside
@@ -210,7 +215,8 @@ design and evidence are first-class material and MUST NOT be silently dropped (M
    Section-9 reference are ADDED, never used to strip, rewrite, summarize, or relocate any
    Section-5 text. On a successful persist, append a short project-root-relative reference
    line under Section 9.1 (replacing the `_Not yet populated._` placeholder on the FIRST
-   design entry; leaving Section 9.2's placeholder untouched until its own first entry — M1):
+   design entry; leaving Section 9.2's placeholder untouched until its own first entry — M1),
+   through the one writer (`spec-write.py append --spec <spec_path> --section 9.1`):
 
    ```
    - `docs/dev/specs/<de-prefixed-id>/design/turn-<N>-<slug>.md` — <one-line description>
@@ -221,7 +227,8 @@ design and evidence are first-class material and MUST NOT be silently dropped (M
 
 5. **Persist evidence (M4 / M5 — two branches).**
    - **File/photo WITH a usable readable path** → copy it into
-     `$BOUND_ROOT/evidence/<safe-name>` and append a reference line under Section 9.2:
+     `$BOUND_ROOT/evidence/<safe-name>` and append a reference line under Section 9.2
+     (`spec-write.py append --spec <spec_path> --section 9.2`, as every Section 9 line):
      ```
      - `docs/dev/specs/<de-prefixed-id>/evidence/<safe-name>` — <one-line description>
      ```
@@ -297,6 +304,7 @@ Only proceed to Step 6 when a STRONG signal fires.
 2. **Invoke spec subagent for agent selection + view creation + checkpoints**:
    ```
    Use Agent tool with:
+   - subagent_type: "spec"
    - description: "Spec agent: split + checkpoints for <spec-id>"
    - prompt: "
      You are the spec subagent. Read and follow the instructions in ~/.claude/agents/spec.md EXACTLY.
@@ -307,6 +315,10 @@ Only proceed to Step 6 when a STRONG signal fires.
      Project dir: <$CLAUDE_PROJECT_DIR>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
+     Obligation block (instantiate per dispatch: <spec-id> is this split's de-prefixed id, dispatched_at the UTC time captured immediately before this Agent call; never hand-invented):
+     <obligation v="1">
+     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "spec", "pipeline": "spec", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "spec_views", "path": "docs/dev/specs/<spec-id>/views", "monolith": "docs/dev/specs/spec-<spec-id>.md"}]}
+     </obligation>
      Execute Phase 0 (read spec, decide relevant agents).
      Then Phase 1 (intelligent extraction if monolith > 200 lines).
      Then Phase 2 (checkpoint generation).
@@ -352,9 +364,8 @@ Only proceed to Step 6 when a STRONG signal fires.
         line, AND the `_Not yet populated._` placeholders — appears verbatim in
         orchestrator.md and in the selected relevant views (each of those lines counts
         toward coverage because `spec-verify.py`'s `is_skippable` skips only blank/`---`);
-        that companion design body files and evidence binaries are NOT inlined into any
-        view; and that each referenced design/ or evidence/ artifact path exists under
-        docs/dev/specs/<spec-id>/. Flag any Section-9 line — heading, comment, subheading,
+        and that companion design body files and evidence binaries are NOT inlined into any
+        view. Flag any Section-9 line — heading, comment, subheading,
         annotation, or reference — that was dropped from the views (a coverage break the
         routing alone would miss).
 
@@ -378,6 +389,7 @@ Only proceed to Step 6 when a STRONG signal fires.
 
    ```
    Use Agent tool with:
+   - subagent_type: "spec"
    - description: "Spec agent re-split (round <N>) addressing QA feedback for <spec-id>"
    - prompt: "
      You are the spec subagent. Read and follow the instructions in ~/.claude/agents/spec.md EXACTLY.
@@ -388,6 +400,10 @@ Only proceed to Step 6 when a STRONG signal fires.
      Project dir: <$CLAUDE_PROJECT_DIR>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
+     Obligation block (instantiate per dispatch: <spec-id> is this split's de-prefixed id, dispatched_at the UTC time captured immediately before this Agent call; never hand-invented):
+     <obligation v="1">
+     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "spec", "pipeline": "spec", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "spec_views", "path": "docs/dev/specs/<spec-id>/views", "monolith": "docs/dev/specs/spec-<spec-id>.md"}]}
+     </obligation>
 
      Your previous split was REJECTED by QA. Address each issue below with concrete
      corrections to the views and/or checkpoints. Do not argue -- investigate and fix.
@@ -480,12 +496,12 @@ Sections populated:
 ⚠ Split-QA: 3 rounds exhausted with unresolved issues — see docs/dev/specs/<spec-id>/split-qa-unresolved.json
 
 Usage:
-  /dev                                   ← auto-detects this spec
-  /dev --spec <path>                     ← explicit path
-  /dev-command                           ← auto-detects this spec
-  /dev-command --spec <path>             ← explicit path
-  /dev-overnight <end-time>              ← auto-detects this spec
-  /dev-overnight <end-time> --spec <path> ← explicit path
+  /dev                                        ← in this session: uses this spec (the session's last spec write)
+  /dev --spec <absolute path>                 ← in any session
+  /dev-command                                ← in this session: uses this spec
+  /dev-command --spec <absolute path>         ← in any session
+  /dev-overnight <end-time>                   ← in this session: uses this spec
+  /dev-overnight <end-time> --spec <absolute path> ← in any session
 ```
 
 ---
@@ -494,27 +510,26 @@ Usage:
 
 - **Read the template at runtime** from `~/.claude/templates/overnight-spec.md`. Never hardcode template content.
 - **Preserve template structure exactly** — only replace designated placeholders and `_Not yet populated._` markers.
-- **Do not modify any existing files** except the spec file being created — with ONE
-  scoped carve-out for design/evidence capture (M9): at design/evidence capture time
-  (the Design & Evidence Capture Routine) `/spec` MAY create/write ONLY
-  `docs/dev/specs/<de-prefixed-id>/.spec-binding.json`,
-  `docs/dev/specs/<de-prefixed-id>/design/*`, and
-  `docs/dev/specs/<de-prefixed-id>/evidence/*`. It MUST NOT write `views/`,
-  `manifest.json`, or `.split-complete` — those remain spec-subagent-owned, created at
-  finalize. No other existing file may be modified.
-- **Create the output directory** (`docs/dev/specs/`) if it does not exist.
+- **Do not modify any existing files** except the spec file being created, and that
+  one only through `~/.claude/scripts/spec-write.py` — with ONE scoped carve-out for
+  design/evidence capture (M9): at design/evidence capture time (the Design & Evidence
+  Capture Routine) `/spec` MAY create/write ONLY
+  `docs/dev/specs/<de-prefixed-id>/design/*` and
+  `docs/dev/specs/<de-prefixed-id>/evidence/*`. It MUST NOT write `views/` or
+  `manifest.json` (the spec subagent's, created at finalize); its own `.split-complete`
+  and `split-qa-unresolved.json` are written only in Step 6. No other existing file may be modified.
 - **Use absolute paths** in all output messages.
 - **Spec Creation Mode is the only mode.** It acts immediately on whatever the user provides, accumulates multiple requirements into one file per session, and finalizes only on a natural-conclusion strong signal.
 - **Section 5 verbatim — DO NOT invent nested sub-section structure.** Section 5 holds the user's requirement text verbatim. The only structure the /spec orchestrator may ADD beneath Section 5 is the `### 5.N: <title>` accumulation header defined in Step 4 (one per follow-up turn); any other bullets, headings, or sub-headings must come verbatim from the user, not be invented. DO NOT decompose the user's natural-language paragraph into invented `#### A.`, `#### B.`, `#### C.` (or any `5.X.A`, `5.X.B`-style) sub-headings, machine-voice checklist bullets, or parallel "should/should-not" AC ladders below a `§5.N` block. This prohibition governs both Step 3 (first-write of Section 5) and Step 4 (multi-turn append of `### 5.N`). If the user's paragraph contains multiple ideas, leave them as one paragraph; downstream agents (BA, dev, QA) will decompose during their own phases — not the /spec orchestrator.
   - **Scope of this rule (M6 — agent-INVENTED decomposition only).** The prohibition above bans the ORCHESTRATOR from INVENTING or decomposing architecture/structure inside Section 5 — that decomposition is downstream's job. It does NOT, and must NEVER, justify discarding design the USER actually provided. User-provided design (architecture, directory layout, deployment topology, systemd, runbook, rollout/landing order) is first-class material: it MUST be persisted BYTE-FOR-BYTE to the companion design doc under `docs/dev/specs/<de-prefixed-id>/design/` and REFERENCED from Section 9 (per the Design & Evidence Capture Routine / M3) — never dropped, never used to summarize or relocate Section-5 text. "Design is downstream's job" applies ONLY to agent-invented decomposition; it is not grounds to drop user-supplied design.
 - **Output folder is created by the spec subagent** during Phase 0 (the `views/` /
-  `manifest.json` / `.split-complete` finalize artifacts). The subagent decides which
-  agents get views based on spec content. EXCEPTION (M9): the `design/`, `evidence/`,
-  and `.spec-binding.json` early-capture artifacts may be created by `/spec` itself at
-  design/evidence capture time (the Design & Evidence Capture Routine). Legacy specs lacking an output folder remain
-  valid — `/dev*` falls back gracefully.
+  `manifest.json` finalize artifacts). The subagent decides which agents get views
+  based on spec content. EXCEPTIONS: the `design/` and `evidence/` early-capture
+  artifacts are created by `/spec` itself at design/evidence capture time (the Design &
+  Evidence Capture Routine, M9), and `.split-complete` by `/spec` in Step 6 sub-step 4.
+  Legacy specs lacking an output folder remain valid — `/dev*` falls back gracefully.
 - **Todo script**: `~/.claude/scripts/todo/spec.py` (realpath may differ by install/symlink layout) exposes the 7-step Spec Creation Mode todo list with `blocking_count = 3` (Steps 1-3 must complete before Claude can stop; Steps 4-7 are session-duration).
 - **Workflow update**: Step 7 emits a temp update for the next phase using
   `/spec-update --temp`. It must be compact, reference existing artifacts by path,
-  and suggest the exact next command (`/dev` auto-detect or `/dev --spec
-  <path>`).
+  and suggest the exact next command (`/dev` in this session, or `/dev --spec
+  <absolute path>` in another one).
