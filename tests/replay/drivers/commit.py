@@ -45,8 +45,8 @@ staging; in a real run the message written with the Write tool at the path the t
 (Phase 8 step 1's `MSGFILE=` path, its placeholders bound), then one Bash process holding the Phase 3 lock block
 (lock and session-index init as written) that runs Phase 4's pre-staged check, Phase 5's
 individual `git add -- <path>`, the Phase 8 drift re-check and commit block and the SHA/branch
-reads, printing the descriptor; then Phase 10 as the tree spells it (the token writer's call; or,
-on a text that writes the token with the Write tool, the descriptor values computed in Bash, the
+reads, then the shared-index sync step as Phase 3's text spells it, printing the descriptor; then
+Phase 10 as the tree spells it (the token writer's call; or, on a text that writes the token with the Write tool, the descriptor values computed in Bash, the
 pre-write HEAD check, the Write, the post-write HEAD check). Driver resolution of one textual
 conflict: the text asks the MSGFILE Write to happen while the fd-9 lock is held by the staging
 Bash process, which a tool call cannot do; the driver stages and commits in one process after
@@ -524,6 +524,10 @@ class CommitRun:
                       if "commit -F" in b.text)
         reads = next(b.text for b in cmdtext.blocks(self.analyst_text, "Phase 8: Execute commit", "bash")
                      if "COMMIT_SHA=" in b.text)
+        # After each group's commit, the shared-index sync as Phase 3's text spells it (inline code).
+        sync = re.search(r"`(python3 [^`]*session-index\.py\"? sync-shared [^`]*)`",
+                         cmdtext.section(self.analyst_text, "Phase 3: Serialization"))
+        sync = " ".join(sync.group(1).split()) + "\n" if sync else ""
         staged = "\n".join(cands)
         script = (f"GIT_ROOT={q}\n" + lock.rstrip("\n") + "\n"
                   f"git -C \"${{GIT_ROOT}}\" diff --cached --name-only\n"
@@ -531,7 +535,7 @@ class CommitRun:
                   f"ACTUALLY_STAGED_PATHS=\"$(git -C \"${{GIT_ROOT}}\" diff --cached --name-only)\"\n"
                   + commit.replace(tpl, msgfile).replace("<msgfile>", msgfile).replace("${MSGFILE}", msgfile)
                   .replace("<GIT_ROOT>", root).rstrip("\n") + "\n"
-                  + reads.rstrip("\n") + "\n"
+                  + reads.rstrip("\n") + "\n" + sync
                   + 'printf \'{"repo_root": "%s", "branch": "%s", "commit_sha": "%s"}\\n\' "$GIT_ROOT" "$BRANCH" "$COMMIT_SHA"\n')
         c = sub.bash(script, "Phases 3-8: lock, stage, drift check, commit, descriptor",
                      label=f"{sub.role} Bash stage and commit {order}")

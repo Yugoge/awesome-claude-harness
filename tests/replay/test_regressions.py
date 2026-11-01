@@ -18,15 +18,30 @@ the sibling's stop passes; the faulted lane's own stop is returned to it naming 
 repairs at its next round, and the cycle reaches its terminal. Armed, G1 refuses the earlier
 template at dispatch, so the lane never starts from it: the orchestrator's next round is the
 declaring dispatch from the tree's template, and the sibling still stops with no block.
+
+R-E1, E1 (F3a for dev, F3q for QA): /dev-overnight's cycle contract named dev-report.v1 and
+qa-report.v1 while the Step 12 and Step 15 dispatches' obligations declared v2, and the collection
+check (hooks/posttool-overnight-file-check.py, PostToolUse:Agent) judged the report against the
+contract's v1 after its producer had stopped: a dev or QA following its template was refused there
+("Re-run the subagent or escalate"), and only an undocumented report carrying both shapes passed
+the check. Now the contract the PM TRIAGE handler writes names no schema and the check judges what
+the dispatch's own obligation declares: at hook level (the PostToolUse:Agent hooks settings.json
+registers, run on the contract its producer wrote) and in the compliant /dev-overnight scenario,
+the report the tree's template asks for (valid against v2 and not against v1, so not the dual
+shape) passes the collection check, its producer's stop meets no block, and the cycle reaches its
+terminal. Before (master 2acc29b, the first parent P1b's merge will have): the template-following
+report was refused by the collection check, and only the dual-shape one passed it.
 """
 import json
 import os
+import re
 import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from tests.replay import suite
+from tests.replay import cmdtext, hookrun, sandbox, schemagen, suite
 from tests.replay import test_faults as tf
 from tests.test_landing import append_allow, cli_write, env, git, landing_log, run  # noqa: F401
 
@@ -318,3 +333,177 @@ def test_fanout_wedge(replays, shape, settings):
             f"the sibling did not stop while the faulted report was on disk: {written} {sib_stops} {own}"
         tf._returned_and_repaired(shape, r)
     assert r.reached(), "the pipeline did not reach its terminal:\n" + r.explain()
+
+
+# ------------------------------------------- R-E1, E1: the v1 contract against the v2 obligation
+OVERNIGHT = next(s for s in suite.COMPLIANT if s.name == "/dev-overnight")
+E1 = {"F3a": ("dev", "Step 12"), "F3q": ("qa", "Step 15")}  # the fault: (role, the step dispatching it)
+E1_STEP = dict(E1.values())
+_OBLIGATION = re.compile(r'<obligation\s+v="1"\s*>\s*(\{.*?\})\s*</obligation>', re.S)
+_SID = "e1-replay-session"
+
+
+def _iso(minutes: int = 0) -> str:
+    return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _template_obligation(role: str, sfx: str) -> dict:
+    """The obligation commands/dev-overnight.md declares for `role`'s dispatch, instantiated for the
+    pipeline whose timestamp suffix is `sfx`, dispatched now."""
+    text = cmdtext.section(str(TREE_UNDER_TEST / "commands" / "dev-overnight.md"), E1_STEP[role])
+    line = next(ln for ln in text.splitlines() if "Obligation block" in ln and f'role="{role}"' in ln)
+    head, _, rest = line.partition("artifacts=")
+    fields = dict(re.findall(r'\b(role|pipeline|profile)="([^"]*)"', head))
+    artifacts = json.loads(re.match(r"(\[.*\])\.\s", rest).group(1).replace("{pipeline.timestamp_suffix}", sfx))
+    return dict(fields, task_id=sfx, lane=None, lane_set=None, dispatched_at=_iso(), artifacts=artifacts)
+
+
+def _report_schema(art: dict) -> str:
+    """The schema an obligation's report artifact declares (the template's, e.g. dev-report.v2)."""
+    assert art.get("kind") == "json" and re.fullmatch(r"(dev|qa)-report\.v2", art.get("schema", "")), art
+    return art["schema"]
+
+
+def _template_following(art: dict, role: str, task_id: str) -> dict:
+    """The report the template asks for: an instance of the obligation's schema with its identity."""
+    work = {"dev": {"dev": {"status": "completed", "files_modified": ["toy/__init__.py"], "files_created": []}},
+            "qa": {"qa": {"status": "pass", "e2e_enforcement": {"status": "legitimately_skipped"}}}}[role]
+    schema = schemagen.load(str(TREE_UNDER_TEST), _report_schema(art))
+    return schemagen.instance(schema, dict(work, task_id=task_id) | (art.get("identity") or {}), seed=art["path"])
+
+
+def _assert_template_shape(doc: dict, art: dict) -> None:
+    """Valid against the schema the obligation declares and not against the retired v1: the report a
+    dev or QA following its template writes, not the dual shape that was the only one to pass."""
+    assert schemagen.jsonschema is not None, "jsonschema is needed to tell the two shapes apart"
+    v2 = _report_schema(art)
+    errors = schemagen.errors(schemagen.load(str(TREE_UNDER_TEST), v2), doc)
+    assert not errors, f"{art['path']} does not follow its template ({v2}): {errors}"
+    v1 = schemagen.load(str(TREE_UNDER_TEST), v2[:-1] + "1")
+    assert schemagen.errors(v1, doc), f"{art['path']} also carries the v1 shape (the dual shape)"
+
+
+def _overnight_session(tmp_path, env, settings: str):
+    """An in-place /dev-overnight session at PM TRIAGE's return, at hook level: the state record the
+    launcher writes (window open), a triage report with one fix pipeline, and the env the CLI gives
+    its hooks (the harness home the tree under test, the settings' env). Returns (project, post), where
+    post(role, prompt) runs the PostToolUse:Agent hooks the settings register on that dispatch's return,
+    asserts each allows it with no hook error, and returns their runs by hook."""
+    project = tmp_path / "toyproj"
+    (project / ".claude").mkdir(parents=True)
+    (tmp_path / "tmp").mkdir()
+    record = {"session_id": _SID, "end_time": _iso(120), "current_phase": "exploring",
+              "isolation_active_until": _iso(120), "isolation_released_at": None, "protected_branch": "master",
+              "isolation_kind": "in_place", "worktree_path": str(project), "addressed_issues": []}
+    (project / ".claude" / f"overnight-state-{_SID}.json").write_text(json.dumps(record))
+    (project / "transcript.jsonl").write_text("")
+    with open(TREE_UNDER_TEST / "settings.json") as fh:
+        doc = json.load(fh)
+    doc = sandbox.armed(doc) if settings == "armed" else doc
+    # the settings' env, with the machine overlay's scratch directory (as a landed home's)
+    hook_env = dict(env, **hookrun.settings_env(doc))
+    hook_env.update(CLAUDE_HOME=str(TREE_UNDER_TEST), CLAUDE_PROJECT_DIR=str(project),
+                    TMPDIR=str(tmp_path / "tmp"), CLAUDE_CODE_TMPDIR=str(tmp_path / "tmp"))
+    calls = []
+
+    def post(role: str, prompt: str) -> dict:
+        calls.append(role)
+        n = len(calls)
+        payload = {"session_id": _SID, "transcript_path": str(project / "transcript.jsonl"), "cwd": str(project),
+                   "tool_name": "Agent", "tool_use_id": f"toolu_e1_{n}",
+                   "tool_input": {"subagent_type": role, "description": f"{role} dispatch", "prompt": prompt},
+                   "tool_response": {"status": "completed", "agentId": f"e1agent{n}",
+                                     "content": [{"type": "text", "text": "Done."}]}}
+        rec = hookrun.run_event(doc, "PostToolUse", payload, hook_env, str(project))
+        for h in rec["hooks"]:
+            assert h["verdict"] == "ok" and _no_error_text(h), \
+                f"{role}'s collection met {h['hook']} rc={h['rc']}: {h['stderr'][-1500:]}{h['stdout'][-500:]}"
+        return {h["hook"]: h for h in rec["hooks"]}
+    return project, post
+
+
+def _no_error_text(h: dict) -> bool:
+    """No Python traceback and no GATE_ERROR / GATE_FAULT text (a hook error even at exit 0)."""
+    text = (h.get("stderr") or "") + (h.get("stdout") or "")
+    return suite.TRACEBACK not in text and not suite.GATE_TEXT.search(text)
+
+
+@pytest.mark.parametrize("settings", suite.SETTINGS)
+@pytest.mark.parametrize("fault", list(E1))
+def test_r_e1_hook_level_the_template_report_passes_collection(tmp_path, env, fault, settings):
+    """At hook level: PM TRIAGE returns and its handler writes the cycle contract, whose entries
+    name no schema; the Step 12 dev (F3a) or Step 15 QA (F3q) dispatch, its obligation as the
+    tree's text declares it, returns with the report its template asks for; every PostToolUse:Agent
+    hook settings.json registers allows it, the collection check having judged it valid."""
+    role, _step = E1[fault]
+    project, post = _overnight_session(tmp_path, env, settings)
+    triage = project / "docs" / "dev" / "overnight" / _SID / "triage-report-cycle1.json"
+    triage.parent.mkdir(parents=True)
+    triage.write_text(json.dumps({"pipeline_order": [0], "issues": [
+        {"triage_index": 0, "pipeline_recommendation": "fix", "description": "add accepts non-numbers",
+         "location": "toy/__init__.py"}]}))
+    post("pm", "PM_MODE: TRIAGE\nTriage this cycle's findings.")
+    contract = json.loads((triage.parent / "cycle-1" / "cycle-contract.json").read_text())
+    calls = contract["required_calls"]
+    assert any(c["role"] == role for c in calls), calls
+    assert not [k for c in calls for k in c if "schema" in k or "path" in k], \
+        f"a contract entry declares an artifact or a schema beside the obligation: {calls}"
+    sfx = "20990101-000001-0"
+    ob = _template_obligation(role, sfx)
+    art = next(a for a in ob["artifacts"] if a.get("kind") == "json")
+    doc = _template_following(art, role, sfx)
+    _assert_template_shape(doc, art)
+    report = project / art["path"]
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps(doc, indent=2) + "\n")
+    hooks = post(role, f'{role} for pipeline 0.\n<obligation v="1">{json.dumps(ob)}</obligation>\n')
+    check = hooks["hooks/posttool-overnight-file-check.py"]
+    assert f"OVERNIGHT FILE CHECK: {role} obligation artifacts valid" in check["stdout"], check
+
+
+def _e1_key(settings: str) -> str:
+    return suite.replay_key(OVERNIGHT, settings)
+
+
+E1_CASES = [pytest.param(fault, s, id=f"R-E1-{fault}-{s}", marks=pytest.mark.replay(_e1_key(s), OVERNIGHT.cost))
+            for fault in E1 for s in suite.SETTINGS]
+
+
+@pytest.mark.parametrize("fault,settings", E1_CASES)
+def test_r_e1_the_template_report_passes_collection_in_the_overnight_cycle(replays, fault, settings):
+    """In the compliant /dev-overnight scenario (launch to the Stop after end_time): each Step 12
+    dev (F3a) or Step 15 QA (F3q) dispatch carries the obligation the tree's template declares, its
+    agent writes the report that template asks for (not the dual shape), its stop meets no block,
+    the collection check judges that report valid when the dispatch returns, and the cycle reaches
+    its terminal."""
+    role, step = E1[fault]
+    r = replays.get(_e1_key(settings))
+    assert not r.error and not r.summary.get("driver_error"), r.explain()
+    assert not r.blocks and not r.hook_errors, r.explain()
+    inv, events = tf.invocations(r), r.hook_events()
+    dispatched = [i for i, ev in enumerate(inv) if ev["event"] == "PreToolUse"
+                  and ev["payload"].get("tool_name") == "Agent" and f" {step} Agent({role})" in ev["label"]]
+    assert dispatched, f"no {step} Agent({role}) dispatch:\n" + r.explain()
+    for i in dispatched:
+        p = inv[i]["payload"]
+        ob = json.loads(_OBLIGATION.search(p["tool_input"]["prompt"]).group(1))
+        art = next(a for a in ob["artifacts"] if a.get("kind") == "json")
+        sfx = ob["task_id"]
+        template = next(a for a in _template_obligation(role, sfx)["artifacts"] if a.get("kind") == "json")
+        assert (art["path"], art["schema"]) == (template["path"], template["schema"]), (art, template)
+        post = next(k for k in range(i + 1, len(inv)) if inv[k]["event"] == "PostToolUse"
+                    and inv[k]["payload"].get("tool_use_id") == p.get("tool_use_id"))
+        agent = (inv[post]["payload"].get("tool_response") or {}).get("agentId")
+        wrote = [inv[k]["payload"] for k in range(i, post) if inv[k]["event"] == "PostToolUse"
+                 and inv[k]["payload"].get("tool_name") in ("Write", "Edit")
+                 and inv[k]["payload"]["tool_input"].get("file_path", "").endswith("/" + art["path"])]
+        assert [w["tool_name"] for w in wrote] == ["Write"] and wrote[0].get("agent_id") == agent, \
+            f"{art['path']} was not written once by its producer {agent}: {wrote}"
+        _assert_template_shape(json.loads(wrote[0]["tool_input"]["content"]), art)
+        stops = tf.stops(r, agent)
+        assert stops and not any(s["blocked"] for s in stops), f"{role}'s stop was blocked: {stops}"
+        check = next(h for h in events[post]["hooks"] if h["hook"] == "hooks/posttool-overnight-file-check.py")
+        assert check["verdict"] == "ok" and \
+            f"OVERNIGHT FILE CHECK: {role} obligation artifacts valid" in (check.get("stdout") or ""), \
+            f"the collection check did not judge {art['path']} valid at {inv[post]['label']}: {check}"
+    assert r.reached(), "the cycle did not reach its terminal:\n" + r.explain()
