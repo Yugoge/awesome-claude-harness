@@ -364,10 +364,10 @@ def _collect_commit_grant_candidates():
     a repository mismatch (docs/dev/peer-review-grant-parity.md CRITICAL).
 
     The any-SID glob is a superset of the SID-specific glob, so one glob covers
-    both the fast path and the subagent SID-propagation fallback (a subagent's
-    PreToolUse session_id differs from the orchestrator's CLAUDE_SESSION_ID the
-    grant was written under). A spent grant no longer exists, so every match is
-    unspent.
+    the session's own grants and one written under another id (the writer takes
+    --sid or the env's id); a subagent's PreToolUse payload carries its parent's
+    session_id and main transcript_path, plus agent_id. A spent grant no longer
+    exists, so every match is unspent.
     """
     pattern = os.path.join(harness_state_dir(), 'claude-commit-grant-*-*.json')
     try:
