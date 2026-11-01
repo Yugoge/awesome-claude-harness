@@ -1213,8 +1213,8 @@ def _mint_unique_do_taskid() -> str:
     /close + /commit task-id resolution compatible (no nonce suffix that /close's
     timestamp-pattern branch might reject). The flat /tmp marker is reachable by the
     maxdepth-1 /tmp sweep AND self-pruned here. The ONLY non-reserved return path is
-    an unwritable state dir (OSError) — but there the sidecar write fails too, so
-    the id never reaches the agent and a collision on it is moot."""
+    a state dir that refuses the marker (OSError): the id is then returned
+    unreserved, and the consent flag and the sidecar fail in that dir too."""
     base = datetime.now()
     # Opportunistic prune — a marker only matters for the ~1s it guards (mint
     # always scans forward from `now`), so markers older than 5 min are pure debris.
@@ -1239,12 +1239,10 @@ def _mint_unique_do_taskid() -> str:
         except FileExistsError:
             continue  # this second already reserved by another mint -> bump forward
         except OSError:
-            # State dir unwritable: the sidecar write will also fail, so an
-            # unreserved id here is moot (it never reaches the agent). Return it.
-            return ts
+            return ts  # the state dir refuses the marker: unreserved (see above)
     # 300 consecutive seconds all reserved — unreachable in practice. FAIL CLOSED
-    # rather than return an already-reserved (colliding) id: handle_do_consent's
-    # try/except then skips the sidecar, so no /do task-id is minted for this prompt.
+    # rather than return an already-reserved (colliding) id: handle_do_consent
+    # then prints no minted line and writes no sidecar for this prompt.
     raise RuntimeError("unable to reserve a unique /do task-id after 300 probes")
 
 
@@ -1259,21 +1257,27 @@ def handle_do_consent(sid: str) -> None:
     flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag")
     try:
         flag.write_text("true")
-        print(f"[/do] Consent granted. Main agent may now perform direct operations this session.")
+        print("[/do] Consent granted. Main agent may now perform direct operations this turn.")
     except Exception as e:
         sys.stderr.write(f"[/do] Failed to write consent flag: {e}\n")
     # Mint a unique task-id and expose it via a session-keyed sidecar. Kept
     # SEPARATE from the consent flag (the orchestrator-gate trust root, whose
     # content stays "true" so every existence-checking reader is unaffected).
+    # The minted line is printed first: the Stop gate reads the task id from
+    # this hook's output in the transcript, not from the sidecar (TC-26), so a
+    # failed sidecar write leaves the id named all the same.
     try:
         task_id = _mint_unique_do_taskid()
-        sidecar = Path(f"{harness_state_dir()}/claude-do-task-{sid}.json")
-        sidecar.write_text(json.dumps({
+    except Exception as e:
+        sys.stderr.write(f"[/do] Failed to mint a task-id: {e}\n")
+        return
+    print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → {harness_state_dir()}/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
+    try:
+        Path(f"{harness_state_dir()}/claude-do-task-{sid}.json").write_text(json.dumps({
             "task_id": task_id,
             "session_id": sid,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }))
-        print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → {harness_state_dir()}/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
     except Exception as e:
         sys.stderr.write(f"[/do] Failed to write task sidecar: {e}\n")
 
