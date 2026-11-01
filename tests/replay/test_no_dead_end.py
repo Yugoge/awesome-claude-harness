@@ -86,11 +86,18 @@ def fault_key(fault: str) -> str:
     return suite.replay_key(scn, settings, (("fault", spec),))
 
 
+# /dev-overnight marking Step 0 completed before the wake's CronCreate and stopping after end_time before
+# its CronDelete (P1c X8, row 17): the wake's two gates, replayed under both settings.
+WAKE_LATE = suite.Scenario("dead end: the wake's gates", "overnight", (("variant", "plain"), ("wake", "late")),
+                           ("dev-overnight",), 600)
+
+
 def _reads_every_replay_of_this_file(test):
     """Mark `test` with every replay this file's tests read: the session runner replays them all before
     it runs, and a CI shard that runs it runs them all (conftest.py groups them)."""
     for key, cost in [(case_key(c), CASES[c].cost) for c in CASES] + \
-            [(fault_key(f), FAULTS[f][0].cost) for f in FAULTS]:
+            [(fault_key(f), FAULTS[f][0].cost) for f in FAULTS] + \
+            [(suite.replay_key(WAKE_LATE, st), WAKE_LATE.cost) for st in suite.SETTINGS]:
         test = pytest.mark.replay(key, cost)(test)
     return test
 
@@ -313,8 +320,7 @@ def test_every_block_of_the_session_maps_to_a_site(replays, catalog):
 
 # ---------------------------------------------------------------- the wake's two gates (P1c X8, row 17)
 
-WAKE_LATE = suite.Scenario("dead end: the wake's gates", "overnight", (("variant", "plain"), ("wake", "late")),
-                           ("dev-overnight",), 600)
+# WAKE_LATE (defined above, beside the cases) is replayed here.
 
 
 @pytest.mark.parametrize("key", [pytest.param(suite.replay_key(WAKE_LATE, s), id=s,
