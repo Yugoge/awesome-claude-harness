@@ -474,7 +474,7 @@ Only proceed to Step 6 when a STRONG signal fires.
 ### Step 7: Display result + workflow update
 
 Before the final stdout response, create a compact temp update using
-`/spec-update --temp`. Default to `mktemp -t update-XXXXXX.md`; do not write this
+`/spec-update --temp` (its `update.md` in a `mktemp -d` directory); do not write this
 update into the repo unless the user explicitly asks. The update focuses on
 the next `/dev` session and references the spec path, split marker, views
 folder, checkpoints, and unresolved split-QA file by path instead of duplicating
