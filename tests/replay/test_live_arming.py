@@ -150,6 +150,7 @@ class World:
         self.command("dev", "dev", "fix the flaky test", context="DEV_SESSION_ID pre-initialized by hook: "
                      "dev-20261101-090000\nTask id: 20261101-090000\n")
         self.todos("dev", self.canonical("dev"), 3)
+        self.tool("dev", "Agent", {"subagent_type": "ba", "description": "analyse", "prompt": "Analyse it."})
 
     def _do(self):
         self.command("do", "do", "rename the heading", context=f"[/do] task-id minted: {DO_ID}\n")
@@ -268,7 +269,8 @@ def test_a21_the_open_window_blocks_under_both_hook_lists(world, which):
 @pytest.mark.parametrize("which", ["pre-update", "this tree"])
 def test_a21_the_tool_hooks_accept_the_old_transcript(world, which):
     """pretool-tool-policy.py and pretool-todo-validate.py on the in-flight /dev cycle's transcript:
-    its next TodoWrite (step 4 in progress) is accepted, no traceback."""
+    its next TodoWrite (Step 4 completed after its BA dispatch came back, the next step in progress)
+    is accepted, no traceback."""
     settings = pre_update_settings() if which == "pre-update" else current_settings()
     steps = world.canonical("dev")
     todos = [{"content": s["content"], "activeForm": s.get("activeForm", s["content"]),
