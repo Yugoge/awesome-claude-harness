@@ -508,10 +508,18 @@ class Span:
         return found
 
     def session_families(self) -> set:
-        """The task families (obligation.task_family) the span's ok
-        dispatches named in their obligations."""
-        task_family = _harness_lib("obligation").task_family
-        return {task_family(o.get("task_id")) for o in self.obligations() if task_family(o.get("task_id"))}
+        """The task families (obligation.task_family) of the span's ok
+        dispatches whose artifacts are the task's: a dispatch whose file
+        artifacts are all named otherwise (a session-level report: an
+        overnight triage, a retrospective) stamps an id but works on no task."""
+        obligation = _harness_lib("obligation")
+        families = set()
+        for found in self.obligations():
+            task = obligation.canonical_task_id(found.get("task_id"))
+            paths = [a.get("path") for a in found.get("artifacts") or () if isinstance(a, dict) and a.get("path")]
+            if task and (not paths or any(task in str(path) for path in paths)):
+                families.add(obligation.task_family(task))
+        return families
 
     def write_set(self, project_dir, actor: str | None = "main", stop_line: int | None = None):
         """write_set() of the span: the files written or named after its

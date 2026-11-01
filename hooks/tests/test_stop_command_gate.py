@@ -251,6 +251,20 @@ def test_a2_an_older_passing_family_does_not_cover_the_minted_task(env):
     assert {c[1] for c in env.fake.calls} == {FAMILY, "20261031-120000"}
 
 
+def test_session_families_leave_out_a_dispatch_working_on_no_task(env):
+    env.tx.command("dev-overnight", "--hours 1")
+    env.tx.dispatch("20261101-095259", role="pm", pipeline="dev-overnight", profile="overnight", artifacts=[
+        {"kind": "json", "path": "docs/dev/overnight/s/triage-report-cycle1.json", "schema": "triage-report.v1",
+         "identity": {"task_id": "20261101-095259"}}])
+    env.tx.dispatch(f"{FAMILY}-0-l1", role="dev", pipeline="dev-overnight")
+    env.tx.dispatch(f"dev-{FAMILY}", role="changelog-analyst", pipeline="commit", artifacts=[
+        {"kind": "response_block", "begin": "B", "end": "E", "format": "json", "schema": "changelog-status.v1"}])
+    env.tx.dispatch("20261101-120000", role="qa", result="failed", pipeline="dev")
+    env.tx.add({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "x", "content": "late"}]}})
+    assert command_span.active_span(env.tx.path).session_families() == {f"{FAMILY}-0", FAMILY, "20261101-120000"}
+
+
 def test_a2_a_subagents_stop_is_allowed(env):
     dev_span(env, done=1)
     assert run(env, agent_id="a1") == (0, "")
