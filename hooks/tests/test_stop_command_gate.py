@@ -769,6 +769,21 @@ def overnight_session(env, wake=True, prompt=None):
                     extra={"toolUseResult": {"id": "cron-7", "recurring": True}})
 
 
+def test_a12_a_time_lock_it_cannot_read_blocks_any_span_in_any_mode_until_the_humans_stop(env, monkeypatch):
+    """Self-check finding: an exception in the time-lock (P2's window_open absent) was an allow in an
+    ungated span and in advisory mode; it holds as an open window does, until the human's /stop."""
+    fake = overnight_fake({"session_id": SID, "end_time": "2026-11-01T10:00:00Z"})
+    del fake.window_open
+    monkeypatch.setitem(sys.modules, "lib.overnight", fake)
+    overnight_session(env, wake=False)
+    env.tx.command("spec")
+    for mode in ("block", "advisory"):
+        code, text = run(env, mode)
+        assert code == 2 and "time-lock: gate instrument failure: AttributeError" in text and "/stop" in text
+    env.tx.command("stop")
+    assert run(env) == (0, "")
+
+
 def test_a12_after_the_window_a_live_wake_blocks_naming_its_id_until_deleted(env, monkeypatch):
     monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake({"session_id": SID, "worktree_path":
                                                                       str(env.project)}, window=False))

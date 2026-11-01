@@ -13,7 +13,8 @@ payload on stdin and decides, in order:
   (4) the overnight time-lock, whatever the span and the mode: block while
       overnight.window_open(payload); after end_time (closeout_gaps empty) or
       the owner's /stop, block while the wake's CronCreate (overnight.WAKE_PROMPT)
-      has no later CronDelete (overnight.open_wakes), naming its id;
+      has no later CronDelete (overnight.open_wakes), naming its id; a
+      time-lock it cannot read blocks the same way until the human's /stop;
   (5) no gated span (stop-commands.json's GATED_COMMANDS): allow;
   (6) the gaps: the todo half and the command's predicate; an exception is
       the gap `gate instrument failure: <type>: <message>`, never an allow;
@@ -427,19 +428,18 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     gated = span is not None and span.command in command_span.GATED_COMMANDS
     try:  # (4)
         lock = time_lock(payload)
-    except Exception as exc:
-        if not gated:
-            return 0, f"COMMAND_GATE time-lock: gate instrument failure: {type(exc).__name__}: {exc}\n", None
-        lock, failure = (0, "", None), [f"gate instrument failure: {type(exc).__name__}: {exc}"]
-    else:
-        failure = []
+    except Exception as exc:  # a window it cannot read holds in any span and mode, as an open one does
+        if not (transcript and command_span.timelock_released(transcript)):
+            return 2, (f"COMMAND_GATE time-lock: gate instrument failure: {type(exc).__name__}: {exc}; "
+                       "the human can type /stop\n"), None
+        lock = (0, "", None)
     if lock[0] == 2:
         return lock
     terminal = lock[2]
     if not gated:  # (5)
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
-    gaps = list(failure)
+    gaps = []
     for part in (lambda: todo_gaps(span), lambda: PREDICATES[span.command](span, root, payload)):  # (6)
         try:
             gaps += part()
