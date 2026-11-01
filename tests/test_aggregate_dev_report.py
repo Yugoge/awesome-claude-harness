@@ -2350,8 +2350,11 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
         # 0); that is the parser, not a profile bypass -- G1 rejects such a
         # dispatch. The same qa dispatch with a registered profile is checked
         # and blocked.
-        _write(dev_dir, f"dev-report-{BARE_TID}.json",
-               {**_good_shard(), "parallel_workers": ["A", "B"]})
+        # The canonical the aggregator itself writes, so G3's own check of the
+        # canonical (P3 row 12(b), blocking while armed) passes and the
+        # dispatch reaches the barrier.
+        assert main(["--task-id", BARE_TID]) == 0
+        capsys.readouterr()
         monkeypatch.setattr(_hook_mod, "_run_obligation_barrier", real_barrier)
         monkeypatch.setenv("CLAUDE_OBLIGATION_BARRIER", "block")
         missing_rel = "docs/dev/dev-report-missing-ac8.json"
