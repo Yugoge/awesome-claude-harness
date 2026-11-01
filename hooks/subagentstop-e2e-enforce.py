@@ -11,11 +11,11 @@ Activation logic:
      the qa-report.v2 artifact it declares is the report judged, at exactly
      the path declared (missing: exit 2 naming that path); one that declares
      none (BA validation, close QA) owes no E2E evidence here: exit 0.
-  4. A dispatch without an obligation, in a session whose
-     .claude/dev-registry/<dev_session_id>/e2e-enforce.json is enabled: the
-     docs/dev/qa-report-*.json files this QA's own transcript shows it wrote
-     (command_span.write_set), never another agent's. None written: exit 2,
-     unless the session's do-report declares qa-report expected-absent.
+  4. A dispatch without an obligation, of a QA its agent-index entry binds to
+     a cycle's registry (dev_session_id): the docs/dev/qa-report-*.json files
+     this QA's own transcript shows it wrote (command_span.write_set), never
+     another agent's. None written: exit 2, unless the session's do-report
+     declares qa-report expected-absent.
   5. Each judged report's e2e_enforcement.status: "performed",
      "legitimately_skipped", "ran" or "blocked_app_unavailable" pass;
      "skipped_without_justification", another value or an absent field exit
@@ -246,13 +246,10 @@ def main() -> None:
             )
         sys.exit(0)
 
-    # A dispatch without an obligation, in an enforced session: the QA report
-    # this QA's own transcript shows it wrote, never another agent's.
+    # A dispatch without an obligation, of a QA a cycle's registry holds: the
+    # QA report this QA's own transcript shows it wrote, never another agent's.
     dev_session_id = entry.get("dev_session_id")
     if agent_type != ENFORCED_AGENT_TYPE or not dev_session_id:
-        sys.exit(0)
-    enforce_path = Path(project_dir) / ".claude" / "dev-registry" / dev_session_id / "e2e-enforce.json"
-    if not _read_json(enforce_path).get("enabled"):
         sys.exit(0)
 
     written = command_span.write_set(transcript, project_dir, excluded=()) if transcript else None

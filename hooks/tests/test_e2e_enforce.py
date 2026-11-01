@@ -4,14 +4,14 @@ is judged on.
 
 - A QA whose dispatch carries an obligation (ticket 20261001-161041-r06, P1b
   E7, P1c R10) is judged on exactly the qa-report.v2 it declares, at the path
-  declared, whatever the registry holds (no agent-index entry, no e2e flag)
-  and whatever form the session id takes; a stale report beside it is never
-  read (F3b).
-- A QA whose dispatch carries none, in an enforced session, is judged on the
-  qa-reports its own transcript shows it wrote (command_span.write_set),
-  never the newest file of the session or a sibling's (R10).
-- Every other stop (no session_id, no obligation and no enforced session, a
-  role other than qa, a qa obligation declaring no qa-report.v2) exits 0.
+  declared, whatever the registry holds (no agent-index entry) and whatever
+  form the session id takes; a stale report beside it is never read (F3b).
+- A QA whose dispatch carries none, bound to a cycle's registry (its
+  agent-index entry), is judged on the qa-reports its own transcript shows it
+  wrote (command_span.write_set), never the newest file of the session or a
+  sibling's (R10); the gate has no flag to read.
+- Every other stop (no session_id, no obligation and no cycle registry entry,
+  a role other than qa, a qa obligation declaring no qa-report.v2) exits 0.
 
 Models hooks/tests/test_artifact_contract_enforce.py's fixture and
 invocation patterns (importlib for the hyphenated module under test,
@@ -65,13 +65,6 @@ def _register_agent(
         existing = json.loads(index_path.read_text(encoding="utf-8"))
     existing[agent_id] = {"agent_type": agent_type, "dev_session_id": dev_session_id}
     _write(index_path, existing)
-
-
-def _enable_e2e_enforcement(project_dir: Path, dev_session_id: str) -> None:
-    _write(
-        project_dir / ".claude" / "dev-registry" / dev_session_id / "e2e-enforce.json",
-        {"enabled": True},
-    )
 
 
 def _qa_report(task_id: str, status: str = "performed") -> dict:
@@ -408,8 +401,8 @@ def test_ac4_agent_resolver_unmodified_by_this_fix():
 
 
 # ---------------------------------------------------------------------------
-# R10 (P1c): a dispatch without an obligation, in an enforced session, is
-# judged on the QA reports its own transcript shows it wrote, never on the
+# R10 (P1c): a dispatch without an obligation, of a QA a cycle's registry
+# holds, is judged on the QA reports its own transcript shows it wrote, never on the
 # newest file of the session or a sibling's; every message names the report's
 # path and the field.
 # ---------------------------------------------------------------------------
@@ -434,7 +427,6 @@ def _write_qa_transcript(home, project, session, agent_id, prompt, paths):
 def _registered_qa(tmp_path, dev_session_id, agent_id, session, writes=()):
     project, home = _project_home(tmp_path)
     _register_agent(project, agent_id, dev_session_id, "qa")
-    _enable_e2e_enforcement(project, dev_session_id)
     _write_qa_transcript(home, project, session, agent_id, "Verify this cycle. No obligation block.", writes)
     return project, home
 
@@ -483,7 +475,7 @@ def test_r10_declared_path_beside_a_stale_unsuffixed_report(tmp_path):
     """F3b: a fan-out lane QA's obligation declares its lane report; a stale
     v1 qa-report at the parent's unsuffixed path is nobody's here. The lane
     passes on its own report; missing, it is blocked naming the declared path,
-    never the stale one; at any registry state (no entry, no flag)."""
+    never the stale one; at any registry state (no agent-index entry)."""
     session = "harness-r10-f3b"
     agent_id = "agent-qa-r10-f3b"
     task = "20260303-000000"
@@ -504,10 +496,9 @@ def test_r10_declared_path_beside_a_stale_unsuffixed_report(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-def test_r10_obligation_decides_alone_in_a_registered_session_without_the_flag(tmp_path):
-    """An obligation-bearing QA registered under a session id whose registry
-    holds no e2e flag (an overnight id's form) is still judged on its
-    declared report."""
+def test_r10_obligation_decides_alone_in_a_registered_session(tmp_path):
+    """An obligation-bearing QA registered under a session id of an overnight
+    id's form is still judged on its declared report."""
     session = "harness-r10-noflag"
     agent_id = "agent-qa-r10-noflag"
     task = "20260404-000000"
@@ -530,7 +521,6 @@ def test_r10_a_non_qa_stop_is_never_judged(tmp_path):
     report is not judged here."""
     project, home = _project_home(tmp_path)
     _register_agent(project, "agent-dev-r10", "dev-20260505-000000", "dev")
-    _enable_e2e_enforcement(project, "dev-20260505-000000")
     _write_qa_transcript(home, project, "harness-r10-dev", "agent-dev-r10", "dev work",
                          ["docs/dev/qa-report-20260505-000000.json"])
     _write(project / "docs" / "dev" / "qa-report-20260505-000000.json",
