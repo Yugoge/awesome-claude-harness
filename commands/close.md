@@ -67,7 +67,7 @@ The task-id is the SAME identifier the source `/dev` or `/do` cycle used — nev
 
 A `/do` task: when `docs/dev/dev-report-<TASK_ID>.json` does not exist and `docs/dev/do-report-<TASK_ID>.json` does, bind `DO_REPORT` to it (a dev-report takes precedence).
 
-**Which task?** When no task-id can be bound, ask (header `Task`) which task to close; the options are the task candidates: the first word of each line `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action close --project-dir "<PROJECT_ROOT>"` prints, at most four (fewer than two: add `/close --auto`). The dialog's own answer box takes any other task-id or path. Never default the close-report filename to a fresh timestamp.
+**Which task?** When no task-id can be bound, ask (header `Task`) which task to close; the options are the task candidates: the first word of each line `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action close --project-dir "<PROJECT_ROOT>"` prints, at most four (fewer than two: add `/close --auto` and the tasks `list-actionable --next-action commit` prints, a closed task closing again). The dialog's own answer box takes any other task-id or path. Never default the close-report filename to a fresh timestamp.
 
 ### Late-repair route (R4 — spec-20260907-115508-lawful-commit-channel.md)
 
@@ -108,7 +108,7 @@ python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/obligation.py" declaring-dispat
 
 It reads this task's dispatch records in every session the project's transcript store holds (a `/dev` of an earlier session included) and prints who owes `path` as JSON, or `null`. Act on the answer with one fresh synchronous dispatch: an `Agent` call with `run_in_background: false`, the same task id, lane and obligation, a new `dispatched_at`, the prompt carrying the gap or finding (path, problem, message):
 
-- A `/do` task (`DO_REPORT` set), whatever the answer: the do-report, and a file the answer names no dispatch for (the `/do` main agent wrote it), go to dev, never to `/do`'s own steps: dispatch dev under the same task id with the obligation `<obligation v="1">{"task_id": "<TASK_ID>", "role": "dev", "pipeline": "do", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call>", "artifacts": [{"kind": "json", "path": "docs/dev/do-report-<TASK_ID>.json", "schema": "do-report.v1", "identity": {"task_id": "<TASK_ID>"}}]}</obligation>` to complete the `/do` work; the `/close` orchestrator writes no report.
+- A `/do` task (`DO_REPORT` set), whatever the answer: the do-report, and a file the answer names no dispatch for (the `/do` main agent wrote it), go to dev, never to `/do`'s own steps: dispatch dev under the same task id (pipeline `do`) to complete the `/do` work, its obligation naming the do-report `docs/dev/do-report-<TASK_ID>.json` (schema `do-report.v1`) as the artifact dev completes; the `/close` orchestrator writes no report.
 - `source` `dispatch`, `lane` or `writer`: the answer's dispatch again — its `subagent_type`, `lane` and obligation (a `lane` answer is a lane's dev, whose report write runs the hook that writes the canonical aggregate; a `writer` answer is the dispatch whose own tool calls wrote a product file).
 - `source` `todo_step` with a `subagent_call`: a fresh dispatch of that role under the same task id, from the `template` (its obligation) of the answer's `step` in `commands/<command>.md`; a wholly missing lane is rebuilt in ba → dev → qa order.
 - `source` `todo_step` with no `subagent_call` (the main agent's own step, as `/dev` Step 11 or the late-repair finalize): run that step yourself under the same task id.
@@ -297,7 +297,7 @@ Verdict branches:
    - Branches 3 / 6 / 7 / 8 are all N/A in the codex-disabled path (codex was never invoked; there is no codex dissent to weigh, no infrastructure failure to handle, no parse failure to scan).
    - The close-report MUST record `codex_status: disabled_by_user` in the "Codex consultation" section (NOT `failed_*`), and the per-round entries record `[Codex] consultation skipped: --codex flag not passed; QA-only assessment performed`. The final line MUST be `CLOSE: YES — codex disabled by user` (when the round opened no finding; or the form `CLOSE: YES - with disclosures: <n> items` once every finding the cycle routed has been fixed and re-judged clean, `<n>` = the `## Disclosures` lines) or, when the round opened findings, `CLOSE_FINDINGS: <n> items`.
 
-Transcript file: write the full debate to `docs/dev/close-report-<task-id>.md` (substitute `<task-id>` with the value resolved in Step 3 — e.g. the source `/dev` cycle's task-id; do NOT use a fresh `date +%Y%m%d-%H%M%S` here, that would break /commit's PRIMARY-path lookup) with this structure:
+Transcript file: write the full debate to `docs/dev/close-report-<task-id>.md` (substitute `<task-id>` with the value Task-id resolution bound — the source `/dev` cycle's task-id; do NOT use a fresh `date +%Y%m%d-%H%M%S` here, that would break /commit's PRIMARY-path lookup) with this structure:
   # Close Debate Report
   Task-id, artifact-chain mode, Input files, Rounds run, Verdict. For fan-out,
   include the supplied `lanes[]` matrix and `qa_inputs[]` paths so the report
