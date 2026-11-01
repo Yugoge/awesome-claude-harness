@@ -291,9 +291,18 @@ def test_a3_a_complete_checklist_still_needs_chain_pass(env, answer, code):
         assert g["artifact"] in text and g["problem"] in text and "owner" not in text
 
 
-def test_a3_redev_and_dev_command_share_the_predicate(env):
-    for command in ("redev", "dev-command"):
-        assert gate.PREDICATES[command] is gate.PREDICATES["dev"]
+@pytest.mark.parametrize("command", ["dev", "redev", "dev-command"])
+def test_a7_redev_and_dev_command_are_held_as_dev(env, command):
+    """A2's transcripts with /redev or /dev-command: the same exit code at every Stop (D22)."""
+    steps = canonical(command, "fix the build")
+    env.tx.command(command, "fix the build", context=f"DEV_SESSION_ID pre-initialized by hook: {DEV_ID}\n")
+    env.tx.todos(steps, 1)
+    assert run(env)[0] == 2
+    env.tx.todos(steps, len(steps))
+    assert "- no pipeline dispatched\n" in run(env)[1]
+    env.tx.dispatch(FAMILY)
+    assert run(env) == (0, "")
+    assert gate.PREDICATES[command] is gate.p_dev
 
 
 # ---------------------------------------------------------------- A4: /do
@@ -633,19 +642,21 @@ def test_a8_close_needs_the_rating_question_asked_where_required(env, monkeypatc
     assert env.fake.calls[-1][1:3] == (FAMILY, "close")
 
 
-def test_a8_close_auto_targets_come_from_the_lifecycle_function_never_a_tool_result(env, monkeypatch):
+@pytest.mark.parametrize("command", ["close", "commit"])
+def test_a8_auto_targets_come_from_the_lifecycle_function_never_a_tool_result(env, monkeypatch, command):
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
     lifecycle = types.SimpleNamespace(calls=[])
     lifecycle.auto_targets = lambda root, action, cutoff: lifecycle.calls.append((action, cutoff)) or [FAMILY]
     monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py", lifecycle)
-    env.tx.command("close", "--auto")
-    env.tx.tool("Bash", {"command": "python3 scripts/dev-lifecycle.py list-actionable --next-action close"},
+    env.tx.command(command, "--auto")
+    env.tx.tool("Bash", {"command": f"python3 scripts/dev-lifecycle.py list-actionable --next-action {command}"},
                 result="20990101-000000")
-    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "INVALID_CLOSE_VERDICT", "no")]
+    env.fake.answers[(FAMILY, command)] = [gap(f"docs/dev/close-report-{FAMILY}.md", "INVALID_CLOSE_VERDICT", "no")]
     code, text = run(env)
-    assert code == 2 and "20990101" not in text
+    assert code == 2 and "20990101" not in text and "INVALID_CLOSE_VERDICT" in text
     opened = command_span.active_span(env.tx.path).opened_at()
-    assert lifecycle.calls == [("close", opened)] and opened is not None
+    assert lifecycle.calls == [(command, opened)] and opened is not None
+    assert {c[1] for c in env.fake.calls} == {FAMILY}
 
 
 def test_a8_no_target_names_the_gap(env, monkeypatch):
