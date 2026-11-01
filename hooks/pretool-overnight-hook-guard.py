@@ -1397,7 +1397,8 @@ def _scan_script_files_for_main_git(command: str, main_real: str) -> bool:
     # If the command itself names main_root + a dangerous git op, the inline scan
     # already covers it; here we focus on file operands.
     for tok in command.split():
-        t = tok.strip('\'"')
+        # `~/x.py` names the script bash runs (tilde expansion), so it is read, not "unreadable".
+        t = os.path.expanduser(tok.strip('\'"'))
         if not t or t.startswith('-'):
             continue
         # heuristically a script operand: a path ending in a known script ext OR
@@ -1913,6 +1914,12 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
         '--die-with-parent',
         '--bind', wt_real, wt_real,     # (5) the worktree: RW, nested over RO main
     ]
+    # A TMPDIR outside /tmp (settings.json pins one) is private and writable too, as /tmp is, or
+    # every mktemp of the command fails on the RO host; never one holding main or the worktree.
+    tmp = os.path.realpath(os.environ.get('TMPDIR') or '/tmp')
+    if os.path.isdir(tmp) and not _path_under_prefix(tmp, '/tmp') and not any(
+            _path_under_prefix(r, tmp) or _path_under_prefix(tmp, r) for r in (main_real, wt_real)):
+        argv += ['--tmpfs', tmp]
     # (4) LINKED worktree: RW-expose exactly the git-derived metadata paths the
     # supported surface needs. A fresh_clone worktree is self-contained (its .git
     # lives under the RW worktree already) -> ZERO .git exceptions.

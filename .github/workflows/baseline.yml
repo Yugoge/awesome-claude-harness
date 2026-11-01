@@ -324,11 +324,12 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install strace and Python dependencies
+      - name: Install strace, bubblewrap and Python dependencies
+        # bubblewrap for the /dev-overnight replays, as in the job replay-suite.
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y strace
+          sudo apt-get install -y strace bubblewrap
           python3 -m pip install --require-hashes -r requirements/py312.txt
 
       - name: Replays and differential of this shard
@@ -497,8 +498,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Python dependencies
-        run: python3 -m pip install --require-hashes -r requirements/py312.txt
+      - name: Install bubblewrap and Python dependencies
+        # bubblewrap: pretool-overnight-hook-guard.py re-execs each Bash call of a /dev-overnight
+        # actor inside its bwrap write boundary and refuses the call where bwrap is missing
+        # (OVERNIGHT WRITE-BOUNDARY FAIL-CLOSED); the replays run as the CLI does on a host with it.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          python3 -m pip install --require-hashes -r requirements/py312.txt
 
       - name: Replay suite, shard ${{ matrix.shard }} of 8
         env:

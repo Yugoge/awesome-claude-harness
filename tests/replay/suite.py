@@ -71,7 +71,7 @@ COMPLIANT = (
     Scenario("/dev clarify", "dev", (("variant", "question"),), ("dev",), 100),
     Scenario("/redev", "redev", (), ("dev", "redev"), 170),
     Scenario("/dev-command", "dev_command", (("variant", "plain"),), ("dev-command",), 80),
-    Scenario("/dev-overnight", "overnight", (("variant", "plain"),), ("dev-overnight",), 300),
+    Scenario("/dev-overnight", "overnight", (("variant", "plain"),), ("dev-overnight",), 480),
     Scenario("/do", "do", (("then", "none"),), ("do",), 60),
     Scenario("/close after /dev", "close", (("variant", "plain"),), ("dev", "close"), 150),
     Scenario("/close after /do", "do", (("then", "close"),), ("do", "close"), 110),

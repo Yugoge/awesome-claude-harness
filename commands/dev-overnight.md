@@ -117,7 +117,7 @@ Step 1: Read state file + cd into the working root (first run only)
    - **Clause C (autonomy-directive override)** — `spec_mode == "user-provided"` AND focus contains any of `\b(autonomously|manual\s+interrupt|don.?t\s+ask|no\s+questions)\b` (case-insensitive): treat the run as autonomous regardless of spec_mode. The orchestrator MUST NOT emit `<options>` XML or interrogative endings. When genuine deadlock occurs (e.g., META-DEADLOCK where a hook blocks the very fix needed), the orchestrator MUST: (a) park the deadlocked pipeline (Hard Rule 5), with the decision the deadlock needs as its parked question; (b) continue with the next pipeline; (c) record every owner question as a parked question for the overnight summary, to be asked with AskUserQuestion after `end_time`. Asking the user mid-cycle is a Clause-C violation.
 2. **Loop continuously until `end_time`**. After each fix cycle the todo completion hook handles looping; this is non-negotiable. When `spec_mode == "user-provided"`, a spec-defined user gate does not pause the loop: inside the window the pipeline it gates parks (Hard Rule 5) and the loop continues with the other pipelines; after `end_time` the gate's question is asked with AskUserQuestion and that pipeline is finished.
 3. **Cycles are user-pathway-filtered and priority-driven** (per spec-20260503-091826 Section 5.5 decision #2 — same user-need-centric philosophy as `/dev`, with explore-mode compatibility preserved per Section 5.7 anti-pattern #5). Specialists' free exploration behavior is unchanged — they continue to discover broadly. PM triage applies the user-need path-relevance filter (agents/pm.md Step 4): in **user-provided mode**, the user spec's Section 5 user-need IS the path; pipelines are gated to user-pathway-relevant findings. In **autonomous mode**, only Tier 1 blockers AND multi-agent-consensus findings get pipelines; remaining findings route to the cycle's `out_of_scope_observations` array (per agents/pm.md schema). Within the gated pipeline set, ordering remains by tier: Tier 1 (blockers) first, Tier 2 (major), Tier 3 (minor/cosmetic). Specialists continue to explore broadly — the gating is purely on what becomes a pipeline, not on what specialists are allowed to discover.
-4. **ALL exploration and fixes via subagents**. Use Agent tool for ALL scanning, analysis, and implementation work. Main context only handles TodoWrite and loop control.
+4. **ALL exploration and fixes via subagents**. Use Agent tool for ALL scanning, analysis, and implementation work. Main context only handles TodoWrite and loop control. Every file the main context writes itself (Step 5's spec copies, the pipeline marks of Steps 16-17 in `pipelines.json`, Step 19's cycle log, Step 21's summary) is written by a Bash call with a quoted heredoc (`cat > <path> <<'EOF'` ... `EOF`, or `>>` to append), never with Write or Edit: the orchestrator gate allows the main agent one Write and one Edit per turn (CLAUDE.md, Orchestrator-Only Rule), and the whole session is one turn.
 5. **Producer questions are answered under Clause A or parked; nothing is ever skipped**. A BA or dev producer that needs a real, specific owner decision, one that the request, the code or a sensible default cannot settle, writes `docs/dev/producer-question-<task_id>-<role>.json` (schema producer-question.v1: `task_id` and `role` exactly as in its obligation, `need`, 2-4 `options` of `{label, description}`, a `default` that is one of the labels, `why`) instead of its report, and ends. That artifact is a subagent's only question path. QA has no question path: a QA fail or warning is a process step that sends the pipeline back to dev (Step 17). Inside the time-lock window the orchestrator never asks the owner; for each question it either:
    - **answers it** when the choice is routine and Clause A covers it: it re-dispatches the same role fresh and synchronously (same `subagent_type`, `task_id`, pipeline, profile and obligation template, a fresh `dispatched_at`) with the chosen option and the line `Assumption (orchestrator, Clause A): <label> — <why>`, and writes the same assumption into the cycle log (Step 19); or
    - **parks the pipeline** when the question is a genuine owner decision: set the pipeline's `status = "parked"` and record the question (task id, need, options, default) for the overnight summary's "Parked questions" section. A parked family stays incomplete and lands nothing, no further step of this window dispatches for it, and the loop continues with the other pipelines.
@@ -221,9 +221,9 @@ CURRENT_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 #    The walk DISCOVERS the record; it does NOT define the root. Take the root
 #    from what the record SAYS about itself, never from the directory the record
 #    happens to sit in: the launcher writes the record under its own resolved
-#    project dir but the dev-registry under the git toplevel (`main_root`), and
+#    project dir but the dev-registry under the git toplevel (main_root), and
 #    those DIFFER whenever the session was launched from a SUBDIRECTORY — the
-#    ordinary case, since the launcher's own resolution falls back to `$PWD`.
+#    ordinary case, since the launcher's own resolution falls back to $PWD.
 #    Binding to the containing directory is what made Step 1 hard-abort with
 #    "verify: directory does not exist: <subdir>/.claude/dev-registry/<sid>".
 #    The state's one reading (hooks/lib/overnight.py) does the walk and the field
@@ -814,6 +814,8 @@ For each pipeline that will be created (from triage report's `pipeline_order`):
 5. Replace `<ISO-8601>` with current timestamp
 6. Replace Section 5's `_Not yet populated._` with the pipeline's `description` from triage, verbatim
 7. Store spec paths in the pipeline definitions: `pipeline.spec_path = "docs/dev/overnight/<session_id>/spec-pipeline-<index>.md"`
+
+Write every copy in ONE Bash call, one quoted heredoc per copy (`cat > docs/dev/overnight/<session_id>/spec-pipeline-<index>.md <<'SPEC'`, the copy's text, `SPEC`; Hard Rule 4): one call keeps Steps 4-8 within the orchestrator gate's five consecutive Bash calls before the first BA dispatch.
 
 **User-spec mode** (`spec_mode == "user-provided"`):
 1. The user's spec file at `user_spec_path` is the primary spec
@@ -1470,7 +1472,7 @@ The aggregator filters QA reports to those whose `timestamp_suffix` matches a `s
 
 **Aggregate results from ALL pipelines** by tallying fixed vs parked counts.
 
-**Append to running log** at `docs/dev/overnight-log-<date>.md`:
+**Append to running log** at `docs/dev/overnight-log-<date>.md`, one Bash call (Hard Rule 4): `cat >> docs/dev/overnight-log-<date>.md <<'LOG'`, the entry below, `LOG`.
 
 ```markdown
 ### Cycle <N>: {total_pipelines} pipelines ({fixed_count} fixed, {parked_count} parked)
@@ -1491,7 +1493,7 @@ The aggregator filters QA reports to those whose `timestamp_suffix` matches a `s
 
 **Per-cycle commit**:
 
-After the time check, land a HEAD commit on the session's working branch (`worktree_branch` from the state file — under `in_place` that is the branch the checkout was already on, not a session-created one) covering this cycle's accumulated changes. Call `scripts/commit.sh "chore(overnight): end-of-cycle commit for <worktree_branch>"` (repo-relative path, run from the project root) directly via Bash (single positional arg; `chore` is a valid CC type so M3 lint passes; `(overnight)` scope identifies the automated context). The CAS engine and content-bound ledger still apply. If the invocation exits non-zero (empty ledger for this session, disk content changed, or other CAS refusal), log the failure to the cycle log and continue — per-fix `refs/checkpoints/*` snapshots remain intact and the operator can promote them manually.
+After the time check, land a HEAD commit on the session's working branch (`worktree_branch` from the state file — under `in_place` that is the branch the checkout was already on, not a session-created one) covering this cycle's accumulated changes. Call `scripts/commit.sh "chore(overnight): end-of-cycle commit for <worktree_branch>"` (repo-relative path, run from the project root) directly via Bash (single positional arg; `chore` is a valid CC type so M3 lint passes; `(overnight)` scope identifies the automated context). The CAS engine and content-bound ledger still apply. If the invocation exits non-zero (empty ledger for this session, disk content changed, or other CAS refusal), append the failure to the cycle log (one Bash call, as above) and continue — per-fix `refs/checkpoints/*` snapshots remain intact and the operator can promote them manually.
 
 If time expired: proceed to Step 20 (PM Retro) then Step 21 for final summary.
 If time remains: proceed to Step 20 (PM Retro), then mark Step 21 as completed via TodoWrite. The posttool-overnight-loop.py hook will detect all todo steps completed (it checks every todo's status, including the letter-suffix Step 11g, not a fixed count), reset todos to pending, and inject continuation instructions.
@@ -1586,9 +1588,9 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 5. You then resume from Step 2 (the working root is already established)
 
 **If time expired** (session ending):
-**Read the full state file** to get all cycle data.
+**Read the full state file** (start time, end time, isolation) and the cycle data, which the state file does not hold: the PM retro reports (`docs/dev/overnight/<session_id>/retro-report-cycle*.json`) and the cycle log.
 
-**Generate summary report** at `docs/dev/overnight-summary-<date>.md`:
+**Generate summary report** at `docs/dev/overnight-summary-<date>.md`, one Bash call (Hard Rule 4): `cat > docs/dev/overnight-summary-<date>.md <<'SUMMARY'`, the report below, `SUMMARY`. The time-lock lets the session end after `end_time` once this summary and a PM retro report are on disk.
 
 ```markdown
 # Overnight Development Summary
@@ -1648,7 +1650,7 @@ Detects the repository's default branch dynamically (`main`, `master`, or any ot
 # Detect default branch dynamically (handles main/master/any other)
 DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
 if [ -z "$DEFAULT_BRANCH" ]; then
-  DEFAULT_BRANCH="$(git remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')"
+  DEFAULT_BRANCH="$(git remote show origin 2>/dev/null | sed -n 's/^ *HEAD branch: //p')"
 fi
 if [ -z "$DEFAULT_BRANCH" ]; then
   DEFAULT_BRANCH="master"  # final fallback

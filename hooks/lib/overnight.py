@@ -200,6 +200,25 @@ def cycle_index(state, written=()):
         return 1
 
 
+def closeout_gaps(state):
+    """What the session has not written that its end needs, read from disk: `retro_status`
+    without a PM retrospective (Step 20's retro-report-cycle*.json in the session directory),
+    `final_summary` without Step 21's docs/dev/overnight-summary-*.md under the working root
+    written after start_time (any one, when start_time does not parse)."""
+    gaps = []
+    try:
+        if not any(session_dir(state).glob('retro-report-cycle*.json')):
+            gaps.append('retro_status')
+        start = _parse_end_time(state.get('start_time'))
+        since = start.timestamp() if start else 0.0
+        if not any(p.stat().st_mtime > since
+                   for p in (working_root(state) / 'docs' / 'dev').glob('overnight-summary-*.md')):
+            gaps.append('final_summary')
+    except (OSError, ValueError, TypeError, AttributeError):
+        return gaps or ['final_summary']
+    return gaps
+
+
 def candidate_project_dirs(project_dir=None):
     """Ordered, de-duplicated dirs whose .claude/ may hold the state file.
 

@@ -189,40 +189,58 @@ def test_stop_hook_does_not_revalidate_the_cycle_contract(tmp_path: Path) -> Non
     assert "TIME-LOCK ACTIVE" in inside.stderr
     assert "required_calls" not in inside.stderr
 
-    summary = tmp_path / "summary.md"
-    summary.write_text("done")
+    _write_closeout(tmp_path, session_id)
     past = (datetime.now() - timedelta(hours=2)).isoformat()
-    _write_state(tmp_path, session_id, end_time=past, worktree_path=str(tmp_path),
-                 current_issues=[], unresolved_issues=[], final_summary_path=str(summary),
-                 pm_retro_reports=["retro-1"], artifact_checkpoint_status="checkpointed")
+    _write_state(tmp_path, session_id, end_time=past, worktree_path=str(tmp_path))
     after = _run_stop_hook(tmp_path, session_id)
     assert after.returncode == 0, after.stderr
+
+
+def _write_closeout(root: Path, session_id: str) -> None:
+    """What Steps 20 and 21 leave on disk under the working root: the PM retro
+    report and the overnight summary."""
+    retro = root / "docs" / "dev" / "overnight" / session_id / "retro-report-cycle1.json"
+    retro.parent.mkdir(parents=True, exist_ok=True)
+    retro.write_text("{}")
+    (root / "docs" / "dev" / "overnight-summary-2026-01-01.md").write_text("# Overnight Development Summary\n")
 
 
 def test_stop_hook_allows_once_end_time_passed_and_closeout_complete(
     tmp_path: Path,
 ) -> None:
-    """AC2: once end_time has passed AND the closeout-artifact gate's four
-    fields are satisfied (final_summary_path exists, pm_retro_reports
-    non-empty, artifact_checkpoint_status is a terminal value, no
-    unresolved/current issues), the hook allows stop (exit 0, no
-    'TIME-LOCK ACTIVE'). A naive past-end_time-only fixture would instead
-    exit 2 for the unrelated CLOSEOUT GATE reason, so all four fields are
-    required here, not just end_time."""
+    """AC2: once end_time has passed AND the closeout artifacts are on disk (a
+    PM retro report in the session directory and an overnight summary written
+    after start_time, overnight.closeout_gaps), the hook allows stop (exit 0, no
+    'TIME-LOCK ACTIVE'). No state field takes part: the record holds none that a
+    session step writes."""
     session_id = "ac2-past-complete"
-    summary = tmp_path / "summary.md"
-    summary.write_text("done")
+    start = (datetime.now() - timedelta(hours=3)).isoformat()
     past = (datetime.now() - timedelta(hours=2)).isoformat()
-    _write_state(
-        tmp_path,
-        session_id,
-        end_time=past,
-        current_issues=[],
-        unresolved_issues=[],
-        final_summary_path=str(summary),
-        pm_retro_reports=["retro-1"],
-        artifact_checkpoint_status="intentionally_uncommitted",
-    )
+    _write_closeout(tmp_path, session_id)
+    _write_state(tmp_path, session_id, start_time=start, end_time=past, worktree_path=str(tmp_path))
     result = _run_stop_hook(tmp_path, session_id)
     assert result.returncode == 0, result.stderr
     assert "TIME-LOCK ACTIVE" not in result.stderr
+
+
+def test_stop_hook_after_end_time_names_each_missing_closeout_artifact(tmp_path: Path) -> None:
+    """After end_time the Stop is refused until Step 20's retro report and Step 21's
+    summary are on disk; the refusal names each missing one by path. Self-declared
+    state fields (final_summary_path, pm_retro_reports, artifact_checkpoint_status)
+    release nothing, and a summary older than start_time is not this session's."""
+    session_id = "closeout-gaps"
+    past = (datetime.now() - timedelta(hours=2)).isoformat()
+    _write_state(tmp_path, session_id, start_time=past, end_time=past, worktree_path=str(tmp_path),
+                 final_summary_path=str(tmp_path), pm_retro_reports=["retro-1"],
+                 artifact_checkpoint_status="checkpointed")
+    old = tmp_path / "docs" / "dev" / "overnight-summary-2020-01-01.md"
+    old.parent.mkdir(parents=True)
+    old.write_text("an earlier session's")
+    os.utime(old, (0, 0))
+    first = _run_stop_hook(tmp_path, session_id)
+    assert first.returncode == 2
+    assert "CLOSEOUT GATE" in first.stderr and "missing=retro_status, final_summary" in first.stderr
+    assert "retro-report-cycle*.json" in first.stderr and "overnight-summary-*.md" in first.stderr
+
+    _write_closeout(tmp_path, session_id)
+    assert _run_stop_hook(tmp_path, session_id).returncode == 0

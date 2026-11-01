@@ -151,6 +151,15 @@ def _phases(root: Path, outcome: str = "allow", target: str | None = None) -> li
     ]
 
 
+def _write_closeout(root: Path, sid: str) -> None:
+    """The closeout the time-lock reads from disk after end_time (overnight.closeout_gaps):
+    Step 20's PM retro report and Step 21's overnight summary."""
+    retro = root / "docs" / "dev" / "overnight" / sid / "retro-report-cycle1.json"
+    retro.parent.mkdir(parents=True, exist_ok=True)
+    retro.write_text("{}")
+    (root / "docs" / "dev" / "overnight-summary-2026-01-01.md").write_text("done")
+
+
 def test_timelock_uses_exact_state_and_publishes_without_finalizing(
     tmp_path: Path,
 ) -> None:
@@ -158,22 +167,19 @@ def test_timelock_uses_exact_state_and_publishes_without_finalizing(
     root.mkdir()
     sid = "claude-overnight"
     binding = _binding("overnight", command="dev-overnight", session=sid)
+    # The deadline's closeout holds cycle 1's retro report, so the receipt names generation 2
+    # (publish_overnight_receipt: the cycle in progress, overnight.cycle_index).
+    binding["workflow_generation"] = 2
     provisioned = session_resources.provision(root, binding)
     scratch = Path(provisioned["scratch_path"])
     (scratch / "evidence").write_text("preserve")
     before = _tree_digest(scratch)
-    summary = root / "summary.md"
-    summary.write_text("done")
+    _write_closeout(root, sid)
     state = {
         "session_id": sid,
         "dev_registry_session_id": binding["resource_session_id"],
         "cycle_count": 0,
         "end_time": (datetime.now() - timedelta(seconds=5)).isoformat(),
-        "final_summary_path": str(summary),
-        "pm_retro_reports": ["retro"],
-        "artifact_checkpoint_status": "checkpointed",
-        "current_issues": [],
-        "unresolved_issues": [],
     }
     state_path = root / ".claude" / f"overnight-state-{sid}.json"
     state_path.write_text(json.dumps(state))
@@ -206,17 +212,16 @@ def test_timelock_phase_receipt_meets_finalize_and_no_other_phase_gets_a_key(
     root.mkdir()
     sid = "claude-overnight"
     binding = _binding("overnight", command="dev-overnight", session=sid)
+    # The deadline's closeout holds cycle 1's retro report, so the receipt names generation 2
+    # (publish_overnight_receipt: the cycle in progress, overnight.cycle_index).
+    binding["workflow_generation"] = 2
     provisioned = session_resources.provision(root, binding)
-    summary = root / "summary.md"
-    summary.write_text("done")
+    _write_closeout(root, sid)
     state = {
         "session_id": sid,
         "dev_registry_session_id": binding["resource_session_id"],
         "cycle_count": 0,
         "end_time": (datetime.now() - timedelta(seconds=5)).isoformat(),
-        "final_summary_path": str(summary),
-        "pm_retro_reports": ["retro"],
-        "artifact_checkpoint_status": "checkpointed",
     }
     (root / ".claude" / f"overnight-state-{sid}.json").write_text(json.dumps(state))
     phase_list = [coordinator.Phase("timelock", (sys.executable, str(TIMELOCK)))]
