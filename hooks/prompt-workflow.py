@@ -1696,9 +1696,13 @@ def print_roots(cmd_name: str, sid: str) -> None:
     """PROJECT_ROOT (in /dev-overnight the record's worktree_path, the command's
     <PROJECT_ROOT>; its <MAIN_ROOT> is Step 1's) and HARNESS_ROOT (this hook's
     install), for a harness command only."""
-    harness = Path(__file__).resolve().parent.parent
-    if cmd_name not in {p.stem for p in (harness / 'commands').glob('*.md')}:
+    try:
+        from stop_contract import harness_commands  # hooks/lib: the one list of them
+    except ImportError:  # the checklist after this never waits on the roots
         return
+    if cmd_name not in harness_commands():
+        return
+    harness = Path(__file__).resolve().parent.parent
     state = load_overnight_state(sid) if cmd_name == 'dev-overnight' else None
     project = state.get('worktree_path') if isinstance(state, dict) else None
     print(f'PROJECT_ROOT={project or PROJECT_DIR}\nHARNESS_ROOT={harness}')
