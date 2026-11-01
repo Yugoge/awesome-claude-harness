@@ -182,8 +182,11 @@ def session_state_file(session_id, starts):
 def locate(session_id, payload=None):
     """(state file, record) of `session_id` from CLAUDE_PROJECT_DIR, then the
     hook payload's cwd (else the process cwd); (None, None) when none."""
-    cwd = payload.get('cwd') if isinstance(payload, dict) else None
-    return session_state_file(session_id, (os.environ.get('CLAUDE_PROJECT_DIR'), cwd or os.getcwd()))
+    try:
+        cwd = (payload.get('cwd') if isinstance(payload, dict) else None) or os.getcwd()
+    except OSError:  # the process cwd was removed
+        cwd = None
+    return session_state_file(session_id, (os.environ.get('CLAUDE_PROJECT_DIR'), cwd))
 
 
 def window_open(payload):
