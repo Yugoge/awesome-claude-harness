@@ -410,10 +410,12 @@ def _harness_syntax(resolution) -> list:
 
 
 def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, resolution=None) -> list:
-    """The dev report's wires (ledger judgment, /commit's trial plan, A3.a's file
-    lists) and a dev's or test-writer's F3.a. Returns findings. Another producer's
-    artifact is never judged at this stop: G3 decides on it at the next dispatch."""
-    findings = _harness_syntax(resolution) if ob.get("role") in ("dev", "test-writer") else []
+    """F3.a for any stopping producer (only a role the tool policy lets write the
+    harness can trip it: a dev, a test-writer under tests/generated/), then the dev
+    report's wires (ledger judgment, /commit's trial plan, A3.a's file lists).
+    Returns findings. Another producer's artifact is never judged at this stop: G3
+    decides on it at the next dispatch."""
+    findings = _harness_syntax(resolution)
     if ob.get("role") != "dev":
         return findings
     deadline = time.monotonic() + WIRE_TOTAL_BUDGET_S
