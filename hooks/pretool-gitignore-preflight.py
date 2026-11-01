@@ -22,9 +22,10 @@
 #      close-report the SAME dispatch declares as its deliverable, AND every
 #      path it would otherwise block was already recorded by an on-disk lane
 #      shard of that same cycle. See discriminator E4 below.
-#   9. The dispatch is /commit's changelog-analyst landing of the report's own
-#      task: its obligation (profile commit-landing) names that task as its
-#      task_id. See discriminator E5 below.
+#   9. The dispatch is a QA, close or commit producer reading the report of its
+#      own task: its obligation (profile commit-landing, commit-qa, do-close or
+#      final_verification) names that task as its task_id. See discriminator
+#      E5 below.
 #
 # Blocking condition (exits 2):
 #   Any path in dev.files_modified or dev.files_created is matched by .gitignore
@@ -361,6 +362,9 @@
 #         returns that path for in state `verified`, as the changelog-analyst
 #         accepts it.
 #   A report of any other task named in the same prompt keeps its verdict.
+#   P3 row 13 admits the other close and commit producers the same way:
+#   profiles commit-qa, do-close and final_verification beside commit-landing.
+#   A dev dispatch (singular, fanout-lane) keeps the guard.
 #
 # 2026-10-28 — P1b E3: E2 READS THE DECLARATION, NOT A LIST OF NAMES.
 #
@@ -642,13 +646,14 @@ def is_contract_deliverable(path, src_task_id, repo_root=None, project_dir=None)
     return False
 
 
-# E5: the profile of /commit's changelog-analyst dispatch (Steps 6 and 7),
-# which names the report of the task it lands.
-COMMIT_LANDING_PROFILE = 'commit-landing'
+# E5: the profiles of the producers that read the dev report of the task they
+# verify or land: final QA (final_verification, /dev Step 13 and /close), /do's
+# close, /commit's QA and its changelog-analyst (Steps 6 and 7).
+EXEMPT_PROFILES = frozenset(('commit-landing', 'commit-qa', 'do-close', 'final_verification'))
 
 
-def commit_landing_task_id(prompt):
-    """E5 (2): the task a commit-landing dispatch lands, or None.
+def exempt_task_id(prompt):
+    """E5 (2): the task a close or commit producer's dispatch reads, or None.
 
     Read from the dispatch's own obligation, parsed as G1 parses it; a block
     that does not parse is G1's finding and admits nothing here.
@@ -662,7 +667,7 @@ def commit_landing_task_id(prompt):
         return None
     doc = parsed.obligation
     task_id = doc.get('task_id')
-    if doc.get('profile') != COMMIT_LANDING_PROFILE or not isinstance(task_id, str):
+    if doc.get('profile') not in EXEMPT_PROFILES or not isinstance(task_id, str):
         return None
     return task_id
 
@@ -738,7 +743,7 @@ def gitignored_deliverables(prompt):
     cycle_task_id = close_cycle_task_id(prompt, lane_spans)
 
     repo_root = get_repo_root()
-    landed_task_id = None
+    own_task_id = None
     findings = []
 
     for match in matches:
@@ -804,12 +809,12 @@ def gitignored_deliverables(prompt):
                     report_blocked, cycle_task_id, repo_root)):
             continue
 
-        # E5: /commit's changelog-analyst reads the report of the task it
-        # lands to classify what it stages. See REVISION TRAIL above.
+        # E5: a close or commit producer reads the report of its own task.
+        # See REVISION TRAIL above.
         if report_blocked:
-            if landed_task_id is None:
-                landed_task_id = commit_landing_task_id(prompt) or ''
-            if landed_task_id and is_report_of_task(report_rel, landed_task_id, repo_root):
+            if own_task_id is None:
+                own_task_id = exempt_task_id(prompt) or ''
+            if own_task_id and is_report_of_task(report_rel, own_task_id, repo_root):
                 continue
             findings.append((report_rel, report_blocked))
 

@@ -605,6 +605,8 @@ for any whitelisted file that is also dirty with potential peer entanglement.
 
 The dev report MUST be written to the filesystem so QA can read it directly. Also return the report content in your response.
 
+**Lane echo**: when your dispatch's obligation block carries `lane` and `lane_set`, copy both verbatim (the same string, the same list in the same order) to the report's top level.
+
 ```json
 {
   "request_id": "<task-id>",

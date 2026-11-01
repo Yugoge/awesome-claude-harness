@@ -2484,5 +2484,210 @@ def test_fanout_legacy_check_judges_only_the_stopping_lanes_own_report(
     assert l1_report in proc_l1.stderr and l2_report not in proc_l1.stderr
 
 
+# ---------------------------------------------------------------------------
+# P3 R14: an artifact G2 checks must be written for this dispatch (mtime >=
+# dispatched_at - 2 s) and a lane's dev or qa report must echo the dispatch's
+# lane and lane_set. Both warn in this commit (reason on stderr, exit 0); the
+# promotion commit flips DISPATCH_ECHO_BLOCKS in the hook and _R14_EXIT here.
+# ---------------------------------------------------------------------------
+
+_WARNING = "OBLIGATION_STOPGATE_WARNING"
+_R14_EXIT = 0  # the promotion commit makes this 2
+
+
+def _age(path: Path, dispatched_at: str, seconds: float) -> None:
+    """Set the file's mtime ``seconds`` before the dispatch."""
+    when = datetime.fromisoformat(dispatched_at).timestamp() - seconds
+    os.utime(path, (when, when))
+
+
+def _assert_warns(proc, path: str, reason: str) -> None:
+    assert proc.returncode == _R14_EXIT, proc.stderr
+    assert (_WARNING in proc.stderr) is (_R14_EXIT == 0), proc.stderr
+    assert f"  - {path}: {reason}" in proc.stderr, proc.stderr
+
+
+def test_r14_report_older_than_its_dispatch_warns(tmp_path):
+    """A re-dispatched dev that never rewrites the report of an earlier round."""
+    s = _l2_setup(tmp_path)
+    _l2_write(s, _l2_dev_report(s.task))
+    _age(s.project / s.art_path, s.obligation["dispatched_at"], 2 * 3600)
+    proc = _l2_stop(s)
+    _assert_warns(proc, s.art_path, "stale_for_dispatch")
+    assert f"dispatched_at {s.obligation['dispatched_at']!r}" in proc.stderr
+
+
+def test_r14_clock_slack_is_two_seconds(tmp_path):
+    s = _l2_setup(tmp_path)
+    _l2_write(s, _l2_dev_report(s.task))
+    _age(s.project / s.art_path, s.obligation["dispatched_at"], 1.5)
+    proc = _l2_stop(s)
+    assert proc.returncode == 0 and _WARNING not in proc.stderr, proc.stderr
+    _age(s.project / s.art_path, s.obligation["dispatched_at"], 3)
+    _assert_warns(_l2_stop(s), s.art_path, "stale_for_dispatch")
+
+
+def test_r14_no_dispatched_at_counts_as_stale(tmp_path):
+    """A dispatch without dispatched_at shows no artifact fresh (the grammar
+    refuses such a block, so this is the helper's own rule)."""
+    s = _l2_setup(tmp_path)
+    _l2_write(s, _l2_dev_report(s.task))
+    ob = {k: v for k, v in s.obligation.items() if k != "dispatched_at"}
+    [finding] = HOOK._dispatch_echo_findings(str(s.project), ob, ob["artifacts"][0], {})
+    assert finding["reason"] == "stale_for_dispatch"
+    assert "dispatched_at None" in finding["errors"][0]
+
+
+@pytest.mark.parametrize("role", ["dev", "qa"])
+@pytest.mark.parametrize(
+    "lane, lane_set, errors",
+    [
+        (None, None, ["lane: obligation declares 'l2', file has None",
+                      "lane_set: obligation declares ['l1', 'l2'], file has None"]),
+        ("l2", ["l1", "l2", "l3"],
+         ["lane_set: obligation declares ['l1', 'l2'], file has ['l1', 'l2', 'l3']"]),
+        ("l2", ["l2", "l1"], ["lane_set: obligation declares ['l1', 'l2'], file has ['l2', 'l1']"]),
+        ("l1", ["l1", "l2"], ["lane: obligation declares 'l2', file has 'l1'"]),
+    ],
+    ids=["no_echo", "other_roster", "reordered_roster", "other_lane"],
+)
+def test_r14_fanout_report_not_echoing_its_lane_warns(tmp_path, role, lane, lane_set, errors):
+    s = _l2_setup(tmp_path, role=role, lane="l2", lane_set=["l1", "l2"])
+    report = (_l2_dev_report(s.task) if role == "dev" else _valid_qa_report_v2(s.task))
+    if lane is not None:
+        report.update(lane=lane, lane_set=lane_set)
+    _l2_write(s, report)
+    proc = _l2_stop(s)
+    _assert_warns(proc, s.art_path, "lane_echo_mismatch")
+    for line in errors:
+        assert f"    {line}\n" in proc.stderr, proc.stderr
+    assert "stale_for_dispatch" not in proc.stderr
+
+
+@pytest.mark.parametrize("role", ["dev", "qa"])
+def test_r14_compliant_fanout_lane_passes_without_warning(tmp_path, role):
+    s = _l2_setup(tmp_path, role=role, lane="l2", lane_set=["l1", "l2"])
+    report = (_l2_dev_report(s.task) if role == "dev" else _valid_qa_report_v2(s.task))
+    report.update(lane="l2", lane_set=["l1", "l2"])
+    _l2_write(s, report)
+    proc = _l2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == ""
+
+
+@pytest.mark.parametrize("echoed", [True, False], ids=["echoed", "template_without_echo"])
+def test_r14_in_flight_lane_dispatched_before_the_change_passes(tmp_path, echoed):
+    """A lane dispatched an hour before this change landed writes its report
+    now: fresh against its own dispatched_at, so no staleness; a report from a
+    template that did not yet ask for the echo only warns."""
+    s = _l2_setup(tmp_path, lane="l2", lane_set=["l1", "l2"])
+    s.obligation["dispatched_at"] = datetime.fromtimestamp(
+        datetime.now(timezone.utc).timestamp() - 3600, timezone.utc).isoformat()
+    _write_obligation_transcript(
+        s.home, s.project, s.harness, s.agent_id,
+        f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>')
+    _l2_write(s, _l2_dev_report(s.task, lane="l2" if echoed else None, lane_set=["l1", "l2"]))
+    proc = _l2_stop(s)
+    assert proc.returncode == (0 if echoed else _R14_EXIT), proc.stderr
+    assert "stale_for_dispatch" not in proc.stderr
+    assert ("lane_echo_mismatch" in proc.stderr) is (not echoed), proc.stderr
+
+
+def test_r14_lane_echo_only_where_the_schema_declares_both():
+    assert HOOK._declares_lane_echo("dev-report.v2") and HOOK._declares_lane_echo("qa-report.v2")
+    for schema in ("dev-report.v1", "qa-report.v1", "context.v1", "ba-qa-report.v1", "no-such.v9"):
+        assert not HOOK._declares_lane_echo(schema), schema
+
+
+def test_r14_stale_markdown_warns(tmp_path):
+    ticket = f"docs/dev/ticket-{G2_TASK}.md"
+    s = _g2_setup(tmp_path, "ba", [{"kind": "markdown", "path": ticket, "identity_anchor": G2_TASK}])
+    _write(s.project / ticket, f"# Ticket\nRequest ID: {G2_TASK}\n")
+    assert _g2_stop(s).stderr == ""
+    _age(s.project / ticket, s.dispatched_at.isoformat(), 2 * 3600)
+    _assert_warns(_g2_stop(s), ticket, "stale_for_dispatch")
+
+
+def test_r14_artifacts_not_standing_for_this_stop_are_not_aged(tmp_path):
+    """The close-QA waiver and the producer question stand in for the on-disk
+    artifact, so an old file there is not this stop's and raises nothing."""
+    s, report = _g2_close_qa_setup(tmp_path)
+    _age(s.project / report, s.dispatched_at.isoformat(), 2 * 3600)
+    proc = _g2_stop(s, msg="The append helper refused.\nCLOSE_REPORT_APPEND_ERROR: append: disk full\n")
+    assert proc.returncode == 0 and _WARNING not in proc.stderr, proc.stderr
+
+    q = _g2_setup(tmp_path / "question", "dev", _g2_dev_artifacts("dev-report.v2"))
+    old = q.project / f"docs/dev/dev-report-{G2_TASK}.json"
+    _write(old, _l2_dev_report(G2_TASK))
+    _age(old, q.dispatched_at.isoformat(), 2 * 3600)
+    _write(q.project / _g2_question_path(G2_TASK, "dev"), _g2_question(G2_TASK, "dev"))
+    proc = _g2_stop(q)
+    assert proc.returncode == 0 and proc.stderr == "", proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# P3 A4 (R6/R7, removed by P1b): a failing stop is a plain exit 2 naming the
+# failing artifact and its check code to its producer. Nothing is recorded,
+# no line admits it, and what pre-P1b code left behind (its escalation and
+# admission records and progress files, shapes as that code wrote them, and an
+# orchestrator arbitration file) changes nothing.
+# ---------------------------------------------------------------------------
+
+
+def _pre_p1b_leftovers(s) -> list:
+    cycle = HOOK.obligation.registry_dir_for(s.project, s.task)
+    key = f"{_G2_MISSING} (missing is blocking under obligation authority)|{s.art_path}"
+    record = {"kind": "producer_stop_escalation", "record_id": "esc0123456789abcdef0123",
+              "nonce": "a" * 32, "agent_id": s.agent_id, "role": "dev", "task_id": s.task,
+              "reason": "no_progress", "finding_keys": [key],
+              "artifact_digests": {s.art_path: "ABSENT"}, "created_at": "2026-10-02T00:00:00+00:00"}
+    progress = {"loop_key": f"producer-stop|{s.task}|{s.agent_id}", "round": 2,
+                "no_progress_rounds": 1, "last_outcome": "no_progress", "prev_set": [key],
+                "awaiting": {"emissions": 0, "last_emitted_at": None}, "audit": []}
+    files = {
+        cycle / "escalations" / f"{record['record_id']}.json": record,
+        cycle / "escalation-admissions" / f"{record['record_id']}.json": {
+            "record_id": record["record_id"], "nonce": record["nonce"],
+            "agent_id": s.agent_id, "admitted_at": "2026-10-02T00:00:01+00:00"},
+        cycle / "progress" / "producer-stop-agent_l2_producer.json": dict(progress, phase="arbitration"),
+        cycle / "progress" / "producer-stop-awaiting.json": dict(
+            progress, phase="awaiting_input",
+            awaiting={"emissions": 1, "for": "user", "need": "which cache", "why": "two designs"}),
+        s.project / "docs" / "dev" / f"arbitration-{s.cycle}.json": {
+            "verdict": "awaiting_input", "record_id": record["record_id"]},
+    }
+    for path, doc in files.items():
+        _write(path, doc)
+    return list(files)
+
+
+def _tree(project: Path) -> dict:
+    return {str(p.relative_to(project)): p.read_bytes() for p in project.rglob("*")
+            if p.is_file() and ".git" not in p.relative_to(project).parts}
+
+
+def test_a4_missing_dev_report_is_a_plain_block_every_round(tmp_path):
+    s = _l2_setup(tmp_path)
+    first, second = _l2_stop(s), _l2_stop(s)
+    for proc in (first, second):
+        _g2_assert_blocked_on(proc, s.art_path, _G2_MISSING)
+        assert not _re.search(r"arbitrat|ACK|ESCALATION", proc.stderr), proc.stderr
+    assert first.stderr == second.stderr
+    assert _l2_stores(s) == []
+    acked = _l2_stop(s, msg="I could not write it.\nESCALATION_ACK " + "a" * 32)
+    assert acked.returncode == 2 and acked.stderr == first.stderr
+
+    _pre_p1b_leftovers(s)
+    before = _tree(s.project)
+    for msg in (None, "ESCALATION_ACK " + "a" * 32):
+        proc = _l2_stop(s, msg=msg)
+        assert proc.returncode == 2 and proc.stderr == first.stderr, proc.stderr
+    assert _tree(s.project) == before
+
+    _l2_write(s, _l2_dev_report(s.task))
+    proc = _l2_stop(s)
+    assert proc.returncode == 0 and proc.stderr == "", proc.stderr
+
+
 if __name__ == "__main__":
     sys.exit(subprocess.run([sys.executable, "-m", "pytest", __file__, "-v"]).returncode)

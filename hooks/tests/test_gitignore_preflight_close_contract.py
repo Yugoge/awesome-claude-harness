@@ -1073,12 +1073,13 @@ def test_e2_admits_exactly_what_the_cycle_declares(sandbox):
 LANDED = '20261028-101010'
 
 
-def landing_obligation(task_id=LANDED, profile='commit-landing', role='changelog-analyst'):
+def landing_obligation(task_id=LANDED, profile='commit-landing', role='changelog-analyst',
+                       pipeline='commit'):
     """The obligation block commands/commit.md's Step 7 template carries."""
     return '<obligation v="1">%s</obligation>\n' % json.dumps({
         'task_id': task_id,
         'role': role,
-        'pipeline': 'commit',
+        'pipeline': pipeline,
         'profile': profile,
         'dispatched_at': '2026-10-28T10:10:10Z',
         'artifacts': [{
@@ -1121,11 +1122,22 @@ def landing_sandbox(sandbox):
     return sandbox
 
 
-def test_e5_commit_landing_obligation_for_the_reports_task_admits(landing_sandbox):
+# P3 row 13: every QA, close and commit producer's profile, as (profile, role,
+# pipeline); commit-landing is P1b's.
+READING_PRODUCERS = [
+    ('commit-landing', 'changelog-analyst', 'commit'),
+    ('commit-qa', 'qa', 'commit'),
+    ('do-close', 'qa', 'close'),
+    ('final_verification', 'qa', 'close'),
+]
+
+
+@pytest.mark.parametrize('profile,role,pipeline', READING_PRODUCERS)
+def test_e5_reading_producer_of_the_reports_task_admits(landing_sandbox, profile, role, pipeline):
     rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
-    prompt = commit_step7_prompt(rel, landing_obligation())
+    prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline=pipeline))
     rc, err = run_gate(sandbox_hook(landing_sandbox), prompt)
-    assert rc == 0, 'commit-landing dispatch of the report\'s own task refused: %s' % err
+    assert rc == 0, '%s dispatch of the report\'s own task refused: %s' % (profile, err)
     assert err == ''
 
 
@@ -1156,7 +1168,8 @@ def test_e5_grant_line_admits_nothing(landing_sandbox, tmp_path):
 
 @pytest.mark.parametrize('obligation', [
     landing_obligation(task_id='20261028-202020'),               # another task
-    landing_obligation(profile='commit-qa', role='qa'),          # another profile
+    landing_obligation(profile='singular', role='dev', pipeline='dev'),  # a dev dispatch
+    landing_obligation(profile='commit-qa', role='qa', task_id=None),    # bulk QA: no task
     landing_obligation(profile='commit-bulk', task_id=None),     # bulk landing
     landing_obligation().replace('"commit"', '"nonsense"'),      # G1 rejects it
 ])
@@ -1236,7 +1249,7 @@ def test_e1_e4_predicates_unchanged_when_e5_does_not_apply(sandbox):
 G3_HOOK = os.path.join(REPO_ROOT, 'hooks', 'pretool-aggregate-check.py')
 
 
-def run_g3(root, prompt, mode):
+def run_g3(root, prompt, mode, subagent_type='changelog-analyst'):
     """G3 from the sandbox's hooks/, as the CLI runs it, switch set or unset."""
     env = dict(os.environ)
     env.pop('CLAUDE_OBLIGATION_BARRIER', None)
@@ -1245,8 +1258,8 @@ def run_g3(root, prompt, mode):
     env['CLAUDE_PROJECT_DIR'] = str(root)
     proc = subprocess.run(
         [sys.executable, str(root / 'hooks' / 'pretool-aggregate-check.py')],
-        input=json.dumps({'tool_name': 'Agent', 'tool_input': {
-            'subagent_type': 'changelog-analyst', 'prompt': prompt}}),
+        input=json.dumps({'tool_name': 'Agent', 'agent_id': 'g3-test', 'tool_input': {
+            'subagent_type': subagent_type, 'prompt': prompt}}),
         capture_output=True, text=True, env=env, cwd=str(root))
     return proc.returncode, proc.stderr.strip()
 
@@ -1266,3 +1279,25 @@ def test_g3_applies_the_preflight_rule_only_when_armed(landing_sandbox):
     # The copy this hook keeps decides the same dispatches the same way.
     assert run_gate(sandbox_hook(landing_sandbox), refused)[0] == 2
     assert run_gate(sandbox_hook(landing_sandbox), admitted)[0] == 0
+
+
+@pytest.mark.parametrize('profile,role,pipeline', READING_PRODUCERS)
+def test_g3_and_the_preflight_admit_every_reading_producer(landing_sandbox, profile, role, pipeline):
+    """P3 row 13: the admission is the rule's, so G3 armed and the preflight's
+    copy both admit it."""
+    shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
+    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline=pipeline))
+    assert run_g3(landing_sandbox, prompt, 'block', role) == (0, '')
+    assert run_gate(sandbox_hook(landing_sandbox), prompt) == (0, '')
+
+
+def test_g3_and_the_preflight_keep_the_guard_on_a_dev_dispatch(landing_sandbox):
+    shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
+    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    prompt = commit_step7_prompt(rel, landing_obligation(profile='singular', role='dev', pipeline='dev'))
+    rc, err = run_g3(landing_sandbox, prompt, 'block', 'dev')
+    assert rc == 2
+    assert err.startswith('[gitignored_deliverable] %s: tests/generated/x/test_a.py' % rel)
+    assert run_gate(sandbox_hook(landing_sandbox), prompt) == (
+        2, 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py')

@@ -36,6 +36,8 @@ turn-1-one-shot-blueprint.md:36-50,147-165), first match wins:
          bad_prompt case): UNCONDITIONAL.
      On a violation advisory mode exits 0; block mode prints the
      three-element stderr message and exits 2.
+     A valid block in block mode is then held to dispatch order (R17,
+     _order_findings): ORDER_EXIT decides the exit of a finding.
   4. Any exception raised anywhere in step 2/3 (malformed/empty stdin,
      unreadable dev-registry path, any unexpected internal failure) is caught
      by the single wrapping try/except and the hook exits 0 -- it never
@@ -85,6 +87,11 @@ _DECLARED_ROLE_RE = re.compile(r'\brole="([a-z][a-z0-9-]*)"|"role"\s*:\s*"([a-z]
 _TODO_DELEGATE_RE = re.compile(r"^from ([a-z][a-z0-9-]*) import get_todos\b", re.M)
 TODO_DIR = stop_contract.COMMANDS_DIR.parent / "scripts" / "todo"
 GRAMMAR_DOC_REF = "docs/reference/close-commit-zero-failure-mechanism-20260928.md"
+# R17 warns (stderr, exit 0) in its first commit; its promotion sets 2.
+ORDER_EXIT = 0
+# The verdict a later consumer of the judged producer's artifacts waits for:
+# "every BA invocation MUST be followed by QA validation" (commands/dev.md).
+VERDICT_SCHEMA = "ba-qa-report.v1"
 
 
 def _declared_roles(command) -> frozenset:
@@ -128,6 +135,63 @@ def _emit_block(session_id, subagent_type, reason) -> None:
     )
 
 
+def _declared(obligation) -> dict:
+    """path -> schema of each artifact an obligation declares."""
+    return {a["path"]: a.get("schema") for a in obligation.get("artifacts") or []
+            if isinstance(a, dict) and isinstance(a.get("path"), str)}
+
+
+def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset) -> list:
+    """R17, read from the active span's dispatch order (the CLI's record of
+    each Agent call and its result, never a file's mtime or a clock): for
+    each artifact this prompt names that an earlier dispatch declared, the
+    latest such dispatch must have returned; and unless this dispatch is a
+    verdict itself, the latest verdict naming that producer's artifacts must
+    be issued after it returned and have returned too."""
+    span = command_span.active_span(data["transcript_path"]) if data.get("transcript_path") else None
+    if span is None:
+        return []
+    earlier = []
+    for call in span.iter_calls("Agent", "Task", before=data.get("tool_use_id") or None):
+        parsed = parse_obligation(call.input.get("prompt"), known_schema_ids=known)
+        if isinstance(parsed, ParsedObligation):
+            earlier.append((call, parsed.obligation.get("role"), _declared(parsed.obligation)))
+    own = _declared(obligation)
+    upstream = {path: entry for entry in earlier for path in entry[2] if path not in own and path in prompt}
+    findings, seen = [], set()
+    for path, (call, role, paths) in upstream.items():
+        if call.id in seen:
+            continue
+        seen.add(call.id)
+        if not call.result_line:
+            findings.append(f"reason=producer_not_stopped artifact={path}: declared by dispatch "
+                            f"{call.id} ({role}), which has not returned")
+            continue
+        verdicts = [(v, vpath) for v, _role, vpaths in earlier for vpath, schema in vpaths.items()
+                    if schema == VERDICT_SCHEMA and not set(vpaths) & set(paths)
+                    and any(p in (v.input.get("prompt") or "") for p in paths)]
+        if verdicts and VERDICT_SCHEMA not in own.values():
+            verdict, vpath = verdicts[-1]
+            if verdict.line < call.result_line or not verdict.result_line:
+                findings.append(
+                    f"reason=verdict_not_after_producer_stop artifact={vpath}: the latest verdict on "
+                    f"{path}, dispatch {verdict.id} (line {verdict.line}, "
+                    f"{'returned' if verdict.result_line else 'not returned'}), does not follow the "
+                    f"return of dispatch {call.id} ({role}) at line {call.result_line}")
+    return findings
+
+
+def _emit_order(session_id, subagent_type, findings) -> None:
+    sys.stderr.write(
+        "\nOBLIGATION GATE ORDER (pretool-obligation-gate, R17):\n"
+        f"  session={session_id} subagent_type={subagent_type}\n"
+        + "".join(f"  {finding}\n" for finding in findings)
+        + "  fix: dispatch this once the dispatch named above has returned (for a verdict, once a\n"
+        "  verdict dispatched after that return has returned).\n\n"
+    )
+    sys.exit(ORDER_EXIT)
+
+
 def _evaluate(data: dict, mode: str) -> None:
     """Producer-role check + obligation evaluation (turn-1 microsteps 3-4)."""
     tool_input = data.get("tool_input")
@@ -139,7 +203,8 @@ def _evaluate(data: dict, mode: str) -> None:
     if not carries_block and not _block_required(data.get("transcript_path"), subagent_type):
         return
     session_id = data.get("session_id")
-    parsed = parse_obligation(prompt, known_schema_ids=frozenset(schema_registry.load_registry()))
+    known = frozenset(schema_registry.load_registry())
+    parsed = parse_obligation(prompt, known_schema_ids=known)
     if isinstance(parsed, ParsedObligation):
         obligation = parsed.obligation
         clock = dispatch_clock_within_bound(
@@ -150,6 +215,9 @@ def _evaluate(data: dict, mode: str) -> None:
         elif clock is not True:
             reason = "dispatch_clock_out_of_bound" if clock is False else "dispatch_clock_unverifiable"
         else:
+            findings = _order_findings(data, obligation, prompt, known) if mode == "block" else []
+            if findings:
+                _emit_order(session_id, subagent_type, findings)
             return
     elif isinstance(parsed, NoBlock):  # reached only where a block is required
         reason = "missing_block"

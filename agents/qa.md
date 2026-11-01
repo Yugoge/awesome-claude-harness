@@ -1396,6 +1396,8 @@ When the orchestrator prepends a score-inject block to your dispatch prompt, the
 
 **Status placement** (CRITICAL): place `pass` / `fail` / `warning` under `qa.status` ONLY (nested). Top-level `status` MUST NOT be emitted; `commit.sh` closure detection at lines 547-556 reads `data.get('qa', {}).get('status')` and ignores any top-level `status` key.
 
+**Lane echo**: when your dispatch's obligation block carries `lane` and `lane_set`, copy both verbatim (the same string, the same list in the same order) to the report's top level.
+
 Return verification report as JSON:
 
 ```json
