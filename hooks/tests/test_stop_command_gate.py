@@ -966,6 +966,21 @@ def test_a11_todo_tools_disabled_is_one_gap(env, monkeypatch):
     assert "todo: not completed" not in text
 
 
+def test_a21_a_span_an_older_harness_opened_keeps_the_list_it_started_with(env):
+    """A /dev-overnight span opened before the landing holds the canonical list of its time (22 steps,
+    no Step 0 wake) and is resumed under this tree's settings: its completed list is no gap. A list
+    that is neither that one nor today's canonical still differs."""
+    steps = canonical("dev")
+    older = steps[1:]  # the canonical list before a step was added to it
+    env.tx.command("dev", "fix the build", context=f"Task id: {FAMILY}\n")
+    env.tx.todos(older, 0)
+    env.tx.todos(older, len(older))
+    assert gate.todo_gaps(command_span.active_span(env.tx.path)) == []
+    env.tx.todos(older[1:], len(older) - 1)
+    assert gate.todo_gaps(command_span.active_span(env.tx.path)) == [
+        f"todo: checklist differs from the canonical {len(steps)} steps"]
+
+
 @pytest.mark.parametrize("command", ["commit", "merge", "push"])
 def test_todo_half_without_a_canonical_list_needs_the_last_list_completed(env, command):
     env.fake.answers.clear()

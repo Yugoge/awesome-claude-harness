@@ -111,7 +111,13 @@ def todo_gaps(span) -> list[str]:
             raise RuntimeError(f"{script} gave no canonical list")
         if current is None:
             return [f"todo: checklist never written ({len(canonical)} canonical steps)"]
-        if [t.get("content") for t in current] != [t.get("content") for t in canonical]:
+        # The list the span is held to: the canonical one, or the span's first list, which
+        # pretool-todo-validate admitted only as the canonical list of its time (D15: a span an older
+        # harness opened keeps the list it started with when the canonical one has since changed).
+        first = next(c.input["todos"] for c in span.calls("TodoWrite")
+                     if c.ok and isinstance(c.input.get("todos"), list))
+        if [t.get("content") for t in current] not in ([t.get("content") for t in canonical],
+                                                        [t.get("content") for t in first]):
             return [f"todo: checklist differs from the canonical {len(canonical)} steps"]
     return [f"todo: not completed: {t.get('content')}" for t in current or ()
             if not isinstance(t, dict) or t.get("status") != "completed"]
