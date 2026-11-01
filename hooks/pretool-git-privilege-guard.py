@@ -164,6 +164,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command  # noqa: E402
+from lib.agent_resolver import resolve_agent_type  # noqa: E402
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
     iter_git_invocations, GitInvocation, classify_git_command)
@@ -1073,23 +1074,21 @@ def _grant_provenance_refusal(grant, grant_path, data):
          PIPELINE_ORIGIN. A grant minted by an older copy of the writer
          carries no `minted_by` at all and is refused -- that is deliberate:
          an unsigned ticket is exactly the thing being retired.
-      2. Is the caller a DISPATCHED SUBAGENT? `agent_id` must be non-empty.
-         Measured, not assumed: hooks/pretool-cp-checkin.py is itself a
-         PreToolUse hook and writes this same payload field into
-         .claude/dev-registry/agent-index.json, where the recorded
-         `a`-prefixed ids map to real agent types -- re-derive the asymmetry
-         from that index rather than from this docstring. A dispatched
-         subagent's payload carries a non-empty id, while the main agent's
-         carries none. This single check is what refuses the
+      2. Is the caller a DISPATCHED SUBAGENT? `agent_id` must be non-empty:
+         a dispatched subagent's payload carries a non-empty id, while the
+         main agent's carries none. This single check is what refuses the
          orchestrator-as-bearer -- step 4 of the measured bypass.
       3. Is it THE subagent this pipeline run dispatched? A live
          hook-written changelog-analyst dispatch attestation must exist,
-         dated at or after the mint, whose `prompt_sha256` is the digest of
-         the prompt that dispatched this agent_id (read from the caller's own
-         transcript, as the producer-stop gate reads it). Every repository
-         of that dispatch's plan is committed under the same attestation; a
-         second, unrelated subagent presenting a grant was dispatched with
-         another prompt and is refused. Nothing is written to decide this.
+         dated at or after the mint, whose `subagent_type` is the caller's
+         CLI role (lib.agent_resolver.resolve_agent_type) and whose
+         `prompt_sha256` is the digest of the prompt that dispatched this
+         agent_id (read from the caller's own transcript, as the producer-stop
+         gate reads it). Every repository of that dispatch's plan is committed
+         under the same attestation; a dev or QA presenting the grant is
+         refused naming its role and changelog-analyst, and a second,
+         unrelated subagent was dispatched with another prompt and is refused.
+         Nothing is written to decide this.
 
     Returns a reason string rather than blocking directly, so the caller can
     move on to the next candidate grant instead of letting one stale or
@@ -1135,15 +1134,17 @@ def _grant_provenance_refusal(grant, grant_path, data):
         os.environ.get('CLAUDE_PROJECT_DIR') or str(data.get('cwd') or '') or os.getcwd(),
         str(data.get('agent_transcript_path') or '') or None,
         str(data.get('transcript_path') or '') or None)
+    role = resolve_agent_type(data)
     attestation, why = commit_pipeline.select_dispatch_attestation(
-        sids, str(grant.get('created_at') or ''), prompt_digest)
+        sids, str(grant.get('created_at') or ''), prompt_digest,
+        caller_role=role, prompt_why=digest_why)
     if not attestation:
         return (
             '\nBLOCKED: no changelog-analyst dispatch attestation backs this commit '
             'grant for this caller.\n'
             f'  grant: {grant_path}\n'
-            f'  caller agent_id: {agent_id}\n'
-            f'  reason: {digest_why or why}\n'
+            f'  caller agent_id: {agent_id}, role: {role or "unresolved"}\n'
+            f'  reason: {why}\n'
             'The only intended writer of an attestation is '
             'hooks/pretool-commit-dispatch-attest.py, on the real PreToolUse:Agent '
             'event for a changelog-analyst dispatch; Bash writes into that namespace '

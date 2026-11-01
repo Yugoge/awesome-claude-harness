@@ -91,7 +91,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.agent_resolver import resolve_dev_registry_entry
+from lib.agent_resolver import resolve_agent_type, resolve_dev_registry_entry
+from lib import command_span
 from lib import contract_runtime
 from lib import dispatch_template
 from lib import obligation
@@ -295,10 +296,119 @@ def _wire_ledger_judgment(report: dict, project_dir: str, task_id: str, deadline
     return findings
 
 
-def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> list:
-    """The dev report's wires (ledger judgment and /commit's trial plan).
-    Returns findings. Another producer's artifact is never judged at this
-    stop: G3 decides on it at the next dispatch."""
+# P6 A3.a: dev's declared lists against the files Claude Code recorded it
+# writing. The warning commit prints the finding; the promotion flips this.
+FILE_LISTS_BLOCK = False
+
+
+def _canonical(raw: str, root) -> Path:
+    """resolve-commit-repos.py _canonical_owned_path's form of a path."""
+    path = Path(os.path.expanduser(raw))
+    return (path if path.is_absolute() else Path(root) / path).resolve(strict=False)
+
+
+def _work_tree(path: Path):
+    return next((p for p in path.parents if (p / ".git").exists()), None)
+
+
+def _change(path: Path):
+    """git's status code for a written path, None when there is nothing to
+    land: unchanged from HEAD, ignored, gone and never committed, or outside
+    every git work tree. Read without the index refresh (G2 writes nothing)."""
+    tree = _work_tree(path)
+    out = tree and subprocess.run(
+        ["git", "--no-optional-locks", "-C", str(tree), "status", "--porcelain", "-uall", "--",
+         path.relative_to(tree).as_posix()], capture_output=True, text=True, timeout=10).stdout
+    return out[:2] if out else None
+
+
+def _recorded(transcript):
+    """(written, named) of one transcript as canonical paths, the reader's
+    excluded trees dropped in each path's own repository; None if unreadable.
+    The reader runs on root "/" so another repository's paths are kept."""
+    found = command_span.write_set(transcript, "/") if transcript else None
+    if found is None:
+        return None
+
+    def kept(rels):
+        paths = {_canonical("/" + rel, "/") for rel in rels}
+        return {p for p in paths if not ((t := _work_tree(p))
+                                         and p.relative_to(t).as_posix().startswith(command_span.EXCLUDED_TREES))}
+    return kept(found.written), kept(found.named)
+
+
+def _predecessors(project_dir: str, ob: dict, prompt) -> tuple:
+    """([(written, named)], [unreadable]) of every earlier dev dispatch of
+    this task id and lane in the project's sessions (QA loop, completion
+    dispatch), each mapped to its transcript by meta toolUseId; the search
+    reads the sessions modified since a day before the id's timestamp."""
+    restart = obligation._lib_module("subagent_restart")
+    task, mine = obligation.canonical_task_id(ob.get("task_id")), obligation.parse_iso8601(ob.get("dispatched_at"))
+    found, unreadable, metas = [], [], {}
+    for rec in obligation._task_records(ob.get("task_id"), project_dir, None):
+        other = rec["obligation"]
+        at = obligation.parse_iso8601(other.get("dispatched_at"))
+        if (rec["prompt"] == prompt or other.get("role") != "dev" or other.get("lane") != ob.get("lane")
+                or obligation.canonical_task_id(other.get("task_id")) != task or (mine and at and at > mine)):
+            continue
+        session = rec["transcript"]
+        meta = metas.setdefault(session, restart._metadata_by_tool_use(session)).get(rec["tool_use_id"]) or {}
+        sets = _recorded(meta.get("agent_transcript_path"))
+        if sets is None:
+            unreadable.append(f"dev dispatch {rec['tool_use_id']} in session {session.stem}")
+        else:
+            found.append(sets)
+    return found, unreadable
+
+
+def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, deadline: float) -> list:
+    """A3.a: every declared path (dev.files_modified and files_created) was
+    written or named by this dev or an earlier dispatch of its task and
+    lane, and every written path git has a change for is declared. [] when
+    they agree or the own transcript is unreadable; else the lines of the
+    one finding, addressed to the dev."""
+    own = _recorded(getattr(resolution, "transcript_path", None))
+    if own is None:
+        return []
+    (written, named), unreadable = (set(own[0]), set(own[1])), []
+    try:
+        prior, unreadable = _with_alarm(deadline - time.monotonic(),
+                                        lambda: _predecessors(project_dir, ob, resolution.prompt))
+    except _WireTimeout:
+        prior, unreadable = [], ["the search for earlier dev dispatches (wire budget spent)"]
+    for w, n in prior:
+        written, named = written | w, named | n
+    dev = report.get("dev") if isinstance(report.get("dev"), dict) else {}
+    declared = {key: {_canonical(p, project_dir): p for p in (dev.get(key) if isinstance(dev.get(key), list) else [])
+                      if isinstance(p, str) and p.strip()} for key in ("files_modified", "files_created")}
+    raw = {**declared["files_created"], **declared["files_modified"]}
+    missing = set(raw) - written - named
+    extra = {p: code for p in written - set(raw) if (code := _change(p))}
+    if not missing and not extra:
+        return []
+    root = Path(project_dir).resolve()
+    show = lambda p: p.relative_to(root).as_posix() if p.is_relative_to(root) else str(p)
+    expected = {key: [raw for p, raw in paths.items() if unreadable or p not in missing]
+                for key, paths in declared.items()}
+    for p, code in extra.items():
+        expected["files_created" if code == "??" or code.startswith("A") else "files_modified"].append(show(p))
+    listed = lambda paths: ", ".join(sorted(paths)) or "(none)"
+    lines = [f"declared but not written by this dev: {listed(raw[p] for p in missing)}",
+             f"written but not declared: {listed(show(p) for p in extra)}",
+             "set dev.files_modified and dev.files_created to exactly: "
+             + "; ".join(f"{key}: {', '.join(sorted(v)) or '[]'}" for key, v in expected.items())]
+    if missing:
+        lines.append("a file your own Bash produced counts once one of your Bash commands names it "
+                     "(for example `ls -l <path>`): name it and keep it listed")
+    if unreadable:
+        lines.append(f"unreadable, so its files count only once your own Bash names them: {listed(unreadable)}")
+    return lines
+
+
+def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, resolution=None) -> list:
+    """The dev report's wires (ledger judgment, /commit's trial plan and
+    A3.a's file lists). Returns findings. Another producer's artifact is
+    never judged at this stop: G3 decides on it at the next dispatch."""
     findings = []
     if ob.get("role") != "dev":
         return findings
@@ -317,9 +427,19 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> l
         report_rel = art["path"]
         report_full = Path(project_dir) / report_rel
         task_id = str(ob.get("task_id"))
-        findings += _wire_ledger_judgment(_read_json(report_full), project_dir, task_id, deadline)
+        report = _read_json(report_full)
+        findings += _wire_ledger_judgment(report, project_dir, task_id, deadline)
         if not shard:
             findings += _wire_trial_plan(report_full, report_rel, project_dir, task_id)
+        try:
+            lines = _file_lists_errors(project_dir, ob, report, resolution, deadline)
+        except Exception:
+            lines = []  # a check that cannot run judges nothing
+        if lines and FILE_LISTS_BLOCK:
+            findings.append({"path": report_rel, "reason": "file_lists_differ", "errors": lines})
+        elif lines:
+            sys.stderr.write(f"A3.a would block: {report_rel}: file_lists_differ\n"
+                             + "".join(f"    {line}\n" for line in lines))
     return findings
 
 
@@ -470,6 +590,8 @@ def main() -> None:
     # enforcement of the agent's own dev-report/context.json obligation too.
     entry = resolve_dev_registry_entry(agent_id, project_dir)
     agent_type = entry.get("agent_type", "") if entry else ""
+    # P6 R3: the role Claude Code runs this agent as, whenever one is known.
+    role = resolve_agent_type(data)
 
     # Obligation mode (rollout S4): verify the artifacts THIS agent's own
     # dispatch obligation names, ahead of the session-wide correlation guess
@@ -491,12 +613,20 @@ def main() -> None:
                 project_dir=project_dir,
                 payload_agent_transcript_path=transcript_hint,
                 # Every template and canonical todo step declares a dispatch's
-                # role as its subagent_type (G1 refuses any other), the type
-                # this agent registered as; no role list says which.
-                expected_role=agent_type or None,
+                # role as its subagent_type (G1 refuses any other), the role
+                # Claude Code runs this agent as; no role list says which.
+                expected_role=role or None,
             )
             if isinstance(resolution, obligation.NoObligationInPrompt):
                 resolution = _template_declared(resolution) or resolution
+            if (isinstance(resolution, obligation.Unresolvable) and resolution.reason == "role_mismatch"
+                    and stopgate_mode == "block"):
+                sys.stderr.write(
+                    f"OBLIGATION_STOPGATE_BLOCKED: agent {agent_id} runs as {role!r}, but its dispatch's "
+                    f"obligation names role {resolution.detail}:\n  - <obligation>: role_mismatch\n"
+                    f"This obligation is not yours: write no artifact of another role, and say in your "
+                    f"reply that the dispatch named role {resolution.detail}.\n")
+                sys.exit(2)
             if isinstance(resolution, obligation.Resolved):
                 artifacts = resolution.obligation.get("artifacts", [])
                 json_artifacts = [a for a in artifacts if a.get("kind") == "json"]
@@ -681,9 +811,8 @@ def main() -> None:
                 # shape- and terminal-valid, so the checkers see a usable report.
                 if not failures:
                     try:
-                        failures.extend(
-                            _run_downstream_wires(project_dir, resolution.obligation, json_artifacts)
-                        )
+                        failures.extend(_run_downstream_wires(
+                            project_dir, resolution.obligation, json_artifacts, resolution))
                     except Exception:
                         pass  # a crashed wire judges nothing (see its section comment)
                 who = (f"agent {agent_id} (role={resolution.obligation.get('role')}, "
@@ -701,7 +830,7 @@ def main() -> None:
                     sys.stderr.write(
                         f"OBLIGATION_STOPGATE_BLOCKED: {who} declared "
                         f"{len(verified_artifacts)} obligated artifact(s); "
-                        f"{len(failures)} failed verification:\n"
+                        f"{len(failures)} finding(s) to repair before you stop:\n"
                         f"{_finding_lines(failures)}"
                         f"Fix your OWN artifact(s) listed above, then stop "
                         f"again. Do NOT edit any other agent's artifact.\n"

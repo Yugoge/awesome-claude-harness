@@ -3,17 +3,17 @@
 
 Activation logic:
   1. Read agent_id from stdin. If absent, exit 0 (non-subagent stop).
-  2. Resolve agent entry via resolve_dev_registry_entry(agent_id, project_dir).
-     If None (agent not in agent-index.json — skipped FIRST ACTION sentinel):
-       exit 0 (fail-open). Rationale: other hooks enforce FIRST ACTION; a
-       false-positive block here is more harmful than a miss.
-  3. If dev_session_id is None (legacy flat-string entry): exit 0 (fail-open).
-  4. Check .claude/dev-registry/<dev_session_id>/codex-enforce.json.
-     If absent or enabled != true: exit 0 (no enforcement for this session).
-  5. Check .claude/dev-registry/<dev_session_id>/codex-ledger/<agent_id>.json.
+  2. Read the agent's own dispatch obligation (hooks/lib/obligation.py's
+     reader of its transcript). It names the cycle (lib/agent_cycle.py): the
+     registry of its task, else of the session that dispatched it; a dispatch
+     without one, by its agent-index.json entry. No cycle: exit 0 (fail-open).
+  3. The role is Claude Code's record of the agent
+     (lib.agent_resolver.resolve_agent_type).
+  4. Check the cycle's codex-enforce.json.
+     If absent or enabled != true: exit 0 (no enforcement for this cycle).
+  5. Check the cycle's codex-ledger/<agent_id>.json.
      If present: exit 0.
-  6. Read the agent's own dispatch prompt (hooks/lib/obligation.py's reader
-     of its transcript). It is bound when it carries the line
+  6. Its own dispatch prompt is bound when it carries the line
      `codex_required: true`, or when the dispatch template it was made from
      (hooks/lib/dispatch_template.py: the command its obligation names, else
      the command whose span holds the dispatch) carries that line: the session
@@ -37,8 +37,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import dispatch_template, obligation
-from lib.agent_resolver import resolve_dev_registry_entry
+from lib import agent_cycle, dispatch_template, obligation
+from lib.agent_resolver import resolve_agent_type
 
 CODEX_REQUIRED_LINE = re.compile(r"^\s*codex_required:\s*true\s*$", re.M)
 
@@ -80,48 +80,24 @@ def main() -> None:
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
 
-    # Resolve agent entry (both agent_type and dev_session_id)
-    entry = resolve_dev_registry_entry(agent_id, project_dir)
-    if entry is None:
-        # Agent not in index: fail-open
+    # The agent's own obligation names its cycle (P6 R4); the role is Claude
+    # Code's record of the agent.
+    resolution = agent_cycle.own_resolution(data, project_dir)
+    own = resolution.obligation if isinstance(resolution, obligation.Resolved) else {}
+    registry = agent_cycle.registry_dir(data, own, project_dir)
+    if registry is None or not _read_json(registry / "codex-enforce.json").get("enabled"):
+        # No cycle, or no (or a disabled) enforcement flag in it
         sys.exit(0)
+    dev_session_id = registry.name
+    agent_type = resolve_agent_type(data) or ""
 
-    dev_session_id = entry.get("dev_session_id")
-    if not dev_session_id:
-        # Legacy flat-string entry: no session correlation, skip enforcement
-        sys.exit(0)
-
-    agent_type = entry.get("agent_type", "")
-
-    # Check enforcement flag
-    enforce_path = Path(project_dir) / ".claude" / "dev-registry" / dev_session_id / "codex-enforce.json"
-    if not enforce_path.exists():
-        # No enforcement flag for this session
-        sys.exit(0)
-
-    enforce_data = _read_json(enforce_path)
-    if not enforce_data.get("enabled"):
-        # Enforcement explicitly disabled
-        sys.exit(0)
-
-    # Check codex ledger
-    ledger_path = Path(project_dir) / ".claude" / "dev-registry" / dev_session_id / "codex-ledger" / f"{agent_id}.json"
-    if ledger_path.exists():
+    if (registry / "codex-ledger" / f"{agent_id}.json").exists():
         # Agent called codex: allow stop
         sys.exit(0)
 
     # Bound only when its own dispatch, or the template it was made from, asks
-    # for codex (read last: only an agent about to be blocked has its
-    # transcript read).
-    resolution = obligation.resolve_own_obligation(
-        session_id=data.get("session_id") or data.get("sessionId"),
-        agent_id=agent_id,
-        project_dir=project_dir,
-        payload_agent_transcript_path=data.get("agent_transcript_path"),
-    )
-    # /close and /commit dispatches share the task's registry, whose codex flag
-    # /dev --codex armed for /dev's own; the role is bound as G2 binds it.
-    own = resolution.obligation if isinstance(resolution, obligation.Resolved) else {}
+    # for codex. /close and /commit dispatches share the task's registry, whose
+    # codex flag /dev --codex armed for /dev's own; the role is bound as G2 binds it.
     if own.get("pipeline") in ("close", "commit") and (not agent_type or own.get("role") == agent_type):
         sys.exit(0)
     if (not CODEX_REQUIRED_LINE.search(getattr(resolution, "prompt", "") or "")

@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""Resolve subagent identity to agent_type string.
+"""Resolve subagent identity to agent_type string: the one role reader.
 
 Refactored from pretool-subagent-code-block.py::_find_agent_type so that
-multiple hooks (pretool-subagent-code-block.py, pretool-tool-policy.py)
-can share one canonical lookup.
+multiple hooks (pretool-subagent-code-block.py, pretool-tool-policy.py,
+the overnight guard) share one canonical lookup.
 
-Resolution order (first hit wins):
-  1. payload.subagent_type — if the runtime already injects the role label.
-  2. payload.agent_id matched against /spec cp-state files.
-  3. payload.agent_id matched against /dev dev-registry agent-index.json.
-  4. None — caller decides (main agent or unknown).
+Resolution order (first hit wins), what Claude Code records before any
+registry an agent's own reads produce:
+  0. No payload.agent_id -> None: the main agent, whatever agent_type says.
+  1. payload.agent_type — the CLI names the subagent's type with its agent_id.
+  2. agentType of the CLI's <transcript dir>/<session_id>/subagents/
+     agent-<agent_id>.meta.json, in every account root (an older CLI that
+     puts no agent_type in the payload).
+  3. payload.agent_id matched against /spec cp-state files, then against
+     /dev dev-registry agent-index.json (older check-ins), whose one parse
+     (resolve_dev_registry_entry) also gives index readers the cycle.
+  4. None — caller decides (unregistered subagent).
+A top-level payload.subagent_type is no role: only a dispatch's tool_input
+carries one.
 
 Fail-safe: every I/O path is wrapped; on any unexpected exception we
 return None rather than raise.
@@ -22,7 +30,7 @@ None, degrade to warn + allow. See pretool-subagent-code-block.py.
 
 STALE-1 (2026-07-15): cp-state files that never got checked out (crashed
 session, abandoned spec, orphaned instance slot) sit on disk forever with
-is_running=true. Because step 2 of the resolution order scans ALL specs
+is_running=true. Because step 3 of the resolution order scans ALL specs
 globally (not just the current session's own spec), a brand-new session
 whose agent_id happens to match one of these dangling entries -- via
 recycled/reused runtime agent_id values, observed in practice -- was
@@ -57,6 +65,7 @@ import glob
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 
@@ -165,22 +174,10 @@ def _pick_active(matches: list) -> Optional[str]:
     return next(iter(types))  # F14 M9: deterministic same-role active
 
 
-def _lookup_dev_registry_index(agent_id: str, project_dir: str) -> Optional[str]:
-    index_path = f"{project_dir}/.claude/dev-registry/agent-index.json"
-    data = _read_json(index_path)
-    if not data:
-        return None
-    value = data.get(agent_id)
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        t = value.get("agent_type")
-        return t if isinstance(t, str) else None
-    return None
-
-
 def resolve_dev_registry_entry(agent_id: str, project_dir: str) -> Optional[dict]:
-    """Return a normalized entry dict for agent_id, or None.
+    """Return a normalized entry dict for agent_id, or None: the one parse of
+    agent-index.json, its role for resolve_agent_type's last step and, for index
+    readers, its cycle.
 
     Always returns {"agent_type": str, "dev_session_id": str|None}.
     Handles both legacy flat-string values (wraps as {"agent_type": value,
@@ -241,24 +238,52 @@ def _scan_cp_state_files(agent_id: str, project_dir: str):
     return _FAIL_CLOSED if picked is None else picked
 
 
-def _resolve_by_id(agent_id: str) -> Optional[str]:
+def _meta_agent_type(agent_id: str, payload: dict, project_dir: str) -> Optional[str]:
+    """Step 2, through the restart path's meta reader, imported only here: a
+    payload naming its role pays nothing for it."""
+    session_id, transcript = payload.get("session_id"), payload.get("transcript_path")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    try:
+        from .subagent_restart import SESSION_RE, _metadata_by_tool_use, account_project_roots, project_slug
+    except ImportError:  # hooks/lib placed directly on sys.path
+        from subagent_restart import SESSION_RE, _metadata_by_tool_use, account_project_roots, project_slug  # type: ignore[no-redef]
+    if not SESSION_RE.fullmatch(session_id):
+        return None
+    dirs = [Path(transcript).parent] if isinstance(transcript, str) and transcript else []
+    for folder in dict.fromkeys(dirs + [root / project_slug(project_dir) for root in account_project_roots()]):
+        for meta in _metadata_by_tool_use(folder / f"{session_id}.jsonl").values():
+            if meta["agent_id"] == agent_id and meta["agent_type"]:
+                return meta["agent_type"]
+    return None
+
+
+def _resolve_by_id(agent_id: str, payload: dict) -> Optional[str]:
+    """Steps 2 and 3 of the order."""
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
+    try:
+        role = _meta_agent_type(agent_id, payload, project_dir)
+    except Exception:  # fail-safe (module docstring): an unreadable meta is no meta
+        role = None
+    if role:
+        return role
     spec_hit = _scan_cp_state_files(agent_id, project_dir)
     if spec_hit is _FAIL_CLOSED:
         return None  # active collision: deny, do NOT consult agent-index
     if isinstance(spec_hit, str):
         return spec_hit
-    return _lookup_dev_registry_index(agent_id, project_dir)
+    entry = resolve_dev_registry_entry(agent_id, project_dir)
+    return entry["agent_type"] if entry else None
 
 
 def resolve_agent_type(payload: dict) -> Optional[str]:
-    """Public API: PreToolUse stdin payload -> agent_type or None."""
+    """Public API: hook stdin payload -> agent_type or None (the order above)."""
     if not isinstance(payload, dict):
         return None
-    direct = payload.get("subagent_type")
-    if isinstance(direct, str) and direct:
-        return direct
     agent_id = payload.get("agent_id")
     if not agent_id or not isinstance(agent_id, str):
         return None
-    return _resolve_by_id(agent_id)
+    role = payload.get("agent_type")
+    if isinstance(role, str) and role:
+        return role
+    return _resolve_by_id(agent_id, payload)

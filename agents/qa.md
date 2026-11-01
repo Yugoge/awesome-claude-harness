@@ -459,66 +459,6 @@ For each script in `dev.scripts_created`:
 
 ### Step 5: Regression Testing
 
-**Provenance check** (run BEFORE other regression steps):
-
-Read `baseline_head_sha` from the dev-report top-level field (or context JSON). If `baseline_head_sha` is absent or empty, skip this check and log: `WARNING: baseline_head_sha absent — provenance check skipped (unborn repo or pre-first-commit cycle)`. Do NOT raise a FAIL for a missing baseline.
-
-When `baseline_head_sha` is present:
-
-1. Compute the set of files actually changed since the baseline: `git diff --name-only <baseline_head_sha>` (working tree vs baseline SHA — changes are uncommitted at QA time). Collect this as `diff_files`.
-2. Read `dev.files_modified` and `dev.files_created` from the dev-report.
-3. Read `baseline_dirty_snapshot` from the dev-report or context JSON. Parse it into `baseline_dirty_paths`: for each porcelain line, extract the path field (columns 4+ of the line). For rename entries where the path field contains ` -> `, add **both** the source path and the destination path to `baseline_dirty_paths` to avoid false positives across `git diff --name-only` variants. Use this set (not the raw string) in all exclusion checks below.
-4. For every path in `dev.files_modified` that is **absent** from `diff_files` **AND** absent from `baseline_dirty_paths` **AND** is not an adoption-cell path (see the Adoption-cell carve-out below), raise a critical FAIL finding:
-   ```json
-   {
-     "label": "dev_provenance_violation",
-     "primary_cause": "dev_implementation",
-     "severity": "critical",
-     "detail": "<path> appears in dev.files_modified but is not in git diff --name-only <baseline_head_sha> and was not in baseline_dirty_paths"
-   }
-   ```
-**Adoption-cell carve-out (`untracked_modified_adoption`)**: a path is an adoption-cell path **only if all five** of these conjuncts hold — (i) it is untracked (`git ls-files --error-unmatch <path>` fails), (ii) it is in `dev.files_modified`, (iii) it is **not** in `dev.files_created`, (iv) the dev-report carries an `untracked_modified_provenance[<path>]` entry whose `path` equals `<path>` and whose `admission` is `authenticated_preexisting_untracked_whole_file`, and (v) — the **external anchor** — the live tree agrees with that entry: the sha256 of the bytes currently at `<path>` equals the entry's `final.sha256`, **and** `git status --porcelain -- <path>` reports exactly `?? <path>`. Such a path does **not** raise `dev_provenance_violation`: it is a pre-existing untracked file this cycle modified, which by construction cannot appear in `git diff --name-only <baseline_head_sha>` (that lists modified *tracked* files), so its absence from `diff_files` is expected rather than anomalous. This exemption is **exactly** five-conjunct and no wider: a path satisfying only four of the five still raises the critical FAIL in step 4 unchanged, and every path absent from both `diff_files` and `baseline_dirty_paths` that is not an adoption-cell path still raises it unchanged. An exemption that widened into a blanket suppression would be a regression, not a fix.
-
-Why (v) is not optional: conjuncts (i)–(iv) are satisfied entirely by data the **producer** wrote or by a shape derived from it, so on their own this exemption would let a dev-report suppress its own critical `dev_provenance_violation` finding by emitting a well-formed contract stub — a verifier gated wholly on the claim it is meant to check. Conjunct (v) is the only one the producer cannot author: it is measured from the live working tree, and it mirrors exactly what `stage-owned-hunks.py` already enforces before it will admit the same path on the commit side. If (v) cannot be evaluated (the path is absent, or `git status` returns anything other than `?? <path>`), the exemption does **not** apply and step 4 raises the critical FAIL unchanged — the carve-out fails closed, never open.
-
-NON-NORMATIVE SUMMARY — the normative definition of `untracked_modified_adoption` is the admission predicate `.claude/scripts/stage-owned-hunks.py` executes for `--untracked-modified-report` (`_load_untracked_modified_contract()` followed by `_untracked_modified_main()`); it enforces every conjunct summarised here plus further checks this summary does not restate (canonical-report digest binding, task/request-id and report-filename binding, differing `pre_edit`/`final` digests, `pre_edit_provenance` and `final_source_hashes` agreement, `evidence_source` presence, regular-non-symlink target, absence from the index, and non-binary content). If this summary and that predicate disagree, the predicate governs.
-
-5. Paths in `baseline_dirty_paths` are excluded from the FAIL set even if absent from the diff — dev may have confirmed them without modifying them.
-
-**Reverse (under-reporting) check** — run immediately after step 5 (uses `diff_files` and `baseline_dirty_paths` computed above):
-
-For every path in `diff_files` that is:
-   - **absent** from `dev.files_modified ∪ dev.files_created` (union of both lists), AND
-   - **absent** from `baseline_dirty_paths`
-
-   raise a critical FAIL finding:
-   ```json
-   {
-     "label": "files_modified_underreport_violation",
-     "primary_cause": "dev_implementation",
-     "severity": "critical",
-     "detail": "<path> appears in git diff --name-only <baseline_head_sha> but is absent from dev.files_modified ∪ dev.files_created and was not in baseline_dirty_paths — dev under-reported its file footprint"
-   }
-   ```
-   Note: the union check (`dev.files_modified ∪ dev.files_created`) prevents false positives for staged new files, which appear in both the diff output (as added files) and in `dev.files_created`. A path satisfies the check if it appears in either list.
-   Note: `dev.observed_preexisting` is NOT an exclusion for this check. By definition (`agents/dev.md` derivation rules), `observed_preexisting` contains only paths absent from `git diff --name-only`; a path cannot logically be both in `diff_files` and in `observed_preexisting`. Using it as an exclusion would create an escape hatch where dev claims a changed file is "preexisting" to suppress a violation.
-
-   Concurrency caveat (explanatory, human-triage only): `baseline_dirty_snapshot` is a point-in-time capture (see `agents/dev.md`), so in a shared working tree with concurrent `/dev` sessions this check can false-positive for peer-session files written after the snapshot was captured. Do not treat `baseline_dirty_snapshot` as a complete concurrency boundary. This is interpretive guidance for triaging a flagged path — it does NOT instruct you to detect, infer, or programmatically remove "suspected peer" paths, and it does NOT relax the FAIL guards above.
-
-Also check `dev.files_created` for provenance:
-
-6. Compute the combined set of new files: UNION of `git ls-files --others --exclude-standard` (untracked files not in git index) and `git diff --cached --name-only --diff-filter=A` (staged new files added to the index but not yet committed). A staged file is NOT returned by `--others`, so both commands are required.
-7. For every path in `dev.files_created` that is **absent** from the combined new-files set (step 6) **AND** absent from `baseline_dirty_paths`, raise a critical FAIL finding:
-   ```json
-   {
-     "label": "files_created_provenance_violation",
-     "primary_cause": "dev_implementation",
-     "severity": "critical",
-     "detail": "<path> appears in dev.files_created but is not in (git ls-files --others --exclude-standard ∪ git diff --cached --name-only --diff-filter=A) and was not in baseline_dirty_paths"
-   }
-   ```
-8. Paths in `baseline_dirty_paths` are excluded from the FAIL set even if absent from the combined new-files set — they were already new/untracked at baseline time.
-
 **Check related functionality not broken**:
 
 1. **Git diff analysis**: Run `git diff HEAD~1` to see what changed. Look for modified files beyond expected scope, deleted functions still referenced, and changed API signatures.

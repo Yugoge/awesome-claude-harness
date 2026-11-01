@@ -178,12 +178,9 @@ def _try_resolve_agent_type(payload: dict) -> str:
 
 
 def _resolve_role(payload: dict) -> str:
-    """Resolve acting subagent role: agent_resolver lib first, env var fallback."""
-    role = _try_resolve_agent_type(payload)
-    if role:
-        return role
-    env_role = os.environ.get('CLAUDE_AGENT_TYPE', '')
-    return env_role if isinstance(env_role, str) else ''
+    """Resolve acting subagent role through agent_resolver alone: an
+    environment variable is never a role ('' for the main agent)."""
+    return _try_resolve_agent_type(payload)
 
 
 def _load_active_contract(state: dict) -> dict | None:
@@ -864,26 +861,30 @@ def _is_cwd_in_worktree(worktree_paths: list[str], cwd: str | None = None) -> bo
 
 
 def _resolve_child_session(payload: dict) -> dict | None:
-    """M9/round-3 overnight_child: payload.agent_id -> agent-index.json
-    dev_session_id -> overnight state, if that state is live + validated."""
+    """M9/round-3 overnight_child: the overnight state of the session a
+    subagent works for, the one that dispatched it (payload.session_id), where
+    its own dispatch obligation is recorded (P6 R4). An agent-index.json
+    dev_session_id written before the pull names it only for an agent whose
+    dispatch carries no obligation (the transcript is read only when such an
+    entry exists, so an ordinary call reads none)."""
     if not isinstance(payload, dict):
         return None
     agent_id = payload.get('agent_id')
     if not agent_id:
         return None
     project_dir = str(Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd())))
-    if _resolve_dev_registry_entry is None:
-        return None
+    session_id = payload.get('session_id') or ''
     try:
-        entry = _resolve_dev_registry_entry(agent_id, project_dir)
+        entry = _resolve_dev_registry_entry(agent_id, project_dir) if _resolve_dev_registry_entry else None
+        if entry and entry.get('dev_session_id'):
+            from lib import obligation
+            own = obligation.resolve_own_obligation(session_id=session_id, agent_id=agent_id,
+                                                    project_dir=project_dir)
+            if not isinstance(own, obligation.Resolved):
+                session_id = entry['dev_session_id']
     except Exception:
         return None
-    if not entry:
-        return None
-    dev_sid = entry.get('dev_session_id')
-    if not dev_sid:
-        return None
-    return _load_session_state(dev_sid)
+    return _load_session_state(session_id)
 
 
 def _governing_state_for_cwd(cwd: str) -> dict | None:

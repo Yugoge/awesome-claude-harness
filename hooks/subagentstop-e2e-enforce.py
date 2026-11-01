@@ -3,28 +3,25 @@
 
 Activation logic:
   1. Read agent_id from stdin. If absent, exit 0 (non-subagent stop).
-  2. Resolve agent entry via resolve_dev_registry_entry(agent_id, project_dir).
-     If None (agent not in agent-index.json -- skipped FIRST ACTION sentinel):
-       fall back to obligation.resolve_own_obligation() (registry-independent;
-       reads the agent's own dispatch transcript directly). On a Resolved
-       obligation declaring a qa-report.v2 artifact, apply the SAME
-       declared-report check as step 6 below against that artifact's exact
-       path. Otherwise (no resolvable obligation, role != qa,
-       or no qa-report.v2 artifact declared): exit 0, true fail-open (LOW-10
-       preserved; ticket 20261001-161041-r06).
-  3. If dev_session_id is None (legacy flat-string entry): exit 0 (fail-open).
-  4. If agent_type != "qa": exit 0 (scoped to QA only).
-  5. Check .claude/dev-registry/<dev_session_id>/e2e-enforce.json.
-     If absent or enabled != true: exit 0 (no enforcement for this session).
-  6. Read the QA's own dispatch obligation (P1b E7: the record of what it
-     owes). When the dispatch carries one, it decides alone: the qa-report.v2
-     artifact it declares is the report judged, at exactly the path declared
+  2. The role is Claude Code's record of the agent
+     (lib.agent_resolver.resolve_agent_type), so a QA that Read another
+     role's sentinel is still a QA. Another role: exit 0. An agent the CLI
+     names no role for is a QA only when its own dispatch obligation says so.
+  3. Read the QA's own dispatch obligation (P1b E7: the record of what it
+     owes), also when its block fails the grammar (a pre-P1 template). It
+     names the cycle (lib/agent_cycle.py): the registry of its task, else of
+     the session that dispatched it; a dispatch without one, by its
+     agent-index.json entry. No cycle: exit 0 (fail-open).
+  4. Check the cycle's e2e-enforce.json. If absent or enabled != true:
+     exit 0 (no enforcement for this cycle).
+  5. A dispatch that carries an obligation is judged on it alone: the
+     qa-report.v2 artifact it declares, at exactly the path declared
      (missing: exit 2); one that declares none (BA validation, close QA) owes
      no E2E evidence here: exit 0.
-  7. A dispatch without an obligation: find the session-correlated
+  6. A dispatch without an obligation: find the session-correlated
      qa-report-*.json in docs/dev/ within project_dir.
      If none found: exit 2 (no QA report means no E2E evidence).
-  8. Read e2e_enforcement.status from the QA report.
+  7. Read e2e_enforcement.status from the QA report.
      If status is "performed", "legitimately_skipped" (with blocking_reason),
      "ran", or "blocked_app_unavailable": exit 0.
      If status is "skipped_without_justification" or field is absent:
@@ -43,8 +40,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.agent_resolver import resolve_dev_registry_entry
-from lib import obligation
+from lib.agent_resolver import resolve_agent_type
+from lib import agent_cycle, obligation
 
 # Only enforce for QA agents
 ENFORCED_AGENT_TYPE = "qa"
@@ -215,17 +212,12 @@ def _enforce_e2e_status(
     sys.exit(2)
 
 
-def _own_obligation(data: dict, agent_id: str, project_dir: str) -> dict:
+def _own_obligation(data: dict, project_dir: str) -> dict:
     """This QA's own dispatch obligation as declared, read also when the block
     fails the grammar (a pre-P1 template); {} when there is none or it cannot
     be read."""
     try:
-        resolution = obligation.resolve_own_obligation(
-            session_id=data.get("session_id") or data.get("sessionId"),
-            agent_id=agent_id,
-            project_dir=project_dir,
-            payload_agent_transcript_path=data.get("agent_transcript_path"),
-        )
+        resolution = agent_cycle.own_resolution(data, project_dir)
     except Exception:
         return {}
     if isinstance(resolution, obligation.Resolved):
@@ -238,47 +230,6 @@ def _own_obligation(data: dict, agent_id: str, project_dir: str) -> dict:
     except ValueError:
         return {}
     return doc if isinstance(doc, dict) else {}
-
-
-def _enforce_e2e_via_obligation(data: dict, agent_id: str, project_dir: str) -> None:
-    """Registry-independent fallback (ticket 20261001-161041-r06, M1).
-
-    Resolves THIS agent's own dispatch obligation directly from its
-    transcript (hooks/lib/obligation.py::resolve_own_obligation) instead of
-    agent-index.json, and -- only when that obligation declares a
-    qa-report.v2 artifact -- applies the SAME e2e_enforcement.status check
-    the registered path applies, against the obligation's own declared
-    artifact path (no glob-guessing).
-
-    Exits 2 on a block. Returns normally (never exits) when no resolvable
-    qa obligation exists, the role does not match "qa", or the obligation
-    declares no qa-report.v2 artifact -- in every such case the caller's
-    own unconditional exit 0 is the true fail-open (LOW-10 preserved, AC3).
-    """
-    try:
-        resolution = obligation.resolve_own_obligation(
-            session_id=data.get("session_id") or data.get("sessionId"),
-            agent_id=agent_id,
-            project_dir=project_dir,
-            payload_agent_transcript_path=data.get("agent_transcript_path"),
-            expected_role=ENFORCED_AGENT_TYPE,
-        )
-    except Exception:
-        # A resolver bug must degrade to the caller's fail-open, never
-        # crash the hook and never block on an internal error.
-        return
-
-    if not isinstance(resolution, obligation.Resolved):
-        # NoObligationInPrompt / Unresolvable (including role_mismatch):
-        # true fail-open, LOW-10 preserved (AC3).
-        return
-
-    _enforce_declared_report(
-        dict(resolution.obligation),
-        agent_id,
-        project_dir,
-        session_context=f"via obligation fallback (task_id={resolution.obligation.get('task_id')})",
-    )
 
 
 def _enforce_declared_report(
@@ -329,46 +280,23 @@ def main() -> None:
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
 
-    # Resolve agent entry (both agent_type and dev_session_id)
-    entry = resolve_dev_registry_entry(agent_id, project_dir)
-    if entry is None:
-        # Agent not in index (e.g. a skipped/failed FIRST ACTION
-        # registration): fall back to the registry-independent obligation
-        # resolver (ticket 20261001-161041-r06, M1) before the true
-        # fail-open below.
-        _enforce_e2e_via_obligation(data, agent_id, project_dir)
+    # The role is Claude Code's record (P6 R4): a QA that Read dev.json is
+    # still judged. An agent it names no role for is a QA only by its own
+    # dispatch, which declares what it owes (P1b E7, row 3) and its cycle.
+    agent_type = resolve_agent_type(data)
+    if agent_type not in (None, ENFORCED_AGENT_TYPE):
         sys.exit(0)
-
-    dev_session_id = entry.get("dev_session_id")
-    if not dev_session_id:
-        # Legacy flat-string entry: no session correlation, skip enforcement
+    declared = _own_obligation(data, project_dir)
+    if (agent_type or declared.get("role")) != ENFORCED_AGENT_TYPE:
         sys.exit(0)
-
-    agent_type = entry.get("agent_type", "")
-    if agent_type != ENFORCED_AGENT_TYPE:
-        # Not a QA agent: bypass enforcement unconditionally
+    agent_type = ENFORCED_AGENT_TYPE
+    registry = agent_cycle.registry_dir(data, declared, project_dir)
+    if registry is None or not _read_json(registry / "e2e-enforce.json").get("enabled"):
+        # No cycle, or no (or a disabled) enforcement flag in it: fail-open
         sys.exit(0)
+    dev_session_id = registry.name
 
-    # Check enforcement flag
-    enforce_path = (
-        Path(project_dir)
-        / ".claude"
-        / "dev-registry"
-        / dev_session_id
-        / "e2e-enforce.json"
-    )
-    if not enforce_path.exists():
-        # No enforcement flag for this session: fail-open
-        sys.exit(0)
-
-    enforce_data = _read_json(enforce_path)
-    if not enforce_data.get("enabled"):
-        # Enforcement explicitly disabled
-        sys.exit(0)
-
-    # What this QA owes is in its own dispatch obligation (P1b E7, row 3): a
-    # dispatch that carries one is judged on the report it declares alone.
-    declared = _own_obligation(data, agent_id, project_dir)
+    # A dispatch that carries an obligation is judged on the report it declares alone.
     if declared:
         _enforce_declared_report(
             declared, agent_id, project_dir, session_context=f"in session {dev_session_id}"

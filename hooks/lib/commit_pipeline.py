@@ -78,15 +78,14 @@ So: mint side raises the cost, consume side is the structural barrier. Both
 are required; neither is sufficient. Do not describe the mint side as
 unforgeable.
 
-Consumer identity: `agent_id` in the PreToolUse payload. MEASURED, not
-assumed -- `hooks/pretool-cp-checkin.py` is itself a PreToolUse hook and
-writes `json.load(sys.stdin)["agent_id"]` straight into
-`.claude/dev-registry/agent-index.json`, where the recorded `a`-prefixed ids
-map to real agent types (ba/qa/pm/architect/...), so the asymmetry is
-re-derivable from that index rather than taken on faith from this comment. A
-dispatched subagent's PreToolUse payload carries a non-empty `agent_id`; the
-main agent's does not. That asymmetry is what refuses the
-orchestrator-as-bearer.
+Consumer identity: `agent_id` plus the CLI role. A dispatched subagent's
+PreToolUse payload carries a non-empty `agent_id`; the main agent's does not,
+which refuses the orchestrator-as-bearer. The role is what Claude Code records
+for that agent (`lib.agent_resolver.resolve_agent_type`: the payload's
+`agent_type` beside its `agent_id`, else the agent's meta file), and an
+attestation is selected only by a caller whose role is the attestation's
+dispatched `subagent_type` (changelog-analyst): a dev or QA of the same
+session presenting the grant is refused by name.
 """
 
 from __future__ import annotations
@@ -665,7 +664,7 @@ def caller_prompt_sha256(session_id: str, agent_id: str, project_dir: str,
 
 
 def select_dispatch_attestation(sids, grant_created_at: str, prompt_sha256: str,
-                                now=None):
+                                now=None, caller_role=None, prompt_why: str = ""):
     """Pick the attestation of the dispatch that started the caller.
 
     Returns `(path, reason)`: a path on success, `(None, reason)` otherwise.
@@ -690,6 +689,11 @@ def select_dispatch_attestation(sids, grant_created_at: str, prompt_sha256: str,
     two records their own writers made, so the same subagent's commit in the
     next repository of its plan finds the same attestation, and nothing is
     written to make that so.
+
+    Requires `caller_role` (the caller's CLI role) to equal the attestation's
+    `subagent_type`: an attestation is selected only by the role its dispatch
+    started. `prompt_why` is `caller_prompt_sha256`'s reason when it read no
+    prompt; a refusal names the role mismatch first, then that reason.
     """
     now = now or datetime.now(timezone.utc)
     minted = _parse_iso(grant_created_at)
@@ -701,6 +705,7 @@ def select_dispatch_attestation(sids, grant_created_at: str, prompt_sha256: str,
     # file that is in fact present.
     rejected_older = 0
     rejected_other_dispatch = 0
+    rejected_role = 0
     import glob as _glob
     for sid in [s for s in (sids or []) if s]:
         for path in _glob.glob(attestation_glob(sid)):
@@ -709,6 +714,9 @@ def select_dispatch_attestation(sids, grant_created_at: str, prompt_sha256: str,
             seen.add(path)
             record = safe_read_json(path)
             if not _attestation_is_live(record, path, now):
+                continue
+            if record.get("subagent_type") != caller_role:
+                rejected_role += 1
                 continue
             dispatched_at = _parse_iso(record.get("dispatched_at"))
             if minted is not None and dispatched_at is not None and dispatched_at < minted:
@@ -719,6 +727,15 @@ def select_dispatch_attestation(sids, grant_created_at: str, prompt_sha256: str,
                 continue
             candidates.append((dispatched_at or now, path))
     if not candidates:
+        if rejected_role:
+            return None, (
+                f"{rejected_role} live dispatch attestation(s) exist, dispatched as "
+                f"{CHANGELOG_ANALYST!r}, but the caller's role is "
+                f"{caller_role or 'unresolved'!r}: an attestation is selected only by the "
+                f"role its dispatch started, {CHANGELOG_ANALYST!r}"
+            )
+        if prompt_why:
+            return None, prompt_why
         if rejected_older:
             return None, (
                 f"{rejected_older} live changelog-analyst dispatch attestation(s) exist for "

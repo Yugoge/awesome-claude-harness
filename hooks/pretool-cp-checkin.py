@@ -45,12 +45,13 @@ REGISTER_TIMEOUT_S = 20
 # workflows. These workflows produce no spec views, so VIEW_PATH_PATTERN never
 # fires for them. Root cause: commit e086ccb scoped enforcement to /spec only;
 # /dev sessions have no cp-state files, so the enforcement hook fails open.
-# Fix: each dispatched subagent reads .claude/dev-registry/<session_id>/<agent>.json
-# as its FIRST ACTION; this hook extracts the agent type from the path, writes the
-# Claude-stdin agent_id -> agent_type mapping to .claude/dev-registry/agent-index.json,
-# and is the sentinel's one producer: it creates the sentinel in the cycle's armed
-# registry right before that read, so a sentinel exists for exactly the roles a
-# dispatch reads (P1b goal 2). See ba-spec-20260424-110000.md.
+# Fix (ba-spec-20260424-110000.md): a subagent that reads
+# .claude/dev-registry/<session_id>/<agent>.json gets the agent type from the path
+# written to .claude/dev-registry/agent-index.json under its Claude-stdin agent_id,
+# only when the payload carries no agent_type (an older CLI): with one, the role
+# is the CLI's (lib/agent_resolver.py) and the read registers nothing.
+# The hook stays the sentinel's one producer: it creates the sentinel in the
+# cycle's armed registry right before that read (P1b goal 2).
 DEV_SENTINEL_PATTERN = re.compile(
     r".*/\.claude/dev-registry/(?P<session_id>[^/]+)/(?P<agent>[^/]+)\.json$"
 )
@@ -221,7 +222,9 @@ def _ensure_dev_sentinel(file_path, agent, session_id):
 
 def _handle_dev_sentinel(data, project_dir):
     """Process a DEV_SENTINEL_PATTERN Read; create the sentinel, register UUID ->
-    agent_type.
+    agent_type only when the payload carries no agent_type: the role is then the
+    CLI's (lib/agent_resolver.py), and a path the agent chose to read must not
+    write a second, possibly different, one into the index.
 
     Returns True when handled, False when the Read does not target a sentinel
     or the Claude-stdin agent_id is missing (main-agent Read is ignored).
@@ -233,7 +236,8 @@ def _handle_dev_sentinel(data, project_dir):
     if not agent_id:
         return False
     _ensure_dev_sentinel((data.get("tool_input") or {}).get("file_path") or "", agent, session_id)
-    _update_dev_registry_index(project_dir, agent_id, agent, session_id)
+    if not data.get("agent_type"):
+        _update_dev_registry_index(project_dir, agent_id, agent, session_id)
     return True
 
 

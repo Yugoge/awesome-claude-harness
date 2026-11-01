@@ -39,11 +39,12 @@ def _load_module(path, name):
 guard = _load_module(HOOKS_DIR / "pretool-git-privilege-guard.py", "pretool_git_privilege_guard")
 
 
-def _make_data(agent_id=None, session_id="test-sid-abc123"):
+def _make_data(agent_id=None, session_id="test-sid-abc123", agent_type=None):
     return {
         "tool_name": "Bash",
         "session_id": session_id,
         **({"agent_id": agent_id} if agent_id else {}),
+        **({"agent_type": agent_type} if agent_type else {}),
         "tool_input": {"command": ""},
     }
 
@@ -630,7 +631,8 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
         return str(path)
 
     def _arm_dispatched_consumer(self, sid):
-        """Put the caller in the entitled-consumer position; return its agent_id.
+        """Put the caller in the entitled-consumer position; return its payload
+        identity: the agent_id and the role Claude Code records with it.
 
         The guard now additionally requires that whoever presents a grant BE the
         subagent the pipeline dispatched: a non-empty `agent_id` in the payload,
@@ -655,7 +657,7 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
                                 return_value=(digest, ""))
         identity.start()
         self.addCleanup(identity.stop)
-        return "a" + "0" * 16
+        return {"agent_id": "a" + "0" * 16, "agent_type": guard.commit_pipeline.CHANGELOG_ANALYST}
 
     @staticmethod
     def _fake_glob_returning(grant_paths):
@@ -692,7 +694,7 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
             # Armed AFTER both grants exist: the attestation's dispatch time must
             # land at or after their created_at, since the pipeline mints first
             # and dispatches second.
-            data = _make_data(agent_id=self._arm_dispatched_consumer(sid),
+            data = _make_data(**self._arm_dispatched_consumer(sid),
                               session_id=sid)
             with patch("glob.glob", side_effect=self._fake_glob_returning([g_root, g_other])):
                 with patch.object(guard, "_spend_grant", return_value=True) as mock_spend:
@@ -726,7 +728,7 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
             # Armed too: unarmed, this test would block because the caller is not
             # an entitled consumer, NOT because no grant matches the target repo,
             # and would keep passing while guarding nothing.
-            data = _make_data(agent_id=self._arm_dispatched_consumer(sid),
+            data = _make_data(**self._arm_dispatched_consumer(sid),
                               session_id=sid)
             with patch("glob.glob", side_effect=self._fake_glob_returning([g_other])):
                 with patch.object(guard, "_spend_grant") as mock_spend:
