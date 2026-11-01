@@ -909,7 +909,7 @@ def test_a_dispatch_that_cannot_declare_the_target_decides_as_its_full_reading(t
     s = _mixed_session(tmp_path / "projects")
     agents = sorted(p.name[len("agent-"):-len(".meta.json")] for p in s.subagents.glob("*.meta.json"))
     kinds = {a: json.loads((s.subagents / f"agent-{a}.meta.json").read_text())["agentType"] for a in agents}
-    callers = [None] + [(a, kinds[a]) for a in agents[::3]]
+    callers = [None] + [(a, kinds[a]) for a in agents]
     paths = ["docs/dev/note.md", "docs/dev/context-20261028-400000.json", "docs/dev/qa-report-20261028-400002.json",
              "docs/dev/notes-20261028-400003/a.md", "docs/dev/producer-question-20261028-400000-ba.json",
              "src/mod20261028-400004.py", "docs/dev/ticket-20261028-488888.md", "docs/dev/nometa.md",
