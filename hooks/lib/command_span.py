@@ -31,6 +31,7 @@ import os
 import re
 import stat
 from collections import namedtuple
+from datetime import datetime
 from pathlib import Path
 
 COMMANDS_DIR = Path(__file__).resolve().parent.parent.parent / "commands"
@@ -445,6 +446,95 @@ class Span:
                 todos = call.input["todos"]
         return todos
 
+    def opened_at(self) -> float | None:
+        """The time the CLI recorded for the opener (seconds since the epoch);
+        None when its record carries none."""
+        lines, floor = self._lines()
+        end = min(floor, len(lines.data) + 1) - 1  # the opener line's end
+        record = _decode(lines.data[lines.data.rfind(b"\n", 0, max(end, 0)) + 1:end]) or {}
+        try:
+            return datetime.fromisoformat(str(record.get("timestamp")).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+
+    def minted_id(self) -> str | None:
+        """The task id the UserPromptSubmit hook printed for the opener
+        (MINTED_LINE_RE): its context record, which the CLI writes after the
+        typed prompt and before the turn's first assistant record. An agent's
+        echo of the line (its text, a tool result) is never read."""
+        lines, pos = self._lines()
+        data = lines.data
+        while pos < len(data):
+            end = data.find(b"\n", pos)
+            end = len(data) if end < 0 else end
+            raw = data[pos:end]
+            if b'"type":"assistant"' in raw or b'"type": "assistant"' in raw:
+                return None
+            attachment = (_decode(raw) or {}).get("attachment") if b"hook_additional_context" in raw else None
+            if isinstance(attachment, dict) and attachment.get("type") == "hook_additional_context":
+                content = attachment.get("content")
+                if isinstance(content, list):
+                    content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
+                found = MINTED_LINE_RE.search(content) if isinstance(content, str) else None
+                if found:
+                    return found.group(1)
+            pos = end + 1
+        return None
+
+    def returns(self, *names: str):
+        """(Use, its tool_result record or None) of each of the span's
+        ``names`` calls, in order: the record the CLI wrote of the call's
+        result (the result block's content, the record's toolUseResult)."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return
+        for _begin, end, block in _found(lines, floor, names, False, None):
+            ident = block.get("id") or ""
+            found, ok = _result(lines, end, ident)
+            record = None if found is None else _decode(lines.data[found:lines._bounds(found)[1]])
+            yield Use(id=ident, name=block.get("name") or "", input=block["input"], ok=ok,
+                      result_at=None if found is None else self._base + found), record
+
+    def obligations(self) -> list[dict]:
+        """The obligation blocks of the span's dispatches that came back ok
+        (Agent or Task), parsed by obligation.parse_obligation, in order."""
+        obligation = _harness_lib("obligation")
+        found = []
+        for call in self.uses("Agent", "Task"):
+            parsed = obligation.parse_obligation(str(call.input.get("prompt") or "")) if call.ok else None
+            if isinstance(parsed, obligation.ParsedObligation):
+                found.append(parsed.obligation)
+        return found
+
+    def session_families(self) -> set:
+        """The task families (obligation.task_family) the span's ok
+        dispatches named in their obligations."""
+        task_family = _harness_lib("obligation").task_family
+        return {task_family(o.get("task_id")) for o in self.obligations() if task_family(o.get("task_id"))}
+
+    def write_set(self, project_dir, actor: str | None = "main", stop_line: int | None = None):
+        """write_set() of the span: the files written or named after its
+        opener and before line ``stop_line`` (the next opener, when given), by
+        ``actor``: "main", the main session's own calls (no subagent's
+        isSidechain record), or None, every record."""
+        return write_set(self.transcript_path, project_dir, self.start_line, stop_line=stop_line,
+                         main_only=actor == "main")
+
+
+# The task-id lines the UserPromptSubmit hook prints for a /do and a /dev-family opener.
+MINTED_LINE_RE = re.compile(
+    r"^(?:\[/do\] task-id minted|DEV_SESSION_ID pre-initialized by hook): ([A-Za-z0-9._-]+)", re.M)
+
+
+def _harness_lib(name: str):
+    """A sibling harness module, imported only when a reader that needs it is
+    called: loading this module imports none (R10)."""
+    import importlib
+    if __package__:
+        return importlib.import_module(f"{__package__}.{name}")
+    return importlib.import_module(name)
+
 
 def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):
     """(begin, end, block) of each main-session tool_use block from offset
@@ -651,11 +741,12 @@ def _bash_named(command: str, cwd: str, root: str) -> set[str]:
 
 
 def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: int = 0,
-              excluded=EXCLUDED_TREES) -> WriteSet | None:
+              excluded=EXCLUDED_TREES, stop_line: int | None = None, main_only: bool = False) -> WriteSet | None:
     """The project-relative files the transcript's own tool calls after
-    ``start_line`` wrote or named (TC-46), outside ``excluded`` (a caller
-    asking which reports an agent wrote passes none); None when the
-    transcript cannot be read."""
+    ``start_line`` (and before ``stop_line``) wrote or named (TC-46), outside
+    ``excluded`` (a caller asking which reports an agent wrote passes none);
+    with ``main_only`` a subagent's own records (isSidechain) are left out.
+    None when the transcript cannot be read."""
     root = os.path.normpath(str(project_dir))
     try:
         records = _records(transcript_path)
@@ -663,8 +754,10 @@ def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: 
         return None
     uses, ok = [], set()
     for number, record in records:
-        if number <= start_line:
+        if number <= start_line or (main_only and record.get("isSidechain")):
             continue
+        if stop_line is not None and number >= stop_line:
+            break
         message = record.get("message")
         content = message.get("content") if isinstance(message, dict) else None
         for block in content if isinstance(content, list) else ():

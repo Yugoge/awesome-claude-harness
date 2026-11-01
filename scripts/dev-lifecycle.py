@@ -488,6 +488,28 @@ def actionable_parents(rows: list[dict], next_action: str) -> list[str]:
     )
 
 
+def auto_targets(project_root: Path, next_action: str, cutoff: Optional[float] = None,
+                 rows: Optional[list[dict]] = None) -> list[str]:
+    """The parents an --auto run walks: actionable_parents of ``rows``, else of
+    a fresh scan (no cached listing), less a task registered after ``cutoff`` (seconds
+    since the epoch; the run's opener), read from the time its id was minted
+    at (hooks/lib/obligation.task_stamp, the minting clock's local time). A
+    task whose id holds no stamp is kept."""
+    from datetime import datetime
+    from hooks.lib.obligation import task_stamp
+
+    def registered(task_id: str) -> Optional[float]:
+        stamp = task_stamp(task_id)
+        try:
+            return datetime.strptime(stamp, "%Y%m%d-%H%M%S").timestamp() if stamp else None
+        except ValueError:
+            return None
+
+    rows = scan(Path(project_root)) if rows is None else rows
+    return [task_id for task_id in actionable_parents(rows, next_action)
+            if cutoff is None or (registered(task_id) or float("-inf")) <= cutoff]
+
+
 def validate_auto_flag_combination(
     auto: bool, explicit_task_id: Optional[str], force: bool, bulk: bool
 ) -> Optional[str]:
@@ -580,6 +602,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     list_parser = sub.add_parser("list-actionable", help="List parent task-ids with a given next_action.")
     list_parser.add_argument("--next-action", required=True, choices=["close", "commit"])
     list_parser.add_argument("--project-dir", default=_default_project_dir())
+    list_parser.add_argument("--cutoff", type=float, default=None,
+                             help="Leave out tasks registered after this time (seconds since the epoch).")
 
     args = parser.parse_args(argv)
     project_root = Path(args.project_dir).resolve()
@@ -598,7 +622,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         # step takes it from here instead of calling the chain again.
         rows = scan(project_root)
         by_id = {row["task_id"]: row for row in rows if row.get("kind") == "ticket"}
-        for task_id in actionable_parents(rows, args.next_action):
+        for task_id in auto_targets(project_root, args.next_action, args.cutoff, rows):
             chain = by_id[task_id].get("artifact_chain")
             if chain is None:
                 print(task_id)
