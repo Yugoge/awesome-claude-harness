@@ -491,13 +491,13 @@ jobs:
     # the tests that replay nothing (the runner's unit tests) run in shard 1. Every
     # pull_request push runs it all, so a phase PR merges only with the whole suite green on its
     # head (tests/TESTING.md, "Replay suite").
-    name: replay suite ${{ matrix.shard }}/8
+    name: replay suite ${{ matrix.shard }}/12
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -519,10 +519,10 @@ jobs:
           sudo apt-get install -y bubblewrap
           python3 -m pip install --require-hashes -r requirements/py312.txt
 
-      - name: Replay suite, shard ${{ matrix.shard }} of 8
+      - name: Replay suite, shard ${{ matrix.shard }} of 12
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-          REPLAY_SHARD: ${{ matrix.shard }}/8
+          REPLAY_SHARD: ${{ matrix.shard }}/12
           REPLAY_WORK: ${{ runner.temp }}/replay
         run: >-
           python3 -m pytest tests/replay -q -p no:cacheprovider -rfE --durations=0

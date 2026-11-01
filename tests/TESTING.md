@@ -189,7 +189,7 @@ keeps every replay's records (blocks.json, hooks.jsonl, terminals.json, transcri
 suite fails with the reason; it never skips.
 
 **CI.** The `replay-suite` job of `.github/workflows/baseline.yml` runs it on every push and
-pull request, over 8 shards (`REPLAY_SHARD=i/8`; each replay whole in one shard, by its declared
+pull request, over 12 shards (`REPLAY_SHARD=i/12`; each replay whole in one shard, by its declared
 cost). The `baseline` job's pytest step leaves `tests/replay/` to it.
 
 **The merge rule.** From P1c on, a phase PR merges only with the whole replay suite green on its
