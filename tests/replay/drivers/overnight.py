@@ -1339,7 +1339,7 @@ class Night:
                 self.failed.append(p)
         passed = len(self.pipes) - len(self.failed)
         self.o.s.say(f"Pipelines passed: {passed} of {len(self.pipes)}\nPipelines needing iteration: "
-                     f"{len(self.failed)}\nPipelines parked: 0")
+                     f"{len(self.failed)}")
         if self.failed and self.variant != "qa-fail":
             raise RuntimeError("a QA did not pass outside variant qa-fail")
         if self.failed:
