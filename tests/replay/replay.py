@@ -172,6 +172,9 @@ class Replay:
         # Optional fn(step label) -> deviations, consulted for a tool call or dispatch whose caller passes
         # none (a subagent's own calls, made by agents.Player): a driver sets it to reach those steps.
         self.deviation_at = None
+        # Dispatches whose subagent's stop waits for the next dispatch to end (a parallel batch's
+        # interleaving, as a fault asks for it: tests/replay/faults.py `defer`).
+        self.deferred: list = []
         os.makedirs(layout.out, exist_ok=True)
         os.makedirs(layout.markers, exist_ok=True)
         self._log = open(os.path.join(layout.out, "hooks.jsonl"), "w")
@@ -632,7 +635,8 @@ class Actor:
             deviation = self.rp.deviation_at(label)
         step = self.rp.step("dispatch", label, {"subagent_type": subagent_type, "prompt": prompt,
                                                 "description": description, "body": body, "result": result,
-                                                "deviation": deviation, "extra_input": extra_input or {}})
+                                                "deviation": deviation, "extra_input": extra_input or {},
+                                                "actor": self})
         d = Dispatch(label, "Agent", agent_type=step["subagent_type"])
         if step.get("skip"):
             d.skipped = True
@@ -663,14 +667,27 @@ class Actor:
         if step["body"]:
             step["body"](sub)
         final = step["result"](sub) if callable(step["result"]) else step["result"]
-        if getattr(self.rp, "fault_pending", None):
-            from . import faults
-            final = faults.forged_line(self.rp, aid, final)
         sub.last_final = final
         default = getattr(self.rp, "on_stop_block_default", None)
         if default is not None:  # an injected fault's agent repairs at its next round (faults.py)
             own = on_stop_block
             on_stop_block = (lambda s, ev: (own and own(s, ev)) or default(s, ev))
+            stop_rounds = max(stop_rounds, 4)  # F2g: a forged round before the repair round
+
+        def finish():
+            self._finish_dispatch(step, d, sub, agent_in, prompt, final, on_stop_block, stop_rounds, t0)
+
+        if step.get("defer_stop"):  # its stop comes after the next dispatch's (one parallel batch)
+            self.rp.deferred.append(finish)
+            return d
+        finish()
+        while self.rp.deferred:
+            self.rp.deferred.pop(0)()
+        return d
+
+    def _finish_dispatch(self, step, d, sub, agent_in, prompt, final, on_stop_block, stop_rounds, t0) -> None:
+        """The subagent's final text and stop rounds, the Agent tool_result and its PostToolUse."""
+        label, aid, atype, tid = d.label, d.agent_id, d.agent_type, d.tool_use_id
         active = False
         for _ in range(max(1, stop_rounds)):
             self.s.say(final, aid)
@@ -693,7 +710,6 @@ class Actor:
         self.rp.settle(d.post, label, step["deviation"])
         d.ok = not d.stop.still_blocked
         self.rp.after(step, d)
-        return d
 
 
 # ---------------------------------------------------------------- tool effects
