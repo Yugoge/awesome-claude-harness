@@ -231,9 +231,7 @@ class PyModule:
             elif isinstance(p, ast.ExceptHandler):
                 handler = True
                 out.append("except " + (ast.get_source_segment(self.src, p.type) if p.type else ""))
-            elif isinstance(p, ast.Match):
-                pass
-            elif isinstance(p, ast.match_case) if hasattr(ast, "match_case") else False:
+            elif type(p).__name__ == "match_case":
                 out.append("case " + ast.get_source_segment(self.src, p.pattern))
             out += self._early_returns(ch, p)
             ch, p = p, self.parent.get(p)
@@ -279,9 +277,7 @@ class PyModule:
         p = self.parent.get(st)
         while isinstance(p, ast.With):
             p = self.parent.get(p)
-        if func is None or p is not func or st not in func.body:
-            return p is func and isinstance(st, ast.stmt) and _in_body(func, st)
-        return True
+        return func is not None and p is func and st in func.body
 
     def message(self, node) -> list[str]:
         """The string constants of the statement holding node and of up to six statements before it in
@@ -340,10 +336,6 @@ class PyModule:
         if isinstance(expr, ast.Name) and self.consts.get(expr.id) == want:
             return True
         return False
-
-
-def _in_body(func, st) -> bool:
-    return func is not None and st in getattr(func, "body", [])
 
 
 @dataclass
@@ -859,7 +851,8 @@ class Enumerator:
         seen.add(key)
         out = []
         for h in helpers.get(key, []):
-            if h.kind == "call":
+            if h.kind == "call":  # an intermediate helper: its own call carries message text too
+                out.append(h)
                 mod = self.py[h.file]
                 for node in ast.walk(mod.ast):
                     if isinstance(node, ast.Call) and node.lineno == h.line:
@@ -1122,7 +1115,7 @@ def match(hook: str, text: str, catalog: list[Site]) -> list[Site]:
     for s in catalog:
         if not any(r[0] == hook for r in s.regs):
             continue
-        score = sum(len(f) for f in fragments(s) if f in text)
+        score = sum(len(f) if f in text else 40 if len(f) > 40 and f[:40] in text else 0 for f in fragments(s))
         if score > best:
             best, out = score, [s]
         elif score == best and score:
