@@ -1450,16 +1450,269 @@ def late_repair_eligible(result: dict[str, Any]) -> bool:
     return result.get("late_repair_eligible") is True
 
 
+# --- Disposition --------------------------------------------------------------
+#
+# One answer per task and stage for every consumer: chain_pass, or incomplete
+# with its gaps.  A gap holds facts only: the artifact, the failing check's code
+# and message, and the lane of the dispatch that declared the artifact.  A
+# broken instrument raises instead, so it is never read as a gap.
+STAGES = ("dev", "close", "commit")
+INSTRUMENT_CODES = frozenset({"AGGREGATE_IMPLEMENTATION_ERROR", "UNREADABLE_DEV_DIRECTORY"})
+# Python's own exit status for an unhandled exception, so a failure main()
+# catches and one it cannot (raised while the interpreter loads it) read alike.
+INSTRUMENT_FAILURE_EXIT = 1
+_MINTED_RE = re.compile(r"\[/do\] task-id minted: ([A-Za-z0-9._-]+)")
+# Gap-line values stay one printable-ASCII line: anything else is a JSON string.
+_GAP_TOKEN_RE = re.compile(r'[!#-\[\]-~]+')
+_GAP_MESSAGE_UNSAFE_RE = re.compile(r'[^ -~]|^"| lane=')
+
+
+def _harness_lib(name: str) -> ModuleType:
+    """hooks/lib/<name> of the harness this script is installed in."""
+    harness = str(Path(__file__).resolve().parent.parent)
+    if harness not in sys.path:
+        sys.path.insert(0, harness)
+    return importlib.import_module(f"hooks.lib.{name}")
+
+
+def _newer(path: Path, than: Path) -> bool:
+    try:
+        return path.stat().st_mtime_ns > than.stat().st_mtime_ns
+    except OSError:
+        return False
+
+
+def _check_dev_chain(validator: ChainValidator, task_id: str, obligation: ModuleType) -> dict[str, str]:
+    """The dev chain, strict, plus each lane's BA-QA verdict and unanswered
+    producer questions.  Returns each lane artifact's lane label, the lane a
+    gap takes when no dispatch declared its artifact."""
+    root, dev_dir = validator.root, validator.dev_dir
+    result = resolve_chain(root, task_id)
+    for error in result["errors"]:
+        if error["code"] in INSTRUMENT_CODES:
+            raise RuntimeError(f"{error['code']} at {error['path']}: {error['detail']}")
+    validator.errors.extend(
+        error for error in result["errors"]
+        if (error["code"], error["path"]) != ("MISSING_ARTIFACT", result["completion"])
+    )
+    units = {
+        "singular": [(task_id, None)],
+        "fanout": [(lane["task_id"], lane["worker"]) for lane in result["lanes"]],
+    }.get(result["mode"], [])
+    lanes: dict[str, str] = {}
+    for unit, worker in units:
+        paths = _parent_paths(dev_dir, unit)
+        ba_qa = dev_dir / f"ba-qa-report-{unit}.json"
+        questions = {role: dev_dir / f"producer-question-{unit}-{role}.json" for role in ("ba", "dev")}
+        for path in (*paths.values(), ba_qa, *questions.values()):
+            if worker:
+                lanes[_rel(path, root)] = worker
+        report = validator.read_json(ba_qa)
+        if report is not None and obligation.terminal_status("ba-qa-report.v1", report) != "pass":
+            validator.error(
+                "INVALID_BA_QA_VERDICT",
+                _rel(ba_qa, root),
+                f"verdict is {report.get('verdict')!r}; expected 'pass'",
+            )
+        # A question is answered by its producer's next artifacts, written after it.
+        for role, answers in (("ba", ("ticket", "context")), ("dev", ("dev_report",))):
+            if questions[role].is_file() and not all(_newer(paths[key], questions[role]) for key in answers):
+                validator.error(
+                    "unanswered",
+                    _rel(questions[role], root),
+                    f"no {' and '.join(paths[key].name for key in answers)} written after the question",
+                )
+    return lanes
+
+
+def _do_minted(root: Path, task_id: str) -> bool:
+    """Whether the UserPromptSubmit hook minted ``task_id`` for a /do the human
+    typed: its hook-context record inside that /do's span, in any session of
+    the project's transcript store (a later session's /close finds it too)."""
+    obligation, command_span, stop_contract = (
+        _harness_lib(name) for name in ("obligation", "command_span", "stop_contract")
+    )
+    commands = stop_contract.harness_commands()
+    needle = f"[/do] task-id minted: {task_id}".encode()
+    for transcript in obligation._session_transcripts(root, None):
+        try:
+            if needle not in transcript.read_bytes():
+                continue
+            records = command_span._records(transcript)
+        except OSError:
+            continue
+        command = None
+        for _line, record in records:
+            opener = stop_contract.span_opener(record, commands)
+            command = opener[0] if opener else command
+            attachment = record.get("attachment")
+            if command == "do" and isinstance(attachment, dict) and attachment.get("type") == "hook_additional_context":
+                content = attachment.get("content")
+                text = content if isinstance(content, str) else json.dumps(content)
+                if task_id in _MINTED_RE.findall(text):
+                    return True
+    return False
+
+
+def _check_do_report(validator: ChainValidator, path: Path, obligation: ModuleType) -> None:
+    record, problem = _harness_lib("do_report").load(path)
+    relative = _rel(path, validator.root)
+    if not path.is_file():
+        validator.error("MISSING_ARTIFACT", relative, problem)
+    elif obligation.terminal_status("do-report.v1", record) != "completed":
+        do = record.get("do") if record else None
+        status = do.get("status") if isinstance(do, dict) else None
+        validator.error(
+            f"do.status:{status if isinstance(status, str) else json.dumps(status)}",
+            relative,
+            problem or f"do.status is {status!r}; expected 'completed'",
+        )
+
+
+def _check_commits(validator: ChainValidator, task_id: str, report: Path, lifecycle: ModuleType) -> None:
+    """A ``Task-id`` line reachable from HEAD in every repository of the task's
+    commit plan, the plan built as dev-lifecycle's commit_detection builds it;
+    its dirty-tree half is no part of the disposition."""
+    root = validator.root
+    repos = lifecycle._load_commit_repos_module()
+    try:
+        plan = repos.build_plan(
+            task_id=task_id,
+            control_root_arg=str(root),
+            supported_repo_args=[],
+            report_arg=str(report),
+            verify_ownership=False,
+        )
+    except repos.PlanError as exc:
+        validator.error("REPO_PLAN_ERROR", _rel(report, root), str(exc))
+        return
+    trailer = f"Task-id: {task_id}"
+    for repo in plan["repositories"]:
+        repo_root = Path(repo["repo_root"])
+        if not lifecycle._head_reachable_trailer(repo_root, trailer):
+            validator.error(
+                "MISSING_TASK_TRAILER",
+                _rel(repo_root, root),
+                f"no commit reachable from HEAD carries the line {trailer!r}",
+            )
+
+
+def disposition(project_root: Path | str, task_id: str, stage: str) -> dict[str, Any]:
+    """The task's disposition at ``stage`` (dev, close or commit), read-only:
+    ``{"disposition": "chain_pass" | "incomplete", "stage", "task_id",
+    "gaps": [{"artifact", "problem", "message", "lane"}, ...]}``, the gaps in
+    stage order.  Raises on an instrument failure (an unknown stage, an unsafe
+    task id, a missing project root, an unimportable helper, an unreadable
+    docs/dev, a failing aggregator)."""
+    if stage not in STAGES:
+        raise ValueError(f"stage must be one of {', '.join(STAGES)}, not {stage!r}")
+    task_id = task_id.strip()
+    if not _safe_task_id(task_id):
+        raise ValueError(f"task-id {task_id!r} is not a safe filename component")
+    root = Path(project_root).resolve()
+    if not root.is_dir():
+        raise NotADirectoryError(f"project root {root} is not a directory")
+    obligation = _harness_lib("obligation")
+    validator = ChainValidator(root, task_id)
+    report = validator.dev_dir / f"dev-report-{task_id}.json"
+    do_path = validator.dev_dir / f"do-report-{task_id}.json"
+    lanes: dict[str, str] = {}
+    do_record, _problem = _harness_lib("do_report").load(do_path)
+    if not report.is_file() and (
+        (do_record is not None and do_record.get("source") == "do") or _do_minted(root, task_id)
+    ):
+        report = do_path
+        _check_do_report(validator, do_path, obligation)
+    else:
+        lanes = _check_dev_chain(validator, task_id, obligation)
+    if stage != "dev":
+        lifecycle = _exec_script("dev-lifecycle.py", "_disposition_lifecycle")
+        close_report = validator.dev_dir / f"close-report-{task_id}.md"
+        verdict = lifecycle._load_close_verdict_module().classify_file(close_report)
+        if verdict != "yes":
+            validator.error(
+                "INVALID_CLOSE_VERDICT",
+                _rel(close_report, root),
+                f"the last non-empty line classifies as {verdict!r}; expected 'yes'",
+            )
+        if stage == "commit":
+            _check_commits(validator, task_id, report, lifecycle)
+    declared: dict[str, dict | None] = {}
+    gaps = []
+    for error in validator.errors:
+        path = error["path"]
+        if path not in declared:
+            declared[path] = obligation.declaring_dispatch(task_id, path, root)
+        gaps.append({
+            "artifact": path,
+            "problem": error["code"],
+            "message": error["detail"],
+            "lane": (declared[path] or {}).get("lane") or lanes.get(path),
+        })
+    return {
+        "disposition": "incomplete" if gaps else "chain_pass",
+        "stage": stage,
+        "task_id": task_id,
+        "gaps": gaps,
+    }
+
+
+def gap_line(gap: dict[str, Any]) -> str:
+    """One gap as the CLI prints it.  A value outside its plain form (a token
+    without spaces or quotes; a message without control or non-ASCII
+    characters, a leading quote or " lane=") is written as a JSON string."""
+    def token(value: Any) -> str:
+        text = str(value)
+        return text if _GAP_TOKEN_RE.fullmatch(text) else json.dumps(text)
+
+    message = str(gap["message"])
+    if _GAP_MESSAGE_UNSAFE_RE.search(message):
+        message = json.dumps(message)
+    lane = "-" if gap["lane"] is None else token(gap["lane"])
+    return f"GAP artifact={token(gap['artifact'])} problem={token(gap['problem'])}: {message} lane={lane}"
+
+
+def _print_disposition(project_dir: str, task_id: str, stage: str | None) -> int:
+    try:
+        outcome = disposition(project_dir, task_id, stage)
+    except Exception as exc:  # an instrument failure: never a disposition
+        print(
+            f"resolve-dev-artifact-chain.py: instrument failure: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return INSTRUMENT_FAILURE_EXIT
+    print(f"DISPOSITION={outcome['disposition']} STAGE={outcome['stage']} TASK={outcome['task_id']}")
+    for gap in outcome["gaps"]:
+        print(gap_line(gap))
+    return 0
+
+
+def _default_project_dir() -> str:
+    """The working directory's git top level, else the working directory: the
+    CLI is run from inside the project, and a Bash call's environment carries
+    no CLAUDE_PROJECT_DIR."""
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return os.getcwd()
+    return top.stdout.strip() if top.returncode == 0 and top.stdout.strip() else os.getcwd()
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
     parser = StableArgumentParser(prog="resolve-dev-artifact-chain.py")
     parser.add_argument("--task-id", required=True)
-    parser.add_argument(
-        "--project-dir",
-        default=str(Path(__file__).resolve().parent.parent),
-    )
+    parser.add_argument("--project-dir")
+    parser.add_argument("--disposition", action="store_true")
+    parser.add_argument("--stage")
     try:
         args = parser.parse_args(argv)
     except ValueError as exc:
+        if "--disposition" in argv:
+            print(f"resolve-dev-artifact-chain.py: {exc}", file=sys.stderr)
+            return INSTRUMENT_FAILURE_EXIT
         result = _base_result("", "", "")
         result["errors"] = [
             {"code": "CLI_ARGUMENT_ERROR", "path": "", "detail": str(exc)}
@@ -1470,7 +1723,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 2
-    result = resolve_chain(args.project_dir, args.task_id)
+    project_dir = args.project_dir or _default_project_dir()
+    if args.disposition:
+        return _print_disposition(project_dir, args.task_id, args.stage)
+    result = resolve_chain(project_dir, args.task_id)
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return exit_status(result)
 

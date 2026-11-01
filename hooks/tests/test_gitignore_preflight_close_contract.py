@@ -33,9 +33,10 @@ with no lane-matrix span and no close-report deliverable to anchor E3 or E4 on.
 Discriminator E5 exempts it when the dispatch's own obligation (profile
 commit-landing, parsed as G1 parses it) names the report's task as its task_id;
 the commit grant is no longer read here (P1b row 11: the privilege guard is the
-grant's one decider). The same rule is G3's (hooks/pretool-aggregate-check.py
-calls gitignored_deliverables()). Its obligations are pinned in the E5 section
-at the bottom of this file.
+grant's one decider). P3 row 13 admits profiles commit-qa, do-close and
+final_verification the same way; a dev dispatch keeps the guard. The same rule
+is G3's (hooks/pretool-aggregate-check.py calls gitignored_deliverables()). Its
+obligations are pinned in the E5 section at the bottom of this file.
 
 Synthetic cases run against a throwaway git repo containing a copy of the gate, so
 the gate's repo-root derivation (dirname(dirname(__file__))) lands inside the

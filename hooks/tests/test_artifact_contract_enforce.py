@@ -1873,7 +1873,7 @@ _CHAIN_STUB = (
     "open(os.environ['L2_STUB_CHAIN'] + '.ran', 'w').close()\n"
     "doc = json.load(open(os.environ['L2_STUB_CHAIN']))\n"
     "print(json.dumps(doc))\n"
-    "sys.exit(0 if doc.get('status') in ('pass', 'pass_with_exceptions') else 2)\n"
+    "sys.exit(0 if doc.get('status') == 'pass' else 2)\n"
 )
 
 
@@ -2634,7 +2634,8 @@ def test_r14_artifacts_not_standing_for_this_stop_are_not_aged(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _pre_p1b_leftovers(s) -> list:
+def _pre_p1b_leftovers(s) -> None:
+    """Shapes as the G2 and progress_measure of 03409de^ wrote them."""
     cycle = HOOK.obligation.registry_dir_for(s.project, s.task)
     key = f"{_G2_MISSING} (missing is blocking under obligation authority)|{s.art_path}"
     record = {"kind": "producer_stop_escalation", "record_id": "esc0123456789abcdef0123",
@@ -2658,7 +2659,6 @@ def _pre_p1b_leftovers(s) -> list:
     }
     for path, doc in files.items():
         _write(path, doc)
-    return list(files)
 
 
 def _tree(project: Path) -> dict:

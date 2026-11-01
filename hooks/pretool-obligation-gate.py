@@ -169,7 +169,7 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
             continue
         verdicts = [(v, vpath) for v, _role, vpaths in earlier for vpath, schema in vpaths.items()
                     if schema == VERDICT_SCHEMA and not set(vpaths) & set(paths)
-                    and any(p in (v.input.get("prompt") or "") for p in paths)]
+                    and any(p in v.input["prompt"] for p in paths)]
         if verdicts and VERDICT_SCHEMA not in own.values():
             verdict, vpath = verdicts[-1]
             if verdict.line < call.result_line or not verdict.result_line:

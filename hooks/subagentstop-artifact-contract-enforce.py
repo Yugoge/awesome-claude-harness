@@ -435,22 +435,18 @@ def _dispatch_echo_findings(project_dir: str, ob: dict, art: dict, record) -> li
             f"dispatch (slack {obligation.FILE_FRESHNESS_SLACK_SECONDS}s)"]})
     if (isinstance(record, dict) and ob.get("lane") is not None and ob.get("lane_set") is not None
             and _declares_lane_echo(art.get("schema"))):
-        errors = [f"{key}: obligation declares {ob.get(key)!r}, file has {record.get(key)!r}"
-                  for key, same in (("lane", record.get("lane") == ob.get("lane")),
-                                    ("lane_set", obligation.lane_sets_identical(
-                                        record.get("lane_set"), ob.get("lane_set"))))
-                  if not same]
+        same = {"lane": record.get("lane") == ob["lane"],
+                "lane_set": obligation.lane_sets_identical(record.get("lane_set"), ob["lane_set"])}
+        errors = [f"{key}: obligation declares {ob[key]!r}, file has {record.get(key)!r}"
+                  for key, ok in same.items() if not ok]
         if errors:
             findings.append({"path": art["path"], "reason": "lane_echo_mismatch", "errors": errors})
     return findings
 
 
 def _finding_lines(findings: list) -> str:
-    text = ""
-    for f in findings[:10]:
-        text += f"  - {f['path']}: {f['reason']}\n"
-        text += "".join(f"    {err}\n" for err in f.get("errors", [])[:10])
-    return text
+    return "".join(f"  - {f['path']}: {f['reason']}\n" + "".join(f"    {e}\n" for e in f.get("errors", [])[:10])
+                   for f in findings[:10])
 
 
 def main() -> None:
