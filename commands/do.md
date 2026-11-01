@@ -45,10 +45,7 @@ State what changed, which files were modified, and (if Step 3 ran) whether codex
 
 ### Step 5: Write do-report
 
-End every `/do` with a do-report at `docs/dev/do-report-<TASK_ID>.json`. You write it whole (the template below; no hook pre-writes it), `do.summary` filled, `do.status` terminal:
-
-- `"completed"` — normal finish. Fill `do.summary` and `do.files_modified`/`do.files_created`.
-- `"blocked"` — honest terminal state when the task could not be finished (user abandoned it, an operation stayed unauthorized). Fill `do.summary` with what blocked it. NEVER report abandoned work as completed.
+End every `/do` with a do-report at `docs/dev/do-report-<TASK_ID>.json`. You write it whole (the template below; no hook pre-writes it): `do.status` `"completed"`, `do.summary` saying what was done, `do.files_modified`/`do.files_created` filled. NEVER report unfinished work as completed: when the task cannot be finished as asked, ask the user in this turn how to go on (below).
 
 The gate: the Stop gate (`hooks/stop-command-gate.py`) holds this `/do` until the report validates against `schemas/do-report.v1.json`, `do.status` is `"completed"` and its file lists are exact (below). It writes and deletes nothing: only finishing the report releases it. A decision only the user can make is asked in this turn with AskUserQuestion; the answer releases no gate.
 
