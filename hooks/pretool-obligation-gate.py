@@ -147,7 +147,8 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
     each artifact this prompt names that an earlier dispatch declared, the
     latest such dispatch must have returned; and unless this dispatch is a
     verdict itself, the latest verdict naming that producer's artifacts must
-    be issued after it returned and have returned too."""
+    be issued after it returned and have returned too. A refused or errored
+    dispatch (an is_error result) ran nothing, so it has not returned."""
     span = command_span.active_span(data["transcript_path"]) if data.get("transcript_path") else None
     if span is None:
         return []
@@ -163,20 +164,21 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
         if call.id in seen:
             continue
         seen.add(call.id)
-        if not call.result_line:
+        if not (call.result_line and call.ok):
             findings.append(f"reason=producer_not_stopped artifact={path}: declared by dispatch "
-                            f"{call.id} ({role}), which has not returned")
+                            f"{call.id} ({role}), which has not returned a result")
             continue
         verdicts = [(v, vpath) for v, _role, vpaths in earlier for vpath, schema in vpaths.items()
                     if schema == VERDICT_SCHEMA and not set(vpaths) & set(paths)
                     and any(p in v.input["prompt"] for p in paths)]
         if verdicts and VERDICT_SCHEMA not in own.values():
             verdict, vpath = verdicts[-1]
-            if verdict.line < call.result_line or not verdict.result_line:
+            returned = bool(verdict.result_line and verdict.ok)
+            if verdict.line < call.result_line or not returned:
                 findings.append(
                     f"reason=verdict_not_after_producer_stop artifact={vpath}: the latest verdict on "
                     f"{path}, dispatch {verdict.id} (line {verdict.line}, "
-                    f"{'returned' if verdict.result_line else 'not returned'}), does not follow the "
+                    f"{'returned' if returned else 'not returned'}), does not follow the "
                     f"return of dispatch {call.id} ({role}) at line {call.result_line}")
     return findings
 

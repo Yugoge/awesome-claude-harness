@@ -767,10 +767,12 @@ ORDER_EXIT = 2
 LANES = ["l1", "l2"]
 
 
-def _returned(tool_use_id):
-    """The record of a dispatch's returned result."""
-    return {"type": "user", "isSidechain": False, "message": {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": tool_use_id, "content": "returned"}]}}
+def _returned(tool_use_id, refused=False):
+    """The record of a dispatch's returned result (refused: a hook's is_error refusal)."""
+    result = {"type": "tool_result", "tool_use_id": tool_use_id, "content": "returned"}
+    if refused:
+        result.update(content="PreToolUse hook refused the dispatch", is_error=True)
+    return {"type": "user", "isSidechain": False, "message": {"role": "user", "content": [result]}}
 
 
 def _stage(kind, task=TASK_ID, lane=None, extra=(), dispatched_at=None):
@@ -800,12 +802,13 @@ def _stage(kind, task=TASK_ID, lane=None, extra=(), dispatched_at=None):
 
 
 def _history(steps):
-    """Records of earlier dispatches: (id, stage, returned) each, in order."""
+    """Records of earlier dispatches: (id, stage, returned) each, in order;
+    returned is True, False (still running) or "refused"."""
     records = []
     for tool_use_id, (subagent_type, prompt), returned in steps:
         records.append(_tool_use(tool_use_id, "Agent", {"subagent_type": subagent_type, "prompt": prompt}))
         if returned:
-            records.append(_returned(tool_use_id))
+            records.append(_returned(tool_use_id, refused=returned == "refused"))
     return records
 
 
@@ -939,3 +942,19 @@ def test_R17_order_is_record_order_not_dispatched_at(tmp_path):
     assert "reason=producer_not_stopped" in warned.stderr and warned.returncode == ORDER_EXIT
     passed = _order_run(home, project, DEV_LOOP + [("toolu_dev2", late, True)], _stage("qa"))
     assert passed.returncode == 0 and passed.stderr == "", passed.stderr
+
+
+def test_R17_a_refused_redispatch_has_not_returned(tmp_path):
+    """A dev re-dispatch a hook refused (is_error result) ran nothing: a QA
+    after it would re-judge the previous round's report, so it is a finding;
+    so is a dev after a refused BA-QA re-dispatch."""
+    home, project = _dirs(tmp_path)
+    steps = DEV_LOOP + [("toolu_dev2", _stage("dev", extra=QA_FIX), "refused")]
+    result = _order_run(home, project, steps, _stage("qa"))
+    assert result.returncode == ORDER_EXIT
+    assert ("reason=producer_not_stopped artifact=docs/dev/dev-report-" in result.stderr
+            and "toolu_dev2 (dev), which has not returned a result" in result.stderr), result.stderr
+    steps = BA_LOOP + [("toolu_ba2", _stage("ba"), True), ("toolu_baqa2", _stage("ba_qa"), "refused")]
+    result = _order_run(home, project, steps, _stage("dev"))
+    assert result.returncode == ORDER_EXIT
+    assert "dispatch toolu_baqa2 (line" in result.stderr and "not returned" in result.stderr, result.stderr

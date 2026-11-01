@@ -34,7 +34,8 @@ Discriminator E5 exempts it when the dispatch's own obligation (profile
 commit-landing, parsed as G1 parses it) names the report's task as its task_id;
 the commit grant is no longer read here (P1b row 11: the privilege guard is the
 grant's one decider). P3 row 13 admits profiles commit-qa, do-close and
-final_verification the same way; a dev dispatch keeps the guard. The same rule
+(in pipeline close) final_verification the same way; a dev-side dispatch,
+/dev's own final QA included, keeps the guard. The same rule
 is G3's (hooks/pretool-aggregate-check.py calls gitignored_deliverables()). Its
 obligations are pinned in the E5 section at the bottom of this file.
 
@@ -1170,6 +1171,7 @@ def test_e5_grant_line_admits_nothing(landing_sandbox, tmp_path):
 @pytest.mark.parametrize('obligation', [
     landing_obligation(task_id='20261028-202020'),               # another task
     landing_obligation(profile='singular', role='dev', pipeline='dev'),  # a dev dispatch
+    landing_obligation(profile='final_verification', role='qa', pipeline='dev'),  # /dev Step 13's QA
     landing_obligation(profile='commit-qa', role='qa', task_id=None),    # bulk QA: no task
     landing_obligation(profile='commit-bulk', task_id=None),     # bulk landing
     landing_obligation().replace('"commit"', '"nonsense"'),      # G1 rejects it
@@ -1293,11 +1295,13 @@ def test_g3_and_the_preflight_admit_every_reading_producer(landing_sandbox, prof
     assert run_gate(sandbox_hook(landing_sandbox), prompt) == (0, '')
 
 
-def test_g3_and_the_preflight_keep_the_guard_on_a_dev_dispatch(landing_sandbox):
+@pytest.mark.parametrize('profile,role', [('singular', 'dev'), ('final_verification', 'qa')])
+def test_g3_and_the_preflight_keep_the_guard_on_a_dev_dispatch(landing_sandbox, profile, role):
+    """A dev dispatch, and /dev's own final QA (Step 13, pipeline dev)."""
     shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
     rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
-    prompt = commit_step7_prompt(rel, landing_obligation(profile='singular', role='dev', pipeline='dev'))
-    rc, err = run_g3(landing_sandbox, prompt, 'block', 'dev')
+    prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline='dev'))
+    rc, err = run_g3(landing_sandbox, prompt, 'block', role)
     assert rc == 2
     assert err.startswith('[gitignored_deliverable] %s: tests/generated/x/test_a.py' % rel)
     assert run_gate(sandbox_hook(landing_sandbox), prompt) == (

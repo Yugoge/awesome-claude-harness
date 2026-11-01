@@ -647,9 +647,12 @@ def is_contract_deliverable(path, src_task_id, repo_root=None, project_dir=None)
 
 
 # E5: the profiles of the producers that read the dev report of the task they
-# verify or land: final QA (final_verification, /dev Step 13 and /close), /do's
-# close, /commit's QA and its changelog-analyst (Steps 6 and 7).
-EXEMPT_PROFILES = frozenset(('commit-landing', 'commit-qa', 'do-close', 'final_verification'))
+# verify or land: /do's close, /commit's QA and its changelog-analyst (Steps 6
+# and 7), and /close's QA. /dev's own final QA (Step 13) shares /close's
+# profile but is a dev-side dispatch, so final_verification is exempt only in
+# pipeline close: the guard's forward-path catch stays in /dev.
+EXEMPT_PROFILES = frozenset(('commit-landing', 'commit-qa', 'do-close'))
+CLOSE_ONLY_PROFILE = 'final_verification'
 
 
 def exempt_task_id(prompt):
@@ -667,7 +670,10 @@ def exempt_task_id(prompt):
         return None
     doc = parsed.obligation
     task_id = doc.get('task_id')
-    if doc.get('profile') not in EXEMPT_PROFILES or not isinstance(task_id, str):
+    profile = doc.get('profile')
+    exempt = profile in EXEMPT_PROFILES or (
+        profile == CLOSE_ONLY_PROFILE and doc.get('pipeline') == 'close')
+    if not exempt or not isinstance(task_id, str):
         return None
     return task_id
 
