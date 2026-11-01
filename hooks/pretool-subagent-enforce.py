@@ -56,12 +56,14 @@ def _content_to_step(content: str) -> str:
 
 
 def _current_step_label(stdin_data: dict) -> str | None:
-    """The in-progress step label of the session's checklist, read from the
-    transcript."""
+    """The in-progress step label of the span's last ok TodoWrite (command_span's
+    last_todos, read from the end of the span: no line before it is counted)."""
     span = command_span.active_span(stdin_data.get('transcript_path') or '')
-    for item in (span.last_todos() if span else None) or []:
-        if isinstance(item, dict) and item.get('status') == 'in_progress':
-            return _content_to_step(item.get('content', ''))
+    for use in span.uses('TodoWrite', newest_first=True) if span else ():
+        todos = use.input.get('todos')
+        if use.ok and isinstance(todos, list):
+            return next((_content_to_step(t.get('content', '')) for t in todos
+                         if isinstance(t, dict) and t.get('status') == 'in_progress'), None)
     return None
 
 
