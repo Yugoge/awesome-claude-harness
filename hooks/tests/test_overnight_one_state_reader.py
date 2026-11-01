@@ -346,6 +346,72 @@ def test_collection_checks_the_dispatch_obligation(session):
     assert _run("posttool-overnight-file-check.py", session, _agent("dev", "x")).returncode == 0
 
 
+def _v2_dev_report(task_id: str) -> dict:
+    """The report dev-report.v2 asks for, as the dispatch's obligation declares it."""
+    return {"report_version": 2, "request_id": task_id, "task_id": task_id,
+            "timestamp": "2026-10-28T01:01:01Z", "baseline_head_sha": "",
+            "baseline_dirty_snapshot": "", "owned_edits": {}, "pre_edit_snapshots": {},
+            "dev": {"status": "completed", "files_modified": ["toy/__init__.py"],
+                    "files_created": []}}
+
+
+def test_collection_reads_the_schema_from_the_obligation_and_names_artifact_and_check(session):
+    """E1 (R13): the contract entry declares no schema, so the check takes the one the
+    dispatch's obligation declares: the report that schema asks for passes, a report in
+    the retired v1 shape is refused. The refusal names the artifact, the check (the
+    obligation's schema id) and the declaring dispatch's next round, and offers no escalation."""
+    task_id = "20261028-010101-0"
+    dispatch = _dev_dispatch(task_id)
+    _triage_report(session, 1, fixes=1)
+    _run("posttool-subagent-track.py", session, _agent("pm", "PM_MODE: TRIAGE"))
+    contract = json.loads((session / "docs" / "dev" / "overnight" / SID / "cycle-1"
+                           / "cycle-contract.json").read_text())
+    assert all(set(e) == {"step", "role", "mode", "pipeline_id"} for e in contract["required_calls"])
+    rel = f"docs/dev/dev-report-{task_id}.json"
+    report = session / rel
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"report_version": 1, "task_id": task_id, "status": "completed",
+                                  "files_modified": [], "files_created": [],
+                                  "root_cause_addressed": "x", "ac_status": {}}))
+    old = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert old.returncode == 2
+    assert f"{rel} (schema dev-report.v2): <root>: 'dev' is a required property" in old.stderr
+    assert "Dispatch dev again with the same obligation template and a fresh dispatched_at" in old.stderr
+    assert "escalat" not in old.stderr.lower()
+    report.unlink()
+    missing = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert missing.returncode == 2 and f"{rel} (schema dev-report.v2): expected artifact missing" \
+        in missing.stderr and "escalat" not in missing.stderr.lower()
+    report.write_text(json.dumps(_v2_dev_report(task_id)))
+    valid = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert valid.returncode == 0, valid.stderr
+    assert "dev obligation artifacts valid (step=12)" in valid.stdout
+
+
+def test_collection_names_a_markdown_artifact_by_its_failing_check(session):
+    """A markdown artifact (BA's ticket) is named with the check its validator failed."""
+    task_id = "20261028-030303-0"
+    obligation = {
+        "task_id": task_id, "lane": None, "lane_set": None, "role": "ba",
+        "pipeline": "dev-overnight", "profile": "overnight", "dispatched_at": _iso(0),
+        "artifacts": [{"kind": "markdown", "path": f"docs/dev/ticket-{task_id}.md",
+                       "identity_anchor": task_id}],
+    }
+    dispatch = _agent("ba", f'analyse\n<obligation v="1">{json.dumps(obligation)}</obligation>')
+    _triage_report(session, 1, fixes=1)
+    _run("posttool-subagent-track.py", session, _agent("pm", "PM_MODE: TRIAGE"))
+    ticket = session / "docs" / "dev" / f"ticket-{task_id}.md"
+    ticket.parent.mkdir(parents=True, exist_ok=True)
+    ticket.write_text("# a ticket for another task\n")
+    refused = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert refused.returncode == 2
+    assert f"docs/dev/ticket-{task_id}.md (identity_anchor_missing): identity_anchor substring " \
+        "not found" in refused.stderr
+    assert "Dispatch ba again" in refused.stderr and "escalat" not in refused.stderr.lower()
+    ticket.write_text(f"# Ticket {task_id}\n")
+    assert _run("posttool-overnight-file-check.py", session, dispatch).returncode == 0
+
+
 def _retro_dispatch(cycle: int) -> dict:
     task_id = "20261028-020202"
     obligation = {
