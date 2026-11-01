@@ -307,20 +307,10 @@ def close_and_commit(
 
 
 def derive_state(project_root: Path, task_id: str) -> dict:
-    """Derive one task-id's lifecycle row.
-
-    Precedence resolution (dev implementation decision, documented in the dev
-    report): the ba-qa-report check and the do-report branch are both
-    reached only when no canonical dev-report exists; between them, a
-    ba-qa-report's PRESENCE takes precedence over a do-report's presence,
-    because a ba-qa-report is direct evidence of an in-progress /dev-track
-    attempt for this id. A do-report is a deliberate /do-track substitute for
-    the ENTIRE dev-chain (BA-QA included by design -- the disposition checks a
-    /do task's do-report alone, no ticket/context/QA), so it is
-    consulted only when no ba-qa-report exists either. This keeps AC-L1/L2/L3
-    (ba-qa-report-driven) and AC-L9/L10 (do-report-driven, real corpus has no
-    ba-qa-report for that id) both satisfied without contradiction.
-    """
+    """Derive one task-id's lifecycle row, by precedence: a dev-report (its close-report's verdict, else
+    the /dev chain's, unless it is dev's report concluding a /do task whose do-report is not completed:
+    Q7); else a ba-qa-report, direct evidence of a /dev-track attempt; else a do-report, the /do track's
+    substitute for the whole chain, BA-QA included (AC-L1-L3 and AC-L9/L10 hold together)."""
     project_root = Path(project_root)
     dev_dir = project_root / "docs" / "dev"
     row: dict[str, Any] = {
@@ -347,7 +337,6 @@ def derive_state(project_root: Path, task_id: str) -> dict:
                 ))
                 return row
             if do_report_lite_preflight(_read_json(do_report_path) or {}) == "do.status":
-                # Q7: dev's report concludes a /do task whose do-report is not completed (the disposition)
                 row.update(state="close_pending", next_action="close", invoke_resolver=False, chain_origin="do_report")
                 return row
             row.update(chain_state(task_id, _load_resolver_module().resolve_chain(project_root, task_id)))
