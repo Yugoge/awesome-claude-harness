@@ -6,7 +6,8 @@ do-task-id-collision): handle_do_consent must mint a globally-unique pure-timest
 task-id (reservation-backed, no same-second collision) and expose it via a
 session-keyed sidecar, WITHOUT changing the consent-flag trust root (content stays
 "true"). The agent then resolves its own task-id via $CLAUDE_CODE_SESSION_ID instead
-of `ls -t ...consent... | head -1` (which aliased parallel /do sessions).
+of `ls -t ...consent... | head -1` (which aliased parallel /do sessions). The hook
+writes no do-report: the /do main agent is its one writer (E8 (a)).
 
 Run: python3 hooks/tests/test_do_taskid_mint.py
 """
@@ -14,6 +15,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -72,8 +74,7 @@ def test_consent_flag_content_unchanged_and_sidecar_written():
     sid = "test-sid-" + next(tempfile._get_candidate_names())
     _cleanup(sid)
     try:
-        with tempfile.TemporaryDirectory() as tmp:  # keep the skeleton out of the real docs/dev
-            pw.handle_do_consent(sid, project_dir=Path(tmp))
+        pw.handle_do_consent(sid)
         flag = _state(f"claude-orchestrator-consent-{sid}.flag")
         sidecar = _state(f"claude-do-task-{sid}.json")
         # Trust root untouched: flag exists, content is exactly "true".
@@ -94,9 +95,8 @@ def test_distinct_sessions_get_distinct_sidecars():
     sid_b = "test-B-" + next(tempfile._get_candidate_names())
     _cleanup(sid_a); _cleanup(sid_b)
     try:
-        with tempfile.TemporaryDirectory() as tmp:  # keep the skeletons out of the real docs/dev
-            pw.handle_do_consent(sid_a, project_dir=Path(tmp))
-            pw.handle_do_consent(sid_b, project_dir=Path(tmp))
+        pw.handle_do_consent(sid_a)
+        pw.handle_do_consent(sid_b)
         a = json.loads(_state(f"claude-do-task-{sid_a}.json").read_text())
         b = json.loads(_state(f"claude-do-task-{sid_b}.json").read_text())
         assert a["task_id"] != b["task_id"], f"two sessions aliased to one task-id {a['task_id']!r} — the collision is back"
@@ -105,58 +105,30 @@ def test_distinct_sessions_get_distinct_sidecars():
         _cleanup(sid_a); _cleanup(sid_b)
 
 
-def test_skeleton_prewritten_pending_with_stripped_request():
-    """Consent must pre-write the pending do-report skeleton (existence is
-    hook-guaranteed; content completion stays with the agent), with request =
-    $ARGUMENTS verbatim (leading /do token stripped)."""
+def test_consent_writes_no_do_report():
+    """E8 (a): the /do prompt's hook mints the id and writes the sidecar, and
+    nothing else in the project: the do-report's one writer is the main agent
+    (commands/do.md Step 5)."""
     sid = "test-sid-" + next(tempfile._get_candidate_names())
     _cleanup(sid)
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            pw.handle_do_consent(sid, "/do --codex fix the widget", project_dir=Path(tmp))
+            home = Path(tmp) / "home"
+            project = Path(tmp) / "project"
+            project.mkdir()
+            env = {**os.environ, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(home / ".claude"),
+                   "CLAUDE_PROJECT_DIR": str(project), "PYTHONDONTWRITEBYTECODE": "1"}
+            proc = subprocess.run(
+                [sys.executable, str(HOOK)], capture_output=True, text=True, cwd=project, env=env,
+                input=json.dumps({"session_id": sid, "cwd": str(project), "prompt": "/do fix the widget",
+                                  "hook_event_name": "UserPromptSubmit"}), timeout=60)
+            assert proc.returncode == 0, proc.stderr
             tid = json.loads(_state(f"claude-do-task-{sid}.json").read_text())["task_id"]
-            report = Path(tmp) / "docs" / "dev" / f"do-report-{tid}.json"
-            assert report.exists(), "consent must pre-write the do-report skeleton"
-            rec = json.loads(report.read_text())
-            assert rec["report_version"] == 1 and rec["source"] == "do"
-            assert rec["task_id"] == tid and rec["request_id"] == tid
-            assert rec["request"] == "--codex fix the widget", \
-                f"request must be args verbatim minus /do token, got {rec['request']!r}"
-            assert rec["do"]["status"] == "pending"
-            assert rec["do"]["files_modified"] == [] and rec["do"]["files_created"] == []
+            assert f"[/do] task-id minted: {tid}" in proc.stdout, proc.stdout
+            assert not (project / "docs").exists(), \
+                f"the hook wrote a project artifact: {sorted(project.rglob('*'))}"
     finally:
         _cleanup(sid)
-
-
-def test_skeleton_declares_profile_and_expected_absent():
-    """AC-L5-01: the pre-written skeleton must declare the artifacts a /do run
-    legitimately never produces, so downstream artifact-presence checks (e.g.
-    L2's e2e-gate) can tell an intentional absence from a real failure."""
-    sid = "test-sid-" + next(tempfile._get_candidate_names())
-    _cleanup(sid)
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            pw.handle_do_consent(sid, "/do fix the widget", project_dir=Path(tmp))
-            tid = json.loads(_state(f"claude-do-task-{sid}.json").read_text())["task_id"]
-            report = Path(tmp) / "docs" / "dev" / f"do-report-{tid}.json"
-            rec = json.loads(report.read_text())
-            assert rec["profile"] == "do", f"profile must be 'do', got {rec.get('profile')!r}"
-            assert rec["expected_absent"] == ["qa-report", "dev-report", "ticket", "context", "completion"], \
-                f"expected_absent mismatch: {rec.get('expected_absent')!r}"
-    finally:
-        _cleanup(sid)
-
-
-def test_skeleton_never_clobbers_existing_report():
-    """O_EXCL create: a pre-existing report at the minted path survives byte-for-byte."""
-    with tempfile.TemporaryDirectory() as tmp:
-        d = Path(tmp) / "docs" / "dev"
-        d.mkdir(parents=True)
-        pre = d / "do-report-20990101-000000.json"
-        pre.write_text('{"sentinel": true}')
-        got = pw._write_do_report_skeleton("20990101-000000", "req", Path(tmp))
-        assert got is None, "skeleton write over an existing report must refuse, not overwrite"
-        assert pre.read_text() == '{"sentinel": true}', "existing report bytes must be untouched"
 
 
 def _run():

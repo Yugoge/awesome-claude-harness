@@ -67,7 +67,7 @@ def test_real_generic_validators_accept_every_projected_transition(todos, guards
     )
     errors: list[str] = []
     last = _frontier(todos, 0)
-    post.check_initial_status(last, errors)
+    errors.extend(canonical.initial_status_violations(last))
     for index in range(1, len(todos)):
         new = _frontier(todos, index)
         errors.extend(pre.validate(last, new))

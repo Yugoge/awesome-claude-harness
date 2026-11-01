@@ -20,12 +20,10 @@ fi
 # Push only a namespaced recovery ref in background. Never publish refs/heads/<branch>.
 SHORT_SHA="${COMMIT_SHA:0:12}"
 BACKUP_REF="refs/backups/claude/${BRANCH}/${SHORT_SHA}"
-LOG_PATH="${CLAUDE_BACKUP_LOG:-${HOME}/.claude/logs/post-commit-auto-push.log}"
 REMOTE="${CLAUDE_BACKUP_REMOTE:-origin}"
 
-mkdir -p "$(dirname "$LOG_PATH")"
-git update-ref "$BACKUP_REF" "$COMMIT_SHA" 2>>"$LOG_PATH" || true
-nohup git push "$REMOTE" "${COMMIT_SHA}:${BACKUP_REF}" >>"$LOG_PATH" 2>&1 &
+git update-ref "$BACKUP_REF" "$COMMIT_SHA" 2>/dev/null || true
+nohup git push "$REMOTE" "${COMMIT_SHA}:${BACKUP_REF}" >/dev/null 2>&1 &
 
 # Don't wait for push to complete
 exit 0

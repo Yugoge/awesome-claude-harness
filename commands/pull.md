@@ -25,7 +25,7 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 ### Step 1: Execute the pull script
 
 ```bash
-bash ~/.claude/hooks/pull.sh
+bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/pull.sh"
 PULL_EXIT_CODE=$?
 ```
 
@@ -107,7 +107,7 @@ it does not gate any future command.
 After displaying the pull-analyst report, run a non-blocking incremental Graphify cache update. This ensures the global knowledge graph reflects the newly pulled commits.
 
 ```bash
-source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py update || true
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-maintain.py" update || true
 ```
 
 This call is advisory: if GRAPHIFY_BIN is absent, CLAUDE_GRAPHIFY_ENABLED=0, or the cache is unavailable, it exits 0 immediately with a status=unavailable message. The update MUST NOT block the pull workflow or require user confirmation. Failure is silent (logged to stderr only).
@@ -117,4 +117,4 @@ This call is advisory: if GRAPHIFY_BIN is absent, CLAUDE_GRAPHIFY_ENABLED=0, or 
 - `/push` - Push changes with untracked file detection
 - `git status` - Check current working directory state
 
-The implementation is in `~/.claude/hooks/pull.sh`.
+The implementation is in `<HARNESS_ROOT>/hooks/pull.sh`.

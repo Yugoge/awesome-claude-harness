@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "dev-report.v2",
   "title": "Dev Report v2 (nested producer shape)",
-  "description": "Per-task dev implementation report, v2: matches the REAL nested producer template (agents/dev.md:590-674 — nested dev.status, top-level baseline keys) instead of v1's flat shape. Required baseline_head_sha/baseline_dirty_snapshot mirror the live producer checks at scripts/aggregate-dev-report.py:529-546 (commit inventory #71/#72, close #20/#22; empty string is legal for both — unborn repo / clean tree). The AC-deviation sub-shape is copied from its canonical machine-shape definition at scripts/resolve-dev-artifact-chain.py:80-130. lane/lane_set follow docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.1(e)/§1.2: lane_set is required non-null when lane is a string; lane-membership (lane ∈ lane_set) is NOT expressible in Draft7 and is the later G2 echo check, deliberately not faked here. Authority: design §1.6 (schema v2 cutover).",
+  "description": "Per-task dev implementation report, v2: matches the REAL nested producer template (agents/dev.md:590-674 — nested dev.status, top-level baseline keys) instead of v1's flat shape. Required baseline_head_sha/baseline_dirty_snapshot mirror the live producer checks at scripts/aggregate-dev-report.py:529-546 (commit inventory #71/#72, close #20/#22; empty string is legal for both — unborn repo / clean tree). The AC-deviation sub-shape is defined here: this schema is its shape. lane/lane_set follow docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.1(e)/§1.2: lane_set is required non-null when lane is a string; lane-membership (lane ∈ lane_set) is NOT expressible in Draft7 and is the later G2 echo check, deliberately not faked here. Authority: design §1.6 (schema v2 cutover).",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -91,7 +91,7 @@
     "ac_deviation_with_user_need_satisfied_block": {
       "type": "object",
       "additionalProperties": true,
-      "description": "Canonical machine shape: scripts/resolve-dev-artifact-chain.py:80-130 ('THE ONE PLACE that defines the machine shape'). Unknown extra keys tolerated (resolver comment :96-97).",
+      "description": "The AC-deviation record's machine shape: this schema is the shape. Unknown extra keys tolerated.",
       "required": [
         "clause_a_deviated_ac_ids",
         "clause_b_user_need_verbatim",

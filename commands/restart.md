@@ -67,7 +67,7 @@ directive to this session's own main agent — see
    `RESTART_BLOCKED_SESSION_ID_UNAVAILABLE` when neither exists:
 
    ```text
-   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py prepare
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py" prepare
    ```
 
    The output is the transcript-derived candidate set for THIS parent session
@@ -114,7 +114,7 @@ directive to this session's own main agent — see
    helper with a tool timeout of at least 600000 ms:
 
    ```text
-   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py status --wait-seconds 540
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py" status --wait-seconds 540
    ```
 
    If `complete` is false, report `RESTART_INCOMPLETE` with every
@@ -127,7 +127,7 @@ directive to this session's own main agent — see
 5. **Finalize only after all responses.** When `complete` is true, invoke:
 
    ```text
-   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py finalize
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py" finalize
    ```
 
    Report the recovered agent IDs and point to their existing transcript paths.

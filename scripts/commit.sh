@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Description: Discoverable canonical entrypoint for commands/dev-overnight.md's
-#              Step 19 end-of-cycle commit call. Bounded reachability fix only
+# Description: Kept, run by no command since P2 (D15: no feature is retired).
+#              It was the entrypoint of commands/dev-overnight.md Step 19's
+#              end-of-cycle commit, which P2 removed: overnight work now lands
+#              after the session through the owner-typed /close --auto,
+#              /commit --auto, /merge and /push. Bounded reachability fix only
 #              (AC-L22 / Must-Have #10, task 20260808-035658-lanel) -- this is
 #              NOT a CAS/content-bound-ledger redesign.
 # Usage: commit.sh <commit-message> [repo-root]
@@ -8,10 +11,10 @@
 #   0  nothing to commit (repo already clean) -- a legitimate no-op
 #   1  bad usage (missing message argument)
 #   3  repo is dirty but this script cannot self-authorize a real HEAD commit
-#      (see rationale below) -- the caller (dev-overnight.md Step 19) already
-#      treats ANY non-zero exit as "log the failure and continue"; refs/
-#      checkpoints/* snapshots remain intact and the operator can promote
-#      them manually via /commit.
+#      (see rationale below) -- its former caller (dev-overnight.md Step 19,
+#      removed in P2) treated ANY non-zero exit as "log the failure and
+#      continue"; refs/checkpoints/* snapshots remain intact and the operator
+#      can promote them manually via /commit.
 #
 # Root-cause reference: docs/dev/ticket-20260808-035658-lanel.md Must-Have #10
 # (objection 1). commands/dev-overnight.md:1561 previously called a bare,

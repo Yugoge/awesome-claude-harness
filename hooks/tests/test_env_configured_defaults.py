@@ -30,7 +30,7 @@ KNOBS = (
     "CLAUDE_DEV_CONTAINERS", "CLAUDE_DEV_SYSTEMD", "CLAUDE_DAEMON_RESTART_GRANT_HELPER",
     "CLAUDE_PROTECTED_DAEMON_PREFIX", "CLAUDE_PROTECTED_DAEMON_TARGETS",
     "CLAUDE_PROTECTED_PROCESS_FAMILY", "CLAUDE_HARD_BANNED_SCRIPTS",
-    "CLAUDE_DAEMON_RESTART_AUDIT_LOG", "CLAUDE_CHECKPOINT_EXTRA_TRAILER", "CHECKPOINT_LOG_DIR",
+    "CLAUDE_CHECKPOINT_EXTRA_TRAILER", "CHECKPOINT_LOG_DIR",
     "WORKFLOW_PRUNE_ACCOUNTS_DIR", "WORKFLOW_PRUNE_PROJECT_DIRNAME", "CLAUDE_HOME",
     "CLAUDE_PYTHON_BIN", "CLAUDE_TASK_ID",
 )
@@ -101,8 +101,8 @@ def test_stand_in_daemon_is_gated_and_grantable(sandbox):
     r = hook(env, "systemctl restart demo-daemon-acct-a")
     assert r.returncode == 0, r.stderr
     assert not flag.exists()  # single-shot grant consumed
-    audit = tmp_path / "config" / "logs" / "claude-daemon-restart-grants.log"
-    assert "acct-a" in audit.read_text()  # audit log lives under CLAUDE_CONFIG_DIR
+    # E12: no output the owner reads names a grant audit log, so a consumed grant writes none
+    assert not list((tmp_path / "config").rglob("*.log"))
 
 
 def test_unset_grant_helper_guidance_reads_sensibly(sandbox):

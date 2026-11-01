@@ -7,8 +7,10 @@ Public API:
                  classification, action) -> None
     get_degradation_state(specialist_type, session_id=None) -> dict
 
-Policy: $CLAUDE_PROJECT_DIR/.claude/policies/specialist-degradation.v1.json
-Log:    $CLAUDE_PROJECT_DIR/.claude/state/specialist-yield-log.jsonl
+Policy: the harness's own policies/specialist-degradation.v1.json (claude_home)
+Log:    <project>/.claude/state/specialist-yield-log.jsonl, the project being
+        $CLAUDE_PROJECT_DIR, else the main checkout of the cwd's repository
+        (so a linked worktree's call reaches the main root's log), else the cwd
 
 Env overrides for tests:
     SPECIALIST_YIELD_POLICY_PATH
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,26 +37,6 @@ except ImportError:  # pragma: no cover
     _HAS_FCNTL = False
 
 
-_FALLBACK_POLICY: dict[str, Any] = {
-    "policy_version": 1,
-    "defaults": {
-        "low_yield_threshold": 3,
-        "clean_sweep_threshold": 5,
-        "degradation_actions": ["reduce_budget_50pct", "skip_next_cycle"],
-        "history_window": 5,
-        "escalation_after_actions": [
-            "reduce_budget_50pct",
-            "skip_next_cycle",
-            "skip_next_2_cycles",
-            "escalate_to_user",
-        ],
-    },
-    "per_specialist_overrides": {
-        "ui-specialist": {"low_yield_threshold": 4, "clean_sweep_threshold": 7},
-        "user": {"low_yield_threshold": 5, "clean_sweep_threshold": 10},
-    },
-}
-
 _DEGRADED_ACTION_LABELS = {
     "reduce_budget_50pct",
     "skip_next_cycle",
@@ -63,15 +46,21 @@ _DEGRADED_ACTION_LABELS = {
 
 
 def _project_dir() -> Path:
+    # State lives in the project, never in the harness home (claude_home.project_dir's fallback).
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        return Path(os.environ["CLAUDE_PROJECT_DIR"])
+    try:
+        common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        common = ""
+    return Path(common).parent if common else Path.cwd()
+
+
+def _policy_path() -> Path | None:
     # WS1: resolve via the shared claude_home resolver, never the literal /root.
-    return claude_home.project_dir()
-
-
-def _policy_path() -> Path:
     override = os.environ.get("SPECIALIST_YIELD_POLICY_PATH")
-    if override:
-        return Path(override)
-    return _project_dir() / ".claude" / "policies" / "specialist-degradation.v1.json"
+    return Path(override) if override else claude_home.resolve_optional("policies/specialist-degradation.v1.json")
 
 
 def _log_path() -> Path:
@@ -88,22 +77,30 @@ def _read_text_safe(path: Path) -> str | None:
         return None
 
 
-def _load_policy() -> dict[str, Any]:
-    text = _read_text_safe(_policy_path())
+def _read_policy(path: Path | None) -> dict[str, Any] | None:
+    text = _read_text_safe(path) if path is not None else None
     if text is None:
-        return _FALLBACK_POLICY
+        return None
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        return _FALLBACK_POLICY
-    if not isinstance(data, dict) or "defaults" not in data:
-        return _FALLBACK_POLICY
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("defaults"), dict):
+        return None
     return data
+
+
+def _load_policy() -> dict[str, Any]:
+    """The policy the harness ships; raises when it cannot be read."""
+    policy = _read_policy(_policy_path())
+    if policy is None:
+        raise LookupError("no readable specialist-degradation policy")
+    return policy
 
 
 def _resolve_policy_for(specialist_type: str) -> dict[str, Any]:
     policy = _load_policy()
-    defaults = dict(policy.get("defaults", _FALLBACK_POLICY["defaults"]))
+    defaults = dict(policy["defaults"])
     overrides = (policy.get("per_specialist_overrides") or {}).get(specialist_type, {})
     if isinstance(overrides, dict):
         defaults.update(overrides)
@@ -322,7 +319,8 @@ def _check_escalation(
     history: list[dict[str, Any]], escalation_chain: list[str]
 ) -> dict[str, Any] | None:
     trailing = _trailing_degraded_actions(history)
-    if len(trailing) < len(escalation_chain):
+    if not escalation_chain or len(trailing) < len(escalation_chain):
+        # A policy that declares no chain escalates nothing.
         return None
     return {
         "state": "escalated",
@@ -451,10 +449,5 @@ def get_degradation_state(
 
     low_t = int(policy.get("low_yield_threshold", 3))
     cs_t = int(policy.get("clean_sweep_threshold", 5))
-    chain = list(
-        policy.get(
-            "escalation_after_actions",
-            _FALLBACK_POLICY["defaults"]["escalation_after_actions"],
-        )
-    )
+    chain = list(policy.get("escalation_after_actions") or ())
     return _evaluate_history(history, low_t, cs_t, chain)
