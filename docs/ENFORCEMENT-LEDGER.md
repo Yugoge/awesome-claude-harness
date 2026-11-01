@@ -15,7 +15,7 @@ than leaving the reader to assume all of them — is the whole point of publishi
 
 **Three columns are derived.** <!-- published-columns:derived:begin -->`event_class`, `matcher`
 and `hook`<!-- published-columns:derived:end --> are recomputed from
-the checked-out `settings.json` (the row set was last reconciled against `@ef6e9037`) by
+the checked-out `settings.json` (the row set was last reconciled against `@2a806c79`) by
 `scripts/check-enforcement-evidence.py --claims`, which
 compares the derived triple set against the published rows and fails on **either** symmetric
 difference. That check runs inside the already required `baseline` CI job via
@@ -319,7 +319,7 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
     own `<main root>/.claude/overnight-state-<session_id>.json` exists (`hooks/lib/overnight.py`'s
     one locator); exits 2 while its window is open (end time ahead, no human-typed `/stop` since
     the session's `/dev-overnight`), and after the end time while `overnight.closeout_gaps` names
-    a missing PM retrospective report or an overnight summary written since `start_time`; a
+    a gap: no PM retrospective report, or no overnight summary written since `start_time`; a
     human-typed `/stop` releases it at once, with no closeout check; no state field releases it.
   - **S-005 `coverage`** (`stop-spec-coverage-enforce.py`): acts only when the transcript's active
     command span is `/spec` and no TodoWrite in it has come back with every step completed, and
