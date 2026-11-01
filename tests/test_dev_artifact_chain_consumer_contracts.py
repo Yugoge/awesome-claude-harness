@@ -47,20 +47,25 @@ def test_dev_completion_uses_shared_read_only_resolver() -> None:
 
 def test_close_resolves_explicit_and_bare_before_singular_assumptions() -> None:
     text = _read("commands/close.md")
-    resolution = text[
-        text.index("### Task-id resolution") :
-        text.index("### do-report lite preflight")
-    ]
-    flat = _squash(resolution)
+    step0 = text[text.index("### Step 0:") : text.index("### Routes")]
+    flat = _squash(step0)
 
-    # /close's one chain call is Step 0's selector call, from the harness home.
-    assert 'python3 ~/.claude/scripts/close-route-select.py "${ROUTE_SELECT_ARGS[@]}"' in resolution
-    assert "both explicit `/close <task-id-or-path>` and bare `/close`" in resolution
-    assert "before any parent ticket/context/QA assumption" in resolution
-    assert 'PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"' in resolution
+    # /close's one chain call is Step 0's disposition call, from the harness
+    # home (P4 R1); Steps 1-3 read the chain's data fields from that run (R3).
+    assert text.count("resolve-dev-artifact-chain.py --disposition") == 1
+    assert (
+        'python3 "${CLAUDE_HOME:-$HOME/.claude}"/scripts/resolve-dev-artifact-chain.py'
+        ' --disposition --stage dev --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>"'
+    ) in step0
+    assert "close-route-select" not in text
+    assert "explicit and bare `/close` alike" in flat
+    assert "no parent ticket/context/QA assumption before it" in flat
+    assert "`CHAIN=<JSON>`" in step0
+    for field in RESULT_FIELDS:
+        assert f"`{field}`" in step0
     # P1b E5 / ruling 1: the canonical aggregate's one producer is the
     # lane-completeness hook; /close runs no aggregator of its own.
-    assert "aggregate-dev-report.py" not in resolution
+    assert "aggregate-dev-report.py" not in text
     assert "runs no aggregator" in flat
     assert "Parent ticket/context/QA are optional" in flat
 
@@ -69,8 +74,12 @@ def test_close_reuses_resolver_for_qa_and_workflow_integrity() -> None:
     text = _read("commands/close.md")
     qa_prompt = text[text.index("### Step 2:") : text.index("### Step 3:")]
 
-    # Report schemas are checked at each producer's stop (G2), not re-run here.
+    # Report schemas are checked at each producer's stop (G2), not re-run here,
+    # and QA cites Step 0's chain_pass instead of re-checking the chain (R3).
     assert "### Artifact schema gate" not in text
+    assert "_exceptions" not in text
+    assert "- Disposition: chain_pass" in qa_prompt
+    assert "Step 0's `chain_pass`" in qa_prompt
     assert "Lane matrix: <ARTIFACT_CHAIN.lanes" in qa_prompt
     assert "QA inputs: <ARTIFACT_CHAIN.qa_inputs" in qa_prompt
     assert "commit_whitelist_artifacts" in qa_prompt

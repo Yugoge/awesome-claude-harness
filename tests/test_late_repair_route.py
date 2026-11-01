@@ -728,13 +728,19 @@ def test_route_select_cli_passes_only_a_pass_chain_and_loads_a_legacy_needs_revi
         assert payload["artifact_chain"]["status"] == expected_status
 
 
-def test_ac11_static_grep_confirms_close_md_uses_close_route_select(tmp_path: Path) -> None:
-    # Routing invariant: /close reaches the late-repair controller only through
-    # the route selector, so the controller is not named before the R4 section.
+def test_ac11_static_grep_confirms_close_md_reaches_init_only_in_the_r4_section(tmp_path: Path) -> None:
+    # Routing invariant (P4): /close calls no route selector; its late-repair
+    # section alone names the controller, whose init it calls once, and only
+    # when --late-repair is passed. close-route-select.py stays, uncalled.
     close_md = (REPO_ROOT / "commands" / "close.md").read_text(encoding="utf-8")
-    assert "### Late-repair route" in close_md
-    assert "scripts/close-route-select.py" in close_md
-    assert "late-repair-controller.py" not in close_md.split("### Late-repair route")[0]
+    head, rest = close_md.split("### Late-repair route")
+    r4 = rest.split("\n### ")[0]
+    assert "close-route-select" not in close_md
+    assert "late-repair-controller.py" not in head
+    assert close_md.count("late-repair-controller.py") == r4.count("late-repair-controller.py")
+    assert 'late-repair-controller.py" init --task-id "$TASK_ID"' in r4
+    assert "without `--late-repair`, nothing in this section runs" in r4
+    assert ROUTE_SELECT_PATH.is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -1384,11 +1390,15 @@ def test_close_todo_declares_finalize_as_a_main_agent_step_under_late_repair(tmp
 
     plain = todos("/close")
     late = todos("/close --late-repair 20260101-000960")
-    assert todos("/close --force") != plain
-    assert late[1:] == plain
+    # P4 R11: the same five steps under every prompt; under --late-repair,
+    # Step 0 (the main agent's own) also declares finalize's effective report.
+    assert todos("/close --force") == plain
+    assert todos("/close --auto") == plain
+    assert late[1:] == plain[1:]
     finalize = late[0]
-    assert finalize["content"] == "Step 0: Finalize the late repair"
+    assert finalize["content"] == plain[0]["content"] == "Step 0: Resolve the disposition; complete the cycle when incomplete"
     assert "subagent_call" not in finalize
+    assert "artifacts" not in plain[0]
     [declared] = finalize["artifacts"]
 
     # The declared path is the one finalize writes and records.
