@@ -134,8 +134,9 @@ COST = {"plain": 354, "stop": 345, "qa-fail": 524}
 FOCUS = "harden the toy package's public functions"
 END_TIME = "8h"
 # Variant plain's window: launch plus twice the cycle's longest wall time, the cycle (launch to Step
-# 19's TIME CHECK) measured untraced in the replay container, both settings.
-CYCLE_WALL_S = 210
+# 19's cycle log) measured untraced in the replay container, both settings, two replays side by side:
+# 179-266 s, the longest with the unit suite running beside them.
+CYCLE_WALL_S = 270
 WORK_BRANCH = "night-work"
 
 # Blocks the replay passes: none. Each block the base tree's replay met (P1b's hand-off) is fixed at
