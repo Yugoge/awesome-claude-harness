@@ -20,6 +20,18 @@ Driver arguments (cli.py --arg K=V):
   then=close          /close only
   then=none           the /do turn only
   session=same|later  the session /close and /commit are typed in (default same)
+  variant=blocked     the /do turn ends with the do-report's other terminal, do.status "blocked"
+                      (default then=close): /close's Step 0 names the do-report, Routes' /do bullet
+                      dispatches dev under the same task id with the obligation the bullet spells,
+                      and /close lands (acceptance 4 (g), Q7)
+  variant=main-file   close QA's first round names the file the /do main agent wrote (default
+                      then=close): dev along the do-report's route, Step 0 again, a fresh round
+                      (acceptance 4 (h), its /do half)
+  dev_stop=unwritten|uncompleted   the first routed dev stops leaving the artifact its obligation
+                      declares as it is, or written with its terminal field short of completed; on
+                      G2's block it writes it completed and stops again (whether G2 stops a missing
+                      completion at dev's stop)
+The artifact check replays the plain /do (VARIANTS); the variants run on demand.
 
 Respellings: no harness-script call of the /do text needs one (row 7). One path is recorded in
 blocks.json "respellings" as "do sidecar dir": the base text reads the sidecar at the literal
@@ -52,14 +64,17 @@ TOY_NEW = ("def add(a, b):\n    for name, x in ((\"a\", a), (\"b\", b)):\n"
            "            raise TypeError(f\"add(): argument {name} must be a number\")\n    return a + b\n")
 
 DEVIATIONS = Deviations([])
+# The do-report's summary per terminal status (Step 5: "blocked" says what blocked it).
+SUMMARY = {"completed": "toy.add now raises TypeError naming the argument that is not a number.",
+           "blocked": "toy.add is changed, but the toy tests were not run: the operation stayed unauthorized."}
 
 
 class DoTurn:
     """One /do turn: the main agent works directly and writes the do-report."""
 
     def __init__(self, rp, session=None, deviations: Deviations | None = None, task: str = TASK,
-                 edits=(("toy/__init__.py", TOY_OLD, TOY_NEW),)):
-        self.rp, self.task, self.edits = rp, task, list(edits)
+                 edits=(("toy/__init__.py", TOY_OLD, TOY_NEW),), status: str = "completed"):
+        self.rp, self.task, self.edits, self.status = rp, task, list(edits), status
         from .close import kept_only
         self.o = Orchestrator(rp, "do", session=session, deviations=kept_only(rp, deviations or DEVIATIONS))
         self.tid = ""
@@ -150,9 +165,8 @@ class DoTurn:
             if v == "<TASK_ID>":
                 doc[k] = self.tid
         doc["request"] = self.task
-        doc["do"].update(status="completed", files_modified=list(self.files_modified),
-                         files_created=list(self.files_created),
-                         summary="toy.add now raises TypeError naming the argument that is not a number.")
+        doc["do"].update(status=self.status, files_modified=list(self.files_modified),
+                         files_created=list(self.files_created), summary=SUMMARY[self.status])
         text = json.dumps(doc, indent=2) + "\n"
         path = os.path.join(o.project, self.report_rel)
         # A text that has the hook pre-write a skeleton tells the agent to rewrite it; else the agent
@@ -169,21 +183,31 @@ class DoTurn:
             o.advance(label=self.label(f"TodoWrite Step {n - 1} done, Step {n} in_progress"))
             fn()
         o.advance(label=self.label("TodoWrite Step 5 done"))
-        o.s.stop(f"/do {self.tid} done: toy.add rejects non-numbers; do-report {self.report_rel}. "
+        o.s.stop(f"/do {self.tid} {self.status}: {SUMMARY[self.status]} do-report {self.report_rel}. "
                  f"Next: /close {self.tid}", label="/do Stop", deviation=o.devs.at("/do Stop"))
         return self.tid
 
 
+# The variant the artifact check replays ("": the plain /do, then /close and /commit); the acceptance
+# variants run on demand only (`--arg variant=...`).
+VARIANTS = ("",)
+ACCEPTANCE_VARIANTS = ("blocked", "main-file")
+
+
 def run(rp) -> None:
-    then = rp.args.get("then", "close-commit")
-    rp.pipeline = "do" if then == "none" else f"do+{then}"
-    turn = DoTurn(rp)
+    variant = rp.args.get("variant", "")
+    if variant not in VARIANTS + ACCEPTANCE_VARIANTS:
+        raise ValueError(f"unknown variant {variant!r}")
+    then = rp.args.get("then", "close" if variant else "close-commit")
+    rp.pipeline = ("do" if then == "none" else f"do+{then}") + (f"/{variant}" if variant else "")
+    turn = DoTurn(rp, status="blocked" if variant == "blocked" else "completed")
     tid = turn.run()
     if then == "none":
         return
     from . import close as close_drv
     session = rp.later_session(turn.o.s) if rp.args.get("session") == "later" else turn.o.s
-    cr = close_drv.CloseRun(rp, session, tid, do_report=turn.report_rel, producer=close_drv.DoProducer(turn))
+    cr = close_drv.CloseRun(rp, session, tid, do_report=turn.report_rel, producer=close_drv.DoProducer(turn),
+                            variant="append" if variant == "main-file" else "plain")
     cr.run()
     if then == "close":
         return

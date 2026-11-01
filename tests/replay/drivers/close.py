@@ -71,7 +71,7 @@ import os
 import re
 import shlex
 
-from .. import agents, cmdtext, roles
+from .. import agents, cmdtext, roles, schemagen
 from ..pipeline import Deviations, Orchestrator, Respelling, parse_declare, utc_now
 from ..replay import Deviation
 
@@ -549,8 +549,8 @@ class CloseRun:
                      label=self.label("Task-id resolution Glob reports"),
                      deviation=self.devs.at(self.label("Task-id resolution Glob reports")))
         names = [os.path.basename(p) for p in (g.response.get("filenames") or [])] if g.ok else []
-        if f"dev-report-{self.tid}.json" in names:
-            self.do_report = None  # a dev-report takes precedence
+        if f"dev-report-{self.tid}.json" in names and "a dev-report takes precedence" in o.section("Task-id resolution"):
+            self.do_report = None
             return
         o.values.update(DO_REPORT=self.do_report)
 
@@ -660,26 +660,76 @@ class CloseRun:
         fact(self.rp, "routed", {"label": label, "path": path, "role": role, "new": len(self.routed) - n})
         return d, role
 
+    def do_template(self) -> str:
+        """The obligation Routes' /do bullet spells (its inline `<obligation v="1">` block)."""
+        item = next((it for it in re.split(r"\n(?=- )", self.routing_section()) if it.startswith("- A `/do` task")), "")
+        m = re.search(r'`(<obligation v="1">\{.*?\}</obligation>)`', item)
+        if not m:
+            raise cmdtext.TextNotFound("Routes' /do bullet spells no obligation")
+        return m.group(1)
+
     def do_dev(self, path: str, detail: str, label: str, edits=None):
-        """The Routes /do bullet: dev under the same task id (pipeline do), its obligation naming the do-report."""
+        """The Routes /do bullet: dev under the same task id with the obligation the bullet spells. With
+        `--arg dev_stop=unwritten` the first such dev stops leaving that artifact as it is, with
+        `dev_stop=uncompleted` having written it with its terminal field short of completed; on G2's block it
+        writes it completed and stops again."""
         o = self.o
-        report = f"docs/dev/do-report-{self.tid}.json"
-        ob = {"task_id": self.tid, "role": "dev", "pipeline": "do", "profile": "singular", "dispatched_at": utc_now(),
-              "artifacts": [{"kind": "json", "path": report, "schema": "do-report.v1", "identity": {"task_id": self.tid}}]}
-        prompt = (o._block(ob) + f"\n\nComplete the /do work of task {self.tid}: {path}: {detail}\n")
-        act = agents.Act(work=roles.dev(list(edits or [])), content={"do-report.v1": {"do": {"status": "completed"}}},
+        prompt = o.instantiate(self.do_template() + f"\n\nComplete the /do work of task {self.tid}: {path}: {detail}\n",
+                               self.tid)
+        arts = agents.obligation_of(prompt)["artifacts"]
+        short = self.rp.args.get("dev_stop") if not any(r["role"] == "dev" for r in self.routed) else None
+        done: dict = {}
+        dev_work = roles.dev(list(edits or []), baseline_fallback=True)
+
+        def work(sub, brief, player):
+            done.update(dev_work(sub, brief, player) or {})
+            for art in arts if short == "uncompleted" else ():
+                doc = player.json_doc(art, done)
+                for dotted in player.tree.terminal_vocabulary().get(art["schema"], {}):
+                    schemagen.set_path(doc, dotted, "blocked")
+                agents.put(sub, os.path.join(o.project, art["path"]), json.dumps(doc, indent=2) + "\n",
+                           f"{sub.role} Write {art['path']}")
+            return done
+        # no baseline was captured for a /do task: the agent text's fallback (empty values, git status)
+        act = agents.Act(work=work, content={"do-report.v1": {"do": {"status": "completed"}},
+                                             "dev-report.v2": {"baseline_head_sha": "", "baseline_dirty_snapshot": ""}},
+                         faults={a["path"]: "missing" for a in arts} if short else {},
                          summary="the /do work is complete")
         player = agents.Player(o.tree, prompt, act, role="dev")
+
+        def finish(sub, ev):
+            fact(self.rp, "routed dev stop blocked", {"label": label, "hooks": sorted({b["hook"] for b in ev.blocks})})
+            act.faults = {}
+            for art in arts:
+                player._write_artifact(sub, art, done)
+            return player.final(sub)
         lab = self.label(f"{label} Agent(dev)")
         d = o.s.dispatch("dev", prompt, description="dev", body=player.body, result=player.final, label=lab,
-                         deviation=self.devs.at(lab))
+                         deviation=self.devs.at(lab), on_stop_block=finish if short else None)
+        fact(self.rp, "routed dev", {"label": label, "task_id": self.tid == agents.obligation_of(prompt)["task_id"],
+                                     "pipeline": agents.obligation_of(prompt).get("pipeline"),
+                                     "artifacts": [a["path"].replace(self.tid, "<task>") for a in arts],
+                                     "written": [p.replace(self.tid, "<task>") for p in player.written],
+                                     "stop_blocked": bool(d.stop and d.stop.still_blocked)})
         self.routed.append({"path": path, "problem": detail, "role": "dev"})
         return d, "dev"
 
     # ------------------------------------------------------------ Step 1
+    def do_conclusion(self) -> str | None:
+        """The dev-report dev wrote along the do-report's route, where the text has it conclude the /do task
+        (Q7) and it exists."""
+        rel = f"docs/dev/dev-report-{self.tid}.json"
+        said = "dev-report-<TASK_ID>.json" in self.o.section("Step 1")
+        return rel if said and os.path.exists(os.path.join(self.o.project, rel)) else None
+
     def cycle_files(self) -> list:
         if self.do_report:
-            return list((self.load(self.do_report).get("do") or {}).get("files_modified") or [])
+            files = list((self.load(self.do_report).get("do") or {}).get("files_modified") or [])
+            rel = self.do_conclusion()
+            if rel:
+                self.read(rel, self.label("Step 1 Read the /do task's dev-report"))
+                files += [f for f in (self.load(rel).get("dev") or {}).get("files_modified") or [] if f not in files]
+            return files
         rel = self.chain.get("canonical_dev_report") or ""
         if not rel:
             return []
@@ -776,7 +826,8 @@ class CloseRun:
                         v = chain.get(f.group(1))
                         value = v if isinstance(v, str) else json.dumps(v if v is not None else [])
                 elif "do-report" in desc and "/do work" in desc:
-                    value = self.do_report if self.do_report else None
+                    concluded = self.do_conclusion() if self.do_report and "dev-report" in desc else None
+                    value = ", ".join(p for p in (self.do_report, concluded) if p) or None
                 elif "parent ticket" in desc and chain.get("mode") == "singular" and not self.do_report:
                     value = json.dumps(chain.get("artifact_paths"))
             if value is not None:

@@ -65,7 +65,7 @@ The task-id is the SAME identifier the source `/dev` or `/do` cycle used — nev
 - A timestamp argument (e.g. `20260424-103044`): `TASK_ID=$ARGUMENTS`, with no parent ticket or QA-report check first (a fan-out cycle has no parent ticket).
 - No argument: the parent task-id of this conversation's `/dev` cycle, or the `/do` task-id and its do-report. No filesystem scan, no default-to-newest.
 
-A `/do` task: when `docs/dev/dev-report-<TASK_ID>.json` does not exist and `docs/dev/do-report-<TASK_ID>.json` does, bind `DO_REPORT` to it (a dev-report takes precedence).
+A `/do` task: when `docs/dev/do-report-<TASK_ID>.json` exists, bind `DO_REPORT` to it (a dev-report dev wrote along its route, Routes, leaves it bound).
 
 **Which task?** When no task-id can be bound, ask (header `Task`) which task to close; the options are the task candidates: the first word of each line `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action close --project-dir "<PROJECT_ROOT>"` prints, at most four (fewer than two: add `/close --auto` and the tasks `list-actionable --next-action commit` prints, a closed task closing again). The dialog's own answer box takes any other task-id or path. Never default the close-report filename to a fresh timestamp.
 
@@ -108,7 +108,7 @@ python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/obligation.py" declaring-dispat
 
 It reads this task's dispatch records in every session the project's transcript store holds (a `/dev` of an earlier session included) and prints who owes `path` as JSON, or `null`. Act on the answer with one fresh synchronous dispatch: an `Agent` call with `run_in_background: false`, the same task id, lane and obligation, a new `dispatched_at`, the prompt carrying the gap or finding (path, problem, message):
 
-- A `/do` task (`DO_REPORT` set), whatever the answer: the do-report, and a file the answer names no dispatch for (the `/do` main agent wrote it), go to dev, never to `/do`'s own steps: dispatch dev under the same task id (pipeline `do`) to complete the `/do` work, its obligation naming the do-report `docs/dev/do-report-<TASK_ID>.json` (schema `do-report.v1`) as the artifact dev completes; the `/close` orchestrator writes no report.
+- A `/do` task (`DO_REPORT` set), whatever the answer: the do-report, and a file the answer names no dispatch for (the `/do` main agent wrote it), go to dev, never to `/do`'s own steps: dispatch dev under the same task id with the obligation `<obligation v="1">{"task_id": "<TASK_ID>", "role": "dev", "pipeline": "do", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call>", "artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<TASK_ID>.json", "schema": "dev-report.v2", "identity": {"task_id": "<TASK_ID>"}}]}</obligation>` to complete the `/do` work; its dev-report, which G2 verifies at dev's stop, concludes a `/do` task whose do-report is not `completed` (Step 0's call takes it), and the `/close` orchestrator writes no report.
 - `source` `dispatch`, `lane` or `writer`: the answer's dispatch again — its `subagent_type`, `lane` and obligation (a `lane` answer is a lane's dev, whose report write runs the hook that writes the canonical aggregate; a `writer` answer is the dispatch whose own tool calls wrote a product file).
 - `source` `todo_step` with a `subagent_call`: a fresh dispatch of that role under the same task id, from the `template` (its obligation) of the answer's `step` in `commands/<command>.md`; a wholly missing lane is rebuilt in ba → dev → qa order.
 - `source` `todo_step` with no `subagent_call` (the main agent's own step, as `/dev` Step 11 or the late-repair finalize): run that step yourself under the same task id.
@@ -124,7 +124,7 @@ The orchestrator MUST emit a TodoWrite call updating the Step-N todo item to `in
 
 **Authority note**: inspector subagents (`style-inspector`, `cleanliness-inspector`, `prompt-inspector`) are orchestrator-only auditors. ONLY this `/close` command may dispatch them. Subagents (including QA in Step 2) have NO authority to dispatch inspectors.
 
-**Cycle-diff file list**: `dev.files_modified` of the report `ARTIFACT_CHAIN.canonical_dev_report` names (the aggregate union in a fan-out cycle, used verbatim), or `do.files_modified` of `DO_REPORT` for a `/do` task. An empty list is passed as empty; the inspectors then return no finding.
+**Cycle-diff file list**: `dev.files_modified` of the report `ARTIFACT_CHAIN.canonical_dev_report` names (the aggregate union in a fan-out cycle, used verbatim), or, for a `/do` task, `do.files_modified` of `DO_REPORT` with `dev.files_modified` of `docs/dev/dev-report-<TASK_ID>.json` when dev wrote one along its route (Routes). An empty list is passed as empty; the inspectors then return no finding.
 
 **Registry name**: `<SESSION_ID>` in the FIRST ACTION lines of Steps 1 and 2 is the registry directory `obligation.registry_dir_for` names for `$TASK_ID` (`dev-<ts>` or `dev-command-<ts>`, from the task's canonical id):
 
@@ -175,7 +175,7 @@ Input artifacts (read them first):
 - Fan-out inputs: <for each lanes[] row, its task_id/ticket/context/dev_report/
   qa_report, plus canonical_dev_report and completion; never invent a parent
   ticket/context/QA-report>
-- do-report: <do-report-<ts>.json for /do work, otherwise omit>
+- do-report: <do-report-<ts>.json for /do work, with dev-report-<ts>.json when dev wrote one, otherwise omit>
 
 Treat the `lanes[]` array as a lane matrix for one parent close decision, not as
 a bundled implementation-verification prompt. In fan-out mode read every row and

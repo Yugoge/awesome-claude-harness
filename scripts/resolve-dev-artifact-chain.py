@@ -1624,9 +1624,13 @@ def disposition(project_root: Path | str, task_id: str, stage: str) -> dict[str,
     do_path = validator.dev_dir / f"do-report-{task_id}.json"
     lanes: dict[str, str] = {}
     do_record, do_problem = _harness_lib("do_report").load(do_path)
-    if not report.is_file() and (
-        (do_record is not None and do_record.get("source") == "do") or _do_minted(root, task_id)
-    ):
+    do_task = (do_record is not None and do_record.get("source") == "do") or (
+        (do_path.is_file() or not report.is_file()) and _do_minted(root, task_id))
+    if do_task and report.is_file() and obligation.terminal_status("do-report.v1", do_record) != "completed":
+        # Q7: the report of dev, dispatched along the do-report's route, concludes the /do task (G2 verified it)
+        if (record := validator.read_json(report)) is not None:
+            validator.validate_dev(record, task_id, report)
+    elif do_task:
         report = do_path
         _check_do_report(validator, do_path, do_record, do_problem, obligation)
     else:

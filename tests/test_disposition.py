@@ -416,6 +416,40 @@ def test_a_do_report_short_of_completed_is_a_do_status_gap(tmp_path, status, pro
     assert pairs(outcome(tree.root)[1]) == [(tree.rel(f"do-report-{TASK}.json"), problem)]
 
 
+# Q7: dev, dispatched along the do-report's route (close.md Routes), concludes a /do task whose do-report is
+# not completed in its own dev-report; no ticket, context or QA report is asked of a /do task.
+@pytest.mark.parametrize("stage", ["dev", "close"])
+def test_dev_s_report_concludes_a_do_task_whose_do_report_is_not_completed(tmp_path, stage):
+    tree = Tree(tmp_path / "proj")
+    tree.write(f"do-report-{TASK}.json", do_report("blocked"))
+    tree.write(f"dev-report-{TASK}.json", dev_report(TASK))
+    if stage == "close":
+        tree.write(f"close-report-{TASK}.md", "# Close\n\nCLOSE: YES — codex disabled by user\n")
+    assert outcome(tree.root, stage) == ("chain_pass", [])
+
+
+def test_dev_s_report_short_of_completed_leaves_the_do_task_open_on_it(tmp_path):
+    tree = Tree(tmp_path / "proj")
+    tree.write(f"do-report-{TASK}.json", do_report("blocked"))
+    tree.write(f"dev-report-{TASK}.json", dev_report(TASK, status="blocked"))
+    assert pairs(outcome(tree.root)[1]) == [(tree.rel(f"dev-report-{TASK}.json"), "INVALID_DEV_STATUS")]
+
+
+def test_a_completed_do_report_concludes_beside_dev_s_report(tmp_path):
+    tree = Tree(tmp_path / "proj")
+    tree.write(f"do-report-{TASK}.json", do_report())
+    tree.write(f"dev-report-{TASK}.json", dev_report(TASK, status="blocked"))
+    assert outcome(tree.root) == ("chain_pass", [])
+
+
+def test_a_minted_do_task_with_an_unreadable_do_report_is_concluded_by_dev_s_report(tmp_path):
+    tree = Tree(tmp_path / "proj")
+    session(tree.root, "s-do", [typed("do", "make a change"), minted()])
+    tree.write(f"do-report-{TASK}.json", "{not json")
+    tree.write(f"dev-report-{TASK}.json", dev_report(TASK))
+    assert outcome(tree.root) == ("chain_pass", [])
+
+
 # --------------------------------------------------------------------------
 # A2: instrument failures are never a disposition
 # --------------------------------------------------------------------------

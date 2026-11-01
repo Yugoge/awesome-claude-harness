@@ -61,3 +61,19 @@ def test_step4_asks_the_native_rating_once_and_leaves_the_answer_alone() -> None
     assert "Skip" not in json.dumps(question)
     assert "does nothing with the answer" in step4
     assert "one per landed parent, each with its own source" in step4
+
+
+def test_a_do_task_is_completed_by_dev_whose_own_report_concludes_it() -> None:
+    """Q7: Routes' /do bullet dispatches dev with a template obligation naming dev's own report, never the
+    do-report (the /do main agent stays its one producer); the /close orchestrator writes no report."""
+    routes = _section("### Routes")
+    [item] = [line for line in routes.splitlines() if line.startswith("- A `/do` task")]
+    block = re.search(r'`<obligation v="1">(\{.*?\})</obligation>`', item).group(1)
+    ob = json.loads(re.sub(r"<[^>\"]*>", "x", block))
+    assert {k: ob[k] for k in ("role", "pipeline", "profile")} == {"role": "dev", "pipeline": "do",
+                                                                   "profile": "singular"}
+    [art] = ob["artifacts"]
+    assert (art["path"], art["schema"]) == ("docs/dev/dev-report-x.json", "dev-report.v2")
+    assert "do-report" not in block
+    assert "concludes a `/do` task whose do-report is not `completed`" in item
+    assert "the `/close` orchestrator writes no report" in item
