@@ -21,7 +21,8 @@ tree's text spells each one, read at run time:
   the turn ends with its `AWAITING_INPUT:` line. Then the attribution-log slice block (where it is not the
   plan block's own tail); the dispatch-snapshot
   manifest (the state dir and session id read in Bash, each plan entry's `git status
-  --porcelain=v1`, then a Write of the fields the text lists); one grant per plan entry with the
+  --porcelain=v1`: the attribution block's own output where the text prints them there, else a call of
+  their own; then a Write of the fields the text lists); one grant per plan entry with the
   writer block of the step.
 * Step 6: the planning dispatch (changelog-analyst with Step 7's prompt, DRYRUN=true), the
   pre-commit QA dispatch from the step's prompt block, the decision read of the
@@ -289,21 +290,28 @@ class CommitRun:
                 .replace("<human|orchestrator>", "human"))
 
     def attribution(self) -> None:
-        """The attribution slice, where the text gives it a block of its own (else the plan block built it)."""
+        """The attribution slice, where the text gives it a block of its own (else the plan block built it);
+        a block that also prints the manifest's inputs is the call manifest() reads them from."""
         o = self.o
         block = o.block("Step 5", anchor="ATTRIBUTION_FILES=()")
+        self.snapshot = None
         if "REPOSITORY_PLAN=" not in block:
-            self.run_text(block, self.label("Step 5 Bash attribution slice"), "Attribution-log slice",
-                          capture=("ATTRIBUTION_LOG",))
+            c = self.run_text(block, self.label("Step 5 Bash attribution slice"), "Attribution-log slice",
+                              capture=("ATTRIBUTION_LOG",))
+            if "status --porcelain" in block:
+                self.snapshot = c
 
     def manifest(self) -> None:
         o = self.o
-        repos = [e["repo_root"] for e in self.plan.get("repositories") or []]
-        cmd = (". ~/.claude/hooks/lib/harness_state_dir.sh\nharness_state_dir\n"
-               'echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"\n'
-               + "\n".join(f"echo '--- {r}'; git -C {shlex.quote(r)} status --porcelain=v1" for r in repos))
-        c = o.run(cmd, "State dir, session id and status per plan entry", self.label("Step 5 Bash manifest inputs"))
-        out = (c.response.get("stdout") or "").split("\n") if c.ok else []
+        c = self.snapshot
+        if c is None:  # a text whose attribution block prints no manifest input: the inputs in a call of their own
+            repos = [e["repo_root"] for e in self.plan.get("repositories") or []]
+            cmd = (". ~/.claude/hooks/lib/harness_state_dir.sh\nharness_state_dir\n"
+                   'echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"\n'
+                   + "\n".join(f"echo '--- {r}'; git -C {shlex.quote(r)} status --porcelain=v1" for r in repos))
+            c = o.run(cmd, "State dir, session id and status per plan entry", self.label("Step 5 Bash manifest inputs"))
+        # (the values the snapshot call kept follow its output as `declare -p` lines)
+        out = (c.response.get("stdout") or "").split("\ndeclare -")[0].split("\n") if c.ok else []
         state, sid = (out + ["", ""])[:2]
         files, cur = {}, None
         for line in out[2:]:

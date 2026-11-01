@@ -287,9 +287,9 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   task's dev-report there, then its do-report, and fall back to the control-root
   `docs/dev` only when no close-report directory is available. Pass the selected
   canonical report explicitly; never scan reports by mtime. The block below is one
-  Bash call (the orchestrator gate allows five in a row), and each retry loop opens
-  its body with the assignment (`while :; do VAR="$(...)" && break`), the form the
-  removal policy of bash-safety reads, never `until VAR="$(...)"`.
+  Bash call, and each retry loop opens its body with the assignment
+  (`while :; do VAR="$(...)" && break`), the form the removal policy of
+  bash-safety reads, never `until VAR="$(...)"`.
 
   ```bash
   CONTROL_ROOT="$(git rev-parse --show-toplevel)"
@@ -355,24 +355,39 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
           "resolve-commit-repos.py could not construct a repository plan" \
           "resolve-commit-repos.py --task-id $TASK_ID --control-root $CONTROL_ROOT --report $TASK_REPORT --supported-repo $NESTED_REPO"
   done
-  # Attribution-log slice (below): no retry loop, an exit code of 2 is an ordinary outcome.
+  ```
+
+  **Attribution-log slice (ground-truth attribution, additive to the plan above),
+  with the dispatch snapshot's inputs.** Once `REPOSITORY_PLAN` resolves, the next
+  Bash call (the block below) builds `ATTRIBUTION_LOG` — a slice of
+  the write-time attribution journal (`hooks/lib/attribution_journal.py`) scoped to
+  exactly this plan's owned paths. This is the fact-based attribution source
+  `agents/changelog-analyst.md`'s staging decision reads instead of (or as a
+  cross-check alongside) the dev-report's self-reported ledger fields. No retry
+  loop here — unlike `REPOSITORY_PLAN`, an exit code of 2 (no journaled events for
+  any requested path — e.g. the path pre-dates the journal's rollout) is an
+  ordinary, expected outcome, not a finding to route, and nothing in this call
+  decides: its output is what the manifest below records. The same call prints
+  the manifest's other inputs: the state dir, the session id and each plan
+  entry's `git status --porcelain=v1`. (The orchestrator gate allows five Bash
+  calls in a row; with `--auto`'s discovery, Step 3 and the plan this is the
+  fourth, a one-repository plan's grant writer the fifth.)
+
+  ```bash
   ATTRIBUTION_FILES=()
   while IFS= read -r abs_path; do
       [ -n "$abs_path" ] && ATTRIBUTION_FILES+=(--file "$abs_path")
   done < <(jq -r '.repositories[] | .repo_root as $root | (.owned_paths[]? // empty) | $root + "/" + .' <<<"$REPOSITORY_PLAN")
   ATTRIBUTION_LOG="$(python3 ~/.claude/scripts/verify-attribution-chain.py --json "${ATTRIBUTION_FILES[@]}" 2>/dev/null)"
   ATTRIBUTION_LOG="${ATTRIBUTION_LOG:-{\"results\":[],\"no_events\":[],\"discarded_lines\":[]}}"
+  . ~/.claude/hooks/lib/harness_state_dir.sh
+  harness_state_dir
+  echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"
+  while IFS= read -r PLAN_ROOT; do
+      echo "--- $PLAN_ROOT"
+      git -C "$PLAN_ROOT" status --porcelain=v1
+  done < <(jq -r '.repositories[].repo_root' <<<"$REPOSITORY_PLAN")
   ```
-
-  **Attribution-log slice (ground-truth attribution, additive to the plan above).**
-  The same block, immediately after `REPOSITORY_PLAN` resolves, builds `ATTRIBUTION_LOG` — a slice of
-  the write-time attribution journal (`hooks/lib/attribution_journal.py`) scoped to
-  exactly this plan's owned paths. This is the fact-based attribution source
-  `agents/changelog-analyst.md`'s staging decision reads instead of (or as a
-  cross-check alongside) the dev-report's self-reported ledger fields. No retry
-  loop there — unlike `REPOSITORY_PLAN`, an exit code of 2 (no journaled events for
-  any requested path — e.g. the path pre-dates the journal's rollout) is an
-  ordinary, expected outcome, not a finding to route.
 
   `ATTRIBUTION_LOG.results[]` carries, per owned path, its folded write-event
   chain verdict (`CONTINUOUS_TAIL_MATCH` / `CONTINUOUS_TAIL_MISMATCH` / `BREAK`)
@@ -394,8 +409,9 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   user-supplied root override, or a report field to populate this list.
 
   **Write the dispatch-snapshot manifest FIRST — before minting any grant** (non-bulk
-  mode only; ordering is load-bearing since 2026-10-06, see below). Capture
-  `git status --porcelain=v1` independently for every admitted plan entry, then write
+  mode only; ordering is load-bearing since 2026-10-06, see below). From the
+  snapshot call above (each admitted plan entry's own `git status --porcelain=v1`,
+  the state dir and the session id it printed), write
   `manifest_path = <state-dir>/claude-commit-manifest-{sid}.json` — where `<state-dir>`
   is `CLAUDE_STATE_DIR` when set to an absolute path and `/tmp` otherwise, resolved by
   `hooks/lib/harness_state_dir`, which is the SAME resolver the manifest's readers use;
