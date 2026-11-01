@@ -311,10 +311,11 @@ flowchart LR
     PM --> SP[specialists scan<br/>architect · product-owner · user · ui-specialist]
     SP --> TR[PM triage<br/>tier + prioritize to pipelines]
     TR --> PARA[parallel BA→QA-of-BA→Dev→QA<br/>one pipeline per issue]
-    PARA --> CM[end-of-cycle HEAD commit<br/>bridge-mode grant]
+    PARA --> CM[checkpoint snapshots<br/>refs/checkpoints, no commit]
     CM --> RT[PM retrospective<br/>hand off to next cycle]
     RT -->|time remaining| PM
     RT -->|deadline reached| SUM([summary + stop])
+    SUM --> LAND["owner types afterwards:<br/>/close --auto · /commit --auto<br/>/merge · /push"]
 
     TL[[Stop-hook time-lock:<br/>refuses to terminate before end_time]] -.guards.-> RT
 ```
@@ -322,7 +323,7 @@ flowchart LR
 - **Launch** (the `/dev-overnight` command): fails closed if it cannot produce a *validated isolated worktree*; on success it writes `.claude/overnight-state-<session_id>.json` with `worktree_path`, `worktree_branch`, `view_paths`, `spec_mode`, `actor_git_env`, etc. A missing/invalid state is a **HARD ABORT** for the actor.
 - **Loop continuation** (`hooks/posttool-overnight-loop.py`, `PostToolUse` matcher `TodoWrite`): when all todos are completed, the session owns an overnight state record, and its window is live (`hooks/lib/overnight.py` `state_verdicts`), it *prints* continuation instructions; it writes no state. The cycle number is `overnight.cycle_index`: the first cycle with no retrospective report yet.
 - **Time-lock** (`hooks/stop-overnight-timelock.py`, a phase of the `Stop` coordinator): reads only the stopping session's own `overnight-state-<session_id>.json`; while its window is live it exits 2 to **block termination**, so the loop cannot be short-circuited. Cancel explicitly with `/stop`.
-- **Per-cycle commits** are real merge-ready HEAD commits via `commit.sh` bridge mode; mid-cycle `refs/checkpoints/*` snapshots are recovery-only and never advance HEAD (the two are explicitly distinct semantic layers).
+- **No per-cycle commit.** The session commits nothing: `refs/checkpoints/<branch>` snapshots hold its work and never advance HEAD. After the session the owner lands it once, typing `/close --auto` and `/commit --auto` (in a session at the worktree under `--worktree`, in the checkout under `in_place`), then `/merge <worktree_branch>` (isolated modes only) and `/push` in the main checkout; all four are human-only, and the session runs none of them.
 - **Actor isolation**: the actor sources `actor_git_env`, which prepends a policy-shim git wrapper to `PATH` and sets `CLAUDE_OVERNIGHT_ACTOR=1`; defense-in-depth on top of the PreTool hook-guard and the git-native keystone.
 
 > **Shared `.git` common-dir — config/hooks mutation now CLOSED (RO-bind).** The overnight session runs in a *linked* git worktree that **shares the repository `.git` common-dir** with the main checkout (`commands/dev-overnight.md`, KNOWN ACCEPTED LIMITATION). The keystone-disable vector — an actor running `git config --unset core.hooksPath` (or dropping a default hook) through the RW-bound common-dir to disable the reference-transaction keystone and then move main HEAD off master — is now **closed**: the per-Bash bwrap boundary (`hooks/pretool-overnight-hook-guard.py::_build_bwrap_argv`, step 7, via `_shared_common_dir_ro_rebinds`) RE-binds `<common>/config` and `<common>/hooks` **READ-ONLY**, nested over the RW common-dir bind, so those two paths hit EROFS while `<common>/objects` + `<common>/refs` + logs stay writable for the legitimate keystone-guarded commit / ref-update path (a commit writes objects/refs/index/logs, never config or hooks). The two protections still layer: the git reference-transaction keystone guards HEAD/master moves; the bwrap RO-bind boundary guards main working-tree writes AND now the shared config/hooks. **Remaining residual** (accepted for this cycle): `gc`/`fetch`/`repack` writes landing under `<common>/objects` are still not refused by the OS boundary (they fall outside the supported add/commit/status/diff surface); the fully sound alternative remains fresh-clone (no-shared-`.git`) isolation. This config **does** now defend against the shared config/hooks keystone-disable path, but does not claim protection against every shared-`.git` object-store mutation.

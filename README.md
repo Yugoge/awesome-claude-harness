@@ -418,7 +418,7 @@ Run the guard demo: `bash examples/guard-demo/run-demo.sh`
 | **Evidence-gated BA → Dev → QA pipeline** | The analysis is QA'd *before* coding; every claim needs proof (git blame, grep, import-chain); the user's verbatim words are the binding spec. Pipeline: `/spec → /dev → /close → /commit → /push`. | `commands/dev.md`, `agents/ba.md`, `agents/qa.md` |
 | **Release-readiness gate** | `/close` proves not just "the code works" but "the system can ship it" — four Workflow-Integrity checks, optionally a multi-round QA↔Codex debate. | `commands/close.md` |
 | **Git protection kernel** | `commit / push / merge / reset --hard` refused unless a per-operation authorization grant is present (commit grant is single-use; push grant is wrapper-managed and retryable on failure); wide-path checkout, stash-as-buffer, and hard resets blocked by default. Each guard maps to a specific failure class it prevents. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
-| **Autonomous overnight pipeline** | `/dev-overnight 6:00` runs an unattended explore → triage → fix → verify → commit loop until a wall-clock end time. Stop-hook physically refuses early termination. | `commands/dev-overnight.md`, `hooks/stop-overnight-timelock.py` |
+| **Autonomous overnight pipeline** | `/dev-overnight 6:00` runs an unattended explore → triage → fix → verify loop until a wall-clock end time, committing nothing; you land the work once, afterwards. Stop-hook physically refuses early termination. | `commands/dev-overnight.md`, `hooks/stop-overnight-timelock.py` |
 | **Lossless quota recovery** | `/restart` resumes every recoverable interrupted child in the current parent transcript by its original `agent_id`; replacement agents are forbidden, and success requires response evidence from every candidate. | `commands/restart.md`, `hooks/lib/subagent_restart.py` |
 | **Structured break-glass grants** | `/allow` writes a structured grant (`{op, target, args_contain}`) matched by command structure — consumed on any terminal result. | `hooks/lib/allowlist.py`, `commands/allow.md` |
 | **Branch / PR / worktree firewall** | Creating a branch, PR, or worktree is forbidden by default everywhere, with explicit human escape hatches and a live-overnight exception. | `hooks/pretool-block-branch-pr-worktree.py`, `hooks/pretool-block-enterworktree.sh` |
@@ -580,15 +580,16 @@ flowchart LR
     PM --> SP[specialists scan<br/>architect / product-owner / user / ui]
     SP --> TR[PM triage<br/>tier + route to pipelines]
     TR --> PARA[parallel BA→QA-of-BA→Dev→QA<br/>one pipeline per issue]
-    PARA --> CM[end-of-cycle commit<br/>blessed bridge grant]
+    PARA --> CM[checkpoint snapshots<br/>refs/checkpoints, no commit]
     CM --> RT[PM retrospective<br/>hand off to next cycle]
     RT -->|time remaining| PM
     RT -->|end-time reached| SUM([summary + stop])
+    SUM --> LAND["owner types afterwards:<br/>/close --auto · /commit --auto<br/>/merge · /push"]
 
     TL[[Stop-hook time-lock:<br/>refuses to terminate before end-time]] -.guards.-> RT
 ```
 
-`/dev-overnight` runs a todo-completion-driven loop inside a dedicated worktree. A `Stop` hook (`hooks/stop-overnight-timelock.py`) physically refuses to end the conversation until your wall-clock end time, defaulting to an 8-hour session if no end time is provided. Each issue gets its own one-issue-per-subagent pipeline; cycles deduplicate against state and end with a real, merge-ready commit. Cancel any time with `/stop`.
+`/dev-overnight` runs a todo-completion-driven loop inside a dedicated worktree. A `Stop` hook (`hooks/stop-overnight-timelock.py`) physically refuses to end the conversation until your wall-clock end time, defaulting to an 8-hour session if no end time is provided. Each issue gets its own one-issue-per-subagent pipeline; cycles deduplicate against state. Nothing is committed per cycle: the work stays in `refs/checkpoints/<branch>`, and after the session you land it once by typing `/close --auto`, `/commit --auto`, `/merge <worktree_branch>` (`--worktree` sessions only) and `/push`; the session runs none of them. Cancel any time with `/stop`.
 
 > **Limitation.** The overnight session runs in a *linked* worktree that shares the repository `.git` common-dir with the main checkout — an accepted deviation, not a clean isolation guarantee, documented in `commands/dev-overnight.md`.
 
