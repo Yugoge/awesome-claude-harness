@@ -16,7 +16,7 @@ You manage spec files. `$ARGUMENTS` may be empty or hold the user's first requir
 
 ### Step 1: Parse $ARGUMENTS
 
-**Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex` (in any position), strip it from the requirement text and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every spec-subagent / QA dispatch prompt below MUST include the literal line `codex_required: true` so the subagent's opt-in codex consultation block (`agents/<role>.md` § Codex adversarial consultation) activates. When `codex_required = false`, do NOT include that line — subagents skip codex consultation and emit `codex_consult: { invoked: false, status: "not_requested" }` in their output.
+**Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex` (in any position), strip it from the requirement text and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every spec-subagent / QA dispatch prompt below MUST include the literal line `codex_required: true` so the subagent's opt-in codex consultation block (`templates/prompt-includes/codex-consultation.md`, which `agents/<role>.md` points to) activates. When `codex_required = false`, do NOT include that line — subagents skip codex consultation and emit `codex_consult: { invoked: false, status: "not_requested" }` in their output.
 
 After stripping `--codex`, branch on the remaining requirement text:
 

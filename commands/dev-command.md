@@ -80,7 +80,7 @@ Extract requirement from `$ARGUMENTS`:
 Requirement: "$ARGUMENTS"
 ```
 
-**Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex` (in any position), strip it from the requirement text and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every BA / QA / dev dispatch prompt below MUST include the literal line `codex_required: true` so the subagent's opt-in codex consultation block (`agents/<role>.md` § Codex adversarial consultation) activates. When `codex_required = false`, do NOT include that line — subagents skip codex consultation and emit `codex_consult: { invoked: false, status: "not_requested" }` in their output.
+**Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex` (in any position), strip it from the requirement text and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every BA / QA / dev dispatch prompt below MUST include the literal line `codex_required: true` so the subagent's opt-in codex consultation block (`templates/prompt-includes/codex-consultation.md`, which `agents/<role>.md` points to) activates. When `codex_required = false`, do NOT include that line — subagents skip codex consultation and emit `codex_consult: { invoked: false, status: "not_requested" }` in their output.
 
 **Codex suppression guardrail**: When `codex_required: true` is included in any subagent dispatch prompt, the orchestrator MUST NOT include any pre-populated `codex_consult` field or object in that same prompt. Setting `codex_required: true` and simultaneously pre-answering `codex_consult` contradicts the flag and silently suppresses Codex consultation.
 
@@ -217,7 +217,7 @@ Use Agent tool with:
 - description: "<Specialist role> consultation for: <requirement summary>"
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<specialist-name>.json to register with the enforcement system. Do this BEFORE any other tool call.
-  CHECKPOINT MARKING: see agents/<specialist-name>.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+  CHECKPOINT MARKING: follow your agent file's checkpoint pointer: mark or waive every cp-NN of your own slot; a pending one blocks your stop (subagentstop-cp-enforce.py).
 
   You are the <specialist-name> specialist. Follow .claude/agents/<specialist-name>.md.
 
@@ -306,7 +306,7 @@ Use Task tool with:
 - description: "Analyze requirement and build development context"
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
-  CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+  CHECKPOINT MARKING: follow your agent file's checkpoint pointer: mark or waive every cp-NN of your own slot; a pending one blocks your stop (subagentstop-cp-enforce.py).
 
   Obligation block (docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2 — example; the orchestrator instantiates this per-dispatch from the <timestamp> / session-id values already used elsewhere in this template, never hand-invented):
   <obligation v="1">
@@ -370,7 +370,7 @@ Use Task tool with:
 - description: "Continue BA analysis with clarification answers"
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
-  CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+  CHECKPOINT MARKING: follow your agent file's checkpoint pointer: mark or waive every cp-NN of your own slot; a pending one blocks your stop (subagentstop-cp-enforce.py).
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
@@ -426,7 +426,7 @@ Use Agent tool with:
 - description: "Validate BA analysis quality (not code)"
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
-  CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+  CHECKPOINT MARKING: follow your agent file's checkpoint pointer: mark or waive every cp-NN of your own slot; a pending one blocks your stop (subagentstop-cp-enforce.py).
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="ba_validation", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1","identity":{"task_id":"<timestamp>"}}] (ba-qa-report.v1 is registered in schemas/registry.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
 
@@ -511,7 +511,7 @@ Use Agent tool with:
 - description: "Re-investigate: address QA objections on analysis quality"
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
-  CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+  CHECKPOINT MARKING: follow your agent file's checkpoint pointer: mark or waive every cp-NN of your own slot; a pending one blocks your stop (subagentstop-cp-enforce.py).
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
@@ -565,7 +565,7 @@ Use Task tool with:
 - description: "Implement development changes based on BA context"
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/dev.json to register with the enforcement system. Do this BEFORE any other tool call.
-  CHECKPOINT MARKING: see agents/dev.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+  CHECKPOINT MARKING: follow your agent file's checkpoint pointer: mark or waive every cp-NN of your own slot; a pending one blocks your stop (subagentstop-cp-enforce.py).
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
@@ -617,7 +617,7 @@ Use Task tool with:
 - description: "Verify implementation quality against standards"
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
-  CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
+  CHECKPOINT MARKING: follow your agent file's checkpoint pointer: mark or waive every cp-NN of your own slot; a pending one blocks your stop (subagentstop-cp-enforce.py).
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="final_verification", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
 
@@ -709,39 +709,8 @@ You can now use these scripts without permission prompts.
 
 ### Step 15: Iteration Loop (QA warning or fail)
 
-#### Layer-escalation gate (mandatory)
-
-When QA rejects the dev fix, the orchestrator MUST track the layer used in
-each attempt. Rules:
-
-1. Attempt 1 may target any layer BA recommends (usually the lowest plausible
-   layer).
-2. If attempts 1 AND 2 both target the SAME layer (L1 / L2 / L3 / L4 / L5)
-   and BOTH fail QA, iteration 3 MUST target a DIFFERENT layer. The
-   orchestrator passes `layer_escalation_required: true` to BA and the BA
-   MUST produce a new root-cause hypothesis at a DIFFERENT layer.
-3. Each attempt's layer is recorded by its own producer, never by the
-   orchestrator: dev's report carries `fix_layer`, which equals BA's
-   `diagnosis_layer` (agents/dev.md), and a BA re-dispatched with
-   `layer_escalation_required: true` lists the rejected attempts with their
-   layers under `prior_attempts.attempts[].target_layer` of its new context.
-   The orchestrator notes each attempt's `fix_layer` beside the iteration
-   number in its todo list; before iteration N it compares the last N-1
-   layers, and if they are all equal and QA has rejected them all,
-   escalation is mandatory.
-4. BA's Contract D novelty-check MUST include `differs_from_all_prior_layers`
-   in addition to `differs_from_all_priors`. A fix that changes L1 wording
-   but stays in L1 is NOT novel under this rule.
-5. If the same layer is the only one that can plausibly solve the bug
-   (genuine edge case), BA MUST explicitly argue this in prose with
-   evidence; the orchestrator may override the gate only after user
-   confirmation.
-
-Dev iterates and QA re-checks until QA's status is `pass`; pass is the only exit.
-
-**Next iteration**: return to Step 10 and re-dispatch dev with Step 10's template (a fresh `dispatched_at`) and the same context file, adding the line `QA report file: docs/dev/qa-report-<timestamp>.json`, so dev works from QA's findings and `refined_context` (agents/dev.md). No new context is built: the context stays BA's and the QA report stays QA's (D2).
-
-**Iteration tracking**: Update TodoWrite with iteration number
+QA fail: re-dispatch this lane's dev with the QA report path, the same task_id, lane and obligation template, and a fresh dispatched_at; the Stop gate keeps the command open until the disposition is chain_pass.
+Dispatch line: `QA report file: docs/dev/qa-report-<timestamp>.json`.
 
 ### Step 16: Generate Completion Report
 

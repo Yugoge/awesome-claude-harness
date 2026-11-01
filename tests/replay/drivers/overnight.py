@@ -67,7 +67,8 @@ Driver arguments (cli.py --arg K=V):
   variant=qa-fail one cycle whose pipeline 0 fails its first QA (its dev's first fix is incomplete),
                   then the owner's /stop inside cycle 2's window. Step 16 marks each pipeline's phase
                   (done and fixed, or qa_failed) in the pipelines file; Step 17, as the tree's text
-                  says: the iteration plan's block, the plan Read, and for each entry the pipeline's
+                  says: the iteration plan's block and the plan Read where the text has them (else
+                  each qa_failed pipeline in turn), and for each entry the pipeline's
                   iteration incremented in the pipelines file, the text's per-iteration blocks (the
                   base's context refinement), the Step 11g precondition at the new iteration, dev from
                   Step 12's template with the lines Step 17 adds (the base's iteration context in place
@@ -1355,8 +1356,9 @@ class Night:
         self.write(rel, new, label)
 
     def step17(self) -> None:
-        """Step 17 as the tree's text says: the iteration plan's block, the plan Read, and each entry's
-        Dev+QA inner loop until its QA passes."""
+        """Step 17 as the tree's text says: the iteration plan's block and the plan Read where it has
+        them (else the qa_failed pipelines in order), and each entry's Dev+QA inner loop until its QA
+        passes."""
         o = self.o
         once, per = [], []
         for name, b, _ in o.step_blocks("Step 17"):
@@ -1366,10 +1368,11 @@ class Night:
             o.run_text(b.text, f"{self.L}Step 17 Bash {name}", "Build the iteration plan")
             m = re.search(r">\s*(\S+\.json)\s*$", o.bind(b.text).strip())
             plan_rel = m.group(1) if m else plan_rel
-        if plan_rel is None:
-            raise cmdtext.TextNotFound("Step 17 has no block writing the iteration plan")
-        self.read(plan_rel, "Step 17 Read iteration plan")
-        plan = self.load(plan_rel).get("iteration_plan") or []
+        if plan_rel is not None:  # the base text's iteration-plan block, then the plan Read
+            self.read(plan_rel, "Step 17 Read iteration plan")
+            plan = self.load(plan_rel).get("iteration_plan") or []
+        else:  # a Step 17 with no plan block re-dispatches each qa_failed pipeline's dev in turn
+            plan = [{"index": p.index} for p in self.failed]
         sec = o.section("Step 17")
         g_tpl = o.template("Step 11g")
         d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 12"), None) if "Agent(" in b.text))

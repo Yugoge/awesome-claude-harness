@@ -60,7 +60,6 @@ Organization and usage documentation for `scripts/`.
 - `graphify_lib.py` - graphify_lib.py — shared library for Graphify knowledge-graph integration
 - `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 - `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
-- `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
 - `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 - `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 - `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the

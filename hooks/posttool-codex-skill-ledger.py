@@ -10,10 +10,11 @@ agent-index.json entry) and writes a ledger entry to:
 Fail-open on all error paths: if agent_id is missing or the agent names no
 existing cycle registry, exit 0 without blocking.
 
-The quota/timeout semantics: PostToolUse fires on all Skill completions regardless
-of whether the codex invocation succeeded. The ledger records the call with a
-status field. The subagentstop-codex-enforce.py hook treats any ledger entry as
-sufficient — the agent tried; infrastructure failure is not agent non-compliance.
+The quota/timeout semantics: the ledger records the call with a status read from
+the Skill output (quota_error, timeout, parse_error, else called). The
+subagentstop-codex-enforce.py hook treats any ledger entry as sufficient — the
+agent tried; infrastructure failure is not agent non-compliance. This hook is
+registered under PostToolUse (matcher Skill) only, not PostToolUseFailure.
 """
 
 import json

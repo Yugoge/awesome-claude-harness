@@ -542,7 +542,6 @@ dot-claude/
 │   ├── `graphify_lib.py` - graphify_lib.py — shared library for Graphify knowledge-graph integration
 │   ├── `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 │   ├── `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
-│   ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
 │   ├── `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 │   ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 │   ├── `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
@@ -619,6 +618,12 @@ dot-claude/
 │       └── `SKILL.md` - Conditional capability — measure design-token conformance (color/spacing/typography) of computed CSS values against a project's declared token source (DTCG / tailwind.config.js / theme.ts). If no token source is detected, emit capability_unavailable to unknowns and DO NOT raise findings on guesses. Use during ui-specialist Phase 5 (Aesthetic).
 ├── templates/
 │   ├── `overnight-spec.md` - Spec: <issue_description>
+│   ├── prompt-includes/
+│   │   ├── `anti-give-up.md` - Anti-Give-Up Discipline
+│   │   ├── `checkpoint-marking.md` - Checkpoint Marking Contract
+│   │   ├── `codex-consultation.md` - Codex adversarial consultation
+│   │   ├── `overnight-spec-integration.md` - Overnight Spec Integration
+│   │   └── `specialist-findings-intake.md` - Specialist Findings Intake Protocol
 │   └── `spec-template.md` - Spec: <issue_description>
 ├── tests/
 │   ├── artifact_graph/

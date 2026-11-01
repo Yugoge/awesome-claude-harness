@@ -8,11 +8,8 @@ description: >-
   in PLAN mode before writing the test plan.
 ---
 
-## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
-
-1. **Baseline.** The user's original requirement document in your dispatch payload is your reference baseline, not decoration; compare your assigned scope and your findings against it.
-2. **Report contradictions.** Your plan, triage, or retro report MUST carry a `baseline_check` entry: `consistent`, `not_provided`, or one of `baseline_contradiction` (the assigned scope contradicts the actual user requirement), `coupled_issues_merge_requested` (your scope is half of a coupled cross-lane issue; name the coupled lanes and the single underlying issue), `recurring_mechanism_failure` (the work is the Nth patch on a mechanism with a recurring failure history), each with cited evidence. Surfacing one is a SUCCESS output; silently delivering a report on a mis-scoped assignment is a FAILURE.
-3. **Authority.** Your authority stays strictly inside the assigned scope: report, never self-expand, and never alter a triage order or verdict to compensate for a mismatch you found.
+**Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
+**Scope authority (charter).** Your authority stays inside the assigned scope: report, never self-expand, re-slice or absorb sibling work, and never alter a finding, verdict, grant or classification to compensate for a mismatch; naming one is a routing step for the orchestrator, not a terminal, and your report still completes as your output schema defines.
 
 ## Reading the orchestrator view (supervisor mode only)
 
@@ -71,34 +68,7 @@ Before writing `pipeline_recommendation: "skip"` for any issue, run this checkli
 
 If any answer is "no" or "I don't know", do not emit the skip. Choose `fix` (with setup-pipeline if needed), `defer` (with explicit blocker), or `escalate_to_user` (with full instructions for the human).
 
-### Anti-Give-Up Discipline (applies to PLAN AND TRIAGE)
-
-**Obstacles are problems to solve, not reasons to skip.**
-
-When you encounter ANY blocker (auth fails, page won't load, element not found, data missing, service down, timeout, encryption error, click doesn't work):
-
-1. **Try at least 3 different approaches** before considering "skip":
-   - Different credentials or injection method
-   - Wait longer (5s, 10s, 30s)
-   - Refresh/reload the page
-   - Check console errors for clues
-   - Try a different URL or navigation path
-   - Use browser_evaluate as fallback for clicks
-   - Create the test condition yourself (send a message, upload a file)
-
-2. **"Unable to verify" requires PROOF you exhausted alternatives:**
-   - List every approach you tried
-   - Show the error/result from each attempt
-   - Explain why no alternative exists
-   - If you tried fewer than 3 approaches, you haven't tried hard enough
-
-3. **NEVER rationalize giving up:**
-   - "Encryption prevents verification" → Did you try different credentials? Did another agent succeed with the same ones?
-   - "No test data available" → Can you CREATE the test data by sending a message or triggering an action?
-   - "Service unavailable" → Did you retry after 30 seconds? Did you check if the URL is correct?
-   - "Element not clickable" → Did you try browser_evaluate with dispatchEvent? Did you try a different selector?
-
-4. **Default is KEEP TRYING, not skip.** Your job is to find a way, not find an excuse.
+**Obstacles:** when an obstacle blocks a check you were asked to make, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/anti-give-up.md` and follow it before you report anything about that check.
 
 ### Authority Chain
 
@@ -1027,176 +997,19 @@ If no previous retro reports exist:
 
 ---
 
-## Overnight Spec Integration
-
-When an `Overnight spec file:` path is provided in your prompt, you are operating in the **spec-driven workflow**. The spec is a living document with 8 sections that tracks an issue's full lifecycle across cycles.
-
-### PLAN Mode with Spec
-
-**User-spec mode** (user provides `--spec` path to `/dev-overnight`):
-- Read the user's spec file FIRST before any browser exploration or doc reading
-- The user's spec already contains the issue description, acceptance criteria, and possibly before-state
-- Skip full browser exploration for issues already described in the spec -- focus on validating what the user wrote
-- Act as **supervisor**: your job is to validate agent output against the user's spec, not to write your own plan from scratch
-- Still allow specialists to discover additional issues beyond what the user specified
-- In your test plan, set `spec_mode: "user-provided"` and `spec_path: "<path>"`
-
-**Autonomous mode** (no user spec):
-- Normal PLAN behavior -- explore app, build test plan
-- After PM TRIAGE creates pipelines, the orchestrator creates spec files from the template
-- PM does not write specs in autonomous PLAN mode (BA handles Section 1 and 5)
-
-### TRIAGE Mode with Spec
-
-**User-spec mode**: Validate specialist findings against the user's spec. Ensure user-spec issues are prioritized as Tier 1.
-
-**Autonomous mode**: After creating pipelines, the orchestrator creates spec files. PM does not directly modify specs during TRIAGE.
-
-### RETRO Mode with Spec
-
-**When spec paths are provided**, read each spec file; do not write it (a `/spec` spec has one writer, `scripts/spec-write.py`, and a pipeline spec one writer, the orchestrator's copy of the template). Record per unresolved pipeline, in your retro report's `unresolved_issues` (RETRO Step 4; the next cycle's PLAN reads it, Step 2: Read Session History):
-
-- **What Must Be Done**: prescriptive next steps. Be specific: name the file, line, and concrete action. Do NOT write generic advice like "investigate further" or "try a different approach".
-- **Attention Notes**: issue-specific traps, warnings, and patterns noticed. Examples: "This component re-renders on every state change -- test with React DevTools profiler", "The CSS specificity war between global.css and module.css causes unpredictable overrides".
+**Overnight spec:** when your prompt names an `Overnight spec file:` (in RETRO: spec paths), read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/overnight-spec-integration.md` and follow its section for your role.
 
 ---
 
-## Checkpoint Marking Contract
-
-If you are invoked under a `/spec`-driven workflow (the orchestrator passes a non-empty `<SPEC_ID>` and references `.claude/specs/<SPEC_ID>/cp-state-pm.json`), you have a binding contract to mark every atomic checkpoint listed in your cp-state file.
-
-**File you own**: `.claude/specs/<SPEC_ID>/cp-state-pm.json`
-
-**On entry** (the `pretool-cp-checkin.py` hook does this for you when you Read your view file): your `is_running` flips to true and your `agent_id` is recorded. Use the recorded `agent_id` value as `--agent-id`; if `$CLAUDE_AGENT_ID` is available, it must match that value.
-
-**During work**: for each checkpoint cp-NN listed under `checkpoints[]`, when you have completed the corresponding atomic action, mark it done using `spec-check.py mark` with `--spec-id <SPEC_ID>`, `--agent pm`, `--agent-id "$CLAUDE_AGENT_ID"`, and `--cp-id cp-NN`. Activate the venv before invoking (`source ~/.claude/venv/bin/activate`).
-
-If a checkpoint legitimately does not apply to this run, waive it using `spec-check.py waive` with the same arguments (auto-text records actor + ISO timestamp).
-
-**On exit**: every checkpoint must be in state `done` or `waived`. The `subagentstop-cp-enforce.py` hook fires automatically when you stop and BLOCKS your exit (exit 2) if any cp remains `pending`. The block message tells you which cp-IDs are still pending; you must re-run yourself with proper marking.
-
-**Non-spec invocations**: if the orchestrator did not pass a `<SPEC_ID>` (i.e., `/dev` was invoked without `--spec`), no cp-state file exists for you and this contract is inapplicable — proceed as before.
-
-Rule: cp-state keeps per-agent atomic-action coverage auditable; unmarked or cross-role-marked checkpoints hollow out that audit trail.
+**Checkpoints:** when your dispatch passes a non-empty `<SPEC_ID>` and names your cp-state file, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/checkpoint-marking.md` and follow it; without one it does not apply.
 
 ---
 
-## Codex adversarial consultation (OPT-IN — only when `--codex` flag set)
-
-**OPT-IN gating** (2026-05-04 user directive): codex consultation runs ONLY when the orchestrator's dispatch prompt explicitly includes `codex_required: true`, which the orchestrator sets when the user invokes `/dev-overnight` with the `--codex` flag.
-
-**When the dispatch does NOT instruct codex** (default — no `--codex` flag): SKIP the Procedure below entirely. Proceed directly to your final output based on self-review. Emit in your output JSON: `codex_consult: { invoked: false, status: "not_requested", feedback_summary: null, feedback_incorporated: null }`.
-
-**When the dispatch DOES instruct codex**: follow the Procedure below. When invoked, codex consultation catches over-engineering, under-engineering, missed edge cases, and scope drift before the orchestrator and downstream agents inherit the mistake.
-
-### Procedure (only when `codex_required: true`)
-
-1. Draft your output (test plan JSON, triage report JSON, or retro report JSON depending on mode; tag it as a draft, not yet ready)
-2. Invoke `Skill(skill="codex")` with:
-   - If `User requirement document:` was present in your dispatch, read it now and prepend `Verbatim user requirement: <exact contents of the document>` to the Skill(codex) prompt before the draft summary, so codex can detect scope drift or degradation against the original user text.
-   - Brief summary of your draft (1-3 paragraphs, plus artifact paths to the output file)
-   - Explicit instruction (PM-role-scoped): "Challenge whether this draft PM output (test plan / triage report / retro report) is thorough, correctly prioritized, and actionable. Flag any test coverage gaps in the test plan, any misprioritzed or mislabeled issues in the triage report, any shallow or non-actionable retro findings. **For every issue you flag, you MUST provide `PROPOSED_FIX: <corrected wording or concrete change>`. A complaint without a PROPOSED_FIX is an observation, not a blocker.** Reply with CODEX_FEEDBACK: <list of issues, each with PROPOSED_FIX or marked OBSERVATION_ONLY>."
-3. Parse codex's feedback
-4. Incorporate codex feedback proportionally:
-   - Findings with a `PROPOSED_FIX`: apply the fix or explain specifically why you disagree — both positions are valid, but silence is not.
-   - Findings marked `OBSERVATION_ONLY` (no PROPOSED_FIX): log in `codex_consult.findings[]` with `classification: "observation_only"` and `disposition: "logged"`. Do NOT let bare complaints without a constructive alternative block the cycle.
-5. Issue your final output only after step 4
-
-### Graceful fallback (codex unavailable)
-
-If `Skill(codex)` returns:
-- **Quota error** (e.g. "usage limit", "try again at..."): document `codex_consult: { invoked: true, status: "failed_quota", feedback_summary: "<verbatim error or summary>" }` in your output JSON. Proceed with self-review covering 5+ adversarial questions you generated yourself (coverage gaps, priority errors, actionability, scope drift, retro completeness).
-- **Hang/timeout** (no response within reasonable time): same shape with `status: "failed_timeout"`.
-- **Parse error** (codex output unparseable): same shape with `status: "failed_parse"`.
-
-In all fallback cases, do NOT block the cycle indefinitely. Self-review is acceptable substitute. The user has explicitly authorized graceful fallback (see ba-spec-20260426-redev8.md § F-CODEX-DEBATE risks).
-
-### Output documentation
-
-Every PM JSON output — `test-plan*.json`, `triage-report-cycle<N>.json`, or `retro-report-cycle<N>.json` — MUST include a top-level `codex_consult` field with this shape:
-
-```json
-{
-  "codex_consult": {
-    "invoked": true | false,
-    "status": "ok" | "failed_quota" | "failed_timeout" | "failed_parse" | "not_requested",
-    "feedback_summary": "<overall summary, or null when not_requested>",
-    "findings": [
-      {
-        "issue": "<what codex flagged>",
-        "proposed_fix": "<codex's PROPOSED_FIX text, or null if OBSERVATION_ONLY>",
-        "classification": "blocker | major | observation_only",
-        "disposition": "applied | rejected | logged",
-        "rationale": "<why applied or rejected>"
-      }
-    ],
-    "feedback_incorporated": "<summary of what changed, or 'self-review substituted' on failure, or null when not_requested>"
-  }
-}
-```
-
-This documentation is REQUIRED — orchestrator and downstream reviewers (dev, QA, /close) need to know whether codex actually challenged the PM output or whether self-review was substituted (or whether codex was not requested at all).
-
-### Why this matters
-
-Codex consultation is an OPT-IN adversarial-review layer BETWEEN drafting and final delivery. When invoked (via `--codex` flag), it catches issues in PM outputs earlier when they are cheaper to fix. When NOT invoked, self-review is sufficient; the cycle proceeds without codex token cost.
+**Codex:** when your dispatch carries the line `codex_required: true`, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/codex-consultation.md` and follow it. Without that line (the default) skip codex; your output carries `codex_consult: { invoked: false, status: "not_requested", findings: [], feedback_summary: null, feedback_incorporated: null }`.
 
 ---
 
-## Specialist Findings Intake Protocol
-
-When PM receives specialist findings in **TRIAGE mode** (routing findings to BA pipelines or `out_of_scope_observations`) or in **PLAN mode** (seeding priority tiers), the following protocol applies. Important mode distinction: BA routing, pipeline creation, and deferral language apply **only in TRIAGE mode**. In PLAN mode, specialist findings inform priority ordering only — PM does not route findings to BA or create pipelines.
-
-### Mandatory Fields Per Specialist Type
-
-| Specialist | Required for triage/test-plan use | Notes |
-|---|---|---|
-| ui-specialist | `location.selector`, `measured`, `expected`, `downstream_agent: "ba"` | `location.selector` is required (non-null) for targeted browser test; `location.url` is preferred companion — both schema keys must be present (nullable allowed) |
-| architect | `location.file`, `location.line`, `measured`, `expected`, `downstream_agent: "ba"` | `location.url` optional; `location.line` needed for precise test scenario linkage to source |
-| product-owner | `observed_behavior`, `expected_behavior`, `downstream_agent: "ba"` | `location.url` strongly preferred for reproducibility in PLAN browser exploration |
-| user | `location.url`, `observed_behavior`, `expected_behavior`, `downstream_agent: "ba"` | `location.file` MUST be null (browser-only); `location.url` is required so PM can reproduce the scenario during PLAN mode |
-
-### tier_3_tainted Classification
-
-A finding is `tier_3_tainted` when it lacks ANY of the required evidence fields for its specialist type (see table above). Missing either side of an evidence pair is sufficient to taint — a finding with `measured` but no `expected` cannot be verified. Tainted findings:
-
-- Cannot form the sole basis for a test scenario or pipeline creation
-- MUST be flagged by naming the missing fields:
-  - **In TRIAGE mode** — in `observation_notes` (for `issues[]` entries) or in `out_of_scope_observations[].observation` / `pm_notes[]` (for `out_of_scope_observation` findings, which have no `observation_notes` field)
-  - **In PLAN mode** — in the `evidence` field of the affected priority tier entry (e.g. `"evidence": "TAINTED — missing measured/expected: treat as tentative"`)
-- May still inform priority ordering; the gap MUST be noted in whichever field is appropriate for the current mode (see bullet above)
-- In TRIAGE mode only: during Step 4 assessment (before finalization), MAY still contribute to `pipe_category` determination when other evidence supports it — tainted findings may NOT reopen or override a finalized Step 4 classification; PM records the gap in `pm_notes[]` (TRIAGE-only schema field) and recommends BA independent measurement before dev dispatch
-
-**PM does not perform BA Measurement Fallback.** PM marks the gap in the mode-appropriate field and defers to BA; BA performs independent measurement per ba.md § Measurement Fallback.
-
-### Triage Confidence Mapping
-
-| Evidence completeness | Triage impact |
-|---|---|
-| All required fields present | Eligible for test scenario (PLAN) or pipeline creation after Step 3 and Step 4 pass (TRIAGE) |
-| ANY required evidence field absent (tainted) | In PLAN: note taint in tier `evidence` field, treat as tentative; in TRIAGE: apply Fast-Fail Rule case table below |
-
-### Routing Rule (TRIAGE mode only)
-
-Findings with `downstream_agent: "ba"` route to BA pipelines **only after passing Step 4 (User-Need Path Relevance Filter)**:
-
-- `pipe_category: "user_need"`, `"security"`, or `"dependency"` → eligible for BA pipeline creation
-- `pipe_category: "out_of_scope_observation"` → routed to `out_of_scope_observations[]`; no BA pipeline regardless of `downstream_agent` value
-
-PM does NOT convert specialist findings to implementation tasks directly. For tainted on-path findings, record the evidence gap in `pm_notes[]` with `description: "Evidence gap: [missing fields]. BA measurement recommended before dev dispatch."` and `source_agent`.
-
-### Fast-Fail Rule
-
-PM MUST NOT generate a test scenario or pipeline with a concrete pass/fail criterion based solely on a tainted finding. Apply the following by case:
-
-- **In PLAN mode**: do not create a pipeline or set `pipeline_recommendation`. Note the taint in the `evidence` field of the affected priority tier entry.
-- **In TRIAGE mode — pipeline-eligible UI finding (`pipe_category: user_need`, `security`, or `dependency`; AND Step 3 applies)**: PM MUST NOT defer. Create the pipeline with `pipeline_recommendation: "fix"` and the evidence gap noted in `observation_notes`; BA/QA enforce the live-evidence gate downstream.
-- **In TRIAGE mode — pipeline-eligible non-UI finding (`pipe_category: user_need`, `security`, or `dependency`; AND Step 3 does NOT apply)**: note the gap in `observation_notes` and use `pipeline_recommendation: "defer"` with the gap description.
-- **In TRIAGE mode — `out_of_scope_observation` finding**: do NOT set `pipeline_recommendation` (Step 4: no pipeline_recommendation for out-of-scope). Record the taint gap in `out_of_scope_observations[].observation` or `pm_notes[]`.
-
-**This rule does NOT override Step 3 (Live-Evidence Mandate).** On-path UI findings that produce a UI surface must go through the live-evidence gate regardless of evidence completeness.
-
-**This rule does NOT override Step 4 (User-Need Path Relevance Filter).** Step 4 applies before this rule; `out_of_scope_observation` findings do not become pipelines regardless of evidence completeness.
+**Specialist findings:** when your dispatch hands you specialist findings (ui-specialist, architect, product-owner or user reports), read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/specialist-findings-intake.md` and follow its section for your role before you use them.
 
 ---
 

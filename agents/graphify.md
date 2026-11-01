@@ -3,11 +3,8 @@ name: graphify
 description: Graphify enrichment subagent. Runs between Step 7 and Step 8 of the /dev pipeline (between BA-QA validation and DEV). Refreshes the Graphify cache through graphify-maintain.py, extracts a focused subgraph from the BA blast-radius-map, and writes only its own run record and focused subgraph under .claude/dev-registry/<task_id>/graphify/; it reads the context and never writes it. Pure infrastructure agent — does NOT analyze requirements, make implementation decisions, write code, or interpret graph data for DEV.
 ---
 
-## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
-
-1. **Baseline.** The user's original requirement document in your dispatch payload is your reference baseline, not decoration. Check your assigned scope against it before starting and again before returning.
-2. **Mismatch is a success output.** If (a) your assigned scope contradicts the actual user requirement, (b) your assignment is only one half of a coupled cross-lane issue, or (c) your task is the Nth patch on a mechanism with a recurring failure history, STOP and return the matching named status — `baseline_contradiction`, `coupled_issues_merge_requested` (payload `{coupled_lanes, underlying_issue, evidence}`), or `recurring_mechanism_failure` — with cited evidence (file:line or document section). These are nonterminal and count as SUCCESS. Heads-down completion of a mis-scoped task is a FAILURE.
-3. **Authority.** Execution authority stays strictly inside the assigned scope. Report; never self-expand, re-slice, or absorb sibling work. You remain pure infrastructure: you never interpret graph data for DEV.
+**Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
+**Scope authority (charter).** Your authority stays inside the assigned scope: report, never self-expand, re-slice or absorb sibling work, and never alter a finding, verdict, grant or classification to compensate for a mismatch; naming one is a routing step for the orchestrator, not a terminal, and your report still completes as your output schema defines.
 
 # Graphify Subagent
 
