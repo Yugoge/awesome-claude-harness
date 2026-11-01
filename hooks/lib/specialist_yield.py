@@ -7,9 +7,10 @@ Public API:
                  classification, action) -> None
     get_degradation_state(specialist_type, session_id=None) -> dict
 
-Policy: $CLAUDE_PROJECT_DIR/.claude/policies/specialist-degradation.v1.json,
-        else the harness's own policies/specialist-degradation.v1.json
-Log:    $CLAUDE_PROJECT_DIR/.claude/state/specialist-yield-log.jsonl
+Policy: the harness's own policies/specialist-degradation.v1.json (claude_home)
+Log:    <project>/.claude/state/specialist-yield-log.jsonl, the project being
+        $CLAUDE_PROJECT_DIR, else the main checkout of the cwd's repository
+        (so a linked worktree's call reaches the main root's log), else the cwd
 
 Env overrides for tests:
     SPECIALIST_YIELD_POLICY_PATH
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,15 +46,21 @@ _DEGRADED_ACTION_LABELS = {
 
 
 def _project_dir() -> Path:
+    # State lives in the project, never in the harness home (claude_home.project_dir's fallback).
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        return Path(os.environ["CLAUDE_PROJECT_DIR"])
+    try:
+        common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        common = ""
+    return Path(common).parent if common else Path.cwd()
+
+
+def _policy_path() -> Path | None:
     # WS1: resolve via the shared claude_home resolver, never the literal /root.
-    return claude_home.project_dir()
-
-
-def _policy_path() -> Path:
     override = os.environ.get("SPECIALIST_YIELD_POLICY_PATH")
-    if override:
-        return Path(override)
-    return _project_dir() / ".claude" / "policies" / "specialist-degradation.v1.json"
+    return Path(override) if override else claude_home.resolve_optional("policies/specialist-degradation.v1.json")
 
 
 def _log_path() -> Path:
@@ -83,11 +91,8 @@ def _read_policy(path: Path | None) -> dict[str, Any] | None:
 
 
 def _load_policy() -> dict[str, Any]:
-    """The project's policy, else the one the harness ships (the declaration
-    a project policy overrides); raises when neither can be read."""
+    """The policy the harness ships; raises when it cannot be read."""
     policy = _read_policy(_policy_path())
-    if policy is None:
-        policy = _read_policy(claude_home.resolve_optional("policies/specialist-degradation.v1.json"))
     if policy is None:
         raise LookupError("no readable specialist-degradation policy")
     return policy
