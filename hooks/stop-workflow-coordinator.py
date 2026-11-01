@@ -1,29 +1,18 @@
 #!/usr/bin/env python3
 """Serialize Stop phases and call the sole receipt-gated resource finalizer.
 
-LANE-B (20260808-035658) M4/M7, P5 R9: hooks/stop-launch.py runs it (and a session that
-loaded an older hook list runs it directly), running its phases in order: coverage,
-auto_commit, completion (hooks/stop-command-gate.py, the one Stop gate), cleanup. A passing
-phase may end its stdout with a JSON object whose systemMessage (auto-commit's
-refused-snapshot notice) main() shows as this hook's own.
+LANE-B (20260808-035658) M4/M7, P5 R9: run by hooks/stop-launch.py (directly by a session that
+loaded an older hook list), in order: coverage, auto_commit, completion (hooks/stop-command-gate.py,
+the one Stop gate), cleanup. A passing phase may end its stdout with a JSON object whose
+systemMessage (auto-commit's refused-snapshot notice) main() shows as this hook's own.
 
-Only coverage and completion may block. A coverage block relays failed_phase=coverage and
-the last 4 KB of its stderr; a completion block relays the gate's stderr first (its
-`COMMAND_GATE /<command>: not complete` and the gaps), and an allowed completion's stderr
-(advisory `would block`) is relayed too. An auto_commit or cleanup failure, and a coverage
-failure other than exit 2, is recorded in the result JSON and allowed. A completion
-failure (exit outside {0, 2}, timeout, launch error, missing file) is decided by the
-stdlib fallback on the transcript reader (`fallback`). Cleanup runs only on an allowed
-Stop; a block returns before it. The finalizer runs only when every phase allowed cleanly.
-
-The gate's mode comes from the process environment only (`gate_mode`): CLAUDE_COMMAND_GATE=off
-skips completion, and with it the overnight time-lock the gate holds; else the gate blocks when
-the launcher ran this coordinator (its LAUNCHER_MARK) and runs advisory when a session that
-loaded an older hook list runs it directly (arming option 1).
-
-The terminal receipt (P1b row 15): the gate prints the terminal time-lock status of an
-allowed Stop as one stdout line, and this coordinator alone publishes the receipt from it
-(session_resources.publish_overnight_receipt), which finalize then reads.
+Only coverage and completion block: a coverage block relays failed_phase=coverage and the last
+4 KB of its stderr, completion's stderr (its block text, or advisory `would block`) is relayed
+whole and first. Other failures are recorded in the result JSON and allowed; a completion that did
+not decide (exit outside {0, 2}, timeout, launch error, missing file) goes to `fallback`. Cleanup
+runs only on an allowed Stop, the finalizer only when every phase allowed cleanly. `gate_mode`
+reads the process environment only. The gate prints an allowed Stop's terminal time-lock status as
+its last stdout line, and this coordinator alone publishes the receipt finalize reads (P1b row 15).
 
 Resource preflight/finalize is opt-in: LANEB_SESSION_RESOURCE_TRUST_KEY and _TRUST_ROOT
 are set nowhere by default (no SessionStart provisioning). Without both, only the phases
