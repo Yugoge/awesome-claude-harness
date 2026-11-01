@@ -515,10 +515,9 @@ def _enforce_bash_all_sessions(tool_name: str, tool_input: dict, worktree_paths:
 
 
 def apply_global_worktree_enforcement(tool_name: str, tool_input: dict, worktree_paths: list[str]) -> None:
-    """Block ALL sessions from writing outside active overnight worktrees.
-
-    This catches subagents that have different session_ids from the
-    parent overnight agent but should still be confined to the worktree.
+    """Block writes outside every live overnight worktree; main() runs it for
+    each enforced actor. A subagent's payload carries its parent's session_id
+    and main transcript_path (plus agent_id), so it is governed as its session.
     """
     if not worktree_paths:
         return
