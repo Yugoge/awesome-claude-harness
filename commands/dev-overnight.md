@@ -168,9 +168,10 @@ When `spec_mode == "user-provided"` comes from a spec but the user's focus strin
 - **`--worktree`**: restores the historical isolated launch — create the worktree, and if that is impossible fall back through repair/prune to a durable fresh clone. If no durable isolation can be produced, the launch is **refused** rather than silently downgraded to in-place: you asked for isolation, so you get isolation or an error.
 - Passing both flags is an error; the launcher refuses rather than picking one.
 
-Two launch-time refusals apply to in-place mode, both fail-fast with no state written:
+Three launch-time refusals apply to in-place mode, each fail-fast with no state written:
 - **Detached HEAD** — every downstream consumer names a branch, and commits on a detached HEAD are unreachable.
 - **The checkout is on `protected_branch`** — the keystone denies protected-branch ref moves for the overnight actor, so the session would launch fine and then fail at its first commit hours later. Check out a working branch, or pass `--worktree`.
+- **bubblewrap does not run** — in place, the keystone (`core.hooksPath`) sits in this checkout's own `.git/config`, and only the guard's bubblewrap read-only bind keeps the actor's Bash commands off it: without bubblewrap, every removal of the key, by the main agent and by a subagent, passed the hooks. The refusal names bubblewrap and the remedy: install bubblewrap, or pass `--worktree`. A Write or Edit runs outside bubblewrap, so the guard also refuses an overnight actor's Write or Edit of its checkout's git config.
 
 **Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex` (in any position), strip it from the argument string and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every BA / QA / dev / PM dispatch prompt MUST include the literal line `codex_required: true` so each subagent's OPT-IN Codex consultation block activates. When `codex_required = false`, do NOT include that line.
 
@@ -1507,7 +1508,7 @@ Use Agent tool with:
 - Has `cycle_stats` object
 - If `FINAL_CYCLE: true` (the report's `is_final_cycle`): has `final_summary` object
 
-If that check refuses the report (its message names the path and the failing rule), re-invoke PM-Retro (a fresh dispatch: same obligation template, fresh `dispatched_at`) until the report passes, with no retry cap: each cycle's retro report is part of the session's closeout (Step 21).
+If that check refuses the report (its message names the path and the failing rule), re-invoke PM-Retro (a fresh dispatch: same obligation template, fresh `dispatched_at`) until the report passes, with no retry cap: a PM retrospective report on disk is part of the session's closeout (Step 21).
 
 **Check qa_rerun_required**: Read the retro report's `qa_rerun_required` field.
 - If `qa_rerun_required: true`: re-invoke QA for the pipelines listed in `qa_rerun_reasons`. Use the same QA invocation pattern as Step 14-16, but pass additional context: `"This is a PM-requested QA re-run. Reasons: <qa_rerun_reasons>. Focus on the specific concerns raised."` After QA re-run completes, proceed to Step 21 (do NOT re-invoke RETRO — avoid infinite loops).
@@ -1578,7 +1579,7 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 
 **Decisions made without the owner** lists every decision of the session, one row each, spec-declared user gates first (Hard Rule 1, Clause B), each as recorded when it was made (Hard Rule 5): the orchestrator's from its re-dispatch line, a subagent's copied from that subagent's report. Write "None" under the heading when the session made none.
 
-**After `end_time` nobody is asked and nothing waits for the owner.** The time-lock (`hooks/stop-overnight-timelock.py`) lets the session end once its closeout is on disk: the retro report of each cycle (`docs/dev/overnight/<session_id>/retro-report-cycle<N>.json`, Step 20) and this summary, written after the session started. Until both exist, its block names what is missing.
+**After `end_time` nobody is asked and nothing waits for the owner.** The time-lock (`hooks/stop-overnight-timelock.py`) lets the session end once its closeout is on disk (`hooks/lib/overnight.py` `closeout_gaps`): a PM retrospective report (a `retro-report-cycle*.json` under `docs/dev/overnight/<session_id>/`, Step 20) and this summary (an `overnight-summary-*.md` under `docs/dev/`) written since the session's `start_time`. Until both exist, its block names what is missing.
 
 **The session lands nothing.** DO NOT merge, squash, cherry-pick, commit or manually copy files. `/close`, `/commit`, `/merge` and `/push` are human-typed commands (`disable-model-invocation: true`, and `settings.json` denies their `Skill` calls), so the session runs none of them; the owner types them after the session (Post-loop flow below). Until then the work stays in the working tree at `worktree_path`, snapshotted in `refs/checkpoints/<worktree_branch>`. Under `registered_worktree` / `fresh_clone_checkout` the worktree is preserved: `/commit --auto` commits the work on `<worktree_branch>`, and `/merge` brings those commits to $DEFAULT_BRANCH with their history intact. Under `in_place` there is no session-created branch: the commits land on the working branch the checkout was already on.
 
@@ -1701,7 +1702,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 - **posttool-todo-count.py** (PostToolUse:TodoWrite): Enforces step count
 - **posttool-todo-sequence.py** (PostToolUse:TodoWrite): Enforces step ordering
 - **codex_native_harness.py / stop-overnight-timelock.py** (Stop): Active Stop-chain workflow enforcement; do not cite absent legacy workflow-enforce hooks as active
-- **stop-overnight-timelock.py** (Stop): Blocks stop until end_time, then until the closeout (each cycle's retro report and the summary) is on disk; a human-typed `/stop` releases it
+- **stop-overnight-timelock.py** (Stop): Blocks stop until end_time, then until the closeout (a PM retrospective report and a summary written since `start_time`) is on disk; a human-typed `/stop` releases it
 - **posttool-git-checkpoint.sh** (PostToolUse:Write|Edit): Snapshots each change to `refs/checkpoints/<branch>`; never advances HEAD
 
 ### Loop Mechanism (v3)
