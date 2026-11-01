@@ -16,7 +16,7 @@ Rules enforced:
   4. Content and activeForm are immutable (only status changes allowed)
   5. Steps must be completed in order (no skipping ahead)
   6. Subagent completion guard (Gate 4): cannot complete a subagent step
-     without having called the Agent tool first
+     without an Agent call of its role that came back or that /restart resumed
 
 Exit codes:
   0: Valid, allow TodoWrite
@@ -24,6 +24,7 @@ Exit codes:
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -225,9 +226,22 @@ def _in_progress(todos):
     return found[0] if len(found) == 1 else None
 
 
-def _dispatched_steps(state, canonical):
+def _resumed(state, sid):
+    """(offset, 1, call) of each Agent call of the span that never came back
+    but whose agent the /restart recovery resumed (the span's SendMessage to
+    it, placed there) and finalized (its journal record): that call is its
+    step's dispatch, with no replacement call (commands/restart.md, Lesson 16)."""
+    from lib.subagent_restart import finalized_resumes
+    journal = finalized_resumes(sid)
+    cut = {c.id: c for c in state.span.uses('Agent', 'Task') if not c.ok} if journal else {}
+    return [(m.result_at, 1, cut[journal[str(m.input.get('to'))]]) for m in state.span.uses('SendMessage')
+            if cut and m.ok and journal.get(str(m.input.get('to'))) in cut]
+
+
+def _dispatched_steps(state, canonical, sid=''):
     """The subagent steps a dispatch has been made for, read from the record:
-    each Agent call that came back pairs with a step. With step ip in progress,
+    each Agent call that came back, or that a recovery resumed (_resumed),
+    pairs with a step. With step ip in progress,
     a typed call counts for the first step of ip..ip+2 that names its type and
     has no call yet (the window covers a TodoWrite and its Agent sent
     together), an untyped call for ip itself. A step set back to pending (a new
@@ -235,8 +249,8 @@ def _dispatched_steps(state, canonical):
     # Ordered by where each result is recorded (the offset of its line, which
     # orders as its line number does), so no line before the span is counted.
     events = sorted([(w.result_at, 0, w) for w in state.write_uses]
-                    + [(c.result_at, 1, c) for c in state.span.uses('Agent', 'Task') if c.ok],
-                    key=lambda e: (e[0], e[1]))
+                    + [(c.result_at, 1, c) for c in state.span.uses('Agent', 'Task') if c.ok]
+                    + _resumed(state, sid), key=lambda e: (e[0], e[1]))
     current, counted = [], set()
     for _, is_dispatch, call in events:
         if not is_dispatch:
@@ -256,7 +270,7 @@ def _dispatched_steps(state, canonical):
     return counted
 
 
-def _find_completing_subagent_step(state, last, new_todos, canonical):
+def _find_completing_subagent_step(state, last, new_todos, canonical, sid=''):
     """Find a step transitioning to completed that needs subagent guard."""
     dispatched = None
     for i, (old, new) in enumerate(zip(last, new_todos)):
@@ -269,7 +283,7 @@ def _find_completing_subagent_step(state, last, new_todos, canonical):
         if not needs_guard:
             continue
         if dispatched is None:
-            dispatched = _dispatched_steps(state, canonical)
+            dispatched = _dispatched_steps(state, canonical, sid)
         if i not in dispatched:
             return i, new, canonical[i].get('subagent_call')
     return None, None, None
@@ -282,23 +296,34 @@ def _format_subagent_names(subagent_call):
     return subagent_call.get('subagent_type', '?')
 
 
-def check_subagent_completion_guard(state, last, new_todos, cmd):
+def _unreturned(state, types):
+    """'call <id>, declared artifacts: ...' of each Agent call of one of
+    ``types`` in the span that has not come back (its obligation's paths)."""
+    from lib.obligation import extract_obligation_block
+    return [f'call {c.id}, declared artifacts: ' + (', '.join(re.findall(r'"path":\s*"([^"]+)"', getattr(
+        extract_obligation_block(str(c.input.get('prompt') or '')), 'body', ''))) or 'none')
+        for c in state.span.uses('Agent', 'Task')
+        if not c.ok and str(c.input.get('subagent_type') or '').strip().lower() in types]
+
+
+def check_subagent_completion_guard(state, last, new_todos, cmd, sid=''):
     """Gate 4: block completing a subagent step without calling Agent."""
     if not last or not cmd:
         return
     canonical = state.canonical
     idx, step_todo, sa_call = _find_completing_subagent_step(
-        state, last, new_todos, canonical
+        state, last, new_todos, canonical, sid
     )
     if idx is not None:
         agents = _format_subagent_names(sa_call)
-        sys.stderr.write(
-            f'\nBLOCKED: Cannot complete Step {idx} '
-            f'("{step_todo.get("content", "?")}").\n'
-            f'This step requires a subagent call ({agents}) '
-            f'that has not been made.\n'
-            f'Call the Agent tool first, then mark completed.\n\n'
-        )
+        cut = _unreturned(state, _subagent_types(canonical[idx]))
+        why = (f'Its {agents} call has not come back ({"; ".join(cut)}). A subagent cut by an '
+               'interrupted session or a usage limit is resumed and finalized by the owner\'s /restart '
+               '(commands/restart.md), never replaced by a new call.\n\n' if cut else
+               f'This step requires a subagent call ({agents}) that has not been made.\n'
+               'Call the Agent tool first, then mark completed.\n\n')
+        sys.stderr.write(f'\nBLOCKED: Cannot complete "{step_todo.get("content", "?")}" '
+                         f'(subagent role {agents}).\n' + why)
         sys.exit(2)
 
 
@@ -333,7 +358,7 @@ def main():
     violations = validate(last, new_todos)
     if violations:
         emit_block(cmd, violations, last)
-    check_subagent_completion_guard(state, last, new_todos, cmd)
+    check_subagent_completion_guard(state, last, new_todos, cmd, str(data.get('session_id') or ''))
     sys.exit(0)
 
 

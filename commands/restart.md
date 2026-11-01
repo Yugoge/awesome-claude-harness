@@ -67,7 +67,7 @@ directive to this session's own main agent — see
    `RESTART_BLOCKED_SESSION_ID_UNAVAILABLE` when neither exists:
 
    ```text
-   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py prepare
+   ~/.claude/venv/bin/python ~/.claude/scripts/restart-subagents.py prepare
    ```
 
    The output is the transcript-derived candidate set for THIS parent session
@@ -114,7 +114,7 @@ directive to this session's own main agent — see
    helper with a tool timeout of at least 600000 ms:
 
    ```text
-   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py status --wait-seconds 540
+   ~/.claude/venv/bin/python ~/.claude/scripts/restart-subagents.py status --wait-seconds 540
    ```
 
    If `complete` is false, report `RESTART_INCOMPLETE` with every
@@ -127,10 +127,14 @@ directive to this session's own main agent — see
 5. **Finalize only after all responses.** When `complete` is true, invoke:
 
    ```text
-   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py finalize
+   ~/.claude/venv/bin/python ~/.claude/scripts/restart-subagents.py finalize
    ```
 
    Report the recovered agent IDs and point to their existing transcript paths.
+   Then go on with the command whose subagents were cut, from the checklist step
+   that was in progress: each resumed agent's original `Agent` call is that
+   step's dispatch (`pretool-todo-validate.py` reads the recovery journal), so
+   complete the step once its artifacts are checked; never dispatch a replacement.
 
 ## Zero-candidate continuation
 
@@ -199,8 +203,8 @@ complete, valid prepare result, never an error to retry.
 - **DO NOT copy a transcript into a fresh prompt** and call that a restart.
 - **DO NOT repeat irreversible operations.** The fixed recovery message requires
   each resumed agent to inspect its last tool result and workspace side effects first.
-- **DO NOT overwrite or complete the active `/dev`, `/redev`, `/spec`, or
-  `/dev-overnight` TodoWrite/workflow bookmark.** `/restart` is an orthogonal
+- **DO NOT overwrite the active `/dev`, `/redev`, `/spec`, or `/dev-overnight`
+  TodoWrite/workflow bookmark, nor complete its steps before step 5.** `/restart` is an orthogonal
   control operation and intentionally has no todo script. Because of this,
   `pretool-workflow-gate.py` exempts the exact `restart-subagents.py`
   invocations in steps 2, 4, and 5 from the checklist gate: even a session

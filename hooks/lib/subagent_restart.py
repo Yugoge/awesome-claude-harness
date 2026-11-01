@@ -1070,6 +1070,19 @@ def _read_state(sid: str) -> dict[str, Any] | None:
     return state
 
 
+def finalized_resumes(session_id: str) -> dict[str, str]:
+    """{agent_id: tool_use_id of its original Agent call} of the agents this
+    session's recovery resumed and finalized: the journal complete (every
+    response observed, as finalize requires) and the capability consumed."""
+    try:
+        state, live = _read_state(session_id), grant_path(session_id).exists()
+    except RestartError:
+        return {}
+    if state is None or live or not status_view(state)["complete"]:
+        return {}
+    return {c["agent_id"]: str(c.get("tool_use_id")) for c in state.get("candidates", []) if isinstance(c, dict)}
+
+
 def _load_state(session_id: str) -> dict[str, Any]:
     sid = _safe_session_id(session_id)
     state = _read_state(sid)

@@ -15,6 +15,11 @@ artifact's path, it repairs it at its next stop (the next round, stop_hook_activ
 what it meant to, as the agent text tells it to, and stops again. No other actor repairs anything,
 and nothing outside the faulted agent acts on the block (Replay.on_stop_block_default).
 
+    cut@<label glob>, limit@<label glob>
+
+A session cut while a subagent runs (F5, F5f) or a usage limit met by it (F6), and the owner's
+/restart after it: tests/replay/recovery.py.
+
     plant@<label glob>=<path>:<content kind>
 
 Before the step whose label matches, the fault (actor "fault") writes `path` (project-relative;
@@ -34,8 +39,10 @@ import os
 _FORGED = "ESCALATION_ACK 0123456789abcdef"
 
 
-def _record(rp, rec: dict) -> None:
-    rp.fault_records.append(rec)
+def _record(rp, rec: dict | None = None) -> None:
+    """Add `rec` (None: none) and write faults.json with every record as it now is."""
+    if rec is not None:
+        rp.fault_records.append(rec)
     with rp.acting("driver"):
         with open(os.path.join(rp.layout.out, "faults.json"), "w") as fh:
             json.dump(rp.fault_records, fh, indent=1)
@@ -161,6 +168,9 @@ def install(rp, spec: str) -> None:
         if kind == "plant":
             glob, _, what = rest.partition("=")
             rp.faults.append((glob, _plant(rp, glob, what)))
+        elif kind in ("cut", "limit"):  # F5, F5f, F6: tests/replay/recovery.py
+            from . import recovery
+            recovery.install(rp, kind, rest)
         else:
             rp.faults.append((rest, _write_fault(rp, kind, rest)))
     rp.on_stop_block_default = on_stop_block

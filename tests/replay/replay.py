@@ -105,6 +105,10 @@ class Dispatch(Call):
     agent_type: str = ""
     stop: Event | None = None
     actor: "Actor | None" = None
+    # A session cut while the subagent ran (faults.py `cut`, `limit`): its Agent call never comes
+    # back; the recovery resumes the same agent, whose response ends with `final_line`.
+    cut: bool = False
+    final_line: str = ""
 
 
 def now_iso() -> str:
@@ -660,39 +664,51 @@ class Actor:
         meta = os.path.join(os.path.dirname(self.s.agent_tpath(aid)), f"agent-{aid}.meta.json")
         with open(meta, "w") as fh:
             json.dump({"agentType": atype, "description": agent_in["description"], "toolUseId": tid}, fh)
-        if step["body"]:
-            step["body"](sub)
-        final = step["result"](sub) if callable(step["result"]) else step["result"]
-        if getattr(self.rp, "fault_pending", None):
-            from . import faults
-            final = faults.forged_line(self.rp, aid, final)
-        sub.last_final = final
-        default = getattr(self.rp, "on_stop_block_default", None)
-        if default is not None:  # an injected fault's agent repairs at its next round (faults.py)
-            own = on_stop_block
-            on_stop_block = (lambda s, ev: (own and own(s, ev)) or default(s, ev))
-        active = False
-        for _ in range(max(1, stop_rounds)):
-            self.s.say(final, aid)
-            d.stop = self.s.fire("SubagentStop", f"{label} stop", {
-                "stop_hook_active": active, "agent_id": aid, "agent_type": atype,
-                "agent_transcript_path": self.s.agent_tpath(aid), "last_assistant_message": final})
-            if not self.rp.settle(d.stop, f"{label} stop", step["deviation"]) or not on_stop_block:
-                break
-            nxt = on_stop_block(sub, d.stop)
-            if not nxt:
-                break
-            final, active = nxt, True
-        d.response = {"status": "completed", "prompt": prompt, "agentId": aid,
-                      "content": [{"type": "text", "text": final}],
-                      "totalDurationMs": int((time.monotonic() - t0) * 1000), "totalTokens": 0,
-                      "totalToolUseCount": sub.calls, "usage": {"input_tokens": 0, "output_tokens": 0}}
-        self._result(tid, [{"type": "text", "text": final}], resp=d.response)
-        d.post = self.s.fire("PostToolUse", label, {"tool_name": "Agent", "tool_input": agent_in,
-                                                    "tool_response": d.response, "tool_use_id": tid}, self.agent)
-        self.rp.settle(d.post, label, step["deviation"])
-        d.ok = not d.stop.still_blocked
-        self.rp.after(step, d)
+
+        def rest(on_stop_block=on_stop_block):
+            if step["body"]:
+                step["body"](sub)
+            final = step["result"](sub) if callable(step["result"]) else step["result"]
+            if getattr(self.rp, "fault_pending", None):
+                from . import faults
+                final = faults.forged_line(self.rp, aid, final)
+            if d.final_line:
+                final = final.rstrip("\n") + "\n\n" + d.final_line
+            sub.last_final = final
+            default = getattr(self.rp, "on_stop_block_default", None)
+            if default is not None:  # an injected fault's agent repairs at its next round (faults.py)
+                own = on_stop_block
+                on_stop_block = (lambda s, ev: (own and own(s, ev)) or default(s, ev))
+            active = False
+            for _ in range(max(1, stop_rounds)):
+                self.s.say(final, aid)
+                d.stop = self.s.fire("SubagentStop", f"{label} stop", {
+                    "stop_hook_active": active, "agent_id": aid, "agent_type": atype,
+                    "agent_transcript_path": self.s.agent_tpath(aid), "last_assistant_message": final})
+                if not self.rp.settle(d.stop, f"{label} stop", step["deviation"]) or not on_stop_block:
+                    break
+                nxt = on_stop_block(sub, d.stop)
+                if not nxt:
+                    break
+                final, active = nxt, True
+            d.response = {"status": "completed", "prompt": prompt, "agentId": aid,
+                          "content": [{"type": "text", "text": final}],
+                          "totalDurationMs": int((time.monotonic() - t0) * 1000), "totalTokens": 0,
+                          "totalToolUseCount": sub.calls, "usage": {"input_tokens": 0, "output_tokens": 0}}
+            if not d.cut:  # a call cut before it came back gets no result (recovery.py reports its end)
+                self._result(tid, [{"type": "text", "text": final}], resp=d.response)
+                d.post = self.s.fire("PostToolUse", label, {"tool_name": "Agent", "tool_input": agent_in,
+                                                            "tool_response": d.response, "tool_use_id": tid},
+                                     self.agent)
+                self.rp.settle(d.post, label, step["deviation"])
+            d.ok = not d.stop.still_blocked
+            self.rp.after(step, d)
+
+        cuts = getattr(self.rp, "cuts", None)
+        if cuts is None:
+            rest()
+        else:  # the subagent may be cut mid-run: it then goes on only when the recovery resumes it
+            cuts.run(d, sub, rest, agent_in)
         return d
 
 
