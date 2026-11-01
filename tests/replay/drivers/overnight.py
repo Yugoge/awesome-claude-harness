@@ -75,8 +75,8 @@ Driver arguments (cli.py --arg K=V):
                   Step 12's template with the lines Step 17 adds (the base's iteration context in place
                   of the context file), the qa_mode write the text has before QA (the base's), QA from
                   Step 15's template, its report Read, and the pipeline marked done and fixed on a pass
-  variant=unattended  D20's unattended decision: one cycle in a window of `window` minutes (default
-                  10) typed as the end time; pipeline 0 meets, inside the window, a producer question an
+  variant=unattended  D20's unattended decision: one cycle in a window of `window` minutes typed as
+                  the end time; pipeline 0 meets, inside the window, a producer question an
                   experiment settles (its BA, Step 8), a stand-in spec-declared user gate (its dev
                   dispatch, Step 12) and a producer question no experiment settles (its dev, Step 12).
                   Each is decided without the owner as Hard Rule 5 and Clause B say: BA is re-dispatched
@@ -94,7 +94,8 @@ Driver arguments (cli.py --arg K=V):
                   ESCALATION_ACK line (in the window, and after it before the summary). The checks
                   (Night.unattended_checks, out/unattended.json) raise when one fails; a compliant
                   step a hook blocked is listed there ("false_blocks") and in blocks.json
-  window=N        variant=unattended only: the end time typed, in minutes from the launch
+  window=N        variant=unattended only: the end time typed, in minutes from the launch (default: 10,
+                  or 1.5 minutes per second the session's start took on this host when that is more)
   stop_at=N       the step after which variant=stop interrupts
   kit=base        the replay of the base kit's text: row 7's respellings below are applied
   kept=<JSON>     [[hook, step_norm, normalised text], ...]: a declared deviation passes only a block
@@ -122,6 +123,7 @@ import calendar
 import fnmatch
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -139,8 +141,9 @@ PIPELINE = "dev-overnight"
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 # (qa-fail: measured beside plain on the P1b working tree at effa0ec, scaled by plain's 813). unattended
 # takes about 520 CPU seconds the same way (its untraced runs beside plain's on P2's working tree), but
-# each of its replays holds its slot for its window and the closeout after it (about 660 s): it declares
-# that slot time at CI's rate (2 x 660 s x 2.40 / 4 slots), so the shard plan schedules it as it runs.
+# each of its replays holds its slot for its window (10 minutes on CI) and the closeout after it, about
+# 660 s in all: it declares that slot time at CI's rate (2 x 660 s x 2.40 / 4 slots), so the shard plan
+# schedules it as it runs.
 COST = {"plain": 813, "stop": 345, "qa-fail": 524, "unattended": 790}
 FOCUS = "harden the toy package's public functions"
 END_TIME = "8h"
@@ -688,6 +691,7 @@ class Night:
         self.project = rp.layout.project
         self.base_kit = rp.args.get("kit") == "base"
         self.owner_setup()  # before the session starts (the Orchestrator starts it)
+        started = time.monotonic()
         self.o = NightOrchestrator(rp, "dev-overnight", deviations=devs, respellings=devdrv.RESPELLINGS,
                                    rules=self._rules())
         rp.deviation_at = self.o.devs.at  # the subagents' own calls take the same deviations by label
@@ -711,7 +715,11 @@ class Night:
         # variant=unattended: the decisions as recorded when made (the gate's flagged), the injected
         # probes' outcomes, the prompts that carried a decision, the question each producer wrote
         self.unattended = variant == "unattended"
-        self.window_min = int(rp.args.get("window", UNATTENDED_WINDOW_MIN))
+        # The window scales with this host's speed, read from the session's start (its SessionStart hooks):
+        # a loaded host's replay reaches Step 13 about 45-60 times that later, so the decisions stay inside it.
+        started = time.monotonic() - started
+        self.window_min = int(rp.args["window"]) if rp.args.get("window") else max(
+            UNATTENDED_WINDOW_MIN, math.ceil(1.5 * started))
         self.decisions: list = []
         self.probes: list = []
         self.carried: list = []
@@ -2097,7 +2105,8 @@ class Night:
                  if not b["passed_by_deviation"] or re.sub(r" stop$", "", b["step"]) in self.own]
         with rp.acting("driver"):
             with open(os.path.join(rp.layout.out, "unattended.json"), "w") as fh:
-                json.dump({"checks": res, "false_blocks": false, "decisions": self.decision_rows(),
+                json.dump({"window_min": self.window_min, "checks": res, "false_blocks": false,
+                           "decisions": self.decision_rows(),
                            "probes": self.probes,
                            "carried": [{"where": c["where"], "line": c["line"]} for c in self.carried],
                            "summary": self.summary_rel, "log": self.log_rel}, fh, indent=1)
