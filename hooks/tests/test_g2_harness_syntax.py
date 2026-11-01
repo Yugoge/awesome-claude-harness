@@ -4,13 +4,15 @@ artifact-contract-enforce.py, _harness_syntax) parses every file of the
 agent's own written set whose realpath is under the live harness home's
 hooks/ or scripts/: the built-in compiler for Python, `bash -n` for shell.
 
-The warning commit prints `F3.a would block: <path>: <message>` and changes no
-exit code; each case also runs a copy of the hook with SYNTAX_BLOCK flipped
-(the promotion), which exits 2 naming the file and the message as a G2
-finding. The harness home is a copy of the hook tree laid out the way
-claude_home.resolve() finds it (settings.json, hooks/, policies/ and scripts/
-together); transcripts are synthetic, in the records G2's tests use. After
-every stop, nothing has written a __pycache__ under the harness home.
+A broken file blocks the stop: exit 2 with a G2 finding naming the file and
+the message. The check only warned in the commit that introduced it, so each
+case also runs a copy of the hook with SYNTAX_BLOCK set to False (that
+warning mode), which prints `F3.a would block: <path>: <message>` and changes
+no exit code; every clean case passes both. The harness home is a copy of
+the hook tree laid out the way claude_home.resolve() finds it (settings.json,
+hooks/, policies/ and scripts/ together); transcripts are synthetic, in the
+records G2's tests use. After every stop, nothing has written a __pycache__
+under the harness home.
 """
 from __future__ import annotations
 
@@ -33,22 +35,23 @@ BROKEN_SH = "#!/usr/bin/env bash\nif true; then\n  echo hi\n"
 
 @pytest.fixture
 def harness(tmp_path):
-    """(home, hook, promoted hook, marker): the harness home holds the hook as it
-    is and a copy with SYNTAX_BLOCK flipped; the marker is older than any run."""
+    """(home, hook, warning hook, marker): the harness home holds the hook as it
+    is and a copy with SYNTAX_BLOCK set to False (the warning mode); the marker
+    is older than any run."""
     hook = base._l2_hook_tree(tmp_path)
     home = hook.parent.parent
     (home / "settings.json").write_text("{}\n", encoding="utf-8")
     (home / "policies").mkdir()
     text = hook.read_text(encoding="utf-8")
-    assert text.count("SYNTAX_BLOCK = False") == 1
-    promoted = hook.with_name("promoted-" + hook.name)
-    promoted.write_text(text.replace("SYNTAX_BLOCK = False", "SYNTAX_BLOCK = True"), encoding="utf-8")
+    assert text.count("SYNTAX_BLOCK = True") == 1
+    warning = hook.with_name("warning-" + hook.name)
+    warning.write_text(text.replace("SYNTAX_BLOCK = True", "SYNTAX_BLOCK = False"), encoding="utf-8")
     resolved = subprocess.run([sys.executable, "-B", str(home / "hooks" / "lib" / "claude_home.py"), "resolve"],
                               capture_output=True, text=True, check=True).stdout.strip()
     assert resolved == str(home.resolve())
     marker = tmp_path / "marker"
     marker.touch()
-    return home.resolve(), hook, promoted, marker
+    return home.resolve(), hook, warning, marker
 
 
 def _agent(tmp_path, role: str):
@@ -65,13 +68,13 @@ def _agent(tmp_path, role: str):
     return s
 
 
-def _stop(s, harness, calls, promoted=False, env=None) -> subprocess.CompletedProcess:
+def _stop(s, harness, calls, warning=False, env=None) -> subprocess.CompletedProcess:
     """The agent's own transcript holds these (name, input, ok) calls; it stops."""
     home, hook, flipped, marker = harness
     prompt = f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>'
     base._write_obligation_transcript(s.home, s.project, s.harness, s.agent_id, prompt, calls)
     proc = base._run_hook(s.project, s.home, s.agent_id, session_id=s.harness, stopgate_mode="block",
-                          hook_path=flipped if promoted else hook,
+                          hook_path=flipped if warning else hook,
                           extra_env={"PYTHONDONTWRITEBYTECODE": "1", **(env or {})})
     fresh = subprocess.run(["find", str(home), "-name", "__pycache__", "-newer", str(marker)],
                            capture_output=True, text=True, check=True).stdout
@@ -116,18 +119,18 @@ def test_dev_broken_python_hook_warns_then_blocks_with_the_compiler_message(tmp_
     calls = [_write(x, BROKEN_PY)]
     message = _compiled(x)
     assert "(x.py, line 1)" in message
-    _warned(_stop(s, harness, calls), x, message)
-    _blocked(_stop(s, harness, calls, promoted=True), x, message)
+    _blocked(_stop(s, harness, calls), x, message)
+    _warned(_stop(s, harness, calls, warning=True), x, message)
 
 
 def test_dev_unclosed_if_in_a_harness_script_warns_then_blocks_with_bash_n_message(tmp_path, harness):
     s, x = _agent(tmp_path, "dev"), harness[0] / "scripts" / "x.sh"
     calls = [_write(x, BROKEN_SH)]
     proc = _stop(s, harness, calls)
-    message = proc.stderr.split(f"{WARN}: {x}: ", 1)[-1].split("\n", 1)[0]
+    message = proc.stderr.split(f"  - {x}: harness_syntax_error\n    ", 1)[-1].split("\n", 1)[0]
     assert re.match(r"x\.sh: line \d+: syntax error", message), proc.stderr
-    _warned(proc, x, message)
-    _blocked(_stop(s, harness, calls, promoted=True), x, message)
+    _blocked(proc, x, message)
+    _warned(_stop(s, harness, calls, warning=True), x, message)
 
 
 def test_extensionless_files_are_parsed_by_their_shebang_interpreter(tmp_path, harness):
@@ -138,9 +141,9 @@ def test_extensionless_files_are_parsed_by_their_shebang_interpreter(tmp_path, h
     tool, render, notes = home / "scripts" / "tool", home / "hooks" / "render", home / "scripts" / "notes"
     calls = [_write(tool, BROKEN_SH), _write(render, "#!/usr/bin/env python3\n" + BROKEN_PY),
              _write(notes, BROKEN_PY)]
-    for promoted in (False, True):
-        proc = _stop(s, harness, calls, promoted)
-        assert proc.returncode == (2 if promoted else 0), proc.stderr
+    for warning in (False, True):
+        proc = _stop(s, harness, calls, warning)
+        assert proc.returncode == (0 if warning else 2), proc.stderr
         assert _compiled(render) in proc.stderr and re.search(r"tool: line \d+: syntax error", proc.stderr)
         assert str(notes) not in proc.stderr, proc.stderr
 
@@ -154,8 +157,8 @@ def test_product_repository_and_a_harness_copy_outside_the_home_are_not_checked(
     (copy / "settings.json").write_text("{}\n", encoding="utf-8")
     calls = [_write(s.project / "hooks" / "x.py", BROKEN_PY), _write(copy / "hooks" / "x.py", BROKEN_PY),
              _write(copy / "scripts" / "x.sh", BROKEN_SH)]
-    for promoted in (False, True):
-        _unchecked(_stop(s, harness, calls, promoted, env={"CLAUDE_HOME": str(copy)}))
+    for warning in (False, True):
+        _unchecked(_stop(s, harness, calls, warning, env={"CLAUDE_HOME": str(copy)}))
 
 
 def test_fixed_gone_or_refused_before_the_stop_is_clean(tmp_path, harness):
@@ -172,8 +175,8 @@ def test_fixed_gone_or_refused_before_the_stop_is_clean(tmp_path, harness):
     base._write(fixed, BROKEN_PY.replace("(:", "():"))
     gone.unlink()
     base._write(refused, BROKEN_PY)
-    for promoted in (False, True):
-        _unchecked(_stop(s, harness, calls, promoted))
+    for warning in (False, True):
+        _unchecked(_stop(s, harness, calls, warning))
 
 
 def test_test_writer_broken_write_its_policy_admits_is_checked_as_dev(tmp_path, harness):
@@ -181,8 +184,8 @@ def test_test_writer_broken_write_its_policy_admits_is_checked_as_dev(tmp_path, 
     x = harness[0] / "hooks" / "tests" / "generated" / "20261012-000000" / "test_x.py"
     calls = [_write(x, BROKEN_PY)]
     message = _compiled(x)
-    _warned(_stop(s, harness, calls), x, message)
-    _blocked(_stop(s, harness, calls, promoted=True), x, message)
+    _blocked(_stop(s, harness, calls), x, message)
+    _warned(_stop(s, harness, calls, warning=True), x, message)
 
 
 def test_five_changed_hook_files_take_the_predicate_under_a_second(tmp_path, harness):

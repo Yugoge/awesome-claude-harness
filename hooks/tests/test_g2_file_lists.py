@@ -9,13 +9,14 @@ QA loop, a completion dispatch from another session); N is the paths its own
 Bash commands name. D is dev.files_modified + dev.files_created. (a) each D
 path is in W + N; (b) each W path git has a change for is in D.
 
-The warning commit prints the finding as an `A3.a would block` stderr line
-and changes no exit code; each case also runs a copy of the hook with
-FILE_LISTS_BLOCK flipped (the promotion), which exits 2 with the same lines
-as a G2 finding. Transcripts are synthetic, in the records Claude Code
-writes: the session's main transcript holds each Agent dispatch, the
-subagent's own transcript its dispatch prompt and tool calls, and its
-meta.json the dispatch's toolUseId.
+A difference blocks dev's stop: exit 2 with the lines as a G2 finding. The
+check only warned in the commit that introduced it, so each case also runs a
+copy of the hook with FILE_LISTS_BLOCK set to False (that warning mode),
+which prints the same lines after an `A3.a would block` stderr line and
+changes no exit code; every clean case passes both. Transcripts are
+synthetic, in the records Claude Code writes: the session's main transcript
+holds each Agent dispatch, the subagent's own transcript its dispatch prompt
+and tool calls, and its meta.json the dispatch's toolUseId.
 """
 from __future__ import annotations
 
@@ -35,12 +36,13 @@ WARN = "A3.a would block"
 
 
 @pytest.fixture(scope="module")
-def promoted(tmp_path_factory):
-    """A copy of the hook tree whose A3.a decision constant is flipped."""
-    hook = base._l2_hook_tree(tmp_path_factory.mktemp("promoted"))
+def warning(tmp_path_factory):
+    """A copy of the hook tree whose A3.a decision constant is set to False
+    (the warning mode)."""
+    hook = base._l2_hook_tree(tmp_path_factory.mktemp("warning"))
     text = hook.read_text(encoding="utf-8")
-    assert text.count("FILE_LISTS_BLOCK = False") == 1
-    hook.write_text(text.replace("FILE_LISTS_BLOCK = False", "FILE_LISTS_BLOCK = True"), encoding="utf-8")
+    assert text.count("FILE_LISTS_BLOCK = True") == 1
+    hook.write_text(text.replace("FILE_LISTS_BLOCK = True", "FILE_LISTS_BLOCK = False"), encoding="utf-8")
     return hook
 
 
@@ -130,7 +132,7 @@ def _lines(proc) -> dict:
 
 
 def _warned(proc, report: str, not_written: str, undeclared: str, expected: str) -> dict:
-    """Warning commit: exit 0, one `A3.a would block` line naming the lists."""
+    """Warning mode: exit 0, one `A3.a would block` line naming the lists."""
     assert proc.returncode == 0, proc.stderr
     assert proc.stderr.count(WARN) == 1 and f"{WARN}: {report}: file_lists_differ" in proc.stderr, proc.stderr
     lines = _lines(proc)
@@ -142,7 +144,7 @@ def _warned(proc, report: str, not_written: str, undeclared: str, expected: str)
 
 
 def _blocked(proc, report: str, not_written: str, undeclared: str, expected: str) -> dict:
-    """Promotion: the same lines as a G2 finding of this stop, exit 2."""
+    """The hook: the same lines as a G2 finding of this stop, exit 2."""
     assert proc.returncode == 2, proc.stderr
     assert WARN not in proc.stderr and f"  - {report}: file_lists_differ" in proc.stderr, proc.stderr
     lines = _lines(proc)
@@ -186,7 +188,7 @@ def _git_derived(c: Cycle) -> tuple:
 # A9 / A10: the T6 replay ---------------------------------------------------
 
 
-def test_a9_t6_git_derived_lists_warn_with_the_expected_lists(tmp_path, promoted):
+def test_a9_t6_git_derived_lists_warn_with_the_expected_lists(tmp_path, warning):
     c = Cycle(tmp_path)
     d = c.dispatch("session-t6", "agent-t6dev", _t6(c))
     modified, created = _git_derived(c)
@@ -195,47 +197,47 @@ def test_a9_t6_git_derived_lists_warn_with_the_expected_lists(tmp_path, promoted
                        "src/INDEX.md", "src/README.md", "src/new.py"]
     not_written = f".claude/dev-registry/dev-{TASK}/dev.json, CLAUDE.md, scratch.txt, src/INDEX.md, src/README.md"
     expected = "files_modified: []; files_created: generated.txt, src/new.py"
-    _warned(c.stop(d, modified, created), d["report"], not_written, "(none)", expected)
-    _blocked(c.stop(d, modified, created, promoted), d["report"], not_written, "(none)", expected)
-    for hook in (None, promoted):
+    _blocked(c.stop(d, modified, created), d["report"], not_written, "(none)", expected)
+    _warned(c.stop(d, modified, created, warning), d["report"], not_written, "(none)", expected)
+    for hook in (None, warning):
         _clean(c.stop(d, [], ["src/new.py", "generated.txt"], hook))
     assert not list((c.project / "docs" / "dev").glob("journal-view-*.json"))
 
 
-def test_a10_generator_output_unnamed_until_dev_names_it(tmp_path, promoted):
+def test_a10_generator_output_unnamed_until_dev_names_it(tmp_path, warning):
     c = Cycle(tmp_path)
     calls = _t6(c, bash="python3 gen.py")
     d = c.dispatch("session-gen", "agent-gendev", calls)
     args = (d["report"], "generated.txt", "(none)", "files_modified: []; files_created: src/new.py")
-    warned = _warned(c.stop(d, [], ["src/new.py", "generated.txt"]), *args)
-    blocked = _blocked(c.stop(d, [], ["src/new.py", "generated.txt"], promoted), *args)
-    for lines in (warned, blocked):
+    blocked = _blocked(c.stop(d, [], ["src/new.py", "generated.txt"]), *args)
+    warned = _warned(c.stop(d, [], ["src/new.py", "generated.txt"], warning), *args)
+    for lines in (blocked, warned):
         assert lines["fix"] == "name it and keep it listed", lines
     named = c.dispatch("session-gen2", "agent-gendev2", calls + [("Bash", {"command": "ls -l generated.txt"}, True)])
-    for hook in (None, promoted):
+    for hook in (None, warning):
         _clean(c.stop(named, [], ["src/new.py", "generated.txt"], hook))
 
 
-def test_a10_written_file_omitted(tmp_path, promoted):
+def test_a10_written_file_omitted(tmp_path, warning):
     c = Cycle(tmp_path)
     d = c.dispatch("session-omit", "agent-omitdev", _t6(c))
     args = (d["report"], "(none)", "src/new.py", "files_modified: []; files_created: generated.txt, src/new.py")
-    _warned(c.stop(d, [], ["generated.txt"]), *args)
-    _blocked(c.stop(d, [], ["generated.txt"], promoted), *args)
+    _blocked(c.stop(d, [], ["generated.txt"]), *args)
+    _warned(c.stop(d, [], ["generated.txt"], warning), *args)
 
 
-def test_a10_file_another_sessions_agent_wrote(tmp_path, promoted):
+def test_a10_file_another_sessions_agent_wrote(tmp_path, warning):
     c = Cycle(tmp_path)
     base._write(c.project / "peer.py", "peer = 1\n")
     c.dispatch("session-peer", "agent-peerdev", [("Write", {"file_path": c.path("peer.py"), "content": "x"}, True)],
                task="20261012-111111")
     d = c.dispatch("session-own", "agent-owndev", _t6(c))
     args = (d["report"], "peer.py", "(none)", "files_modified: []; files_created: generated.txt, src/new.py")
-    _warned(c.stop(d, [], ["src/new.py", "generated.txt", "peer.py"]), *args)
-    _blocked(c.stop(d, [], ["src/new.py", "generated.txt", "peer.py"], promoted), *args)
+    _blocked(c.stop(d, [], ["src/new.py", "generated.txt", "peer.py"]), *args)
+    _warned(c.stop(d, [], ["src/new.py", "generated.txt", "peer.py"], warning), *args)
 
 
-def test_a10_scratch_written_then_removed_and_refused_write(tmp_path, promoted):
+def test_a10_scratch_written_then_removed_and_refused_write(tmp_path, warning):
     """notes.tmp Written then removed by Bash (gone from disk and HEAD), and a
     Write a hook refused (is_error: nothing written): neither is declared."""
     c = Cycle(tmp_path)
@@ -244,12 +246,12 @@ def test_a10_scratch_written_then_removed_and_refused_write(tmp_path, promoted):
                       ("Write", {"file_path": c.path("src/denied.py"), "content": "d"}, False)]
     base._write(c.project / "src" / "denied.py", "a peer's file\n")
     d = c.dispatch("session-tmp", "agent-tmpdev", calls)
-    for hook in (None, promoted):
+    for hook in (None, warning):
         _clean(c.stop(d, [], ["src/new.py", "generated.txt"], hook))
 
 
 @pytest.mark.parametrize("second_session", [False, True], ids=["qa_loop", "completion_dispatch"])
-def test_a10_redispatch_inherits_the_cycles_writes(tmp_path, promoted, second_session):
+def test_a10_redispatch_inherits_the_cycles_writes(tmp_path, warning, second_session):
     """QA failed; a second dev dispatch of the task and lane (in the same
     session, or a /close span's completion dispatch in a new one) writes
     src/extra.py: the cycle's earlier writes are its own."""
@@ -258,42 +260,43 @@ def test_a10_redispatch_inherits_the_cycles_writes(tmp_path, promoted, second_se
     base._write(c.project / "src" / "extra.py", "extra = 1\n")
     d = c.dispatch("session-b" if second_session else "session-a", "agent-round2",
                    [("Write", {"file_path": c.path("src/extra.py"), "content": "extra = 1\n"}, True)])
-    for hook in (None, promoted):
+    for hook in (None, warning):
         _clean(c.stop(d, [], ["src/new.py", "generated.txt", "src/extra.py"], hook))
     args = (d["report"], "(none)", "src/new.py",
             "files_modified: []; files_created: generated.txt, src/extra.py, src/new.py")
-    _warned(c.stop(d, [], ["src/extra.py", "generated.txt"]), *args)
-    _blocked(c.stop(d, [], ["src/extra.py", "generated.txt"], promoted), *args)
+    _blocked(c.stop(d, [], ["src/extra.py", "generated.txt"]), *args)
+    _warned(c.stop(d, [], ["src/extra.py", "generated.txt"], warning), *args)
 
 
-def test_a10_redev_mints_a_new_task_and_inherits_nothing(tmp_path, promoted):
+def test_a10_redev_mints_a_new_task_and_inherits_nothing(tmp_path, warning):
     c = Cycle(tmp_path)
     c.dispatch("session-a", "agent-old", _t6(c))
     d = c.dispatch("session-a", "agent-redev", [("Write", {"file_path": c.path("src/app.py"), "content": "x = 2\n"},
                                                  True)], task="20261012-020000")
     base._write(c.project / "src" / "app.py", "x = 2\n")
-    _clean(c.stop(d, ["src/app.py"], []))
+    for hook in (None, warning):
+        _clean(c.stop(d, ["src/app.py"], [], hook))
     args = (d["report"], "src/new.py", "(none)", "files_modified: src/app.py; files_created: []")
-    _warned(c.stop(d, ["src/app.py"], ["src/new.py"]), *args)
-    _blocked(c.stop(d, ["src/app.py"], ["src/new.py"], promoted), *args)
+    _blocked(c.stop(d, ["src/app.py"], ["src/new.py"]), *args)
+    _warned(c.stop(d, ["src/app.py"], ["src/new.py"], warning), *args)
 
 
-def test_a10_unreadable_predecessor_is_named_and_its_files_need_naming(tmp_path, promoted):
+def test_a10_unreadable_predecessor_is_named_and_its_files_need_naming(tmp_path, warning):
     c = Cycle(tmp_path)
     _t6(c)
     c.dispatch("session-a", "agent-lost", transcript=False)
     d = c.dispatch("session-a", "agent-round2", [("Write", {"file_path": c.path("src/new.py"), "content": "y"}, True)])
-    lines = _warned(c.stop(d, [], ["src/new.py", "generated.txt"]), d["report"], "generated.txt", "(none)",
-                    "files_modified: []; files_created: generated.txt, src/new.py")
+    lines = _blocked(c.stop(d, [], ["src/new.py", "generated.txt"]), d["report"], "generated.txt", "(none)",
+                     "files_modified: []; files_created: generated.txt, src/new.py")
     assert "toolu_dispatch_agent-lost in session session-a" in lines["unreadable"]
-    _blocked(c.stop(d, [], ["src/new.py", "generated.txt"], promoted), d["report"], "generated.txt", "(none)",
-             "files_modified: []; files_created: generated.txt, src/new.py")
+    _warned(c.stop(d, [], ["src/new.py", "generated.txt"], warning), d["report"], "generated.txt", "(none)",
+            "files_modified: []; files_created: generated.txt, src/new.py")
     named = c.dispatch("session-a", "agent-round3", [("Bash", {"command": "ls -l generated.txt"}, True)])
-    for hook in (None, promoted):
+    for hook in (None, warning):
         _clean(c.stop(named, [], ["src/new.py", "generated.txt"], hook))
 
 
-def test_a10_fanout_lanes_each_against_their_own_writes(tmp_path, promoted):
+def test_a10_fanout_lanes_each_against_their_own_writes(tmp_path, warning):
     c = Cycle(tmp_path)
     roster = ["l1", "l2"]
     base._write(c.project / "src" / "a.py", "a\n")
@@ -302,28 +305,28 @@ def test_a10_fanout_lanes_each_against_their_own_writes(tmp_path, promoted):
                     lane="l1", lane_set=roster)
     lb = c.dispatch("session-f", "agent-lane2", [("Write", {"file_path": c.path("src/b.py"), "content": "b\n"}, True)],
                     lane="l2", lane_set=roster)
-    for hook in (None, promoted):
+    for hook in (None, warning):
         _clean(c.stop(la, [], ["src/a.py"], hook))
         _clean(c.stop(lb, [], ["src/b.py"], hook))
     args = (la["report"], "src/b.py", "(none)", "files_modified: []; files_created: src/a.py")
-    _warned(c.stop(la, [], ["src/a.py", "src/b.py"]), *args)
-    _blocked(c.stop(la, [], ["src/a.py", "src/b.py"], promoted), *args)
+    _blocked(c.stop(la, [], ["src/a.py", "src/b.py"]), *args)
+    _warned(c.stop(la, [], ["src/a.py", "src/b.py"], warning), *args)
 
 
 # Path canonicalisation and the written-set edge cases ----------------------
 
 
-def test_a10_absolute_in_repo_path_compares_as_the_relative_one(tmp_path, promoted):
+def test_a10_absolute_in_repo_path_compares_as_the_relative_one(tmp_path, warning):
     c = Cycle(tmp_path)
     base._write(c.project / "src" / "app.py", "x = 3\n")
     d = c.dispatch("session-abs", "agent-absdev",
                    [("Edit", {"file_path": c.path("src/app.py"), "old_string": "1", "new_string": "3"}, True)])
-    for hook in (None, promoted):
+    for hook in (None, warning):
         _clean(c.stop(d, [c.path("src/app.py")], [], hook))
         _clean(c.stop(d, ["./src/../src/app.py"], [], hook))
 
 
-def test_written_then_deleted_tracked_file_is_declared(tmp_path, promoted):
+def test_written_then_deleted_tracked_file_is_declared(tmp_path, warning):
     """A tracked file dev Edited and then removed with `git rm` is a deletion
     that must land: declared (git rm names it) it passes; undeclared, the
     expected lists put it in files_modified."""
@@ -332,32 +335,32 @@ def test_written_then_deleted_tracked_file_is_declared(tmp_path, promoted):
              ("Bash", {"command": "git rm -q src/app.py"}, True)]
     d = c.dispatch("session-rm", "agent-rmdev", calls)
     _git(c.project, "rm", "-q", "src/app.py")
-    for hook in (None, promoted):
+    for hook in (None, warning):
         _clean(c.stop(d, ["src/app.py"], [], hook))
     args = (d["report"], "(none)", "src/app.py", "files_modified: src/app.py; files_created: []")
-    _warned(c.stop(d, [], []), *args)
-    _blocked(c.stop(d, [], [], promoted), *args)
+    _blocked(c.stop(d, [], []), *args)
+    _warned(c.stop(d, [], [], warning), *args)
 
 
-def test_write_leaving_bytes_identical_needs_no_declaration(tmp_path, promoted):
+def test_write_leaving_bytes_identical_needs_no_declaration(tmp_path, warning):
     """A Write whose bytes equal HEAD leaves git nothing to land: it need not
     be declared, and declaring it passes too (it was written)."""
     c = Cycle(tmp_path)
     d = c.dispatch("session-same", "agent-samedev",
                    [("Write", {"file_path": c.path("src/app.py"), "content": "x = 1\n"}, True)])
-    for hook in (None, promoted):
+    for hook in (None, warning):
         _clean(c.stop(d, [], [], hook))
         _clean(c.stop(d, ["src/app.py"], [], hook))
 
 
-def test_path_in_both_lists_is_one_declared_path(tmp_path, promoted):
+def test_path_in_both_lists_is_one_declared_path(tmp_path, warning):
     c = Cycle(tmp_path)
     d = c.dispatch("session-both", "agent-bothdev", _t6(c))
-    for hook in (None, promoted):
+    for hook in (None, warning):
         _clean(c.stop(d, ["src/new.py"], ["src/new.py", "generated.txt"], hook))
 
 
-def test_excluded_trees_and_paths_outside_every_work_tree(tmp_path, promoted):
+def test_excluded_trees_and_paths_outside_every_work_tree(tmp_path, warning):
     """docs/dev/**, .claude/dev-registry/** and .claude/scratch/** of the
     repository, and a file outside every git work tree, need no declaration;
     a write into another repository does, by its absolute path. Declared,
@@ -377,21 +380,21 @@ def test_excluded_trees_and_paths_outside_every_work_tree(tmp_path, promoted):
                    [("Write", {"file_path": path, "content": text}, True) for path, text in files.items()])
     lib = str((other / "lib.py").resolve())
     args = (d["report"], "(none)", lib, f"files_modified: []; files_created: {lib}")
-    _warned(c.stop(d, [], []), *args)
-    _blocked(c.stop(d, [], [], promoted), *args)
-    for hook in (None, promoted):
+    _blocked(c.stop(d, [], []), *args)
+    _warned(c.stop(d, [], [], warning), *args)
+    for hook in (None, warning):
         proc = c.stop(d, [], [str(other / "lib.py")], hook)
         assert "file_lists_differ" not in proc.stderr and WARN not in proc.stderr, proc.stderr
         assert "outside the supported repository set" in proc.stderr, proc.stderr
     (other / "lib.py").unlink()
-    for hook in (None, promoted):
+    for hook in (None, warning):
         _clean(c.stop(d, [], [], hook))
 
 
 def test_no_journal_view_write_is_left_in_g2():
     text = base.HOOK_PATH.read_text(encoding="utf-8")
     assert text.count("journal-view") == 0
-    assert text.count("FILE_LISTS_BLOCK = False") == 1  # the warning commit; the promotion flips it
+    assert text.count("FILE_LISTS_BLOCK = True") == 1  # promoted; the warning-mode copy sets it to False
 
 
 # R6 / R7: the prose G2's check replaces -------------------------------------

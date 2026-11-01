@@ -297,10 +297,10 @@ def _wire_ledger_judgment(report: dict, project_dir: str, task_id: str, deadline
 
 
 # P6 A3.a (a dev's declared lists against the files Claude Code recorded it
-# writing) and F3.a (a live harness file its dev or test-writer broke): the
-# warning commit prints each finding, the promotion flips the check's constant.
-FILE_LISTS_BLOCK = False
-SYNTAX_BLOCK = False
+# writing) and F3.a (a live harness file its dev or test-writer broke) block as
+# G2 findings; each only warned, exit unchanged, in the commit introducing it.
+FILE_LISTS_BLOCK = True
+SYNTAX_BLOCK = True
 
 
 def _tree_rel(path: Path) -> tuple:  # (git work tree holding path, path in it); (None, "") outside every tree
