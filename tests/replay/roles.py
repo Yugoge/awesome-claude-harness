@@ -121,33 +121,39 @@ def test_writer(tier_key: str = "complexity_tier", risk_key: str = "risk_level")
 # ---------------------------------------------------------------- dev
 
 def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None = None, creates: list | None = None,
-        baseline_fallback: bool = False):
+        produced: list | None = None):
     """Apply `edits` [(rel, old, new)] (Read, then Edit), write each new file of `creates`
-    [(rel, content)] (an existing one is Read, then edited in place), write each generated test the
-    per-task manifest gives a skeleton for and the disk lacks, replace each generated test's
-    TEST_INCOMPLETE sentinel line with `test_bodies[ac_uid]`, then derive dev.files_* with the
-    git commands of the agent text (with `baseline_fallback`, its `git status --porcelain` fallback
-    when the dispatch passed no baseline_head_sha) and record the owned-edits ledger and pre-edit
-    snapshots."""
+    [(rel, content)] (an existing one is Read, then edited in place), run each Bash command of
+    `produced` [(command, rel)] that makes the file rel, write each generated test the per-task
+    manifest gives a skeleton for and the disk lacks, replace each generated test's
+    TEST_INCOMPLETE sentinel line with `test_bodies[ac_uid]`, record the owned-edits ledger and
+    pre-edit snapshots, then declare the files as the agent text's file-list rule says: exactly the
+    files this dev wrote, dev.files_created those that did not exist before the cycle,
+    dev.files_modified the existing ones it changed. A file a Bash command made that the command
+    does not name is first named with the rule's own example command; a re-dispatch keeps the files
+    its earlier round's report lists that still exist."""
 
     def work(sub, brief, player):
         project, prompt = brief.project, brief.prompt
-        text = player.tree.agent_text(player.role)
+        # The rule's paragraph, located through the extractor: a renamed or removed rule fails here.
+        name_cmd = next(c for c in cmdtext.inline_codes(player.tree.agent_text(player.role), "Output Format",
+                                                        "List exactly the files you wrote") if "<path>" in c)
         owned, snapshots, touched = {}, {}, []
         fresh = set()   # generated tests this dispatch wrote from the manifest's skeletons
+        new = set()     # files this dispatch wrote that did not exist before its write
 
-        def edit(rel, old, new):
+        def edit(rel, old, new_text):
             path = os.path.join(project, rel)
             sub.read(path, label=f"{sub.role} Read {rel}")
             before = peek(sub.rp, sub.role, path)
             snapshots.setdefault(rel, before)
-            call = sub.edit(path, old, new, label=f"{sub.role} Edit {rel}")
+            call = sub.edit(path, old, new_text, label=f"{sub.role} Edit {rel}")
             if call.ok:
-                owned.setdefault(rel, []).append({"old": old, "new": new})
+                owned.setdefault(rel, []).append({"old": old, "new": new_text})
                 touched.append(rel)
 
-        for rel, old, new in edits:
-            edit(rel, old, new)
+        for rel, old, new_text in edits:
+            edit(rel, old, new_text)
         for rel, content in creates or []:
             path = os.path.join(project, rel)
             existed = os.path.exists(path)  # put() then Reads it and edits it in place
@@ -159,6 +165,19 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
             owned.setdefault(rel, []).append({"old": r.get("oldString", "") if existed else "",
                                               "new": r.get("newString", "") if existed else content})
             touched.append(rel)
+            if not existed:
+                new.add(rel)
+        for command, rel in produced or []:
+            path = os.path.join(project, rel)
+            existed = os.path.exists(path)
+            if not sub.bash(command, f"Produce {rel}", label=f"{sub.role} Bash produce {rel}").ok \
+                    or not os.path.exists(path):
+                continue
+            if rel not in command and path not in command:  # the producing command does not name it
+                sub.bash(name_cmd.replace("<path>", shlex.quote(rel)), f"Name {rel}", label=f"{sub.role} Bash name {rel}")
+            touched.append(rel)
+            if not existed:
+                new.add(rel)
         gen = re.search(r"Generated tests \(when test-writer ran\):\s*(\S+?)/?\s", prompt)
         gen_dir = gen.group(1).rstrip("/") if gen else None
         man = re.search(r"per-task active manifest at\s+(\S+?\.json)", prompt)
@@ -172,6 +191,7 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
                     if call is not None and call.ok:
                         snapshots.setdefault(rel, "")
                         fresh.add(rel)
+                        new.add(rel)
                         touched.append(rel)
         if test_bodies and gen_dir and os.path.isdir(os.path.join(project, gen_dir)):
             for fn in sorted(os.listdir(os.path.join(project, gen_dir))):
@@ -184,57 +204,45 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
                 uid = re.search(r'^AC_UID = "([0-9a-f]+)"', src, re.M)
                 body = test_bodies.get(uid.group(1) if uid else "", test_bodies.get("*"))
                 if m and body:
-                    new = "\n".join(m.group(1) + l if l else l for l in body.strip("\n").split("\n"))
-                    edit(rel, m.group(0), new)
+                    body = "\n".join(m.group(1) + l if l else l for l in body.strip("\n").split("\n"))
+                    edit(rel, m.group(0), body)
         for rel in fresh:  # a file this dispatch created: one Write of its final content in the ledger
             owned[rel] = [{"old": "", "new": peek(sub.rp, sub.role, os.path.join(project, rel))}]
-        # Git-diff derivation, as the agent text spells each command.
-        base = re.search(r"^\s*baseline_head_sha:[ \t]*(\S*)", prompt, re.M)
-        base = base.group(1) if base else ""
-        diff_cmd = _codes(text, "Output Format", "git diff --name-only <baseline_head_sha>").replace(
-            "<baseline_head_sha>", base)
-        others_cmd = _codes(text, "Output Format", "git ls-files --others")
-        cached_cmd = _codes(text, "Output Format", "git diff --cached")
-
-        def names(cmd, what):
-            c = sub.bash(cmd, f"List {what}", label=f"{sub.role} Bash {what}")
-            return [l for l in c.response.get("stdout", "").split("\n") if l.strip()] if c.ok else []
-
-        fallback = None
-        if baseline_fallback and not base:  # "If `baseline_head_sha` is empty or absent ..., use `git status --porcelain`"
-            sec = cmdtext.section(text, "Output Format")
-            para = next((p for p in re.split(r"\n\s*\n", sec) if "baseline_head_sha` is empty or absent" in p), "")
-            fallback = next((c for c in re.findall(r"`([^`\n]+)`", para) if c.startswith("git status")), None)
-        if fallback:
-            modified, untracked, staged_new = [], [], []
-            for line in names(fallback, "changed files"):
-                xy, path = line[:2], line[3:].strip()
-                if xy != "??":
-                    modified.append(path)
-                    continue
-                # a collapsed untracked directory lists the touched files under it
-                untracked.extend([t for t in touched if t.startswith(path)] if path.endswith("/") else [path])
-        else:
-            modified = names(diff_cmd, "modified files")
-            untracked = names(others_cmd, "untracked files")
-            staged_new = names(cached_cmd, "staged new files")
+        # A re-dispatch of the task and lane: the files its earlier round's report (the artifact
+        # this dispatch declares, already on disk) lists that still exist, in the list it put them in.
+        prior, prior_prov = {"files_created": set(), "files_modified": set()}, {}
+        for art in (brief.obligation or {}).get("artifacts") or []:
+            path = os.path.join(project, art.get("path") or "")
+            if art.get("kind") != "json" or not os.path.isfile(path):
+                continue
+            sub.read(path, label=f"{sub.role} Read {art['path']} (earlier round)")
+            try:
+                doc = json.loads(peek(sub.rp, sub.role, path))
+            except ValueError:
+                continue
+            for key in prior:
+                prior[key] |= {p for p in ((doc.get("dev") or {}).get(key) or [])
+                               if isinstance(p, str) and os.path.exists(os.path.join(project, p))}
+            prior_prov.update(doc.get("untracked_modified_provenance") or {})
+        created = prior["files_created"] | new
+        modified = (prior["files_modified"] | set(touched)) - created
+        # Adoption cell: an existing file untracked at baseline (the dispatch's baseline_dirty_snapshot,
+        # copied verbatim) that this cycle changed carries its provenance object.
         snap = re.search(r"^\s*baseline_dirty_snapshot:[ \t]*(.*)$", prompt, re.M)
         snap = snap.group(1).strip() if snap else ""
         if snap.startswith('"'):
             snap = json.loads(snap)
-        dirty = [l[3:].strip() for l in snap.split("\n") if len(l) > 3]
-        pre_dirty = lambda p: any(p == d or (d.endswith("/") and p.startswith(d)) for d in dirty)
-        created = sorted({p for p in untracked + staged_new if (p in fresh or not pre_dirty(p)) and p in touched})
+        untracked = [l[3:].strip() for l in snap.split("\n") if l[:3] == "?? "]
         provenance = {}
-        for rel in touched:
-            if rel in untracked and pre_dirty(rel) and rel not in fresh:  # adoption cell: pre-existing untracked, modified here
-                if rel not in modified:
-                    modified.append(rel)
+        for rel in sorted(modified):
+            if rel in snapshots and any(rel == d or (d.endswith("/") and rel.startswith(d)) for d in untracked):
                 provenance[rel] = {
                     "path": rel, "admission": "authenticated_preexisting_untracked_whole_file",
                     "pre_edit": {"sha256": hashlib.sha256(snapshots[rel].encode()).hexdigest(), "git_status": "??"},
                     "final": {"sha256": _sha256(os.path.join(project, rel)), "git_status": "??"}}
-        dev_part = {"files_modified": sorted(set(modified)), "files_created": created}
+            elif rel in prior_prov and rel not in touched:  # adopted in an earlier round, unchanged since
+                provenance[rel] = prior_prov[rel]
+        dev_part = {"files_modified": sorted(modified), "files_created": sorted(created)}
         out = {"owned_edits": owned, "pre_edit_snapshots": snapshots, "dev": dev_part}
         if provenance:
             out["untracked_modified_provenance"] = provenance

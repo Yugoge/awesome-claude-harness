@@ -92,7 +92,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_agent_type, resolve_dev_registry_entry
-from lib import command_span
+from lib import claude_home, command_span
 from lib import contract_runtime
 from lib import dispatch_template
 from lib import obligation
@@ -374,11 +374,46 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     return lines
 
 
+# P6 F3.a: a live harness file the stopping dev or test-writer wrote that no
+# longer parses; the warning commit prints it, the promotion flips this.
+SYNTAX_BLOCK = False
+
+
+def _harness_syntax(resolution) -> list:
+    """F3.a: each file of the agent's own written set (no inheritance) whose
+    realpath is under the live harness home's hooks/ or scripts/ and that, as it
+    stands now, Python's compiler (.py, python shebang) or `bash -n` (.sh, bash
+    shebang) rejects. Nothing is written: no py_compile, no __pycache__."""
+    home, findings = claude_home.resolve(), []
+    roots = [(home / d).resolve() for d in ("hooks", "scripts")] if home else []
+    try:
+        written = sorted(_recorded(getattr(resolution, "transcript_path", None))[0])
+    except Exception:  # an unreadable transcript judges nothing
+        return []
+    for p in (p for p in written if any(p.is_relative_to(r) for r in roots)):
+        try:
+            text = p.read_bytes()
+            shebang = text.split(b"\n", 1)[0] if text[:2] == b"#!" and not p.suffix else b""
+            if p.suffix == ".py" or b"python" in shebang:
+                compile(text, str(p), "exec")
+            elif (p.suffix == ".sh" or b"bash" in shebang) and (run := subprocess.run(
+                    ["bash", "-n", "--", p.name], cwd=p.parent, capture_output=True, text=True, timeout=2)).returncode:
+                raise SyntaxError("; ".join(run.stderr.strip().splitlines()))
+        except (SyntaxError, ValueError) as exc:
+            if SYNTAX_BLOCK:
+                findings.append({"path": str(p), "reason": "harness_syntax_error", "errors": [str(exc)]})
+            else:
+                sys.stderr.write(f"F3.a would block: {p}: {exc}\n")
+        except Exception:  # gone at the stop, unreadable, or bash timed out: judges nothing
+            pass
+    return findings
+
+
 def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, resolution=None) -> list:
-    """The dev report's wires (ledger judgment, /commit's trial plan and
-    A3.a's file lists). Returns findings. Another producer's artifact is
-    never judged at this stop: G3 decides on it at the next dispatch."""
-    findings = []
+    """The dev report's wires (ledger judgment, /commit's trial plan, A3.a's file
+    lists) and a dev's or test-writer's F3.a. Returns findings. Another producer's
+    artifact is never judged at this stop: G3 decides on it at the next dispatch."""
+    findings = _harness_syntax(resolution) if ob.get("role") in ("dev", "test-writer") else []
     if ob.get("role") != "dev":
         return findings
     deadline = time.monotonic() + WIRE_TOTAL_BUDGET_S

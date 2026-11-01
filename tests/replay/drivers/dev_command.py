@@ -353,10 +353,9 @@ class DevCommandCycle:
         o = self.o
         fields = with_lines(o.template("Step 10"), list(add_lines) + self.graph_lines, context_rel)
         if iteration:  # QA's finding: the command runs the whole tree; dev narrows it to -q tests/
-            work = roles.dev([(CMD_REL, "python3 -m pytest\n", "python3 -m pytest -q tests/\n")], baseline_fallback=True)
+            work = roles.dev([(CMD_REL, "python3 -m pytest\n", "python3 -m pytest -q tests/\n")])
         else:
-            work = roles.dev([], creates=[(CMD_REL, CMD_PARTIAL if self.variant == "qa-fail" else CMD_FINAL)],
-                             baseline_fallback=True)
+            work = roles.dev([], creates=[(CMD_REL, CMD_PARTIAL if self.variant == "qa-fail" else CMD_FINAL)])
         content = {"*": {"baseline_head_sha": "", "baseline_dirty_snapshot": "",  # none in the dispatch payload
                          "dev": {"fix_layer": LAYER}}}
         act = agents.Act(work=work, content=content, summary="the test command runs the toy package tests")

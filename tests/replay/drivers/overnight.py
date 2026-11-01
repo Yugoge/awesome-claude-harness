@@ -1268,7 +1268,7 @@ class Night:
 
     def dispatch_dev(self, fields: dict, p: Pipe, old: str, new: str, label: str, attempt: int):
         sc = p.sc
-        work = roles.dev([(sc.rel, old, new)], baseline_fallback=True)
+        work = roles.dev([(sc.rel, old, new)])
 
         def dev_work(sub, b, pl, work=work):
             out = work(sub, b, pl)
