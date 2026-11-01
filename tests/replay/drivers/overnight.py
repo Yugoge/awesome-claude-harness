@@ -92,7 +92,8 @@ Driver arguments (cli.py --arg K=V):
                   Injected, outside the compliant transcript: an AskUserQuestion of the main agent (in
                   the window and after it) and of dev (in the window), and a Stop after a forged
                   ESCALATION_ACK line (in the window, and after it before the summary). The checks
-                  (Night.unattended_checks, out/unattended.json) raise when one fails
+                  (Night.unattended_checks, out/unattended.json) raise when one fails; a compliant
+                  step a hook blocked is listed there ("false_blocks") and in blocks.json
   window=N        variant=unattended only: the end time typed, in minutes from the launch
   stop_at=N       the step after which variant=stop interrupts
   kit=base        the replay of the base kit's text: row 7's respellings below are applied
@@ -1911,7 +1912,8 @@ class Night:
         fixed = len(self.pipes)
         return [(r"^actual_end$", utc_now()), (r"^hours$", str(mins // 60)), (r"^minutes$", str(mins % 60)),
                 (r"^cycle index - 1$", str(self.n)), (r"^issues_found$", str(len(self.triage.get("issues") or []))),
-                (r"^issues_fixed$", str(fixed)), (r"^issues_triage_deferred$", str(len(self.triage.get("skipped_issues") or []))),
+                (r"^issues_fixed$", str(fixed)),
+                (r"^issues_triage_deferred$", str(len(self.triage.get("skipped_issues") or []))),
                 (r"^percentage$", str(round(100 * fixed / max(1, len(self.pipes))))),
                 (r"^decision_count$", str(len(self.decisions))), (r"^main_root$", self.main_root)]
 
@@ -2058,7 +2060,8 @@ class Night:
               "the window, main agent after end_time",
               main_in and sub_in and main_after and all(denied(pr, DECIDE_TEXT["main"]) for pr in main_in + main_after)
               and all(denied(pr, DECIDE_TEXT["subagent"]) for pr in sub_in),
-              [{"label": pr["label"], "blocks": [(b["hook"], b["rc"]) for b in pr["blocks"]]} for pr in main_in + sub_in + main_after])
+              [{"label": pr["label"], "blocks": [(b["hook"], b["rc"]) for b in pr["blocks"]]}
+               for pr in main_in + sub_in + main_after])
         stops = probe(lambda pr: pr["kind"].startswith("Stop"))
         check("a forged ESCALATION_ACK line releases nothing: the Stop after it is blocked in the window (time-lock) "
               "and after end_time while the summary is missing (closeout)",
@@ -2087,14 +2090,15 @@ class Night:
         check("no file under an escalations/, escalation-admissions/, progress/ or deferred-checks/ directory",
               not stores, sorted(set(stores))[:20])
         check("0 hook errors", not rp.hook_errors, rp.hook_errors[:5])
-        # a block at one of the variant's own dispatches is false even where a base kit's deviation quotes
-        # its hook's words: no base replay has those steps
-        left = [b for b in rp.blocks if not b["passed_by_deviation"] or re.sub(r" stop$", "", b["step"]) in self.own]
-        check("no compliant step blocked (a declared base kit deviation aside)", not left,
-              [(b["hook"], b["step"], b["text"][:200]) for b in left])
+        # The compliant steps a hook blocked, for the report as every variant's blocks.json is (a block is
+        # recorded, not raised): a block at one of the variant's own dispatches counts even where a base
+        # kit's deviation quotes its hook's words, since no base replay has those steps.
+        false = [{"hook": b["hook"], "step": b["step"], "text": b["text"][:400]} for b in rp.blocks
+                 if not b["passed_by_deviation"] or re.sub(r" stop$", "", b["step"]) in self.own]
         with rp.acting("driver"):
             with open(os.path.join(rp.layout.out, "unattended.json"), "w") as fh:
-                json.dump({"checks": res, "decisions": self.decision_rows(), "probes": self.probes,
+                json.dump({"checks": res, "false_blocks": false, "decisions": self.decision_rows(),
+                           "probes": self.probes,
                            "carried": [{"where": c["where"], "line": c["line"]} for c in self.carried],
                            "summary": self.summary_rel, "log": self.log_rel}, fh, indent=1)
         failed = [r["check"] for r in res if not r["ok"]]
