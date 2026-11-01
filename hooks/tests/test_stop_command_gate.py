@@ -270,7 +270,7 @@ def test_a2_no_bound_counter_release_token_or_write():
     assert not calls & {"write_text", "write_bytes", "unlink", "remove", "rename", "replace", "mkdir", "touch",
                         "open", "makedirs", "rmtree"}
     for word in ("stop_hook_active", "AWAITING_INPUT", "is_pause", "settings.machine", "private-literal",
-                 "claude-do-task-", "cancelled_by_user", "derive_state"):
+                 "claude-do-task-", "terminal_status\")", "derive_state"):
         assert word not in source, word
 
 
@@ -405,6 +405,19 @@ def test_r8_every_do_span_of_the_task_counts(env):
     path = do_report(env, modified=["src/a.py"])
     [(_c, _a, detail)] = resolver.do_report_gaps(env.project, DO_ID, path, str(env.tx.path))
     assert detail.endswith(json.dumps(["src/a.py", "src/b.py"]))
+
+
+def test_r8_a_versioned_report_failing_its_schema_is_a_gap(env):
+    """The do-report gate's schema case (stop-do-report-gate.py, a stub after P5), now the do branch's."""
+    do_span(env)
+    path = do_report(env)
+    record = json.loads(path.read_text())
+    record["report_version"] = 1
+    record["do"]["files_modified"] = "src/a.py"
+    path.write_text(json.dumps(record))
+    gaps = resolver.do_report_gaps(env.project, DO_ID, path, str(env.tx.path))
+    assert {code for code, _a, _d in gaps} == {"SCHEMA_VIOLATION"}
+    assert any("files_modified" in detail for _c, _a, detail in gaps)
 
 
 def test_r8_without_a_transcript_the_lists_stand(env):
@@ -728,7 +741,7 @@ def test_a12_after_the_window_a_live_wake_blocks_naming_its_id_until_deleted(env
     code, text = run(env)
     assert code == 2 and "cron-7" in text and "AskUserQuestion" not in text
     env.tx.tool("CronDelete", {"id": "cron-7"})
-    assert run(env) == (0, "")
+    assert gate.decision(env.payload) == (0, "", "cancelled_by_user")
 
 
 def test_a12_after_end_time_the_families_and_closeout_decide(env, monkeypatch):
@@ -745,7 +758,14 @@ def test_a12_after_end_time_the_families_and_closeout_decide(env, monkeypatch):
     assert env.fake.calls[-1][0] == str(env.tmp / "wt")
     env.fake.answers.clear()
     monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake(record))
-    assert run(env) == (0, "")
+    assert gate.decision(env.payload) == (0, "", "completed_by_deadline")
+
+
+def test_a12_no_terminal_status_without_an_overnight_record_or_with_an_open_closeout(env, monkeypatch):
+    env.tx.command("spec")
+    assert gate.decision(env.payload) == (0, "", None)
+    monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake({"session_id": SID}, closeout=["no summary"]))
+    assert gate.decision(env.payload) == (0, "", None)
 
 
 # ---------------------------------------------------------------- R10: the reader's module
@@ -794,4 +814,4 @@ def test_the_gate_runs_as_a_script(env):
     env.tx.command("spec")
     done = subprocess.run([sys.executable, str(HOOKS / "stop-command-gate.py"), "--mode", "block"],
                           input=json.dumps({**env.payload, "agent_id": "x"}), capture_output=True, text=True)
-    assert (done.returncode, done.stderr) == (0, "")
+    assert (done.returncode, done.stderr, done.stdout) == (0, "", "")

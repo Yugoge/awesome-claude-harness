@@ -2278,7 +2278,8 @@ def do_report_gaps(
     if not transcript or not isinstance(do, dict):
         return gaps
     declared = set()
-    for entry in [*(do.get("files_modified") or []), *(do.get("files_created") or [])]:
+    lists = [do.get(key) for key in ("files_modified", "files_created")]
+    for entry in [entry for listed in lists if isinstance(listed, list) for entry in listed]:
         rel = command_span._project_relative(entry, str(root), str(root)) if isinstance(entry, str) else None
         declared |= {rel} if rel else set()
     written, named, found = set(), set(), False

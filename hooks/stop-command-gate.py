@@ -373,21 +373,28 @@ def _open_wake(transcript: str) -> str | None:
     return next(iter(scheduled), None)
 
 
-def timelock(payload) -> str | None:
-    """Step (4)'s block line, or None. Codex-native Stop owns overnight
-    isolation in Codex roots, so the Codex runtime meets none."""
+def timelock(payload) -> tuple[str | None, str | None]:
+    """Step (4): (its block line, None), or (None, the session's terminal
+    time-lock status once its window has closed: completed_by_deadline after
+    end_time with the closeout complete, cancelled_by_user after the human's
+    /stop), or (None, None) for a session with no overnight record or an
+    incomplete closeout. Codex-native Stop owns overnight isolation in Codex
+    roots, so the Codex runtime meets none."""
     if os.environ.get("CLAUDE_COMPAT_RUNTIME") == "codex":
-        return None
+        return None, None
     overnight, transcript = _lib("overnight"), payload.get("transcript_path") or ""
     _state_file, record = overnight.locate(payload.get("session_id"), payload)
     if record is None:
-        return None
+        return None, None
     if overnight.window_open(payload):
-        return f"overnight window open until {record.get('end_time')}; continue the remaining pipelines"
-    if not command_span.timelock_released(transcript) and overnight.closeout_gaps(record, overnight.working_root(record)):
-        return None
+        return f"overnight window open until {record.get('end_time')}; continue the remaining pipelines", None
+    released = command_span.timelock_released(transcript)
+    if not released and overnight.closeout_gaps(record, overnight.working_root(record)):
+        return None, None
     wake = _open_wake(transcript)
-    return f"overnight wake {wake} is still scheduled; delete it (CronDelete id {wake})" if wake else None
+    if wake:
+        return f"overnight wake {wake} is still scheduled; delete it (CronDelete id {wake})", None
+    return None, "cancelled_by_user" if released else "completed_by_deadline"
 
 
 # ---------------------------------------------------------------- the decision
@@ -410,25 +417,31 @@ def _block_text(command: str, gaps: list[str]) -> str:
 
 def decide(payload: dict, mode: str = "block") -> tuple[int, str]:
     """(exit code, stderr text) of one Stop."""
+    return decision(payload, mode)[:2]
+
+
+def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
+    """(exit code, stderr text, terminal time-lock status of an allowed Stop
+    or None) of one Stop."""
     if payload.get("agent_id"):  # (1)
-        return 0, ""
+        return 0, "", None
     if mode == "off":  # (2)
-        return 0, ""
+        return 0, "", None
     transcript = payload.get("transcript_path") or ""
     span = command_span.active_span(transcript) if transcript else None  # (3)
     gated = span is not None and span.command in command_span.GATED_COMMANDS
     try:  # (4)
-        lock = timelock(payload)
+        lock, terminal = timelock(payload)
     except Exception as exc:
         if not gated:
-            return 0, f"COMMAND_GATE time-lock: gate instrument failure: {type(exc).__name__}: {exc}\n"
-        lock, failure = None, [f"gate instrument failure: {type(exc).__name__}: {exc}"]
+            return 0, f"COMMAND_GATE time-lock: gate instrument failure: {type(exc).__name__}: {exc}\n", None
+        lock, terminal, failure = None, None, [f"gate instrument failure: {type(exc).__name__}: {exc}"]
     else:
         failure = []
     if lock:
-        return 2, f"COMMAND_GATE time-lock: {lock}\n"
+        return 2, f"COMMAND_GATE time-lock: {lock}\n", None
     if not gated:  # (5)
-        return 0, ""
+        return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
     gaps = list(failure)
     for part in (lambda: todo_gaps(span), lambda: PREDICATES[span.command](span, root, payload)):  # (6)
@@ -437,19 +450,25 @@ def decide(payload: dict, mode: str = "block") -> tuple[int, str]:
         except Exception as exc:
             gaps.append(f"gate instrument failure: {type(exc).__name__}: {exc}")
     if not gaps:  # (7)
-        return 0, ""
+        return 0, "", terminal
     text = _block_text(span.command, gaps)
-    return (0, "would block\n" + text) if mode == "advisory" else (2, text)
+    return (0, "would block\n" + text, terminal) if mode == "advisory" else (2, text, None)
 
 
 def main(argv=None) -> int:
+    """stdin: the Stop payload. stderr: the block text. stdout, on an allowed
+    Stop of a session whose overnight window has closed: one JSON line
+    {"timelock_terminal": <status>}, the decision the coordinator's terminal
+    receipt call takes (R9); nothing otherwise."""
     argv = sys.argv[1:] if argv is None else argv
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:
         payload = {}
-    code, text = decide(payload if isinstance(payload, dict) else {}, _mode(argv))
+    code, text, terminal = decision(payload if isinstance(payload, dict) else {}, _mode(argv))
     sys.stderr.write(text)
+    if terminal:
+        sys.stdout.write(json.dumps({"timelock_terminal": terminal}) + "\n")
     return code
 
 
