@@ -359,19 +359,15 @@ def test_do_report_gate_with_a_completed_report_keeps_the_flag_and_streak(sess):
     _complete_do_report(sess)
     proc = sess.stop([sys.executable, str(DO_REPORT_GATE)])
     assert proc.returncode == 0, proc.stderr
-    assert not (sess.state / f"claude-do-report-gate-{sess.sid}.json").exists(), \
-        "the compliant branch ran (it removes the block counter)"
     assert sess.flag().read_text() == "true"
     assert json.loads(sess.streak().read_text()) == _streak_state(2)
     sess.assert_other_session_untouched()
 
 
-def test_do_report_gate_forced_allow_keeps_the_flag(sess):
+def test_do_report_gate_refused_stops_keep_the_flag(sess):
     assert sess.prompt("/do rename heading").returncode == 0
-    for _ in range(2):
+    for _ in range(3):  # no count of refused stops releases the gate (D23, D25)
         assert sess.stop([sys.executable, str(DO_REPORT_GATE)]).returncode == 2
-    forced = sess.stop([sys.executable, str(DO_REPORT_GATE)])
-    assert forced.returncode == 0 and "FORCED ALLOW" in forced.stderr, forced.stderr
     assert sess.flag().read_text() == "true"
     sess.assert_other_session_untouched()
 

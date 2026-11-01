@@ -7,7 +7,8 @@ selected tests name, REPLAY_WORKERS at a time, so the replays of one job run sid
 
 REPLAY_SHARD=i/n (CI) keeps the tests of the replays shard i of n owns: each replay goes, costliest
 first, to the shard with the least cost so far (each replay whole in one shard), and the tests that
-replay nothing (unit tests) to shard 1. REPLAY_WORK keeps the runs (default: pytest's temp dir).
+replay nothing (unit tests) to shard 1; a test marked `every_shard` (it reads the replays its shard
+ran) to every shard. REPLAY_WORK keeps the runs (default: pytest's temp dir).
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from tests.replay import suite
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "replay(key, cost): the test reads replay `key` (suite.replay_key)")
+    config.addinivalue_line("markers", "every_shard: the test reads whatever replays its shard ran; it runs in every shard")
 
 
 def _key(item):
@@ -47,7 +49,8 @@ def pytest_collection_modifyitems(config, items):
     keep, drop = [], []
     for it in items:
         k = _key(it)
-        (keep if (owner.get(k[0]) if k else 1) == i else drop).append(it)
+        mine = it.get_closest_marker("every_shard") or (owner.get(k[0]) if k else 1) == i
+        (keep if mine else drop).append(it)
     if drop:
         config.hook.pytest_deselected(items=drop)
     items[:] = keep
