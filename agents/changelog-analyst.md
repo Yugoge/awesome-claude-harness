@@ -23,7 +23,7 @@ your job is to classify, stage, commit, and write the push-gate token.
 CONTROL_ROOT=$HOME          # resolved control root (parent-repo working-tree root), supplied by the /commit Step 7 dispatch — NOT an author-absolute literal; fallback for dev-report lookup when subproject search yields nothing; close-report and ticket I/O always use CONTROL_ROOT
 NESTED_REPO=$(realpath "${CLAUDE_HOME:-$HOME/.claude}")   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
 REPOSITORY_PLAN=<JSON>      # normal-mode authority emitted by resolve-commit-repos.py; empty only in bulk mode
-ARTIFACT_CHAIN=<JSON>       # normal /dev artifact authority emitted by resolve-dev-artifact-chain.py; empty for bulk/source=do
+ARTIFACT_CHAIN=<JSON>       # normal /dev chain data fields of /commit Step 3's disposition call; empty for bulk/source=do
 ATTRIBUTION_LOG=<JSON>      # write-time attribution journal slice emitted by verify-attribution-chain.py, scoped to REPOSITORY_PLAN's owned paths; main-path attribution authority for the staging decision (see "Attribution and staging decision" below); empty object in bulk mode
 ```
 
@@ -121,9 +121,10 @@ handling are all unchanged).
 - `DRYRUN` — `true` | `false`
 - `FORCE` — `true` | `false`
 - `REPOSITORY_PLAN` — required in normal mode. Exact schema-1 JSON emitted by `resolve-commit-repos.py`, including task/report digest and ordered repository-specific repo/branch/HEAD/path bindings. Empty only in bulk mode, which preserves the legacy control+nested sweep.
-- `ARTIFACT_CHAIN` — required and non-empty for normal `/dev` mode. Exact
-  status in {"pass", "pass_with_exceptions"} JSON emitted by
-  `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+- `ARTIFACT_CHAIN` — normal `/dev` mode: the chain data fields (`mode`, `lanes`,
+  `report_paths`, `canonical_dev_report`, `artifact_paths`,
+  `commit_whitelist_artifacts`, `qa_inputs`) of the disposition that admitted the task
+  (`/commit` Step 3), data this agent takes as given.
   Empty only in bulk mode or when the normal source is a source=`do` report.
 - `ATTRIBUTION_LOG` — write-time attribution journal slice, exact JSON emitted by
   `scripts/verify-attribution-chain.py --json` scoped to `REPOSITORY_PLAN`'s owned
@@ -155,43 +156,9 @@ resulting repo-relative partition to equal every entry's `owned_paths`.
 Any mismatch returns `failed/repository_plan_invalid` before index mutation. Do not
 silently rebuild or widen the plan inside this agent.
 
-When the plan's report is `dev-report-<TASK_ID>.json`, fail closed unless
-`ARTIFACT_CHAIN` is an object with `status in {"pass", "pass_with_exceptions"}`,
-`task_id == TASK_ID`, `mode` in `{singular, fanout}`, and `canonical_dev_report`
-resolving to the same file as `REPOSITORY_PLAN.report_path`. Require arrays for
-`lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
-`qa_inputs`. `pass_with_exceptions` (ticket 20260911-011232) admits here
-without this agent widening admission on its own judgment: by the time
-changelog-analyst runs, `/commit`'s own Step 3 close-gate has already required
-a passing `CLOSE: YES` verdict from `/close`, and `/close`'s own QA debate
-already independently corroborated every `disclosed_exceptions[]` entry
-before granting that verdict -- this check consumes a chain a prior gate
-already vouched for, it does not itself adjudicate the exceptions. A genuine
-`status == "fail"` is refused exactly as before. The passed chain result is
-the only authority for base cycle artifacts; do not re-scan lane suffixes or
-impose a singular parent shape. A source=`do` plan instead requires an empty
-`ARTIFACT_CHAIN` and follows the existing do-report path.
-
-**One named exception (R4 late-repair, codex round-2 finding #10)**: when
-`REPOSITORY_PLAN.report_path`'s basename is `dev-report-<TASK_ID>.effective.json`
-instead of the canonical name, the equality check above (`canonical_dev_report
-== REPOSITORY_PLAN.report_path`) would otherwise fail by construction --
-`ARTIFACT_CHAIN.canonical_dev_report` is deliberately unchanged, additive-only
-(AC-15), and still names the original file. This mismatch is accepted ONLY
-after changelog-analyst itself independently re-verifies it -- never trusted
-from `REPOSITORY_PLAN`'s shape alone: dynamically load
-`os.path.join(os.environ.get('CLAUDE_HOME') or os.path.expanduser('~/.claude'), 'scripts/late-repair-controller.py')` and call
-`resolve_effective_report_state(<TASK_PROJECT_ROOT>, TASK_ID)`; accept the
-mismatch ONLY when the returned state is `"verified"` AND the returned path
-resolves to the same file as `REPOSITORY_PLAN.report_path`. Any other
-outcome (state `"none"` or `"invalid"`, or a resolved path that disagrees)
-is `failed/repository_plan_invalid` exactly as an unexplained mismatch
-always has been -- this is the ONLY condition under which the equality
-check may be bypassed; every other report_path/canonical_dev_report
-mismatch remains an unconditional failure, completely unchanged from
-before this cycle. When `REPOSITORY_PLAN.report_path`'s basename is the
-canonical `dev-report-<TASK_ID>.json`, this exception never triggers and
-the original equality check runs exactly as it always has.
+`ARTIFACT_CHAIN` is not validated here: it is data of the disposition that admitted the
+task, and its `commit_whitelist_artifacts` is Phase 2's item 4. A source=`do` plan has an
+empty `ARTIFACT_CHAIN` and follows the existing do-report path.
 
 After validation, set `GIT_ROOT` to each plan entry in ascending `order` and run
 `git -C "${GIT_ROOT}" status --porcelain=v1`. Parse each output. Extract ALL files
@@ -260,14 +227,11 @@ The candidate set is restricted to a **staging whitelist** consisting of:
    `mode == "singular"`. When `mode == "fanout"` it instead admits every
    resolver-validated lane ticket/context/dev/QA artifact plus the parent
    canonical/completion. Do not glob lane suffixes or create pseudo-parent
-   artifacts. **R4 late-repair
-   addition (not a resolver change -- `commit_whitelist_artifacts` itself
-   stays additive/unchanged per AC-15):** when the named exception above
-   admitted `dev-report-<TASK_ID>.effective.json` as `REPOSITORY_PLAN.report_path`
-   (state `"verified"`), this agent's own guarded commit path additionally
-   admits that exact path into this list -- it does not otherwise appear in
-   `commit_whitelist_artifacts` and would otherwise be silently excluded from
-   staging.
+   artifacts. **R4 late-repair addition:** when `REPOSITORY_PLAN.report_path` is
+   `dev-report-<TASK_ID>.effective.json` (the late-repair effective report, which
+   `/commit` plans from only in the controller's `verified` state), that exact path is
+   admitted into this list too -- it does not appear in `commit_whitelist_artifacts`
+   and would otherwise be silently excluded from staging.
 5. Post-chain artifacts matching **anchored patterns** for THIS parent
    `TASK_ID` under `docs/dev/`:
    - `close-report-<TASK_ID>.md`
@@ -330,7 +294,7 @@ Exit with `failure_code: scope_violation`.
 
 **When BULK=false AND no dev-report exists**: check for a do-report before aborting.
 
-- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Preserve the pre-resolver do-path anchored set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-`, and `*-inspector-report-*`, each scoped to the same parent `TASK_ID` under `docs/dev/`) and the original `+30` staged-file-count overhead. `ARTIFACT_CHAIN` must be empty: the resolver contract applies to `/dev`, not `/do`. Skip the provenance filter (do-reports have no `baseline_head_sha`). Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
+- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Preserve the pre-resolver do-path anchored set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-`, and `*-inspector-report-*`, each scoped to the same parent `TASK_ID` under `docs/dev/`) and the original `+30` staged-file-count overhead. `ARTIFACT_CHAIN` is empty: the chain applies to `/dev`, not `/do`. Skip the provenance filter (do-reports have no `baseline_head_sha`). Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
 
 - If neither dev-report NOR do-report exists: **ABORT** — do NOT stage any files.
   Print and exit immediately:
@@ -403,7 +367,7 @@ union instead, exactly as item 3 and its sourcing note specify — derived with
 `scripts/lib/candidate_tree.py` over the reports directory holding the resolved path,
 never read from the canonical, and aborting rather than defaulting to empty when the
 derivation is impossible. When BULK=false, these three arrays form the **primary staging
-whitelist** (along with the resolver-validated `commit_whitelist_artifacts` and anchored
+whitelist** (along with the chain's `commit_whitelist_artifacts` and anchored
 post-chain artifacts defined above). When BULK=true, they are used for commit message
 enrichment only (existing behavior).
 

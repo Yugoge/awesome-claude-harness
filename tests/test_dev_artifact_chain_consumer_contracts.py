@@ -91,20 +91,67 @@ def test_close_reuses_resolver_for_qa_and_workflow_integrity() -> None:
 def test_normal_commit_and_changelog_share_resolver_whitelist() -> None:
     command = _read("commands/commit.md")
     analyst = _read("agents/changelog-analyst.md")
+    step3 = command[command.index("### Step 3:") : command.index("### Step 4:")]
 
-    assert FIXED_ENTRYPOINT in command
-    assert command.count('ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py') == 1
-    assert command.index('TASK_PROJECT_ROOT="') < command.index(
-        'ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py'
-    )
-    assert "ARTIFACT_CHAIN=<exact resolver JSON" in command
+    # P4 R5: /commit's one chain call is Step 3's disposition at the close stage; its
+    # CHAIN line is the data Step 5 and Step 7 hand on, never a second call.
+    assert command.count("resolve-dev-artifact-chain.py --disposition") == 1
+    assert "resolve-dev-artifact-chain.py --disposition --stage close" in step3
+    assert "--bulk" not in step3.split("```bash")[1].split("```")[0]
+    assert "resolve-dev-artifact-chain.py --task-id" not in command
+    assert 'ARTIFACT_CHAIN="$(' not in command
+    assert "`CHAIN=` line" in step3 and "No second chain call is made." in step3
+    assert "ARTIFACT_CHAIN=<the chain data fields of Step 3's disposition call" in command
     assert "ARTIFACT_CHAIN.commit_whitelist_artifacts" in command
-    assert FIXED_ENTRYPOINT in analyst
     assert "Every exact path in `ARTIFACT_CHAIN.commit_whitelist_artifacts`" in analyst
     assert "resolver-validated lane ticket/context/dev/QA artifact" in analyst
     assert "Do not glob lane suffixes" in analyst
     assert "original\n+singular overhead" not in analyst
     assert "the original\nsingular overhead" in analyst
+
+
+def test_commit_completes_an_unclosed_task_from_one_disposition() -> None:
+    """P4 R5: an incomplete disposition is completed (dev-stage gaps routed, the close
+    stage as close.md Steps 1-2), the waits are in-turn questions, nothing re-validates."""
+    command = _read("commands/commit.md")
+    step3 = command[command.index("### Step 3:") : command.index("### Step 4:")]
+    flat = _squash(step3)
+
+    assert "route it (Routes)" in flat
+    assert "run `commands/close.md` Steps 1-2 for this task id" in flat
+    assert "OPERATION_STALLED: <the error>" in flat
+    # D10 (--dry-run): the cycle completes first; no close-gate relaxation is left.
+    assert "`--dry-run` completes the cycle here exactly as a real run does" in flat
+    assert "DRYRUN" not in step3 and "check 2 relaxed" not in command
+    # Check 3 stays advisory; checks 1, 2 and 4 are the disposition.
+    assert "Check 3 — close-report age (advisory, never aborts)" in step3
+    assert "check 4" not in command.lower() and "FORCED" not in command
+    for gone in ("AWAITING_INPUT", "awaiting-input", "R15", "arbitrat", "route_finding", "owing_dispatch",
+                 "pass_with_exceptions", "artifact_role", "source_check"):
+        assert gone not in command, gone
+    # Each wait is one AskUserQuestion with a header of at most 12 characters.
+    headers = __import__("re").findall(r"header `([^`]+)`", command)
+    assert sorted(headers) == ["Flags", "Hook block", "Request", "Task"], headers
+    assert all(len(h) <= 12 for h in headers)
+    assert "/stop" not in command and "I will fix the harness" not in command
+    related = command[command.index("## Related") :]
+    assert "may run first; `/commit` completes an unclosed task itself" in related
+
+
+def test_changelog_analyst_phase1_takes_the_chain_as_data() -> None:
+    """P4 R6: Phase 1 validates the repository plan, not ARTIFACT_CHAIN; a late-repair
+    effective report the plan names is still admitted."""
+    analyst = _read("agents/changelog-analyst.md")
+    phase1 = analyst[analyst.index("### Phase 1:") : analyst.index("### Phase 2:")]
+
+    assert "pass_with_exceptions" not in analyst
+    assert "status in {" not in phase1
+    assert "resolve_effective_report_state" not in phase1
+    assert "`ARTIFACT_CHAIN` is not validated here" in phase1
+    assert "schema_version=1" in phase1 and "repository_plan_invalid" in phase1
+    item4 = analyst[analyst.index("4. Every exact path in `ARTIFACT_CHAIN.commit_whitelist_artifacts`") :]
+    item4 = item4[: item4.index("5. Post-chain artifacts")]
+    assert "dev-report-<TASK_ID>.effective.json" in item4 and "admitted into this list too" in item4
 
 
 def test_close_qa_accepts_one_parent_lane_matrix_without_fake_parents() -> None:

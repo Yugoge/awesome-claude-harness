@@ -1055,6 +1055,36 @@ def test_ac9_companion_resolve_commit_repos_selects_effective_report_when_verifi
     assert Path(plan["report_path"]).resolve() == effective_path.resolve()
 
 
+def _commit_step5_block() -> str:
+    """commands/commit.md Step 5's repository-plan block, as the command spells it."""
+    text = (REPO_ROOT / "commands" / "commit.md").read_text(encoding="utf-8")
+    step5 = text[text.index("### Step 5:") : text.index("### Step 6:")]
+    import re
+    body = next(b for b in re.findall(r"```bash\n(.*?)```", step5, re.S) if "LATE_REPAIR_JSON" in b)
+    assert "resolve-commit-repos.py" in body, body
+    return "\n".join(line[2:] if line.startswith("  ") else line for line in body.splitlines())
+
+
+def test_commit_step5_plans_from_the_verified_effective_report(tmp_path: Path) -> None:
+    """P4 R5/R6 (late-repair entry as /commit uses it): with the controller's state verified,
+    commit.md Step 5's own block plans from the effective report, which the changelog-analyst
+    then admits into its whitelist because the plan names it (agents/changelog-analyst.md item 4)."""
+    task_id = "20260101-000805"
+    root = tmp_path / "project"
+    effective_path = _produce_verified_effective_report(root, task_id)
+    script = (_commit_step5_block() + '\nprintf "TASK_REPORT=%s\\n" "$TASK_REPORT"'
+              + '\nprintf "PLAN=%s\\n" "$(jq -c . <<<"$REPOSITORY_PLAN")"\n')
+    env = {**__import__("os").environ, "CLAUDE_HOME": str(REPO_ROOT), "TASK_ID": task_id,
+           "CLOSE_REPORT": str(root / "docs" / "dev" / f"close-report-{task_id}.md")}
+    proc = subprocess.run(["bash", "-c", script], cwd=root, env=env, capture_output=True, text=True)
+    out = dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+    assert json.loads(out["LATE_REPAIR"])["state"] == "verified", proc.stdout + proc.stderr
+    assert Path(out["TASK_REPORT"]).resolve() == effective_path.resolve()
+    assert Path(json.loads(out["PLAN"])["report_path"]).resolve() == effective_path.resolve()
+    analyst = (REPO_ROOT / "agents" / "changelog-analyst.md").read_text(encoding="utf-8")
+    assert "when `REPOSITORY_PLAN.report_path` is\n   `dev-report-<TASK_ID>.effective.json`" in analyst
+
+
 def test_ac9_companion_resolve_commit_repos_regression_no_run_record(tmp_path: Path) -> None:
     task_id = "20260101-000810"
     root = tmp_path
