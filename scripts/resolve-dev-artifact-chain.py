@@ -1559,7 +1559,7 @@ def _check_do_report(
     validator: ChainValidator, path: Path, record: dict | None, problem: str | None, obligation: ModuleType
 ) -> None:
     relative = _rel(path, validator.root)
-    if not path.is_file():
+    if record is None:  # do_report.load's verdict, the report's one reading (P1b E8)
         validator.error("MISSING_ARTIFACT", relative, problem)
     elif obligation.terminal_status("do-report.v1", record) != "completed":
         do = record.get("do") if record else None
