@@ -44,7 +44,7 @@ RELAY_HOOK = REPO_ROOT / 'hooks' / 'userprompt-doc-sync-check.py'
 DOC_SYNC_PACKAGE = REPO_ROOT / 'hooks' / 'doc_sync'
 sys.path.insert(0, str(REPO_ROOT))
 
-SCRUBBED_ENV = ('CLAUDE_PROJECT_DIR', 'CLAUDE_DOC_SYNC_ROOTS', 'CLAUDE_DOC_SYNC_STATE_ROOT')
+SCRUBBED_ENV = ('CLAUDE_PROJECT_DIR', 'CLAUDE_DOC_SYNC_ROOTS', 'CLAUDE_DOC_SYNC_STATE_ROOT', 'CLAUDE_CONFIG_DIR')
 STATE_ROOT_SEAM = 'CLAUDE_DOC_SYNC_STATE_ROOT'
 NOTICE_CAP = 2000
 
@@ -788,7 +788,8 @@ def run_relay(home, tmp_root):
     environment.update(HOME=str(home), TMPDIR=str(tmp_root),
                        PATH=os.path.dirname(sys.executable) + os.pathsep + os.environ.get('PATH', ''),
                        PYTHONDONTWRITEBYTECODE='1')
-    return subprocess.run([sys.executable, str(RELAY_HOOK)], capture_output=True, text=True, env=environment,
+    installed = shutil.copy(RELAY_HOOK, home / '.claude' / 'hooks' / RELAY_HOOK.name)  # runs its siblings
+    return subprocess.run([sys.executable, str(installed)], capture_output=True, text=True, env=environment,
                           cwd=str(home), timeout=120)
 
 

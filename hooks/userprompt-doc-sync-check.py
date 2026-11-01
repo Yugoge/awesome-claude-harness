@@ -9,7 +9,8 @@ INDEX.md of a directory left empty.
 
 Hook type: UserPromptSubmit
 Exit codes: 0 always (never blocks)
-Cache file: ~/.claude/.doc-sync-cache.json
+Cache file: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.doc-sync-cache.json (runtime state);
+the child hooks run from this file's own directory (harness assets)
 Check interval: 300 seconds
 """
 
@@ -20,7 +21,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-CACHE_FILE: Path = Path.home() / '.claude' / '.doc-sync-cache.json'
+CACHE_FILE: Path = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / '.doc-sync-cache.json'
 CHECK_INTERVAL: int = 300  # seconds between checks
 HOOK_EVENT_NAME: str = 'UserPromptSubmit'
 MAX_OUTPUT_CHARS: int = 10000  # documented cap for hook output strings
@@ -159,7 +160,7 @@ def main() -> None:
 
         # Resync affected directories via posttool-doc-sync.py
         if dirs_to_resync:
-            hook_dir: Path = Path.home() / '.claude' / 'hooks'
+            hook_dir: Path = Path(__file__).resolve().parent
             for dir_path in dirs_to_resync:
                 # Find any remaining file to use as trigger
                 remaining: list[Path] = [
