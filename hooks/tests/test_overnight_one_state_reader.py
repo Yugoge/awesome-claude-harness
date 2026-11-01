@@ -171,8 +171,11 @@ def test_script_write_state_and_cycle_index(tmp_path):
 def test_steps_come_from_the_canonical_todo():
     steps = contract_runtime.overnight_steps()
     assert [e["step"] for e in contract_runtime.exploration_calls(steps)] == ["2", "3", "4"]
-    assert [label for label, _call in contract_runtime.post_triage_steps(steps)] == [
-        "8", "10", "11g", "12", "15", "20"]
+    # Each dispatching step after PM TRIAGE, and the re-dispatches of BA (9, 11), dev (13) and
+    # dev and QA (17), in step order (P2 R13).
+    assert [(label, call["subagent_type"]) for label, call in contract_runtime.post_triage_steps(steps)] == [
+        ("8", "ba"), ("9", "ba"), ("10", "qa"), ("11", "ba"), ("11g", "graphify"), ("12", "dev"),
+        ("13", "dev"), ("15", "qa"), ("17", "dev"), ("17", "qa"), ("20", "pm")]
     assert contract_runtime.triage_call(steps)["mode"] == "TRIAGE"
 
 
@@ -296,9 +299,12 @@ def test_triage_handler_writes_the_contract_and_the_dispatch_hook_reads_it(sessi
     path = session / "docs" / "dev" / "overnight" / SID / "cycle-1" / "cycle-contract.json"
     contract = json.loads(path.read_text())
     assert [(c["step"], c["role"], c["mode"]) for c in contract["required_calls"]] == [
-        ("8", "ba", None), ("8", "ba", None), ("10", "qa", None), ("10", "qa", None),
+        ("8", "ba", None), ("8", "ba", None), ("9", "ba", None), ("9", "ba", None),
+        ("10", "qa", None), ("10", "qa", None), ("11", "ba", None), ("11", "ba", None),
         ("11g", "graphify", None), ("11g", "graphify", None),
-        ("12", "dev", None), ("12", "dev", None), ("15", "qa", None), ("15", "qa", None),
+        ("12", "dev", None), ("12", "dev", None), ("13", "dev", None), ("13", "dev", None),
+        ("15", "qa", None), ("15", "qa", None),
+        ("17", "dev", None), ("17", "dev", None), ("17", "qa", None), ("17", "qa", None),
         ("20", "pm", "RETRO")]
     import jsonschema
     jsonschema.validate(contract, json.loads((REPO / "schemas" / "cycle-contract.v1.json").read_text()))
