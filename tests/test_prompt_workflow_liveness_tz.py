@@ -30,6 +30,7 @@ import ast
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -429,7 +430,10 @@ class TestAC5SessionBinding(unittest.TestCase):
         self.assertEqual(0, result.returncode)
         self.assertIn('OVERNIGHT CONTINUATION', result.stdout)
         self.assertIn(f'OVERNIGHT CONTINUATION - Cycle {cycles_done + 1}', result.stdout)
-        self.assertIn(f'overnight-state-{owner_sid}.json', result.stdout)
+        # The block names the record's absolute path (the locator's), never a
+        # path relative to wherever the session happens to be rooted.
+        self.assertRegex(result.stdout, rf'(?m)^Read /.*/\.claude/overnight-state-'
+                                        rf'{re.escape(owner_sid)}\.json and resume from phase="')
 
     def _assert_zero(self, result):
         self.assertEqual(0, result.returncode)
@@ -716,6 +720,8 @@ class TestR1WindowOpenDecides(unittest.TestCase):
                     self.assertEqual(['OVERNIGHT CONTINUATION - Cycle 4', f'PROJECT_ROOT={root}',
                                       f'HARNESS_ROOT={harness}'], result.stdout.splitlines()[:3])
                     self.assertIn('--- COMMAND SPECIFICATION ---', result.stdout)
+                    state_file = (main / '.claude' / 'overnight-state-AAAA.json').resolve()
+                    self.assertIn(f'Read {state_file} and resume from phase=', result.stdout)
                     self.assertTrue(marker.is_file())
                     self.assertFalse((root / '.claude' / 'overnight-delivery-AAAA.json').exists())
 

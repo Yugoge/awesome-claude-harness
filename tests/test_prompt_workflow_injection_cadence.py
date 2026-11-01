@@ -671,7 +671,7 @@ class TestAC5CycleBoundaryStillDelivers(unittest.TestCase):
             self.assertIn(SPEC_HEADER, out)
             self.assertIn(spec_body_probe(), out)
             self.assertIn('OVERNIGHT CONTINUATION - Cycle 6', out.splitlines()[0])
-            self.assertIn('resume from phase="exploring"', out)
+            self.assertIn(f'Read {fixture.state_path.resolve()} and resume from phase="exploring"', out)
             self.assertIn('Phase mapping:', out)
 
             marker = json.loads(fixture.marker_path().read_text())
@@ -686,7 +686,7 @@ class TestAC5CycleBoundaryStillDelivers(unittest.TestCase):
             fixture.write_state(cycles_done=2, phase='implementing')
             out = deliver(fixture)
             self.assertNotIn(SPEC_HEADER, out)
-            self.assertIn('resume from phase="implementing"', out)
+            self.assertIn(f'Read {fixture.state_path.resolve()} and resume from phase="implementing"', out)
             self.assertIn('Phase: implementing', out)
 
 

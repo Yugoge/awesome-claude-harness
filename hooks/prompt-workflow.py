@@ -1058,7 +1058,7 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
         'the system automatically resets for a new cycle.',
         f'Canonical steps: {step_labels}',
         'Do NOT create state file.',
-        f'Read .claude/overnight-state-{state.get("session_id", "default")}.json and resume from phase="{phase}".',
+        f'Read {overnight.locate(state.get("session_id"), {"cwd": str(PROJECT_DIR)})[0]} and resume from phase="{phase}".',
         # Phase->step map MUST match the markdown Continuation-Mode map in
         # commands/dev-overnight.md (### Continuation Mode), the single source of
         # truth. implementing->Step 12 lands on the shared Step 11g Dev-dispatch
