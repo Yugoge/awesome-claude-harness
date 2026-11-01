@@ -150,7 +150,7 @@ def _run_forked(script_path, project_dir, env):
 def run_todo_script(cmd_name, prompt=''):
     """Load canonical todos from todo script via subprocess.
 
-    Search order (AF2 fix -- matches posttool-todo-count.py):
+    Search order (AF2 fix):
       1. {CLAUDE_PROJECT_DIR}/scripts/todo/{cmd_name}.py
       2. ~/.claude/scripts/todo/{cmd_name}.py
 

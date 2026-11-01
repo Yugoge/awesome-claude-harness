@@ -1731,8 +1731,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 - **posttool-overnight-loop.py** (PostToolUse:TodoWrite): Detects all-completed state, resets todos for new cycle if end_time is future
 - **pretool-overnight-hook-guard.py** (PreToolUse): Blocks Write/Edit/Bash targeting .claude/hooks/ during overnight sessions
 - **pretool-workflow-gate.py** (PreToolUse): Gates tools until TodoWrite is called
-- **posttool-todo-count.py** (PostToolUse:TodoWrite): Enforces step count
-- **posttool-todo-sequence.py** (PostToolUse:TodoWrite): Enforces step ordering
+- **pretool-todo-validate.py** (PreToolUse:TodoWrite): Enforces step count and ordering, the first list, and the subagent and wake steps
 - **codex_native_harness.py / stop-overnight-timelock.py** (Stop): Active Stop-chain workflow enforcement; do not cite absent legacy workflow-enforce hooks as active
 - **stop-overnight-timelock.py** (Stop): Blocks stop until end_time reached
 - **posttool-git-checkpoint.sh** (PostToolUse:Write|Edit): Auto-commits changes
