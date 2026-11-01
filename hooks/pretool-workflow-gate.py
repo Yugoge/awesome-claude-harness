@@ -58,11 +58,11 @@ CODEX_RUNTIME_ENV = 'CLAUDE_COMPAT_RUNTIME'
 # running. Enforcing the pairing here too would duplicate that authority in
 # a second place that could drift from it.
 _HARNESS_HOME = str(Path(os.path.abspath(__file__)).parent.parent)  # install location
-_RESTART_HELPER_COMMAND_RE = re.compile(
-    r'^(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
+_RESTART_HELPER_COMMAND_RE = re.compile(  # the venv form, or commands/restart.md's quoted CLAUDE_HOME channel
+    r'^(?:(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
     r'/venv/bin/python3?\s+'
     r'(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
-    r'/scripts/restart-subagents\.py\s+'
+    r'/scripts/restart-subagents\.py|python3\s+"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/restart-subagents\.py")\s+'
     r'(?:prepare|status|finalize)'
     r'(?:\s+--cross-account)?'
     r'(?:\s+--wait-seconds\s+\d+)?'

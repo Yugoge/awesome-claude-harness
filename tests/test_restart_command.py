@@ -824,6 +824,45 @@ def test_restart_helper_bypass_fails_closed_on_unsafe_home(tmp_path: Path) -> No
     assert "CHECKLIST NOT STARTED" in blocked.stderr
 
 
+CHANNEL = '"${CLAUDE_HOME:-$HOME/.claude}/'
+
+
+def test_restart_helper_channel_spelling_keeps_the_deadlock_exemption(tmp_path: Path) -> None:
+    """commands/restart.md runs its helper through the quoted CLAUDE_HOME channel
+    (P2 R6). Each of its three lines and the venv spelling origin/master's
+    restart.md used get the same decision from the gate; a channel line that is
+    unquoted, chained, carries another flag or is not the helper stays gated."""
+    gate = HOOKS / "pretool-workflow-gate.py"
+    project_dir = tmp_path / "project"
+    (project_dir / ".claude").mkdir(parents=True)
+    transcript = _unstarted_dev_transcript(tmp_path)
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir)}
+    command = (ROOT / "commands" / "restart.md").read_text(encoding="utf-8")
+    lines = [line.strip() for line in command.splitlines() if "/scripts/restart-subagents.py\" " in line]
+    assert len(lines) == 3 and all(line.startswith("python3 " + CHANNEL) for line in lines), lines
+
+    def decide(cmd: str) -> subprocess.CompletedProcess[str]:
+        return _run_hook(gate, {"tool_name": "Bash", "session_id": str(uuid.uuid4()),
+                                "transcript_path": transcript, "tool_input": {"command": cmd}}, env)
+
+    for new in lines + [lines[0] + " --cross-account"]:
+        old = new.replace("python3 " + CHANNEL, "$HOME/.claude/venv/bin/python $HOME/.claude/").replace('.py"', ".py")
+        assert old.startswith("$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py ")
+        new_rc, old_rc = decide(new), decide(old)
+        assert (new_rc.returncode, old_rc.returncode) == (0, 0), (new, new_rc.stderr, old_rc.stderr)
+    for gated in (
+        lines[0].replace('"', ""),
+        lines[0] + " && rm -rf /tmp/should-not-run",
+        lines[0] + " --session-id other",
+        lines[0].replace("python3 ", "bash "),
+        lines[0].replace(CHANNEL, '"/tmp/elsewhere/.claude/'),
+        lines[0].replace("restart-subagents.py", "restart-helper.py"),
+        CHANNEL + 'venv/bin/python" ' + lines[0].split(" ", 1)[1],
+    ):
+        blocked = decide(gated)
+        assert blocked.returncode == 2 and "CHECKLIST NOT STARTED" in blocked.stderr, gated
+
+
 def _restart_roots_in_child(tmp_path: Path, accounts_root_env: str | None) -> dict:
     """Import subagent_restart in a fresh interpreter (ACCOUNTS_ROOT is read at
     import time) with a scratch CLAUDE_CONFIG_DIR and report its roots."""
