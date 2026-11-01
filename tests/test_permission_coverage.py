@@ -280,11 +280,21 @@ def test_a_running_session_keeps_the_old_spellings_it_loaded():
     assert not asks, "\n".join(asks)
 
 
+# Old lines a running session can still hold whose text P1b's G2 arming deleted from today's
+# commands (origin/master's commands/dev-overnight.md ran it at Steps 2, 3 and 4), so no rewritten
+# line stands for them.
+DELETED_OLD_LINES = [
+    ("commands/dev-overnight.md (origin/master, Steps 2-4)",
+     "~/.claude/scripts/check-overnight-reports.sh docs/dev/overnight/<session_id>"),
+]
+
+
 def test_each_kept_old_spelling_covers_a_line_only_it_covers():
     """Each kept entry covers the old spelling (as written, or with the script run directly, as the
-    old text ran it) of a line the texts run, which no other entry covers."""
+    old text ran it) of a line the texts run, or of a deleted line a running session still holds,
+    which no other entry covers."""
     allow = _allow()
-    rows = list(rewritten_commands())
+    rows = list(rewritten_commands()) + [(where, line, line) for where, line in DELETED_OLD_LINES]
     for entry in RUNNING_SESSION_SPELLINGS:
         others = bash_rules([e for e in allow if e != entry])
         needed = [where for where, line, simple in rows

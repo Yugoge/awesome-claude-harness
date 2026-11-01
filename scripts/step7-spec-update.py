@@ -23,8 +23,11 @@ ENV:
   COMMIT_STEP7_TRACE=1   Emit STEP7_* deterministic markers to stderr.
 
 EXIT CODES:
-  0   normal — either Step 8 skipped, stage 1/2 dispatched, or stage 4 empty-set
-  2   stage 4 fail-closed (set has 1 or more elements without context linkage)
+  0   every outcome: the selection is the line printed (Step 8 skipped, the stage 1/2
+      dispatch, stage 4's empty set, or stage 4's unlinked spec(s), which commands/commit.md
+      Step 8 (4) routes as a finding on the context and no spec update is dispatched for).
+      The exit status decides nothing: the close report this selection reads is checked at
+      close QA's own stop (G2), and /commit Step 3 admitted the task on its verdict (P1b E4).
 
 OUTPUT:
   stdout: human-readable narration of the decision
@@ -45,7 +48,6 @@ Claude Code Agent call, not a shell command).
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
 import pathlib
@@ -66,16 +68,6 @@ def _trace_on() -> bool:
 def _emit(marker: str) -> None:
     if _trace_on():
         print(marker, file=sys.stderr, flush=True)
-
-
-def _close_report_missing(cr: pathlib.Path) -> bool:
-    """Whether there is no close report, as hooks/lib/close-verdict.py, the one
-    classifier every reader of a close report takes its verdict from, decides it
-    (its file name is no identifier: imported by name from the harness root)."""
-    harness = str(pathlib.Path(__file__).resolve().parent.parent)
-    if harness not in sys.path:
-        sys.path.insert(0, harness)
-    return importlib.import_module("hooks.lib.close-verdict").classify_file(cr) == "missing"
 
 
 def _parse_close_report_lines_outside_fences(path: pathlib.Path):
@@ -114,9 +106,9 @@ def _stage1_context_spec_path(task_id: str, dev_docs_root: pathlib.Path):
 
 
 def _stage2_close_report_continuation(task_id: str, dev_docs_root: pathlib.Path):
+    # The close report is there: close QA's own stop (G2) checked it, and /commit
+    # Step 3 admitted the task on its verdict before Step 8 runs (P1b E4).
     cr = dev_docs_root / f"close-report-{task_id}.md"
-    if _close_report_missing(cr):
-        return None
     matches = []
     for line in _parse_close_report_lines_outside_fences(cr):
         m = CONTINUATION_RE.match(line)
@@ -134,8 +126,6 @@ def _stage2_close_report_continuation(task_id: str, dev_docs_root: pathlib.Path)
 
 def _stage3_mtime_glob(task_id: str, dev_docs_root: pathlib.Path):
     cr = dev_docs_root / f"close-report-{task_id}.md"
-    if _close_report_missing(cr):
-        return []
     cr_mtime = cr.stat().st_mtime
     lo = cr_mtime - 24 * 3600
     hi = cr_mtime + 3600
@@ -249,7 +239,7 @@ def main() -> int:
             f"{paths_str}; explicit context.spec_path required",
             file=sys.stderr,
         )
-    return 2
+    return 0
 
 
 if __name__ == "__main__":

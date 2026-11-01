@@ -1795,6 +1795,37 @@ def test_settings_env_rule(tmp_path, env):
     assert out == ""
 
 
+def test_settings_env_any_session(tmp_path, env):
+    """P1b E4: any_session=True reads the harness home's settings.json env also for a process whose
+    env has CLAUDE_HOME (a session started since the landing); the other rules stay."""
+    home = r7_home(tmp_path, {"CLAUDE_OBLIGATION_STOPGATE": "block", "N": 1})
+    code = ("import json, sys; sys.path.insert(0, sys.argv[1]); from lib import claude_home as c;"
+            "print(json.dumps(c.settings_env('CLAUDE_OBLIGATION_STOPGATE', 'N', 'ABSENT', any_session=True)))")
+    cmd = [sys.executable, "-c", code, str(home / "hooks")]
+    want = {"CLAUDE_OBLIGATION_STOPGATE": "block"}
+    assert json.loads(run(cmd, dict(env, CLAUDECODE="1")).stdout) == want
+    assert json.loads(run(cmd, dict(env, CLAUDECODE="1", CLAUDE_HOME="/x")).stdout) == want
+    assert json.loads(run(cmd, dict(env, CLAUDE_PROJECT_DIR="/p", CLAUDE_HOME=str(home))).stdout) == want
+    assert json.loads(run(cmd, dict(env, CLAUDECODE="1", CLAUDE_HOME="/x",
+                                    CLAUDE_OBLIGATION_STOPGATE="advisory")).stdout) == {}
+    assert json.loads(run(cmd, dict(env, CLAUDE_HOME="/x")).stdout) == {}  # not a Claude Code process
+    (home / "settings.json").write_text("<<<<<<< conflict")
+    assert json.loads(run(cmd, dict(env, CLAUDECODE="1", CLAUDE_HOME="/x")).stdout) == {}
+
+
+def test_settings_switch(tmp_path, env):
+    """P1b E4: G2's switch as a running session whose env lacks it meets it: the harness home's
+    settings.json value, stripped and lowercased, with or without CLAUDE_HOME; the default when
+    that env does not set it."""
+    home = r7_home(tmp_path, {"CLAUDE_OBLIGATION_STOPGATE": " Block "})
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); from lib import claude_home as c;"
+            "print(c.settings_switch('CLAUDE_OBLIGATION_STOPGATE', 'advisory'), c.settings_switch('ABSENT', 'x'))")
+    cmd = [sys.executable, "-c", code, str(home / "hooks")]
+    assert run(cmd, dict(env, CLAUDECODE="1")).stdout.split() == ["block", "x"]
+    assert run(cmd, dict(env, CLAUDECODE="1", CLAUDE_HOME="/x")).stdout.split() == ["block", "x"]
+    assert run(cmd, env).stdout.split() == ["advisory", "x"]  # not a Claude Code process
+
+
 def test_subagent_restart_reads_the_accounts_root_from_rendered_settings(tmp_path, env):
     home = r7_home(tmp_path, {"CLAUDE_RESTART_ACCOUNTS_ROOT": "/opt/demo/accounts"})
     shutil.rmtree(home / "hooks" / "lib")

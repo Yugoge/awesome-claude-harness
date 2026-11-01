@@ -20,7 +20,7 @@ commands/spec.md, commands/spec-update.md and agents/spec.md of the tree under t
      MONOLITH_LINES line, the spec subagent dispatched from the text's template (its
      obligation instantiated where the template has one), the split QA from its template
      and its loop (the re-split template on a fail), the `.split-complete` marker, the
-     finalize guard block and the lint block; Step 7: the /spec-update --temp note
+     finalize guard block where the text has one and the lint block; Step 7: the /spec-update --temp note
      (mktemp, Read, Write, as that command's text says) and the result display; Stop.
 
 Every spec write follows the tree's own text: where it names scripts/spec-write.py, every
@@ -971,10 +971,11 @@ class SpecRun:
         marker_path = f"{self.project}/{o.bind(content.group(2))}"
         o.run(f'printf \'%s\\n\' "{content.group(1)}" > {shlex.quote(marker_path)}', "Mark the split complete",
               "Step 6 Bash split-complete")
-        # 5. Finalize guard; 6. centralization lint.
+        # 5. Finalize guard, where the text still runs one (the base); 6. centralization lint.
         o.values.update(spec_path=self.path, CLAUDE_PROJECT_DIR=self.project)
-        o.run_text(o.block("Step 6", anchor="FINALIZE BLOCKED"), "Step 6 Bash finalize guard", "Finalize guard",
-                   capture=("VIEWS_AVAILABLE", "ARTIFACT_ID"))
+        if "FINALIZE BLOCKED" in sec:
+            o.run_text(o.block("Step 6", anchor="FINALIZE BLOCKED"), "Step 6 Bash finalize guard", "Finalize guard",
+                       capture=("VIEWS_AVAILABLE", "ARTIFACT_ID"))
         o.run_text(o.block("Step 6", anchor="lint-spec-id-centralization"), "Step 6 Bash centralization lint",
                    "Centralization lint (advisory)")
 
@@ -1001,8 +1002,10 @@ class SpecRun:
         fail = self.variant == "split-qa-fail" and self.qa_round == 1
         views = f"{self.project}/docs/dev/specs/{self.spec_id}/views"
         codes = re.findall(r"`([^`\n]+)`", prompt[prompt.index("3. COVERAGE"):prompt.index("4. CONTENT")])
-        find = next(c for c in codes if c.startswith("VERIFIER="))
-        verify = next(c for c in codes if '"$VERIFIER"' in c)
+        # check 3 runs the verifier where the text's prompt still does (the base); otherwise G2 checked
+        # the split at the spec subagent's stop and QA runs nothing for it
+        find = next((c for c in codes if c.startswith("VERIFIER=")), None)
+        verify = next((c for c in codes if '"$VERIFIER"' in c), None)
         project, path = self.project, self.path
 
         def body(sub):
@@ -1010,9 +1013,10 @@ class SpecRun:
             for name in sorted(os.listdir(views)):
                 if name.endswith(".md"):
                     sub.read(f"{views}/{name}", label=f"qa split Read view {name}")
-            cmd = (f"{find}\nif [ -n \"$VERIFIER\" ] && [ -f \"$VERIFIER\" ]; then\n  {verify}\nelse\n"
-                   "  echo \"spec-verify.py not found — manual coverage check required\"\nfi")
-            _sub_bash(sub, cmd, "Split QA check 3: coverage", label="qa split Bash coverage")
+            if find and verify:
+                cmd = (f"{find}\nif [ -n \"$VERIFIER\" ] && [ -f \"$VERIFIER\" ]; then\n  {verify}\nelse\n"
+                       "  echo \"spec-verify.py not found — manual coverage check required\"\nfi")
+                _sub_bash(sub, cmd, "Split QA check 3: coverage", label="qa split Bash coverage")
 
         if fail:
             self.issues = [SPLIT_QA_ISSUE]

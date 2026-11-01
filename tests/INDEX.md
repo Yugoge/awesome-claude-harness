@@ -145,7 +145,7 @@ tests/
 ├── `test_verify_claims_tracked_form.py` - On an initialised home the claude-settings filter leaves the machine form in the
 ├── `test_write_qa_mode.py` - Each QA dispatch's obligation now declares the report it owes, so no qa_mode
 ├── `TESTING.md` - Test Topology & Runner Map (authoritative)
-└── `verify-stop-spec-session-isolation.sh` - QA verification harness for stop-spec-coverage-enforce.py session isolation fix.
+└── `verify-stop-spec-session-isolation.sh` - Checks stop-spec-coverage-enforce.py, an exit-0 stub: G2 checks the split at the spec subagent's stop.
 ```
 <!-- /AUTO:index-stats -->
 

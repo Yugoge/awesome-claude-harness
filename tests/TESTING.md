@@ -99,7 +99,7 @@ graph TD
 | Script | What it verifies | How to run |
 |---|---|---|
 | `fresh-clone-bootstrap-smoke.sh` | Fresh non-root clone: guards load their own clone helpers, block dangerous ops fail-closed, degrade optional capability gracefully. | `bash tests/fresh-clone-bootstrap-smoke.sh [--json out.json] [--keep]` |
-| `verify-stop-spec-session-isolation.sh` | `stop-spec-coverage-enforce.py` session isolation (AC1–AC5 + regressions); exit 0 = all pass | `bash tests/verify-stop-spec-session-isolation.sh` |
+| `verify-stop-spec-session-isolation.sh` | `stop-spec-coverage-enforce.py` is an exit-0 stub (its rule is G2's at the spec subagent's stop); exit 0 = all pass | `bash tests/verify-stop-spec-session-isolation.sh` |
 
 ---
 
