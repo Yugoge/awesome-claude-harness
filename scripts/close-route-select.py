@@ -14,14 +14,14 @@ the ordinary route, so the chain is resolved once per run.
 The pass-through payload is ``{"outcome": "not_selected", "artifact_chain":
 <resolver result>}`` with ``artifact_chain`` byte-identical to the resolver's
 own result and the resolver's own exit status: this script adds no verdict of
-its own to the one chain call.
+its own to the one chain call and reads no status name or constant of the
+resolver's, only ``exit_status``.
 
 Exit codes:
   0  not_selected (no --late-repair, or init declined) with a passing chain
-     (status "pass" or "pass_with_exceptions" -- ticket 20260911-011232), or
-     initialized / already_initialized
+     (status "pass"), or initialized / already_initialized
   1  refuse (usage error, e.g. --late-repair + --force)
-  2  not_selected with a failing chain
+  2  not_selected with any other chain status
 """
 
 from __future__ import annotations

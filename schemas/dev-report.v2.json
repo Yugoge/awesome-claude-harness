@@ -91,7 +91,7 @@
     "ac_deviation_with_user_need_satisfied_block": {
       "type": "object",
       "additionalProperties": true,
-      "description": "Canonical machine shape: scripts/resolve-dev-artifact-chain.py:80-130 ('THE ONE PLACE that defines the machine shape'). Unknown extra keys tolerated (resolver comment :96-97).",
+      "description": "The AC-deviation record's machine shape: this schema is the shape. Unknown extra keys tolerated.",
       "required": [
         "clause_a_deviated_ac_ids",
         "clause_b_user_need_verbatim",

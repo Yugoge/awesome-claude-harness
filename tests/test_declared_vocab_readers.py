@@ -1,39 +1,15 @@
 """Readers that take a set from its declaration instead of a copy of it
-(P1b row 19 rule 7): the chain resolver's disclosed-exception
-classifications are schemas/qa-report.v1.json's enum, and the orphan-agent
-detector asks the command files whether they name an agent instead of
-keeping a list of agents it excuses.
+(P1b row 19 rule 7): the orphan-agent detector asks the command files
+whether they name an agent instead of keeping a list of agents it excuses.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import shutil
 import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-
-
-def _resolver():
-    spec = importlib.util.spec_from_file_location("resolve_dev_artifact_chain",
-                                                  REPO / "scripts" / "resolve-dev-artifact-chain.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_disclosed_exception_classifications_are_the_schemas():
-    schema = json.loads((REPO / "schemas" / "qa-report.v1.json").read_text(encoding="utf-8"))
-    declared = schema["properties"]["disclosed_exception"]["properties"]["classification"]["enum"]
-    resolver = _resolver()
-    assert resolver._qa_disclosed_classifications() == frozenset(declared)
-    report = {"iteration_needed": False, "qa": {"disclosed_exception": {
-        "classification": declared[0], "evidence": ["shared tree"],
-        "attestation": resolver.DISCLOSED_EXCEPTION_ATTESTATION}}}
-    assert resolver._qa_environmental_eligible(report)
-    report["qa"]["disclosed_exception"]["classification"] = "not_declared"
-    assert not resolver._qa_environmental_eligible(report)
 
 
 def test_an_agent_no_command_names_is_the_only_orphan(tmp_path):
