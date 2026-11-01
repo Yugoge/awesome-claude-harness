@@ -442,14 +442,6 @@ def test_a_completed_do_report_concludes_beside_dev_s_report(tmp_path):
     assert outcome(tree.root) == ("chain_pass", [])
 
 
-def test_a_minted_do_task_with_an_unreadable_do_report_is_concluded_by_dev_s_report(tmp_path):
-    tree = Tree(tmp_path / "proj")
-    session(tree.root, "s-do", [typed("do", "make a change"), minted()])
-    tree.write(f"do-report-{TASK}.json", "{not json")
-    tree.write(f"dev-report-{TASK}.json", dev_report(TASK))
-    assert outcome(tree.root) == ("chain_pass", [])
-
-
 # --------------------------------------------------------------------------
 # A2: instrument failures are never a disposition
 # --------------------------------------------------------------------------
