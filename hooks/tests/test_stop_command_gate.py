@@ -12,6 +12,7 @@ Run with: python3 -m pytest hooks/tests/test_stop_command_gate.py -q
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -560,6 +561,100 @@ def test_a6_a7_an_analyst_prompt_naming_a_merged_tip_does_not_count_and_a_later_
     git(repo, "merge", "-q", "--no-ff", "--no-edit", "feature")
     git(repo, "checkout", "-q", "feature")
     commit(repo, "g.txt")  # the source moves after the landed merge
+    assert run(env) == (0, "")
+
+
+def branches(repo, *names):
+    """A commit of its own on each named branch, cut from master; HEAD back on master."""
+    for name in names:
+        git(repo, "checkout", "-q", "-b", name, "master")
+        commit(repo, f"{name}.txt")
+    git(repo, "checkout", "-q", "master")
+
+
+def write_grant(env, repo, branch):
+    """The merge-analyst's grant for ``branch``, as agents/merge-analyst.md Phase 8 writes it, at
+    git's clock: one hooks/lib/merge_grant.py's check passes, as at the PostToolUse of that Write."""
+    merge_grant, top = gate._lib("merge_grant"), os.path.realpath(repo)
+    request = f"{int(GIT_CLOCK[0]):032x}"
+    path = Path(merge_grant.grant_root(), hashlib.sha256(top.encode()).hexdigest()[:16], SID, f"{request}.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    expires = (datetime.now(timezone.utc) + timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    path.write_text(json.dumps({
+        "verdict": "approved", "risks": [], "analysis_summary": "clean", "repo_root": top, "branch": branch,
+        "source_tip": git(repo, "rev-parse", branch), "default_branch": "master",
+        "default_tip": git(repo, "rev-parse", "master"), "session_id": SID, "nonce": request, "expires_at": expires}))
+    assert merge_grant.fault(str(path)) == ""
+    GIT_CLOCK[0] += 1
+    os.utime(path, (GIT_CLOCK[0], GIT_CLOCK[0]))
+
+
+@pytest.mark.parametrize("typed", [True, False])
+def test_a6_a_source_already_in_the_default_branch_holds(env, repo, typed):
+    """merge.sh's conflict text has the human commit the merge and type /merge <ref> again, and a
+    re-run after a completed merge is idempotent: git's "Already up to date" writes no reflog entry."""
+    branches(repo, "feature")
+    git(repo, "merge", "-q", "--no-ff", "--no-edit", "feature")
+    git(repo, "checkout", "-q", "feature")  # in place on the source: a bare /merge's tier 3
+    opener_now(env, "merge", "feature" if typed else "")
+    git(repo, "checkout", "-q", "master")
+    git(repo, "merge", "-q", "--no-edit", "feature")
+    assert run(env) == (0, "")
+
+
+@pytest.mark.parametrize("args", ["", "master", "same", "no-such-ref"])
+def test_a6_step_1s_refusals_hold_with_nothing_merged_and_a_merge_no_grant_names_blocks(env, repo, args):
+    """Bare on the default branch (tier 3 degenerates), a typed ref at the default branch's commit
+    (self-merge) or one that resolves to nothing (missing tip): Step 1 refuses and nothing is
+    merged. A merge into the default branch after the opener then has no source, and a grant this
+    session wrote before the opener (an earlier /merge) names none."""
+    git(repo, "branch", "same")
+    branches(repo, "other")
+    write_grant(env, repo, "other")
+    opener_now(env, "merge", args)
+    assert run(env) == (0, "")
+    git(repo, "merge", "-q", "--no-ff", "--no-edit", "other")
+    code, text = run(env)
+    assert code == 2 and "no merge-analyst grant" in text
+
+
+@pytest.mark.parametrize("args", ["", "master", "--no-commit"])
+def test_a6_with_no_source_from_git_steps_pick_is_the_merge_analysts_grant(env, repo, args):
+    """A bare /merge on the default branch (Step 0's tier 2 from an overnight-state record that
+    merge.sh's cleanup removes), or the ref a self-merge refusal's answer named: the source is the
+    newest merge-analyst grant this session wrote since the opener."""
+    branches(repo, "feature", "other")
+    opener_now(env, "merge", args)
+    write_grant(env, repo, "feature")
+    held = args == "--no-commit"
+    flag = "--no-commit" if held else "--no-edit"
+    git(repo, "merge", "-q", "--no-ff", flag, "other")
+    code, text = run(env)
+    assert code == 2 and ("MERGE_HEAD is" if held else "no merge of feature") in text
+    if held:
+        git(repo, "merge", "--abort")
+    git(repo, "merge", "-q", "--no-ff", flag, "feature")
+    assert run(env) == (0, "")
+    if held:
+        git(repo, "commit", "-q", "--no-edit")
+    git(repo, "branch", "-q", "-D", "feature")  # the wrapper's cleanup
+    assert run(env) == (0, "")
+
+
+@pytest.mark.parametrize("finish", ["commit", "abort"])
+def test_a6_merge_no_commit_finalized_or_aborted_decides_as_a_committed_merge(env, repo, finish):
+    branches(repo, "feature")
+    opener_now(env, "merge", "--no-commit feature")
+    git(repo, "merge", "-q", "--no-commit", "--no-ff", "feature")
+    assert run(env) == (0, "")
+    if finish == "commit":  # merge.sh's printed finalize
+        git(repo, "commit", "-q", "--no-edit")
+        assert run(env) == (0, "")
+        return
+    git(repo, "merge", "--abort")
+    code, text = run(env)
+    assert code == 2 and "no merge of feature into refs/heads/master" in text
+    git(repo, "merge", "-q", "--no-commit", "--no-ff", "feature")  # the merge made again
     assert run(env) == (0, "")
 
 

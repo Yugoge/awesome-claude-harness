@@ -49,6 +49,14 @@ def is_grant_path(path: str) -> bool:
     return len(parts) == 3 and not rel.startswith("..")
 
 
+def newest(repo_root: str, session_id: str, since: float) -> dict:
+    """The session's last grant for the repository at `repo_root`, if written at or
+    after `since` (fault() passed it on that Write), else {}: the Stop gate's source."""
+    folder = Path(grant_root(), hashlib.sha256(os.path.realpath(repo_root).encode()).hexdigest()[:16])
+    found = sorted((p.stat().st_mtime, p) for p in (folder / session_id).glob("*.json")) if session_id else []
+    return json.loads(found[-1][1].read_text()) if found and found[-1][0] >= since else {}
+
+
 def _git(cwd: str, *args: str) -> str:
     try:
         done = subprocess.run(["git", "-C", cwd] + list(args),

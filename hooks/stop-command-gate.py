@@ -26,9 +26,10 @@ command_span (the CLI's record of typed prompts, tool calls and hook context),
 git, and the producers' own deciders, called, never copied: P3's disposition
 as the chain's own disposition_lines (scripts/resolve-dev-artifact-chain.py,
 through the one adapter `disposition`), P2's overnight locator and window
-(hooks/lib/overnight.py), P4's close rating (hooks/lib/close_rating.py) and
-dev-lifecycle's --auto target function. No target comes from a dispatch
-prompt or a tool result. The gate writes nothing but its own output (stdout:
+(hooks/lib/overnight.py), P4's close rating (hooks/lib/close_rating.py),
+dev-lifecycle's --auto target function and the merge-analyst's grant
+(hooks/lib/merge_grant.py). No target comes from a dispatch prompt or a
+tool result. The gate writes nothing but its own output (stdout:
 the terminal time-lock status of an allowed Stop, see main), keeps no count
 and has no release but the work itself: the next compliant step clears each
 gap. The human's /stop opens a span that is not gated, and nothing here
@@ -268,14 +269,14 @@ def _since(span) -> float:
     return int(opened)  # reflog times are whole seconds
 
 
-def _source_tips(root, ref: str, since: float) -> set:
-    """The values git gives the typed ref from the opener on: its value at
-    the opener, each later reflog value and its value now."""
+def _source_tips(root, ref: str, since: float) -> tuple:
+    """The ref's value at the opener (else now), and the values git gives it
+    from the opener on: that one, each later reflog value and its value now."""
     full = _git(root, "rev-parse", "--symbolic-full-name", "--verify", "-q", ref) or ref
     entries = _reflog(root, full)
-    tips = {sha for sha, t, _m in entries if t >= since}
-    tips |= {_value_at(entries, since), _git(root, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}")}
-    return {tip for tip in tips if tip}
+    now = _git(root, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}")
+    at = _value_at(entries, since) or now
+    return at, {tip for tip in {sha for sha, t, _m in entries if t >= since} | {at, now} if tip}
 
 
 def _bare_pick(root, since: float) -> str | None:
@@ -292,32 +293,41 @@ def _bare_pick(root, since: float) -> str | None:
 
 
 def p_merge(span, root, payload) -> list[str]:
-    """/merge [--no-commit] [<ref>] [INFERRED; A6]: a merge entry in
-    DEFAULT_BRANCH's reflog after the opener has a value of the source as its
-    merged parent (a fast-forward: as its new value), and no unmerged path;
-    --no-commit: MERGE_HEAD is a value of the source."""
+    """/merge [--no-commit] [<ref>] [INFERRED; A6]. Source: the typed ref, else
+    the newest merge-analyst grant this session wrote here since the opener
+    (checked against git on that Write; a bare /merge reads it first), else the
+    bare pick from git; none if its value at the opener is no commit or
+    DEFAULT_BRANCH's (Step 1's missing tip, self-merge). With no unmerged path:
+    MERGE_HEAD (--no-commit, while present) is a value of the source; else a merge
+    entry in DEFAULT_BRANCH's reflog after the opener has one as its merged parent
+    (a fast-forward: as its new value), or the source's value at the opener is in
+    DEFAULT_BRANCH ("Already up to date"); no source: no merge entry after it."""
     _repository(root)
     args = span.args.split()
     refs = [a for a in args if not a.startswith("-")]
     since = _since(span)
-    ref = refs[0] if refs else _bare_pick(root, since)
-    if not ref:
-        return ["merge: Step 0's pick has no git record (no current branch at the opener)"]
-    tips = _source_tips(root, ref, since)
-    if "--no-commit" in args:
-        head = _git(root, "rev-parse", "--verify", "-q", "MERGE_HEAD")
-        return [] if head and head in tips else [f"merge: MERGE_HEAD is {head or 'absent'}, not {ref}'s tip"]
     default = (subprocess.run(["bash", str(HARNESS / "scripts" / "derive-default-branch.sh")], cwd=str(root),
                               capture_output=True, text=True, timeout=20).stdout.strip())
-    merged = False
-    for sha, t, message in _reflog(root, f"refs/heads/{default}"):
-        if t < since or not message.startswith(("merge ", "commit (merge)")):
-            continue
-        parents = (_git(root, "rev-list", "--parents", "-n", "1", sha) or "").split()[2:]
-        if (tips & ({sha} | set(parents)) if tips else message.startswith(f"merge {ref}:")):
-            merged = True
-            break
-    gaps = [] if merged else [f"merge: no merge of {ref} into refs/heads/{default} after the /merge opener"]
+    base, named = _source_tips(root, f"refs/heads/{default}", since)[0], refs[0] if refs else _bare_pick(root, since)
+    grant = _lib("merge_grant").newest(_git(root, "rev-parse", "--show-toplevel") or str(root),
+                                       payload.get("session_id"), since)
+    own = [(named, *_source_tips(root, named, since))] if named else []
+    granted = [(grant.get("branch"), grant.get("source_tip"), {grant.get("source_tip")})]
+    ref, at, tips = next((s for s in (own + granted if refs else granted + own) if s[1] not in (None, base)),
+                         (named, None, set()))
+    landed = [(sha, m) for sha, t, m in _reflog(root, f"refs/heads/{default}")
+              if t >= since and m.startswith(("merge ", "commit (merge)"))]
+    head = _git(root, "rev-parse", "--verify", "-q", "MERGE_HEAD") if "--no-commit" in args else None
+    if head:
+        gaps = [] if head in tips else [f"merge: MERGE_HEAD is {head}, not {ref}'s tip"]
+    elif any(tips & {sha, *(_git(root, "rev-list", "--parents", "-n", "1", sha) or "").split()[2:]} if tips
+             else m.startswith(f"merge {ref}:") for sha, m in landed) or (
+            _ancestor(root, at, f"refs/heads/{default}") if at else not landed):
+        gaps = []
+    else:
+        gaps = [f"merge: no merge of {ref} into refs/heads/{default} after the /merge opener" if at else
+                f"merge: refs/heads/{default} took a merge after the opener; no merge-analyst grant of this "
+                "session since the opener names its source"]
     if _git(root, "ls-files", "-u"):
         gaps.append("merge: unmerged paths remain in the index")
     return gaps
