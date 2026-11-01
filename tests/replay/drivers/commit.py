@@ -78,7 +78,7 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
                           approves, it commits (P4 acceptance 4 (f))
   variant=waits           a later session types `/commit` (no task context: the Task question, the
                           stub picks the task), its first Step 7 commit is refused by a hook (the
-                          Hook block question, then Steps 5-7 again); then `/commit --auto --force`
+                          Authorize question, then Steps 5-7 again); then `/commit --auto --force`
                           (the Flags question) (P4 acceptance 5's /commit cases)
   session=same|later      /close and /commit typed in the cycle's session or a later one
                           (default same for plain, later for every other variant)
@@ -920,28 +920,6 @@ class CommitRun:
         return ans
 
 
-def interrupted_dev(rp):
-    """A /dev whose session stops after its dev (Step 12): its QA (Step 13) never dispatched."""
-    from . import dev as devdrv
-    cyc = devdrv.DevCycle(rp, "plain", rp.args.get("tier", "STANDARD"))
-    o = cyc.o
-    cyc.start()
-    cyc.step1()
-    for n in range(2, 7):
-        cyc.to(n)
-        getattr(cyc, f"step{n}")()
-    cyc.to(7)
-    cyc.step7(verdict="pass")
-    cyc.to(8)
-    cyc.to(9); cyc.step9()
-    cyc.to(10); cyc.step10()
-    cyc.to(11)
-    o.s.say("Step 11 waived: single-dev cycle (N == 1); the dev writes the canonical report itself.")
-    cyc.to(12); cyc.step12()
-    closedrv.fact(rp, "dev interrupted", {"after": "Step 12", "qa_dispatched": False})
-    return closedrv.DevProducer(cyc), cyc.tid, o.s, cyc
-
-
 def fanout_dev(rp):
     from . import dev as devdrv
     cyc = devdrv.FanoutCycle(rp, "fanout", rp.args.get("tier", "STANDARD"), 2)
@@ -962,8 +940,8 @@ def run(rp) -> None:
     session_kind = rp.args.get("session", "same" if variant in ("plain", "reject") else "later")
     rp.pipeline = (f"{after}+close+commit" + (f"/{variant}" if variant != "plain" else "")
                    + ("/later" if session_kind == "later" else ""))
-    if variant == "laneqa":
-        producer, tid, s, cyc = interrupted_dev(rp)
+    if variant == "laneqa":  # the /dev session interrupted before its QA (Step 13) was ever dispatched
+        producer, tid, s, cyc = closedrv.dev_cycle(rp, after, stop_before=13)
     elif variant == "aggregate":
         producer, tid, s, cyc = fanout_dev(rp)
     else:

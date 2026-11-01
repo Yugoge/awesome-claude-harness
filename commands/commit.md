@@ -188,9 +188,9 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   its actual Git root (the deepest supported repository, never an unadmitted nested
   checkout), and emits an ordered JSON plan whose per-repository entries bind
   `repo_root`, `branch`, `expected_head`, task-owned repo-relative paths, and whether the
-  control repo owns cycle artifacts. The report is taken from the exact `docs/dev`
-  directory that supplied `CLOSE_REPORT`: this task's dev-report there, else its
-  do-report, else the control-root `docs/dev`; never scan reports by mtime.
+  control repo owns cycle artifacts. The report is this task's dev-report, else its
+  do-report, in the exact `docs/dev` directory that supplied `CLOSE_REPORT` (the
+  control-root `docs/dev` only when there is none); never scan reports by mtime.
 
   ```bash
   CONTROL_ROOT="$(git rev-parse --show-toplevel)"
