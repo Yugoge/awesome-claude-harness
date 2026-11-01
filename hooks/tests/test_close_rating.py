@@ -119,6 +119,14 @@ def test_a_re_rating_writes_no_second_row(config: Path) -> None:
     assert [(row["task_id"], row["rating"]) for row in _rows(config)] == [(TASK, 4), (OTHER, 3)]
 
 
+def test_a_rating_sourced_with_the_minted_prefix_and_one_without_are_one_task(config: Path) -> None:
+    # First rating wins per canonical task id, as the predicates compare them.
+    _silent(_run(_payload("4 - Minor gaps", task=f"dev-{TASK}"), config))
+    _silent(_run(_payload("5 - Fully met", tool_use_id="toolu_again"), config))
+    _silent(_run(_payload("3 - Major gaps", task=f"dev-command-{TASK}", tool_use_id="toolu_third"), config))
+    assert [(row["task_id"], row["rating"]) for row in _rows(config)] == [(f"dev-{TASK}", 4)]
+
+
 @pytest.mark.parametrize("source", ["remember", f"close-rating:{TASK}/x", "close-rating:ab", f"close-rating:{TASK}\n",
                                     f"Close-rating:{TASK}", ""])
 def test_another_source_is_a_no_op(config: Path, source: str) -> None:
