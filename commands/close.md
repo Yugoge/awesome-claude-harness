@@ -165,32 +165,30 @@ close_route_finding() {
 
 # R15 progress measure. Arguments: before-hash after-hash before-unresolved
 # after-unresolved (the sets are newline-separated finding ids). Call it directly,
-# not inside $( ): it keeps its history in CLOSE_PROGRESS_SEEN and sets
-# CLOSE_PROGRESS_RESULT (also printed) to progress or no_progress. A round is
+# not in a command substitution: it keeps its history in CLOSE_PROGRESS_SEEN and
+# sets CLOSE_PROGRESS_RESULT (also printed) to progress or no_progress. A round is
 # progress iff the producer artifact bytes changed, or the unresolved set became
 # strictly smaller; a (bytes, set) state seen in any earlier round never counts
-# as progress again (the revisit rule).
+# as progress again (the revisit rule). No comma and no case pattern in the
+# body: pretool-bash-safety.sh reads either as a dynamic command head.
 close_progress() {
   local bh="${1:-}" ah="${2:-}" bset="${3:-}" aset="${4:-}" bkey akey nb na
   bset="$(printf '%s\n' "$bset" | sed '/^$/d' | sort -u)"
   aset="$(printf '%s\n' "$aset" | sed '/^$/d' | sort -u)"
-  bkey="$bh|$(paste -sd, - <<<"$bset")"
-  akey="$ah|$(paste -sd, - <<<"$aset")"
-  case $'\n'"${CLOSE_PROGRESS_SEEN:-}"$'\n' in *$'\n'"$bkey"$'\n'*) ;; *) CLOSE_PROGRESS_SEEN="${CLOSE_PROGRESS_SEEN:+$CLOSE_PROGRESS_SEEN$'\n'}$bkey" ;; esac
+  bkey="$bh $(printf '%s\n' "$bset" | tr '\n' ' ')"
+  akey="$ah $(printf '%s\n' "$aset" | tr '\n' ' ')"
+  grep -qxF -- "$bkey" <<<"${CLOSE_PROGRESS_SEEN:-}" || CLOSE_PROGRESS_SEEN="${CLOSE_PROGRESS_SEEN:+$CLOSE_PROGRESS_SEEN$'\n'}$bkey"
   CLOSE_PROGRESS_RESULT=no_progress
-  case $'\n'"${CLOSE_PROGRESS_SEEN:-}"$'\n' in
-    *$'\n'"$akey"$'\n'*) ;;
-    *)
-      CLOSE_PROGRESS_SEEN="$CLOSE_PROGRESS_SEEN"$'\n'"$akey"
-      nb=$(printf '%s\n' "$bset" | sed '/^$/d' | wc -l)
-      na=$(printf '%s\n' "$aset" | sed '/^$/d' | wc -l)
-      if [ "$bh" != "$ah" ]; then
-        CLOSE_PROGRESS_RESULT=progress
-      elif [ "$na" -lt "$nb" ] && [ -z "$(comm -13 <(printf '%s\n' "$bset") <(printf '%s\n' "$aset"))" ]; then
-        CLOSE_PROGRESS_RESULT=progress
-      fi
-      ;;
-  esac
+  if ! grep -qxF -- "$akey" <<<"$CLOSE_PROGRESS_SEEN"; then
+    CLOSE_PROGRESS_SEEN="$CLOSE_PROGRESS_SEEN"$'\n'"$akey"
+    nb=$(printf '%s\n' "$bset" | sed '/^$/d' | wc -l)
+    na=$(printf '%s\n' "$aset" | sed '/^$/d' | wc -l)
+    if [ "$bh" != "$ah" ]; then
+      CLOSE_PROGRESS_RESULT=progress
+    elif [ "$na" -lt "$nb" ] && [ -z "$(comm -13 <(printf '%s\n' "$bset") <(printf '%s\n' "$aset"))" ]; then
+      CLOSE_PROGRESS_RESULT=progress
+    fi
+  fi
   echo "$CLOSE_PROGRESS_RESULT"
 }
 
@@ -220,7 +218,9 @@ verdict branch below), whenever `REQUIRED_ACTIONS_JSON` is a non-empty array.
 There is no repair engine and no repetition bound: the loop is bounded only by
 the R15 progress measure.
 
-For each `{path, detail, source_check}` entry:
+For each `{path, detail, source_check}` entry, steps 1 and 2; then, once every
+entry of the round is dispatched, steps 3 to 5 once per distinct `source_check`
+of the round (as `/commit`'s loop re-runs its chain call once per round):
 
 1. **Owing dispatch** = the JSON answer (or `null`) of the declaring-dispatch
    reader on the entry's path, run as its own Bash call:
@@ -256,16 +256,18 @@ For each `{path, detail, source_check}` entry:
    (CLAUDE.md Orchestrator-Only Rule), carrying the FIRST ACTION line and the
    `<obligation v="1">` block of the dispatch it repeats, scoped to the entry's
    `path` / `detail` (a step of the main agent's own runs in its place).
-3. **Re-check** — re-run ONLY the entry's `source_check` (never the whole
-   `/close` flow from scratch), as an independent verifier. A verifier never
-   edits the artifact it judges; it reports a finding and the producer fixes it.
+3. **Re-check** — re-run ONLY that `source_check` (never the whole `/close`
+   flow from scratch), once for all the entries it produced, as an independent
+   verifier. A verifier never edits the artifact it judges; it reports a
+   finding and the producer fixes it.
 4. **Measure progress** with `close_progress` when the re-check still fails
-   (before/after hash of the producer artifact's bytes; before/after set of
-   unresolved finding ids), as `/commit`'s loop does. Re-check
-   passes -> the finding is closed: it is recorded as a completed repair (see
-   `## Disclosures` below), never as an open gap. A round that changed neither
-   the producer artifact's bytes nor shrank the unresolved set, or that
-   revisits a state already seen, is `no_progress`.
+   (before/after hash of the bytes of the entries' artifacts; before/after set
+   of unresolved finding ids), as `/commit`'s loop does. Re-check passes ->
+   each of its findings is closed: each is recorded as a completed repair, one
+   line in the `## Disclosures` format below that every later close-QA
+   dispatch receives as its `Completed repairs` input, never as an open gap.
+   A round that changed neither those bytes nor shrank the unresolved set, or
+   that revisits a state already seen, is `no_progress`.
 5. **No progress -> orchestrator arbitration (R5 / R13).** The orchestrator
    personally re-runs the single `source_check` and decides who is right.
    Producer right -> the verifier's report is itself a bad artifact: its
@@ -298,7 +300,7 @@ REQUIRED_ACTIONS_JSON='[]'   # the Resolver-error routing rule below, recorded i
 if [ "$LATE_REPAIR" != "true" ] && [ "$ROUTE_SELECT_RC" -ne 0 ]; then
   while IFS= read -r ERR; do
     close_route_finding "$(jq -r --arg report "docs/dev/dev-report-$TASK_ID.json" '.path // .artifact // $report' <<<"$ERR")" \
-      "resolver reported $(jq -r '.code // "an error"' <<<"$ERR") (rc=$ROUTE_SELECT_RC)" "close-route-select.py"
+      "resolver reported $(jq -r '(.code // "an error") + ": " + (.detail // "")' <<<"$ERR") (rc=$ROUTE_SELECT_RC)" "close-route-select.py"
   done < <(jq -c '.errors[]?' <<<"$ARTIFACT_CHAIN")
   [ "$REQUIRED_ACTIONS_JSON" != "[]" ] || close_route_finding "docs/dev/dev-report-$TASK_ID.json" "close-route-select.py returned non-zero (rc=$ROUTE_SELECT_RC) with no parseable errors[] and LATE_REPAIR=false" "close-route-select.py"
 fi
@@ -310,7 +312,7 @@ resolver's own error list; this is the implementation this rule reads, not a
 separate mechanism. Each element of that array becomes one `close_route_finding`
 call: path = that element's `.path // .artifact`, or, when the element names
 neither, the chain's dev report `docs/dev/dev-report-$TASK_ID.json`; detail = "resolver reported `<.code, default "an
-error">` (rc=$ROUTE_SELECT_RC)"; `source_check` = `close-route-select.py` --
+error">: <.detail>` (rc=$ROUTE_SELECT_RC)", the check's code and message; `source_check` = `close-route-select.py` --
 the same `{path, detail, source_check}` shape `close_route_finding` takes
 everywhere else in this document. When `errors[]` is empty or unparseable,
 there is exactly one such finding instead, on that same dev report, with detail
@@ -478,6 +480,9 @@ Input artifacts (read them first):
   qa_report, plus canonical_dev_report and completion; never invent a parent
   ticket/context/QA-report>
 - do-report: <do-report-<ts>.json for /do work, otherwise omit>
+- Completed repairs: <one line per repair the routing loop completed in this
+  /close (Step 0, a preflight, an earlier round), in the `## Disclosures`
+  format; [] when none>
 
 Treat the `lanes[]` array as a lane matrix for one parent close decision, not as
 a bundled implementation-verification prompt. In fan-out mode read every row and
@@ -615,7 +620,7 @@ Transcript file: write the full debate to `docs/dev/close-report-<task-id>.md` (
   Workflow Integrity Dimension: explicit per-bullet status (1. Downstream consumability: PASS/FAIL/N/A; 2. task-id chain consistency: PASS/FAIL/N/A; 3. Pre-existing-defect rule: PASS/FAIL/N/A; 4. Self-deployability: PASS/FAIL/N/A) — with one-sentence reason for each FAIL or N/A.
   Codex consultation: explicit `codex_status` value (`ok` | `failed_quota` | `failed_timeout` | `failed_parse`). When the value is one of the failure modes, include a "Degraded codex consultation" section that records: which rounds failed, the verbatim error / timeout / parse-issue from each attempt, and the explicit acknowledgement that the verdict was granted on QA's substantive YES alone (per Verdict rule branch 6). For `failed_parse` specifically (FINDING-4), the section MUST additionally include: (i) the verbatim raw codex output text from EACH failed_parse round, (ii) QA's explicit per-round manual scan note, and (iii) the verbatim attestation `manual parse: NO substantive dissent signal found in failed_parse output`. Without all three, branch 7 is not satisfied and the result falls to branch 8 (a defective close-report: a finding on it, routed to its declaring QA dispatch).
   For each round: [QA] position + rationale; [Codex] position + rationale (or "consultation failed: <reason>" when codex_status was failed-* in that round).
-  **`## Disclosures` (present whenever the routing loop completed at least one repair this cycle):** one line per completed repair, as an attached record only, in the exact format `path: problem | 归因: role(lane) | 修复: fix evidence` (field labels stay in Chinese; no code prefix). The final line's `<n>` count (in the `CLOSE: YES - with disclosures: <n> items` form below) MUST equal the number of disclosure lines in this section. Omit the section entirely when no repair was completed.
+  **`## Disclosures` (present whenever the routing loop completed at least one repair this cycle):** one line per completed repair (each line of the dispatch's `Completed repairs` input), as an attached record only, in the exact format `path: problem | 归因: role(lane) | 修复: fix evidence` (field labels stay in Chinese; no code prefix). The final line's `<n>` count (in the `CLOSE: YES - with disclosures: <n> items` form below) MUST equal the number of disclosure lines in this section. Omit the section entirely when no repair was completed.
   At bottom: the LAST non-empty line of the file MUST be EXACTLY this attempt's verdict line (Return value below: a landed `CLOSE: YES*` form such as a bare line `CLOSE: YES`, or the round-open line `CLOSE_FINDINGS: <n> items`). A round-open section is appended like any other (append-only) and never lands anything. Do NOT prefix it with `Final verdict:`, `Verdict:`, or any other label — the runtime parser (`hooks/lib/close-verdict.py`) reads the last non-empty line and requires it to start literally with `CLOSE: `; any prefix breaks `/commit`'s admission check.
 
 Overwrite policy: if `docs/dev/close-report-<task-id>.md` already exists with a `CLOSE:` line in it (a prior closure attempt for the same task-id), do NOT silently overwrite: always preserve the existing bytes and append a fresh debate as a new section dated by ISO timestamp, then require the file's LAST non-empty line to be exactly THIS new attempt's own legal `CLOSE:` verdict line (see Return value below). Perform this append via the deterministic helper — write the new dated section's full text (ending in this attempt's own legal `CLOSE:` line) to a temp file, then invoke it with ABSOLUTE paths rooted at `$PROJECT_ROOT` (resolved in Step 0 above) so the helper can never target the wrong project's `docs/dev` tree regardless of QA's own working directory:

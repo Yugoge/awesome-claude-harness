@@ -7,6 +7,10 @@
                                      the main agent's next step is cut the same way (both lanes of a
                                      fan-out batch). The owner reopens the session (`claude --resume`,
                                      SessionStart source "resume") and types /restart.
+                                     A glob matching a step of the main agent instead (a dispatch,
+                                     `Step 13 [[]l2] Agent(qa)`) cuts the session before that step,
+                                     with no subagent running (F8q: SessionCut ends the command there;
+                                     the owner types /close instead of /restart).
     --arg fault=limit@<label glob>   F6: at that step the subagent's next request meets a usage limit:
                                      its transcript gets the CLI's API-error record, its Agent call ends in
                                      the CLI's error result, the main agent's own request meets the same
@@ -44,6 +48,12 @@ TERMINATED = f"Agent terminated early due to an API error: {BANNER} (error type 
 
 class Stuck(RuntimeError):
     """The recovery met a refusal or failure the text gives no way past."""
+
+
+class SessionCut(RuntimeError):
+    """A cut between the main agent's own steps (F8q): the CLI process ended before the step it names, with
+    no subagent running; the command the driver was playing ends there, and the owner's next command
+    (their /close, D7) meets the cycle unfinished."""
 
 
 class _Abandoned(BaseException):
@@ -128,8 +138,16 @@ class Cuts:
             s.fire("StopFailure", "StopFailure rate_limit", {"error": "rate_limit"})
 
     def at_step(self, rp, phase, step) -> None:
-        """The cut point: after the first matching step of a subagent (on its own thread)."""
+        """The cut point: after the first matching step of a subagent (on its own thread); before a matching
+        step of the main agent (a dispatch, or a tool call of its own) when no subagent runs (SessionCut)."""
         r = self.runs.get(getattr(step.get("actor"), "aid", None))
+        main = step.get("kind") == "dispatch" or (step.get("kind") == "tool"
+                                                  and getattr(step.get("actor"), "agent", 1) is None)
+        if phase == "before" and r is None and main and self.kind == "cut" and not self.recovered:
+            self.recovered = True  # nothing is parked: no /restart follows
+            _record(rp, {"kind": "cut", "label": step["label"], "agent": None, "role": "main", "repaired": False,
+                         "rounds": 0, "events_before": rp.n_events})
+            raise SessionCut(step["label"])
         if phase != "after" or r is None or r.cut_step is not None or self.recovered:
             return
         r.cut_step = step

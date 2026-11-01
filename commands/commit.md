@@ -332,7 +332,7 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
               --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")" && break
           while IFS= read -r GAP_PATH; do
               route_finding "$GAP_PATH" \
-                  "resolve-dev-artifact-chain.py (chain-recheck) failed during commit-time repository planning" \
+                  "resolve-dev-artifact-chain.py reported $(jq -r --arg p "$GAP_PATH" '[.errors[]? | select((.path // .artifact) == $p) | (.code // "an error") + ": " + (.detail // "")] | join("; ") | if . == "" then "a non-zero exit" else . end' <<<"$ARTIFACT_CHAIN") during commit-time repository planning" \
                   "resolve-dev-artifact-chain.py --task-id $TASK_ID --project-dir $TASK_PROJECT_ROOT"
           done < <(jq -r --arg report "$TASK_REPORT" \
               '[.errors[]? | .path // .artifact // $report] | if length == 0 then [$report] else . end | unique[]' \

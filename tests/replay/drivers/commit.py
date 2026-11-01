@@ -59,9 +59,11 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
   after=dev|dev-command   the cycle committed (default dev; /do is drivers/do.py)
   variant=plain|route|append   the /close before it (drivers/close.py's variants)
   variant=auto            /dev, then `/close --auto`, then `/commit --auto`
-  variant=commit-route    /close lands, then the lane dev report is removed and /commit is typed in
-                          a later session: Step 5's chain call names the report, its owner is
-                          dispatched again, the same call re-run (acceptance 7's fourth case)
+  variant=commit-route    /close lands, then the lane dev report (a fan-out cycle's first lane's) is
+                          removed and /commit is typed in a later session: Step 5's chain call
+                          names the report, its owner is dispatched again, the same call re-run
+                          (acceptance 7's fourth case; F8c)
+  cycle_variant=V         drivers/dev.py's variant of the cycle (default plain; fanout, lanes=N)
   variant=full            route, append and commit-route in one cycle: the lane QA report removed
                           after /dev, /close in a later session (Step 0's routing round, then a
                           close-QA finding on the product file, dev again, the appended round), the
@@ -213,6 +215,8 @@ class CommitRun:
             if not found or k == rounds:
                 return False
             _, path, detail, check = (found[0] + ["", "", ""])[:4]
+            closedrv.fact(self.rp, "routing entry", {"label": f"Step 5 round {k + 1}",
+                                                     "entry": {"path": path, "detail": detail, "source_check": check}})
             if self.route_step5(path, detail, k + 1, check) == "awaiting":
                 return False
         try:
@@ -252,7 +256,11 @@ class CommitRun:
                 self.awaiting = line  # the single awaiting-input line ends the turn
                 closedrv.fact(self.rp, "commit awaiting input", {"label": lab, "path": path, "line": line})
                 return "awaiting"
-            closedrv.dispatch_answer(self, ans, path, detail, lab)
+            d, role = closedrv.dispatch_answer(self, ans, path, detail, lab)
+            if d is not None and getattr(d, "agent_id", ""):
+                closedrv.fact(self.rp, "routed dispatch", {"label": lab, "path": path, "role": role,
+                                                           "lane": ans.get("lane") if isinstance(ans, dict) else None,
+                                                           "agent_id": d.agent_id, "tool_use_id": d.tool_use_id})
             return None
         table = closedrv.role_function(defs)
         c = self.run_text(f"{defs}\n{table} {shlex.quote(path)}", self.label(f"{lab} Bash {table}"),
@@ -768,7 +776,7 @@ def run(rp) -> None:
                    + ("/later" if session_kind == "later" else ""))
     producer, tid, s, cyc = closedrv.dev_cycle(rp, after)
     if variant in ("route", "full"):
-        closedrv.remove(rp, [p for p in (f"docs/dev/qa-report-{tid}.json",)
+        closedrv.remove(rp, [p for p in (closedrv.lane_report(cyc, "qa"),)
                              if os.path.exists(os.path.join(rp.layout.project, p))])
     session = rp.later_session(s) if session_kind == "later" else s
     close_variant = {"commit-route": "plain", "full": "append"}.get(variant, variant)
@@ -780,6 +788,6 @@ def run(rp) -> None:
     cr.run()
     if variant in ("commit-route", "full"):
         # The lane dev report removed after /close landed (acceptance 7): Step 5's chain call names it.
-        closedrv.remove(rp, [f"docs/dev/dev-report-{tid}.json"])
+        closedrv.remove(rp, [closedrv.lane_report(cyc, "dev")])
         session = rp.later_session(session)
     CommitRun(rp, session, tid, producer=producer).run()

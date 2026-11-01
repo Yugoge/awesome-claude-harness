@@ -26,6 +26,13 @@ with the tree's settings ("shipped") and armed (G1-G3 block).
 The held git index.lock (F4, F4c, F4s; R14, X7): the shared-index sync (scripts/session-index.py
 sync-shared, the changelog-analyst's step after each commit) waits while a process holds the lock and
 removes, once and saying so, a lock no process holds that is older than the sync.
+
+An unfinished cycle the owner's /close or /commit meets (F8, F8q, F8p, F8c; tests/replay/routing.py):
+the gap names the artifact's path and its check and no role (D21); /close's one chain call (Step 0),
+its close-QA round (F8p) or /commit's chain call (Step 5, F8c) finds it; the routing loop dispatches
+again what P1b's E3 reader returns for that path (the same subagent_type, task id, lane and obligation
+template, a fresh dispatched_at), that dispatch's own agent writes the repair, and the typed /close or
+/commit (HX) is the only human event; /close ends in its Terminal form and F8c's commit lands.
 """
 from __future__ import annotations
 
@@ -35,7 +42,7 @@ import re
 
 import pytest
 
-from tests.replay import recovery, suite
+from tests.replay import recovery, routing, suite
 
 FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
 L1_DEV = "agent:dev Write docs/dev/dev-report-*-l1.json"
@@ -373,3 +380,63 @@ def test_f4s_stale_lock_at_commit(replays, key):
     _completed(r, rec)
     assert sum("removed" in line for line in rec["sync_lines"]) == 1, rec
     assert rec["sync_reports"] and not rec["lock_left_after_stop"], rec
+
+
+# ---------------------------------------------------------------- F8, F8q, F8p, F8c: an unfinished cycle met by /close or /commit
+def _route_cases(scn: suite.Scenario, faults: tuple = ()) -> list:
+    keys = [suite.replay_key(scn, s, faults) for s in suite.SETTINGS]
+    return [pytest.param(k, id=s, marks=pytest.mark.replay(k, scn.cost)) for k, s in zip(keys, suite.SETTINGS)]
+
+
+F8 = suite.Scenario("F8", "close", (("variant", "route"), ("cycle_variant", "fanout")), ("dev", "close"), 400)
+F8P = suite.Scenario("F8p", "close", (("variant", "break"), ("cycle_variant", "fanout")), ("dev", "close"), 420)
+F8Q = suite.Scenario("F8q", "close", (("cycle_variant", "fanout"),), ("close",), 420)
+F8Q_CUT = (("fault", "cut@Step 13 [[]l2] Agent(qa)"),)
+F8C = suite.Scenario("F8c", "commit", (("variant", "commit-route"), ("cycle_variant", "fanout")),
+                     ("dev", "close", "commit"), 500)
+
+
+@pytest.mark.parametrize("key", _route_cases(F8))
+def test_f8_lane_qa_report_removed_then_close(replays, key):
+    r = replays.get(key)
+    f = routing.assert_routed(r, typed="close", source="dispatch", check="close-route-select.py")
+    assert f["chain"][0]["route_select_rc"] != 0 and [c for c in f["chain"][0]["errors"]
+                                                      if c[1] == f["injection"][0]["path"]], f["chain"]
+    assert f["chain"][-1]["route_select_rc"] == 0, f["chain"]
+    routing.assert_close_form(r)
+
+
+@pytest.mark.parametrize("key", _route_cases(F8Q, F8Q_CUT))
+def test_f8q_fanout_cut_before_a_lane_qa_then_close(replays, key):
+    r = replays.get(key)
+    assert r.terminal("dev") is None, "the cut /dev reached its own terminal"
+    tid = r.terminal("close")["task"]
+    f = routing.assert_routed(r, typed="close", source="todo_step", check="close-route-select.py",
+                              path=f"docs/dev/qa-report-{tid}-l2.json")
+    # Each step still lacking ran by its expected producer: the completion report, the main agent's own step.
+    done = f"docs/dev/completion-{tid}.md"
+    owing = [o["answer"] for o in f["owing"] if o["path"] == done]
+    assert owing and owing[0]["source"] == "todo_step" and owing[0]["subagent_call"] is None, f["owing"]
+    close_session = f["dispatches"][f["routed"][0]["tool_use_id"]]["session"]
+    assert any(sid == close_session and p.endswith("/" + done) for sid, p in f["main_writes"]), (f["own"], f["main_writes"])
+    assert f["chain"][-1]["route_select_rc"] == 0, f["chain"]
+    routing.assert_close_form(r)
+
+
+@pytest.mark.parametrize("key", _route_cases(F8P))
+def test_f8p_lane_product_file_broken_then_close(replays, key):
+    r = replays.get(key)
+    f = routing.assert_routed(r, typed="close", source="writer", check="close QA round", names=r"\bAC-\d+ fails: \S")
+    path = f["injection"][0]["path"]
+    first = f["rounds"][0]
+    assert first["verdict"].startswith("CLOSE_FINDINGS") and [x for x in first["findings"] if x["path"] == path], first
+    assert f["dispatches"][f["routed"][0]["tool_use_id"]]["subagent_type"] == "dev", f["routed"]
+    assert len(f["rounds"]) == 2 and not f["rounds"][1]["findings"], f["rounds"]
+    routing.assert_close_form(r)
+
+
+@pytest.mark.parametrize("key", _route_cases(F8C))
+def test_f8c_lane_dev_report_removed_then_commit(replays, key):
+    r = replays.get(key)
+    f = routing.assert_routed(r, typed="commit", source="dispatch", check="resolve-dev-artifact-chain.py")
+    assert r.fact("commit")["commit_status"] == "committed", r.fact("commit")
