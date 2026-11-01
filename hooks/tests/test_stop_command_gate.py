@@ -658,14 +658,41 @@ def test_a6_merge_no_commit_finalized_or_aborted_decides_as_a_committed_merge(en
     assert run(env) == (0, "")
 
 
+def write_token(repo):
+    """The push-gate token for the branch at HEAD, by its one writer, as /commit's changelog-analyst runs it."""
+    writer = gate._script("scripts/write-push-gate-token.py")
+    branch, head = git(repo, "branch", "--show-current"), git(repo, "rev-parse", "HEAD")
+    assert writer.main(["--repo-root", str(repo), "--branch", branch, "--commit", head]) == 0
+
+
+def write_push_grant(env, repo, verdict):
+    """The push-analyst's grant for the branch at HEAD, as agents/push-analyst.md Phase 7 writes it, at
+    commands/push.md Step 4's path and git's clock."""
+    top, request = os.path.realpath(repo), f"{int(GIT_CLOCK[0]):032x}"
+    path = Path(env.state, "agentic-commit", "push-analyst", hashlib.sha256(top.encode()).hexdigest()[:16], SID,
+                f"{request}.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    expires = (datetime.now(timezone.utc) + timedelta(seconds=600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    path.write_text(json.dumps({
+        "verdict": verdict, "risks": ["sensitive file pattern in commits-to-push: .env"] if verdict == "blocked" else [],
+        "analysis_summary": verdict, "branch": git(repo, "branch", "--show-current"),
+        "head_sha": git(repo, "rev-parse", "HEAD"), "remote_name": "origin", "remote_url": str(env.tmp / "origin.git"),
+        "session_id": SID, "nonce": request, "expires_at": expires}))
+    GIT_CLOCK[0] += 1
+    os.utime(path, (GIT_CLOCK[0], GIT_CLOCK[0]))
+
+
 @pytest.fixture
-def remotes(env, repo):
+def remotes(env, repo, monkeypatch):
+    """topic, pushed to origin with upstream set, after the /commit whose push-gate token names it."""
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SID)
     for name in ("origin", "fork"):
         bare = env.tmp / f"{name}.git"
         git(env.tmp, "init", "-q", "--bare", str(bare))
         git(repo, "remote", "add", name, str(bare))
     git(repo, "checkout", "-q", "-b", "topic")
     commit(repo, "t1.txt")
+    write_token(repo)
     git(repo, "push", "-q", "-u", "origin", "topic")
     return repo
 
@@ -702,11 +729,56 @@ def test_a6_typed_push_counts_only_the_typed_remote(env, remotes):
     assert run(env) == (0, "")
 
 
-def test_a6_push_from_a_detached_head_names_it(env, remotes):
+def test_a6_push_from_a_detached_head_holds_as_step_2s_refusal(env, remotes):
+    """push.md Step 2 refuses a detached HEAD ("check out the branch to push"): no push can be made
+    from it, so the run is complete. With the branch checked out, ahead and with a token, the push
+    is owed."""
+    commit(remotes, "t2.txt")
     git(remotes, "checkout", "-q", "--detach")
     opener_now(env, "push")
+    assert run(env) == (0, "")
+    git(remotes, "checkout", "-q", "topic")
     code, text = run(env)
-    assert code == 2 and "detached" in text
+    assert code == 2 and "not published" in text
+
+
+@pytest.mark.parametrize("token", ["none for the branch", "not in HEAD's history"])
+def test_a6_push_with_no_usable_push_gate_token_holds_as_push_shs_refusal(env, remotes, token):
+    """push.md Step 5: push.sh refuses (exit 3, "run /commit first") while no push-gate token names an
+    ancestor of HEAD: a branch the owner committed to without /commit, or a token whose commit left
+    HEAD's history. Once the token's writer names HEAD, the push is owed."""
+    if token == "none for the branch":
+        git(remotes, "checkout", "-q", "-b", "other", "master")
+    else:
+        git(remotes, "reset", "-q", "--hard", "master")
+    commit(remotes, "t2.txt")
+    opener_now(env, "push")
+    assert run(env) == (0, "")
+    write_token(remotes)
+    code, text = run(env)
+    assert code == 2 and "not published" in text
+
+
+def test_a6_push_holds_on_the_push_analysts_blocked_verdict_for_head(env, remotes):
+    """push.md Step 5: execute-push.py refuses a blocked grant ("push BLOCKED by push-analyst", action
+    "resolve the listed risks first") and leaves it unspent. It holds as this session's newest grant
+    since the opener, for the branch at HEAD: not one written before the opener, not once HEAD moved
+    past it, not under a newer approved one."""
+    commit(remotes, "t2.txt")
+    write_push_grant(env, remotes, "blocked")  # an earlier /push's
+    opener_now(env, "push")
+    assert run(env)[0] == 2
+    write_push_grant(env, remotes, "blocked")
+    assert run(env) == (0, "")
+    commit(remotes, "t3.txt")  # the risks resolved by a commit: the new HEAD's push is owed
+    assert run(env)[0] == 2
+    write_push_grant(env, remotes, "blocked")
+    assert run(env) == (0, "")
+    write_push_grant(env, remotes, "approved")
+    code, text = run(env)
+    assert code == 2 and "not published" in text
+    git(remotes, "push", "-q", "origin", "topic")
+    assert run(env) == (0, "")
 
 
 @pytest.mark.parametrize("command", ["merge", "push"])

@@ -27,8 +27,9 @@ git, and the producers' own deciders, called, never copied: P3's disposition
 as the chain's own disposition_lines (scripts/resolve-dev-artifact-chain.py,
 through the one adapter `disposition`), P2's overnight locator and window
 (hooks/lib/overnight.py), P4's close rating (hooks/lib/close_rating.py),
-dev-lifecycle's --auto target function and the merge-analyst's grant
-(hooks/lib/merge_grant.py). No target comes from a dispatch prompt or a
+dev-lifecycle's --auto target function, the merge-analyst's and push-analyst's
+grants (hooks/lib/merge_grant.py) and the push-gate token's path
+(scripts/write-push-gate-token.py). No target comes from a dispatch prompt or a
 tool result. The gate writes nothing but its own output (stdout:
 the terminal time-lock status of an allowed Stop, see main), keeps no count
 and has no release but the work itself: the next compliant step clears each
@@ -337,12 +338,16 @@ def p_push(span, root, payload) -> list[str]:
     """/push [<remote>] [INFERRED; A6]: refs/remotes/<remote>/<BRANCH> (the
     typed remote, else any) took HEAD, or the branch's value at that time,
     after the opener; or HEAD is at or behind the typed remote's ref (none
-    typed: the upstream's)."""
+    typed: the upstream's); or push.md refuses the push: no current branch
+    (Step 2), no push-gate token names an ancestor of HEAD (push.sh's exit 3:
+    its READ side over the path of the token's one writer), or this session's
+    newest push-analyst grant here since the opener is blocked for BRANCH at
+    HEAD (Step 5: execute-push.py refuses it and leaves it unspent)."""
     _repository(root)
     typed = next((a for a in span.args.split() if not a.startswith("-")), None)
     branch = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
     if not branch:
-        return ["push: HEAD is detached (no current branch to push)"]
+        return []  # Step 2: "HEAD is detached"; no push can be made from it
     head, since = _git(root, "rev-parse", "HEAD"), _since(span)
     local = _reflog(root, f"refs/heads/{branch}")
     for remote in [typed] if typed else (_git(root, "remote") or "").split():
@@ -353,6 +358,20 @@ def p_push(span, root, payload) -> list[str]:
            else _git(root, "rev-parse", "--symbolic-full-name", "--verify", "-q", "@{upstream}"))
     if ref and _git(root, "rev-parse", "--verify", "-q", ref) and _ancestor(root, "HEAD", ref):
         return []
+    top = _git(root, "rev-parse", "--show-toplevel") or str(root)
+    token = _script("scripts/write-push-gate-token.py").token_path(top, branch, "")  # <repo dir>/<session>/<name>
+    for path in [token.parent.parent / token.name, *token.parent.parent.glob(f"*/{token.name}")]:
+        try:
+            sha = json.loads(path.read_text()).get("commit_sha")
+        except (OSError, ValueError, AttributeError):
+            continue  # "Malformed/unparseable candidates are skipped"
+        if sha and _ancestor(root, str(sha), "HEAD"):
+            break
+    else:
+        return []  # Step 5: push.sh's exit 3, "run /commit first"
+    grant = _lib("merge_grant").newest(top, payload.get("session_id"), since, "push-analyst")
+    if (grant.get("verdict"), grant.get("branch"), grant.get("head_sha")) == ("blocked", branch, head):
+        return []  # Step 5: "push BLOCKED by push-analyst"
     return [f"push: HEAD {head} of {branch} is not published on {ref or 'a remote'} since the /push opener"]
 
 

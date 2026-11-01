@@ -49,10 +49,11 @@ def is_grant_path(path: str) -> bool:
     return len(parts) == 3 and not rel.startswith("..")
 
 
-def newest(repo_root: str, session_id: str, since: float) -> dict:
+def newest(repo_root: str, session_id: str, since: float, analyst: str = "merge-analyst") -> dict:
     """The session's last grant for the repository at `repo_root`, if written at or
-    after `since` (fault() passed it on that Write), else {}: the Stop gate's source."""
-    folder = Path(grant_root(), hashlib.sha256(os.path.realpath(repo_root).encode()).hexdigest()[:16])
+    after `since` (fault() passed it on that Write), else {}: the Stop gate's source.
+    The push-analyst's grant has the same path rule (agents/push-analyst.md Phase 7)."""
+    folder = Path(grant_root()).with_name(analyst) / hashlib.sha256(os.path.realpath(repo_root).encode()).hexdigest()[:16]
     found = sorted((p.stat().st_mtime, p) for p in (folder / session_id).glob("*.json")) if session_id else []
     return json.loads(found[-1][1].read_text()) if found and found[-1][0] >= since else {}
 
