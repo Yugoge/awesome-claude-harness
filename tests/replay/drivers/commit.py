@@ -76,8 +76,9 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
   variant=reject          commit QA's first round rejects citing no artifact: its own QA reruns and
                           names the product file, its writer (dev) reruns, a fresh round from Step 5
                           approves, it commits (P4 acceptance 4 (f))
-  variant=waits           a later session types `/commit` (no task context: the Task question, the
-                          stub picks the task), its first Step 7 commit is refused by a hook (the
+  variant=waits           /dev lands, no /close; a later session types `/commit` (no task context:
+                          the Task question lists the close_pending task, the stub picks it; Step 3
+                          closes it), its first Step 7 commit is refused by a hook (the
                           Authorize question, then Steps 5-7 again); then `/commit --auto --force`
                           (the Flags question) (P4 acceptance 5's /commit cases)
   session=same|later      /close and /commit typed in the cycle's session or a later one
@@ -364,8 +365,8 @@ class CommitRun:
         doc = {"session_id": sid, "task_id": self.tid, "dispatched_at": utc_now(), "repository_plan": self.plan,
                "artifact_chain": self.chain or None, "files_at_dispatch": files}
         path = os.path.join(state or self.rp.layout.state, f"claude-commit-manifest-{sid or o.s.sid}.json")
-        o.s.write(path, json.dumps(doc, indent=2) + "\n", label=self.label("Step 5 Write manifest"),
-                  deviation=self.devs.at(self.label("Step 5 Write manifest")))
+        # A later round of the same session finds its own manifest: Read, then edit in place (the write guard).
+        agents.put(o.s.main, path, json.dumps(doc, indent=2) + "\n", self.label("Step 5 Write manifest"))
 
     def mint(self) -> None:
         o = self.o
@@ -671,7 +672,8 @@ class CommitRun:
             return None
         body = finding or "\n".join(f"- {p}: authored change of this task; no secret, byproduct or scope contamination"
                                     for g in groups for p in g["files"])
-        return agents.Act(work=work, notes="Per-file findings:\n" + body + "\n\ncodex_status: not run (codex_required false)",
+        notes = f"Round {self.rounds}, {utc_now()}. Per-file findings:\n{body}\n\ncodex_status: not run (codex_required false)"
+        return agents.Act(work=work, notes=notes,
                           terminal={"*commit-qa-report-*": verdict, "response_line": verdict},
                           final_line=verdict, summary="pre-commit QA")
 
@@ -913,11 +915,13 @@ class CommitRun:
             c = self.run_text(call.replace("--next-action commit", f"--next-action {action}"),
                               self.label(f"Step 2 Bash list-actionable {action}"), f"The {action}_pending parents")
             cands += [l.split()[0] for l in (c.response.get("stdout") or "").split("\n") if l.strip()] if c.ok else []
+        if not cands:  # "When neither list names a parent, print ... and end."
+            self.o.s.say(re.search(r"print `(No task to commit:[^`]*)`", sec).group(1))
+            return ""
         header = re.search(r"header `([^`]+)`", sec).group(1)
         question = re.search(r"question `([^`]+)`", sec).group(1)
         opts = [(t, "the task to land") for t in cands[:3]] + [("/commit --auto", "every commit_pending parent")]
-        ans = self.ask(header, question, opts, "Step 2 AskUserQuestion task")
-        return ans
+        return self.ask(header, question, opts, "Step 2 AskUserQuestion task")
 
 
 def fanout_dev(rp):
@@ -950,9 +954,9 @@ def run(rp) -> None:
         closedrv.remove(rp, [p for p in (f"docs/dev/qa-report-{tid}.json",)
                              if os.path.exists(os.path.join(rp.layout.project, p))])
     session = rp.later_session(s) if session_kind == "later" else s
-    if variant not in ("unclosed", "laneqa"):
-        close_variant = {"commit-route": "plain", "full": "append", "aggregate": "plain", "reject": "plain",
-                         "waits": "plain"}.get(variant, variant)
+    if variant not in ("unclosed", "laneqa", "waits"):
+        close_variant = {"commit-route": "plain", "full": "append", "aggregate": "plain",
+                         "reject": "plain"}.get(variant, variant)
         cr = closedrv.CloseRun(rp, session, tid, producer=producer, variant=close_variant, auto=variant == "auto")
         if variant == "auto":
             cr.run_auto()
@@ -971,7 +975,9 @@ def run(rp) -> None:
         # `/commit` with no task context: the Task question; the stub owner picks the first candidate.
         run_.o.slash("", label=run_.label("typed (no task)"))
         ans = run_.task_question()
-        run_.tid = ans if ans and not ans.startswith("/") else tid
+        if not ans or ans.startswith("/"):
+            raise RuntimeError(f"the Task question offered no task: {ans!r}")
+        run_.tid = ans
         out = run_.walk()
         run_.o.s.stop(run_.stalled or f"/commit {run_.tid}: {out}", label="/commit Stop",
                       deviation=run_.devs.at("/commit Stop"))
