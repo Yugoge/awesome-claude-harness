@@ -344,7 +344,8 @@ class Span:
                     content = own["content"] if isinstance(own, dict) and isinstance(own.get("content"), list) \
                         else block.get("content")
                     return content if isinstance(content, str) else "\n".join(
-                        b.get("text") or "" for b in content or () if isinstance(b, dict) and b.get("type") == "text")
+                        b.get("text") or "" for b in (content if isinstance(content, list) else ())
+                        if isinstance(b, dict) and b.get("type") == "text")
         return ""
 
     def obligations(self) -> list:

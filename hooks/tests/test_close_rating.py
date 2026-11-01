@@ -358,3 +358,15 @@ def test_commit_running_close_steps_requires_no_rating(tmp_path: Path) -> None:
     tx.close_qa()
     path = tx.write(tmp_path / "t.jsonl")
     assert not _required(tx, path) and not close_rating.rating_asked(path, TASK)
+
+
+def test_task_ids_compare_canonically(tmp_path: Path) -> None:
+    # The close-QA obligation may carry the minted dev- prefix the question's source leaves out.
+    tx = _Tx()
+    tx.typed(f"/close {TASK}")
+    tx.close_qa(task=f"dev-{TASK}")
+    tx.rating(task=TASK)
+    path = tx.write(tmp_path / "t.jsonl")
+    assert _required(tx, path, TASK) and _required(tx, path, f"dev-{TASK}")
+    assert close_rating.rating_asked(path, TASK) and close_rating.rating_asked(path, f"dev-{TASK}")
+    assert not _required(tx, path, "") and not close_rating.rating_asked(path, "")

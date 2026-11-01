@@ -437,10 +437,11 @@ def test_result_text_is_the_agents_own_reply_or_the_results_text(tmp_path):
         toolUseResult={"status": "completed", "agentId": "a1",
                        "content": [{"type": "text", "text": "Judged.\nCLOSE: YES"}]}))
     bash = tx.tool("Bash", {"command": "ls"}, result="a\nb")
+    odd = tx.tool("Bash", {"command": "true"}, result=7)  # neither text nor a list of blocks
     pending = tx.tool_use("AskUserQuestion", {"questions": []})
     span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
     assert span.result_text(agent) == "Judged.\nCLOSE: YES"
-    assert span.result_text(bash) == "a\nb"
+    assert span.result_text(bash) == "a\nb" and span.result_text(odd) == ""
     assert span.result_text(pending) == "" and span.result_text("toolu_none") == ""
 
 
