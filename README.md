@@ -639,8 +639,8 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Develop** | `/dev-command` | Command-authoring dev pipeline. | The thing you're building is itself a command or agent. |
 | **Develop** | `/dev-overnight` | Autonomous overnight loop. | A backlog to grind through unattended, all night. |
 | **Develop** | `/redev` | Re-attach the /dev workflow harness to the current in-conversation development need. | The /dev workflow context is already present; new requirement text is optional. |
-| **Ship** | `/close` | Release-readiness gate (QA verdict + optional Codex debate). | After dev finishes, before committing — the go/no-go gate. |
-| **Ship** | `/commit` | Surgical staging + conventional commit message + commit grant. | Once /close passes and you're ready to record the change. |
+| **Ship** | `/close` | Release-readiness gate (QA verdict + optional Codex debate); it first completes an unfinished cycle and ends by asking you to rate it. | After dev finishes, to land the close verdict. Optional before `/commit <task-id>`, which closes an unclosed task itself. |
+| **Ship** | `/commit` | Surgical staging + conventional commit message + commit grant. | When you're ready to record the change; an unfinished or unclosed cycle is completed and closed first. |
 | **Ship** | `/merge` | Bridge to target branch with pre-merge analyst grant. | After commit, to carry the change into a target branch. |
 | **Ship** | `/push` | Single-process gated push with push analyst grant. | After commit/merge, to publish the branch to remote. |
 | **Ship** | `/pull` | Post-pull advisory risk analysis. | Just pulled — you want a read on what the incoming commits touch. |
@@ -757,9 +757,8 @@ file has to be rewritten. What carries that, and where it stops:
 The prompts in `commands/`, `agents/` and `skills/` run harness files through the same
 `${CLAUDE_HOME:-$HOME/.claude}` channel and take the project root as
 `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}`, so the commands they issue reach a clone
-outside `~/.claude`. Not yet portable: some lines of `commands/close.md` (its audit log, routing,
-late-repair, declaring-dispatch and scoring calls) and `commands/commit.md` (its admission, routing,
-late-repair and repository-plan calls) still name `~/.claude/...` until their rework; every other
+outside `~/.claude`. Not yet portable: one line of `commands/close.md` (its `--force` audit log)
+still names `~/.claude/...`; every other
 mention of `~/.claude` in the prompts only names the default location.
 
 ---
@@ -889,7 +888,7 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 | SessionStart | 8 | Environment setup, scratch-directory init, resolver announcement, dependency checks |
 | UserPromptSubmit | 6 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
 | PreToolUse | 35 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
-| PostToolUse | 18 | Doc-sync, allowlist grant consumption, checkpoint writes |
+| PostToolUse | 19 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | PostToolUseFailure | 1 | Allowlist grant consumption on a failed tool result |
 | Notification | 1 | User-facing notification routing |
 | Stop | 3 | Workflow coordinator (overnight time-lock, spec coverage, auto-commit, allowlist cleanup phases), `/do` report gate, obligation gate (an exit-0 stub: artifacts are decided at each producer's stop) |

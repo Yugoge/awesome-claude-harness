@@ -2,7 +2,7 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 53
+**Total entries**: 54
 **Convention**: kebab
 
 ## Tree
@@ -31,6 +31,7 @@ lib/
 ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
+├── `close_rating.py` - calls and the two predicates P5's Stop gate imports. The question (/close Step 4, source
 ├── `closeout.py` - CLI:
 ├── `command_span.py` - The span is the records after the latest human-typed harness command outside
 ├── `commit_journal.py` - WHY THIS EXISTS

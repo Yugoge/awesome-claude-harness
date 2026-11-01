@@ -348,10 +348,9 @@ def _do_md_template(task_id):
 
 def test_do_md_step5_template_passes_the_gate():
     """E8 (a): the /do main agent writes the whole report from commands/do.md's
-    Step 5 template. Filled in, it passes this gate and keeps the
-    expected_absent the close QA's e2e gate reads (subagentstop-e2e-enforce.py
-    blocks the close QA's stop when a /do report does not declare its
-    qa-report absent)."""
+    Step 5 template. Filled in, it passes this gate and keeps the template's
+    expected_absent, the qa-report among the artifacts a /do task leaves
+    absent."""
     sid, tid = _sid(), "20260101-000016"
     with tempfile.TemporaryDirectory() as tmp:
         _write_sidecar(sid, tid)

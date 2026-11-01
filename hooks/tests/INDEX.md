@@ -2,7 +2,7 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-10-30T16:09:35Z*
-**Total entries**: 115
+**Total entries**: 116
 **Convention**: kebab
 
 ## Tree
@@ -21,7 +21,7 @@ tests/
 ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 ├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
-├── `test_artifact_contract_enforce.py` - The hook is the producer-side port of /close's Artifact schema gate
+├── `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
 ├── `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
 ├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
 ├── `test_baseline_snapshot_preflight.py` - agents/dev.md:535 declares that the orchestrator captures baseline_dirty_snapshot
@@ -36,6 +36,7 @@ tests/
 ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 ├── `test_checklist_record.py` - Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
 ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
+├── `test_close_rating.py` - hooks/posttool-close-rating.py, the rating log's one writer
 ├── `test_close_verdict_round_open.py` - `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 ├── `test_command_span.py` - The span is the records after the latest human-typed harness command outside
 ├── `test_commit_artifact_rw_boundary.py` - WHY THIS FILE EXISTS
@@ -58,7 +59,7 @@ tests/
 ├── `test_doc_sync_regen_readme_status.py` - Backlog #83: regen_readme() returned None on every path, so nobody could tell a skipped
 ├── `test_doc_sync_regions.py` - Backlog #85: four unrelated marker predicates (README first occurrence, INDEX substring
 ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
-├── `test_e2e_enforce.py` - obligation fallback (ticket 20261001-161041-r06, M1)
+├── `test_e2e_enforce.py` - report the QA's own obligation names
 ├── `test_env_configured_defaults.py` - or derived; such values come back only through the environment (normally the
 ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
