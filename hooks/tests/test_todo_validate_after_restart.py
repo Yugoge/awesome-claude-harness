@@ -3,10 +3,10 @@
 A dev subagent cut before its Agent call came back (no tool_result, or the CLI's error result after a
 usage limit) is resumed by the owner's /restart through SendMessage and finalized (commands/restart.md).
 Its original Agent call is then the dev step's dispatch: pretool-todo-validate.py lets the step
-complete, reading the span's SendMessage to that agent and the recovery journal
-(subagent_restart.finalized_resumes), and asks for no replacement call (Lesson 16). Until the
-recovery is finalized the step stays refused, the message naming the step, the role and the cut
-call's declared artifact.
+complete, reading the span's SendMessage to that agent, the recovery journal
+(subagent_restart.completed_resumes) and the span's ok finalize call after it, never the
+capability itself, and asks for no replacement call (Lesson 16). Until the recovery is finalized
+the step stays refused, the message naming the step, the role and the cut call's declared artifact.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ sys.path.insert(0, str(HOOKS.parent))
 from hooks.lib import subagent_restart as restart  # noqa: E402
 
 REPORT = "docs/dev/dev-report-20990101-000001.json"
+FINALIZE = "~/.claude/venv/bin/python ~/.claude/scripts/restart-subagents.py finalize"  # commands/restart.md step 5
 OBLIGATION = ('<obligation v="1">\n' + json.dumps({
     "task_id": "20990101-000001", "role": "dev", "pipeline": "dev", "profile": "singular",
     "dispatched_at": "2099-01-01T00:00:01Z",
@@ -103,7 +104,12 @@ class _Cycle:
             restart.observe_subagent_stop({"session_id": self.sid, "agent_id": c["agent_id"],
                                            "last_assistant_message": "done\n\nRECOVERY_STATUS: completed"})
         if finalize:
-            restart.finalize(self.sid)
+            self.finalize()
+
+    def finalize(self):
+        """restart.md step 5's finalize, as the main agent's Bash call records it."""
+        restart.finalize(self.sid)
+        self.result(self.use("Bash", {"command": FINALIZE}))
 
     def complete_step_10(self):
         todos = _frontier(10)
@@ -136,7 +142,19 @@ def test_before_finalize_the_step_is_refused_naming_step_role_and_artifact(cycle
     assert refused.returncode == 2
     assert '"Step 10: Delegate to dev subagent" (subagent role dev)' in refused.stderr
     assert REPORT in refused.stderr and "never replaced by a new call" in refused.stderr
-    restart.finalize(cycle.sid)
+    cycle.finalize()
+    assert cycle.complete_step_10().returncode == 0
+
+
+def test_a_finalize_before_the_resume_does_not_finalize_it(cycle):
+    """Only an ok finalize after the agent's SendMessage finalizes its resume (an earlier
+    recovery's finalize, or a refused call, does not)."""
+    aid = cycle.cut()
+    cycle.result(cycle.use("Bash", {"command": FINALIZE}))
+    cycle.restart([aid], finalize=False)
+    cycle.result(cycle.use("Bash", {"command": FINALIZE}), "Exit code 2", error=True)
+    assert cycle.complete_step_10().returncode == 2
+    cycle.finalize()
     assert cycle.complete_step_10().returncode == 0
 
 
@@ -154,11 +172,16 @@ def test_a_resumed_call_of_another_role_does_not_meet_the_dev_step(cycle):
     assert refused.returncode == 2 and "requires a subagent call (dev) that has not been made" in refused.stderr
 
 
-def test_finalized_resumes_reads_only_a_finalized_complete_journal(cycle):
+def test_completed_resumes_reads_only_a_complete_journal_never_the_capability(cycle):
     aid = cycle.cut()
-    assert restart.finalized_resumes(cycle.sid) == {}
-    cycle.restart([aid], finalize=False)
-    assert restart.finalized_resumes(cycle.sid) == {}, "the capability is still live: not finalized"
+    assert restart.completed_resumes(cycle.sid) == {}
+    restart.mint_grant(cycle.sid, str(cycle.path))
+    restart.prepare_state(cycle.sid)
+    restart.mark_dispatched(cycle.sid, aid)
+    assert restart.completed_resumes(cycle.sid) == {}, "no response observed yet"
+    restart.observe_subagent_stop({"session_id": cycle.sid, "agent_id": aid,
+                                   "last_assistant_message": "done\n\nRECOVERY_STATUS: completed"})
+    assert restart.completed_resumes(cycle.sid) == {aid: cycle.cut_tid}, "the live capability is not read"
     restart.finalize(cycle.sid)
-    assert restart.finalized_resumes(cycle.sid) == {aid: cycle.cut_tid}
-    assert restart.finalized_resumes("not a session id!") == {}
+    assert restart.completed_resumes(cycle.sid) == {aid: cycle.cut_tid}
+    assert restart.completed_resumes("not a session id!") == {}

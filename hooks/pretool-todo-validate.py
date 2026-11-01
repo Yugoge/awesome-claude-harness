@@ -232,13 +232,16 @@ def _in_progress(todos):
 def _resumed(state, sid):
     """(offset, 1, call) of each Agent call of the span that never came back
     but whose agent the /restart recovery resumed (the span's SendMessage to
-    it, placed there) and finalized (its journal record): that call is its
+    it, placed there), saw come back (its journal record) and finalized (an ok
+    finalize call of restart.md's helper after it in the span): that call is its
     step's dispatch, with no replacement call (commands/restart.md, Lesson 16)."""
-    from lib.subagent_restart import finalized_resumes
-    journal = finalized_resumes(sid)
+    from lib.subagent_restart import completed_resumes, is_helper_invocation
+    journal = completed_resumes(sid)
     cut = {c.id: c for c in state.span.uses('Agent', 'Task') if not c.ok} if journal else {}
+    done = [b.result_at for b in state.span.uses('Bash') if b.ok and str(b.input.get('command')).split()[2:3]
+            == ['finalize'] and is_helper_invocation({'tool_name': 'Bash', 'tool_input': b.input})] if cut else []
     return [(m.result_at, 1, cut[journal[str(m.input.get('to'))]]) for m in state.span.uses('SendMessage')
-            if cut and m.ok and journal.get(str(m.input.get('to'))) in cut]
+            if cut and m.ok and journal.get(str(m.input.get('to'))) in cut and any(t > m.result_at for t in done)]
 
 
 def _dispatched_steps(state, canonical, sid=''):
