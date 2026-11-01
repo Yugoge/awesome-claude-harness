@@ -404,9 +404,9 @@ def _producer_question(project_dir: str, ob: dict):
 
 
 # P3 R14: an artifact stands for this stop only when written for this dispatch,
-# and a lane's report echoes its dispatch's lane and roster. These checks warn
-# for now; the promotion commit sets this to True so they block like the rest.
-DISPATCH_ECHO_BLOCKS = False
+# and a lane's report echoes its dispatch's lane and roster. These checks block
+# like the rest (they warned in the commit that introduced them).
+DISPATCH_ECHO_BLOCKS = True
 
 
 def _declares_lane_echo(schema_id) -> bool:

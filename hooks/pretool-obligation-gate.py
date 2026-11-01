@@ -87,8 +87,8 @@ _DECLARED_ROLE_RE = re.compile(r'\brole="([a-z][a-z0-9-]*)"|"role"\s*:\s*"([a-z]
 _TODO_DELEGATE_RE = re.compile(r"^from ([a-z][a-z0-9-]*) import get_todos\b", re.M)
 TODO_DIR = stop_contract.COMMANDS_DIR.parent / "scripts" / "todo"
 GRAMMAR_DOC_REF = "docs/reference/close-commit-zero-failure-mechanism-20260928.md"
-# R17 warns (stderr, exit 0) in its first commit; its promotion sets 2.
-ORDER_EXIT = 0
+# R17's finding blocks, like every G1 finding in block mode.
+ORDER_EXIT = 2
 # The verdict a later consumer of the judged producer's artifacts waits for:
 # "every BA invocation MUST be followed by QA validation" (commands/dev.md).
 VERDICT_SCHEMA = "ba-qa-report.v1"

@@ -33,7 +33,8 @@ fan-out whose lanes have all reported.
 Within the dispatch's scope a due canonical must also parse, validate against
 dev-report.v2, carry its task's identity, and name in parallel_workers exactly
 the lanes its lane reports declare and the dispatch obligation's lane_set
-(P3 row 12(b)). That check warns until CANONICAL_CHECK_EXIT is promoted.
+(P3 row 12(b)). That check blocks while CLAUDE_OBLIGATION_BARRIER=block and
+warns otherwise.
 
 Filename patterns (lib/dev_report_shard_patterns.py) find a family's lane
 reports and its canonical; worker labels in NON_WORKER_LABELS (bare "iter",
@@ -304,8 +305,8 @@ CANONICAL_PRODUCER = (
     "hooks/posttool-lane-completeness-watch.py, which runs the aggregator "
     "whenever a lane report of the task is written"
 )
-# P3 row 12(b) warns (exit 0) until its promotion commit sets 2 here.
-CANONICAL_CHECK_EXIT = 0
+# P3 row 12(b): a block while the barrier is armed (P2), a warning otherwise.
+CANONICAL_CHECK_EXIT = 2
 
 
 def _emit_block(violations):
@@ -321,16 +322,17 @@ def _emit_block(violations):
     sys.exit(2)
 
 
-def _emit_canonical_findings(findings):
-    """Report row 12(b)'s findings; they block only once CANONICAL_CHECK_EXIT does."""
+def _emit_canonical_findings(findings, armed):
+    """Report row 12(b)'s findings: a block while the barrier is armed, else a warning."""
     if not findings:
         return
-    verdict = "BLOCKED Agent dispatch (qa)" if CANONICAL_CHECK_EXIT else "WARNING (not blocking yet)"
+    blocking = CANONICAL_CHECK_EXIT if armed else 0
+    verdict = "BLOCKED Agent dispatch (qa)" if blocking else "WARNING (not blocking yet)"
     lines = ["", f"{verdict}: a fan-out's canonical aggregate does not match its lanes."]
     lines += [f"  [{code}] {path}: {problem} | producer: {CANONICAL_PRODUCER}" for code, path, problem in findings]
     sys.stderr.write("\n".join(lines) + "\n\n")
-    if CANONICAL_CHECK_EXIT:
-        sys.exit(CANONICAL_CHECK_EXIT)
+    if blocking:
+        sys.exit(blocking)
 
 
 def _resolve_dev_dir():
@@ -637,7 +639,8 @@ def main():
         lane_reports, canonicals = _scan_dev_dir(dev_dir)
         scope_task_id = _scope_task_id(data)
         violations = _find_violations(lane_reports, canonicals, dev_dir, scope_task_id)
-        if os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower() != "block":
+        armed = os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower() == "block"
+        if not armed:
             # Advisory G3 keeps master's one always-on block; (a) and (b) wait for P2's arming.
             violations = [v for v in violations if v[0] == "canonical_missing"]
         if violations:
@@ -648,7 +651,7 @@ def main():
                 findings = _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_set)
             except Exception:
                 findings = []  # fail open: a self-bug here never skips the checks below
-            _emit_canonical_findings(findings)
+            _emit_canonical_findings(findings, armed)
 
     _run_obligation_barrier(data)
     _run_gitignore_rule(data)

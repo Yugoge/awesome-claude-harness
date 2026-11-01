@@ -758,12 +758,12 @@ def test_G1_declared_roles_follow_the_command_files(tmp_path, monkeypatch):
 
 # --------------------------------------------------------------------------
 # R17: dispatch order, read from the active span's record of each dispatch
-# and its returned result. Warning commit: the reason on stderr, exit 0
-# (ORDER_EXIT); the promotion commit flips ORDER_EXIT to 2.
+# and its returned result. A finding exits ORDER_EXIT (2 since the promotion
+# commit; 0 in the warning commit before it).
 # --------------------------------------------------------------------------
 
 ORDER_BANNER = "OBLIGATION GATE ORDER"
-ORDER_EXIT = 0
+ORDER_EXIT = 2
 LANES = ["l1", "l2"]
 
 
@@ -863,11 +863,11 @@ def test_R17_dev_while_verdict_predates_redispatched_ba_stop_warns(tmp_path, ba2
 @pytest.mark.parametrize("baqa2_returned", [True, False], ids=["verdict_returned", "verdict_running"])
 def test_R17_dev_after_newer_verdict(tmp_path, baqa2_returned):
     """After a newer BA-QA dispatch issued once the re-dispatched BA
-    returned: silent when it has returned, a warning while it runs."""
+    returned: silent when it has returned, a finding while it runs."""
     home, project = _dirs(tmp_path)
     steps = BA_LOOP + [("toolu_ba2", _stage("ba"), True), ("toolu_baqa2", _stage("ba_qa"), baqa2_returned)]
     result = _order_run(home, project, steps, _stage("dev"))
-    assert result.returncode == 0
+    assert result.returncode == (0 if baqa2_returned else ORDER_EXIT)
     if baqa2_returned:
         assert result.stderr == "", result.stderr
     else:

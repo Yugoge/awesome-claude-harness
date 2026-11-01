@@ -8,7 +8,8 @@ from the QA dispatch's own obligation (P3 row 12).
 (b) The canonical aggregate of a fan-out in scope must parse, validate against
     dev-report.v2, carry its task's identity, and name in parallel_workers
     exactly the lanes the lane reports record and the obligation's lane_set.
-    This check warns (reason on stderr, exit 0) until its promotion commit.
+    This check blocks while CLAUDE_OBLIGATION_BARRIER=block and warns (reason on
+    stderr, exit 0) otherwise.
 
 Run with: python3 -m pytest hooks/tests/test_aggregate_check_obligation_scope.py -v
 """
@@ -95,6 +96,11 @@ def _run(project, prompt, mode=None):
                           capture_output=True, env=env, cwd=str(project), timeout=60)
 
 
+def _promoted_exit(mode):
+    """Row 12(b) blocks while the barrier is armed and warns otherwise."""
+    return 2 if mode == "block" else 0
+
+
 @pytest.fixture
 def dev_dir(tmp_path):
     path = tmp_path / "docs" / "dev"
@@ -138,7 +144,7 @@ def test_this_tasks_missing_canonical_still_blocks(dev_dir, mode):
 
 
 # --------------------------------------------------------------------------
-# (b) the canonical's content: a warning in this commit
+# (b) the canonical's content: a block while armed, a warning otherwise
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("mode", [None, "block"])
@@ -154,7 +160,7 @@ def test_compliant_canonical_passes_without_a_warning(dev_dir, mode):
 def test_workers_beyond_the_shard_lanes_warn(dev_dir, mode):
     canonical = _fanout(dev_dir, TASK, LANES, workers=["l1", "l2", "l3"])
     result = _run(dev_dir.parents[1], _obligation(TASK), mode)
-    assert result.returncode == 0
+    assert result.returncode == _promoted_exit(mode)
     assert (f"[canonical_roster_mismatch] {canonical}: its parallel_workers ['l1', 'l2', 'l3'] "
             "differ from the lanes its lane reports record ['l1', 'l2']") in result.stderr
 
@@ -177,7 +183,7 @@ def test_workers_missing_a_lane_warn_while_advisory_and_block_when_armed(dev_dir
 def test_workers_differing_from_the_obligations_lane_set_warn(dev_dir, mode):
     canonical = _fanout(dev_dir, TASK, LANES, workers=LANES)
     result = _run(dev_dir.parents[1], _obligation(f"{TASK}-l1", lane="l1", lane_set=["l1", "l2", "l3"]), mode)
-    assert result.returncode == 0
+    assert result.returncode == _promoted_exit(mode)
     assert (f"[canonical_roster_mismatch] {canonical}: its parallel_workers ['l1', 'l2'] "
             "differ from the dispatch obligation's lane_set ['l1', 'l2', 'l3']") in result.stderr
 
@@ -189,7 +195,7 @@ def test_canonical_failing_dev_report_v2_warns(dev_dir, mode):
     del doc["owned_edits"]
     _write(canonical, doc)
     result = _run(dev_dir.parents[1], _obligation(TASK), mode)
-    assert result.returncode == 0
+    assert result.returncode == _promoted_exit(mode)
     assert f"[canonical_schema_invalid] {canonical}: schema-invalid under obligation-supplied schema" \
         in result.stderr
     assert "owned_edits" in result.stderr
@@ -213,7 +219,7 @@ def test_canonical_carrying_another_identity_warns(dev_dir, mode):
     canonical = _fanout(dev_dir, TASK, LANES, workers=LANES)
     _write(canonical, {**json.loads(canonical.read_text()), "task_id": OTHER})
     result = _run(dev_dir.parents[1], _obligation(TASK), mode)
-    assert result.returncode == 0
+    assert result.returncode == _promoted_exit(mode)
     assert (f"[canonical_identity_mismatch] {canonical}: its task_id '{OTHER}' and request_id "
             f"'{TASK}' are not its task's '{TASK}'") in result.stderr
 

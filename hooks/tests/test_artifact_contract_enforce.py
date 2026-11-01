@@ -2487,12 +2487,12 @@ def test_fanout_legacy_check_judges_only_the_stopping_lanes_own_report(
 # ---------------------------------------------------------------------------
 # P3 R14: an artifact G2 checks must be written for this dispatch (mtime >=
 # dispatched_at - 2 s) and a lane's dev or qa report must echo the dispatch's
-# lane and lane_set. Both warn in this commit (reason on stderr, exit 0); the
-# promotion commit flips DISPATCH_ECHO_BLOCKS in the hook and _R14_EXIT here.
+# lane and lane_set. Both warned in their first commit (reason on stderr, exit
+# 0); the promotion commit flipped DISPATCH_ECHO_BLOCKS in the hook and _R14_EXIT.
 # ---------------------------------------------------------------------------
 
 _WARNING = "OBLIGATION_STOPGATE_WARNING"
-_R14_EXIT = 0  # the promotion commit makes this 2
+_R14_EXIT = 2  # 0 in the warning commit
 
 
 def _age(path: Path, dispatched_at: str, seconds: float) -> None:
