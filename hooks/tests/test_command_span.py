@@ -416,3 +416,46 @@ def test_last_todos_is_the_last_ok_todowrite(tmp_path):
     # A PostToolUse reader names its own call: the list before it.
     assert span.last_todos(before=second) == _todos("in_progress", "pending")
     assert span.last_todos(before=first) is None
+
+
+def _obligation_prompt(task_id, role="qa", pipeline="close"):
+    from hooks.lib import obligation
+    doc = {"task_id": task_id, "role": role, "pipeline": pipeline, "profile": "singular",
+           "dispatched_at": "2026-10-19T12:00:00Z",
+           "artifacts": [{"kind": "response_line", "terminal_line_regex": "^DONE$"}]}
+    return "FIRST ACTION: register.\n" + obligation.serialize_obligation(doc)
+
+
+def test_result_text_is_the_agents_own_reply_or_the_results_text(tmp_path):
+    tx = _Transcript()
+    tx.command("close", "20261019-120000")
+    agent = tx.tool_use("Agent", {"subagent_type": "qa", "prompt": "judge"})
+    tx.add(tx._envelope("user", message={"role": "user", "content": [{
+        "type": "tool_result", "tool_use_id": agent, "content": [
+            {"type": "text", "text": "Judged.\nCLOSE: YES"},
+            {"type": "text", "text": "agentId: a1\n<usage>total_tokens: 9</usage>"}]}]},
+        toolUseResult={"status": "completed", "agentId": "a1",
+                       "content": [{"type": "text", "text": "Judged.\nCLOSE: YES"}]}))
+    bash = tx.tool("Bash", {"command": "ls"}, result="a\nb")
+    pending = tx.tool_use("AskUserQuestion", {"questions": []})
+    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
+    assert span.result_text(agent) == "Judged.\nCLOSE: YES"
+    assert span.result_text(bash) == "a\nb"
+    assert span.result_text(pending) == "" and span.result_text("toolu_none") == ""
+
+
+def test_obligations_are_the_ok_dispatches_well_formed_blocks(tmp_path):
+    tx = _Transcript()
+    tx.tool("Agent", {"subagent_type": "qa", "prompt": _obligation_prompt("20261019-110000")})  # before the span
+    tx.command("close", "--auto")
+    first = tx.tool("Agent", {"subagent_type": "qa", "prompt": _obligation_prompt("dev-20261019-120000")})
+    tx.tool("Agent", {"subagent_type": "qa", "prompt": _obligation_prompt("20261019-130000")},
+            result="PreToolUse:Agent hook error", is_error=True)
+    tx.tool("Agent", {"subagent_type": "qa", "prompt": "no block"})
+    tx.tool("Agent", {"subagent_type": "qa", "prompt": '<obligation v="1">{not json}</obligation>'})
+    lane = tx.tool("Task", {"subagent_type": "dev", "prompt": _obligation_prompt("20261019-140000-l1", "dev", "dev")})
+    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
+    found = span.obligations()
+    assert [(call.id, doc["task_id"], doc["role"]) for call, doc in found] == [
+        (first, "dev-20261019-120000", "qa"), (lane, "20261019-140000-l1", "dev")]
+    assert span.session_families() == {"20261019-120000", "20261019-140000-l1"}

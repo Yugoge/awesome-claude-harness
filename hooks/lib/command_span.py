@@ -328,6 +328,53 @@ class Span:
                 todos = call.input["todos"]
         return todos
 
+    def result_text(self, ident: str) -> str:
+        """The text of call ``ident``'s tool_result in the span ('' while none
+        came back). For an Agent call it is the agent's own reply, the
+        record's toolUseResult content, without the CLI's agentId trailer."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return ""
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            for block in _blocks(record):
+                if block.get("type") == "tool_result" and block.get("tool_use_id") == ident:
+                    own = record.get("toolUseResult")
+                    content = own["content"] if isinstance(own, dict) and isinstance(own.get("content"), list) \
+                        else block.get("content")
+                    return content if isinstance(content, str) else "\n".join(
+                        b.get("text") or "" for b in content or () if isinstance(b, dict) and b.get("type") == "text")
+        return ""
+
+    def obligations(self) -> list:
+        """(call, obligation) of each ok Agent/Task dispatch in the span whose
+        prompt carries a well-formed obligation block, in transcript order."""
+        ob = _obligation()
+        found = []
+        for call in self.calls("Agent", "Task"):
+            prompt = call.input.get("prompt")
+            parsed = ob.parse_obligation(prompt) if call.ok and isinstance(prompt, str) else None
+            if isinstance(parsed, ob.ParsedObligation):
+                found.append((call, parsed.obligation))
+        return found
+
+    def session_families(self) -> set:
+        """The canonical task ids (obligation.canonical_task_id) the span's
+        obligations name."""
+        canonical = _obligation().canonical_task_id
+        return {family for _call, doc in self.obligations() if (family := canonical(doc.get("task_id")))}
+
+
+def _obligation():
+    """hooks/lib/obligation.py, imported when first asked: a span reader that
+    needs no obligation loads none of it."""
+    try:
+        from . import obligation
+    except ImportError:
+        import obligation  # type: ignore[no-redef]
+    return obligation
+
 
 def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):
     """(begin, end, block) of each main-session tool_use block from offset
