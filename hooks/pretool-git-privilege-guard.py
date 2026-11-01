@@ -42,10 +42,10 @@ and git stash list/show/pop (non-destructive forms). Hard reset and direct
 ref mutation are not agent-accessible.
 
 /do consent (hooks/lib/allowlist.py has_do_consent: main agent, one turn)
-releases every rule here but three (E2): git commit, git push and a git merge
-into the protected branch, and a git command the guard cannot classify, are
-judged as without it, and each block then names the commands that land them
-(/close then /commit, /push, /merge).
+releases every rule here except those on git commit, git push and a git merge
+into the protected branch (E2): these, and a git command the guard cannot
+classify, are judged as without it, and each block then names the commands
+that land them (/close then /commit, /push, /merge).
 
 Spec: spec-20260424-233926 section 5.2.4 (R4.3) line 233-249.
 
@@ -1647,8 +1647,8 @@ def _audit_residual_override(path, ovr, kinds, segments, digest):
 
 def _evaluate_command(command, data, do_consent=False):
     # do_consent: the main agent holds /do consent, which covers every rule
-    # here but git commit, git push and a merge into the protected branch (E2),
-    # nor a git command the guard cannot classify, which may be one of them.
+    # here except git commit, git push, a merge into the protected branch (E2)
+    # and a git command the guard cannot classify, which may be one of them.
     # Classify once: build invocations list for all _looks_like_* and _evaluate_* calls.
     # iter_git_invocations uses token-aware parsing so path-qualified forms like
     # /usr/bin/git are detected alongside bare 'git' (closes RISK-3 bypass).
