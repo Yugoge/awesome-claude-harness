@@ -19,9 +19,7 @@ Rules enforced:
      without an Agent call of its role that came back or that /restart resumed
   7. The wake (/dev-overnight Step 0) completes only after a recurring
      CronCreate of the wake's prompt in the span (P1c X8)
-
-Past a command's first list, a list of unchanged length is paired with the
-last one, and each step with its canonical step, by content, never by index.
+Past a command's first list, lists of one length pair by content, never index.
 
 Exit codes:
   0: Valid, allow TodoWrite

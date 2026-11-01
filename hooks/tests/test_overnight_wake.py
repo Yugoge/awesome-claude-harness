@@ -342,3 +342,15 @@ def test_overnight_write_boundary_leaves_the_restart_helper_alone(tmp_path, sub)
     assert plain.returncode == 0 and "updatedInput" not in plain.stdout, (plain.stdout, plain.stderr)
     chained = guard(f"{HELPER} {sub} && touch {tmp_path / 'outside'}")
     assert chained.returncode == 2 or "updatedInput" in chained.stdout, (chained.stdout, chained.stderr)
+
+
+def test_the_command_texts_carry_the_wake_and_its_deletions():
+    """dev-overnight.md's Step 0 block is the one recurring CronCreate of WAKE_PROMPT; Step 21's
+    session-ending branch and stop.md end with its CronDelete."""
+    sys.path.insert(0, str(ROOT))
+    from tests.replay import cmdtext
+    night = (ROOT / "commands" / "dev-overnight.md").read_text()
+    spec = json.loads(cmdtext.block(night, "Step 0", lang="json"))
+    assert spec["prompt"] == WAKE and spec["recurring"] is True
+    assert "CronDelete" in cmdtext.section(night, "Step 21") and "Delete the wake" in night
+    assert "CronDelete" in cmdtext.section((ROOT / "commands" / "stop.md").read_text(), "Implementation")

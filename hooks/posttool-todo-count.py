@@ -4,9 +4,8 @@ PostToolUse Hook: Enforce canonical todo count immediately after TodoWrite.
 
 Fires after every TodoWrite call.
 If the number of todos written is less than blocking_count (from todo script),
-block Claude and provide the full canonical todo list to re-submit; only for the
-command's first list or a change of its length, so a list the session started
-with stays valid when the canonical list changes under it (P1c row 17). The command
+block Claude and provide the full canonical todo list to re-submit, at a command's
+first list or a change of its length only (P1c row 17). The command
 is the one that opened the transcript's active span; the workflow gate reads the
 same record, so the block writes nothing.
 

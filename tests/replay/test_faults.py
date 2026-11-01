@@ -454,9 +454,9 @@ REFUSALS = {"bad-message": (("stop_at", "3"), ("fault", "limit@agent:pm Read REA
             "after-stop": (("wake", "after-stop"),)}
 
 
-def _cases(scn, extra: tuple) -> list:
+def _cases(scn, extra: tuple, name: str = "") -> list:
     keys = [suite.replay_key(scn, s, extra) for s in suite.SETTINGS]
-    return [pytest.param(k, id=s, marks=pytest.mark.replay(k, scn.cost)) for k, s in zip(keys, suite.SETTINGS)]
+    return [pytest.param(k, id=name + s, marks=pytest.mark.replay(k, scn.cost)) for k, s in zip(keys, suite.SETTINGS)]
 
 
 def _non_human(r, prompts: list) -> list:
@@ -510,7 +510,8 @@ def test_f6o_usage_limit_after_end_time_before_the_summary_resumed_by_the_wake(r
 
 # ---------------------------------------------------------------- X8's refusals of the widened exception
 
-@pytest.mark.parametrize("key", _cases(STOP_WAKE, REFUSALS["bad-message"]) + _cases(STOP_WAKE, REFUSALS["bad-id"]))
+@pytest.mark.parametrize("key", _cases(STOP_WAKE, REFUSALS["bad-message"], "bad-message-")
+                         + _cases(STOP_WAKE, REFUSALS["bad-id"], "bad-id-"))
 def test_the_wakes_capability_refuses_any_other_message_or_id(replays, key):
     r = replays.get(key)
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()

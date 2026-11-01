@@ -334,11 +334,8 @@ class Checklist:
 
     @property
     def lock(self):
-        """Why the workflow gate holds other tools back, or '' when it does not. The
-        list's length is not compared here: a first list or a length change that
-        differs from the canonical one is refused at its own TodoWrite
-        (pretool-todo-validate.py), and a list the session started with stays
-        valid when the canonical list changes under it (P1c row 17)."""
+        """Why the workflow gate holds other tools back, or '' when it does not. No length
+        check: pretool-todo-validate.py refuses a wrong first list or length change (P1c row 17)."""
         if self.todos is None:
             return 'not_started'
         if not self._accepted:
