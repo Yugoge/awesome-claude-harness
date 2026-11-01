@@ -58,6 +58,8 @@ Every Agent dispatch from this orchestrator shares the following invariant prelu
 ```
 Hook creates state file + view detection (automatic; a worktree only under --worktree)
   |
+Step 0: Schedule the wake (one recurring CronCreate, deleted where the session ends)
+  |
 Step 1: Read state file + cd into the working root (first run only)
   |
   +---> EXPLORATION PHASE (Step 2)
@@ -192,6 +194,16 @@ The `focus` string is stored in the state file and passed to all 4 specialist su
 ---
 
 ## Implementation
+
+### Step 0: Schedule the Wake
+
+First, before Step 1, schedule the session's wake: one recurring `CronCreate` with exactly this input, the prompt verbatim:
+
+```json
+{"cron": "3,13,23,33,43,53 * * * *", "recurring": true, "prompt": "[awesome-claude-harness/overnight-wake-v1] Scheduled wake of this /dev-overnight session: resume what a usage limit cut (commands/restart.md's recovery), then carry on with the checklist step in progress."}
+```
+
+Keep the job id its result returns. The wake fires only while the session is idle, as after a usage limit ended the turn; the hooks then issue the `/restart` capability to it inside this session's span and hand you `commands/restart.md`'s recovery, which you run with no human, then carry on. A wake that finds nothing cut finalizes with 0 candidates and the cycle goes on. `pretool-todo-validate.py` completes Step 0 only after this call. On a loop reset (Step 21) and in Continuation Mode the wake scheduled at launch still runs: mark Step 0 completed with no second `CronCreate`. The wake ends with a `CronDelete` of its id, as the last step of Step 21's session-ending branch, or of `/stop`; the time-lock refuses the Stop after `end_time` until then.
 
 ### Step 1: Read State File and Establish the Working Root
 
@@ -1531,7 +1543,7 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 2. Check overnight-state.json for future end_time
 3. Reset all todos to pending
 4. Print loop continuation instructions
-5. You then resume from Step 2 (the working root is already established)
+5. You then mark Step 0 (the wake still runs) and Step 1 completed and resume from Step 2 (the working root is already established)
 
 **If time expired** (session ending):
 **Read the full state file** (start time, end time, isolation) and the cycle data, which the state file does not hold: the PM retro reports (`docs/dev/overnight/<session_id>/retro-report-cycle*.json`) and the cycle log.
@@ -1654,6 +1666,8 @@ independent so the user can inspect state between each step.
 
 The time-lock has been released. The session can now end normally.
 ```
+
+**Delete the wake** (the last step of this branch): `CronDelete` with the job id Step 0's `CronCreate` returned, then mark Step 21 completed. The time-lock refuses the Stop after `end_time` while the wake has no `CronDelete`.
 
 ### Post-loop manual flow (human-in-the-loop)
 

@@ -2074,6 +2074,13 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str) -> N
         )
 
 
+def _restart_helper(payload: dict) -> bool:
+    if 'restart-subagents.py' not in str(payload.get('tool_input')):
+        return False
+    from lib.subagent_restart import is_helper_invocation
+    return is_helper_invocation(payload)
+
+
 def main():
     """Entry point: apply global + actor-scoped overnight enforcement (M9)."""
     tool_name, tool_input, session_id, payload = _parse_hook_input()
@@ -2123,8 +2130,11 @@ def main():
             # actor — re-exec the surviving command inside the RO-bind boundary
             # (emit updatedInput.command + exit 0) when bwrap is available, else
             # FAIL-CLOSED. Layered ON TOP OF the L4 guard (STEP A still ran).
-            _apply_write_boundary(
-                tool_input.get('command', ''), gov_state, main_git_dir)
+            # /restart's helper writes only its own journal, never a working tree (P1c X8: the
+            # overnight wake runs it): it runs outside the boundary, as commands/restart.md has it.
+            if not _restart_helper(payload):
+                _apply_write_boundary(
+                    tool_input.get('command', ''), gov_state, main_git_dir)
         elif classification == 'worktree_context':
             # VECTOR-3 fail-closed: cwd is inside an active worktree but no
             # governing overnight state could be resolved for it. We cannot derive

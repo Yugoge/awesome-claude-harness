@@ -109,6 +109,59 @@ TASK_NOTIFICATION_RE = re.compile(
 RECOVERY_STATUS_RE = re.compile(r"RECOVERY_STATUS:\s*(completed|quota_interrupted)\b")
 
 
+# The helper invocations commands/restart.md runs, which neither another
+# command's checklist (pretool-workflow-gate.py) nor the overnight write
+# boundary (pretool-overnight-hook-guard.py: they write only this module's
+# journal, never a working tree) may hold back. Matched structurally against
+# the documented invocations only (no --session-id: commands/restart.md never passes it, so admitting it would
+# only widen attack surface for zero functional benefit), with shell
+# metacharacters rejected so this can never become a chaining bypass.
+# The two optional groups are positional, not bound to a subcommand: this
+# pattern admits either flag after any of the three subcommands, a
+# permissive superset of what the CLI accepts. argparse registers each flag
+# on its own subparser, so a combination this pattern admits but the CLI
+# does not (e.g. finalize --cross-account) exits non-zero there rather than
+# running. Enforcing the pairing here too would duplicate that authority in
+# a second place that could drift from it.
+_HARNESS_HOME = str(Path(os.path.abspath(__file__)).parents[2])  # install location
+_RESTART_HELPER_COMMAND_RE = re.compile(
+    r'^(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
+    r'/venv/bin/python3?\s+'
+    r'(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
+    r'/scripts/restart-subagents\.py\s+'
+    r'(?:prepare|status|finalize)'
+    r'(?:\s+--cross-account)?'
+    r'(?:\s+--wait-seconds\s+\d+)?'
+    r'\s*$'
+)
+_SHELL_METACHAR_RE = re.compile(r'[;&|`\n<>]|\$\(')
+_HOME_UNSAFE_RE = re.compile(r'[\s;&|`\n<>$]')
+
+
+def is_helper_invocation(data: dict) -> bool:
+    """True only for the exact, unchained /restart helper invocation.
+
+    The pattern's literal-$HOME alternative is only trustworthy if $HOME
+    itself expands to a single clean word when Bash actually runs the
+    command; a HOME value containing whitespace or shell metacharacters
+    would let that expansion smuggle in extra words or operators the regex
+    never saw. Fail closed (no bypass, ordinary gate enforcement applies)
+    whenever the resolved home directory looks unsafe.
+    """
+    if data.get('tool_name') != 'Bash':
+        return False
+    tool_input = data.get('tool_input') if isinstance(data.get('tool_input'), dict) else {}
+    command = tool_input.get('command')
+    if not isinstance(command, str):
+        return False
+    command = command.strip()
+    if not command or _SHELL_METACHAR_RE.search(command):
+        return False
+    if _HOME_UNSAFE_RE.search(str(Path.home())) or _HOME_UNSAFE_RE.search(_HARNESS_HOME):
+        return False
+    return bool(_RESTART_HELPER_COMMAND_RE.match(command))
+
+
 class RestartError(RuntimeError):
     """Expected fail-closed recovery error."""
 

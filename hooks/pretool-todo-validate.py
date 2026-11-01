@@ -17,6 +17,11 @@ Rules enforced:
   5. Steps must be completed in order (no skipping ahead)
   6. Subagent completion guard (Gate 4): cannot complete a subagent step
      without an Agent call of its role that came back or that /restart resumed
+  7. The wake (/dev-overnight Step 0) completes only after a recurring
+     CronCreate of the wake's prompt in the span (P1c X8)
+
+Past a command's first list, a list of unchanged length is paired with the
+last one, and each step with its canonical step, by content, never by index.
 
 Exit codes:
   0: Valid, allow TodoWrite
@@ -30,7 +35,7 @@ from pathlib import Path
 
 # Import shared canonical validation
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.todo_canonical import checklist, validate_against_canonical, run_todo_script
+from lib.todo_canonical import by_content, checklist, validate_against_canonical, run_todo_script
 
 
 def _check_field_changed(old_val, new_val):
@@ -251,19 +256,20 @@ def _dispatched_steps(state, canonical, sid=''):
     events = sorted([(w.result_at, 0, w) for w in state.write_uses]
                     + [(c.result_at, 1, c) for c in state.span.uses('Agent', 'Task') if c.ok]
                     + _resumed(state, sid), key=lambda e: (e[0], e[1]))
-    current, counted = [], set()
+    current, steps, counted = [], [], set()
     for _, is_dispatch, call in events:
         if not is_dispatch:
             current = call.input['todos']
+            steps = by_content(canonical, current)
             counted -= {i for i, t in enumerate(current) if t.get('status') == 'pending'}
             continue
         ip = _in_progress(current)
         if ip is None:
             continue
         kind = str(call.input.get('subagent_type') or '').strip().lower()
-        window = range(ip, min(len(canonical), ip + 3)) if kind else [ip]
+        window = range(ip, min(len(current), ip + 3)) if kind else [ip]
         for i in window:
-            types = _subagent_types(canonical[i]) if i < len(canonical) else set()
+            types = _subagent_types(steps[i])
             if types and i not in counted and (not kind or kind in types):
                 counted.add(i)
                 break
@@ -273,19 +279,18 @@ def _dispatched_steps(state, canonical, sid=''):
 def _find_completing_subagent_step(state, last, new_todos, canonical, sid=''):
     """Find a step transitioning to completed that needs subagent guard."""
     dispatched = None
-    for i, (old, new) in enumerate(zip(last, new_todos)):
+    for i, (old, new, step) in enumerate(zip(last, new_todos, by_content(canonical, new_todos))):
         needs_guard = (
             old.get('status') == 'in_progress'
             and new.get('status') == 'completed'
-            and i < len(canonical)
-            and canonical[i].get('subagent_call')
+            and step.get('subagent_call')
         )
         if not needs_guard:
             continue
         if dispatched is None:
             dispatched = _dispatched_steps(state, canonical, sid)
         if i not in dispatched:
-            return i, new, canonical[i].get('subagent_call')
+            return i, new, step
     return None, None, None
 
 
@@ -310,13 +315,12 @@ def check_subagent_completion_guard(state, last, new_todos, cmd, sid=''):
     """Gate 4: block completing a subagent step without calling Agent."""
     if not last or not cmd:
         return
-    canonical = state.canonical
-    idx, step_todo, sa_call = _find_completing_subagent_step(
-        state, last, new_todos, canonical, sid
+    idx, step_todo, step = _find_completing_subagent_step(
+        state, last, new_todos, state.canonical, sid
     )
     if idx is not None:
-        agents = _format_subagent_names(sa_call)
-        cut = _unreturned(state, _subagent_types(canonical[idx]))
+        agents = _format_subagent_names(step.get('subagent_call'))
+        cut = _unreturned(state, _subagent_types(step))
         why = (f'Its {agents} call has not come back ({"; ".join(cut)}). A subagent cut by an '
                'interrupted session or a usage limit is resumed and finalized by the owner\'s /restart '
                '(commands/restart.md), never replaced by a new call.\n\n' if cut else
@@ -325,6 +329,19 @@ def check_subagent_completion_guard(state, last, new_todos, cmd, sid=''):
         sys.stderr.write(f'\nBLOCKED: Cannot complete "{step_todo.get("content", "?")}" '
                          f'(subagent role {agents}).\n' + why)
         sys.exit(2)
+
+
+def check_wake_step(state, last, new_todos):
+    """Rule 7: the wake step completes only after an ok recurring CronCreate of
+    the wake's prompt in the span, the job the session's CronDelete ends."""
+    from lib import overnight
+    for old, new, step in zip(last, new_todos, by_content(state.canonical, new_todos)):
+        if (step.get('wake_call') and old.get('status') == 'in_progress' and new.get('status') == 'completed'
+                and not any(overnight.is_wake(u) for u in state.span.uses('CronCreate'))):
+            sys.stderr.write(f'\nBLOCKED: Cannot complete "{new.get("content")}": this /{state.command} span holds '
+                             "no ok recurring CronCreate of the wake's prompt. Call CronCreate as the command's "
+                             'text gives it (recurring, its prompt verbatim), then mark the step completed.\n')
+            sys.exit(2)
 
 
 def parse_stdin():
@@ -355,10 +372,12 @@ def main():
     if last is None or len(last) != len(new_todos):
         validate_against_canonical_if_needed(cmd, new_todos, state.arguments)
         sys.exit(0)
-    violations = validate(last, new_todos)
+    paired = by_content(last, new_todos)
+    violations = validate(paired, new_todos)
     if violations:
         emit_block(cmd, violations, last)
-    check_subagent_completion_guard(state, last, new_todos, cmd, str(data.get('session_id') or ''))
+    check_wake_step(state, paired, new_todos)
+    check_subagent_completion_guard(state, paired, new_todos, cmd, str(data.get('session_id') or ''))
     sys.exit(0)
 
 

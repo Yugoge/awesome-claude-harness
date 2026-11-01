@@ -7,7 +7,12 @@ disable-model-invocation: true
 
 Human-only emergency recovery; invoke only after a session or usage limit has
 interrupted this session — every recoverable interrupted subagent, or, when the
-session had none, the main agent's own work.
+session had none, the main agent's own work. Inside `/dev-overnight` the session's
+own wake (dev-overnight.md Step 0) starts the same Mandatory procedure with no
+human: `userprompt-restart-authorize.py` issues the capability to the wake's fixed
+text only while the `/dev-overnight` span is open (never after `/stop`), and
+`prompt-workflow.py` hands this procedure over; with 0 candidates it finalizes and
+the session carries on with its checklist step in progress (D20).
 
 ## Usage
 

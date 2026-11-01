@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.todo_canonical import run_todo_script, write_bookmark
+from lib.todo_canonical import by_content, run_todo_script, write_bookmark
 from lib import contract_runtime
 from lib import overnight
 
@@ -358,7 +358,8 @@ def _resolve_base_context(session_id: str):
     last_todos = state.get('last_todos')
     if not cmd_name or not last_todos:
         return None
-    canonical = run_todo_script(cmd_name, state.get('arguments', '')) or []
+    # Each todo's canonical step is the one of its content, never of its index (P1c row 17).
+    canonical = by_content(run_todo_script(cmd_name, state.get('arguments', '')) or [], last_todos)
     ip_index = _current_in_progress_index(state)
     return state, last_todos, canonical, ip_index, bm_path
 

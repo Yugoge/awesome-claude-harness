@@ -35,3 +35,40 @@ def test_compliant_run(replays, key):
     assert not r.blocks, "a compliant run met a gate block:\n" + r.explain()
     assert not r.hook_errors, "a compliant run met a hook error:\n" + r.explain()
     assert r.reached(), "a pipeline did not reach its terminal:\n" + r.explain()
+
+
+# ---------------------------------------------------------------- /dev-overnight's wake (P1c X8, row 17)
+
+OVERNIGHT = next(s for s in suite.COMPLIANT if s.name == "/dev-overnight")
+STOP = suite.Scenario("/dev-overnight /stop (X8)", "overnight", (("variant", "stop"), ("then", "idle")),
+                      ("dev-overnight",), 90)
+
+
+@pytest.mark.parametrize("key", [pytest.param(suite.replay_key(OVERNIGHT, s), id=s,
+                                              marks=pytest.mark.replay(suite.replay_key(OVERNIGHT, s), OVERNIGHT.cost))
+                                 for s in suite.SETTINGS])
+def test_overnight_wake_deleted_before_its_stop(replays, key):
+    """The compliant /dev-overnight scenario's terminal, where Step 0 scheduled the wake: the wake
+    deleted before the Stop after end_time and none fired in the two wake intervals after it."""
+    r = replays.get(key)
+    wake, term = r.fact("wake"), r.terminal("dev-overnight") or {}
+    assert wake and len(wake["created"]) == 1 and wake["deleted"] == wake["created"] and not wake["fired"], wake
+    assert term.get("wake_live_at_stop") == [] and term.get("wakes_fired_after") == 0, term
+    assert r.reached(), r.explain()
+
+
+@pytest.mark.parametrize("key", [pytest.param(suite.replay_key(STOP, s), id=s,
+                                              marks=pytest.mark.replay(suite.replay_key(STOP, s), STOP.cost))
+                                 for s in suite.SETTINGS])
+def test_owner_stop_deletes_the_wake_and_none_fires(replays, key):
+    """X8's /stop replay: /dev-overnight with the owner's /stop typed inside the window, run past stop.md's
+    CronDelete of the wake (no Stop driven after it) and two wake intervals more: 0 blocks, 0 hook errors,
+    0 wakes fired."""
+    r = replays.get(key)
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    assert not r.blocks and not r.hook_errors, r.explain()
+    wake = r.fact("wake")
+    assert wake and len(wake["created"]) == 1 and wake["deleted"] == wake["created"] and not wake["fired"], wake
+    labels = [(ev["event"], ev["label"]) for ev in r.hook_events()]
+    at = labels.index(("PostToolUse", "/stop CronDelete wake"))
+    assert not [x for x in labels[at:] if x[0] == "Stop"], labels[at:]
