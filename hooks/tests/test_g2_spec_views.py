@@ -15,6 +15,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 HOOK = REPO / "hooks" / "subagentstop-artifact-contract-enforce.py"
 sys.path.insert(0, str(REPO / "hooks" / "lib"))
@@ -48,7 +50,8 @@ VIEW_TEXT = {
 }
 
 
-def _split(project: Path, complete: bool, mono: str = MONO_TEXT, view_text: dict = VIEW_TEXT) -> None:
+def _split(project: Path, complete: bool, mono: str = MONO_TEXT, view_text: dict = VIEW_TEXT,
+           manifest: dict | None = None) -> None:
     (project / MONOLITH).parent.mkdir(parents=True, exist_ok=True)
     (project / MONOLITH).write_text(mono, encoding="utf-8")
     views = project / VIEWS
@@ -57,6 +60,12 @@ def _split(project: Path, complete: bool, mono: str = MONO_TEXT, view_text: dict
         if not complete and name == "qa.md":
             text = text.replace("Report the pytest result line.\n", "")
         (views / name).write_text(text, encoding="utf-8")
+    # The manifest the spec subagent writes (agents/spec.md Step 5): the views it wrote, of this monolith.
+    if manifest is None:
+        manifest = {"schema_version": 1, "spec_id": SPEC_ID, "monolith_path": MONOLITH,
+                    "views": {n[:-3]: f"views/{n}" for n in view_text if n != "orchestrator.md"}}
+    if manifest:
+        (views / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 def _base_prompt(project: Path) -> str:
@@ -174,3 +183,39 @@ def test_the_spec_views_grammar_in_the_library_and_the_schema():
         rejected = obligation.validate_obligation(dict(doc, artifacts=[bad]))
         assert isinstance(rejected, obligation.Rejection), bad
         assert not jsonschema.Draft7Validator(schema).is_valid(dict(doc, artifacts=[bad]))
+
+
+@pytest.mark.parametrize("manifest, failed", [
+    ({}, "views/manifest.json missing or not a regular file"),
+    ({"schema_version": 1, "spec_id": SPEC_ID, "monolith_path": "docs/dev/specs/other.md",
+      "views": {"ba": "views/ba.md"}}, "points at a non-existent file"),
+    ({"schema_version": 1, "spec_id": SPEC_ID, "monolith_path": MONOLITH,
+      "views": {"ba": "views/ba.md", "dev": "views/dev.md"}}, "referenced view file for role 'dev' not found"),
+], ids=["missing", "other_monolith", "view_missing"])
+def test_the_splits_manifest_is_checked_at_the_spec_subagents_stop(tmp_path, manifest, failed):
+    """P1b E4: the split's own manifest predicates (resolve-spec-artifacts.py split_problem, the rule
+    /spec's finalize guard ran in the orchestrator's call) go back to the spec subagent at its stop,
+    naming the manifest and the failed predicate; the marker the orchestrator writes later is not
+    among them."""
+    run = _stop(tmp_path, _obligation_prompt, manifest=manifest)
+    assert run.returncode == 2, run.stderr
+    assert f"{VIEWS}/manifest.json: spec_manifest_invalid" in run.stderr
+    assert failed in run.stderr
+
+
+def test_the_stop_coverage_hook_is_an_exit_zero_stub(tmp_path):
+    """P1b row 8, Correction 9: stop-spec-coverage-enforce.py, which the Stop coordinator runs as
+    its coverage phase, allows the /spec orchestrator's Stop on a split spec-verify rejects (the
+    stop it blocked before): the rule is G2's at the spec subagent's stop, above."""
+    stub = REPO / "hooks" / "stop-spec-coverage-enforce.py"
+    assert any(line.startswith("# STUB:") for line in stub.read_text(encoding="utf-8").splitlines())
+    project = tmp_path / "project"
+    _split(project, complete=False)
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "/spec x"}}) + "\n",
+                          encoding="utf-8")
+    payload = {"session_id": SESSION, "transcript_path": str(transcript), "stop_hook_active": False}
+    run = subprocess.run([sys.executable, str(stub)], input=json.dumps(payload), text=True, capture_output=True,
+                         env={**os.environ, "CLAUDE_PROJECT_DIR": str(project)}, timeout=30)
+    assert (run.returncode, run.stdout, run.stderr) == (0, "", "")
+
