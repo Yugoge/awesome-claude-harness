@@ -10,6 +10,7 @@ set -u
 RUNTIME_DIRS=(
   ".claude/dev-registry/"
   ".claude/dev-start-replays/"
+  ".claude/specs/"
   ".claude/workflow-locks/"
 )
 

@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 HOOK = Path(__file__).resolve().parent.parent / "session-gitignore-propagate.sh"
-RUNTIME = [".claude/dev-registry/", ".claude/dev-start-replays/", ".claude/workflow-locks/"]
+RUNTIME = [".claude/dev-registry/", ".claude/dev-start-replays/", ".claude/specs/", ".claude/workflow-locks/"]
 
 
 def _env(home):
@@ -47,7 +47,8 @@ def _toy(tmp_path):
 
 def _runtime_files(root, sid="s1"):
     paths = [".claude/dev-registry/agent-index.json", ".claude/dev-registry/dev-t1/dev.json",
-             f".claude/dev-start-replays/{sid}/d.json", f".claude/workflow-locks/{sid}.lock"]
+             f".claude/dev-start-replays/{sid}/d.json", ".claude/specs/t1/cp-state-qa.json",
+             f".claude/workflow-locks/{sid}.lock"]
     for rel in paths:
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text("{}\n")
