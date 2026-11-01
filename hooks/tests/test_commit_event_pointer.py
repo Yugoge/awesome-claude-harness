@@ -122,9 +122,10 @@ def dispatch(prompt, sid=SID, subagent_type="changelog-analyst"):
     return agent_id
 
 
-def commit_payload(repo, agent_id, tool_use_id):
-    msg = Path(repo).parent / "msg.txt"
-    msg.write_text("feat: change\n")
+def commit_payload(repo, agent_id, tool_use_id, message="feat: change\n\nTask-id: 20261028-100000\n"):
+    msg = Path(repo).parent / ("msg.txt" if message is not None else "missing-msg.txt")
+    if message is not None:
+        msg.write_text(message)
     return {"tool_name": "Bash", "session_id": SID, "agent_id": agent_id, "cwd": repo,
             "tool_use_id": tool_use_id, "transcript_path": str(session_dir() / f"{SID}.jsonl"),
             "tool_input": {"command": f'git -C {repo} commit -F "{msg}"'}}
@@ -210,6 +211,28 @@ def test_main_agent_and_a_spent_grant_are_refused(world):
     assert evaluate(commit_payload(repo, analyst, "toolu_a")) == 0
     # The commit failed: the grant does not come back, so the same commit again is refused.
     assert evaluate(commit_payload(repo, analyst, "toolu_b")) == 2
+
+
+def test_a_grant_commits_only_a_message_carrying_its_task_id_line(world):
+    """A16: the analyst's `git commit -F <file>` under a grant naming a task needs the line
+    `Task-id: <task>` in the whole file; another task's line, the id elsewhere in a line, an
+    unreadable or unresolved file are refused, and a refusal spends nothing. The bulk route
+    (`auto-bulk:` subject, no Task-id line) is test_bulk_commit_sentinel's
+    test_f_flag_blessed_bridge_allowed_with_sentinel."""
+    state = os.environ["CLAUDE_STATE_DIR"]
+    repo = make_repo(world / "toy")
+    grant, _ = mint(state, repo)
+    analyst = dispatch("TASK_ID=20261028-100000")
+    for message in ("feat: change\n", "feat: change\n\nTask-id: 20261028-100001\n",
+                    "feat: Task-id: 20261028-100000\n", None):
+        assert evaluate(commit_payload(repo, analyst, "toolu_refused", message)) == 2, message
+        assert os.path.exists(grant)
+    unresolved = commit_payload(repo, analyst, "toolu_unresolved")
+    unresolved["tool_input"]["command"] = f'git -C {repo} commit -F "${{MSGFILE}}"'
+    assert evaluate(unresolved) == 2 and os.path.exists(grant)
+    body = "feat: change\n\nTask-id: 20261028-100000\n f.txt | 1 +\n"
+    assert evaluate(commit_payload(repo, analyst, "toolu_ok", body)) == 0
+    assert not os.path.exists(grant)
 
 
 def test_spending_is_an_unlink_only_one_event_wins(world):
