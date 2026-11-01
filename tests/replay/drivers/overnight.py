@@ -20,12 +20,13 @@ Then, in one session, the main agent:
     one at a time, each prompt built from the text's bullet list ("Each subagent receives ..."),
     the report validation the text asks for (the base's check-overnight-reports.sh and its sanity
     Reads), the core-flow gate Read of the user report;
-  - Step 4: the cycle number as the text reads it (`overnight.py cycle-index <STATE_FILE>`, or the
-    state record's cycle_count), PM TRIAGE from the template, the pipeline_blocked Read; on a text
-    with the "Cycle Contract Manifest" (the base), the orchestrator's contract: its primary and
-    mirror Writes and the cycle-current.json symlink, its fields from the section's bullets, its
-    BA/dev/QA/graphify entries from the section's inline examples, the entries of the other
-    dispatches the cycle commits to from those dispatches' own templates;
+  - Step 4: the cycle number as the text reads it (`overnight.py cycle-index <STATE_FILE>`, the `Cycle:`
+    line of overnight-status.sh, or the state record's cycle_count), PM TRIAGE from the template, the
+    pipeline_blocked Read; on a text with the "Cycle Contract Manifest" (the base), the
+    orchestrator's contract: its primary and mirror Writes and the cycle-current.json symlink, its
+    fields from the section's bullets, its BA/dev/QA/graphify entries from the section's inline
+    examples, the entries of the other dispatches the cycle commits to from those dispatches' own
+    templates;
   - Step 5: the template Read and one spec copy per pipeline, the text's replacements made;
   - Step 6: the pipeline builder block; Step 7: the focus criteria;
   - Step 8 per pipeline: the pre-BA retry signals (Four Contracts Awareness), the graphify
@@ -963,10 +964,14 @@ class Night:
     def cycle_number(self) -> None:
         o = self.o
         sec = o.section("Step 4")
-        m = re.search(r"`(~/\.claude/hooks/lib/overnight\.py cycle-index <STATE_FILE>)`", sec)
+        # `overnight.py cycle-index <STATE_FILE>`, or the `Cycle:` line overnight-status.sh prints for it
+        m = re.search(r"`(~/\.claude/hooks/lib/overnight\.py cycle-index <STATE_FILE>)`", sec) or re.search(
+            r"the `Cycle:` line of `(bash \"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/overnight-status\.sh\" <STATE_FILE>)`", sec)
         if m:
             c = self.bash(o.bind(m.group(1)), "Read the cycle number", "Step 4 Bash cycle-index")
             out = c.response.get("stdout", "").strip() if c.ok else ""
+            line = re.search(r"^\s*Cycle:\s*(\d+)\s*$", out, re.M)
+            out = line.group(1) if line else out
             self.n = int(out) if out.isdigit() else self.cycle
         else:  # the base text: Cycle number <cycle_count + 1>, from the state record
             self.read(self.state_file, "Step 4 Read state record (cycle_count)")
@@ -1082,7 +1087,7 @@ class Night:
         self.todo_to(5)
         sec = o.section("Step 5")
         tpl = re.search(r"Copy the template from `([^`]+)`", sec).group(1)
-        tpl_path = tpl.replace("~", self.rp.layout.home, 1)
+        tpl_path = tpl.replace("~", self.rp.layout.home, 1) if tpl.startswith("~/") else o.bind(tpl)
         self.read(tpl_path, "Step 5 Read spec template")
         text = agents.peek(self.rp, "main", tpl_path)
         sec5 = "Replace Section 5's `_Not yet populated._`" in sec
@@ -1472,7 +1477,8 @@ class Night:
         self.write(self.log_rel, (old.rstrip("\n") + "\n\n" if old else "") + entry.strip("\n") + "\n", "Step 19 Write cycle log")
         # TIME CHECK.
         code = next(c for c in cmdtext.inline_codes(o.text, "Step 19", "TIME CHECK")
-                    if c.startswith("~/.claude/scripts/overnight-status.sh"))
+                    if c.startswith(("~/.claude/scripts/overnight-status.sh",
+                                     'bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh"')))
         cmd = o.bind(code)
         if cmd.strip() == "~/.claude/scripts/overnight-status.sh" and "against the state file" in sec:
             cmd += " " + shlex.quote(self.state_file)
