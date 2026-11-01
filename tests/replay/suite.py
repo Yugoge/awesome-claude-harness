@@ -237,8 +237,11 @@ def replay_key(scn: Scenario, settings: str, faults: tuple = (), tag: str = "") 
 class Runner:
     """Replays scenarios of one tree in sandboxes copied from one template under `work`; results cached."""
 
-    def __init__(self, work: str, tree: str = REPO, workers: int | None = None, log=None):
+    def __init__(self, work: str, tree: str = REPO, workers: int | None = None, log=None, env=None,
+                 settings_files=None):
         self.work = os.path.abspath(work)
+        self.env = dict(env or {})  # added to every replay's hook environment (cli.py --env)
+        self.settings_files = dict(settings_files or {})  # a settings name -> the file it replays with
         self.tree = os.path.abspath(tree)
         self.workers = workers or int(os.environ.get("REPLAY_WORKERS") or max(1, min(4, os.cpu_count() or 1)))
         self.log = log or (lambda *a: None)
@@ -307,10 +310,10 @@ class Runner:
         os.makedirs(out)
         sandbox.clone(self.template(), sb)
         argv = [sys.executable, "-m", "tests.replay", "run", "--tree", self.tree, "--out", out, "--sandbox", sb,
-                "--driver", scn.driver, "--settings", settings, "--runs", "plain"]
+                "--driver", scn.driver, "--settings", self.settings_files.get(settings, settings), "--runs", "plain"]
         for k, v in tuple(scn.args) + tuple(faults):
             argv += ["--arg", f"{k}={v}"]
-        for k, v in self.guard.env().items():
+        for k, v in {**self.guard.env(), **self.env}.items():
             argv += ["--env", f"{k}={v}"]
         before = self.guard.count
         t0 = time.monotonic()

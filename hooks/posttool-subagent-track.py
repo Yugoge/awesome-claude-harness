@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -271,13 +272,17 @@ def _is_triage_dispatch(stdin_data: dict, steps: list) -> bool:
         return False
     role = ti.get('subagent_type')
     return (isinstance(role, str) and role.strip().lower() == triage.get('subagent_type')
-            and contract_runtime.detect_mode(ti.get('prompt', '')) == triage.get('mode'))
+            and contract_runtime.detect_mode(ti.get('prompt', ''), role) == triage.get('mode'))
 
 
-def _pipeline_count(state: dict, cycle_id: int) -> int | None:
+def _pipeline_count(state: dict, cycle_id: int, prompt: str = '') -> int | None:
     """How many pipelines this cycle's triage report creates, counted by the
-    Step-6 builder itself so the count and the pipelines cannot disagree."""
-    triage = overnight.session_dir(state) / f'triage-report-cycle{cycle_id}.json'
+    Step-6 builder itself so the count and the pipelines cannot disagree. The
+    report is the one the TRIAGE dispatch's prompt names (a session still on
+    the base's text numbers it by the record's cycle_count, which no hook
+    advances since P1b), else the cycle's."""
+    named = re.findall(r'triage-report-cycle\d+\.json', prompt if isinstance(prompt, str) else '')
+    triage = overnight.session_dir(state) / (named[-1] if named else f'triage-report-cycle{cycle_id}.json')
     if not triage.is_file():
         return None
     try:
@@ -302,7 +307,7 @@ def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
     if not _is_triage_dispatch(stdin_data, steps):
         return
     cycle_id = overnight.cycle_index(state)
-    count = _pipeline_count(state, cycle_id)
+    count = _pipeline_count(state, cycle_id, (stdin_data.get('tool_input') or {}).get('prompt', ''))
     if count is None:
         sys.stderr.write(
             f'CYCLE CONTRACT NOT WRITTEN: cycle {cycle_id} has no readable triage '

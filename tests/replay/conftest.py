@@ -79,7 +79,7 @@ def runner(tmp_path_factory, request):
     keys = []
     for it in request.session.items:
         for k, _cost in _keys(it):
-            if k not in keys:
+            if k not in keys and k in suite.REGISTRY:  # a test with its own runner: not prefetched
                 keys.append(k)
     r.prefetch_keys = keys
     yield r

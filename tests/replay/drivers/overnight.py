@@ -83,6 +83,9 @@ Driver arguments (cli.py --arg K=V):
   variant=plain   one cycle, the session's last: end_time is launch plus twice the cycle's longest
                   wall time (CYCLE_WALL_S), then the session-ending path and the Stop (default)
   end=<N>m        variant plain's end-time argument in place of the one CYCLE_WALL_S gives
+  cycles=2        variant plain with two cycles (P1c A11 (b)): cycle 1 inside the window, Step 21's loop
+                  reset, cycle 2 the session's last; end_time is launch plus twice the two cycles'
+                  longest wall time
   variant=stop    the owner's /stop inside cycle 1's window, once Step `stop_at` (default 12) is done
   then=idle       with variant=stop, X8's /stop replay: no Stop is driven after stop.md's last step (the
                   wake's CronDelete); the session idles two wake intervals (facts.json "wake"); stop_at
@@ -199,8 +202,8 @@ SCENARIO_EXPORT = devdrv.Scenario(
 
 # What each cycle's specialists find, one pipeline each (dev.py's scenarios plus the export one).
 CYCLE_SCENARIOS = {1: (devdrv.SCENARIO, devdrv.SCENARIO_SUB), 2: (devdrv.SCENARIO_README, SCENARIO_EXPORT)}
-# Variant plain (the compliant scenario): one finding, one pipeline.
-PLAIN_SCENARIOS = {1: (devdrv.SCENARIO,)}
+# Variant plain (the compliant scenario): one finding, one pipeline (with cycles=2, cycle 2's another).
+PLAIN_SCENARIOS = {1: (devdrv.SCENARIO,), 2: (devdrv.SCENARIO_SUB,)}
 # The specialists PM PLAN recommends (the rest of agent_assignments not called this cycle).
 CALLED = {"architect": "code review of the package's two modules", "user": "the core flow: import toy, call add"}
 SKIPPED = {"product-owner": "the README is the only product document; the architect covers it",
@@ -531,6 +534,7 @@ class Night:
         self.base_kit = rp.args.get("kit") == "base"
         rp.cron = Cron(rp)  # the CLI's scheduler (tests/replay/wake.py)
         self.wake_job = None
+        self.cycles = int(rp.args.get("cycles", "1"))
         self.owner_setup()  # before the session starts (the Orchestrator starts it)
         self.o = NightOrchestrator(rp, "dev-overnight", deviations=devs, respellings=devdrv.RESPELLINGS,
                                    rules=self._rules())
@@ -742,7 +746,7 @@ class Night:
         o = self.o
         end = END_TIME
         if self.variant == "plain":
-            end = self.rp.args.get("end") or f"{-(-2 * CYCLE_WALL_S // 60)}m"
+            end = self.rp.args.get("end") or f"{-(-2 * self.cycles * CYCLE_WALL_S // 60)}m"
         o.slash(f"{end} {FOCUS}")
         o.todo_start("C1 TodoWrite canonical list")
 
@@ -1444,7 +1448,7 @@ class Night:
         entry = re.sub(r"^\*\*Parked\*\*:.*$", "**Parked**: none", entry, flags=re.M)
         entry = entry.replace("<timestamp>", utc_now())
         self.log_append(entry, "Step 19 cycle log")
-        if self.variant == "plain":
+        if self.variant == "plain" and self.cycle >= self.cycles:
             self.idle_until_end()
         # TIME CHECK.
         code = next(c for c in cmdtext.inline_codes(o.text, "Step 19", "TIME CHECK")
@@ -1534,6 +1538,11 @@ class Night:
             o.todos = [dict(t, status="in_progress" if k == 0 else "pending") for k, t in enumerate(o.todos)]
             o._todo(f"{self.L}TodoWrite reset (loop)")
             self.read_paths = set()
+        elif "OVERNIGHT SESSION COMPLETE" in hook:
+            # The window closed though the TIME CHECK said nothing of it (the base's status script finds
+            # no session from the state file's path): the hook's "Generate your summary and finish up".
+            self.expired = True
+            self.session_end()
         else:
             raise RuntimeError(f"the loop hook printed no reset after cycle {self.cycle}: {hook[-400:]!r}")
 
@@ -1556,7 +1565,7 @@ class Night:
         mins = max(0, int((_epoch(now) - _epoch(start)) // 60)) if start else 0
         fixed = len(self.pipes)
         rules = [(r"^actual_end$", now), (r"^hours$", str(mins // 60)), (r"^minutes$", str(mins % 60)),
-                 (r"^cycle index - 1$", str(self.n)), (r"^issues_found$", str(fixed)),
+                 (r"^cycle index - 1$", str(self.n)), (r"^cycle_count$", str(self.n)), (r"^issues_found$", str(fixed)),
                  (r"^issues_fixed$", str(fixed)), (r"^issues_parked$", "0"), (r"^issues_triage_deferred$", "0"),
                  (r"^percentage$", "100"), (r"^issue$", "; ".join(p.rec["description"] for p in self.pipes)),
                  (r"^file$", ", ".join(p.rec["location"] for p in self.pipes)),
@@ -1565,9 +1574,13 @@ class Night:
                  (r"^Patterns noticed", "none: every finding of the session was fixed")]
         text = o.bind(cmdtext.block(sec, None, lang="markdown"), rules).replace("Fixed / Parked", "Fixed")
         form = re.search(r"`(cat > (\S+) <<'(\w+)')`", sec)
-        self.summary_rel = o.bind(form.group(2))
-        self.bash(f"{o.bind(form.group(1))}\n{text.rstrip(chr(10))}\n{form.group(3)}\n",
-                  "Write the overnight summary", "Step 21 Bash summary")
+        if form:
+            self.summary_rel = o.bind(form.group(2))
+            self.bash(f"{o.bind(form.group(1))}\n{text.rstrip(chr(10))}\n{form.group(3)}\n",
+                      "Write the overnight summary", "Step 21 Bash summary")
+        else:  # the base text: "Generate summary report at `<path>`", written as a new file
+            self.summary_rel = o.bind(re.search(r"Generate summary report\*\* at `([^`]+)`", sec).group(1))
+            self.write(self.summary_rel, text.rstrip("\n") + "\n", "Step 21 Write summary")
         for name, b, _ in o.step_blocks("Step 21"):
             o.run_text(b.text, f"{self.L}Step 21 Bash {name}", "Detect the default branch")
         ann = o.block("Step 21", anchor="Overnight development session complete.")
@@ -1578,8 +1591,9 @@ class Night:
         if "Delete the wake" in sec and self.rp.args.get("wake") != "late":  # the branch's last step
             self.delete_wake(s, f"{self.L}Step 21 CronDelete wake")
         i = o.current()
-        o.todos[i]["status"] = "completed"
-        o._todo(f"{self.L}TodoWrite Step 21 done (all completed)")
+        if i is not None:  # (already completed where the loop hook said the session is complete)
+            o.todos[i]["status"] = "completed"
+            o._todo(f"{self.L}TodoWrite Step 21 done (all completed)")
 
     def stop_after_end(self) -> None:
         """The session's Stop after end_time: /dev-overnight's terminal is reached when the summary is
@@ -1658,9 +1672,13 @@ class Night:
                 self.run_cycle(until=int(self.rp.args.get("stop_at", default)))
             elif self.variant == "qa-fail":
                 self.run_cycle(until=until)
-            else:  # plain: one cycle, the session's last (its TIME CHECK finds end_time passed)
-                if self.run_cycle(until=until):
-                    self.stop_after_end()
+            else:  # plain: `cycles` cycles, the last the session's (its TIME CHECK finds end_time passed)
+                for _ in range(self.cycles):
+                    if not self.run_cycle(until=until):
+                        return
+                    if getattr(self, "expired", False):
+                        break
+                self.stop_after_end()
                 return
         except Refused as r:
             self.o.s.say(f"{r}: the dispatch was refused and the text gives no way on; the cycle stops here.")
