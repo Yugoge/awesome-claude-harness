@@ -129,8 +129,11 @@ def test_redev_mints_a_fresh_id_exactly_as_dev(tmp_path):
         # the clock's own second is the named task's id, already taken
         started = _start(root, f"/{command} {named}", clock="2026-10-30T12:00:00")
         fresh = sorted(set(_ids(root)) - {named})
+        # each run's PROJECT_ROOT= line names its own project; the rest must match
+        assert started.stdout.startswith(f"PROJECT_ROOT={root}\n".encode())
         seen[command] = (
-            started.stdout.replace(f"/{command.upper()}:".encode(), b"/DEV:"),
+            started.stdout.replace(str(root).encode(), b"<project>")
+            .replace(f"/{command.upper()}:".encode(), b"/DEV:"),
             fresh,
             sorted(p.name for p in (root / ".claude" / "dev-registry" / fresh[0]).iterdir()),
         )
