@@ -325,7 +325,8 @@ def run_coordinator(
     relays = []
     for phase in selected:
         if phase.name == "completion" and mode == "off":
-            results.append({"phase": phase.name, "status": "skipped", "returncode": None, "reason": "CLAUDE_COMMAND_GATE=off"})
+            results.append({"phase": phase.name, "status": "skipped", "returncode": None,
+                            "reason": "CLAUDE_COMMAND_GATE=off"})
             continue
         result = _run_phase(
             phase,

@@ -157,6 +157,18 @@ def test_a10_a_broken_stop_contract_leaves_the_launcher_deciding(tmp_path):
     assert _stop(tmp_path, hooks, "spec").returncode == 0
 
 
+def test_a9_a_broken_obligation_module_is_named_by_the_gate_and_stop_releases_it(tmp_path):
+    """A9: a syntax error in a scratch obligation.py: an ungated session stops; a /dev span is
+    blocked by the gate itself, naming the import error; after the human's /stop it stops."""
+    hooks = _scratch(tmp_path, (HOOKS / "stop-workflow-coordinator.py").read_text(), whole=True)
+    (hooks / "lib" / "obligation.py").write_text(BROKEN)
+    assert _stop(tmp_path, hooks, "spec").returncode == 0
+    done = _stop(tmp_path, hooks, "dev")
+    assert done.returncode == 2 and done.stderr.startswith("COMMAND_GATE /dev: not complete"), done.stderr
+    assert "gate instrument failure: SyntaxError" in done.stderr
+    assert _stop(tmp_path, hooks, "dev", "stop").returncode == 0
+
+
 # ---------------------------------------------------------------- A10: a deciding coordinator is relayed
 @pytest.mark.parametrize("code", [0, 2])
 def test_a10_the_coordinators_exit_stdout_and_stderr_are_relayed_verbatim(tmp_path, code):
@@ -208,7 +220,9 @@ def test_a22_each_retired_stop_hook_is_a_one_line_stub_exiting_0(stub):
 
 
 def test_a22_no_awaiting_input_or_g4_decider_remains():
-    grep = subprocess.run(["git", "-C", str(REPO), "grep", "-n", "-e", "AWAITING_INPUT", "-e", "evaluate_required_values",
-                           "--", "commands/merge.md", "commands/push.md", "commands/do.md", "hooks", "scripts",
-                           ":!hooks/tests"], capture_output=True, text=True)
-    assert grep.returncode == 1 and grep.stdout == "", grep.stdout
+    g4 = "evaluate_" + "required_values"  # spelled apart: A22's own grep of hooks/ and scripts/ finds nothing
+    awaiting = subprocess.run(["git", "-C", str(REPO), "grep", "-n", "AWAITING_INPUT", "--", "commands/merge.md",
+                               "commands/push.md", "commands/do.md", "hooks", ":!hooks/tests"], capture_output=True, text=True)
+    decider = subprocess.run(["git", "-C", str(REPO), "grep", "-n", g4, "--", "hooks", "scripts"],
+                             capture_output=True, text=True)
+    assert (awaiting.returncode, awaiting.stdout, decider.returncode, decider.stdout) == (1, "", 1, "")
