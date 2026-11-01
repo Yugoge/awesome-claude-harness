@@ -487,14 +487,14 @@ class WriteSet(namedtuple("WriteSet", "written named")):
     __slots__ = ()
 
 
-def _project_relative(raw: str, cwd: str, root: str) -> str | None:
+def _project_relative(raw: str, cwd: str, root: str, excluded=EXCLUDED_TREES) -> str | None:
     path = os.path.expanduser(raw)
     if not os.path.isabs(path):
         path = os.path.join(cwd or root, path)
     rel = os.path.relpath(os.path.normpath(path), root)
     if rel in (".", "..", ".git") or rel.startswith(("../", ".git/")):
         return None
-    return None if rel.startswith(EXCLUDED_TREES) else rel
+    return None if excluded and rel.startswith(tuple(excluded)) else rel
 
 
 def _bash_named(command: str, cwd: str, root: str) -> set[str]:
@@ -514,10 +514,12 @@ def _bash_named(command: str, cwd: str, root: str) -> set[str]:
     return named
 
 
-def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: int = 0) -> WriteSet | None:
+def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: int = 0,
+              excluded=EXCLUDED_TREES) -> WriteSet | None:
     """The project-relative files the transcript's own tool calls after
-    ``start_line`` wrote or named (TC-46), outside EXCLUDED_TREES; None when
-    the transcript cannot be read."""
+    ``start_line`` wrote or named (TC-46), outside ``excluded`` (a caller
+    asking which reports an agent wrote passes none); None when the
+    transcript cannot be read."""
     root = os.path.normpath(str(project_dir))
     try:
         records = _records(transcript_path)
@@ -540,7 +542,8 @@ def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: 
     for use_id, name, tool_input, cwd in uses:
         if name in EDIT_TOOLS:
             target = tool_input.get(EDIT_TOOLS[name])
-            rel = _project_relative(target, cwd, root) if use_id in ok and isinstance(target, str) and target else None
+            rel = (_project_relative(target, cwd, root, excluded)
+                   if use_id in ok and isinstance(target, str) and target else None)
             if rel:
                 written.add(rel)
         elif name == "Bash" and isinstance(tool_input.get("command"), str):

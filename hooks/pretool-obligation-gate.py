@@ -153,8 +153,8 @@ def _evaluate(data: dict, mode: str) -> None:
             return
     elif isinstance(parsed, NoBlock):  # reached only where a block is required
         reason = "missing_block"
-    else:  # Rejection -- unconditional, whatever the span
-        reason = parsed.reason
+    else:  # Rejection -- unconditional, whatever the span; the field it failed named
+        reason = parsed.reason + (f" at {parsed.field}" if getattr(parsed, "field", "") else "")
     if mode == "block":
         _emit_block(session_id, subagent_type, reason)
         sys.exit(2)
