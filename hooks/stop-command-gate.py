@@ -23,14 +23,15 @@ payload on stdin and decides, in order:
 Each fact comes from the one producer that writes it: the transcript through
 command_span (the CLI's record of typed prompts, tool calls and hook context),
 git, and the producers' own deciders, called, never copied: P3's disposition
-(scripts/resolve-dev-artifact-chain.py, through the one adapter
-`disposition`), P2's overnight locator and window (hooks/lib/overnight.py),
-P4's close rating (hooks/lib/close_rating.py), the DDR
-(obligation.declaring_dispatch) and dev-lifecycle's --auto target function.
-No target comes from a dispatch prompt or a tool result. The gate writes
-nothing, keeps no count and has no release but the work itself: the next
-compliant step clears each gap. The human's /stop opens a span that is not
-gated, and nothing here offers a stop.
+as the chain's own disposition_lines (scripts/resolve-dev-artifact-chain.py,
+through the one adapter `disposition`), P2's overnight locator and window
+(hooks/lib/overnight.py), P4's close rating (hooks/lib/close_rating.py) and
+dev-lifecycle's --auto target function. No target comes from a dispatch
+prompt or a tool result. The gate writes nothing but its own output (stdout:
+the terminal time-lock status of an allowed Stop, see main), keeps no count
+and has no release but the work itself: the next compliant step clears each
+gap. The human's /stop opens a span that is not gated, and nothing here
+offers a stop.
 """
 from __future__ import annotations
 
