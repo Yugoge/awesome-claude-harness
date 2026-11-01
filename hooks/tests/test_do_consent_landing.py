@@ -5,7 +5,8 @@ the hook state dir (CLAUDE_STATE_DIR points at the test's own directory). Every 
 through hooks/lib/allowlist.py has_do_consent: the orchestrator gate and the branch firewall
 honour it for the main agent; the git-privilege guard honours it for every rule but git commit,
 git push and a git merge into the protected branch (the branch refs/remotes/origin/HEAD names),
-whose blocks name the commands that land them; no hook honours it for a subagent. A valid /allow
+and a git command it cannot classify, whose blocks name the commands that land them; no hook
+honours it for a subagent. A valid /allow
 or /push grant authorizes what it authorized before.
 
 Hooks run as subprocesses with PreToolUse payloads shaped as the CLI sends them, in a product
@@ -131,6 +132,8 @@ def test_guard_ignores_do_for_commit_push_and_a_protected_merge(product):
     _blocked_naming(product.bash(GUARD, "git commit -m wip"), "/close", "/commit")
     _blocked_naming(product.bash(GUARD, "git push origin HEAD:refs/heads/sb-ud5"), "/push")
     assert "BLOCKED: agent git push" in product.bash(GUARD, "git push").stderr
+    # A git command the guard cannot classify may be a push: refused as without /do.
+    _blocked_naming(product.bash(GUARD, "$GIT push origin master"), "/push")
     _blocked_naming(product.bash(GUARD, "git merge feat"), "/merge")  # on master
     # A merge the guard cannot place in its own cwd counts as protected.
     product.git("checkout", "-q", "feat")
