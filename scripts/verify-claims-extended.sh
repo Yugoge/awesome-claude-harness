@@ -105,35 +105,33 @@ slash = [f for f in os.listdir(cmd_dir)
 if not slash:
     sys.stderr.write("commands/ produced 0 slash entry points — refusing (schema anomaly)\n"); sys.exit(3)
 
-# --- settings.json ----------------------------------------------------------
-try:
-    cfg = json.load(open(os.path.join(root, "settings.json"), encoding="utf8"))
-except Exception as e:
-    sys.stderr.write(f"settings.json unreadable / invalid JSON: {e}\n"); sys.exit(3)
+# --- settings.json, through the one load of a settings file -------------------
+# hooks/lib/claude_home.py load_settings: the object with the shapes its readers rely on (a
+# permissions object of string lists, a hooks object of lists), or its reason it is unusable.
+sys.path.insert(0, os.path.join(root, "hooks", "lib"))
+from claude_home import load_settings
+cfg, problem = load_settings(os.path.join(root, "settings.json"))
+if cfg is None:
+    sys.stderr.write(f"settings.json unusable: {problem or 'absent'}\n"); sys.exit(3)
 
-perms = cfg.get("permissions")
-if not isinstance(perms, dict):
-    sys.stderr.write("settings.json: 'permissions' missing or not an object\n"); sys.exit(3)
+perms = cfg.get("permissions", {})
 # An ABSENT key and a PRESENT-but-empty list both mean zero entries. The truthful claim is the
 # number 0, never the word "absent"; presence is reported separately for diagnostics only.
-p_allow, p_deny, p_ask = (len(perms.get(k) or []) for k in ("allow", "deny", "ask"))
+p_allow, p_deny, p_ask = (len(perms.get(k, [])) for k in ("allow", "deny", "ask"))
 ask_present = "ask" in perms
 
-hooks = cfg.get("hooks")
-if not isinstance(hooks, dict) or not hooks:
-    sys.stderr.write("settings.json: 'hooks' missing or not a non-empty object\n"); sys.exit(3)
-
+# What the counts cannot show is listed for the comparison below to fail on.
+anomalies = [] if cfg.get("hooks") else ["settings.json: 'hooks' missing or empty"]
 per_event_hooks, per_event_blocks = {}, {}
-for ev, lst in hooks.items():
-    if not isinstance(lst, list):
-        sys.stderr.write(f"settings.json: hooks[{ev!r}] is not a list\n"); sys.exit(3)
+for ev, lst in cfg.get("hooks", {}).items():
     per_event_blocks[ev] = len(lst)
     n = 0
     for entry in lst:
         h = entry.get("hooks") if isinstance(entry, dict) else None
-        if not isinstance(h, list):
-            sys.stderr.write(f"settings.json: a matcher-entry under {ev!r} has no 'hooks' array\n"); sys.exit(3)
-        n += len(h)
+        if isinstance(h, list):
+            n += len(h)
+        else:
+            anomalies.append(f"settings.json: a matcher-entry under {ev!r} has no 'hooks' array")
     per_event_hooks[ev] = n
 
 print(json.dumps({
@@ -141,6 +139,7 @@ print(json.dumps({
     "perm_allow": p_allow, "perm_deny": p_deny, "perm_ask": p_ask, "ask_present": ask_present,
     "per_event_hooks": per_event_hooks,
     "per_event_blocks": per_event_blocks,
+    "anomalies": anomalies,
 }))
 PY
 )"
@@ -250,6 +249,10 @@ def check_scalar(label, pats, expected):
     if not any_found:
         print(f"  {label}: no occurrence in any scanned document (fail-closed)")
         overall = False
+
+for anomaly in T["anomalies"]:
+    print(f"  {anomaly}: the per-event counts cannot show it (fail-closed)")
+    overall = False
 
 print("--- check 2: slash entry points ---")
 check_scalar("slash_command_count", SLASH_PATS, T["slash"])

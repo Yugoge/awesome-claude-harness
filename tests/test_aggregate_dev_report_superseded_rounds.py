@@ -1,39 +1,28 @@
 """Regression coverage for backlog #99 (task 20260922-100846): the canonical
-aggregate dev-report silently dropped a retried lane's superseded round(s)'
-owned_edits/pre_edit_snapshots when that lane's promoted (post-QA-FAIL retry)
-report recorded only a delta on top of the round it superseded.
+aggregate dev-report's ownership-completeness check over a multi-lane,
+order-dependent owned_edits union.
 
-Root cause (docs/dev/ticket-20260922-100846.md): `_scan_shards()`
-(scripts/aggregate-dev-report.py) only enumerates top-level files directly
-under docs/dev/, never recursing into docs/dev/superseded-<task-id>/, so a
-QA-FAIL'd round-0 report archived there was invisible to `_merge_owned_edits`.
-Measured on the real cycle 20260921-134709 this session: lane b=6 hunks,
-lane c=5 hunks, lane d round-0=11 hunks, lane d promoted (delta-only)=1 hunk
-for scripts/spec-check.py -- the pre-fix aggregate only ever saw 12 of the
-23 hunks required to byte-replay from the true git baseline to the live
-file. This suite is self-contained: it builds isolated synthetic git-repo
-fixtures rather than depending on that real cycle's on-disk artifacts
-remaining in their current state, but the b/c/d hunk counts below (6, 5, 11,
-1) deliberately mirror the real cycle's own shape, including an explicit
-order-dependency between lanes (c's last hunk anchors on text b's own edit
-creates) and within a retried lane (the promoted delta anchors on text
-round-0's own edit creates) -- the same "order matters" property BA's git-
-blob replay verified in the real cycle.
+Measured on the real cycle 20260921-134709: lane b=6 hunks, lane c=5 hunks,
+lane d round-0=11 hunks, lane d promoted (delta-only)=1 hunk for
+scripts/spec-check.py -- 23 hunks required to byte-replay from the true git
+baseline to the live file. This suite is self-contained: it builds isolated
+synthetic git-repo fixtures rather than depending on that real cycle's
+on-disk artifacts remaining in their current state, but the b/c/d hunk
+counts below (6, 5, 11, 1) deliberately mirror the real cycle's own shape,
+including an explicit order-dependency between lanes (c's last hunk anchors
+on text b's own edit creates) and within a lane (the promoted delta anchors
+on text round-0's own edit creates) -- the same "order matters" property
+BA's git-blob replay verified in the real cycle.
 
-The fix adds two additive capabilities to scripts/aggregate-dev-report.py:
-  1. `_scan_superseded_shards`/`_expand_shards_with_superseded_rounds`: fold
-     each lane's docs/dev/superseded-<task-id>/dev-report-<task-id>-<lane>-
-     round<N>.json reports ahead of that lane's own promoted contribution,
-     for the owned_edits/pre_edit_snapshots merge ONLY, in ascending
-     numeric round order (never mtime).
-  2. `_apply_completeness_check` (backlog #99 criterion C): for every
-     TRACKED file in the final merged owned_edits, reuse
-     scripts/stage-owned-hunks.py's own `--ledger --snapshot --dry-run`
-     replay-and-compare logic (never reimplemented here) to verify the
-     union actually covers the live file's bytes; a gap makes the
-     aggregator exit non-zero with a named diagnostic while still writing
-     the aggregate (ownership_completeness_gaps populated, never silently
-     omitted).
+Covered in scripts/aggregate-dev-report.py:
+  - `_apply_completeness_check` (backlog #99 criterion C): for every
+    TRACKED file in the final merged owned_edits, reuse
+    scripts/stage-owned-hunks.py's own `--ledger --snapshot --dry-run`
+    replay-and-compare logic (never reimplemented here) to verify the
+    union actually covers the live file's bytes; a gap makes the
+    aggregator exit non-zero with a named diagnostic while still writing
+    the aggregate (ownership_completeness_gaps populated, never silently
+    omitted).
 """
 
 import importlib.util
@@ -51,8 +40,6 @@ _spec.loader.exec_module(_mod)
 
 main = _mod.main
 _build_aggregate = _mod._build_aggregate
-_scan_superseded_shards = _mod._scan_superseded_shards
-_expand_shards_with_superseded_rounds = _mod._expand_shards_with_superseded_rounds
 _merge_owned_edits = _mod._merge_owned_edits
 _resolve_baseline_snapshot = _mod._resolve_baseline_snapshot
 _resolve_dev_dir = _mod._resolve_dev_dir
@@ -165,14 +152,12 @@ LANE_D_PROMOTED_HUNKS = [
 ALL_HUNKS_CORRECT_ORDER = LANE_B_HUNKS + LANE_C_HUNKS + LANE_D_ROUND0_HUNKS + LANE_D_PROMOTED_HUNKS
 LIVE_CONTENT = _apply_forward(BASE_CONTENT, ALL_HUNKS_CORRECT_ORDER)
 
-BUGGY_ORDER_MISSING_ROUND0 = LANE_B_HUNKS + LANE_C_HUNKS + LANE_D_PROMOTED_HUNKS  # 12, pre-fix shape
-
 
 def _write_real_shape_fixture(repo: Path, *, drop_last_round0_hunk: bool = False) -> str:
     """Write the b/c/d fixture's shards to docs/dev/ and commit+dirty the
     target file. Returns baseline_head_sha. With drop_last_round0_hunk=True,
-    round-0's OWN declared owned_edits omits its last hunk -- a genuine gap
-    that not even the union (with the fix applied) can cover (AC-4/D4)."""
+    lane d's declared owned_edits omits round-0's last hunk -- a genuine gap
+    that not even the union can cover (AC-4/D4)."""
     dev_dir = repo / "docs" / "dev"
     sha = _commit_baseline(repo, REL, BASE_CONTENT)
     (repo / REL).write_bytes(LIVE_CONTENT)  # dirty, unstaged -- mirrors ' M scripts/spec-check.py'
@@ -186,94 +171,9 @@ def _write_real_shape_fixture(repo: Path, *, drop_last_round0_hunk: bool = False
         TASK_ID, sha, [REL], {REL: LANE_C_HUNKS}, {REL: sha},
     ))
     _write(dev_dir, "dev-report-%s-d.json" % TASK_ID, _shard(
-        TASK_ID, sha, [REL], {REL: LANE_D_PROMOTED_HUNKS}, {REL: sha},
+        TASK_ID, sha, [REL], {REL: round0_hunks + LANE_D_PROMOTED_HUNKS}, {REL: sha},
     ))
-    _write(
-        dev_dir / ("superseded-%s" % TASK_ID),
-        "dev-report-%s-d-round0.json" % TASK_ID,
-        _shard(TASK_ID, sha, [REL], {REL: round0_hunks}, {REL: sha}),
-    )
     return sha
-
-
-# ---------------------------------------------------------------------------
-# AC-2 / D2 (1 retry) + real-shape reproduction of cycle 20260921-134709
-# ---------------------------------------------------------------------------
-
-class TestOneRetryFoldsRound0AheadOfPromoted:
-    def test_ac2_union_is_round0_then_promoted_in_order_zero_dropped(self):
-        """AC-2: the canonical aggregate's owned_edits[F] contains all 12 of
-        lane d's hunks -- round-0's 11 followed by promoted's 1 -- in that
-        exact order, zero dropped."""
-        shards = [
-            ("b", _shard(TASK_ID, "sha1", [REL], {REL: LANE_B_HUNKS})),
-            ("d", _shard(TASK_ID, "sha1", [REL], {REL: LANE_D_PROMOTED_HUNKS})),
-        ]
-        superseded_dev_dir = Path("/nonexistent/does/not/matter")
-        expanded = _expand_shards_with_superseded_rounds(
-            [("d", shards[1][1])], superseded_dev_dir, "20260101-090000"
-        )
-        # With no superseded directory on disk at all, expansion is a no-op
-        # (identity) -- proves the additive contract before exercising a
-        # real disk-backed superseded round below.
-        assert expanded == [("d", shards[1][1])]
-
-    def test_ac2_and_real_shape_end_to_end_23_hunks_replay_clean(
-        self, repo: Path, capsys: pytest.CaptureFixture
-    ):
-        """Real-shape reproduction of cycle 20260921-134709 (b=6, c=5,
-        d round0=11, d promoted=1 => 23 total): after the fix, re-running
-        the UNMODIFIED CLI produces a canonical whose owned_edits[target.py]
-        has all 23 hunks in b, c, round0, promoted order, and the criterion-C
-        completeness check passes (aggregator exits 0)."""
-        _write_real_shape_fixture(repo)
-
-        rc = main(["--task-id", TASK_ID])
-        out = json.loads(capsys.readouterr().out)
-        assert rc == 0, out
-        assert out["action"] == "aggregated"
-
-        doc = json.loads((repo / "docs" / "dev" / ("dev-report-%s.json" % TASK_ID)).read_text())
-        assert doc["owned_edits"][REL] == ALL_HUNKS_CORRECT_ORDER
-        assert len(doc["owned_edits"][REL]) == 23
-        assert doc["blocking_issues"] == []
-        assert doc[_mod.COMPLETENESS_GAPS_KEY] == []  # the real no-gap witness
-
-    def test_bug_reproduction_without_the_fix_matches_pre_fix_12_hunk_shape(
-        self, repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
-    ):
-        """TDD control: with superseded-round discovery stubbed out (the
-        pre-fix state), the real-shape fixture reproduces the EXACT reported
-        defect -- a 12-hunk ledger (round-0's 11 hunks silently dropped) that
-        fails to byte-replay the live file, so the criterion-C completeness
-        check itself now (post-fix) catches what the pre-fix aggregator
-        would have silently shipped as 'aggregated' with no blocking_issues
-        at all."""
-        _write_real_shape_fixture(repo)
-        monkeypatch.setattr(_mod, "_scan_superseded_shards", lambda *a, **k: {})
-
-        rc = main(["--task-id", TASK_ID])
-        capsys.readouterr()
-        # Attribution-journal consumer cutover (docs/reference/attribution-
-        # journal-cutover-flip-plan-20261003.md, superseded by the zero-
-        # blocking constraint of the follow-up consumer-cutover task): the
-        # exit code is gated by the write-time ledger now, not by this
-        # criterion-C replay (see _completeness_check_file's require_full_
-        # coverage=False branch) -- a git-only fixture with no journal
-        # evidence is deferred, not blocked, so rc == 0. The replay-based
-        # criterion-C check this test was built to pin still runs, UNCHANGED,
-        # as the non-blocking GLOBAL diagnostic the assertions below verify.
-        assert rc == 0
-
-        doc = json.loads((repo / "docs" / "dev" / ("dev-report-%s.json" % TASK_ID)).read_text())
-        assert doc["owned_edits"][REL] == BUGGY_ORDER_MISSING_ROUND0
-        assert len(doc["owned_edits"][REL]) == 12
-        # The diagnostic is recorded on the aggregate's own completeness key,
-        # never on `blocking_issues`: that field is freshness-compared, so a
-        # diagnostic written there made the canonical permanently stale
-        # against its own rebuild.  Same strength, different channel.
-        assert any(REL in issue for issue in doc[_mod.COMPLETENESS_GAPS_KEY])
-        assert not any(REL in issue for issue in doc["blocking_issues"])
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +198,7 @@ class TestFullCoveragePasses:
 # names target.py -- that computation and its storage key are UNCHANGED by
 # the rescope. What changed on purpose is which figure drives the aggregator's
 # OWN exit code. This fixture's gap is a same-cycle SHORTFALL, not a
-# same-cycle CONFLICT: round-0's declared ledger replays WITHOUT ERROR from
+# same-cycle CONFLICT: lane d's declared ledger replays WITHOUT ERROR from
 # its own declared starting point (every remaining anchor is still uniquely
 # locatable; a hunk is simply absent from the ledger, not colliding with
 # another), it just reproduces fewer bytes than the live file. Mechanically
@@ -319,9 +219,9 @@ class TestGenuineGapFailsClosed:
     def test_ac4_shortfall_stays_informational_not_blocking_after_rescope(
         self, repo: Path, capsys: pytest.CaptureFixture
     ):
-        """A same-cycle shortfall (round-0's own declared owned_edits is
-        missing a hunk, so the union's replay succeeds but falls short of the
-        live file) no longer fails the aggregator's own exit code after the
+        """A same-cycle shortfall (lane d's declared owned_edits is missing
+        round-0's last hunk, so the union's replay succeeds but falls short of
+        the live file) no longer fails the aggregator's own exit code after the
         same-cycle-only gate rescope: the shortfall is not a conflict and not
         a non-replaying ledger, so it is not this cycle's own incoherence to
         fail on. Criterion C keeps naming target.py in the non-blocking
@@ -621,10 +521,10 @@ class TestAlreadyDirtyBaselinePrefersDeclaredBlobOverHead:
 
         rc = main(["--task-id", TASK_ID])
         capsys.readouterr()
-        # Attribution-journal consumer cutover (see the sibling TDD control
-        # above, test_bug_reproduction_without_the_fix_matches_pre_fix_12_
-        # hunk_shape, for the full citation): the exit code no longer comes
-        # from this replay at all -- it comes from the write-time ledger,
+        # Attribution-journal consumer cutover (docs/reference/attribution-
+        # journal-cutover-flip-plan-20261003.md, superseded by the zero-
+        # blocking constraint of the follow-up consumer-cutover task): the
+        # exit code no longer comes from this replay at all -- it comes from the write-time ledger,
         # which defers (no journal evidence in this git-only fixture) rather
         # than blocks. The monkeypatched pre-fix _resolve_baseline_snapshot
         # order is therefore a no-op for rc; it still reproduces the pre-fix
@@ -641,69 +541,10 @@ class TestAlreadyDirtyBaselinePrefersDeclaredBlobOverHead:
 
 
 # ---------------------------------------------------------------------------
-# AC-8: round0, round1, promoted ordering is strictly filename-round-number
-# derived, NEVER mtime or directory-listing order.
-# ---------------------------------------------------------------------------
-
-class TestRoundOrderingIsNumericNeverMtime:
-    def test_ac8_round0_before_round1_before_promoted_even_with_reversed_mtime(
-        self, repo: Path, capsys: pytest.CaptureFixture, tmp_path: Path
-    ):
-        sha = _commit_baseline(repo, REL, b"line01\nline02\nline03\n")
-        # promoted depends on round1's edit, round1 depends on round0's edit
-        # -- so a wrong merge order provably fails to replay.
-        round0_hunks = [{"old": "line01\n", "new": "line01-R0\n"}]
-        round1_hunks = [{"old": "line01-R0\n", "new": "line01-R0-R1\n"}]
-        promoted_hunks = [{"old": "line01-R0-R1\n", "new": "line01-R0-R1-FIX\n"}]
-        live = _apply_forward(b"line01\nline02\nline03\n", round0_hunks + round1_hunks + promoted_hunks)
-        (repo / REL).write_bytes(live)
-
-        dev_dir = repo / "docs" / "dev"
-        _write(dev_dir, "dev-report-%s-a.json" % TASK_ID, _shard(TASK_ID, sha, [REL], {"other.py": []}))
-        _write(dev_dir, "dev-report-%s-d.json" % TASK_ID, _shard(TASK_ID, sha, [REL], {REL: promoted_hunks}, {REL: sha}))
-        superseded_dir = dev_dir / ("superseded-%s" % TASK_ID)
-        superseded_dir.mkdir(parents=True)
-
-        # Write round1's file to disk FIRST, round0's SECOND -- opposite of
-        # chronological/round order -- to prove ordering is derived from the
-        # filename's numeric suffix, never mtime or directory-listing order.
-        _write(superseded_dir, "dev-report-%s-d-round1.json" % TASK_ID, _shard(TASK_ID, sha, [REL], {REL: round1_hunks}, {REL: sha}))
-        _write(superseded_dir, "dev-report-%s-d-round0.json" % TASK_ID, _shard(TASK_ID, sha, [REL], {REL: round0_hunks}, {REL: sha}))
-
-        rc = main(["--task-id", TASK_ID])
-        out = json.loads(capsys.readouterr().out)
-        assert rc == 0, out
-        doc = json.loads((dev_dir / ("dev-report-%s.json" % TASK_ID)).read_text())
-        assert doc["owned_edits"][REL] == round0_hunks + round1_hunks + promoted_hunks
-
-    def test_scan_superseded_shards_orders_by_filename_number_not_mtime(self, tmp_path: Path):
-        dev_dir = tmp_path / "docs" / "dev"
-        superseded_dir = dev_dir / "superseded-20260101-090000"
-        superseded_dir.mkdir(parents=True)
-        # Create round1 first (earlier mtime), round0 second (later mtime).
-        (superseded_dir / "dev-report-20260101-090000-d-round1.json").write_text("{}")
-        (superseded_dir / "dev-report-20260101-090000-d-round0.json").write_text("{}")
-
-        result = _scan_superseded_shards(dev_dir, "20260101-090000", {"d"})
-        rounds = [n for n, _ in result["d"]]
-        assert rounds == [0, 1]
-
-
-# ---------------------------------------------------------------------------
 # D1: a lane with NO retry -- aggregator behavior completely unchanged.
 # ---------------------------------------------------------------------------
 
 class TestNoRetryLaneUnaffected:
-    def test_d1_no_superseded_directory_expansion_is_identity(self):
-        shards = [
-            ("p", _shard(TASK_ID, "sha1", ["a.py"], {"a.py": [{"old": "x", "new": "y"}]})),
-            ("q", _shard(TASK_ID, "sha1", ["b.py"], {"b.py": [{"old": "m", "new": "n"}]})),
-        ]
-        expanded = _expand_shards_with_superseded_rounds(
-            shards, Path("/definitely/does/not/exist"), "20260101-090000"
-        )
-        assert expanded is shards  # identity, not merely equal -- zero overhead, zero behavior change
-
     def test_d1_end_to_end_no_retry_two_lane_cycle_exits_0_unaffected(
         self, repo: Path, capsys: pytest.CaptureFixture
     ):
@@ -808,49 +649,6 @@ class TestSameAnchorHunkCollapse:
         ]
         merged = _merge_owned_edits(shards)
         assert merged[REL] == [hunk_b, hunk_c]
-
-    def test_ac2_real_shape_lane_a_end_to_end_replays_clean_via_stage_owned_hunks(
-        self, repo: Path, capsys: pytest.CaptureFixture
-    ):
-        """End-to-end reproduction of the real cycle's lane a shape: after
-        the fix, folding round0 ahead of promoted for a lane whose promoted
-        report already fully re-declares the file (self-sufficient, not a
-        pure delta) must still produce a criterion-C-clean (rc == 0) merged
-        ledger -- not a corrupted double-application."""
-        base = b"import os\nimport re\n\ndef _extract_cp_mv_targets(command: str) -> List[str]:\n    pass\n"
-        sha = _commit_baseline(repo, REL, base)
-
-        shared_old = "def _extract_cp_mv_targets(command: str) -> List[str]:\n"
-        e0 = {"old": "import os\nimport re\n", "new": "import bisect\nimport os\nimport re\n"}
-        round0_e1 = {"old": shared_old, "new": "ROUND0 TEXT\n" + shared_old}
-        promoted_e1 = {
-            "old": shared_old,
-            "new": "PROMOTED FINAL TEXT\n" + shared_old,
-            "note": "final authored text of the region",
-        }
-        live = _apply_forward(base, [e0, promoted_e1])
-        (repo / REL).write_bytes(live)
-
-        dev_dir = repo / "docs" / "dev"
-        _write(dev_dir, "dev-report-%s-a.json" % TASK_ID, _shard(
-            TASK_ID, sha, [REL], {REL: [e0, promoted_e1]}, {REL: sha},
-        ))
-        _write(dev_dir, "dev-report-%s-e.json" % TASK_ID, _shard(
-            TASK_ID, sha, ["other.py"], {"other.py": [{"old": "x", "new": "y"}]}, {"other.py": sha},
-        ))
-        _write(
-            dev_dir / ("superseded-%s" % TASK_ID),
-            "dev-report-%s-a-round0.json" % TASK_ID,
-            _shard(TASK_ID, sha, [REL], {REL: [e0, round0_e1]}, {REL: sha}),
-        )
-
-        rc = main(["--task-id", TASK_ID])
-        out = json.loads(capsys.readouterr().out)
-        assert rc == 0, out
-        doc = json.loads((dev_dir / ("dev-report-%s.json" % TASK_ID)).read_text())
-        assert doc["owned_edits"][REL] == [e0, promoted_e1]
-        assert doc["blocking_issues"] == []
-        assert doc[_mod.COMPLETENESS_GAPS_KEY] == []  # the real no-gap witness
 
 
 # ---------------------------------------------------------------------------

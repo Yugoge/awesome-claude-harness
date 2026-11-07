@@ -9,8 +9,8 @@ Blocks Bash commands that:
   - Redirect into `.claude/specs/*/cp-state-*.json` (spec-check.py only)
   - Redirect into `docs/dev/specs/*/views/manifest.json` (Write tool only)
 
-Whitelist: commands invoking `.claude/scripts/spec-check.py` are
-allowed even if they appear to touch these paths (these ARE the legal writers).
+Whitelist: commands invoking `.claude/scripts/spec-check.py` (or its quoted CLAUDE_HOME
+channel spelling) are allowed even if they appear to touch these paths (these ARE the legal writers).
 
 Fail-open on parse errors. Exit 0 = allow, exit 2 = block.
 """
@@ -37,6 +37,7 @@ BLOCK_PATTERNS = [
 # Whitelisted invocations (bypass all views/cp-state write checks)
 WHITELIST_PATTERNS = [
     re.compile(r"\.claude/scripts/spec-check\.py"),
+    re.compile(r'"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/spec-check\.py"'),  # the quoted CLAUDE_HOME channel
     re.compile(r"bin/spec-check\.py"),  # legacy path; retained for compatibility with old invocations
 ]
 

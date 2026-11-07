@@ -120,6 +120,66 @@ class SpecialistYieldTest(unittest.TestCase):
         self.assertIn("empty", result["reason"].lower())
         self.assertEqual(result["source_records"], [])
 
+    def test_the_shipped_policy_applies_whatever_the_project_holds(self) -> None:
+        """P2 R4: the policy resolves through claude_home, never from the project:
+        a product's .claude/policies copy (here 1 low_yield run) is not read, and
+        the harness's policies/specialist-degradation.v1.json decides (its
+        ui-specialist override needs 4 low_yield runs, not 3)."""
+        project = Path(self._tmpdir.name) / "product"
+        (project / ".claude" / "policies").mkdir(parents=True)
+        (project / ".claude" / "policies" / "specialist-degradation.v1.json").write_text(json.dumps(
+            {"defaults": {"low_yield_threshold": 1, "clean_sweep_threshold": 1}}), encoding="utf-8")
+        self._saved_env["CLAUDE_PROJECT_DIR"] = os.environ.get("CLAUDE_PROJECT_DIR")
+        os.environ["CLAUDE_PROJECT_DIR"] = str(project)
+        del os.environ["SPECIALIST_YIELD_POLICY_PATH"]
+        declared = json.loads(Path(PROD_POLICY_PATH).read_text(encoding="utf-8"))
+        threshold = declared["per_specialist_overrides"]["ui-specialist"]["low_yield_threshold"]
+        records = [_make_record("ui-specialist", "low_yield", i) for i in range(1, threshold)]
+        _seed_log(self._log_path, records)
+        self.assertEqual(specialist_yield.get_degradation_state("ui-specialist")["state"], "active")
+        _seed_log(self._log_path, records + [_make_record("ui-specialist", "low_yield", threshold)])
+        self.assertEqual(specialist_yield.get_degradation_state("ui-specialist")["state"], "degraded")
+
+    def test_no_readable_policy_is_the_fail_safe_default(self) -> None:
+        os.environ["SPECIALIST_YIELD_POLICY_PATH"] = str(Path(self._tmpdir.name) / "absent.json")
+        _seed_log(self._log_path, [_make_record("architect", "low_yield", i) for i in range(1, 6)])
+        resolve_optional = specialist_yield.claude_home.resolve_optional
+        specialist_yield.claude_home.resolve_optional = lambda relpath: None
+        try:
+            result = specialist_yield.get_degradation_state("architect")
+        finally:
+            specialist_yield.claude_home.resolve_optional = resolve_optional
+        self.assertEqual(result["state"], "active")
+        self.assertIn("policy unreadable", result["reason"])
+
+
+    def test_the_log_lives_in_the_project_not_the_harness_home(self) -> None:
+        """P2 R4: state is the project's. With CLAUDE_PROJECT_DIR unset, a call
+        from a linked worktree or a subdirectory reaches the main checkout's log
+        (where an overnight hook, CLAUDE_PROJECT_DIR = the main root, writes)."""
+        import subprocess
+        main = Path(self._tmpdir.name) / "main"
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(main)]
+        main.mkdir()
+        subprocess.run(["git", "init", "-q", str(main)], check=True)
+        subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "init"], check=True)
+        subprocess.run(git + ["worktree", "add", "-q", ".claude/worktrees/w1"], check=True)
+        (main / "sub").mkdir()
+        self._saved_env["CLAUDE_PROJECT_DIR"] = os.environ.get("CLAUDE_PROJECT_DIR")
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        del os.environ["SPECIALIST_YIELD_LOG_PATH"]
+        expected = main.resolve() / ".claude" / "state" / "specialist-yield-log.jsonl"
+        cwd = os.getcwd()
+        try:
+            for start in (main, main / ".claude" / "worktrees" / "w1", main / "sub"):
+                os.chdir(start)
+                self.assertEqual(specialist_yield._log_path().resolve(), expected, start)
+        finally:
+            os.chdir(cwd)
+        os.environ["CLAUDE_PROJECT_DIR"] = str(main / "elsewhere")
+        self.assertEqual(specialist_yield._log_path(),
+                         main / "elsewhere" / ".claude" / "state" / "specialist-yield-log.jsonl")
+
 
 if __name__ == "__main__":
     unittest.main()

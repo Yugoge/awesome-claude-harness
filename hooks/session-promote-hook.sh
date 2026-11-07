@@ -14,18 +14,10 @@
 
 # Do NOT use `set -e` here: the hook must never fail Claude Code startup.
 
-LOG="/var/log/claude-tier.log"
-
 # WS1: resolve the harness home from this script's own location (optional — this
 # hook degrades gracefully if unresolved).
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/claude_home.sh" 2>/dev/null || true
 CLAUDE_HOME="$(claude_home_resolve 2>/dev/null || true)"
-
-log_hook() {
-  local ts
-  ts="$(date -Iseconds 2>/dev/null || echo now)"
-  printf '%s [hook] %s\n' "$ts" "$1" >> "$LOG" 2>/dev/null || true
-}
 
 # Read stdin into a variable (small JSON; cap at ~1MB for safety).
 payload=""
@@ -101,18 +93,16 @@ fi
 
 # WS1 (AC-WS3-6): resolve the OPTIONAL external promote helper via
 # $SESSION_PROMOTE_BIN. Absent => this author-environment capability is simply
-# unavailable on this machine; log one line and degrade (never a bare fallback).
+# unavailable on this machine; degrade (never a bare fallback).
 PROMOTE_BIN="${SESSION_PROMOTE_BIN:-}"
 if [[ -z "$PROMOTE_BIN" || ! -x "$PROMOTE_BIN" ]]; then
-  log_hook "session-promote: unavailable (set SESSION_PROMOTE_BIN to enable RAM-disk promotion); skipping (optional)"
   exit 0
 fi
 
-log_hook "queue promote $PROJECT_NAME/$SESSION_ID"
-
 # Fire and forget. Disown to fully detach from the hook's process group so
-# Claude Code's hook pipeline doesn't wait on it.
+# Claude Code's hook pipeline doesn't wait on it; the helper's output goes to
+# /dev/null so it holds none of the hook's pipes open.
 ( "$PROMOTE_BIN" "$SESSION_ID" "$PROJECT_NAME" \
-    >> "$LOG" 2>&1 & disown ) 2>/dev/null
+    >/dev/null 2>&1 & disown ) 2>/dev/null
 
 exit 0

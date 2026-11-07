@@ -4,34 +4,35 @@
 G1 is the first of five enforcement doors (spec-20260930-092323) that move
 artifact-completeness detection from /close and /commit time -- where the
 producing agent's context is already gone -- to the dispatch moment. It runs
-on every Agent dispatch whose tool_input.subagent_type is a producer role
-(ba, dev, qa, test-writer, changelog-analyst and the three /close inspectors)
-or whose prompt contains "<obligation" (any subagent_type), and evaluates the
+on every Agent dispatch whose prompt contains "<obligation" (any
+subagent_type) or whose tool_input.subagent_type is a role the active
+command's dispatch templates declare an obligation for (read from
+commands/<command>.md, P1b row 18), and evaluates the
 dispatch prompt's <obligation v="1"> block with hooks/lib/obligation.py's
 parse_obligation() (never re-implemented here) against the harness's own
-schemas/registry.json, logging (advisory mode) or rejecting (block mode,
+schemas/registry.json, allowing (advisory mode) or rejecting (block mode,
 CLAUDE_OBLIGATION_GATE=block) when it is not valid.
 
 P1 behaviour pinned here:
   - a valid block carries a current dispatched_at (within 300 s of now) and
     a role equal to the dispatch's subagent_type; otherwise role_mismatch,
     dispatch_clock_out_of_bound or dispatch_clock_unverifiable;
-  - a producer dispatch without a block is a violation (missing_block) only
-    inside the active human-typed span (hooks/lib/command_span.active_span on
-    the payload's transcript_path) of dev, redev, dev-command, dev-overnight,
-    do, close or commit -- never keyed by .claude/dev-registry/<session_id>/;
+  - a dispatch without a block is a violation (missing_block) only inside
+    the active human-typed span (hooks/lib/command_span.active_span on the
+    payload's transcript_path) of a command whose templates declare an
+    obligation for its subagent_type (/redev's are /dev's) -- never keyed by
+    .claude/dev-registry/<session_id>/ and never by a list of commands;
   - a malformed block, an unregistered schema id or a bad prompt is rejected
     whatever the span.
 
 Every assertion anchors on the subprocess exit code and/or stable tokens in
-stderr/the advisory JSONL log -- never solely on a full free-text sentence
+stderr -- never solely on a full free-text sentence
 (backlog #118's control-flow-not-wording rule), mirroring
 hooks/tests/test_do_block_subagents.py's style.
 
 Fixture hygiene: every hook subprocess runs with HOME and CLAUDE_CONFIG_DIR
-pinned to a per-test tmp dir (so the advisory log is
-<tmp HOME>/.claude/logs/obligation-gate-advisory.jsonl, never the real one),
-CLAUDE_PROJECT_DIR and cwd pinned to a per-test tmp project dir, and
+pinned to a per-test tmp dir (never the real one), CLAUDE_PROJECT_DIR and
+cwd pinned to a per-test tmp project dir, and
 PYTHONDONTWRITEBYTECODE=1 so no bytecode cache lands in the repository.
 Transcripts follow the T1 order: the in-flight Agent tool_use is already the
 transcript's last record when PreToolUse runs.
@@ -49,7 +50,6 @@ import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO_ROOT, "hooks", "pretool-obligation-gate.py")
-ADVISORY_LOG_RELPATH = Path(".claude") / "logs" / "obligation-gate-advisory.jsonl"
 
 # Mirrors lib.subagent.SUBAGENT_ENV_KEYS: scrub these from the subprocess env
 # so a test run that itself happens inside a subagent context cannot leak
@@ -65,8 +65,12 @@ SUBAGENT_ENV_KEYS = (
 BLOCK_BANNER = "OBLIGATION GATE BLOCK"
 TASK_ID = "20261019-103000"
 DISPATCH_ID = "toolu_g1_dispatch"
-# SPAN_COMMANDS_REQUIRING_BLOCK in hooks/pretool-obligation-gate.py (TC-41, D7).
-GATED_SPAN_COMMANDS = ("dev", "redev", "dev-command", "dev-overnight", "do", "close", "commit")
+# (command, a role its dispatch templates declare an obligation for) (TC-41, D7).
+DECLARING_SPANS = (
+    ("dev", "ba"), ("redev", "ba"), ("dev-command", "ba"), ("dev-overnight", "pm"),
+    ("close", "qa"), ("commit", "changelog-analyst"), ("spec", "spec"),
+    ("merge", "merge-analyst"), ("push", "push-analyst"),
+)
 
 
 # --------------------------------------------------------------------------
@@ -114,23 +118,10 @@ def _unique_sid(label="gate"):
     return f"test-obligation-{label}-{uuid.uuid4().hex}"
 
 
-def _advisory_log(home):
-    return Path(home) / ADVISORY_LOG_RELPATH
-
-
-def _advisory_records(home, sid=None):
-    log = _advisory_log(home)
-    if not log.is_file():
-        return []
-    records = []
-    for line in log.read_text(encoding="utf-8").splitlines():
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if sid is None or record.get("session_id") == sid:
-            records.append(record)
-    return records
+def _written_logs(home):
+    """Files under the scratch home's logs/ directory: the gate writes none."""
+    logs = Path(home) / ".claude" / "logs"
+    return sorted(p.name for p in logs.rglob("*")) if logs.is_dir() else []
 
 
 # --------------------------------------------------------------------------
@@ -299,7 +290,8 @@ def _no_span_records():
 
 def test_AC_L1_01_valid_block_always_passes(tmp_path):
     """AC-L1-01: well-formed block (current dispatched_at, role ==
-    subagent_type) inside a /dev span, any switch mode -> exit 0, no advisory."""
+    subagent_type) inside a /dev span, any switch mode -> exit 0, nothing
+    written."""
     home, project = _dirs(tmp_path)
     for switch in (None, "advisory", "block", "garbage-value"):
         sid = _unique_sid("ac01")
@@ -307,26 +299,20 @@ def test_AC_L1_01_valid_block_always_passes(tmp_path):
                                     prompt="do work\n" + _valid_block("dev"))
         result = _run_hook(home, project, payload, switch=switch)
         assert result.returncode == 0, f"switch={switch!r}: {result.stderr}"
-        assert _advisory_records(home, sid) == []
+        assert _written_logs(home) == []
 
 
-def test_AC_L1_02_missing_block_active_session_advisory_logs_and_passes(tmp_path):
+def test_AC_L1_02_missing_block_active_session_advisory_passes(tmp_path):
     """AC-L1-02: no block, advisory, active /dev span (no dev-registry dir
-    anywhere) -> exit 0 + one advisory line with ts/session_id/subagent_type/
-    reason=missing_block."""
+    anywhere) -> exit 0, no block message, nothing written."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("ac02")
     payload = _dispatch_payload(project, sid, _span_records("dev"), prompt="do work, no block")
     assert not (project / ".claude" / "dev-registry").exists()
     result = _run_hook(home, project, payload)
     assert result.returncode == 0
-    records = _advisory_records(home, sid)
-    assert len(records) == 1, records
-    record = records[0]
-    for field in ("ts", "session_id", "subagent_type", "reason"):
-        assert field in record, f"missing field {field!r} in {record}"
-    assert record["reason"] == "missing_block"
-    assert record["subagent_type"] == "dev"
+    assert BLOCK_BANNER not in result.stderr
+    assert _written_logs(home) == []
 
 
 def test_AC_L1_03_missing_block_no_active_session_silent_pass(tmp_path):
@@ -341,7 +327,7 @@ def test_AC_L1_03_missing_block_no_active_session_silent_pass(tmp_path):
         result = _run_hook(home, project, payload, switch=switch)
         assert result.returncode == 0, f"switch={switch!r}: {result.stderr}"
         assert BLOCK_BANNER not in result.stderr
-        assert _advisory_records(home, sid) == []
+        assert _written_logs(home) == []
 
 
 def test_AC_L1_04_missing_block_active_session_block_mode_rejects(tmp_path):
@@ -355,24 +341,21 @@ def test_AC_L1_04_missing_block_active_session_block_mode_rejects(tmp_path):
     assert BLOCK_BANNER in result.stderr
     for token in ("obligation", "orchestrator", "<obligation", "reason=missing_block"):
         assert token in result.stderr, f"missing token {token!r} in {result.stderr}"
-    # Block mode still logs (log-then-decide ordering, turn-1 microstep 4a).
-    records = _advisory_records(home, sid)
-    assert len(records) == 1, records
-    assert records[0]["reason"] == "missing_block"
+    assert _written_logs(home) == []
 
 
-def test_AC_L1_05_malformed_block_advisory_logs_validator_reason(tmp_path):
-    """AC-L1-05: malformed block, advisory, active /dev span -> exit 0 +
-    advisory reason carries the validator's specific rejection reason."""
+def test_AC_L1_05_malformed_block_advisory_passes(tmp_path):
+    """AC-L1-05: malformed block, advisory, active /dev span -> exit 0, no
+    block message, nothing written (AC-L1-06 pins the validator's reason in
+    block mode)."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("ac05")
     payload = _dispatch_payload(project, sid, _span_records("dev"),
                                 prompt="do work\n" + _malformed_block())
     result = _run_hook(home, project, payload)
     assert result.returncode == 0
-    records = _advisory_records(home, sid)
-    assert len(records) == 1, records
-    assert records[0]["reason"] == "missing_field"
+    assert BLOCK_BANNER not in result.stderr
+    assert _written_logs(home) == []
 
 
 def test_AC_L1_06_malformed_block_block_mode_rejects_with_reason(tmp_path):
@@ -389,8 +372,8 @@ def test_AC_L1_06_malformed_block_block_mode_rejects_with_reason(tmp_path):
 
 def test_AC_L1_07_non_producer_role_always_passes_untouched(tmp_path):
     """AC-L1-07: subagent_type outside the producer set and no "<obligation"
-    in the prompt -> exit 0 unconditionally, no advisory, even in block mode
-    inside a gated /dev span."""
+    in the prompt -> exit 0 unconditionally, nothing written, even in block
+    mode inside a gated /dev span."""
     home, project = _dirs(tmp_path)
     for subagent_type in ("architect", "ui-specialist", "general-purpose", None):
         sid = _unique_sid("ac07")
@@ -398,34 +381,30 @@ def test_AC_L1_07_non_producer_role_always_passes_untouched(tmp_path):
                                     subagent_type=subagent_type, prompt="do work, no block")
         result = _run_hook(home, project, payload, switch="block")
         assert result.returncode == 0, subagent_type
-        assert _advisory_records(home, sid) == []
+        assert _written_logs(home) == []
 
 
 def test_AC_L1_08_switch_off_is_unconditional(tmp_path):
     """AC-L1-08: CLAUDE_OBLIGATION_GATE=off -> exit 0 before any other check,
-    no advisory, even for a missing-block producer dispatch in a /dev span and
-    for a malformed block."""
+    nothing written, even for a missing-block producer dispatch in a /dev span
+    and for a malformed block."""
     home, project = _dirs(tmp_path)
     for prompt in ("do work, no block", "do work\n" + _malformed_block()):
         sid = _unique_sid("ac08")
         payload = _dispatch_payload(project, sid, _span_records("dev"), prompt=prompt)
         result = _run_hook(home, project, payload, switch="off")
         assert result.returncode == 0
-        assert _advisory_records(home, sid) == []
+        assert _written_logs(home) == []
 
 
 def test_AC_L1_09_internal_crash_still_exits_0(tmp_path):
     """AC-L1-09: malformed/empty stdin raises inside the fail-open wrapper ->
-    caught, advisory reason=gate_error written best-effort, exit 0."""
+    caught, nothing written, exit 0."""
     home, project = _dirs(tmp_path)
-    for count, raw_stdin in enumerate(("this is not json {", ""), 1):
+    for raw_stdin in ("this is not json {", ""):
         result = _run_hook(home, project, raw_stdin=raw_stdin, switch="block")
         assert result.returncode == 0
-        gate_errors = [
-            r for r in _advisory_records(home)
-            if r.get("reason") == "gate_error" and r.get("session_id") is None
-        ]
-        assert len(gate_errors) == count, gate_errors
+        assert _written_logs(home) == []
 
 
 def test_AC_L1_10_settings_json_registration_additive_only():
@@ -466,7 +445,7 @@ def test_AC_L1_11_advisory_mode_zero_behavioral_change(tmp_path):
         assert result.returncode == 0
         assert result.stdout == ""
         assert result.stderr == ""
-    assert _advisory_records(home, sid) == []
+    assert _written_logs(home) == []
 
 
 def test_AC_L1_12_block_then_fixed_dispatch_passes(tmp_path):
@@ -487,33 +466,29 @@ def test_AC_L1_12_block_then_fixed_dispatch_passes(tmp_path):
 
 
 def test_AC_L1_13_malformed_block_unconditional_no_active_session(tmp_path):
-    """AC-L1-13: malformed block, advisory, NO gated span -> still exits 0 and
-    logs the validator's reason (Rejection is unconditional, unlike NoBlock's
+    """AC-L1-13: malformed block, NO gated span -> block mode still rejects it
+    with the validator's reason (Rejection is unconditional, unlike NoBlock's
     AC-L1-03 gating)."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("ac13")
     payload = _dispatch_payload(project, sid, _no_span_records(),
                                 prompt="do work\n" + _malformed_block())
-    result = _run_hook(home, project, payload)
-    assert result.returncode == 0
-    records = _advisory_records(home, sid)
-    assert len(records) == 1, records
-    assert records[0]["reason"] == "missing_field"
+    result = _run_hook(home, project, payload, switch="block")
+    assert result.returncode == 2
+    assert "reason=missing_field" in result.stderr, result.stderr
 
 
 def test_AC_L1_14_absent_prompt_routes_to_bad_prompt_rejection(tmp_path):
     """AC-L1-14: tool_input.prompt absent/non-string -> extract_obligation_block
     returns Rejection(reason='bad_prompt') -- routed through Rejection, not
-    NoBlock -- advisory logs reason=bad_prompt, exit 0."""
+    NoBlock -- block mode rejects it with reason=bad_prompt."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("ac14")
     payload = _dispatch_payload(project, sid, _span_records("dev"),
                                 tool_input={"subagent_type": "dev"})  # no "prompt" key at all
-    result = _run_hook(home, project, payload)
-    assert result.returncode == 0
-    records = _advisory_records(home, sid)
-    assert len(records) == 1, records
-    assert records[0]["reason"] == "bad_prompt"
+    result = _run_hook(home, project, payload, switch="block")
+    assert result.returncode == 2
+    assert "reason=bad_prompt" in result.stderr, result.stderr
 
 
 # --------------------------------------------------------------------------
@@ -590,7 +565,7 @@ def _violation_payload(project, sid, case_id):
 @pytest.mark.parametrize("case_id", sorted(VIOLATION_CASES))
 def test_G1_block_mode_rejects_violation(tmp_path, case_id):
     """Acceptance 3 (a-f, i) under CLAUDE_OBLIGATION_GATE=block: exit 2, the
-    stderr banner names the specific reason, and the violation is logged."""
+    stderr banner names the specific reason, and nothing is written."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("g1blk")
     payload, subagent_type, reason = _violation_payload(project, sid, case_id)
@@ -598,41 +573,51 @@ def test_G1_block_mode_rejects_violation(tmp_path, case_id):
     assert result.returncode == 2, f"{case_id}: rc={result.returncode} stderr={result.stderr}"
     assert BLOCK_BANNER in result.stderr
     assert f"reason={reason}" in result.stderr, result.stderr
-    records = _advisory_records(home, sid)
-    assert [(r["reason"], r["subagent_type"]) for r in records] == [(reason, subagent_type)]
+    assert f"subagent_type={subagent_type}" in result.stderr, result.stderr
+    assert _written_logs(home) == []
 
 
 @pytest.mark.parametrize("case_id", sorted(VIOLATION_CASES))
-def test_G1_switch_unset_advisory_records_violation(tmp_path, case_id):
+def test_G1_switch_unset_advisory_passes_violation(tmp_path, case_id):
     """Acceptance 3 (k): the same cases with CLAUDE_OBLIGATION_GATE unset ->
-    exit 0, no block message, and one advisory record in
-    <HOME>/.claude/logs/obligation-gate-advisory.jsonl carrying the reason."""
+    exit 0, no block message, nothing written."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("g1adv")
-    payload, subagent_type, reason = _violation_payload(project, sid, case_id)
+    payload, _, _ = _violation_payload(project, sid, case_id)
     result = _run_hook(home, project, payload)
     assert result.returncode == 0, f"{case_id}: {result.stderr}"
     assert BLOCK_BANNER not in result.stderr
-    assert _advisory_log(home).is_file()
-    records = _advisory_records(home, sid)
-    assert len(records) == 1, records
-    record = records[0]
-    for field in ("ts", "session_id", "subagent_type", "reason"):
-        assert field in record, f"missing field {field!r} in {record}"
-    assert (record["reason"], record["subagent_type"]) == (reason, subagent_type)
+    assert _written_logs(home) == []
 
 
-@pytest.mark.parametrize("command", GATED_SPAN_COMMANDS)
-def test_G1_gated_span_producer_without_block_rejects(tmp_path, command):
-    """TC-41/D7: every span in SPAN_COMMANDS_REQUIRING_BLOCK turns a producer
-    dispatch without a block into missing_block (exit 2 in block mode)."""
+@pytest.mark.parametrize("command,role", DECLARING_SPANS)
+def test_G1_gated_span_producer_without_block_rejects(tmp_path, command, role):
+    """TC-41/D7: inside a command's span, a dispatch of a role that command's
+    templates declare an obligation for (/redev's are /dev's) without a block
+    is missing_block (exit 2 in block mode)."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("g1span")
     payload = _dispatch_payload(project, sid, _span_records(command),
-                                subagent_type="dev", prompt="do work, no block")
+                                subagent_type=role, prompt="do work, no block")
     result = _run_hook(home, project, payload, switch="block")
     assert result.returncode == 2, f"/{command}: {result.stderr}"
     assert "reason=missing_block" in result.stderr
+
+
+@pytest.mark.parametrize("command,subagent_type", [
+    ("do", "dev"), ("close", "dev"), ("close", "ba"), ("commit", "dev"), ("merge", "dev"), ("push", "qa"),
+])
+def test_G1_role_the_active_command_declares_no_template_for_passes(tmp_path, command, subagent_type):
+    """No list of commands requires a block: /do's text declares no template,
+    /close's and /commit's none for dev or ba (another command's template for
+    that role does not count), /merge's and /push's none but their analyst's.
+    Each such dispatch without a block passes in block mode."""
+    home, project = _dirs(tmp_path)
+    payload = _dispatch_payload(project, _unique_sid("g1nodecl"), _span_records(command),
+                                subagent_type=subagent_type, prompt="do work, no block")
+    result = _run_hook(home, project, payload, switch="block")
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
 
 
 @pytest.mark.parametrize("records", [
@@ -651,7 +636,7 @@ def test_G1_spec_span_qa_without_obligation_passes(tmp_path, records):
     result = _run_hook(home, project, payload, switch="block")
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
-    assert _advisory_records(home, sid) == []
+    assert _written_logs(home) == []
 
 
 def test_G1_product_repo_without_schemas_loads_harness_registry(tmp_path):
@@ -665,7 +650,7 @@ def test_G1_product_repo_without_schemas_loads_harness_registry(tmp_path):
                                 prompt="validate the BA output\n" + _ba_qa_report_block())
     result = _run_hook(home, project, payload, switch="block")
     assert result.returncode == 0, result.stderr
-    assert _advisory_records(home, sid) == []
+    assert _written_logs(home) == []
 
 
 @pytest.mark.parametrize("opener", [
@@ -684,7 +669,7 @@ def test_G1_non_typed_dev_opens_no_span(tmp_path, opener):
         subagent_type="ba", prompt="Requirement: build it")
     result = _run_hook(home, project, payload, switch="block")
     assert result.returncode == 0, result.stderr
-    assert _advisory_records(home, sid) == []
+    assert _written_logs(home) == []
 
     control_sid = _unique_sid("g1jctl")
     control = _dispatch_payload(
@@ -694,3 +679,78 @@ def test_G1_non_typed_dev_opens_no_span(tmp_path, opener):
     controlled = _run_hook(home, project, control, switch="block")
     assert controlled.returncode == 2, controlled.stderr
     assert "reason=missing_block" in controlled.stderr
+
+
+# --------------------------------------------------------------------------
+# P1b row 18: which dispatches must carry a block is read from the command
+# templates' obligation declarations -- no role list, and not the roster
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("command,subagent_type", [
+    ("dev", "graphify"), ("redev", "graphify"), ("dev-overnight", "graphify"),
+    ("dev", "architect"), ("dev", "ui-specialist"), ("dev", "product-owner"), ("dev", "user"),
+])
+def test_G1_dispatch_no_template_declares_a_block_for_passes(tmp_path, command, subagent_type):
+    """/dev dispatches graphify (Step 9) and its specialists (Step 3) without
+    a block: inside a gated span, in block mode, each passes untouched."""
+    home, project = _dirs(tmp_path)
+    payload = _dispatch_payload(project, _unique_sid("g1decl"), _span_records(command),
+                                subagent_type=subagent_type, prompt="do work, no block")
+    result = _run_hook(home, project, payload, switch="block")
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+
+
+def _gate_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("pretool_obligation_gate_under_test", HOOK)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    return gate
+
+
+def test_G1_declared_roles_come_from_the_active_command_templates():
+    """Each command's set is derived from its own commands/<command>.md at run
+    time: every role is an agent of the roster, each producer whose template
+    declares a block is in its command's set, graphify, which no template
+    gives a block, is in none, /redev has /dev's (its canonical todo is
+    /dev's) and a command without templates has none."""
+    sys.path.insert(0, os.path.join(REPO_ROOT, "hooks"))
+    from lib import roster
+
+    gate = _gate_module()
+    declared = {command: gate._declared_roles(command)
+                for command in ("dev", "redev", "dev-command", "dev-overnight", "close", "commit",
+                                "spec", "do", "merge", "push")}
+    assert all(roles <= roster.roles() for roles in declared.values())
+    assert {"ba", "dev", "qa", "test-writer"} <= declared["dev"]
+    assert declared["redev"] == declared["dev"]
+    assert {"ba", "dev", "qa"} <= declared["dev-command"]
+    assert {"pm", "ba", "dev", "qa"} <= declared["dev-overnight"]
+    assert {"qa", "style-inspector", "cleanliness-inspector", "prompt-inspector"} <= declared["close"]
+    assert {"qa", "changelog-analyst"} <= declared["commit"]
+    assert declared["spec"] == {"spec"}
+    assert declared["do"] == frozenset()
+    # P1b E3's fallback: the analysts' templates declare their own obligation.
+    assert declared["merge"] == {"merge-analyst"} and declared["push"] == {"push-analyst"}
+    assert not any("graphify" in roles for roles in declared.values())
+
+
+def test_G1_declared_roles_follow_the_command_files(tmp_path, monkeypatch):
+    """No role or command is listed in the gate: a command file it is pointed
+    at declares what it declares, and a missing command or todo file
+    declares nothing (no error)."""
+    gate = _gate_module()
+    commands = tmp_path / "commands"
+    todo = tmp_path / "scripts" / "todo"
+    commands.mkdir()
+    todo.mkdir(parents=True)
+    (commands / "ship.md").write_text('---\n---\nembed it with role="qa", pipeline="ship"\n')
+    (commands / "reship.md").write_text("---\n---\nRun the /ship workflow.\n")
+    (todo / "reship.py").write_text("from ship import get_todos\n")
+    monkeypatch.setattr(gate.stop_contract, "COMMANDS_DIR", commands)
+    monkeypatch.setattr(gate, "TODO_DIR", todo)
+    assert gate._declared_roles("ship") == {"qa"}
+    assert gate._declared_roles("reship") == {"qa"}
+    assert gate._declared_roles("absent") == frozenset()

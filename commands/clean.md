@@ -52,7 +52,7 @@ All agents communicate via JSON in `docs/clean/`.
 
 **Parse `--codex`**: If `$ARGUMENTS` contains the literal token `--codex`, strip it from the arguments and set `codex_required = true`. Otherwise set `codex_required = false` (default). When `codex_required = true`, every cleanliness-inspector, style-inspector, and prompt-inspector dispatch prompt below MUST include the literal line `codex_required: true` so the subagent's opt-in codex consultation block activates. When `codex_required = false`, omit that line.
 
-Load TodoList checklist: activate venv and run `~/.claude/scripts/todo/clean.py`.
+Load TodoList checklist: run `source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/todo/clean.py"`.
 
 Set up working directory: create `docs/clean/`, generate `REQUEST_ID="clean-$(date +%Y%m%d-%H%M%S)"` and `TIMESTAMP` in ISO-8601 format.
 
@@ -74,7 +74,7 @@ docs/ subdirectory structure:
 
 ### Step 2: Scan Project Structure
 
-Detect project type and gather baseline info: run `~/.claude/scripts/scan-project.sh "$PROJECT_ROOT"` and extract `project_type`, `file_counts.total`, `.docs`, `.scripts`, `.tests` from the JSON output.
+Detect project type and gather baseline info: run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/scan-project.sh" "$PROJECT_ROOT"` and extract `project_type`, `file_counts.total`, `.docs`, `.scripts`, `.tests` from the JSON output.
 
 ### Step 3: Build Inspection Context
 
@@ -126,10 +126,10 @@ Save to: `docs/clean/context-{REQUEST_ID}.json`
 
 Run rule-inspector to update folder documentation with recent changes:
 
-1. Discover all folders: `~/.claude/scripts/discover-folders.sh "$PROJECT_ROOT"`
-2. Run freshness check: `~/.claude/scripts/check-readme-freshness.sh "$PROJECT_ROOT"` and save to `docs/clean/freshness-${REQUEST_ID}.json`
+1. Discover all folders: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/discover-folders.sh" "$PROJECT_ROOT"`
+2. Run freshness check: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/check-readme-freshness.sh" "$PROJECT_ROOT"` and save to `docs/clean/freshness-${REQUEST_ID}.json`
 3. Build rule-inspector context JSON at `docs/clean/rule-context-${REQUEST_ID}.json` including request_id, timestamp, project_root, folders, freshness data, and parameters `freshness_check: true`, `update_stale_readmes: true`
-4. Invoke: `~/.claude/scripts/orchestrator.sh rule-inspect "$RULE_CONTEXT"`
+4. Invoke: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh" rule-inspect "$RULE_CONTEXT"`
 5. Verify `docs/clean/rule-context-${REQUEST_ID}.json` exists; abort with error if not
 6. For each stale folder, verify the README was actually modified after the script start time; warn if not
 
@@ -139,7 +139,7 @@ Run rule-inspector to update folder documentation with recent changes:
 - Updates stale READMEs (> 7 days old: full update, 3-7 days: incremental)
 - **Special handling for root documentation files (README.md and ARCHITECTURE.md)**: Checks against structural changes, updates project-level overview (not folder rules)
 - Creates README for folders that lack one
-- Regenerates INDEX.md with current file inventory
+- Regenerates INDEX.md with current file inventory in the folders Step 5's clean-inspect checks
 - Applies recency weighting (recent commits weighted 3x higher)
 
 **Root documentation special processing** (ref: commit 590881d5 fix):
@@ -164,12 +164,17 @@ Delegate to cleanliness-inspector subagent. The dispatch prompt MUST include:
 
 ```
 Context file: docs/clean/context-{REQUEST_ID}.json
+<obligation v="1">
+{"task_id": null, "lane": null, "lane_set": null, "role": "cleanliness-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/cleanliness-report-{REQUEST_ID}.json", "schema": "cleanliness-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}
+</obligation>
 <If codex_required = true, include the literal next line; otherwise omit it>
 codex_required: true
 ```
 
+The obligation declares the report this dispatch owes: the inspector's stop checks it (present, valid JSON of its schema, this request's id) and returns a missing or invalid report to the inspector.
+
 ```bash
-~/.claude/scripts/orchestrator.sh clean-inspect docs/clean/context-{REQUEST_ID}.json
+bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh" clean-inspect docs/clean/context-{REQUEST_ID}.json
 ```
 
 Cleanliness inspector reads context, performs inspection, writes:
@@ -212,7 +217,7 @@ The style-inspector uses a **budget protocol** to avoid context overflow. Instea
 
 #### Step 7: Plan Style Inspection
 
-Run the planner script to discover all auditable files and split them into groups: `~/.claude/scripts/plan-style-inspection.sh "$PROJECT_ROOT"`. Save to `docs/clean/style-plan-${REQUEST_ID}.json`. Extract `agent_count` and `total_files` from the output.
+Run the planner script to discover all auditable files and split them into groups: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/plan-style-inspection.sh" "$PROJECT_ROOT"`. Save to `docs/clean/style-plan-${REQUEST_ID}.json`. Extract `agent_count` and `total_files` from the output.
 
 Log: "Style inspection planned: {AGENT_COUNT} agents for {TOTAL_FILES} files"
 
@@ -324,18 +329,16 @@ Expected final output structure:
 
 ### Step 10A: Invoke Prompt Inspector (agents/ and commands/ verbosity)
 
-The prompt-inspector is the only inspector that audits `agents/*.md` and `commands/*.md`; no other inspector in this workflow reaches those directories, so this step is MANDATORY on every /clean run. Delegate to the prompt-inspector subagent with `docs/clean/context-{REQUEST_ID}.json` plus the literal lines `command_files: <every commands/*.md>` and `agent_files: <every agents/*.md>`, and `codex_required: true` only when `codex_required = true`. It writes `docs/clean/prompt-report-{REQUEST_ID}.json` (top-level `findings` array, one entry per file).
+The prompt-inspector is the only inspector that audits `agents/*.md` and `commands/*.md`; no other inspector in this workflow reaches those directories, so this step is MANDATORY on every /clean run. Delegate to the prompt-inspector subagent with `docs/clean/context-{REQUEST_ID}.json` plus the literal lines `command_files: <every commands/*.md>` and `agent_files: <every agents/*.md>`, the block `<obligation v="1">{"task_id": null, "lane": null, "lane_set": null, "role": "prompt-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/prompt-report-{REQUEST_ID}.json", "schema": "prompt-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}</obligation>`, and `codex_required: true` only when `codex_required = true`. It writes `docs/clean/prompt-report-{REQUEST_ID}.json` (top-level `findings` array, one entry per file), the report the obligation declares: the inspector's stop checks it (present, valid JSON of its schema, this request's id) and returns a missing or invalid report to the inspector.
 
 Coverage gate: every `commands/*.md` and `agents/*.md` file MUST appear in the report's audited-file list or be named in a finding; otherwise re-dispatch once for the missed files and BLOCK Step 11 on a second miss.
 
 ### Step 11: Merge Inspection Reports
 
-Combine the cleanliness and style reports using orchestrator: `~/.claude/scripts/orchestrator.sh clean-merge-reports docs/clean/context-with-reports-{REQUEST_ID}.json`
+Combine the cleanliness, style and prompt reports using orchestrator: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh" clean-merge-reports docs/clean/context-{REQUEST_ID}.json`
 
-Orchestrator merges and writes:
+Orchestrator reads `docs/clean/{cleanliness,style,prompt}-report-{REQUEST_ID}.json` and writes:
 - `docs/clean/combined-report-{REQUEST_ID}.json`
-
-The merge helper carries only the cleanliness and style reports. After it returns, the orchestrator MUST add the prompt report to the combined JSON as top-level `prompt_report` (copied verbatim from `docs/clean/prompt-report-{REQUEST_ID}.json`) and add the prompt finding count to the summary `total_issues`. A combined report without `prompt_report` is incomplete; do not proceed to Step 12.
 
 ### Step 12: Present Combined Report to User
 
@@ -479,7 +482,7 @@ Before execution, create a safety checkpoint on `refs/checkpoints/<branch>`
 handles the no-changes case (exit 0) and uses an isolated temp index so
 your real staged area is untouched.
 
-Run `bash ~/.claude/hooks/checkpoint.sh "Before /clean aggressive cleanup"`. Then read `refs/checkpoints/<branch>` and record the checkpoint commit via `~/.claude/scripts/orchestrator.sh record-checkpoint docs/clean/context-with-reports-{REQUEST_ID}.json "$CHECKPOINT_COMMIT"`.
+Run `bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/checkpoint.sh" "Before /clean aggressive cleanup"`. Then read `refs/checkpoints/<branch>` and record the checkpoint commit via `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh" record-checkpoint docs/clean/context-{REQUEST_ID}.json "$CHECKPOINT_COMMIT"`, which prints the `checkpoint_commit` Step 16 carries into the cleaner's context.
 
 **Rollback**: The checkpoint lives on a detached ref, not as a HEAD
 ancestor. To recover individual files:
@@ -503,8 +506,9 @@ The orchestrator may use Bash to prepare the context JSON (merging approvals), b
 Prepare context for the cleaner subagent:
 
 ```bash
-jq -s '.[0] * {user_approvals: .[1].user_approvals}' \
-  docs/clean/context-with-reports-{REQUEST_ID}.json \
+jq -s --arg commit "<checkpoint_commit from Step 15>" \
+  '.[0] * {user_approvals: .[1].user_approvals} * {orchestrator: {analysis: {safety_checkpoint_created: true, checkpoint_commit: $commit}}}' \
+  docs/clean/context-{REQUEST_ID}.json \
   docs/clean/user-approvals-{REQUEST_ID}.json \
   > docs/clean/context-with-approvals-{REQUEST_ID}.json
 ```
@@ -745,11 +749,11 @@ Save to: `docs/clean/completion-{REQUEST_ID}.md`
 
 ## Helper Scripts Used
 
-- `~/.claude/scripts/check-file-references.sh` - Reference detection
-- `~/.claude/scripts/normalize-doc-names.sh` - Naming validation
-- `~/.claude/scripts/update-gitignore.sh` - Gitignore updates
-- `~/.claude/scripts/orchestrator.sh` - Agent coordination
-- `~/.claude/scripts/todo/clean.py` - Workflow checklist
+- `<HARNESS_ROOT>/scripts/check-file-references.sh` - Reference detection
+- `<HARNESS_ROOT>/scripts/normalize-doc-names.sh` - Naming validation
+- `<HARNESS_ROOT>/scripts/update-gitignore.sh` - Gitignore updates
+- `<HARNESS_ROOT>/scripts/orchestrator.sh` - Agent coordination
+- `<HARNESS_ROOT>/scripts/todo/clean.py` - Workflow checklist
 
 ---
 

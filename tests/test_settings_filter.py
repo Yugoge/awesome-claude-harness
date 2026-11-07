@@ -118,7 +118,8 @@ def sb(tmp_path, monkeypatch):
 
 
 def make_home(sb, name="H"):
-    """A harness home with a copy of the script, the runtime-guard config module and hook stubs."""
+    """A harness home with a copy of the script, the settings load (hooks/lib/claude_home.py),
+    the runtime-guard config module and hook stubs."""
     home = sb.tmp / name
     (home / "scripts" / "install").mkdir(parents=True)
     target = home / "scripts" / "install" / "render-settings"
@@ -128,6 +129,7 @@ def make_home(sb, name="H"):
     guard.mkdir(parents=True)
     for module in ("config.py", "shell_lex.py", "pathmatch.py"):
         shutil.copyfile(RUNTIME_GUARD / module, guard / module)
+    shutil.copyfile(REPO / "hooks" / "lib" / "claude_home.py", guard.parent / "claude_home.py")
     for rel in HOOK_FILES:
         (home / rel).write_text("# stub\n")
     return Path(os.path.realpath(home))
@@ -524,6 +526,33 @@ def test_check_reports_missing_hooks_and_protected_runtime(sb):
     assert proc.returncode == 1 and "missing=6" in out
     assert "outside the harness home: %s/hooks/stop-demo.py" % CHANNEL in out
     assert str(sb.tmp / "elsewhere") not in out
+
+
+def test_render_and_check_take_the_settings_load_verdict(sb):
+    """render and check read settings.json through the one load of a settings file
+    (hooks/lib/claude_home.py load_settings): an unusable file is refused with the load's reason,
+    named relative to the home; a missing one is reported missing."""
+    home = make_home(sb)  # not a git checkout: render uses the working file as the clean form
+    (home / "settings.json").write_bytes(canon(clean_form()))
+    write_overlay(home, {"env": {"CLAUDE_HOME": str(home)}})
+    assert run_tool(sb, home, "render").returncode == 0
+    size = (home / "settings.json").stat().st_size
+    for data, reason in ((b"{" * size, "settings.json: not valid JSON ("),
+                         (canon({"permissions": {"allow": "Bash"}}),
+                          "settings.json: permissions.allow is not a list of strings")):
+        (home / "settings.json").write_bytes(data)
+        proc = run_tool(sb, home, "render")
+        assert proc.returncode == 1 and (home / "settings.json").read_bytes() == data
+        assert "render refused: %s" % reason in proc.stderr.decode()
+        proc = run_tool(sb, home, "check")
+        out = proc.stdout.decode()
+        assert proc.returncode == 1 and "[FAIL] hook paths: %s" % reason in out, out
+        assert str(home) not in out
+    (home / "settings.json").unlink()
+    proc = run_tool(sb, home, "check")
+    out = proc.stdout.decode()
+    assert proc.returncode == 1, out
+    assert "[FAIL] hook paths: settings.json is missing; run scripts/bootstrap" in out
 
 
 # ------------------------------------------------- stale or missing overlay (review item 1, R2)
