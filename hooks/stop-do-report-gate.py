@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Stop hook: enforce the /do do-report completion contract at session stop.
 
-A /do session mints a task-id sidecar (/tmp/claude-do-task-<sid>.json) and a
-pending do-report skeleton (docs/dev/do-report-<task_id>.json) at consent time
-(hooks/prompt-workflow.py::handle_do_consent). commands/do.md obliges the agent
-to rewrite that skeleton to a terminal status BEFORE stopping. Historically the
+A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) at
+consent time (hooks/prompt-workflow.py::handle_do_consent). commands/do.md Step 5
+obliges the agent to write the do-report (docs/dev/do-report-<task_id>.json)
+with a terminal status BEFORE stopping. Historically the
 obligation was instruction-only — nothing compared declared vs. actual at
 runtime, so omissions surfaced only when /close later failed to find the report.
 This gate is the runtime binder.
@@ -13,27 +13,27 @@ MODE (env DO_REPORT_GATE_MODE): "block" (default) | "advisory" | "off".
 ADVISORY-FIRST shipped the gate deliberately conservatively — a buggy blocking
 Stop hook on the MAIN session traps every session exit, worse blast radius
 than the SubagentStop analogue that taught this lesson
-(subagentstop-cp-enforce.py). The advisory log has since shown low false
+(subagentstop-cp-enforce.py). The advisory period has since shown low false
 positives, so spec-20260930-092323 L5 flips the default to "block"; the
 MAX_BLOCKS deadlock guard below still prevents a true deadlock.
 
 Compliance (all required to allow stop in block mode):
   1. docs/dev/do-report-<task_id>.json exists and parses as a JSON object.
   2. Top-level task_id equals the sidecar task_id, and source == "do".
-  3. do.status is a TERMINAL status: "completed" or "blocked" ("blocked" is the
-     honest terminal branch — a gate that only accepts "completed" would press
-     the agent to misreport abandoned work; /close still accepts only
-     "completed").
+  3. do.status is a terminal status: lib/obligation.terminal_status, the one
+     decision on the do-report schema's vocabulary. Any terminal status lets
+     the session stop: a gate that accepted only "completed" (the one /close
+     takes) would press the agent to misreport abandoned work.
   4. do.summary is a non-empty string; do.files_modified and do.files_created
      are arrays.
   5. contract_runtime.validate_report_artifact() does not FAIL (schema-infra
      problems and unversioned records skip — never fail-closed).
 The gate checks SHAPE only. It never derives or verifies files_modified against
 git diff (forbidden by commands/do.md — git is session-unaware), and it never
-writes the report itself.
+writes the report.
 
 DEADLOCK GUARD (block mode): per-session attempt counter
-/tmp/claude-do-report-gate-<sid>.json; after MAX_BLOCKS blocks for the same
+<state dir>/claude-do-report-gate-<sid>.json; after MAX_BLOCKS blocks for the same
 task_id the gate force-allows with a loud stderr warning (an unwritable
 docs/dev or a confused agent must not trap the session forever).
 
@@ -44,7 +44,6 @@ agent exactly which fields are missing).
 """
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import re
@@ -55,8 +54,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 MAX_BLOCKS = 2
-ADVISORY_LOG = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "do-report-gate-advisory.jsonl"
-TERMINAL_STATUSES = {"completed", "blocked"}
 
 # Identifier-safety pattern reused from subagentstop-e2e-enforce.py: an unsafe/
 # path-shaped sidecar task_id degrades silently to "no enforcement" rather than
@@ -64,28 +61,13 @@ TERMINAL_STATUSES = {"completed", "blocked"}
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def _log_event(record: dict) -> None:
-    """Best-effort append to the advisory log. Never affects exit."""
-    try:
-        ADVISORY_LOG.parent.mkdir(parents=True, exist_ok=True)
-        record["ts"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        with open(ADVISORY_LOG, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
-
 def _compliance_problems(report_path: Path, task_id: str) -> list[str]:
     """Return [] when the do-report satisfies the stop contract, else the
     human-readable list of violations."""
-    if not report_path.exists():
-        return [f"do-report absent: {report_path}"]
-    try:
-        record = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        return [f"do-report unreadable/unparseable: {e}"]
-    if not isinstance(record, dict):
-        return ["do-report is not a JSON object"]
+    from lib import do_report  # the report's one reading (E8)
+    record, problem = do_report.load(report_path)
+    if record is None:
+        return [problem]
 
     problems: list[str] = []
     if record.get("task_id") != task_id:
@@ -97,11 +79,12 @@ def _compliance_problems(report_path: Path, task_id: str) -> list[str]:
     if not isinstance(do, dict):
         problems.append("missing/invalid \"do\" object")
         return problems
-    status = do.get("status")
-    if status not in TERMINAL_STATUSES:
+    from lib import obligation  # lazy: only a /do session's stop pays the import
+    if obligation.terminal_status("do-report.v1", record) is None:
+        legal = obligation.TERMINAL_VOCABULARY["do-report.v1"]["do.status"]
         problems.append(
-            f"do.status is {status!r} — must be a terminal status "
-            f"({'/'.join(sorted(TERMINAL_STATUSES))}); \"pending\" means the skeleton was never completed")
+            f"do.status is {do.get('status')!r} — must be a terminal status the do-report "
+            f"schema declares ({'/'.join(sorted(legal)) or 'none: schema unreadable'})")
     summary = do.get("summary")
     if not isinstance(summary, str) or not summary.strip():
         problems.append("do.summary must be a non-empty string")
@@ -146,26 +129,6 @@ def _write_blocks(sid: str, task_id: str, blocks: int) -> None:
         pass
 
 
-def _rewrite_pending_to_blocked(report_path: Path, task_id: str) -> bool:
-    """Best-effort: when the deadlock guard gives up and the do-report's own
-    status is still 'pending', rewrite it to an honest terminal 'blocked'
-    state instead of leaving it silently pending forever. Never raises."""
-    try:
-        record = json.loads(report_path.read_text(encoding="utf-8"))
-        if not isinstance(record, dict):
-            return False
-        do = record.get("do")
-        if not isinstance(do, dict) or do.get("status") != "pending":
-            return False
-        do["status"] = "blocked"
-        do["summary"] = "session ended without completing the do-report"
-        report_path.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True
-    except Exception:
-        return False
-
-
 def main() -> int:
     mode = (os.environ.get("DO_REPORT_GATE_MODE", "block") or "block").strip().lower()
     if mode == "off":
@@ -208,47 +171,31 @@ def main() -> int:
         return 0
 
     if mode != "block":
-        _log_event({"event": "would_block", "mode": mode, "session_id": sid,
-                    "task_id": task_id, "report": str(report_path), "problems": problems})
         return 0
 
     blocks = _read_blocks(sid, task_id)
     if blocks >= MAX_BLOCKS:
-        rewritten = _rewrite_pending_to_blocked(report_path, task_id)
-        _log_event({"event": "forced_allow", "mode": mode, "session_id": sid,
-                    "task_id": task_id, "report": str(report_path),
-                    "blocks": blocks, "problems": problems,
-                    "rewrote_pending_to_blocked": rewritten})
         sys.stderr.write(
             f"[do-report-gate] FORCED ALLOW after {blocks} blocks — do-report for task "
             f"{task_id} is STILL non-compliant ({'; '.join(problems)})."
-            + (" Status was rewritten from pending to blocked."
-               if rewritten else "")
-            + " /close will reject this task until the report is completed.\n")
+            " /close will reject this task until the report is completed.\n")
         return 0
 
     _write_blocks(sid, task_id, blocks + 1)
-    _log_event({"event": "block", "mode": mode, "session_id": sid,
-                "task_id": task_id, "report": str(report_path),
-                "blocks": blocks + 1, "problems": problems})
     sys.stderr.write(
         "DO_REPORT_GATE_BLOCKED — the /do contract (commands/do.md) requires a completed "
         f"do-report before this session may stop.\n"
         f"Report: {report_path}\n"
         f"Violations:\n" + "".join(f"  - {p}\n" for p in problems) +
-        "Rewrite the report now: fill do.summary and do.files_modified/files_created from "
+        "Write the report now: fill do.summary and do.files_modified/files_created from "
         "your OWN knowledge of what you changed (do NOT derive from git diff — it is "
-        "session-unaware), and set do.status to \"completed\" (or \"blocked\" with an honest "
-        "summary if the task could not be finished). Then stop again.\n")
+        "session-unaware), and set do.status to the terminal status that is true (with an "
+        "honest summary if the task could not be finished). Then stop again.\n")
     return 2
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as exc:  # FAIL-SAFE: a gate bug must never trap the session
-        try:
-            _log_event({"event": "gate_error", "error": repr(exc)})
-        except Exception:
-            pass
+    except Exception:  # FAIL-SAFE: a gate bug must never trap the session
         sys.exit(0)

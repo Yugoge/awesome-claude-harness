@@ -10,12 +10,10 @@ Activation conditions (ALL must be true to block):
   3. data.get("agent_id") is falsy
      (nested subagent calls are exempt -- field name "agent_id" matches
       pretool-orchestrator-gate.py:71 and pretool-read-size-guard.py:23)
-  4. The workflow bookmark at
-       $CLAUDE_PROJECT_DIR/.claude/workflow-<sid>.json
-     exists AND has command == "spec"
-  5. The official todos file at
-       ~/.claude/todos/<sid>-agent-<sid>.json
-     exists AND has at least one step where status != "completed"
+  4. The transcript's active span was opened by /spec
+  5. Its checklist (the last ok TodoWrite, or the canonical list before the
+     first) has at least one step where status != "completed"
+  (4 and 5 are read from the transcript, lib.todo_canonical.checklist.)
 
 Exit 0 = allow. Exit 2 = block (stderr message shown to user).
 
@@ -24,44 +22,22 @@ malformed input, missing env vars, or corrupt state files.
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
-
-def _official_todos_path(session_id: str) -> Path:
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "todos" / f"{session_id}-agent-{session_id}.json"
-
-
-def _workflow_bookmark_path(session_id: str) -> Path:
-    project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
-    return project_dir / ".claude" / f"workflow-{session_id}.json"
+sys.path.insert(0, str(Path(__file__).parent))
+from lib.todo_canonical import checklist  # noqa: E402
 
 
-def _load_json(path: Path):
-    """Read and json-parse a file. Return None on any failure."""
-    try:
-        return json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+def _spec_todo_progress(data: dict):
+    """(done, total) of the active /spec span's checklist, or None when the
+    active span is not /spec."""
+    state = checklist(data.get("transcript_path"))
+    if state is None or state.command != "spec":
         return None
-
-
-def _is_spec_workflow_active(session_id: str) -> bool:
-    """True when the /spec Interview bookmark is active for this session."""
-    bookmark = _load_json(_workflow_bookmark_path(session_id))
-    if not isinstance(bookmark, dict):
-        return False
-    return bookmark.get("command") == "spec"
-
-
-def _todo_progress(session_id: str):
-    """Return (done, total) for the session's official todos file, or None."""
-    todos = _load_json(_official_todos_path(session_id))
-    if not isinstance(todos, list) or not todos:
-        return None
-    total = len(todos)
-    done = sum(1 for t in todos if isinstance(t, dict) and t.get("status") == "completed")
-    return done, total
+    todos = state.todos if state.todos is not None else state.canonical
+    done = sum(1 for t in todos if t.get("status") == "completed")
+    return done, len(todos)
 
 
 def _tool_is_exempt(data: dict) -> bool:
@@ -74,7 +50,7 @@ def _tool_is_exempt(data: dict) -> bool:
         return True
     # M1 (harness-fixes 20260428): /spec Step 6 sub-step 3 mandates a
     # foreground qa Agent for split-validation. Exempt qa alongside spec.
-    # Activation gate (bookmark.command == "spec") is unchanged, so the
+    # Activation gate (the active span is /spec) is unchanged, so the
     # exemption is bounded to the /spec interview FSM window.
     if tool_input.get("subagent_type") == "qa":
         return True
@@ -89,10 +65,7 @@ def _should_block(data: dict) -> tuple[bool, int, int]:
         return False, 0, 0
     if _tool_is_exempt(data):
         return False, 0, 0
-    session_id = data.get("session_id") or "default"
-    if not _is_spec_workflow_active(session_id):
-        return False, 0, 0
-    progress = _todo_progress(session_id)
+    progress = _spec_todo_progress(data)
     if progress is None:
         return False, 0, 0
     done, total = progress

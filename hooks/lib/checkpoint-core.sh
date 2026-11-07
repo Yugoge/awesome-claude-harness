@@ -373,10 +373,11 @@ _checkpoint_rate_limited_push() {
         repo_hash=$(printf '%s' "$abs_git_dir" | cksum | awk '{print $1}')
     fi
     local stamp_file
-    stamp_file="$(
-      . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/harness_state_dir.sh" 2>/dev/null \
-        && harness_state_dir || printf '%s' /tmp
-    )/.checkpoint-push-${repo_hash}.ts"
+    # Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp), the one path rule every hook
+    # sources. Fail-soft fallback.
+    . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/harness_state_dir.sh" 2>/dev/null \
+      || harness_state_dir() { printf '%s\n' /tmp; }
+    stamp_file="$(harness_state_dir)/.checkpoint-push-${repo_hash}.ts"
 
     # Rate limit: skip if last push attempt was within the interval
     if [ -f "$stamp_file" ]; then

@@ -76,9 +76,11 @@ def _exec_case(end_time_iso: str, sid: str, cycle_count: int = 0):
     tmp = tempfile.TemporaryDirectory()
     tmpdir = Path(tmp.name)
     state_path = _write_state(tmpdir, sid, end_time_iso, cycle_count=cycle_count)
+    before = state_path.read_bytes()
     result = _run_hook(tmpdir, _build_payload(sid))
-    state = json.loads(state_path.read_text())
-    return result, state, tmp
+    # The launcher's write path is the record's only writer: the loop reads it.
+    assert state_path.read_bytes() == before
+    return result, tmp
 
 
 class OvernightLoopTimezoneTests(unittest.TestCase):
@@ -86,74 +88,61 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
 
     def test_aware_future_end_time_does_not_complete(self) -> None:
         future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-        result, state, tmp = _exec_case(future, 'test-future-aware')
+        result, tmp = _exec_case(future, 'test-future-aware')
         try:
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertNotEqual(state.get('current_phase'), 'complete')
-            self.assertEqual(state.get('cycle_count'), 1)
+            self.assertNotIn('OVERNIGHT SESSION COMPLETE', result.stdout)
+            self.assertIn('Starting cycle 1.', result.stdout)
         finally:
             tmp.cleanup()
 
-    def test_aware_past_end_time_marks_complete(self) -> None:
+    def test_aware_past_end_time_completes_session(self) -> None:
         past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        result, state, tmp = _exec_case(past, 'test-past-aware', cycle_count=2)
+        result, tmp = _exec_case(past, 'test-past-aware', cycle_count=2)
         try:
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertEqual(state.get('current_phase'), 'complete')
+            self.assertIn('OVERNIGHT SESSION COMPLETE', result.stdout)
         finally:
             tmp.cleanup()
 
     def test_z_suffixed_future_end_time_does_not_complete(self) -> None:
         future_dt = datetime.now(timezone.utc) + timedelta(hours=1)
         future_z = future_dt.strftime('%Y-%m-%dT%H:%M:%SZ')
-        result, state, tmp = _exec_case(future_z, 'test-z-suffix')
+        result, tmp = _exec_case(future_z, 'test-z-suffix')
         try:
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertNotEqual(state.get('current_phase'), 'complete')
+            self.assertNotIn('OVERNIGHT SESSION COMPLETE', result.stdout)
         finally:
             tmp.cleanup()
 
-    def test_naive_future_end_time_auto_promoted_to_utc(self) -> None:
-        future_aware = datetime.now(timezone.utc) + timedelta(hours=1)
-        future_naive = future_aware.replace(tzinfo=None).isoformat()
+    def test_naive_future_end_time_is_local_time(self) -> None:
+        """A zone-less end_time is local time (lib/overnight.py's window rule)."""
+        future_naive = (datetime.now() + timedelta(hours=1)).isoformat()
         self.assertNotIn('+', future_naive)
         self.assertFalse(future_naive.endswith('Z'))
-        result, state, tmp = _exec_case(future_naive, 'test-naive-future')
+        result, tmp = _exec_case(future_naive, 'test-naive-future')
         try:
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertNotEqual(state.get('current_phase'), 'complete')
+            self.assertNotIn('OVERNIGHT SESSION COMPLETE', result.stdout)
         finally:
             tmp.cleanup()
 
-    def test_update_state_cycle_full_reset_contract(self) -> None:
-        """AC3 (ticket 20261001-161041-r10): _update_state_cycle's full
-        per-cycle contract, not just cycle_count. current_issues and
-        unresolved_issues must clear, pm_triage_reports/pm_retro_reports must
-        be preserved unchanged, legacy current_issue/current_issue_iteration
-        keys must be removed, and cycle_count must increment by 1.
-        CLAUDE_OBLIGATION_TERMINAL=off isolates this from the unrelated G4
-        terminal-gate conditions (a)/(b)."""
+    def test_cycle_number_is_read_from_the_retrospectives(self) -> None:
+        """The loop writes no state: the cycle that ended is the last one
+        whose PM retrospective is on disk under the working root, whatever
+        cycle_count the record carries. CLAUDE_OBLIGATION_TERMINAL=off
+        isolates this from the unrelated G4 terminal-gate conditions (a)/(b)."""
         future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-        sid = 'test-ac3-full-reset'
+        sid = 'test-cycle-index'
         tmp = tempfile.TemporaryDirectory()
         tmpdir = Path(tmp.name)
         try:
-            claude_dir = tmpdir / '.claude'
-            claude_dir.mkdir(parents=True, exist_ok=True)
-            state_path = claude_dir / f'overnight-state-{sid}.json'
-            state = {
-                'session_id': sid,
-                'end_time': future,
-                'cycle_count': 5,
-                'current_phase': 'retro',
-                'current_issues': [{'id': 'leftover'}],
-                'unresolved_issues': ['leftover-issue'],
-                'pm_triage_reports': ['triage-1'],
-                'pm_retro_reports': ['retro-1'],
-                'current_issue': 'legacy-leftover',
-                'current_issue_iteration': 2,
-            }
-            state_path.write_text(json.dumps(state, indent=2))
+            state_path = _write_state(tmpdir, sid, future, cycle_count=5)
+            session_dir = tmpdir / 'worktree' / 'docs' / 'dev' / 'overnight' / sid
+            session_dir.mkdir(parents=True)
+            for n in (1, 2):
+                (session_dir / f'retro-report-cycle{n}.json').write_text('{}')
+            before = state_path.read_bytes()
 
             env = os.environ.copy()
             env['CLAUDE_PROJECT_DIR'] = str(tmpdir)
@@ -167,14 +156,9 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
                 timeout=10,
             )
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            rewritten = json.loads(state_path.read_text())
-            self.assertEqual(rewritten.get('current_issues'), [])
-            self.assertEqual(rewritten.get('unresolved_issues'), [])
-            self.assertEqual(rewritten.get('pm_triage_reports'), ['triage-1'])
-            self.assertEqual(rewritten.get('pm_retro_reports'), ['retro-1'])
-            self.assertNotIn('current_issue', rewritten)
-            self.assertNotIn('current_issue_iteration', rewritten)
-            self.assertEqual(rewritten.get('cycle_count'), 6)
+            self.assertIn('OVERNIGHT LOOP: Cycle 2 complete (PM retro filed). '
+                          'Starting cycle 3.', result.stdout)
+            self.assertEqual(state_path.read_bytes(), before)
         finally:
             tmp.cleanup()
 

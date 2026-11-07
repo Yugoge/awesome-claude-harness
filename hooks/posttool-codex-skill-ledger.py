@@ -2,12 +2,13 @@
 """PostToolUse Hook (Skill): Stamp codex-ledger entry when codex skill is called.
 
 Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
-resolves the calling agent's dev_session_id via agent-index.json and writes a
-ledger entry to:
+resolves the calling agent's cycle as its consumer, subagentstop-codex-enforce.py,
+does (lib/agent_cycle.py: from the agent's own dispatch obligation, else its
+agent-index.json entry) and writes a ledger entry to:
     .claude/dev-registry/<DEV_SESSION_ID>/codex-ledger/<agent_id>.json
 
-Fail-open on all error paths: if agent_id is missing, resolve_dev_registry_entry
-returns None, or dev_session_id is None (legacy format), exit 0 without blocking.
+Fail-open on all error paths: if agent_id is missing or the agent names no
+existing cycle registry, exit 0 without blocking.
 
 The quota/timeout semantics: PostToolUse fires on all Skill completions regardless
 of whether the codex invocation succeeded. The ledger records the call with a
@@ -22,7 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.agent_resolver import resolve_dev_registry_entry
+from lib import agent_cycle
+from lib.agent_resolver import resolve_agent_type
 
 
 def _now_iso_z() -> str:
@@ -73,24 +75,18 @@ def main() -> None:
         sys.exit(0)
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
-    entry = resolve_dev_registry_entry(agent_id, project_dir)
-    if entry is None:
-        # Agent not in index: fail-open (other hooks enforce FIRST ACTION)
+    registry = agent_cycle.registry_dir(data, agent_cycle.own_resolution(data, project_dir)[1], project_dir)
+    if registry is None:
         sys.exit(0)
-
-    dev_session_id = entry.get("dev_session_id")
-    if not dev_session_id:
-        # Legacy flat-string entry: no session correlation possible, skip
-        sys.exit(0)
-
-    agent_type = entry.get("agent_type", "")
+    dev_session_id = registry.name
+    agent_type = resolve_agent_type(data) or ""
 
     # Determine source_command from any available context
     source_command = data.get("session_type") or data.get("source_command") or "unknown"
     tool_call_id = data.get("tool_use_id") or data.get("tool_call_id") or ""
     status = _determine_status(data)
 
-    ledger_dir = Path(project_dir) / ".claude" / "dev-registry" / dev_session_id / "codex-ledger"
+    ledger_dir = registry / "codex-ledger"
     try:
         ledger_dir.mkdir(parents=True, exist_ok=True)
     except OSError:

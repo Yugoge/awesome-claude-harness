@@ -1,5 +1,5 @@
-"""Concurrent-marking tests for scripts/spec-check.py and the slot write of
-hooks/pretool-cp-checkin.py (harness backlog #97).
+"""Concurrent-marking tests for scripts/spec-check.py, the one writer of cp-state slots,
+also when hooks/pretool-cp-checkin.py runs it on a subagent's Read (harness backlog #97).
 
 Every mutating subcommand (check-in, mark, waive, check-out, unlock) must be atomic with
 respect to concurrent commands on the same spec: no lost update, no corrupt or partial slot
@@ -481,41 +481,6 @@ def test_reader_loop_never_sees_a_partial_slot():
             assert reader.decode_failures == 0 and reader.os_errors == 0, (
                 f"trial {trial}: reader saw {reader.decode_failures} partial files and {reader.os_errors} OS errors "
                 f"in {reader.reads} reads")
-
-
-def test_hook_slot_write_reader_loop_never_sees_a_partial_slot():
-    hook = load_module(HOOK, "hook_under_test_reader")
-    with project() as root:
-        d = build(root, 1, 4)
-        slot = Path(d, slot_name(0))
-        reader = Reader([slot, slot])
-        reader.start()
-        try:
-            for n in range(1000):
-                hook._write_payload(slot, slot_payload(0, 4 + (n % 2) * 40))
-        finally:
-            reader.finish()
-        assert reader.reads > 100
-        assert reader.decode_failures == 0 and reader.os_errors == 0, (
-            f"the hook's slot write is not atomic: {reader.decode_failures} partial reads, "
-            f"{reader.os_errors} OS errors in {reader.reads} reads")
-
-
-def test_hook_slot_write_fault_injection_keeps_previous_bytes(monkeypatch):
-    hook = load_module(HOOK, "hook_under_test_fault")
-    with project() as root:
-        d = build(root, 1, 4)
-        slot = Path(d, slot_name(0))
-        before = slot.read_bytes()
-
-        def boom(*_a, **_k):
-            raise OSError(28, "injected replace failure")
-        monkeypatch.setattr(hook.os, "replace", boom)
-        with pytest.raises(OSError):
-            hook._write_payload(slot, slot_payload(0, 40))
-        monkeypatch.undo()
-        assert slot.read_bytes() == before, "a failed hook write changed the previous slot bytes"
-        assert not leftovers(d), leftovers(d)
 
 
 def test_hook_reads_and_marks_coexist_on_one_slot():

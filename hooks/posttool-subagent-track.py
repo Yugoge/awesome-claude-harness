@@ -2,21 +2,25 @@
 """
 PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark.
 
-Two execution paths:
+Bookkeeping (every workflow): locate the in_progress canonical todo via
+array-index (not label) and set
+    bookmark.subagent_calls[str(ip_index)] = True
+in the workflow bookmark as lib.todo_canonical.write_bookmark, its one writer,
+reads it at the write. This unblocks pretool-todo-validate.py at line 238 which
+reads `state.get('subagent_calls', {}).get(str(i), False)` where `i` is the
+canonical enumerate-index. Whether the dispatch produced its artifact is
+decided by posttool-overnight-file-check.py at the same PostToolUse (G3) and
+by the producer's own stop (G2), not here.
 
-Path A (contract present — /dev-overnight cycles):
-    A cycle-contract.json file exists for the active session/cycle. The hook
-    delegates to lib.contract_runtime for cycle-aware progression and marks
-    the step done so downstream validators see the same bookmark shape.
-
-Path B (contract absent — /dev / /redev cycles):
-    No cycle-contract.json. The hook falls through to legacy bookkeeping:
-    locate the in_progress canonical todo via array-index (not label),
-    fresh-read the workflow bookmark, set
-        bookmark.subagent_calls[str(ip_index)] = True
-    and write back atomically. This unblocks pretool-todo-validate.py at
-    line 238 which reads `state.get('subagent_calls', {}).get(str(i), False)`
-    where `i` is the canonical enumerate-index.
+PM TRIAGE handler (/dev-overnight): when the returned Agent call is the PM
+TRIAGE step's dispatch, write the cycle's contract,
+`<working root>/docs/dev/overnight/<sid>/cycle-<N>/cycle-contract.json`
+(lib.contract_runtime.contract_path, N = lib.overnight.cycle_index). It
+renders the dispatching steps after PM TRIAGE from scripts/todo/dev-overnight.py
+_STEPS: once per pipeline the triage report creates (counted by
+scripts/build-pipelines-from-triage.py, the Step-6 builder), except a step
+whose dispatch carries a mode (PM RETRO), which runs once per cycle. This hook
+is the contract's only writer; nothing edits a contract after it is written.
 
 iter1 fix (AC-WID5): the fall-through writer was previously keyed on the
 step LABEL (the literal after "Step ", e.g., '6', '5a', '8'). The validator
@@ -33,18 +37,15 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.todo_canonical import run_todo_script
-from lib.harness_state_dir import harness_state_dir
-
-try:
-    from lib import contract_runtime  # noqa: F401  (Path A optional dep)
-    HAS_CONTRACT_RUNTIME = True
-except Exception:
-    HAS_CONTRACT_RUNTIME = False
+from lib.todo_canonical import run_todo_script, write_bookmark
+from lib import contract_runtime
+from lib import overnight
 
 
 # ---------------------------------------------------------------------------
@@ -98,18 +99,6 @@ def _content_to_step(content: str) -> str:
     if not content.startswith('Step '):
         return ''
     return _split_step_label(content[len('Step '):])
-
-
-def _current_step_label(state: dict) -> str:
-    """Return the LABEL of the in_progress todo (e.g. '6', '5a').
-
-    Used by the contract-driven path (Path A) which keys validation on
-    label form. The fall-through path (Path B) uses array index instead.
-    """
-    for item in state.get('last_todos') or []:
-        if isinstance(item, dict) and item.get('status') == 'in_progress':
-            return _content_to_step(item.get('content', ''))
-    return ''
 
 
 def _current_in_progress_index(state: dict) -> int | None:
@@ -240,171 +229,107 @@ def _check_role_match(expected: str, prompt: str, ip_index: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bookmark writers
+# Bookmark update
 # ---------------------------------------------------------------------------
 
 def _record_subagent_call_legacy(bm_path: Path, key: str) -> None:
-    """Fresh-read the bookmark, set subagent_calls[key]=True, write back.
+    """Set subagent_calls[key]=True in the bookmark as write_bookmark reads it.
 
-    Path B writer (no contract present). `key` MUST be the validator-side
+    The bookkeeping update. `key` MUST be the validator-side
     string form, i.e. str(array_index). Iter1 fix replaced previous
     label-form key with index-form key.
     """
-    try:
-        fresh = json.loads(bm_path.read_text())
+    def _mark(text):
+        if text is None:
+            return None  # no bookmark to record the call in
+        fresh = json.loads(text)
         calls = fresh.get('subagent_calls', {})
         if not isinstance(calls, dict):
             calls = {}
         calls[str(key)] = True
         fresh['subagent_calls'] = calls
-        bm_path.write_text(json.dumps(fresh))
+        return json.dumps(fresh)
+
+    try:
+        write_bookmark(bm_path, _mark)
     except Exception:
         pass
 
 
 # ---------------------------------------------------------------------------
-# Contract path (Path A) — /dev-overnight
+# PM TRIAGE handler — the cycle contract's one writer (/dev-overnight)
 # ---------------------------------------------------------------------------
 
-def _cycle_id_from_state(state: dict) -> int:
-    """Pull the active overnight cycle id from bookmark state, default 0."""
-    for key in ('cycle', 'cycle_id', 'active_cycle'):
-        v = state.get(key)
-        if isinstance(v, int):
-            return v
-        if isinstance(v, str) and v.isdigit():
-            return int(v)
-    return 0
+_BUILD_PIPELINES = Path(__file__).resolve().parent.parent / 'scripts' / 'build-pipelines-from-triage.py'
 
 
-def _try_load_contract(session_id: str, state: dict):
-    """Attempt to load the active overnight contract; return None on miss."""
-    if not HAS_CONTRACT_RUNTIME:
+def _is_triage_dispatch(stdin_data: dict, steps: list) -> bool:
+    """True iff the returned Agent call is the PM TRIAGE step's dispatch."""
+    triage = contract_runtime.triage_call(steps)
+    ti = stdin_data.get('tool_input') if isinstance(stdin_data, dict) else None
+    if not triage or not isinstance(ti, dict):
+        return False
+    role = ti.get('subagent_type')
+    return (isinstance(role, str) and role.strip().lower() == triage.get('subagent_type')
+            and contract_runtime.detect_mode(ti.get('prompt', '')) == triage.get('mode'))
+
+
+def _pipeline_count(state: dict, cycle_id: int) -> int | None:
+    """How many pipelines this cycle's triage report creates, counted by the
+    Step-6 builder itself so the count and the pipelines cannot disagree."""
+    triage = overnight.session_dir(state) / f'triage-report-cycle{cycle_id}.json'
+    if not triage.is_file():
         return None
     try:
-        cycle_id = _cycle_id_from_state(state)
-        return contract_runtime.load_contract(session_id, cycle_id)
-    except Exception:
+        result = subprocess.run(
+            [sys.executable, str(_BUILD_PIPELINES), str(triage), '/dev/stdin',
+             f'cycle{cycle_id}', str(state.get('session_id'))],
+            input=json.dumps(state.get('addressed_issues') or []),
+            capture_output=True, text=True, timeout=30,
+        )
+        pipelines = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
         return None
+    return len(pipelines) if isinstance(pipelines, list) else None
 
 
-def _contract_bookmark_path(session_id: str, cycle_id: int) -> Path:
-    """T2.3: pretool-subagent-enforce wrote /tmp/contract-bookmark-<sid>-<cycle>.json."""
-    return Path(f'{harness_state_dir()}/contract-bookmark-{session_id}-{cycle_id}.json')
-
-
-def _artifact_status_path(session_id: str, cycle_id: int) -> Path:
-    """T2.3: posttool-overnight-file-check (T3.2) writes per-call sidecar."""
-    return Path(f'{harness_state_dir()}/artifact-status-{session_id}-{cycle_id}.json')
-
-
-def _read_json(path: Path) -> dict | None:
-    """Best-effort JSON read; None on any failure."""
+def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
+    """Render the cycle contract when PM TRIAGE returns; otherwise do nothing."""
+    state = overnight.session_state(session_id)
+    if state is None:
+        return
+    steps = contract_runtime.overnight_steps()
+    if not _is_triage_dispatch(stdin_data, steps):
+        return
+    cycle_id = overnight.cycle_index(state)
+    count = _pipeline_count(state, cycle_id)
+    if count is None:
+        sys.stderr.write(
+            f'CYCLE CONTRACT NOT WRITTEN: cycle {cycle_id} has no readable triage '
+            'report; the next PM TRIAGE dispatch writes it.\n')
+        return
+    calls = []
+    for label, call in contract_runtime.post_triage_steps(steps):
+        copies = 1 if call.get('mode') else count
+        calls += [contract_runtime.call_entry(label, call) for _ in range(copies)]
+    contract = {
+        'schema_version': 1,
+        'session_id': session_id,
+        'cycle_id': cycle_id,
+        'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'required_calls': calls,
+    }
+    path = contract_runtime.contract_path(state, cycle_id)
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return None
-
-
-def _matched_entry_for_step(session_id: str, cycle_id: int, step: str) -> dict | None:
-    """T2.3: load the pretool-authored matched_entry for this step."""
-    bm = _read_json(_contract_bookmark_path(session_id, cycle_id))
-    if not isinstance(bm, dict):
-        return None
-    payload = bm.get(step)
-    if not isinstance(payload, dict):
-        return None
-    matched = payload.get('matched_entry')
-    return matched if isinstance(matched, dict) else None
-
-
-def _emit_pending(step: str, ip_index: int, reasons: list) -> None:
-    """T2.3: stderr structured contract-pending diagnostic; never blocks."""
-    sys.stderr.write(
-        f'CONTRACT PENDING (posttool-subagent-track): step={step} '
-        f'index={ip_index} not marked done.\n  reasons:\n'
-    )
-    for r in reasons:
-        sys.stderr.write(f'    - {r}\n')
-
-
-def _validate_via_schema(record: dict, schema_name: str, path_str: str) -> tuple[bool, list]:
-    """T2.3: run validate_artifact and translate Result into (ok, reasons)."""
-    res = contract_runtime.validate_artifact(record, schema_name)
-    if res.get('severity') == 'pass':
-        return True, []
-    errs = res.get('errors') or []
-    msgs = [f"schema '{schema_name}' validation failed: {e}" for e in errs]
-    return False, msgs or [f"schema '{schema_name}' validation failed (no detail)"]
-
-
-def _validate_artifact_for_entry(matched: dict) -> tuple[bool, list]:
-    """T2.3: confirm expected_output_path exists + schema validates."""
-    path_str = matched.get('expected_output_path')
-    if not path_str:
-        return True, []  # entry has no artifact gating
-    p = Path(path_str)
-    if not p.exists():
-        return False, [f"expected_output_path missing: {path_str}"]
-    schema_name = matched.get('schema_name')
-    if not schema_name:
-        return True, []  # existence-only is sufficient
-    record = _read_json(p)
-    if record is None:
-        return False, [f"expected_output_path unreadable as JSON: {path_str}"]
-    return _validate_via_schema(record, schema_name, path_str)
-
-
-def _consult_artifact_status_sidecar(session_id: str, cycle_id: int) -> tuple[bool, list]:
-    """T2.3: if T3.2 sidecar present, honor its schema_status."""
-    sidecar = _read_json(_artifact_status_path(session_id, cycle_id))
-    if not isinstance(sidecar, dict):
-        return True, []
-    status = sidecar.get('schema_status')
-    if status in ('pass', 'unchecked', None):
-        return True, []
-    errs = sidecar.get('errors') or []
-    base = f"artifact-status sidecar reports schema_status='{status}'"
-    return False, [f"{base}: {e}" for e in errs] or [base]
-
-
-def _mark_or_pend(bm_path: Path, ip_index: int | None, step: str,
-                  ok: bool, reasons: list, session_id: str = '',
-                  cycle_id: int = 0, matched: dict | None = None) -> None:
-    """Write the bookmark mark only through atomic contract reconciliation."""
-    if ok and ip_index is not None:
-        try:
-            result = contract_runtime.reconcile_accepted_artifact(
-                session_id, cycle_id, bm_path, ip_index, matched or {},
-            )
-        except Exception as exc:
-            _emit_pending(step, ip_index, [f'atomic reconciliation failed: {exc}'])
-            return
-        if result.get('ok'):
-            return
-        _emit_pending(step, ip_index, [str(result.get('reason') or 'atomic reconciliation failed')])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
+        tmp.write_text(json.dumps(contract, indent=2) + '\n', encoding='utf-8')
+        os.replace(tmp, path)
+    except OSError as exc:
+        sys.stderr.write(f'CYCLE CONTRACT NOT WRITTEN: {path}: {exc}\n')
         return
-    if ip_index is not None:
-        _emit_pending(step, ip_index, reasons)
-
-
-def _enforce(stdin_data: dict, contract: dict, state: dict,
-             bm_path: Path, step: str) -> None:
-    """T2.3: contract-driven path. Marks step done IFF bookmark + artifact valid."""
-    session_id = stdin_data.get('session_id', 'default')
-    cycle_id = _cycle_id_from_state(state)
-    ip_index = _current_in_progress_index(state)
-    matched = _matched_entry_for_step(session_id, cycle_id, step)
-    if not isinstance(matched, dict):
-        _mark_or_pend(bm_path, ip_index, step, False,
-                      ['pretool contract-bookmark missing matched_entry'])
-        return
-    a_ok, a_why = _validate_artifact_for_entry(matched)
-    s_ok, s_why = _consult_artifact_status_sidecar(session_id, cycle_id)
-    _mark_or_pend(
-        bm_path, ip_index, step, a_ok and s_ok, a_why + s_why,
-        session_id, cycle_id, matched,
-    )
+    print(f'CYCLE CONTRACT: cycle {cycle_id}, {count} pipeline(s), '
+          f'{len(calls)} required call(s): {path}')
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +390,7 @@ def _extract_subagent_type(stdin_data: dict) -> str:
 
 def _main() -> None:
     stdin_data, session_id, agent_prompt = _parse_stdin()
+    _write_cycle_contract(stdin_data, session_id)
 
     # Load base context once (state, canonical, ip_index, bm_path).
     base = _resolve_base_context(session_id)
@@ -472,27 +398,8 @@ def _main() -> None:
         sys.exit(0)
     state, last_todos, canonical, ip_index, bm_path = base
 
-    # Contract-presence check FIRST (cycle 20260519-211515 codex Finding 1):
-    # if a /dev-overnight cycle-contract is active, the legacy Case A/B paths
-    # MUST NOT run — bookmark writes go strictly through the contract's
-    # _enforce path (artifact validation + atomic reconciliation). Falling
-    # through to a legacy write would bypass artifact validation.
-    contract = _try_load_contract(session_id, state)
-    if contract is not None:
-        # Path A: strict gate (single in_progress + subagent_call metadata).
-        if ip_index is None:
-            sys.exit(0)
-        if not _step_has_subagent_call(canonical, ip_index):
-            sys.exit(0)
-        _check_role_match(_get_expected_type(canonical, ip_index),
-                          agent_prompt, ip_index)
-        step = _current_step_label(state)
-        _enforce(stdin_data, contract, state, bm_path, step)
-        sys.exit(0)
-
-    # Contract absent — Path B: legacy bookkeeping. Case A (typed lookup
-    # via subagent_type) takes precedence over Case B (legacy in_progress
-    # inference). The two are mutually exclusive; Case A MUST NOT fall
+    # Case A (typed lookup via subagent_type) takes precedence over Case B
+    # (legacy in_progress inference). The two are mutually exclusive; Case A MUST NOT fall
     # through to Case B on a typed miss (AC-H3b mandate).
     subagent_type = _extract_subagent_type(stdin_data)
     if subagent_type:

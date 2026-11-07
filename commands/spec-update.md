@@ -45,25 +45,60 @@ Resolve the target spec:
    fan-out cycle does not need, and this command must not create, a parent
    context merely to resolve the spec.
 3. Else create a new spec from `~/.claude/templates/overnight-spec.md` at
-   `${CLAUDE_PROJECT_DIR:-$(pwd)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md`.
+   `${CLAUDE_PROJECT_DIR:-$(pwd)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md`
+   through the one writer (below): `spec-write.py create --spec <path>` with the
+   populated template on stdin.
+
+Every write of a spec runs through `~/.claude/scripts/spec-write.py`, the one
+writer of `docs/dev/specs/*.md` (`/spec` writes through it too); never Write or
+Edit a spec file. `create --spec <path>` takes the whole new file on stdin;
+`append --spec <path> --section <N>` (or `<N>.<M>` for a `### N.M` subsection)
+adds the text on stdin at the end of that section, or in place of its lone
+`_Not yet populated._` line. Name the spec by its absolute path. A run's
+appends go in ONE Bash call, one `append` per section chained with `&&` (the
+orchestrator gate refuses a sixth Bash call in a row, so a call per section
+loses the last one); a refusal stops the chain there, the sections before it
+stay written, and only the refused append and those after it run again:
+
+```bash
+python3 ~/.claude/scripts/spec-write.py append --spec /abs/path/docs/dev/specs/spec-<ts>.md --section 2 <<'SPEC_BLOCK' &&
+### Cycle <N>
+<content>
+SPEC_BLOCK
+python3 ~/.claude/scripts/spec-write.py append --spec /abs/path/docs/dev/specs/spec-<ts>.md --section 3 <<'SPEC_BLOCK'
+### Cycle <N>
+<content>
+SPEC_BLOCK
+```
 
 Gather source artifacts from the active task-id when available. For `/dev`
-work, invoke the shared read-only
-`scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`
-and retain its JSON even when `status == "fail"`: a failed continuation is
+work, take the `ARTIFACT_CHAIN` the invoking command already holds from its
+one chain call (`/dev`'s and `/dev-command`'s end, `/close` Step 0, `/commit`
+Step 5), verbatim; only a `/spec-update` typed on its own runs
+`python3 ~/.claude/scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+Retain that JSON even when `status == "fail"`: a failed continuation is
 precisely where `errors[]` and the existing lane matrix are useful. Use the
 existing paths named by `artifact_paths`, `report_paths`, `qa_inputs`, and
 `lanes[]`, plus `docs/dev/close-report-<task-id>.md` when present. In singular
 mode this is the existing parent chain; in fan-out mode it is every lane
-ticket/context/dev/QA plus the parent canonical/completion and only optional
-parent artifacts that actually exist. Never replace this with a singular
+ticket/context/dev/QA plus the parent canonical/completion. Never replace this with a singular
 parent context/QA assumption or fabricate missing parent artifacts.
 
 For legacy or non-`/dev` work where no resolver result is available, retain the
 existing same-task parent context/dev-report/QA/close/completion lookup. Always
 include the user's latest message or explicit focus string.
 
-When updating an existing spec, append; never overwrite prior cycles. Determine
+The dispatches of a cycle never write the spec; their section text stays in
+their own reports, and this mode is what carries it into the spec. Read it
+there: what was attempted and changed from the dev reports' `dev.tasks_completed`
+(`description`, `rationale`, `changes`, files); the measured state, and on a fail
+the gap and the next step, from the QA reports' `qa.spec_section_updates`
+(`section_4`, `section_6`, `section_7`); the before-state from BA's context
+(`root_cause_analysis`); and for an overnight pipeline the retro report's
+`unresolved_issues`.
+
+When updating an existing spec, append through `spec-write.py append`; never
+overwrite prior cycles. Determine
 the next cycle number as `max(existing "### Cycle N" headings across Sections
 1-7) + 1`; if none exist, use Cycle 1.
 
@@ -72,11 +107,14 @@ the spec file already contains `<!-- spec-continuation-of: <resolved-task-id> --
 (substituting the actual task-id value — never a literal `${TASK_ID}` or
 `<task-id>` placeholder). If that exact line is absent, write it as the very
 first line of the new cycle block, before any section headings. If it is already
-present, do not write a second copy. This marker is written exactly once per
+present, do not write a second copy (put it on the first line of the first
+`append` block of the run). This marker is written exactly once per
 (task-id, spec file) pair and must appear only in this continuation-spec mode,
 never in temp-note mode.
 
-Populate the per-cycle sections (Sections 2-8) as follows:
+Populate the per-cycle sections (Sections 2-8) as follows, one `append` per
+section in the run's one Bash call, each block starting with its `### Cycle N`
+heading:
 
 - Section 2: what was attempted and why it did not finish.
 - Section 3: changed files or artifact references, not raw diffs.
@@ -99,9 +137,9 @@ materially refined.
 If the spec already has `docs/dev/specs/<spec-id>/views/` or
 `.claude/specs/<spec-id>/cp-state-*.json`, record in Section 8 that those split
 views/checkpoints predate the continuation update and must not be treated as
-fresh unless regenerated. Updating the spec makes its mtime newer than
-`.split-complete`; `/dev` and `/dev-command` must then ignore stale views and
-fall back to the monolith spec.
+fresh unless regenerated. Updating the spec changes its content, so
+`scripts/resolve-spec-artifacts.py` reports its split stale (non-zero exit) to
+`/dev`, `/dev-command` and `/dev-overnight` until `/spec` splits it again.
 
 Output the spec path and next command:
 
@@ -164,15 +202,16 @@ invoke `scripts/resolve-dev-artifact-chain.py`. Update mode has no task-id or
 dev-cycle reconciliation concept.
 
 Append the enrichment content within Section 5 only, as a new `### 5.N`
-subsection. If the target spec's Section 5 already uses numbered `### 5.N`
-headings, use `max(N) + 1`; otherwise follow whatever convention that
-specific target spec already uses.
+subsection, through the one writer (`spec-write.py append --spec <path>
+--section 5`, see Continuation-spec mode). If the target spec's Section 5
+already uses numbered `### 5.N` headings, use `max(N) + 1`; otherwise follow
+whatever convention that specific target spec already uses.
 
 If the target spec already has `docs/dev/specs/<spec-id>/views/` or
 `.claude/specs/<spec-id>/cp-state-*.json`, record in Section 8 that those
 split views/checkpoints predate this update and must not be treated as fresh
 unless regenerated — the same rule Continuation-spec mode applies for its own
-appends.
+appends, written the same way (`spec-write.py append --section 8`).
 
 Do not write the continuation marker comment that Continuation-spec mode
 writes at the start of a new cycle block; Update mode has no cycle block.
