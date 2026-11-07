@@ -752,7 +752,7 @@ Dev iterates and QA re-checks until QA's status is `pass`; pass is the only exit
 ```markdown
 # Development Completion Report
 
-**Request ID**: dev-<timestamp>
+**Request ID**: <timestamp>
 **Completed**: <ISO-8601>
 **Iterations**: <N>
 
@@ -810,6 +810,7 @@ Dev iterates and QA re-checks until QA's status is `pass`; pass is the only exit
 
 ## Files Generated
 
+- Ticket: `docs/dev/ticket-<timestamp>.md`
 - Context: `docs/dev/context-<timestamp>.json`
 - Dev Report: `docs/dev/dev-report-<timestamp>.json`
 - QA Report: `docs/dev/qa-report-<timestamp>.json`
@@ -824,6 +825,8 @@ Development completed successfully!
 ```
 
 **Save report to**: `docs/dev/completion-<timestamp>.md`
+
+The report's identity is the task id as given (`<timestamp>`, no `dev-` prefix), and its Files Generated list names every artifact of the chain (ticket, context, dev report, QA report): the postcondition below reads both, and a prefixed id or a missing reference fails it.
 
 **Codex-native artifact postcondition (hard check before completion)** — mirrors `commands/dev.md` Step 17's postcondition. The resolver builds the file names it reads from the task id as given (for example `dev-report-<task_id>.json`), and this command's artifacts are named `<timestamp>`, so it receives `$TASK_ID`, the hook's `Task id:` (only the registry directory and the user-requirement document carry `$DEV_SESSION_ID`).
 
