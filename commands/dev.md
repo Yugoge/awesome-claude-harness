@@ -65,7 +65,7 @@ Emit spec continuation or the `/close` next step
 - NEVER bundle multiple issues into a single subagent prompt
 - If QA fails and iteration is needed, re-invoke Dev with the SAME single issue, not a batch
 
-**Hook-rejection continuation (operation-local, cycle outcome conditional):** A rejected subagent operation pauses only that attempted operation and MUST be reported with the exact hook output under the global Subagent Hook Discipline; it does not by itself decide the ordinary `/dev` cycle's outcome. Only the human may authorize retry, and neither the orchestrator nor a subagent may retry, disguise, or circumvent an unauthorized operation. If the human declines or abandons it, the orchestrator may abandon-and-continue only when every acceptance criterion remains achievable without that operation: resume the same lane from its existing artifacts, synchronously re-dispatch exactly that one-issue lane if its prior turn ended, and continue through normal validation and QA. If any acceptance criterion is no longer achievable, do not loop, re-dispatch, or fabricate a substitute; record the lane or cycle as blocked/incomplete, name the unmet acceptance criterion, and allow the ordinary `/dev` cycle to terminate honestly.
+**Hook rejection (a process step, never a terminal):** a subagent whose operation a hook rejects never retries, disguises or circumvents it; it reports the rejected command and the hook's output (in its report, or in its producer question artifact when the operation needs the owner's decision). When the operation is needed, the orchestrator asks the owner with one AskUserQuestion that names the operation and the exact command: that is the pause, and it releases no gate. With the answer (or after the owner's `/allow` of that command), it re-dispatches that lane's role (same subagent_type, task_id, lane and obligation template, a fresh dispatched_at), and the cycle continues to completion.
 
 **Per-Subagent Single-Task Rule (MANDATORY)**:
 - Each individual subagent invocation handles exactly ONE issue/task
@@ -90,10 +90,10 @@ A single `/dev` cycle MAY carry more than one requirement. When it does, the orc
 - **Step 10 (Dev)** — dispatch exactly ONE Dev per lane, bound to `lane.text` / `requirement_id`, writing lane-suffixed artifacts.
 - **Step 11 (Aggregate)** — ONE parent-level aggregate join AFTER the barrier that unions the lane-suffixed dev-reports into the canonical singular `dev-report-<session>.json`; this is NOT a per-lane dispatch.
 - **Step 13 (QA)** — dispatch exactly ONE QA per lane.
-- **Step 15 (Permissions)** — ONE Bash call for every passing lane, its lanes' commands one per line, so a failed command does not stop the next. The orchestrator gate refuses a sixth Bash call in a row and only a dispatch resets its count, so a call per lane (N+1 in a row through Step 17's completion check) loses the completion check from five lanes on.
+- **Step 15 (Permissions)** — ONE Bash call for every passing lane, its lanes' commands one per line, so a failed command does not stop the next. The orchestrator gate refuses a sixth Bash call since the last Agent dispatch or human prompt (`hooks/pretool-orchestrator-gate.py`), so a call per lane (N+1 in a row through Step 17's completion check) loses the completion check from five lanes on.
 - **Step 16 (Iteration)** — retry only the failed lanes (lane-local).
 
-**Lane-execution adapter (this step takes precedence over the singular Step templates).** When N > 1, this fan-out step governs the concrete Steps below: every `<requirement>`, `<timestamp>` / session id, input path, output path, dispatch, wait, validation, and result branch in Steps 4–16 is evaluated PER LANE. Each lane's dispatch prompt MUST carry three explicit fields — `Lane requirement_id`, `Lane requirement text` (the authoritative execution scope), and `Parent requirement document (reference baseline)` — and the lane text OVERRIDES the parent document and any "context / BA-spec is absolute truth" clause for EXECUTION scope: the lane implements, verifies, and edits only its own outcome, and sibling outcomes are not work items within that lane's invocation. REPORTING is not lane-local: the parent document is the lane's baseline for checking whether the lane is correctly sliced, and a lane that finds its slice contradicts the parent requirement, is coupled to a sibling lane (one underlying issue split across lanes), or is a recurring-failure patch MUST report it (see `coupled_issues_merge_requested` below and the subagent baseline-check obligation) instead of completing the mis-sliced work. Dispatch stages (4/7/10/13) batch all applicable lanes; waits are stage barriers; validation stages (6/12) run per lane; retry stages (8/16) act only on affected/failed lanes; and every concrete Step's result branch gains a `multi_issue_fanout_requested` route and a `coupled_issues_merge_requested` route (both handled below). When N == 1, none of this applies and the Steps run exactly as written today.
+**Lane-execution adapter (this step takes precedence over the singular Step templates).** When N > 1, this fan-out step governs the concrete Steps below: every `<requirement>`, `<timestamp>` / session id, input path, output path, dispatch, wait, validation, and result branch in Steps 4–16 is evaluated PER LANE. Each lane's dispatch prompt MUST carry three explicit fields — `Lane requirement_id`, `Lane requirement text` (the authoritative execution scope), and `Parent requirement document (reference baseline)` — and the lane text OVERRIDES the parent document and any "context / BA-spec is absolute truth" clause for EXECUTION scope: the lane implements, verifies, and edits only its own outcome, and sibling outcomes are not work items within that lane's invocation. REPORTING is not lane-local: the parent document is the lane's baseline for checking whether the lane is correctly sliced, and a lane that finds its slice contradicts the parent requirement, is coupled to a sibling lane (one underlying issue split across lanes), or is a recurring-failure patch names it in its report (see `coupled_issues_merge_requested` below and the charter's baseline check, `agents/<role>.md`) and absorbs no sibling work. Dispatch stages (4/7/10/13) batch all applicable lanes; waits are stage barriers; validation stages (6/12) run per lane; retry stages (8/16) act only on affected/failed lanes; and every concrete Step's result branch gains a `multi_issue_fanout_requested` route and a `coupled_issues_merge_requested` route (both handled below). When N == 1, none of this applies and the Steps run exactly as written today.
 
 **Lane-authoritative scope (no bundle re-detection).** Each lane is given its assigned requirement `text` as the authoritative execution scope. The full `user-requirement-<session>.md` document is passed to every lane as the reference baseline — never as the lane's execution scope — so a fanned-out lane executes only its own text and does not re-detect multiplicity, while it still consults the parent document to check its slice (reporting coupling or mis-slicing, never acting on sibling outcomes).
 
@@ -101,7 +101,7 @@ A single `/dev` cycle MAY carry more than one requirement. When it does, the orc
 
 **`multi_issue_fanout_requested` routing handler (routing-only, non-terminal).** A BA/Dev subagent returns `status: multi_issue_fanout_requested`, and a QA subagent returns `verdict: multi_issue_fanout_requested`, with payload `{issues: [{requirement_id, text}]}` when it is handed a bundled multi-issue prompt. On receipt the orchestrator treats it as a recognized nonterminal routing enum, not a failure: route `multi_issue_fanout_requested` by re-dispatching each enumerated issue exactly once as its own lane within the same parent cycle (no new session, no user prompt), reusing the decomposition above. Re-run the coverage map against the ORIGINAL bundled prompt so every re-dispatched lane inherits all applicable shared constraints and exclusions (e.g. no-commit, do-not-touch-hooks, per-file-diffs); the returned issue boundaries are advisory and no shared constraint may be dropped during re-dispatch. This signal is never mapped to `contract_violation_refused`.
 
-**`coupled_issues_merge_requested` routing handler (routing-only, non-terminal).** Emitter: a BA/Dev subagent returns `status: coupled_issues_merge_requested`, and a QA subagent returns `verdict: coupled_issues_merge_requested`, when its lane is one half of a coupled cross-lane issue (the parent requirement document shows a single underlying issue sliced into several lanes, or the lane cannot be completed or verified without changing a sibling lane's scope). Payload: `{coupled_lanes: [requirement_id, ...], underlying_issue: "<the single issue, one sentence>", evidence: [file:line or parent-document section, ...]}`. The emitter stops before any analysis, edits, or verification beyond establishing the coupling, exactly as for `multi_issue_fanout_requested`. Handler: on receipt the orchestrator treats it as a recognized nonterminal routing enum, not a failure and not `contract_violation_refused`: merge the named lanes into ONE lane (one `requirement_id`, `text` = the underlying issue covering every merged lane's outcome) and re-dispatch that single lane within the same parent cycle (no new session, no user prompt), updating the coverage map so every requested outcome still maps to exactly one `requirement_id`. The returned `coupled_lanes` and boundaries are advisory: re-run the coverage map against the ORIGINAL parent document so the merged lane inherits every shared constraint and exclusion of every merged lane, and no shared constraint may be dropped. Lanes not named in the payload are untouched. The same baseline-check family also carries `baseline_contradiction` (lane scope contradicts the parent requirement) and `recurring_mechanism_failure` (Nth patch on a mechanism with recurring failure history): these are nonterminal SUCCESS outputs, not failures; the orchestrator surfaces the named evidence to the user and re-scopes or redesigns before re-dispatching the lane, and never forces the emitter to complete the mis-scoped work.
+**`coupled_issues_merge_requested` routing handler (routing-only, non-terminal).** Emitter: a lane's BA, dev or QA names `coupled_issues_merge_requested` in its report's summary, and in its `baseline_check` where its output has one (the "Requirement baseline" charter line of `agents/<role>.md`), when its lane is one half of a coupled cross-lane issue (the parent requirement document shows a single underlying issue sliced into several lanes, or the lane cannot be completed or verified without changing a sibling lane's scope), together with the coupled lanes (their `requirement_id`s), the underlying issue in one sentence and cited evidence (file:line or parent-document section). Its report still completes as its schema defines: the name is no status or verdict value. Handler: when the orchestrator reads a lane's report (Steps 6, 7, 12 and 14) and its summary or `baseline_check` names it, it treats it as a routing step, not a failure and not `contract_violation_refused`: merge the named lanes into ONE lane (one `requirement_id`, `text` = the underlying issue covering every merged lane's outcome) and re-dispatch that single lane within the same parent cycle (no new session, no user prompt), updating the coverage map so every requested outcome still maps to exactly one `requirement_id`. The named lanes and boundaries are advisory: re-run the coverage map against the ORIGINAL parent document so the merged lane inherits every shared constraint and exclusion of every merged lane, and no shared constraint may be dropped. Lanes the report does not name are untouched. The same baseline check also names `baseline_contradiction` (lane scope contradicts the parent requirement) and `recurring_mechanism_failure` (Nth patch on a mechanism with recurring failure history), in the same two places: routing steps, not failures; the orchestrator re-scopes or redesigns the lane from the named evidence before re-dispatching it (asking the owner with one AskUserQuestion only where the evidence leaves a real decision open), and never forces the emitter to complete the mis-scoped work.
 
 **Degenerate single-lane case (N == 1).** When N == 1 the flow degenerates to today's single-lane path with no behavior change: the fan-out wrapper is a no-op for a single requirement, and existing single-requirement cycles are unaffected.
 
@@ -149,7 +149,7 @@ When `VIEWS_AVAILABLE` is `true`, read `view_paths` from `$MANIFEST_PATH` (its `
 Pass `view_paths.ba`, `view_paths.qa`, `view_paths.dev`, etc. alongside (not in place of) `spec_path` when delegating to subagents. Each subagent gets its own view path so its context window is smaller.
 
 **Edge cases**:
-- Empty `$ARGUMENTS` → Prompt user for requirement
+- Empty `$ARGUMENTS` → ask for the requirement with one AskUserQuestion (the pause; the cycle stays open)
 - Otherwise → Pass raw text (minus --spec flag) to BA subagent in Step 4
 
 **Keep this step lightweight** - BA subagent handles all analysis.
@@ -178,7 +178,7 @@ It prints what the hook printed at this command's start, found through this sess
 REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
 ```
 
-Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
+Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. That Read is where `hooks/pretool-cp-checkin.py` creates the role's sentinel and, for a CLI whose payload names no `agent_type`, records the subagent's role in `.claude/dev-registry/agent-index.json`, the role reader's fallback (`hooks/lib/agent_resolver.py`); with a payload `agent_type` the role is the CLI's.
 
 **Also reuse the resolver's `<SPEC_ID>` for cp-state checkpoint propagation.** `/spec` writes per-agent `cp-state-<agent>.json` files into the directory the resolver reports as `cp_dir` (`.claude/specs/<artifact_id>/`). Do NOT re-derive the id from `spec_path` — reuse the resolver output computed above so the producer and consumers agree byte-for-byte:
 
@@ -193,9 +193,9 @@ else
 fi
 ```
 
-When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a cp-state file MUST include a `SECOND ACTION` block (template under each Step's prompt below) instructing the subagent to read `$CLAUDE_PROJECT_DIR/$CP_STATE_DIR/cp-state-<agent>.json` and to mark each checkpoint via `~/.claude/scripts/spec-check.py mark` (or `waive` — auto-text records actor + ISO timestamp) before Stop. Agents SHOULD leave zero pending checkpoints before they Stop. (Note: `subagentstop-cp-enforce.py` **is** wired under `SubagentStop` in `settings.json` and fires when an agent stops with a cp-state file — it blocks (exit 2) on any `pending` checkpoint. Marking via `spec-check.py` is therefore both a discipline expectation and a hook-enforced block.) When `SPEC_ID` is empty (non-`/spec` invocation), or a particular agent has no cp-state file under that artifact id, the SECOND ACTION block is omitted — there are no checkpoints to mark for that launch.
+When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a cp-state file MUST include a `SECOND ACTION` block (template under each Step's prompt below) instructing the subagent to read `$CLAUDE_PROJECT_DIR/$CP_STATE_DIR/cp-state-<agent>.json` and to mark each checkpoint via `~/.claude/scripts/spec-check.py mark` (or `waive` — auto-text records actor + ISO timestamp) before Stop. `hooks/subagentstop-cp-enforce.py` (`SubagentStop`) judges only the stopping subagent's own running slots: with `CP_ENFORCE_MODE=block`, as the shipped `settings.json` sets it, it blocks that stop (exit 2) while one of them has a `pending` checkpoint, and marking or waiving clears it; another agent's slot never blocks it, and under any other mode it exits 0. When `SPEC_ID` is empty (non-`/spec` invocation), or a particular agent has no cp-state file under that artifact id, the SECOND ACTION block is omitted — there are no checkpoints to mark for that launch.
 
-**T1.7 (redev-tier123) — Orchestrator-view + Section 5 read MANDATE**: When `VIEWS_AVAILABLE` is `true`, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view that the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (the views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
+**Orchestrator-view + Section 5 read MANDATE**: When `VIEWS_AVAILABLE` is `true`, BEFORE composing any subagent dispatch prompt, you MUST read the orchestrator view that the resolver located — `$CLAUDE_PROJECT_DIR/$VIEWS_DIR/orchestrator.md` (the views live under `docs/dev/specs/<artifact_id>/views/`, NOT under `.claude/specs/`) — AND the spec's Section 5 (User's Acceptance Criterion) verbatim from `$spec_path`. Quote the user's words from Section 5 directly into every dispatch prompt; do not paraphrase or summarize. The user's verbatim need is the binding contract — every subagent must see the user's literal request, not your reformulation.
 
 ### Step 2: Graphify pre-BA Bash hydrator
 
@@ -261,6 +261,7 @@ In the orchestrator's reasoning (and in BA's context JSON when BA is invoked nex
 ```
 Use Agent tool with:
 - description: "<Specialist role> consultation for: <requirement summary>"
+- run_in_background: false
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<specialist-name>.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -387,6 +388,7 @@ If dev changed L1 when spec called for L3, treat as failed implementation.
 ```
 Use Task tool with:
 - description: "Analyze requirement and build development context"
+- run_in_background: false
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -435,7 +437,7 @@ Use Task tool with:
 
   If Spec file is not null: Read the spec file FIRST. Use Section 5 (User's Acceptance Criterion) as the primary requirement source. Use Sections 1-4 as baseline context. If Section 7 (What Must Be Done) is populated, treat it as prescriptive guidance.
 
-  Goal: Translate the user's request into the smallest, safest, most-precise change set that lands the user-need, per spec-20260503-091826.md Section 5.1: the implementation approach is the minimum, safest, most-perfect, most-deterministic realization of user needs, not an expansion of fix scope; all work centers on user needs. Ground your analysis in the existing codebase patterns (align with current functionality rather than re-inventing). For bugs, find the root cause; for enhancements, research best practices via web search / explore / analyst agents per agents/ba.md Section 5.3 mission. Path-external observations go into the spec's `out_of_scope_observations` chapter (per agents/ba.md), not into the fix scope. Use the existing 5-dimension clarity scoring (What/Why/Where/Scope/Success) to gate `needs_clarification`. Produce both deliverables (ticket-<timestamp>.md per spec-20260503-091826 M3 ba-spec→ticket rename, plus context-<timestamp>.json) following agents/ba.md Output Formats.
+  Goal: Translate the user's request into the smallest, safest, most-precise change set that lands the user-need: the implementation approach is the minimum, safest, most-perfect, most-deterministic realization of user needs, not an expansion of fix scope; all work centers on user needs. Ground your analysis in the existing codebase patterns (align with current functionality rather than re-inventing). For bugs, find the root cause; for enhancements, research best practices via web search / explore / analyst agents per agents/ba.md Section 5.3 mission. Path-external observations go into the spec's `out_of_scope_observations` chapter (per agents/ba.md), not into the fix scope. Use the existing 5-dimension clarity scoring (What/Why/Where/Scope/Success) to gate `needs_clarification`. Produce both deliverables (ticket-<timestamp>.md plus context-<timestamp>.json) following agents/ba.md Output Formats.
 
   Explicit task-id printing: include the literal line `TASK-ID: <timestamp>` in your stdout response so close.md / commit.sh task-id-chain confirmation has an unambiguous anchor for this BA dispatch.
 
@@ -455,6 +457,7 @@ Use Task tool with:
 ```
 Use Task tool with:
 - description: "Continue BA analysis with clarification answers"
+- run_in_background: false
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -512,6 +515,7 @@ Read BA output files:
 Use Agent tool with:
 - subagent_type: "qa"
 - description: "Validate BA analysis quality (not code)"
+- run_in_background: false
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -609,6 +613,7 @@ A BA-QA `fail` loops back to BA until QA's verdict is `pass`; pass is the only e
 Use Agent tool with:
 - subagent_type: "ba"
 - description: "Re-investigate: address QA objections on analysis quality"
+- run_in_background: false
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -654,14 +659,13 @@ Use Agent tool with:
 
 ### Step 9: Graphify enrichment
 
-> **Cross-file label note**: The agent-file and integration-doc interstitial labels (e.g. "between Step 7 and Step 8" in `agents/graphify.md`, `agents/dev.md`, and `docs/reference/graphify-integration.md`) are the **cross-file canonical position-label** for this enrichment touchpoint and are intentionally NOT renumbered to match this command's `### Step 9` heading; the apparent mismatch is expected, so future readers should not "fix" it.
-
 After BA-QA validation passes, dispatch the graphify subagent (its sentinel, `graphify.json`, is in the registry the hook wrote). This is advisory — when graphify is disabled or not installed, or BA wrote no blast-radius map, it records status=skipped or unavailable in its run record; proceed to Step 10 without delay.
 
 ```
 Use Agent tool with:
 - subagent_type: "graphify"
 - description: "Graphify enrichment: extract focused subgraph for task"
+- run_in_background: false
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/graphify.json to register with the enforcement system. Do this BEFORE any other tool call.
 
@@ -677,12 +681,12 @@ When graphify completes (or is skipped), read the `status` of its run record `.c
 
 ### Step 10: Agent dispatch — Delegate to Dev Subagent
 
-**TodoWrite ordering reminder (task 20260519-211515 R3 / AC3)**: TodoWrite mark-as-in_progress for step N must precede any Agent() call dispatched within step N.
+**TodoWrite ordering reminder**: TodoWrite mark-as-in_progress for step N must precede any Agent() call dispatched within step N.
 The orchestrator MUST emit a TodoWrite call updating the Step-N todo item to `in_progress` BEFORE invoking any Agent() (or Task tool) dispatch in Step N. REQUIRED ordering: TodoWrite first, Agent() second. Always update the in_progress marker BEFORE dispatch. Before dispatch of test-writer or Dev (or any subagent in any Step), the matching Todo item MUST already be in_progress; otherwise do not dispatch.
 
-**Pre-dispatch — Test-Writer dispatch (conditional, between BA and Dev per spec-20260518-225715 §5.2 line 167: "Position: BA -> [test-writer] -> Dev -> QA")**:
+**Pre-dispatch — Test-Writer dispatch (conditional, between BA and Dev: BA -> [test-writer] -> Dev -> QA)**:
 
-**Test-writer skip-sentinel honor (task 20260519-211515 R4 / V_TW, CF2-14)**: BEFORE evaluating the gate below, read `_test_writer_skip_reason` from BA's context JSON. If that field is a non-empty string, the test-writer dispatch MUST be skipped on this cycle regardless of complexity_tier / risk_level — the sentinel is an explicit BA-authored skip signal. Record `test_writer_expected = false` and the skip reason in the todo list. Do NOT route a stale-content acceptance-criteria JSON to test-writer; doing so generates wrong-cycle pytest skeletons. This honor-clause is the V_TW enforcement; commands/dev.md Step 10 must reference `_test_writer_skip_reason` or `skip test-writer` language so the sentinel is not decorative.
+**Test-writer skip-sentinel honor**: BEFORE evaluating the gate below, read `_test_writer_skip_reason` from BA's context JSON. If that field is a non-empty string, the test-writer dispatch MUST be skipped on this cycle regardless of complexity_tier / risk_level — the sentinel is an explicit BA-authored skip signal. Record `test_writer_expected = false` and the skip reason in the todo list. Do NOT route a stale-content acceptance-criteria JSON to test-writer; doing so generates wrong-cycle pytest skeletons.
 
 Gate evaluation (mandatory): read `complexity_tier` and `risk_level` from BA's context JSON. If `complexity_tier ∈ {STANDARD, COMPLEX}` OR `risk_level == "high"`, then `test_writer_expected = true`; otherwise `test_writer_expected = false`. Pass `test_writer_expected` into the Dev and QA dispatch prompts.
 
@@ -691,6 +695,7 @@ When `test_writer_expected == true`, dispatch the test-writer subagent BEFORE De
 ```
 Use Task tool with:
 - description: "Generate pytest skeletons from acceptance criteria"
+- run_in_background: false
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/test-writer.json to register with the enforcement system. Do this BEFORE any other tool call.
 
@@ -710,7 +715,7 @@ Use Task tool with:
   "
 ```
 
-After the test-writer subagent completes, verify on disk that both `tests/generated/<task_id>/manifest.json` (per-task active manifest) and `docs/dev/test-writer-report-<task_id>.json` exist. If either is missing, abort the cycle with an error (the orchestrator MUST NOT proceed to Dev with a silently-skipped test-writer). When `test_writer_expected == false`, SKIP the dispatch (record skip rationale in the todo list).
+After the test-writer subagent completes, verify on disk that both `tests/generated/<task_id>/manifest.json` (per-task active manifest) and `docs/dev/test-writer-report-<task_id>.json` exist. If either is missing, dispatch the test-writer again (this template, a fresh dispatched_at) until both exist; the orchestrator never proceeds to Dev with a silently-skipped test-writer. When `test_writer_expected == false`, SKIP the dispatch (record skip rationale in the todo list).
 
 After test-writer completes (or is skipped), the manifest path is passed onward to Dev (in the dispatch prompt) and to QA (Step 13). Dev, the one writer of the test files, writes each from its manifest entry's skeleton and makes it pass; QA verifies the manifest at Step 13 Phase 5 AND that `test_writer_expected == true` implies manifest/report existence (Phase 5 fails with `primary_cause: "dev_implementation"` or `"qa_oversight"` if expected but missing).
 
@@ -730,6 +735,7 @@ Both values MUST be passed into the dev dispatch payload body (see below). If th
 ```
 Use Task tool with:
 - description: "Implement development changes based on BA context"
+- run_in_background: false
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/dev.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -795,6 +801,7 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 ```
 Use Task tool with:
 - description: "Verify implementation quality against standards"
+- run_in_background: false
 - prompt: "
   FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
@@ -898,7 +905,7 @@ Dispatch line: `QA report file: docs/dev/qa-report-<timestamp>.json`.
 
 **QA passed! Generate final report.**
 
-**Task-ID Convention** (canonical from /redev5 onward): the `task-id` is a single literal string (e.g. `20260426-095000-wid`) that appears identically in (a) artifact filename suffix, (b) `request_id` field of every artifact JSON, (c) `task_id` field of every artifact JSON, (d) completion-report heading 1, (e) all artifact JSON files. No prefixed forms (`dev-`, `qa-`, `ba-`, `ui-`) are permitted in NEW artifacts. Past artifacts are not retroactively rewritten.
+**Task-ID Convention**: the `task-id` is a single literal string (the hook's `Task id:`) that appears identically in (a) artifact filename suffix, (b) `request_id` field of every artifact JSON, (c) `task_id` field of every artifact JSON, (d) completion-report heading 1, (e) all artifact JSON files. No prefixed forms (`dev-`, `qa-`, `ba-`, `ui-`) are permitted in NEW artifacts. Past artifacts are not retroactively rewritten.
 
 **Completion report structure**:
 
@@ -1015,9 +1022,6 @@ same result object (`mode`, `lanes`, `report_paths`, `artifact_paths`,
   `qa.status == "pass"`, exact lane-set/provenance/file-union freshness, and
   malformed/missing artifact handling are owned by the resolver. A failed lane
   fails the parent chain.
-- If `claude_code_required = true`, context/report metadata must record that flag
-  or a structured `claude_code_consult` failure/unavailable status in addition
-  to the resolver postcondition.
 
 Subagent final messages, lifecycle records, and JSON-like stdout are not
 completion artifacts. The resolver is read-only: this completion check must not
@@ -1025,9 +1029,9 @@ repair, refresh, or fabricate any artifact.
 
 **Workflow update**:
 
-- If there is any unfinished development work (non-empty follow-up work in
-  "Next Steps", known unmet acceptance criteria, accepted AC-deviation with
-  future work, or user asks to keep improving), use
+- If follow-up work outside this cycle's requirement remains (non-empty
+  "Next Steps", an accepted AC-deviation with future work, or the user asks to
+  keep improving), use
   `/spec-update` default continuation-spec mode with the `ARTIFACT_CHAIN` held
   above (it does not call the chain again). If a source spec exists, update it;
   otherwise create a new spec. The next command is `/dev --spec <spec_path>`.
@@ -1037,16 +1041,6 @@ repair, refresh, or fabricate any artifact.
   conversation context is still active).
 
 **Present to user**: Show summary with key changes and next steps
-
-**Offer git commit** (if requested):
-```
-Would you like me to create a git commit for these changes?
-
-I'll include:
-- Clear commit message with root cause reference
-- All modified files
-- Link to completion report
-```
 
 ---
 
@@ -1102,182 +1096,11 @@ See `/clean` command documentation for details.
 
 ---
 
-## Agent Development Use Cases
-
-**This command supports ALL development tasks, not just scripts:**
-
-### Supported Development Types
-
-1. **Scripts** (`scripts/`)
-   - Bash automation scripts
-   - Python utility scripts
-   - Build/deployment scripts
-
-2. **Slash Commands** (`.claude/commands/`)
-   - New slash commands
-   - Command modifications
-   - Command documentation
-
-3. **Subagents** (`.claude/agents/`)
-   - Specialist subagent definitions
-   - Agent behavior specifications
-   - Agent integration patterns
-
-4. **Hooks** (`.claude/hooks/`)
-   - Pre/post tool use hooks
-   - Session lifecycle hooks
-   - Safety and validation hooks
-
-5. **Configuration** (`.claude/`)
-   - `CLAUDE.md` global instructions
-   - `settings.json` permissions/hooks
-   - Project-specific configs
-
-6. **Todo Scripts** (`.claude/scripts/todo/`)
-   - Workflow checklist generators
-   - Step tracking automation
-
-### Agent-Flexible Implementation
-
-**IMPORTANT**: Avoid over-engineering when Agent intelligence can handle it.
-
-**When to use scripts**:
-- ✅ Repeated operations (run 5+ times)
-- ✅ Complex multi-step workflows
-- ✅ Integration with existing tools
-- ✅ Performance-critical operations
-
-**When to use Agent intelligence**:
-- ✅ One-time operations
-- ✅ Context-dependent decisions
-- ✅ Natural language processing
-- ✅ Creative problem-solving
-- ✅ Adaptive workflows
-
-**Example - Avoid Over-Engineering**:
-
-```
-BAD (over-engineered):
-  User: "Check if file has correct header"
-  Dev: Creates scripts/validate-file-header.sh with 50 lines
-
-GOOD (agent-flexible):
-  User: "Check if file has correct header"
-  Dev: Agent reads file, checks header, reports result
-  (No script needed for one-time check)
-
-WHEN TO SCRIPT:
-  User: "Add header validation to CI/CD pipeline"
-  Dev: Creates scripts/validate-headers.sh
-  (Repeated operation, needs automation)
-```
-
-### Settings.json Permissions
-
-**All development operations require user confirmation via `ask` permission**:
-
-```json
-"ask": [
-  "Edit(.claude/commands/**)",
-  "Edit(.claude/agents/**)",
-  "Edit(.claude/hooks/**)",
-  "Edit(.claude/scripts/**)",
-  "Edit(.claude/settings.json)",
-  "Edit(.claude/CLAUDE.md)"
-]
-```
-
-**Why `ask` permission?**
-- Commands and agents change system behavior
-- Hooks can block operations
-- Settings control security
-- CLAUDE.md affects all sessions
-
-**User must explicitly approve each file change**
-
-### Todo Script Integration
-
-**Todo-script pattern**:
-
-When creating commands with multi-step workflows:
-
-1. **Create todo script** in `.claude/scripts/todo/<command>.py`
-2. **Return workflow steps** as JSON
-3. **Force todo refresh** via hook injection
-
-**Example todo script** (`.claude/scripts/todo/mycommand.py`):
-
-```python
-#!/usr/bin/env python3
-"""Preloaded TodoList for /mycommand workflow."""
-
-def get_todos():
-    return [
-        {"content": "Step 1: Parse input", "activeForm": "Step 1: Parsing input", "status": "pending"},
-        {"content": "Step 2: Process data", "activeForm": "Step 2: Processing data", "status": "pending"},
-        {"content": "Step 3: Generate output", "activeForm": "Step 3: Generating output", "status": "pending"}
-    ]
-
-if __name__ == "__main__":
-    import json
-    print(json.dumps(get_todos(), indent=2, ensure_ascii=False))
-```
-
-**Why todo scripts?**
-- Agent can see progress
-- User can track progress
-- Steps never forgotten
-- Consistent workflow enforcement
-
----
-
-## Example End-to-End Workflow
-
-**User**: `/dev "Fix timeout in API"`
-
-**Step 1**: Parse requirement
-- Requirement: "Fix timeout in API"
-
-**Step 3**: Consult specialists (optional)
-- No specialists needed for this requirement → skip
-
-**Step 4**: Delegate to BA subagent
-- BA writes its question artifact (which API?)
-
-**Step 5**: BA clarification loop
-- AskUserQuestion → POST /api/data; BA re-dispatched with the answer → returns `ready`
-- BA creates: `ba-spec-20251226-114500.md` + `context-20251226-114500.json`
-
-**Step 6**: Validate BA output
-- Both files exist with required sections
-
-**Step 10**: Dev subagent
-- Created: `scripts/measure-api-latency.sh`
-- Created: `scripts/validate-api-timeout.sh`
-- Modified: `config/api.json`
-- Saved report: `docs/dev/dev-report-20251226-114500.json`
-
-**Step 13**: QA subagent
-- Verified all scripts work
-- Confirmed root cause addressed
-- Status: PASS
-- Saved report: `docs/dev/qa-report-20251226-114500.json`
-
-**Step 14**: Process results
-- QA passed → proceed to completion
-
-**Step 17**: Completion report
-- Generated: `docs/dev/completion-20251226-114500.md`
-- Presented summary to user
-
----
-
 ## Success Metrics
 
 - ✅ 100% requirement clarity before development
 - ✅ Root cause identified and addressed
 - ✅ Zero hardcoded values in scripts
-- ✅ QA passes within 3 iterations
 - ✅ All standards enforced
 - ✅ Complete audit trail in JSON files
 
@@ -1287,54 +1110,8 @@ if __name__ == "__main__":
 
 ---
 
-## Orchestrator Prompt Purity (MANDATORY)
+## Orchestrator Prompt Purity
 
-> Enforcement hook: `~/.claude/hooks/pretool-orchestrator-prompt-purity.py` (PreToolUse `Agent` matcher). The same rule lives in the global `CLAUDE.md`. A HOW-prescription pressures a subagent into dodging a blocking hook, so state end-states, never tools.
-
-### The rule
-
-When the orchestrator dispatches BA, dev, QA, ui-specialist, or any other subagent via the `Agent` tool, the dispatch `prompt` MUST describe **WHAT** only:
-
-- the **problem** to solve (symptom, evidence, root cause when known)
-- **constraints** (scope boundaries, permission ceilings, files in-scope vs out-of-scope, sequencing requirements)
-- **acceptance criteria** (observable end-states the result must satisfy)
-- **context** (links to BA spec, prior reports, reference sources)
-
-The dispatch `prompt` MUST NOT prescribe **HOW**:
-
-- no tool names (`Write`, `Edit`, `Read`, `Bash`, `Glob`, `Grep`, `Skill`, `Agent`, `TodoWrite`, `WebFetch`, `WebSearch`, `NotebookEdit`, `EnterWorktree`, `ExitWorktree`, any `mcp__*` family)
-- no shell-command tokens (`sed`, `awk`, `curl`, `wget`, `jq`, `yq`, `python3`, `node`, `npm`, `pip`, `git checkout/reset/revert/push/...`, `mkdir`, `chmod`, `chown`, `cp`, `mv`, `rm`, `ln`, `tar`, `find`, `xargs`, `kill`, `systemctl`, `docker`, `kubectl`, ...)
-- no shell-syntax tokens (`$(...)` command substitution, `<<EOF` heredoc, `>` / `>>` redirection, `&&` / `||` chains, `|` pipe in command context, `2>&1`)
-- no fenced ` ```bash ` / ` ```sh ` / ` ```shell ` / ` ```zsh ` blocks (and no untagged fenced blocks whose first line is shell-like)
-
-The subagent chooses its own toolchain per its `agent.md`. If the orchestrator believes a particular outcome shape is required, it expresses that as an acceptance criterion ("the resulting file must be byte-identical to blob X") not as a tool prescription ("use git checkout").
-
-### Example: WHAT-only (correct)
-
-> "Restore `/root/.claude/agents/ui-specialist.md` to its pre-rewrite content. Acceptance: file length is exactly 657 lines AND its sha256 matches the byte stream pinned at nested-repo HEAD blob `7e5a4b3...`. The restore MUST NOT touch any other file (atomic per-file). Verifiable BEFORE the next phase begins. Reference: BA spec section 'Recovery Plan'."
-
-This describes the desired end-state, the verification path, and the constraint. The subagent decides whether to use git-restore-from-HEAD, git-show-with-redirect, or any other path that produces the same end-state.
-
-### Example: HOW-prescription (forbidden)
-
-> "Use the Write tool to overwrite the file with the original content. Run `git -C "$CLAUDE_PROJECT_DIR" show HEAD:agents/ui-specialist.md > /root/.claude/agents/ui-specialist.md`. Then verify with `wc -l`."
-
-This prescribes specific tool (`Write`), a specific shell command (`git show > path`), and a specific verification command (`wc -l`). It removes subagent autonomy. If `Write` is blocked by `pretool-write-guard.sh`, the subagent will be pressured to dodge the block.
-
-### Scope of this rule
-
-The rule applies to:
-- **orchestrator → subagent dispatch prompts** (Agent tool, `tool_input.prompt`)
-
-The rule does NOT apply to:
-- **user → orchestrator messages** (the user may use any language they wish; the orchestrator translates the user's intent into WHAT-only dispatch prompts)
-- **subagent → subagent dispatch** (recursive Agent calls from inside a subagent are exempt; the hook detects these via `data.agent_id` being truthy and bypasses the scan)
-- **in-file documentation, examples, READMEs, agent.md files, BA specs** (these are read by humans and subagents to learn HOW to do work; the rule is about the live dispatch channel only)
-- **content delimited by `<USER_VERBATIM>...</USER_VERBATIM>` markers inside a dispatch prompt** (so the orchestrator can quote a user message that itself contains tool names without triggering the hook)
-- **dev-registry sentinel-registration boilerplate** (the standard `cat > /root/.claude/dev-registry/<sid>/<role>.json << 'REGEOF'` pattern is subagent-internal scaffolding, not orchestrator HOW-prescription, and is exempted by the hook)
-
-### How the rule is enforced
-
-A PreToolUse hook scans every `Agent` dispatch's `prompt` field. On any blacklist hit, the hook exits with code 2 (Claude Code's blocking convention) and writes a stderr message beginning with the literal substring `orchestrator must not specify HOW; rewrite prompt to describe WHAT only.` followed by the matched category, a redacted snippet of the offending text, and a pointer back to this section.
-
-Self-test fixtures live at `/root/docs/dev/redev-prompt-purity-20260426-self-test.md`.
+A dispatch prompt states WHAT: the problem, constraints, acceptance criteria and context (BA spec, reports, sources); the subagent picks its own toolchain per its agent file.
+It prescribes no HOW: no tool names, shell commands, shell syntax or fenced shell blocks (user text quoted between `<USER_VERBATIM>` and `</USER_VERBATIM>` is exempt).
+`hooks/pretool-orchestrator-prompt-purity.py` (PreToolUse `Agent`, main-agent dispatches only) warns on stderr when a prompt prescribes HOW and exits 0: it never blocks.

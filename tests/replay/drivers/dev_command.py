@@ -11,8 +11,8 @@ Each step does what the tree's text says, read at run time:
 * Step 1: the spec as the tree decides it (the hook's `Spec:` line where the text says the hook
   decided it; else the text's own auto-detect, a Glob of the pattern it names, newest first; a
   `--spec` is never passed), the Read of the command-development patterns document the text
-  says to read before authoring a slash command, and every Bash block of the step but the
-  fallback the text keeps for a missing hook output;
+  says to read before authoring a slash command (where the text still names one), and every Bash
+  block of the step but the fallback the text keeps for a missing hook output;
 * Step 2: the graphify hydrator block of commands/dev.md the step points to;
 * Step 3: the four specialists assessed (all SKIP, each with a reason), no dispatch;
 * Step 4: the pre-BA retry signals (the text's `git log --grep` and the ticket Glob), then BA
@@ -265,11 +265,16 @@ class DevCommandCycle:
         if self.spec_path:
             o.s.say(f"Spec: {self.spec_path}")
         o.values["spec_path"] = self.spec_path
-        # "Read that document before authoring or editing slash commands" (Command Development Best Practices).
-        doc = next(c for c in re.findall(r"`([^`\s]+\.md)`", o.section("Command Development Best Practices"))
-                   if c.startswith("~/"))
-        o.s.read(os.path.join(self.rp.layout.home, doc[2:]), label="Read command-development patterns",
-                 deviation=o.devs.at("Read command-development patterns"))
+        # "Read that document before authoring or editing slash commands" (Command Development Best
+        # Practices), where the text still names one: the base's does, a document no published tree holds.
+        try:
+            practices = o.section("Command Development Best Practices")
+        except cmdtext.TextNotFound:
+            practices = ""
+        doc = next((c for c in re.findall(r"`([^`\s]+\.md)`", practices) if c.startswith("~/")), None)
+        if doc:
+            o.s.read(os.path.join(self.rp.layout.home, doc[2:]), label="Read command-development patterns",
+                     deviation=o.devs.at("Read command-development patterns"))
         fallback = re.compile(r"(?i)\*\*fallback\*\*|hook output (?:is )?absent|not in your context")
         o.run_step_blocks(1, skip=lambda name, b, para: bool(fallback.search(para)),
                           capture=("SPEC_ID",))

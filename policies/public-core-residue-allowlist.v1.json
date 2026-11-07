@@ -78,34 +78,6 @@
       "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
     },
     {
-      "path": "commands/dev.md",
-      "fingerprint": "0f1494ee69e11a18",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Example: WHAT-only (correct) — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "commands/dev.md",
-      "fingerprint": "7d6340d619802e4d",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "How the rule is enforced — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "commands/dev.md",
-      "fingerprint": "ad431a4e6955f846",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Example: HOW-prescription (forbidden) — prose/comment text; never read as a path at runtime."
-    },
-    {
-      "path": "commands/dev.md",
-      "fingerprint": "f653a2d8adf5a2f1",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Scope of this rule — prose/comment text; never read as a path at runtime."
-    },
-    {
       "path": "docs/reference/core-context-refactor-plan.md",
       "fingerprint": "040351515157df67",
       "ordinal": 1,
