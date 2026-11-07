@@ -2630,10 +2630,11 @@ def test_fanout_legacy_check_judges_only_the_stopping_lanes_own_report(
 
 
 # ---------------------------------------------------------------------------
-# P3 R14: an artifact G2 checks must be written for this dispatch (mtime >=
-# dispatched_at - 2 s) and a lane's dev or qa report must echo the dispatch's
-# lane and lane_set. Both warned in their first commit (reason on stderr, exit
-# 0); the promotion commit flipped DISPATCH_ECHO_BLOCKS in the hook and _R14_EXIT.
+# P3 R14: the dispatch must have written one of the files G2 checks (mtime >=
+# dispatched_at - 2 s; a re-dispatch may keep the others unchanged) and a lane's
+# dev or qa report must echo the dispatch's lane and lane_set. Both warned in
+# their first commit (reason on stderr, exit 0); the promotion commit flipped
+# DISPATCH_ECHO_BLOCKS in the hook and _R14_EXIT.
 # ---------------------------------------------------------------------------
 
 _WARNING = "OBLIGATION_STOPGATE_WARNING"
@@ -2678,7 +2679,7 @@ def test_r14_no_dispatched_at_counts_as_stale(tmp_path):
     s = _l2_setup(tmp_path)
     _l2_write(s, _l2_dev_report(s.task))
     ob = {k: v for k, v in s.obligation.items() if k != "dispatched_at"}
-    [finding] = HOOK._dispatch_echo_findings(str(s.project), ob, ob["artifacts"][0], {})
+    [finding] = HOOK._stale_findings(str(s.project), ob, ob["artifacts"], ob["artifacts"])
     assert finding["reason"] == "stale_for_dispatch"
     assert "dispatched_at None" in finding["errors"][0]
 
@@ -2751,6 +2752,71 @@ def test_r14_stale_markdown_warns(tmp_path):
     assert _g2_stop(s).stderr == ""
     _age(s.project / ticket, s.dispatched_at.isoformat(), 2 * 3600)
     _assert_warns(_g2_stop(s), ticket, "stale_for_dispatch")
+
+
+def _ba_first_round(s) -> dict:
+    """BA's three files as the task's first BA dispatch wrote them, a minute
+    before this (re-)dispatch."""
+    files = {
+        f"docs/dev/context-{s.task}.json": {
+            "task_id": s.task, "requirement": "x", "root_cause_analysis": {"affected_files": ["x.py"]},
+            "development_approach": {"strategy": "x"}, "complexity_tier": "SMALL", "risk_level": "low",
+            "test_writer_expected": False},
+        f"docs/dev/ticket-{s.task}.md": f"# Ticket\nRequest ID: {s.task}\n",
+        f"docs/dev/acceptance-criteria-{s.task}.json": {"task_id": s.task, "acceptance_criteria": []},
+    }
+    for rel, body in files.items():
+        _write(s.project / rel, body)
+        _age(s.project / rel, s.dispatched_at.isoformat(), 60)
+    return files
+
+
+def test_r14_redispatch_keeping_a_file_it_judges_right_passes(tmp_path):
+    """dev variant=ba-qa-fail, armed, at the BA re-dispatched after the failing
+    BA-QA verdict (commands/dev.md Step 8): it answers in its context and
+    ticket and keeps its acceptance criteria, which the write guard will not let
+    it Write again and an Edit cannot leave unchanged."""
+    s = _g2_setup(tmp_path, "ba", _g2_ba_artifacts())
+    files = _ba_first_round(s)
+    context, ticket = f"docs/dev/context-{s.task}.json", f"docs/dev/ticket-{s.task}.md"
+    _write(s.project / context, dict(files[context], development_approach={"strategy": "x, with the evidence"}))
+    _write(s.project / ticket, files[ticket] + "\n## QA objections addressed\n")
+    proc = _g2_stop(s)
+    assert proc.returncode == 0 and proc.stderr == "", proc.stderr
+    _g2_assert_decided_by_obligation(s)
+
+
+@pytest.mark.parametrize("case", ["ba_wrote_nothing", "ba_qa_left_its_fail_verdict"])
+def test_r14_report_left_from_an_older_round_is_refused(tmp_path, case):
+    """The rule's other side: a re-dispatch that wrote none of its files left
+    the older round's, each named (the re-dispatched BA; the BA-QA
+    re-validation leaving the first round's fail verdict, ba-qa-fail's own
+    leftover; the dev's is test_r14_report_older_than_its_dispatch_warns)."""
+    if case == "ba_wrote_nothing":
+        s = _g2_setup(tmp_path, "ba", _g2_ba_artifacts())
+        stale = list(_ba_first_round(s))
+    else:
+        report = f"docs/dev/ba-qa-report-{G2_TASK}.json"
+        s = _g2_setup(tmp_path, "qa", [_g2_json(report, "ba-qa-report.v1")], profile="ba_validation")
+        _write(s.project / report, _g2_ba_qa_report(G2_TASK, "fail"))
+        _age(s.project / report, s.dispatched_at.isoformat(), 60)
+        stale = [report]
+    proc = _g2_stop(s)
+    for rel in stale:
+        _g2_assert_blocked_on(proc, rel, "stale_for_dispatch")
+    assert f"this dispatch wrote none of the {len(stale)} file(s) it declares" in proc.stderr
+
+
+def test_r14_a_rewritten_file_failing_its_schema_still_counts_as_written(tmp_path):
+    """The block names what to repair: the rewritten file's schema, not the
+    files the dispatch kept."""
+    s = _g2_setup(tmp_path, "ba", _g2_ba_artifacts())
+    _ba_first_round(s)
+    context = f"docs/dev/context-{s.task}.json"
+    _write(s.project / context, {"task_id": s.task})
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, context, "schema-invalid under obligation-supplied schema")
+    assert "stale_for_dispatch" not in proc.stderr
 
 
 def test_r14_artifacts_not_standing_for_this_stop_are_not_aged(tmp_path):
