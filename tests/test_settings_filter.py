@@ -1274,3 +1274,10 @@ def test_round_trip_properties_randomised(sb):
         assert tool.clean_bytes(machine, layers + old, base) == (b_bytes, None), (base, over, old)
         checked += 1
     assert checked == 400
+
+
+def test_shipped_clean_form_stops_hooks_writing_bytecode():
+    """The tracked clean form sets PYTHONDONTWRITEBYTECODE, so the hooks of a session started from it
+    leave no __pycache__ in the harness home; the value is a public one, not a machine value."""
+    env = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["env"]
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"

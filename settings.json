@@ -7,6 +7,7 @@
     "MAX_MCP_OUTPUT_TOKENS": "40000",
     "EDITOR": "nano",
     "LANG": "en_US.UTF-8",
+    "PYTHONDONTWRITEBYTECODE": "1",
     "GIT_AUTO_STAGE_ALL": "0",
     "GIT_BLOCK_ON_UNTRACKED": "0",
     "GIT_WARN_UNTRACKED": "1",
