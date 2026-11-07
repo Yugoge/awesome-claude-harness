@@ -71,8 +71,31 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
                           dev wrote; dev is dispatched again; the fresh round appends its section
                           through the append helper and lands CLOSE: YES
   variant=auto            `/close --auto` (the cycle's task discovered as close_pending)
+  cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
+                          fan-out cycle with `lanes` lanes)
   session=same|later      /close typed in the /dev's session or a later one (default same for
-                          plain, later for route, append and auto, as acceptance 7 types them)
+                          plain, later for every other variant, as acceptance 7 types them)
+
+Acceptance 7's other routing cases, run by name (`--arg variant=<name>`); the artifact check's job
+list (tests/artifact_graph/runtime.py drivers(): the `variant=` lines above) leaves them out:
+  qa-never                the /dev turn is interrupted after Step 12 (drivers/dev.py variant=qa-never):
+                          the lane QA was never dispatched; Step 0's chain call reports it, the reader
+                          returns the canonical todo step and its role is dispatched from the cycle's
+                          template; a gap on the completion report is /dev Step 17, the main agent's
+                          own, which /close's main agent runs itself (acceptance 7's second case)
+  noartifact              close QA's first round raises a finding that cites no artifact: the entry's
+                          path is that round's own report, the reader returns that round's QA dispatch,
+                          which runs again and names the product file; its writer runs again and a
+                          fresh round lands CLOSE: YES (acceptance 7's fifth case)
+  unwritten               close QA's first round names only a product file no dispatch of the task
+                          wrote (toy/util.py): the reader names no owner, the entry's path becomes the
+                          round's own report, its QA dispatch runs again and names the cycle's dev
+                          report, whose declaring dev dispatch runs again, and a fresh round lands
+                          CLOSE: YES (acceptance 7's sixth case)
+  late-repair             the ticket and context are removed after the cycle's terminal and
+                          `/close --late-repair <task-id>` is typed: the late-repair route (selector,
+                          BA, dev and QA dispatched again with record-stage after each, finalize,
+                          verify-disclosure), then Steps 1-3 (acceptance 7's late-repair case)
 
 Respellings (P1b Scope row 7), driver only, each application recorded in blocks.json: see
 RESPELLINGS (base-text paths that do not resolve in a product repository, and the base text's
@@ -125,6 +148,12 @@ RESPELLINGS = [
     # by their repository path in prose; run as the harness's copy with `bash`, CLAUDE_PROJECT_DIR set.
     Respelling("C6 QA arming", r"(?m)^(?:bash )?(?:~/\.claude/)?scripts/(write-[\w-]+\.sh)",
                PROJECT_ROOT_PREFIX + r"bash ~/.claude/scripts/\1", "commands/close.md QA-arming rule (:246-249 at 2acc29b)"),
+    # The late-repair route's controller calls (close.md:141-143 at 2acc29b): named by their repository path,
+    # without the --task-id and --project-dir its argparse requires (late-repair-controller.py build_parser).
+    Respelling("C7 late-repair controller",
+               r"(?<![\w/~.-])scripts/late-repair-controller\.py (record-stage|finalize|verify-disclosure)(?! --task-id)",
+               r'python3 ~/.claude/scripts/late-repair-controller.py \1 --task-id "$TASK_ID" --project-dir "$PROJECT_ROOT"',
+               "commands/close.md Late-repair route (:141-143 at 2acc29b)"),
 ]
 
 # Blocks the replays meet, each passed at the step it occurs on by a deviation whose comment quotes
@@ -160,6 +189,15 @@ DEVIATIONS = Deviations([
     ("/close Step 2 Agent(qa) close round *", Deviation(
         "hooks/subagentstop-e2e-enforce.py", "E2E_ENFORCE_BLOCKED",
         "close QA of a /do task writes the close-report its obligation declares, no qa-report")),
+    # DEVIATION: "OBLIGATION GATE BLOCK (pretool-obligation-gate): ... subagent_type=dev  what-is-missing: this
+    # dispatch's prompt carries no valid <obligation v="1"> block (reason=missing_block)."
+    # pretool-obligation-gate.py, armed (G1), refuses on 2acc29b's kit the dev dispatch that the base text's
+    # do-report lite preflight makes to complete the /do work (its orchestrator row): /do has no dispatch
+    # template, so the dispatch carries no obligation. On the branch the gate does not evaluate it (no /close
+    # template declares dev), so this fires only on the base's text.
+    ("/close lite preflight round * Agent(dev)", Deviation(
+        "hooks/pretool-obligation-gate.py", "reason=missing_block",
+        "dev dispatched again to complete the /do work, which no template declares")),
     # DEVIATION: "[Write Guard] BLOCKED: File already exists: /var/tmp/claude-scratch/update-<rand>.md"
     # The base text's Step 3 /spec-update --temp note: spec-update.md's Temp-note mode creates it with
     # mktemp, reads it, then writes it.
@@ -178,6 +216,16 @@ CLOSE_YES_PLAIN = "CLOSE: YES — codex disabled by user"
 FINDING = {"path": "toy/__init__.py", "detail": "add() states no contract: its docstring does not say it raises "
                                                 "TypeError naming a non-number argument (AC-01's behaviour is undocumented)"}
 TOY_DOC = ('    """Return a + b; raise TypeError naming the argument that is not a number."""\n')
+# Acceptance 7's fifth case: a close-QA finding that cites no artifact.
+FINDING_NO_ARTIFACT = {"path": "", "detail": "the behaviour change is undocumented: nothing the cycle delivered states "
+                                             "that a non-number argument raises TypeError naming it"}
+# Acceptance 7's sixth case: a finding whose only path is a product file no dispatch of the task wrote.
+FINDING_UNWRITTEN = {"path": "toy/util.py", "detail": "sub() still accepts a non-number: toy's other arithmetic "
+                                                      "helper lacks the argument check the cycle added to add()"}
+UTIL_OLD = "def sub(a,b): return a-b\n"
+UTIL_NEW = ("def sub(a, b):\n    for name, x in ((\"a\", a), (\"b\", b)):\n"
+            "        if not isinstance(x, (int, float)):\n"
+            "            raise TypeError(f\"sub(): argument {name} must be a number\")\n    return a - b\n")
 
 
 def _sha(path: str) -> str:
@@ -307,10 +355,23 @@ def role_function(defs: str) -> str | None:
                  if "case" in m.group(2) and re.search(r"echo (?:dev|qa|ba|orchestrator)\b", m.group(2))), None)
 
 
-def summarize_answer(ans):
+def summarize_answer(ans, session=None):
+    """The answer's fields the report quotes; with `session` (the asking session), whether the dispatch it names
+    was made in an earlier session than the one asking (the reader keys records by task id, never by session)."""
     if not isinstance(ans, dict):
         return ans
-    return {k: ans.get(k) for k in ("source", "role", "subagent_type", "lane", "step", "command") if k in ans}
+    out = {k: ans.get(k) for k in ("source", "role", "subagent_type", "lane", "step", "command") if k in ans}
+    if session is not None and ans.get("session_id"):
+        out["dispatched_in"] = "this session" if ans["session_id"] == getattr(session, "sid", None) else "an earlier session"
+    if isinstance(ans.get("template"), dict):
+        out["template_role"] = ans["template"].get("role")
+    return out
+
+
+def _declares(ans, rel: str) -> bool:
+    """The answer's obligation declares `rel`."""
+    ob = (ans or {}).get("obligation") or {}
+    return any(isinstance(a, dict) and a.get("path") == rel for a in ob.get("artifacts") or [])
 
 
 def act_for(run, role: str, edits=None):
@@ -333,6 +394,10 @@ def dispatch_answer(run, ans, path: str, detail: str, label: str, edits=None):
     (the same subagent_type and obligation, a fresh dispatched_at, scoped to the finding); a canonical todo
     step with a template is a fresh dispatch of its role from the cycle's template. (dispatch, role)."""
     o = run.o
+    if (isinstance(ans, dict) and ans.get("source") == "dispatch" and ans.get("prompt") and hasattr(run, "rerun_close_qa")
+            and _declares(ans, run.report_rel())):
+        # The round's own report: "that round's QA dispatch runs again and names an artifact".
+        return run.rerun_close_qa(ans, path, detail, label), "qa"
     if isinstance(ans, dict) and ans.get("source") in ("dispatch", "lane", "writer") and ans.get("prompt"):
         role = ans.get("subagent_type") or ans.get("role")
         now = utc_now()
@@ -350,6 +415,9 @@ def dispatch_answer(run, ans, path: str, detail: str, label: str, edits=None):
                                      note=f"{path}: {detail}", edits=edits), role
     if isinstance(ans, dict) and ans.get("source") == "todo_step" and not call and not ans.get("template"):
         # "with none, the step is the main agent's own: run it yourself under the same task id"
+        if ans.get("command") != run.o.typed and hasattr(run.producer, "run_step"):
+            # a step of the cycle's own command (/dev Step 17, the completion report): its text, run here
+            return run.producer.run_step(ans, o.s, run.devs, run.label(label)), "orchestrator"
         return own_work(run, path, detail, label)
     raise RuntimeError(f"the reader's answer for {path} is not one this driver plays: {summarize_answer(ans)}")
 
@@ -383,6 +451,11 @@ def own_work(run, path: str, detail: str, label: str):
     (dispatch or None, role)."""
     o, tid = run.o, run.tid
     target = os.path.join(o.project, path) if not os.path.isabs(path) else path
+    if getattr(run, "do_report", None) and path == run.do_report and run.producer is not None:
+        # The base text's do-report lite preflight: "worked by the orchestrator row ...: it re-dispatches dev to
+        # complete the /do work".
+        return run.producer.dispatch("dev", o.s, run.devs, run.label(f"{label} Agent(dev)"),
+                                     note=f"{path}: {detail}"), "dev"
     if not os.path.exists(target):
         docs = os.path.dirname(target)
         g = o.s.tool("Glob", {"pattern": f"*{tid}*", "path": docs}, label=run.label(f"{label} Glob diagnose"))
@@ -520,6 +593,17 @@ class DevProducer:
                 return o.dispatch(fields, act, label, self.tid, subagent_type="dev")
         raise NotImplementedError(f"no cycle template for role {role!r}")
 
+    def run_step(self, ans: dict, session, devs, label: str):
+        """A canonical step of the cycle's command that is the main agent's own (the reader's todo_step with
+        neither subagent call nor template), run by the asking command's main agent under the same task id:
+        /dev Step 17, which writes the completion report, as the cycle's text spells it."""
+        m = re.match(r"Step (\d+)", str(ans.get("step") or ""))
+        if ans.get("command") != "dev" or not m or m.group(1) != "17":
+            raise NotImplementedError(f"no main-agent step {ans.get('command')} {ans.get('step')!r} in this driver")
+        with self.on(session, devs):
+            self.cyc.step17(prefix=label)
+        return None
+
 
 class DoProducer:
     """A /do task: its only producer is the main agent's /do work; close.md routes an unfinished
@@ -530,7 +614,52 @@ class DoProducer:
         self.tid = turn.tid
 
     def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None):
-        raise NotImplementedError(f"/do has no dispatch template for role {role!r} ({note})")
+        """Dev dispatched again under the same task id to complete the /do work (close.md's do-report lite
+        preflight: its own step on the branch, the orchestrator row at 2acc29b). /do has no dispatch template:
+        the prompt states the task, the do-report and the finding; dev finishes the change, runs the tests
+        and rewrites the do-report to `completed` (no /close orchestrator writes it)."""
+        if role != "dev":
+            raise NotImplementedError(f"/do has no dispatch template for role {role!r} ({note})")
+        turn = self.turn
+        project = turn.o.project
+        report = os.path.join(project, turn.report_rel)
+        try:
+            doc = json.loads(agents.peek(turn.rp, "main", report))
+        except (OSError, ValueError):
+            doc = {}
+        do = doc.get("do") or {}
+        prompt = (f"Task-id: {self.tid}\n"
+                  f"Complete the /do work of this task under the same task id: {turn.task}.\n"
+                  f"Do-report: {turn.report_rel}\n"
+                  f"It records the work unfinished (do.status '{do.get('status')}': {do.get('summary')}). Make the "
+                  "change, run the project's tests, then rewrite the do-report with do.status \"completed\", "
+                  "do.summary, and do.files_modified naming the files you changed.\n"
+                  f"Close routing finding: {note}\n")
+
+        def work(sub, brief, player):
+            changed = []
+            for rel, old, new in turn.edits:
+                path = os.path.join(project, rel)
+                sub.read(path, label=f"{sub.role} Read {rel}")
+                if old in agents.peek(sub.rp, sub.role, path):
+                    c = sub.edit(path, old, new, label=f"{sub.role} Edit {rel}")
+                    if c.ok:
+                        changed.append(rel)
+                else:
+                    changed.append(rel)  # already in place
+            sub.bash("python3 -m pytest -q -p no:cacheprovider", "Run the toy tests", label=f"{sub.role} Bash pytest")
+            cur = json.loads(agents.peek(sub.rp, sub.role, report))
+            cur.setdefault("do", {}).update(status="completed", files_modified=sorted(set(
+                list(cur["do"].get("files_modified") or []) + changed)),
+                summary="toy.add now raises TypeError naming the argument that is not a number "
+                        "(completed by dev, dispatched again from /close).")
+            agents.put(sub, report, json.dumps(cur, indent=2) + "\n", f"{sub.role} Write {turn.report_rel}")
+            return None
+
+        act = agents.Act(work=work, summary="the /do work is complete; the do-report is completed")
+        player = agents.Player(turn.o.tree, prompt, act, role="dev")
+        return session.dispatch("dev", prompt, description="dev", body=player.body, result=player.final,
+                                label=label, deviation=devs.at(label))
 
 
 # ---------------------------------------------------------------- the close run
@@ -631,11 +760,11 @@ class CloseRun:
         o.values.update(DO_REPORT=self.do_report)
 
     # ------------------------------------------------------------ Step 0
-    def step0_text(self) -> str:
+    def step0_text(self, late: bool = False) -> str:
         o = self.o
         pre = next((c for c in cmdtext.inline_codes(o.text, "Late-repair route", "LATE_REPAIR_SELECTOR_ARGS=()")
                     if c.startswith("LATE_REPAIR_SELECTOR_ARGS=()")), "")
-        return "LATE_REPAIR=false\n" + pre + "\n" + o.block("Step 0", lang="bash", index=0)
+        return f"LATE_REPAIR={'true' if late else 'false'}\n" + pre + "\n" + o.block("Step 0", lang="bash", index=0)
 
     def step0_records(self) -> bool:
         """The text's Step 0 block records the Resolver-error routing rule's findings itself (its
@@ -643,11 +772,11 @@ class CloseRun:
         block = self.o.block("Step 0", lang="bash", index=0)
         return "close_route_finding" in block and ".errors[]" in block
 
-    def step0(self, label: str = "Step 0") -> int:
+    def step0(self, label: str = "Step 0", late: bool = False) -> int:
         o = self.o
         caps = ("PROJECT_ROOT", "ROUTE_SELECT_RESULT", "ROUTE_SELECT_RC", "ARTIFACT_CHAIN", "CLOSE_CANONICAL_REPORT",
-                "REQUIRED_ACTIONS_JSON", "AGGREGATE_RESULT")
-        self.run_text(self.step0_text(), self.label(f"{label} Bash route select"), "Step 0: resolve the artifact chain",
+                "REQUIRED_ACTIONS_JSON", "AGGREGATE_RESULT", "LATE_REPAIR")
+        self.run_text(self.step0_text(late), self.label(f"{label} Bash route select"), "Step 0: resolve the artifact chain",
                       capture=caps)
         try:
             self.chain = json.loads(o.values.get("ARTIFACT_CHAIN") or "{}")
@@ -692,6 +821,75 @@ class CloseRun:
             raise agents.PlayError(f"Step 0 still fails after {k} routing round(s): "
                                    f"{[(e.get('code'), e.get('path')) for e in self.chain.get('errors') or []]}")
 
+    # ------------------------------------------------------------ the late-repair route
+    def lr_code(self, verb: str) -> str:
+        """The late-repair section's own spelling of a controller call (its first inline code naming the verb)."""
+        sec = self.o.section("Late-repair route")
+        for code in re.findall(r"`([^`]+)`", sec):
+            if re.search(r"late-repair-controller\.py %s\b" % re.escape(verb), code):
+                return code
+        raise cmdtext.TextNotFound(f"the late-repair route names no {verb} call")
+
+    def lr_run(self, verb: str, label: str, desc: str, binds: dict):
+        """One controller call as the section spells it, its placeholders bound, its JSON line back."""
+        code = self.lr_code(verb)
+        for k, v in binds.items():
+            code = code.replace(k, v)
+        lab = self.label(label)
+        code = self.o.respell(code, lab)
+        c = self.run_text(code, lab, desc)
+        out = (c.response.get("stdout") or "") if c.ok else (c.error or "")
+        got = last_json(out) or {}
+        fact(self.rp, f"late-repair {verb}", {"label": label, "ok": c.ok, "result": got})
+        return got
+
+    def lr_stage(self, stage: str) -> str:
+        """One stage of the route, dispatched again from the cycle's template under the same task id; the
+        path of its report (BA's context, the dev report, the QA report)."""
+        o, tid = self.o, self.tid
+        lab = self.label(f"Late-repair Agent({stage})")
+        note = f"late repair: {stage} again against the current state of the work"
+        self.producer.dispatch(stage, o.s, self.devs, lab, note=note)
+        return {"ba": f"docs/dev/context-{tid}.json", "dev": f"docs/dev/dev-report-{tid}.json",
+                "qa": f"docs/dev/qa-report-{tid}.json"}[stage]
+
+    def late_repair(self) -> None:
+        """`--late-repair`: Step 0's selector with the flag (init, the run record), BA then dev then QA dispatched
+        again with `record-stage` after each, finalize (the canonical list's Step 0 where it has one), then
+        verify-disclosure; admitted goes on to Step 1 as the normal path does."""
+        o, tid = self.o, self.tid
+        self.step0(late=True)
+        try:
+            sel = json.loads(o.values.get("ROUTE_SELECT_RESULT") or "{}")
+        except ValueError:
+            sel = {}
+        fact(self.rp, "late-repair selector", {"outcome": sel.get("outcome"), "late_repair": sel.get("late_repair"),
+                                               "route_select_rc": o.values.get("ROUTE_SELECT_RC")})
+        if sel.get("outcome") not in ("initialized", "already_initialized"):
+            raise agents.PlayError(f"the late-repair selector printed {sel.get('outcome')!r}")
+        run_id = sel.get("repair_run_id") or ""
+        for stage in ("ba", "dev", "qa"):
+            rel = self.lr_stage(stage)
+            self.lr_run("record-stage", f"Late-repair Bash record-stage {stage}", f"Record the {stage} stage",
+                        {"<ba|dev|qa>": stage, "<path>": rel, "<id>": run_id})
+        self.lr_run("finalize", "Step 0 Bash finalize" if self.o.todos and self.o.todos[0]["content"].startswith(
+            "Step 0") else "Late-repair Bash finalize", "Finalize the late repair", {"<id>": run_id})
+        if o.todos and o.todos[0]["content"].startswith("Step 0"):
+            o.advance(label=self.label("TodoWrite Step 0 done, Step 1 in_progress"))
+        got = self.lr_run("verify-disclosure", "Late-repair Bash verify-disclosure", "Verify the disclosure", {})
+        blocks = {}
+        with self.rp.acting("driver"):
+            for rel in (f"docs/dev/ticket-{tid}.md", f"docs/dev/context-{tid}.json", f"docs/dev/dev-report-{tid}.json",
+                        f"docs/dev/qa-report-{tid}.json"):
+                try:
+                    with open(os.path.join(o.project, rel)) as fh:
+                        blocks[rel] = "retrospective_disclosure" in fh.read()
+                except OSError:
+                    blocks[rel] = "absent"
+        fact(self.rp, "retrospective_disclosure block carried", blocks)
+        if got.get("outcome") != "admitted":
+            raise agents.PlayError(f"verify-disclosure printed {got}")
+
     # ------------------------------------------------------------ routing
     def record(self, found, source_check: str, label: str) -> list:
         """The findings recorded the way the text records one (its close_route_finding), entries back."""
@@ -733,7 +931,8 @@ class CloseRun:
             cmd, fn = call
             c = self.run_text(cmd, self.label(f"{label} Bash {fn}"), "Who owes the artifact")
             ans = last_json(c.response.get("stdout") or "") if c.ok else None
-            fact(self.rp, "owing dispatch", {"label": label, "path": e["path"], "answer": summarize_answer(ans)})
+            fact(self.rp, "owing dispatch", {"label": label, "path": e["path"],
+                                             "answer": summarize_answer(ans, self.o.s)})
             return {"reader": True, "answer": ans}
         role = e.get("producer_role")
         if not role:
@@ -759,7 +958,22 @@ class CloseRun:
             target = os.path.join(o.project, path) if not os.path.isabs(path) else path
             before = _sha(target)
             own = self.owner(e, label)
-            if own["reader"]:
+            if (own["reader"] and own["answer"] is None and not self.do_report
+                    and e.get("source_check") == "close QA round" and path != self.report_rel()):
+                # "`null` otherwise, and a close-QA finding that cites no artifact: the entry's path becomes that
+                # round's own report, docs/dev/close-report-$TASK_ID.md, with the finding's path and detail as
+                # its detail; that round's QA dispatch runs again and names an artifact."
+                detail, path = f"{path}: {detail}", self.report_rel()
+                e = dict(e, path=path, detail=detail)
+                target = os.path.join(o.project, path)
+                before = _sha(target)
+                own = self.owner(e, label)
+            if self.do_report and path == self.do_report:
+                # The do-report keeps the preflight's own step (the branch's text) or the orchestrator row
+                # (2acc29b): dev dispatched again under the same task id to complete the /do work.
+                d, role = (self.producer.dispatch("dev", o.s, self.devs, self.label(f"{label} Agent(dev)"),
+                                                  note=f"{path}: {detail}"), "dev")
+            elif own["reader"]:
                 d, role = dispatch_answer(self, own["answer"], path, detail, label, edits=e.get("edits"))
             elif own["role"] == "orchestrator":
                 d, role = own_work(self, path, detail, label)
@@ -782,15 +996,40 @@ class CloseRun:
                               self.label(f"{label} Bash close_progress"), "Measure the round's progress")
 
     # ------------------------------------------------------------ preflights
-    def do_preflight(self) -> None:
+    def do_status(self, label: str = "lite preflight") -> str:
+        """The preflight's status check: the text's DO_STATUS block where it has one, else a Read of $DO_REPORT
+        and its do.status (the text's "Read `$DO_REPORT`. Verify ... `do.status == \"completed\"`")."""
         o = self.o
         try:
             blocks = o.step_blocks("do-report lite preflight")
         except cmdtext.TextNotFound:
             blocks = []
         for name, b, _para in blocks:
-            self.run_text(b.text, self.label(f"lite preflight Bash {name}"), "do-report lite preflight",
+            self.run_text(b.text, self.label(f"{label} Bash {name}"), "do-report lite preflight",
                           capture=("DO_STATUS",))
+        if blocks:
+            status = o.values.get("DO_STATUS") or ""
+        else:
+            self.read(self.do_report, self.label(f"{label} Read do-report"))
+            status = str((self.load(self.do_report).get("do") or {}).get("status") or "")
+        fact(self.rp, "do-report lite preflight", {"label": label, "do_status": status})
+        return status
+
+    def do_preflight(self) -> None:
+        o = self.o
+        status, k = self.do_status(), 0
+        while status != "completed" and k < 3:
+            # "a finding on $DO_REPORT: close_route_finding "$DO_REPORT" "do-report status is '<observed>', not
+            # 'completed'" "do-report lite preflight"", worked until the re-read status is completed.
+            k += 1
+            lab = f"lite preflight round {k}"
+            entries = self.record([(self.do_report, f"do-report status is '{status}', not 'completed'")],
+                                  "do-report lite preflight", lab)
+            got = []
+            self.route(entries, lab, recheck=lambda l: got.append(self.do_status(l)) or got[-1] == "completed")
+            status = got[-1] if got else status
+        if status != "completed":
+            raise agents.PlayError(f"the do-report is still {status!r} after {k} routing round(s)")
         if "Artifact schema gate" in o.section("do-report lite preflight"):
             self.schema_gate([self.do_report], "lite preflight")
 
@@ -1013,7 +1252,8 @@ class CloseRun:
                  "Codex consultation: codex_status: disabled_by_user",
                  "[Codex] consultation skipped: --codex flag not passed; QA-only assessment performed"]
         if finding:
-            lines += ["", "## Findings", f"- {finding['path']}: {finding['detail']}"]
+            lines += ["", "## Findings", (f"- {finding['path']}: {finding['detail']}" if finding.get("path")
+                                          else f"- (no artifact cited): {finding['detail']}")]
         if self.repairs and not finding:
             lines += ["", "## Disclosures"] + [f"{r['path']}: {r['problem']} | 归因: {r['role']} | 修复: dispatched again, "
                                                f"re-judged clean in round {rounds}" for r in self.repairs]
@@ -1078,29 +1318,87 @@ class CloseRun:
                                           "stop_blocked": bool(d.stop and d.stop.still_blocked)})
         return last
 
+    def has_reader(self) -> bool:
+        return reader_call(self.helpers, self.routing_section(), "x") is not None
+
+    def close_entry(self, finding: dict):
+        """(path, detail) of the routing entry for a close-QA finding, as the text builds it: on a text with the
+        reader, the path the finding names (that round's own report for a finding that cites none); on a
+        role-table text, the dev report that claims a product file, or $TASK_ID for a finding with no path."""
+        path, detail = finding.get("path") or "", finding["detail"]
+        if self.has_reader():
+            if not path:
+                return self.report_rel(), f"(no artifact cited): {detail}"
+            return path, detail
+        if not path:
+            return self.tid, detail
+        return self.claiming_report(path), f"{path}: {detail}"
+
+    def edits_for(self, finding: dict) -> list:
+        """The change the dispatch that fixes `finding` makes when it runs again."""
+        path = finding.get("path") or ""
+        if path == FINDING["path"]:
+            return [(path, self.current(path), self.fixed(path))]
+        if path == f"docs/dev/dev-report-{self.tid}.json":
+            return [("toy/util.py", UTIL_OLD, UTIL_NEW)]
+        return []
+
+    def named_by_rerun(self) -> dict:
+        """What the round's QA dispatch names when it runs again on a finding that its report alone holds."""
+        if self.variant == "unwritten":
+            return {"path": f"docs/dev/dev-report-{self.tid}.json",
+                    "detail": "the cycle's dev report claims the requirement met, yet toy/util.py's sub() still "
+                              "accepts a non-number (the earlier round's finding on a file no dispatch of this task "
+                              "wrote): the dev work owes that file's argument check"}
+        return dict(FINDING)
+
+    def rerun_close_qa(self, ans: dict, path: str, detail: str, label: str):
+        """That round's QA dispatch runs again (its recorded prompt, a fresh dispatched_at, scoped to the entry)
+        and names an artifact: a new judging round whose return the routing loop takes next."""
+        o = self.o
+        self.round += 1
+        now = utc_now()
+        prompt = re.sub(r'("dispatched_at"\s*:\s*)"[^"]*"', lambda m: m.group(1) + json.dumps(now), ans["prompt"])
+        prompt = prompt.rstrip("\n") + f"\n\nRouting finding: {path}: {detail}\n"
+        named = self.named_by_rerun()
+        act = self.close_qa_act(CLOSE_FINDINGS_ONE, named, os.path.exists(os.path.join(o.project, self.report_rel())))
+        player = agents.Player(o.tree, prompt, act, role="qa")
+        lab = self.label(f"{label} Agent(qa)")
+        d = o.s.dispatch("qa", prompt, description="close debate", body=player.body, result=player.final, label=lab,
+                         deviation=self.devs.at(lab))
+        text = ((d.response.get("content") or [{}])[0].get("text") or "") if d.response else ""
+        last = text.strip().splitlines()[-1] if text.strip() else ""
+        self.verdicts.append((self.round, last))
+        self.rerun_finding = named
+        fact(self.rp, "close QA round", {"task": "<task>", "round": self.round, "verdict": last, "append": True,
+                                          "rerun_of": "the round's own QA dispatch", "names": named["path"],
+                                          "resolved_role": resolved_role(self.rp, d.agent_id) if d.agent_id else None,
+                                          "stop_blocked": bool(d.stop and d.stop.still_blocked)})
+        return d
+
     def step2(self) -> str:
-        """Close QA rounds until one lands; a round-open return is echoed and routed first."""
+        """Close QA rounds until one lands; a round-open return is echoed and routed first. When the routing
+        loop runs the round's own QA dispatch again, that run's return is the next finding routed."""
         o = self.o
         self.step2_session()
-        first_finding = FINDING if self.variant == "append" else None
-        last = self.close_round(CLOSE_FINDINGS_ONE if first_finding else CLOSE_YES_PLAIN, first_finding)
-        k = 0
-        while last.startswith("CLOSE_FINDINGS") and k < 3:
+        first = {"append": FINDING, "noartifact": FINDING_NO_ARTIFACT, "unwritten": FINDING_UNWRITTEN}.get(self.variant)
+        last = self.close_round(CLOSE_FINDINGS_ONE if first else CLOSE_YES_PLAIN, first)
+        finding, k = first, 0
+        while last.startswith("CLOSE_FINDINGS") and finding and k < 4:
             k += 1
             o.s.say(last)
             self.read(self.report_rel(), self.label(f"Step 2 Read close-report round {self.round}"))
-            path = FINDING["path"]
-            # A text with the reader names the product file's own owner; a role-table text routes dev work
-            # through the report that claims the file.
-            claim = path if reader_function(self.helpers) else self.claiming_report(path)
-            edits = [(path, self.current(path), self.fixed(path))]
-            entries = self.record([(claim, f"{path}: {FINDING['detail']}")], "close QA round", f"Step 2 round {k}")
+            entries = self.record([self.close_entry(finding)], "close QA round", f"Step 2 round {k}")
             for e in entries:
-                e["edits"] = edits
+                e["edits"] = self.edits_for(finding)
             n = len(self.routed)
+            self.rerun_finding = None
             # The re-check is a fresh, independent QA round (below); the repair is QA's to disclose.
             self.route(entries, f"Step 2 round {k}", recheck=lambda lab: True)
             self.repairs.extend(self.routed[n:])
+            if self.rerun_finding is not None:
+                finding, last = self.rerun_finding, self.verdicts[-1][1]
+                continue
             verdict = f"CLOSE: YES - with disclosures: {len(self.repairs)} items" if self.repairs else CLOSE_YES_PLAIN
             last = self.close_round(verdict)
         return last
@@ -1179,6 +1477,8 @@ class CloseRun:
         if self.do_report:
             self.do_preflight()
             self.chain = {}
+        elif self.variant == "late-repair":
+            self.late_repair()
         else:
             self.step0_loop()
             if self.chain.get("report_paths") is not None:
@@ -1193,7 +1493,7 @@ class CloseRun:
         return last
 
     def run(self) -> str:
-        self.start(self.tid)
+        self.start(f"--late-repair {self.tid}" if self.variant == "late-repair" else self.tid)
         last = self.body()
         self.outcome = last
         self.o.s.stop(f"/close {self.tid}: {last}", label="/close Stop", deviation=self.devs.at("/close Stop"))
@@ -1249,7 +1549,12 @@ def dev_cycle(rp, after: str):
         cyc.run()
         return DevProducer(cyc), cyc.tid, cyc.o.s, cyc
     from . import dev as devdrv
-    cyc = devdrv.DevCycle(rp, rp.args.get("cycle_variant", "plain"), rp.args.get("tier", "STANDARD"))
+    cv = rp.args.get("cycle_variant", "plain")
+    if cv.startswith("fanout"):
+        cyc = devdrv.FanoutCycle(rp, cv, rp.args.get("tier", "STANDARD"), int(rp.args.get("lanes", "2")),
+                                 rp.args.get("lane_id", "text"))
+    else:
+        cyc = devdrv.DevCycle(rp, cv, rp.args.get("tier", "STANDARD"))
     cyc.run()
     return DevProducer(cyc), cyc.tid, cyc.o.s, cyc
 
@@ -1270,16 +1575,35 @@ def remove(rp, rels) -> None:
             os.remove(os.path.join(rp.layout.project, rel))
 
 
+# Every variant run() plays (the artifact check reads only the docstring's `variant=` lines: no VARIANTS here).
+PLAYED = ("plain", "route", "append", "auto", "qa-never", "noartifact", "unwritten", "late-repair")
+
+
+def removed_after_cycle(variant: str, tid: str) -> list:
+    """The artifacts a variant removes after the cycle reached its terminal (acceptance 7)."""
+    return {"route": [f"docs/dev/qa-report-{tid}.json"],
+            "late-repair": [f"docs/dev/ticket-{tid}.md", f"docs/dev/context-{tid}.json"]}.get(variant, [])
+
+
+def pipeline_name(after: str, rp) -> str:
+    cv = rp.args.get("cycle_variant", "plain")
+    if cv.startswith("fanout") and rp.args.get("lanes", "2") != "2":
+        cv += "-" + rp.args["lanes"]
+    return after + (f"/{cv}" if cv != "plain" else "")
+
+
 def run(rp) -> None:
     after = rp.args.get("after", "dev")
     variant = rp.args.get("variant", "plain")
-    if variant not in ("plain", "route", "append", "auto"):
+    if variant not in PLAYED:
         raise ValueError(f"unknown variant {variant!r}")
+    if variant == "qa-never":
+        rp.args.setdefault("cycle_variant", "qa-never")
     session_kind = rp.args.get("session", "same" if variant == "plain" else "later")
-    rp.pipeline = f"{after}+close" + (f"/{variant}" if variant != "plain" else "") + ("/later" if session_kind == "later" else "")
+    rp.pipeline = (pipeline_name(after, rp) + "+close" + (f"/{variant}" if variant != "plain" else "")
+                   + ("/later" if session_kind == "later" else ""))
     producer, tid, s, cyc = dev_cycle(rp, after)
-    if variant == "route":
-        remove(rp, [p for p in (f"docs/dev/qa-report-{tid}.json",) if os.path.exists(os.path.join(rp.layout.project, p))])
+    remove(rp, [p for p in removed_after_cycle(variant, tid) if os.path.exists(os.path.join(rp.layout.project, p))])
     session = rp.later_session(s) if session_kind == "later" else s
     cr = CloseRun(rp, session, tid, producer=producer, variant=variant, auto=variant == "auto")
     if variant == "auto":
