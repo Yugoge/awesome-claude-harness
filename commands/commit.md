@@ -607,7 +607,8 @@ QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo — 
       "begin": "--- CHANGELOG-ANALYST-STATUS-BEGIN ---",
       "end": "--- CHANGELOG-ANALYST-STATUS-END ---",
       "format": "json",
-      "schema": "changelog-status.v1"
+      "schema": "changelog-status.v1",
+      "repo_roots": <the JSON array of REPOSITORY_PLAN.repositories[].repo_root, in order, when BULK=false, else null>
     }
   ]
 }
@@ -658,14 +659,11 @@ Wait for changelog-analyst to complete. Echo its final status to the user.
 #### Changelog-analyst result handling and retry protocol
 
 Read changelog-analyst's structured status block verbatim (see `agents/changelog-analyst.md`
-§Structured Final Status Output): the producer-stop gate (G2) validated it against
-`changelog-status.v1` at the analyst's own stop. It carries `commit_status`,
+§Structured Final Status Output): the producer-stop gate (G2) validated it at the analyst's
+own stop, against `changelog-status.v1` and, in normal mode, its repository roots and
+order against the obligation's `repo_roots`. It carries `commit_status`,
 `repository_results[]`, and, when applicable, `failure_code`, `failure_reason`, and
-`auto_bulk_commits[]`. In normal mode a result whose repository roots/order do not
-exactly equal `REPOSITORY_PLAN` is not accepted as a landing (the schema does not
-hold the plan): it is a finding on the analyst's status block (it names no file: the
-changelog-analyst dispatch whose status block it is runs again), routed through the
-dispatch-and-recheck loop and re-read.
+`auto_bulk_commits[]`.
 
 **Handle each commit_status value:**
 

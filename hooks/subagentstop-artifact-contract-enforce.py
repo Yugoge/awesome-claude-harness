@@ -483,8 +483,11 @@ def _spec_views_failure(project_dir: str, art: dict):
     """P1b row 8 (moved from stop-spec-coverage-enforce.py): a split's own
     properties at its producer's stop, `spec-verify.py --strict` on the declared
     views against the declared monolith (coverage 100%, pairwise overlap and
-    per-view uniqueness thresholds). A missing verifier checks nothing, as the
-    Stop hook it replaces did."""
+    per-view uniqueness thresholds) and, with --project-dir, its manifest of this
+    monolith, the monolith hash it records and the views it references, by the
+    resolver every /dev* consumer runs (P1b E4: /spec's finalize guard ran it after
+    this stop), but for the marker /spec writes after this stop. A missing verifier
+    checks nothing, as the Stop hook it replaces did."""
     verifier = SCRIPTS_DIR / "spec-verify" / "spec-verify.py"
     if not verifier.is_file():
         return None
@@ -493,19 +496,10 @@ def _spec_views_failure(project_dir: str, art: dict):
     if not monolith.is_file() or not views.is_dir():
         return {"path": art["path"], "reason": "spec_views_missing",
                 "errors": [f"monolith {art['monolith']} or views directory {art['path']} does not exist"]}
-    # The split's own manifest and the views it references, by the predicates every /dev* consumer's
-    # resolver applies (resolve-spec-artifacts.py split_problem; P1b E4: /spec's finalize guard ran
-    # them in the orchestrator's call after this stop). A resolver that will not load checks nothing.
-    try:
-        problem = _load_script_module("resolve-spec-artifacts.py").split_problem(
-            str(views.parent), str(monolith.resolve()), project_dir)
-    except Exception:
-        problem = None
-    if problem:
-        return {"path": f"{art['path']}/manifest.json", "reason": "spec_manifest_invalid", "errors": [problem]}
     try:
         run = subprocess.run(
-            [sys.executable, str(verifier), "--monolith", str(monolith), "--views-dir", str(views), "--strict"],
+            [sys.executable, str(verifier), "--monolith", str(monolith), "--views-dir", str(views), "--strict",
+             "--project-dir", project_dir],
             capture_output=True, text=True, timeout=WIRE_FILE_TIMEOUT_S, cwd=project_dir,
         )
     except subprocess.TimeoutExpired:
@@ -784,7 +778,8 @@ def main() -> None:
                     # jsonschema call path (see
                     # contract_runtime.validate_response_block_for_obligation).
                     result = contract_runtime.validate_response_block_for_obligation(
-                        last_assistant_message, art.get("begin"), art.get("end"), art["schema"]
+                        last_assistant_message, art.get("begin"), art.get("end"), art["schema"],
+                        repo_roots=art.get("repo_roots"),
                     )
                     if result.get("status") == "skip":
                         continue
