@@ -240,12 +240,21 @@ def test_launch_does_not_publish_when_in_place_helper_missing(lab):
     shutil.copy2(LAUNCHER, scripts / LAUNCHER.name)
     (scripts / LAUNCHER.name).chmod(0o755)
     sid = "labsession-" + uuid.uuid4().hex[:8]
+    # An in-place launch needs bubblewrap (P2 R13): a stand-in that runs the command it is
+    # given lets the launch reach the provisioning region this test is about.
+    stand_in = lab / "bin" / "bwrap"
+    stand_in.parent.mkdir()
+    stand_in.write_text('#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\n'
+                        '[ "$#" -gt 0 ] && shift\nexec "$@"\n')
+    stand_in.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_OVERNIGHT_FORCE_NO_BWRAP"}
 
     r = subprocess.run(
         [str(scripts / LAUNCHER.name), "--project-dir", str(main_root),
          "--session-id", sid, "--end-time", "8h", "--no-worktree"],
         capture_output=True, text=True, timeout=300,
-        env=dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null"),
+        env=dict(env, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null",
+                 PATH=f"{stand_in.parent}:{os.environ.get('PATH', '/usr/bin:/bin')}"),
     )
     assert r.returncode != 0, f"launch succeeded with no actor-git provisioning: {r.stdout!r}"
     assert not list((main_root / ".claude").glob("overnight-state-*.json")), \

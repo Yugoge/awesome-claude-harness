@@ -27,15 +27,17 @@ hook and the registered ``$HOME/.claude/hooks`` path are the same inode).
 from __future__ import annotations
 
 import ast
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -78,19 +80,21 @@ def load_hook_module():
     return module
 
 
-def build_state(session_id: str, end_time: str | None, cycle_count: int = 3,
-                phase: str = 'implementing', worktree: str = '/tmp/wt',
+def build_state(session_id: str, end_time: str | None, cycles_done: int = 3,
+                phase: str = 'implementing', worktree: str | None = None,
                 omit_end_time: bool = False, omit_session_id: bool = False) -> dict:
+    """A record, plus the cycles its session has completed under the
+    test-only key `_cycles_done`, which write_state turns into retro reports."""
     state = {
         'session_id': session_id,
         'end_time': end_time,
-        'cycle_count': cycle_count,
         'current_phase': phase,
         'issues_fixed': 0,
         'worktree_path': worktree,
         'focus': 'none',
         'cycle_log': [],
         'current_issues': [],
+        '_cycles_done': cycles_done,
     }
     if omit_end_time:
         del state['end_time']
@@ -100,6 +104,22 @@ def build_state(session_id: str, end_time: str | None, cycle_count: int = 3,
 
 
 def write_state(claude_dir: Path, file_key: str, state: dict) -> Path:
+    """Write the record, and its completed cycles where the hook reads them.
+
+    The record holds no cycle count: hooks/lib/overnight.py cycle_index reads
+    the cycle in progress from the retro reports in the session's directory
+    under its working root, so a record whose worktree_path is unset gets one
+    inside the project.
+    """
+    state = dict(state)
+    cycles_done = state.pop('_cycles_done', 0)
+    if state.get('worktree_path') is None:
+        state['worktree_path'] = str(claude_dir.parent / 'wt')
+    session_dir = (Path(state['worktree_path']) / 'docs' / 'dev' / 'overnight'
+                   / (state.get('session_id') or 'unknown'))
+    for cycle in range(1, cycles_done + 1):
+        session_dir.mkdir(parents=True, exist_ok=True)
+        (session_dir / f'retro-report-cycle{cycle}.json').write_text('{}')
     claude_dir.mkdir(parents=True, exist_ok=True)
     path = claude_dir / f'overnight-state-{file_key}.json'
     path.write_text(json.dumps(state, indent=2))
@@ -205,20 +225,26 @@ def prompt_payload(session_id: str | None, prompt: str = 'continue') -> dict:
 
 
 class TestAC1Truthtable(unittest.TestCase):
-    """AC1 -- 21-row truth table, zone pinned per row group."""
+    """AC1 -- 21-row truth table, zone pinned per row group. Each row's end_time
+    sits in the session's own record; the continuation reader
+    (find_any_overnight_state, deciding by lib/overnight.window_open, P2 R1)
+    finds the record in the window or gives nothing."""
 
     def _assert_rows(self, module, rows):
-        for n, state, expected in rows:
-            with self.subTest(row=n, state=state):
-                try:
-                    actual = module._is_active_state(state)
-                except BaseException as exc:  # noqa: BLE001 - AC1 forbids escape
-                    self.fail(f'row {n}: exception escaped _is_active_state: {exc!r}')
-                self.assertEqual(
-                    expected, actual,
-                    f'row {n}: end_time={state.get("end_time", "__KEY_ABSENT__")!r} '
-                    f'expected {expected}, got {actual}',
-                )
+        with temp_project() as (project, _home):
+            module.PROJECT_DIR = project
+            for n, state, expected in rows:
+                with self.subTest(row=n, state=state):
+                    write_state(project / '.claude', 'AAAA', {'session_id': 'AAAA', **state})
+                    try:
+                        actual = module.find_any_overnight_state('AAAA')[0] is not None
+                    except BaseException as exc:  # noqa: BLE001 - AC1 forbids escape
+                        self.fail(f'row {n}: exception escaped find_any_overnight_state: {exc!r}')
+                    self.assertEqual(
+                        expected, actual,
+                        f'row {n}: end_time={state.get("end_time", "__KEY_ABSENT__")!r} '
+                        f'expected {expected}, got {actual}',
+                    )
 
     def test_group_a_utc(self):
         """Rows 1-13 under TZ=UTC. Row 13 discriminates tzinfo-stripping."""
@@ -246,13 +272,14 @@ class TestAC1Truthtable(unittest.TestCase):
             self._assert_rows(module, rows)
 
     def test_group_b_asia_shanghai(self):
-        """Rows 14-16 under TZ=Asia/Shanghai. 14/15 pin naive-as-local; 16 kills stripping."""
+        """Rows 14-16 under TZ=Asia/Shanghai. 14/15 pin naive-as-UTC (lib/overnight
+        parse_end_time, P2 row 7); 16 kills stripping."""
         with pinned_tz('Asia/Shanghai'):
             module = load_hook_module()
-            naive_local = datetime.now()
+            naive_utc = datetime.now(timezone.utc).replace(tzinfo=None)
             rows = [
-                (14, {'end_time': (naive_local + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, True),
-                (15, {'end_time': (naive_local - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, False),
+                (14, {'end_time': (naive_utc + timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, True),
+                (15, {'end_time': (naive_utc - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%S')}, False),
                 (16, {'end_time': future_z(1)}, True),
             ]
             self._assert_rows(module, rows)
@@ -295,7 +322,7 @@ class TestAC2Continuation(unittest.TestCase):
             module.PROJECT_DIR = project
             sid = 'AAAA-owner'
             write_state(project / '.claude', sid,
-                        build_state(sid, future_z(1), cycle_count=3))
+                        build_state(sid, future_z(1), cycles_done=3))
             os.environ['HOME'] = str(home)
             try:
                 block = module.check_overnight_continuation(sid)
@@ -323,7 +350,7 @@ class TestAC3BlockComposition(unittest.TestCase):
                 module.PROJECT_DIR = project
                 sid = 'AAAA-owner'
                 write_state(project / '.claude', sid,
-                            build_state(sid, future_z(1), cycle_count=3,
+                            build_state(sid, future_z(1), cycles_done=3,
                                         worktree=str(project / 'wt')))
                 spec = module.read_command_spec('dev-overnight')
                 todos = module._load_overnight_todos()
@@ -368,10 +395,10 @@ class TestAC4FailClosed(unittest.TestCase):
                         # clean rejection from an escaping AttributeError, because
                         # main() swallows generic exceptions and exits 0.
                         try:
-                            live = module._is_active_state(state)
+                            found = module.find_any_overnight_state(sid)
                         except BaseException as exc:  # noqa: BLE001
-                            self.fail(f'{case!r}: exception escaped _is_active_state: {exc!r}')
-                        self.assertFalse(live)
+                            self.fail(f'{case!r}: exception escaped find_any_overnight_state: {exc!r}')
+                        self.assertEqual((None, None), found)
                         self.assertIsNone(module.check_overnight_continuation(sid))
             finally:
                 if previous_home is not None:
@@ -399,11 +426,14 @@ class TestAC5SessionBinding(unittest.TestCase):
             payload = prompt_payload(submitting, prompt)
             return run_hook(project, home, payload)
 
-    def _assert_block(self, result, owner_sid, cycle_count):
+    def _assert_block(self, result, owner_sid, cycles_done):
         self.assertEqual(0, result.returncode)
         self.assertIn('OVERNIGHT CONTINUATION', result.stdout)
-        self.assertIn(f'OVERNIGHT CONTINUATION - Cycle {cycle_count + 1}', result.stdout)
-        self.assertIn(f'overnight-state-{owner_sid}.json', result.stdout)
+        self.assertIn(f'OVERNIGHT CONTINUATION - Cycle {cycles_done + 1}', result.stdout)
+        # The block names the record's absolute path (the locator's), never a
+        # path relative to wherever the session happens to be rooted.
+        self.assertRegex(result.stdout, rf'(?m)^Read /.*/\.claude/overnight-state-'
+                                        rf'{re.escape(owner_sid)}\.json and resume from phase="')
 
     def _assert_zero(self, result):
         self.assertEqual(0, result.returncode)
@@ -412,16 +442,16 @@ class TestAC5SessionBinding(unittest.TestCase):
                          'a non-owning session must receive zero injected characters')
 
     def test_row_5_1_owner_receives_own_block(self):
-        state = build_state('AAAA', future_z(1), cycle_count=1)
+        state = build_state('AAAA', future_z(1), cycles_done=1)
         self._assert_block(self._run_row([('AAAA', state)], 'AAAA'), 'AAAA', 1)
 
     def test_row_5_2_stranger_receives_nothing(self):
-        state = build_state('AAAA', future_z(1), cycle_count=1)
+        state = build_state('AAAA', future_z(1), cycles_done=1)
         self._assert_zero(self._run_row([('AAAA', state)], 'ZZZZ-stranger'))
 
     def test_row_5_3_and_5_4_two_live_records_each_gets_its_own(self):
-        a = build_state('AAAA', future_z(1), cycle_count=3)
-        b = build_state('BBBB', future_z(1), cycle_count=9)
+        a = build_state('AAAA', future_z(1), cycles_done=3)
+        b = build_state('BBBB', future_z(1), cycles_done=9)
         records = [('AAAA', a), ('BBBB', b)]
         self._assert_block(self._run_row(records, 'AAAA'), 'AAAA', 3)
         result_b = self._run_row(records, 'BBBB')
@@ -430,58 +460,58 @@ class TestAC5SessionBinding(unittest.TestCase):
                          'BBBB must not be served AAAA state')
 
     def test_row_5_5_payload_omits_session_id(self):
-        state = build_state('AAAA', future_z(1), cycle_count=1)
+        state = build_state('AAAA', future_z(1), cycles_done=1)
         self._assert_zero(self._run_row([('AAAA', state)], None))
 
     def test_row_5_6_submitter_is_default(self):
-        state = build_state('AAAA', future_z(1), cycle_count=1)
+        state = build_state('AAAA', future_z(1), cycles_done=1)
         self._assert_zero(self._run_row([('AAAA', state)], 'default'))
 
     def test_row_5_7_record_has_no_session_id_field(self):
         """A blank/absent record id must NOT broadcast.
 
-        hooks/posttool-overnight-loop.py:156-159 guards with
-        `if state_session_id and ...`, so mirroring it literally would still
-        deliver this record to every session. Strict binding delivers nothing.
+        A record without its own session_id names no session, so the one
+        locator (lib/overnight.py `locate`, selecting by file name and the
+        record's session_id) finds nothing for it. Strict binding delivers nothing.
         """
-        state = build_state('CCCC', future_z(1), cycle_count=1, omit_session_id=True)
+        state = build_state('CCCC', future_z(1), cycles_done=1, omit_session_id=True)
         self._assert_zero(self._run_row([('CCCC', state)], 'CCCC'))
         self._assert_zero(self._run_row([('CCCC', state)], 'ZZZZ-stranger'))
-        blank = build_state('', future_z(1), cycle_count=1)
+        blank = build_state('', future_z(1), cycles_done=1)
         blank['session_id'] = ''
         self._assert_zero(self._run_row([('DDDD', blank)], 'DDDD'))
 
     def test_row_5_8_expired_sorts_first_live_owner_still_served(self):
-        expired = build_state('AAAA', PAST_Z, cycle_count=1)
-        live = build_state('ZZZZ', future_z(1), cycle_count=5)
+        expired = build_state('AAAA', PAST_Z, cycles_done=1)
+        live = build_state('ZZZZ', future_z(1), cycles_done=5)
         self._assert_block(self._run_row([('AAAA', expired), ('ZZZZ', live)], 'ZZZZ'),
                            'ZZZZ', 5)
 
     def test_row_5_9_only_expired_record(self):
-        expired = build_state('AAAA', PAST_Z, cycle_count=1)
+        expired = build_state('AAAA', PAST_Z, cycles_done=1)
         self._assert_zero(self._run_row([('AAAA', expired)], 'AAAA'))
 
     def test_row_5_10_abandoned_far_future_record(self):
-        abandoned = build_state('AAAA', FAR_FUTURE_Z, cycle_count=1)
+        abandoned = build_state('AAAA', FAR_FUTURE_Z, cycles_done=1)
         self._assert_zero(self._run_row([('AAAA', abandoned)], 'ZZZZ-stranger'))
 
     def test_row_5_11_file_key_versus_record_identity_mismatch(self):
         """DISCRIMINATING: a filename-keyed weak predicate passes every other row."""
-        mismatched = build_state('AAAA', future_z(1), cycle_count=7)
+        mismatched = build_state('AAAA', future_z(1), cycles_done=7)
         self._assert_zero(self._run_row([('BBBB', mismatched)], 'BBBB'))
 
     def test_row_5_11b_identity_comparison_is_case_sensitive(self):
         """Mutation lock: a case-insensitive identity comparison would accept
         'aaaa' as the owner of 'AAAA' and pass every other row unchanged."""
-        variant = build_state('aaaa', future_z(1), cycle_count=7)
+        variant = build_state('aaaa', future_z(1), cycles_done=7)
         self._assert_zero(self._run_row([('AAAA', variant)], 'AAAA'))
-        owned = build_state('AAAA', future_z(1), cycle_count=7)
+        owned = build_state('AAAA', future_z(1), cycles_done=7)
         self._assert_zero(self._run_row([('AAAA', owned)], 'aaaa'))
 
     def test_row_5_12_rejected_record_must_not_trigger_fallback_scan(self):
         """DISCRIMINATING: rejection must not be followed by a scan onto another record."""
-        mismatched = build_state('AAAA', future_z(1), cycle_count=7)
-        competing = build_state('AAAA', future_z(1), cycle_count=42)
+        mismatched = build_state('AAAA', future_z(1), cycles_done=7)
+        competing = build_state('AAAA', future_z(1), cycles_done=42)
         result = self._run_row([('BBBB', mismatched), ('AAAA', competing)], 'BBBB')
         self._assert_zero(result)
         self.assertNotIn('Cycle 43', result.stdout)
@@ -507,7 +537,7 @@ class TestAC6ProcessBoundary(unittest.TestCase):
         with temp_project(fixture_command_doc=True) as (project, home):
             sid = 'AAAA-owner'
             write_state(project / '.claude', sid,
-                        build_state(sid, future_z(1), cycle_count=3))
+                        build_state(sid, future_z(1), cycles_done=3))
             result = run_hook(project, home, prompt_payload(sid))
         self.assertEqual(0, result.returncode)
         # Collect whole banner LINES rather than counting the bare phrase: the
@@ -550,39 +580,32 @@ class TestAC6ProcessBoundary(unittest.TestCase):
         self.assertNotIn('OVERNIGHT CONTINUATION', result.stdout)
 
 
-class TestAC7ExceptSetEquality(unittest.TestCase):
-    """AC7 -- the caught set must EQUAL {ValueError, TypeError}, not merely subset it."""
+class TestAC7OneWindowRule(unittest.TestCase):
+    """AC7 -- the reader parses and reads nothing itself (P2 R1). Whether the
+    window is open is lib/overnight.py's window_open, the one window decider,
+    and the record is its locator's, so there is no except clause here that
+    could widen and no state field that could decide."""
 
-    def _caught_names(self):
+    def test_predicate_delegates_to_the_one_window_rule(self):
         tree = ast.parse(HOOK_PATH.read_text())
-        target = None
-        for node in tree.body:
-            if isinstance(node, ast.FunctionDef) and node.name == '_is_active_state':
-                target = node
-        self.assertIsNotNone(target, '_is_active_state not found at module top level')
-        names: set[str] = set()
-        for handler in [n for n in ast.walk(target) if isinstance(n, ast.ExceptHandler)]:
-            self.assertIsNotNone(handler.type, 'bare except is forbidden')
-            captured = handler.type
-            parts = captured.elts if isinstance(captured, ast.Tuple) else [captured]
-            for part in parts:
-                self.assertIsInstance(part, ast.Name, 'only plain exception names permitted')
-                names.add(part.id)
-        return names
-
-    def test_caught_set_equals_value_error_and_type_error(self):
-        names = self._caught_names()
-        self.assertEqual({'ValueError', 'TypeError'}, names,
-                         'the caught set must be EQUAL to the pre-fix set, not a superset')
-        self.assertNotIn('Exception', names)
-        self.assertNotIn('BaseException', names)
+        target = next((node for node in tree.body
+                       if isinstance(node, ast.FunctionDef) and node.name == 'find_any_overnight_state'),
+                      None)
+        self.assertIsNotNone(target, 'find_any_overnight_state not found at module top level')
+        self.assertEqual([], [n for n in ast.walk(target) if isinstance(n, ast.ExceptHandler)])
+        called = {n.func.attr for n in ast.walk(target)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        self.assertTrue({'window_open', 'locate'} <= called, called)
+        self.assertFalse({'fromisoformat', 'state_verdicts', 'read_text', 'get'} & called, called)
+        self.assertNotIn('_is_active_state', {node.name for node in tree.body
+                                              if isinstance(node, ast.FunctionDef)})
 
 
 class TestAC8PatchScope(unittest.TestCase):
     """AC8 -- only the four permitted symbols may differ inside the hook."""
 
-    PERMITTED = ['_is_active_state', 'find_any_overnight_state',
-                 'check_overnight_continuation', 'handle_phase_b']
+    PERMITTED = ['find_any_overnight_state', 'check_overnight_continuation',
+                 'handle_phase_b', 'root_lines']
 
     def test_each_permitted_symbol_defined_exactly_once(self):
         tree = ast.parse(HOOK_PATH.read_text())
@@ -606,6 +629,116 @@ class TestAC8PatchScope(unittest.TestCase):
         self.assertIsNotNone(body)
         self.assertIn('check_overnight_continuation(session_id)', body,
                       'handle_phase_b must thread the submitting session id through')
+
+
+def typed(text: str, **fields) -> dict:
+    """A transcript record of a prompt the human typed (stop_contract's
+    is_human_prompt); ``fields`` mark one the human did not type."""
+    record = {'type': 'user', 'origin': {'kind': 'human'},
+              'message': {'role': 'user', 'content': text}}
+    record.update(fields)
+    return record
+
+
+def command(name: str, args: str = '', **fields) -> dict:
+    """A slash command record as the CLI writes a typed one."""
+    return typed(f'<command-message>{name}</command-message>\n<command-name>/{name}</command-name>\n'
+                 f'<command-args>{args}</command-args>', **fields)
+
+
+class TestR1WindowOpenDecides(unittest.TestCase):
+    """P2 R1, acceptance 6 and 8: the continuation reader decides by
+    lib/overnight.window_open on what the hook has (the session id, the
+    transcript_path it received, its project dir), finds the main root's record
+    from a worktree or a fresh clone, and leads the block with the roots the
+    re-sent command text's Read paths start from."""
+
+    def test_end_time_an_hour_ahead_continues_in_any_timezone(self):
+        for zone in ('Asia/Shanghai', 'America/Los_Angeles'):
+            with pinned_tz(zone):  # the launcher's zone: an aware local end_time
+                local = (datetime.now().astimezone() + timedelta(hours=1)).isoformat(timespec='seconds')
+            for form, end_time in (('Z', future_z(1)), ('local offset', local)):
+                with self.subTest(zone=zone, form=form, end_time=end_time), \
+                        temp_project() as (project, home):
+                    write_state(project / '.claude', 'AAAA', build_state('AAAA', end_time))
+                    result = run_hook(project, home, prompt_payload('AAAA'), {'TZ': zone})
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertIn('OVERNIGHT CONTINUATION - Cycle 4', result.stdout.splitlines())
+
+    def test_only_a_typed_stop_ends_the_continuation(self):
+        stop = command('stop')['message']['content']
+        cases = {
+            'no /stop': ([], True),
+            'typed /stop': ([command('stop')], False),
+            'typed /stop, then a plain prompt': ([command('stop'), typed('go on')], False),
+            'typed /stop as text': ([typed('/stop')], False),
+            'isMeta /stop': ([typed(stop, isMeta=True)], True),
+            'Skill-produced /stop': ([typed(stop, isMeta=True, sourceToolUseID='toolu_01')], True),
+            'scheduled /stop': ([typed(stop, origin={'kind': 'scheduled'})], True),
+            '/stop, then a new /dev-overnight': ([command('stop'), command('dev-overnight', '2h')], True),
+        }
+        for name, (after, continues) in cases.items():
+            with self.subTest(case=name), temp_project() as (project, home):
+                write_state(project / '.claude', 'AAAA', build_state('AAAA', future_z(1)))
+                transcript = project.parent / 'transcript.jsonl'
+                transcript.write_text(''.join(json.dumps(r) + '\n'
+                                              for r in [command('dev-overnight', '8h'), *after]))
+                payload = {**prompt_payload('AAAA'), 'transcript_path': str(transcript)}
+                result = run_hook(project, home, payload)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(continues, 'OVERNIGHT CONTINUATION' in result.stdout, result.stdout[:300])
+
+    def test_a_worktree_or_clone_rooted_session_finds_the_main_roots_record(self):
+        with temp_project() as (main, home):
+            env = {**os.environ, 'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.invalid',
+                   'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@example.invalid'}
+
+            def git(*args):
+                subprocess.run(['git', '-c', 'commit.gpgsign=false', *args], cwd=str(main),
+                               env=env, check=True, capture_output=True)
+
+            git('init', '-q', '-b', 'main')
+            (main / 'README.md').write_text('toy\n')
+            git('add', 'README.md')
+            git('commit', '-q', '-m', 'init')
+            worktree = main.parent / 'wt'
+            clone = main / '.claude' / 'overnight-fresh-clones' / 'night-1'
+            git('worktree', 'add', '-q', '-b', 'overnight-wt', str(worktree))
+            git('clone', '-q', '--local', str(main / '.git'), str(clone))
+            # The harness's own command document, so the heavy half is
+            # delivered and its marker written beside the record it describes.
+            (home / '.claude' / 'commands').mkdir(parents=True)
+            (home / '.claude' / 'commands' / 'dev-overnight.md').write_text(COMMAND_DOC.read_text())
+            harness = os.path.realpath(home / '.claude')
+            for name, root in (('linked worktree', worktree), ('fresh clone', clone)):
+                with self.subTest(isolation=name):
+                    write_state(main / '.claude', 'AAAA', build_state('AAAA', future_z(1), worktree=str(root)))
+                    marker = main / '.claude' / 'overnight-delivery-AAAA.json'
+                    marker.unlink(missing_ok=True)
+                    result = run_hook(root, home, {**prompt_payload('AAAA'), 'cwd': str(root)})
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual(['OVERNIGHT CONTINUATION - Cycle 4', f'PROJECT_ROOT={root}',
+                                      f'HARNESS_ROOT={harness}'], result.stdout.splitlines()[:3])
+                    self.assertIn('--- COMMAND SPECIFICATION ---', result.stdout)
+                    state_file = (main / '.claude' / 'overnight-state-AAAA.json').resolve()
+                    self.assertIn(f'Read {state_file} and resume from phase=', result.stdout)
+                    self.assertTrue(marker.is_file())
+                    self.assertFalse((root / '.claude' / 'overnight-delivery-AAAA.json').exists())
+
+    def test_the_block_and_print_roots_name_the_same_roots(self):
+        """One rule for the roots: the block's two lines are what /dev-overnight
+        printed at its start for the same record."""
+        with temp_project() as (project, home):
+            module = load_hook_module()
+            module.PROJECT_DIR = project
+            write_state(project / '.claude', 'AAAA',
+                        build_state('AAAA', future_z(1), worktree=str(project / 'wt')))
+            printed = io.StringIO()
+            with redirect_stdout(printed):
+                module.print_roots('dev-overnight', 'AAAA')
+            block = module.check_overnight_continuation('AAAA')
+        self.assertEqual(printed.getvalue().splitlines(), block.splitlines()[1:3])
+        self.assertEqual(f'PROJECT_ROOT={project / "wt"}', block.splitlines()[1])
 
 
 STUB_LAUNCHER = '''#!/usr/bin/env bash
@@ -643,11 +776,11 @@ class TestF10IdentityLessFailClosed(unittest.TestCase):
 
     The consumption half is a subtraction ('' is already rejected). The creation
     half is NOT: with '' forwarded, the launcher mints an id it does not return,
-    so ``verify_overnight_state`` resolves ``overnight-state-.json``, aborts the
-    launch, and ``_cleanup_overnight_partials`` -- keyed on the same '' -- leaves
-    the freshly published record live. The boundary guard globs
-    ``overnight-state-*.json`` project-wide, so that orphan would arm isolation
-    for an aborted launch. Hence the id is minted in the hook.
+    so the hook's own reads and ``_cleanup_overnight_partials`` -- keyed on the
+    same '' -- resolve ``overnight-state-.json`` and miss the record the launcher
+    published. The boundary guard globs ``overnight-state-*.json`` project-wide,
+    so an orphan left by a failed launch would arm isolation for it. Hence the
+    id is minted in the hook.
     """
 
     SHARED_LITERALS = ('default', '', 'None', 'null')
@@ -680,7 +813,7 @@ class TestF10IdentityLessFailClosed(unittest.TestCase):
 
     def test_absent_identity_with_live_default_record_receives_nothing(self):
         """The F-10 regression: the row AC5 never seeded."""
-        state = build_state('default', future_z(1), cycle_count=3)
+        state = build_state('default', future_z(1), cycles_done=3)
         result = self._run_phase_b([('default', state)], self.OMIT)
         self.assertEqual(0, result.returncode)
         self.assertNotIn('OVERNIGHT CONTINUATION', result.stdout)
@@ -690,7 +823,7 @@ class TestF10IdentityLessFailClosed(unittest.TestCase):
 
     def test_null_and_empty_identities_stay_closed_against_a_default_record(self):
         """The record AC5 never seeded, probed with every identity-less shape."""
-        state = build_state('default', future_z(1), cycle_count=3)
+        state = build_state('default', future_z(1), cycles_done=3)
         for label, submitting in (('json null', None), ('empty string', ''),
                                   ('stranger', 'ZZZZ-stranger')):
             with self.subTest(submitting=label):
@@ -698,7 +831,7 @@ class TestF10IdentityLessFailClosed(unittest.TestCase):
                 self.assertEqual('', result.stdout)
 
     def test_owner_is_unaffected(self):
-        state = build_state('AAAA', future_z(1), cycle_count=1)
+        state = build_state('AAAA', future_z(1), cycles_done=1)
         result = self._run_phase_b([('AAAA', state)], 'AAAA')
         self.assertIn('OVERNIGHT CONTINUATION - Cycle 2', result.stdout)
         self.assertIn('overnight-state-AAAA.json', result.stdout)
@@ -873,8 +1006,10 @@ class TestAC10G1BoundsUnderOptionR(unittest.TestCase):
     G1_PER_PROMPT_MAX_CHARS = 3000
     # PRODUCTION-SHAPED ceiling: the sibling's own `production_shaped_per_prompt
     # _max_chars`, for the state create-overnight-state.sh actually writes.
-    # Populating main_root + actor_git_env selects the long worktree branch and
-    # the light payload measures 3,554 -- above the fixture ceiling by design.
+    # Populating main_root + actor_git_env selects the long worktree branch. The
+    # light payload measured 3,554 while every prompt carried the
+    # enforcement-registry verification notice; with that per-prompt re-check
+    # gone (the registry's one producer writes it at launch) it measures 2,723.
     G1_PRODUCTION_PER_PROMPT_MAX_CHARS = 4000
     G1_PRODUCTION_MAX_RATIO_OF_BOUNDARY = 0.05
     G1_BOUNDARY_OVERHEAD_MAX_CHARS = 4000   # ABSOLUTE, the lane-owned block share
@@ -887,7 +1022,7 @@ class TestAC10G1BoundsUnderOptionR(unittest.TestCase):
         sid = 'AAAA-owner'
         with temp_project(fixture_command_doc=True) as (project, home):
             write_state(project / '.claude', sid,
-                        build_state(sid, future_z(6), cycle_count=3,
+                        build_state(sid, future_z(6), cycles_done=3,
                                     worktree=str(project / 'wt')))
             cls.outputs = [at_measured_root(
                                run_hook(project, home, prompt_payload(sid, p)).stdout,
@@ -941,15 +1076,16 @@ class TestAC10G1BoundsUnderOptionR(unittest.TestCase):
         payload measures 2,767. That is the shape sibling inject AC-1 scopes its
         3,000 ceiling to, and the sibling explicitly forbids quoting that number
         as a production figure. The launcher-written state populates both fields,
-        selects the long branch, and measures 3,554 -- which BREACHES 3,000. The
-        production-facing bound is therefore the sibling's own production figure,
+        selects the long branch (it measured 3,554 while each prompt carried the
+        registry verification notice, now gone). The production-facing bound is
+        the sibling's own production figure,
         asserted here against a production-shaped state rather than merely
         caveated, together with its ratio-of-boundary companion so an absolute
         cap alone cannot drift loose as the command document grows.
         """
         sid = 'AAAA-owner'
         with temp_project(fixture_command_doc=True) as (project, home):
-            state = build_state(sid, future_z(6), cycle_count=3,
+            state = build_state(sid, future_z(6), cycles_done=3,
                                 worktree=str(project / 'wt'))
             # The shape create-overnight-state.sh writes. Every path derives from
             # the fixture's own temp root; nothing here is a live-tree literal.
@@ -979,10 +1115,6 @@ class TestAC10G1BoundsUnderOptionR(unittest.TestCase):
         self.assertIn('source the actor git-env', light[0])
         for index, output in enumerate(light):
             with self.subTest(prompt=index, chars=len(output)):
-                self.assertGreater(
-                    len(output), self.G1_PER_PROMPT_MAX_CHARS,
-                    'production shape no longer exceeds the fixture ceiling; the '
-                    'two shapes have converged and this case is now vacuous')
                 self.assertLessEqual(len(output),
                                      self.G1_PRODUCTION_PER_PROMPT_MAX_CHARS)
                 self.assertLessEqual(

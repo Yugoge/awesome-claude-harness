@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load doc-sync project-local config and the git-tracked-file set.
+"""Load the git-tracked-file set for doc-sync.
 
 The git-tracked helpers (WS5, AC-WS5-1) let the INDEX/README generators list
 ONLY published (git-tracked) files instead of walking the live filesystem and
@@ -8,7 +8,6 @@ outside a git work-tree (git missing or dir not in a repo) they return None,
 and callers fall back to their existing hand-denylist behaviour.
 """
 
-import json
 import os
 import subprocess
 from pathlib import Path, PurePath
@@ -72,17 +71,6 @@ def is_github_reserved_subtree(dir_path: Path, project_dir: Path | None = None) 
     # anchored at project_dir, that root .github is exactly rel_parts[0]; a nested
     # .github deeper in the tree (e.g. src/.github) is a normal folder, not reserved.
     return bool(rel_parts) and rel_parts[0] == GITHUB_RESERVED_DIR
-
-
-def load_config(project_dir: Path) -> dict:
-    """Load <project_dir>/.claude/doc-sync.json. Return {} when missing or malformed."""
-    config_path = project_dir / '.claude' / 'doc-sync.json'
-    if not config_path.is_file():
-        return {}
-    try:
-        return json.loads(config_path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
 
 
 def _tracked_relpaths(dir_path: Path) -> set[str] | None:

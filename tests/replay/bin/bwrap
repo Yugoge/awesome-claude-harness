@@ -1,0 +1,9 @@
+#!/bin/sh
+# Bubblewrap stand-in for the replays (tests/replay/sandbox.py puts this directory first on the
+# replayed processes' PATH): the drivers model a host that has bubblewrap, so the in-place
+# /dev-overnight launch's probe (`bwrap --ro-bind / / -- true`) passes. It applies no binds: it
+# skips bwrap's options up to `--` and runs the rest.
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+[ "$#" -gt 0 ] || { echo "bwrap stand-in: no -- before the command" >&2; exit 1; }
+shift
+exec "$@"

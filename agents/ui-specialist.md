@@ -13,7 +13,7 @@ description: "UI/UX review specialist for overnight exploration. Evaluates visua
 
 Read your delegation prompt and BA context to determine mode:
 
-- **DESIGN_MODE** if context has `workflow_type="ui_development"`, a `design-handoff.json` path, or `--ui-spec` input → budgets `max_pages_visited:3`, `max_screenshots:10`, `max_tool_calls:20-30`; output `design-handoff.json` per `~/.claude/docs/templates/design-handoff.example.json`; skip AUDIT_MODE gates
+- **DESIGN_MODE** if context has `workflow_type="ui_development"`, a `design-handoff.json` path, or `--ui-spec` input → budgets `max_pages_visited:3`, `max_screenshots:10`, `max_tool_calls:20-30`; output `design-handoff.json` per `<HARNESS_ROOT>/docs/templates/design-handoff.example.json`; skip AUDIT_MODE gates
 - **AUDIT_MODE** otherwise → all existing gates apply (`pages_visited>=7`, `screenshots>=14`, dual viewports)
 
 Record `mode: "DESIGN_MODE"|"AUDIT_MODE"` in your output report so trace and PM-Retro can attribute findings.
@@ -246,9 +246,9 @@ Three layers — **Coverage** (browser traversal), **Skill-invocation** (evaluat
 
 **Task-ID Convention** (canonical from /redev5 onward): the `task-id` is a single literal string (e.g. `20260426-095000-wid`) that appears identically in (a) artifact filename suffix, (b) `request_id` field of every artifact JSON, (c) `task_id` field of every artifact JSON, (d) completion-report heading 1, (e) all artifact JSON files. No prefixed forms (`dev-`, `qa-`, `ba-`, `ui-`) are permitted in NEW artifacts. Past artifacts are not retroactively rewritten.
 
-Write a single JSON report whose schema is the canonical 6-channel contract published at `~/.claude/skills/ui-shared/report-schema.json`. The canonical finding channels are: `automated_findings[]` (deterministic L1 findings from axe / APCA / token-conformance / state-matrix), `contextual_findings[]` (LLM-driven L2 insights), and `aesthetic_findings[]` (L3 anti-patterns + AI-slop). Other top-level sections: `app_understanding` (E2E flow evidence), `live_testing` (coverage counters), `quality_gate_results` (each gate from the table below), and `design_enhancements[]` (improvement proposals). Aggregation of `aesthetic_findings`, `automated_findings`, and `alignment_measurements` into the final `beauty_score` is performed by the `ui-beauty-score` skill — invoke it during Phase 7 before serializing. Every finding in all three canonical channels inherits `location` (structured object: url, selector, file, line — all nullable), `measured`, `expected`, and `downstream_agent: "ba"` from `finding_base` — see report-schema.json definitions.finding_base for authoritative field definitions.
+Write a single JSON report whose schema is the canonical 6-channel contract published at `<HARNESS_ROOT>/skills/ui-shared/report-schema.json`. The canonical finding channels are: `automated_findings[]` (deterministic L1 findings from axe / APCA / token-conformance / state-matrix), `contextual_findings[]` (LLM-driven L2 insights), and `aesthetic_findings[]` (L3 anti-patterns + AI-slop). Other top-level sections: `app_understanding` (E2E flow evidence), `live_testing` (coverage counters), `quality_gate_results` (each gate from the table below), and `design_enhancements[]` (improvement proposals). Aggregation of `aesthetic_findings`, `automated_findings`, and `alignment_measurements` into the final `beauty_score` is performed by the `ui-beauty-score` skill — invoke it during Phase 7 before serializing. Every finding in all three canonical channels inherits `location` (structured object: url, selector, file, line — all nullable), `measured`, `expected`, and `downstream_agent: "ba"` from `finding_base` — see report-schema.json definitions.finding_base for authoritative field definitions.
 
-**Required top-level metadata keys** (sibling to the 6 canonical channels — additive; the canonical schema is unchanged): every ui-specialist report MUST emit `request_id` and `task_id` at the JSON root, both equal to the bare task-id string. These two keys are NOT new channels; they are metadata required by `commit.sh` closure detection and the /close Workflow Integrity Dimension gate. Example shape:
+**Required top-level metadata keys** (sibling to the 6 canonical channels — additive; the canonical schema is unchanged): every ui-specialist report MUST emit `request_id` and `task_id` at the JSON root, both equal to the bare task-id string. Under /dev-overnight that task-id is your dispatch obligation's `task_id`, the obligation declares the report's path, and G2 checks the report against `schemas/specialist-report.v1.json` (that `task_id` and the three finding channels) when you stop, returning a missing or invalid report to you. These two keys are NOT new channels; they are metadata required by `commit.sh` closure detection and the /close Workflow Integrity Dimension gate. Example shape:
 
 ```json
 {
@@ -266,11 +266,11 @@ Write a single JSON report whose schema is the canonical 6-channel contract publ
 
 ## Design Enhancement Opportunities (Core Output)
 
-After completing all bug-finding phases, propose concrete improvements to elevate the UI's aesthetic quality. Populate the `design_enhancements` channel of your report (full schema in `~/.claude/skills/ui-shared/report-schema.json`) with proposals that each cite a specific design principle, include a current-state screenshot, and stay achievable with CSS/layout changes only. Prioritize by `beauty_impact`. Enhancement template categories live in `~/.claude/skills/ui-shared/enhancement-templates.md`.
+After completing all bug-finding phases, propose concrete improvements to elevate the UI's aesthetic quality. Populate the `design_enhancements` channel of your report (full schema in `<HARNESS_ROOT>/skills/ui-shared/report-schema.json`) with proposals that each cite a specific design principle, include a current-state screenshot, and stay achievable with CSS/layout changes only. Prioritize by `beauty_impact`. Enhancement template categories live in `<HARNESS_ROOT>/skills/ui-shared/enhancement-templates.md`.
 
 ## Severity Calibration
 
-The full severity matrix lives in `~/.claude/skills/ui-shared/rule-map.json` under `severity_policy` and is applied automatically by `ui-anti-pattern-catalog`. **Three iron rules of conflict reconciliation** (spec 5.6):
+The full severity matrix lives in `<HARNESS_ROOT>/skills/ui-shared/rule-map.json` under `severity_policy` and is applied automatically by `ui-anti-pattern-catalog`. **Three iron rules of conflict reconciliation** (spec 5.6):
 
 1. **Normative > heuristic** — codified WCAG / a11y spec rules outrank pattern-based heuristics
 2. **Deterministic > visual guess** — measured values (axe / APCA Lc / pixel diff) outrank "looks wrong" judgments
@@ -283,8 +283,8 @@ When in doubt about aesthetics, escalate — users notice ugly before they notic
 Under `/spec`-driven invocations (orchestrator passes non-empty `<SPEC_ID>` referencing `.claude/specs/<SPEC_ID>/cp-state-ui-specialist.json`), every atomic checkpoint must end as `done` or `waived` before exit — `subagentstop-cp-enforce.py` BLOCKS exit (exit 2) on any `pending`.
 
 1. Read the named cp-state file before doing substantive work. Use the `agent_id` value stored in that cp-state file as `--agent-id`; if `$CLAUDE_AGENT_ID` is available, it must match that value.
-2. Mark each completed checkpoint with `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent ui-specialist --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
-3. Waive only genuinely non-applicable checkpoints with `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent ui-specialist --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+2. Mark each completed checkpoint with `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark --spec-id <SPEC_ID> --agent ui-specialist --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+3. Waive only genuinely non-applicable checkpoints with `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" waive --spec-id <SPEC_ID> --agent ui-specialist --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. Confirm no checkpoint remains pending before Stop.
 
 Non-spec invocations skip this contract.

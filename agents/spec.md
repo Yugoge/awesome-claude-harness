@@ -26,7 +26,7 @@ The `/spec` command passes you:
 - **Spec id**: e.g. `spec-20260421-140000`
 - **Monolith path**: `docs/dev/specs/<spec-id>.md`
 - **Monolith lines**: integer line count of the monolith
-- **Project dir**: `$CLAUDE_PROJECT_DIR` (cp-state goes to `.claude/specs/<spec-id>/`)
+- **Project dir**: `<PROJECT_ROOT>` (cp-state goes to `.claude/specs/<spec-id>/`)
 
 **First actions**:
 1. Read the monolith: `docs/dev/specs/<spec-id>.md`
@@ -329,20 +329,7 @@ For each relevant agent:
 
    **R3.2 cross-contamination prevention (per-agent scoped buffers)**: When assembling agent X's Role Mandate, the subagent MUST work in an agent-scoped buffer. NEVER read another agent's pending Role Mandate output, NEVER copy text between agent buffers, and NEVER reuse a basis range across two views (each view's marker MUST cite a range whose annotation is specific to THAT view's agent). Two views with byte-equal Role Mandate sections are a hard fail per R3.6.
 
-   **R3.4 OMIT path (active on all monoliths — scope-neutral)**: If no monolith range satisfies R3.3 for this agent (no `## Role: {agent}` heading, no `consumers:` annotation listing the agent, OR — under `guide_version < 1` — no monolith block whose role-defining content is unambiguous), then OMIT the Role Mandate section entirely. Do NOT fabricate role content. Record the omission so the verifier can reconcile it:
-
-   Append a record to `views/mandate-omissions.json`:
-
-   ```json
-   {"omissions": [{"view": "<agent>.md", "agent": "<agent>", "reason": "<closed-enum>"}]}
-   ```
-
-   `reason` is a CLOSED ENUM — exactly one of:
-   - `"no_role_definition_in_monolith"` — no `## Role:` heading AND no `consumers:` annotation names this agent
-   - `"role_definition_ambiguous"` — multiple candidate blocks conflict; user decision required
-   - `"guide_version_not_declared"` — monolith is legacy and the subagent could not produce a confident verbatim quote
-
-   No free-form reasons are permitted. The verifier reads this file to confirm OMITted views are accounted for.
+   **R3.4 OMIT path (active on all monoliths — scope-neutral)**: If no monolith range satisfies R3.3 for this agent (no `## Role: {agent}` heading, no `consumers:` annotation listing the agent, OR — under `guide_version < 1` — no monolith block whose role-defining content is unambiguous), then OMIT the Role Mandate section entirely. Do NOT fabricate role content. A `## Role: {agent}` / `### Role: {agent}` heading or a `consumers:` annotation naming the agent is the author's own role definition, never ambiguous (ambiguity the author marks is R3.5's), while `[all]` names no agent (M7); so the structural check of `spec-verify.py --strict` (Step 7, and G2 at your stop) accepts a view without `## Role Mandate` exactly when the monolith has neither for the view's agent, and otherwise names the view and the missing section.
 
    **R3.5 AMBIGUOUS escalation (active on all monoliths — scope-neutral)**: If the monolith author marked a paragraph with the literal token `AMBIGUOUS:` (per R6.4) AND that paragraph would otherwise be cited as the Role Mandate basis, propagate the ambiguity verbatim. Emit, in place of the INFERRED marker:
 
@@ -366,7 +353,7 @@ For each relevant agent:
 
    - Every `>` blockquote MUST be a verbatim substring from the monolith.
    - The section heading `## Role Mandate` is the only non-verbatim structural line.
-   - If the spec defines no explicit role responsibilities for any agent, OMIT the Role Mandate per R3.4 with `reason: "guide_version_not_declared"`.
+   - If the spec defines no explicit role responsibilities for any agent, OMIT the Role Mandate per R3.4.
    - **ui-specialist special constraint** (design-spec scenarios where the spec defines a design → implement pipeline): quote the spec's verbatim role-split lines that constrain ui-specialist. Do NOT synthesize a "NEVER write application code" clause — locate the spec's own wording and quote it.
 
 3. Append the assigned content blocks in their ORIGINAL order from the monolith. Preserve blank lines between blocks exactly as they appear in the monolith.
@@ -467,7 +454,7 @@ Only the `## Agent Relevance Analysis` table, `## Views Created` list, and `## M
 
 ### Step 5: Write manifest.json
 
-Write `docs/dev/specs/<spec-id>/views/manifest.json`. Use fcntl.LOCK_EX for atomic write. The manifest includes: schema_version, spec_id, monolith_path, sha256 hash of the monolith, byte count, line count, created_at timestamp, agent_relevance dict from Phase 0, views dict (only agents that received views), and sections_present dict detected by scanning for `## Section N` / `## SN` headings in the monolith. Activate the venv before running Python (`source ~/.claude/venv/bin/activate`).
+Write `docs/dev/specs/<spec-id>/views/manifest.json`. Use fcntl.LOCK_EX for atomic write. The manifest includes: schema_version, spec_id, monolith_path, sha256 hash of the monolith, byte count, line count, created_at timestamp, agent_relevance dict from Phase 0, views dict (only agents that received views), and sections_present dict detected by scanning for `## Section N` / `## SN` headings in the monolith. Activate the venv before running Python (`source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate"`).
 
 ### Step 6: Verbatim self-verification
 
@@ -485,13 +472,16 @@ Activate the venv and run a Python verbatim-check: read the monolith and view fi
 
 ### Step 7: Coverage verification
 
-NOTE: A stop hook (`stop-spec-coverage-enforce.py`) will BLOCK you from
-exiting if coverage < 100%. You cannot skip this -- fix the coverage first.
+NOTE: your dispatch's obligation declares your split (`spec_views`), and G2
+(`hooks/subagentstop-artifact-contract-enforce.py`) runs `spec-verify.py --strict`
+on it at your stop: coverage below 100%, or an overlap or uniqueness threshold
+missed, returns the split to you before you can exit. You cannot skip this --
+fix the split first.
 
 After ALL views are written, run the coverage verification script:
 
 ```bash
-source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-verify/spec-verify.py --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/"
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-verify/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/"
 ```
 
 This checks that every non-blank, non-separator line from the monolith appears in at least one view file. If it exits non-zero (coverage < 100%):
@@ -535,20 +525,14 @@ If after ONE retry the coverage is still < 100%, apply this deterministic rule:
 
    The verifier (`spec-verify.py`, R4a.2) recomputes this hash from the cited range and rejects mismatches. The marker is whitelisted by R4a.4 so the fabrication check ignores the comment line itself.
 
-4. **Allocation conflicts → `views/allocation-decisions.json` (R2.A.4)**. When a block's consumer set is non-obvious (multiple INCLUDE matches with no explicit consumers tag, or a consumers tag that names an agent not in the selected consumer set), append a record to `views/allocation-decisions.json`:
-
-   ```json
-   {"block_id": "L{N}-L{M}", "consumers": ["dev", "qa"], "source_range": "L{N}-L{M}", "reason": "<short rationale>"}
-   ```
-
-5. **Orphan-block halt (R2.A.5)**. If any monolith block carries `consumers: [agent]` for an agent that produced no view in Phase 0, OR if a block has no matching consumer at all (no INCLUDE match, no consumers tag), HALT before writing any view. Emit a clear error: `"orphan block L{N}-L{M}: consumers=[X] but X not in selected views"` or `"orphan block L{N}-L{M}: no consumer matched"`.
+4. **Orphan-block halt (R2.A.5)**. If any monolith block carries `consumers: [agent]` for an agent that produced no view in Phase 0, OR if a block has no matching consumer at all (no INCLUDE match, no consumers tag), HALT before writing any view. Emit a clear error: `"orphan block L{N}-L{M}: consumers=[X] but X not in selected views"` or `"orphan block L{N}-L{M}: no consumer matched"`.
 
 3. Append the assigned lines (preserving monolith order) to that agent's view under a `## Additional Content (coverage fallback)` heading.
 
 4. Re-run spec-verify.py with `--strict` flag (enforces coverage = 100%, max pairwise overlap < 70%, per-view uniqueness > 15%):
 
    ```bash
-   source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-verify/spec-verify.py --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/" --strict
+   source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-verify/spec-verify.py" --monolith "$MONOLITH_PATH" --views-dir "docs/dev/specs/<spec-id>/views/" --strict
    ```
 
 5. **Diagnose failures by type**:
@@ -594,7 +578,7 @@ For each agent selected in Phase 0 (excluding orchestrator), read the view file 
 
 ### Writing cp-state files
 
-Write cp-state files via `.claude/scripts/spec-check.py`. Do not write cp-state JSON directly.
+Write cp-state files only through `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py"`, their one writer. Do not write cp-state JSON directly (no Write, Edit or Python stanza).
 
 ```bash
 # 1. Register agent (creates cp-state file). spec-check.py AUTO-ALLOCATES
@@ -607,14 +591,23 @@ Write cp-state files via `.claude/scripts/spec-check.py`. Do not write cp-state 
 #    disambiguates slots, but agent_id disambiguates the LOGICAL caller
 #    when multiple same-type instances run concurrently. Without it,
 #    Phase 2 cannot reliably pin to the correct slot.
-source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py check-in \
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" check-in \
     --spec-id <spec-id> \
     --agent <agent> \
     --agent-id <agent-id> \
     --artifact docs/dev/<agent>-report-<ts>.json
 ```
 
-Then write checkpoints via a Python stanza (activate venv first: `source ~/.claude/venv/bin/activate`) that preserves flock discipline. The stanza resolves the cp-state path by enumerating all slots for this agent type (primary first, then numbered), filtering for the slot where `agent_id` matches this invocation's agent-id AND `is_running` is true. Matching by `is_running` alone is wrong — concurrent same-type instances would race. Once the correct slot is found, load the JSON, set the `checkpoints` array with Gawande-style verb-first entries, and write back with fcntl.LOCK_EX. Exit with an error if no matching running slot is found.
+Then set the slot's checklist with the same script: one `--action` per Gawande-style verb-first checkpoint, in order (they become `cp-01`, `cp-02`, ... in state `pending`). The script finds the slot by `--agent-id` (pass `--instance-id N` from the `cp-state-path:` line when the id holds more than one slot) and refuses with exit 1 when that id holds none:
+
+```bash
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" checkpoints \
+    --spec-id <spec-id> \
+    --agent <agent> \
+    --agent-id <agent-id> \
+    --action "<first checkpoint action>" \
+    --action "<second checkpoint action>"
+```
 
 ### Checkpoint rules (Gawande-style)
 
@@ -663,7 +656,7 @@ spec-derived checkpoint without replacing it with an equivalent atomic action.
 
 ## Tool usage
 
-You may use: `Read`, `Write`, `Bash` (for `.claude/scripts/spec-check.py`, `~/.claude/scripts/spec-verify/spec-verify-views.py`, `~/.claude/scripts/spec-verify/spec-verify.py`, Python invocations via venv (`source ~/.claude/venv/bin/activate && python3`), and `mkdir -p`).
+You may use: `Read`, `Write`, `Bash` (for `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py"`, `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-verify/spec-verify-views.py"`, `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-verify/spec-verify.py"`, Python invocations via venv (`source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3`), and `mkdir -p`).
 
 You must NOT:
 - Modify the monolith spec (read-only)
@@ -729,7 +722,7 @@ After all three phases complete, emit a JSON summary to stdout:
 Before exiting, verify for each agent that received checkpoints:
 
 ```bash
-source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py status --spec-id <spec-id> --agent <agent>
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" status --spec-id <spec-id> --agent <agent>
 ```
 
 The status should show N checkpoints, all in `pending` state, with a timestamp matching your run.
@@ -812,9 +805,9 @@ This contract is mandatory in that mode:
    `$CLAUDE_AGENT_ID` is available, it must match that value.
 2. Treat each `checkpoints[].id` entry as a required checklist item.
 3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent spec --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark --spec-id <SPEC_ID> --agent spec --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent spec --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" waive --spec-id <SPEC_ID> --agent spec --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 5. Before stopping, confirm every checkpoint is either `done` or
    `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
    to block exit with code 2.

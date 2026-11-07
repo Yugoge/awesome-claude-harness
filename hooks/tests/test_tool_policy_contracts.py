@@ -14,16 +14,34 @@ def _use_current_policy(monkeypatch):
     assert policy_registry.load_policy() is not None
 
 
-def test_ba_exact_observations_ledger_only(monkeypatch):
+def test_ba_cannot_write_the_retired_observations_ledger(monkeypatch):
+    # BA no longer keeps docs/dev/observations-ledger.md (nothing read it), so no prefix admits it.
     _use_current_policy(monkeypatch)
     ledger = ROOT / "docs/dev/observations-ledger.md"
-    assert policy_registry.is_allowed("ba", "Write", str(ledger)) == (True, "ok")
-    allowed, reason = policy_registry.is_allowed("ba", "Edit", str(ledger) + ".bak")
+    allowed, reason = policy_registry.is_allowed("ba", "Write", str(ledger))
     assert not allowed and reason.endswith("not in allowed_write_path_prefixes")
     allowed, reason = policy_registry.is_allowed(
         "ba", "Write", str(ROOT / ".claude/policies/escape.json")
     )
     assert not allowed and reason.endswith("matches denied_write_path_prefixes")
+
+
+def test_no_row_names_the_file_of_an_artifact(monkeypatch):
+    # The BA-validation verdict has one producer, the QA dispatch whose obligation
+    # declares it; pretool-tool-policy.py derives that from the dispatch record
+    # (hooks/tests/test_tool_policy_derived_permission.py). The rows admit
+    # neither role: no allow prefix ends in anything but '/' or '*', bar the
+    # three devices a redirect names.
+    _use_current_policy(monkeypatch)
+    report = ROOT / "docs/dev/ba-qa-report-20261028-000000.json"
+    for role in ("ba", "qa"):
+        allowed, reason = policy_registry.is_allowed(role, "Write", str(report))
+        assert not allowed and reason.endswith("not in allowed_write_path_prefixes")
+    devices = {"*/dev/null", "*/dev/stderr", "*/dev/stdout"}
+    for role, spec in policy_registry.load_policy()["roles"].items():
+        assert "allowed_path_prefixes" not in spec, role
+        for prefix in spec.get("allowed_write_path_prefixes", []):
+            assert prefix.endswith(("/", "*")) or prefix in devices, (role, prefix)
 
 
 def test_ba_search_without_fetch(monkeypatch):

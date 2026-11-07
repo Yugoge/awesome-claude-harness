@@ -103,6 +103,98 @@ def _view_entry_path(val, role):
     return None
 
 
+def _manifest_problem(manifest, abs_spec, project_dir, project_real):
+    """(manifest data, None) when views/manifest.json is a usable manifest of THIS monolith, else
+    (None, the failed predicate). One of the split's own predicates: classify() and the producer's
+    stop (G2, hooks/subagentstop-artifact-contract-enforce.py, through split_problem) apply it."""
+    # manifest must be a regular file. os.path.isfile() returns False for a
+    # broken symlink, a directory, or a wrong-type path, so it doubles as the
+    # PRESENT-BUT-INVALID guard here (evidence present but not a usable manifest).
+    if not os.path.isfile(manifest):
+        return None, "views/manifest.json missing or not a regular file (evidence present)"
+
+    try:
+        with open(manifest, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return None, "views/manifest.json unreadable or malformed JSON: %s" % exc
+
+    if not isinstance(data, dict):
+        return None, "manifest is not a JSON object"
+
+    if data.get("schema_version") != 1:
+        return None, "schema_version != 1 (got %r)" % data.get("schema_version")
+
+    mono = data.get("monolith_path")
+    if not isinstance(mono, str) or not mono:
+        return None, "manifest.monolith_path missing or not a string"
+
+    mono_abs = _anchor(mono, project_dir)
+    # reject escapes outside project root
+    if not (mono_abs == project_real or mono_abs.startswith(project_real + os.sep)):
+        return None, "manifest.monolith_path resolves outside project root: %s" % mono_abs
+    if not os.path.exists(mono_abs):
+        return None, "manifest.monolith_path points at a non-existent file: %s" % mono_abs
+    # samefile resolves symlinks + compares inodes (requires both exist — guaranteed above)
+    try:
+        same = os.path.samefile(mono_abs, abs_spec)
+    except OSError as exc:
+        return None, "could not compare monolith_path to spec_path: %s" % exc
+    if not same:
+        return None, (
+            "manifest.monolith_path resolves to a DIFFERENT monolith (%s) than this spec (%s)"
+            % (mono_abs, abs_spec)
+        )
+    return data, None
+
+
+def _views_problem(data, spec_dir, specs_root, views_dir):
+    """None when every view the manifest references is a regular file under views/, else the failed
+    predicate (the split's other own predicate, with _manifest_problem)."""
+    # All referenced view files must exist as regular files UNDER this candidate's
+    # views_dir. manifest view values use historical conventions:
+    #   new schema:  "views/architect.md"                 (relative to spec dir)
+    #   old schema:  "<candidate>/views/architect.md"     (relative to specs root)
+    #   dict forms:  {"file"/"path": "views/architect.md"} OR a metadata-only dict
+    #               (e.g. {"line_count": N}) where the path is inferred views/<role>.md
+    # The resolved real path MUST stay inside views_dir (reject absolute paths,
+    # ".." escapes, and any value that resolves outside the candidate's views dir) —
+    # otherwise a manifest could point at an unrelated file and falsely validate
+    # (codex issue 1).
+    views = data.get("views")
+    if not isinstance(views, dict) or not views:
+        return "manifest.views missing or empty"
+    views_dir_real = _real(views_dir)
+    for role, val in views.items():
+        rel = _view_entry_path(val, role)   # normalize string/dict -> a path string
+        if rel is None:
+            return "manifest.views[%r] has no usable view path (got %r)" % (role, val)
+        # candidate resolutions, in precedence order:
+        #   spec_dir/<rel>            (new: rel begins with "views/")
+        #   specs_root/<rel>          (old: rel begins with "<candidate>/views/")
+        resolved = None
+        for base in (spec_dir, specs_root):
+            cand = _real(os.path.join(base, rel))
+            # must be a regular file AND inside this candidate's views_dir
+            if (cand == views_dir_real or cand.startswith(views_dir_real + os.sep)) and os.path.isfile(cand):
+                resolved = cand
+                break
+        if resolved is None:
+            return "referenced view file for role %r not found as a regular file under views/ (%s)" % (role, rel)
+    return None
+
+
+def split_problem(spec_dir, abs_spec, project_dir):
+    """The split's own predicates (the manifest and the views it references) as the spec subagent
+    leaves them at its stop: None when they hold, else the failed predicate. The split marker and
+    its freshness, which the /spec orchestrator writes after the split QA loop, are classify()'s."""
+    project_dir = os.path.abspath(project_dir)
+    views_dir = os.path.join(spec_dir, "views")
+    data, problem = _manifest_problem(os.path.join(views_dir, "manifest.json"), abs_spec, project_dir,
+                                      _real(project_dir))
+    return problem or _views_problem(data, spec_dir, os.path.dirname(spec_dir), views_dir)
+
+
 def classify(candidate, abs_spec, project_dir, project_real):
     """Classify one candidate id into (state, detail-dict)."""
     specs_root = os.path.join(project_dir, "docs", "dev", "specs")
@@ -137,44 +229,9 @@ def classify(candidate, abs_spec, project_dir, project_real):
         detail["reason"] = reason
         return PRESENT_BUT_INVALID, detail
 
-    # manifest must be a regular file. os.path.isfile() returns False for a
-    # broken symlink, a directory, or a wrong-type path, so it doubles as the
-    # PRESENT-BUT-INVALID guard here (evidence present but not a usable manifest).
-    if not os.path.isfile(manifest):
-        return invalid("views/manifest.json missing or not a regular file (evidence present)")
-
-    try:
-        with open(manifest, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError) as exc:
-        return invalid("views/manifest.json unreadable or malformed JSON: %s" % exc)
-
-    if not isinstance(data, dict):
-        return invalid("manifest is not a JSON object")
-
-    if data.get("schema_version") != 1:
-        return invalid("schema_version != 1 (got %r)" % data.get("schema_version"))
-
-    mono = data.get("monolith_path")
-    if not isinstance(mono, str) or not mono:
-        return invalid("manifest.monolith_path missing or not a string")
-
-    mono_abs = _anchor(mono, project_dir)
-    # reject escapes outside project root
-    if not (mono_abs == project_real or mono_abs.startswith(project_real + os.sep)):
-        return invalid("manifest.monolith_path resolves outside project root: %s" % mono_abs)
-    if not os.path.exists(mono_abs):
-        return invalid("manifest.monolith_path points at a non-existent file: %s" % mono_abs)
-    # samefile resolves symlinks + compares inodes (requires both exist — guaranteed above)
-    try:
-        same = os.path.samefile(mono_abs, abs_spec)
-    except OSError as exc:
-        return invalid("could not compare monolith_path to spec_path: %s" % exc)
-    if not same:
-        return invalid(
-            "manifest.monolith_path resolves to a DIFFERENT monolith (%s) than this spec (%s)"
-            % (mono_abs, abs_spec)
-        )
+    data, problem = _manifest_problem(manifest, abs_spec, project_dir, project_real)
+    if problem:
+        return invalid(problem)
 
     # split marker must exist as a regular file (broken symlink / dir / missing -> invalid)
     if not os.path.isfile(split_marker):
@@ -223,36 +280,9 @@ def classify(candidate, abs_spec, project_dir, project_real):
         except OSError as exc:
             return invalid("could not stat for staleness check: %s" % exc)
 
-    # All referenced view files must exist as regular files UNDER this candidate's
-    # views_dir. manifest view values use historical conventions:
-    #   new schema:  "views/architect.md"                 (relative to spec dir)
-    #   old schema:  "<candidate>/views/architect.md"     (relative to specs root)
-    #   dict forms:  {"file"/"path": "views/architect.md"} OR a metadata-only dict
-    #               (e.g. {"line_count": N}) where the path is inferred views/<role>.md
-    # The resolved real path MUST stay inside views_dir (reject absolute paths,
-    # ".." escapes, and any value that resolves outside the candidate's views dir) —
-    # otherwise a manifest could point at an unrelated file and falsely validate
-    # (codex issue 1).
-    views = data.get("views")
-    if not isinstance(views, dict) or not views:
-        return invalid("manifest.views missing or empty")
-    views_dir_real = _real(views_dir)
-    for role, val in views.items():
-        rel = _view_entry_path(val, role)   # normalize string/dict -> a path string
-        if rel is None:
-            return invalid("manifest.views[%r] has no usable view path (got %r)" % (role, val))
-        # candidate resolutions, in precedence order:
-        #   spec_dir/<rel>            (new: rel begins with "views/")
-        #   specs_root/<rel>          (old: rel begins with "<candidate>/views/")
-        resolved = None
-        for base in (spec_dir, specs_root):
-            cand = _real(os.path.join(base, rel))
-            # must be a regular file AND inside this candidate's views_dir
-            if (cand == views_dir_real or cand.startswith(views_dir_real + os.sep)) and os.path.isfile(cand):
-                resolved = cand
-                break
-        if resolved is None:
-            return invalid("referenced view file for role %r not found as a regular file under views/ (%s)" % (role, rel))
+    problem = _views_problem(data, spec_dir, specs_root, views_dir)
+    if problem:
+        return invalid(problem)
 
     detail["reason"] = "valid"
     return PRESENT_AND_VALID, detail

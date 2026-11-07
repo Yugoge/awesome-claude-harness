@@ -29,6 +29,7 @@ from spec_verify_parsers import (  # noqa: F401 -- re-exports
     HEADING_REGEX, CONSUMERS_REGEX, CONSUMERS_INLINE_REGEX,
     parse_front_matter, parse_role_headings,
     parse_consumers_tags, lookup_role_block,
+    role_annotated_agents, lines_every_view_carries,
 )
 from spec_verify_summary import (  # noqa: F401 -- re-exports
     CheckResult, validate_layer_1, print_summary, stub_mandate_result,
@@ -196,14 +197,14 @@ def print_show_uncovered(uncovered):
 SKIP_FILES = {"orchestrator.md", "manifest.json", "INDEX.md", "README.md", "checkpoints.json"}
 
 
-def _check_view_file(name, path):
-    """Check a single non-orchestrator view for mandatory sections."""
+def _check_view_file(name, path, annotated):
+    """A consumer view lacks `## Role Mandate` only where R3.4 lets it omit
+    the section: the monolith annotates no role for the view's agent."""
     with open(path, encoding="utf-8") as f:
         content = f.read()
-    checks = [
-        ("Role Mandate", "## role mandate" in content.lower()),
-    ]
-    return [{"file": name, "check": c, "status": "missing"} for c, ok in checks if not ok]
+    if "## role mandate" in content.lower() or name[:-3].lower() not in annotated:
+        return []
+    return [{"file": name, "check": "## Role Mandate", "status": "missing"}]
 
 
 def _check_orchestrator(views_dir):
@@ -222,13 +223,14 @@ def _check_orchestrator(views_dir):
             for c, ok in checks if not ok]
 
 
-def check_structure(views_dir):
+def check_structure(views_dir, monolith_text):
     """Check mandatory sections in each view file. Returns list of issues."""
+    annotated = role_annotated_agents(monolith_text)
     issues = []
     for name in sorted(os.listdir(views_dir)):
         if not name.endswith(".md") or name in SKIP_FILES:
             continue
-        issues.extend(_check_view_file(name, os.path.join(views_dir, name)))
+        issues.extend(_check_view_file(name, os.path.join(views_dir, name), annotated))
     issues.extend(_check_orchestrator(views_dir))
     return issues
 
@@ -406,37 +408,41 @@ def _classify_overlap_findings(pairs, uniqueness, max_overlap, min_uniq):
     return reject_pairs, warn_pairs, reject_uniq, warn_uniq
 
 
-def _print_overlap_header(views):
+def _print_overlap_header(views, by_rule):
     """Print the overlap-check section header with view line counts."""
     print("\n--- Overlap checks ---")
     print(f"Consumer views analyzed: {list(views.keys())}")
+    print(f"Not counted: {by_rule} line(s) every view carries by rule "
+          "(Section 9, consumers: [all])")
     counts = ", ".join(f"{n}={len(s)}" for n, s in views.items())
     print(f"Line counts: {counts}")
     print()
     print("Pairwise overlap matrix (shared / min(|A|, |B|) as %):")
 
 
-def check_overlap(views_dir, max_pairwise_overlap, min_uniqueness):
+def check_overlap(views_dir, max_pairwise_overlap, min_uniqueness, monolith_text):
     """Run overlap + uniqueness checks.
 
     Returns (had_reject_pairs, had_warn_pairs, had_reject_uniq, had_warn_uniq).
     R1.3 callers split overlap and uniqueness into two separate summary
     rows, so the four signals are returned independently rather than
-    OR'd together.
+    OR'd together. Lines every view carries by rule are not counted: a
+    compliant split of a small spec would otherwise fail on them alone.
     """
-    views = load_consumer_views(views_dir)
+    shared_by_rule = lines_every_view_carries(monolith_text)
+    views = {name: lines - shared_by_rule for name, lines in load_consumer_views(views_dir).items()}
     if len(views) < 2:
         print("\n--- Overlap checks ---")
         print(f"Skipped: need at least 2 consumer views (found {len(views)}).")
         return False, False, False, False
-    return _run_overlap_pass(views, max_pairwise_overlap, min_uniqueness)
+    return _run_overlap_pass(views, max_pairwise_overlap, min_uniqueness, len(shared_by_rule))
 
 
-def _run_overlap_pass(views, max_pairwise_overlap, min_uniqueness):
+def _run_overlap_pass(views, max_pairwise_overlap, min_uniqueness, by_rule):
     """Compute and report overlap+uniqueness on a non-empty `views` map."""
     pairs = compute_pairwise_overlap(views)
     uniqueness = compute_uniqueness(views)
-    _print_overlap_header(views)
+    _print_overlap_header(views, by_rule)
     print_overlap_matrix(views, pairs)
     buckets = _classify_overlap_findings(
         pairs, uniqueness, max_pairwise_overlap, min_uniqueness,
@@ -675,11 +681,15 @@ def _run_coverage_check(args):
 
 def _run_structural_check(args):
     """Run structural check; return CheckResult (R1.3)."""
-    structural_issues = check_structure(args.views_dir)
+    with open(args.monolith, encoding="utf-8") as f:
+        monolith_text = f.read()
+    structural_issues = check_structure(args.views_dir, monolith_text)
     print_structural_report(structural_issues)
     if not structural_issues:
         return CheckResult("structural", "PASS", "", 0)
-    detail = f"{len(structural_issues)} issue(s)"
+    # The summary row is what G2 relays to the spec subagent: name each view
+    # and the section it lacks.
+    detail = "; ".join(f"{i['file']}: {i['check']} {i['status']}" for i in structural_issues)
     if args.strict:
         print("\nFAIL: structural issues found with --strict", file=sys.stderr)
         return CheckResult("structural", "FAIL", detail, 1)
@@ -693,8 +703,11 @@ def _run_overlap_check(args):
     underlying check_overlap() already classifies pair vs uniqueness
     findings; here we surface them as two CheckResult records.
     """
+    with open(args.monolith, encoding="utf-8") as f:
+        monolith_text = f.read()
     buckets = check_overlap(
         args.views_dir, args.max_pairwise_overlap, args.min_uniqueness,
+        monolith_text,
     )
     had_reject_pairs, had_warn_pairs, had_reject_uniq, had_warn_uniq = buckets
     overlap_result = _overlap_result(

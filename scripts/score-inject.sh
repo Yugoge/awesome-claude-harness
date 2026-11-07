@@ -67,12 +67,13 @@ if ! flock -s -w "${LOCK_TIMEOUT}" 8; then
   exit 1
 fi
 
-( source "$(dirname "${BASH_SOURCE[0]}")/../venv/bin/activate" && python3 - "${LIFECYCLE_FILE}" "${AGENT}" <<'PYEOF'
+( source "$(dirname "${BASH_SOURCE[0]}")/../venv/bin/activate" && python3 - "${LIFECYCLE_FILE}" "${AGENT}" "$(dirname "${BASH_SOURCE[0]}")/lib" <<'PYEOF'
 import hashlib
-import json
 import sys
 
 lifecycle_file, agent = sys.argv[1:3]
+sys.path.insert(0, sys.argv[3])
+from score_log import ScoreLogError, read_lines
 
 RANK_BOUNDARIES = [
     (0, 20, "Apprentice"),
@@ -124,34 +125,18 @@ def emit_neutral_fallback():
 # Read lifecycle.jsonl under shared flock (flock already acquired by bash caller).
 # Scan all lines; take latest new_score for rank/range computation.
 # For recent-events, take last 3 entries where event != "score_baseline_import".
-# Malformed non-final JSONL line: exit 1 with stderr message (not silent fallback).
+# A refused log: exit 1 with stderr message (not silent fallback).
 try:
-    with open(lifecycle_file, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-except OSError as e:
-    sys.stderr.write(f"score-inject.sh: cannot read {lifecycle_file}: {e}\n")
+    entries = read_lines(lifecycle_file)
+except ScoreLogError as e:
+    sys.stderr.write(f"score-inject.sh: {e}\n")
     sys.exit(1)
 
 score = 50
 agent_found = False
 behavioral_events = []  # events with event != "score_baseline_import"
 
-for i, raw_line in enumerate(lines):
-    stripped = raw_line.rstrip("\n")
-    if not stripped:
-        continue
-    is_final = (i == len(lines) - 1)
-    try:
-        entry = json.loads(stripped)
-    except json.JSONDecodeError:
-        if is_final:
-            # Silently skip partial final line (crash-recovery path)
-            continue
-        # Non-final malformed line: audit corruption — exit 1 with stderr
-        sys.stderr.write(
-            f"score-inject.sh: malformed JSONL at line {i+1} of {lifecycle_file} (not final line) — possible audit corruption\n"
-        )
-        sys.exit(1)
+for _line, entry in entries:
     if entry.get("agent") == agent:
         score = int(entry.get("new_score", 50))
         agent_found = True

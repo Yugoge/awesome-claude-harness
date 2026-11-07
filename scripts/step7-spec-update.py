@@ -3,11 +3,11 @@
 Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2.
 
 This script implements the Step 8 algorithm specified verbatim in commands/commit.md
-section "### Step 8: Spec-update dispatch (post-commit, deterministic fail-closed)".
+section "### Step 8: Spec-update dispatch (post-commit, advisory)".
 
 It is the executable embodiment of the algorithm that the /commit orchestrator runs
 in stages (1) context.spec_path -> (2) close-report continuation line -> (3) mtime+marker
-glob -> (4) fail-closed outcome. The orchestrator may either follow the commit.md
+glob -> (4) advisory outcome. The orchestrator may either follow the commit.md
 prose directly OR invoke this harness; both paths satisfy the AC-05 contract because
 they execute identical decision logic.
 
@@ -16,25 +16,28 @@ USAGE:
       --task-id <TASK_ID> \\
       --dev-docs-root <DEV_DOCS_ROOT> \\
       [--bulk true|false] [--dryrun true|false] \\
-      [--changelog-status committed|nothing_to_commit|nothing_to_commit_precommitted|push_gate_reconciled|failed] \\
-      [--push-gate-token-path <path-or-NONE>]
+      [--changelog-status <commit_status as changelog-analyst reported it>] \\
+      [--push-gate-token-path <ignored>]
 
 ENV:
-  COMMIT_STEP7_TRACE=1   Emit STEP7_* deterministic markers to stderr.
+  COMMIT_STEP8_TRACE=1   Emit STEP8_* deterministic markers to stderr.
 
 EXIT CODES:
-  0   normal — either Step 8 skipped, stage 1/2 dispatched, or stage 4 empty-set
-  2   stage 4 fail-closed (set has 1 or more elements without context linkage)
+  0   every outcome: the selection is the line printed (Step 8 skipped, the stage 1/2
+      dispatch, stage 4's empty set, or stage 4's unlinked spec(s), which commands/commit.md
+      Step 8 (4) prints and dispatches nothing for).
+      The exit status decides nothing: the close report this selection reads is checked at
+      close QA's own stop (G2), and /commit Step 3 admitted the task on its verdict (P1b E4).
 
 OUTPUT:
   stdout: human-readable narration of the decision
-  stderr: STEP7_* markers when COMMIT_STEP7_TRACE=1; warnings; errors
+  stderr: STEP8_* markers when COMMIT_STEP8_TRACE=1; warnings; errors
 
 NOTE: This harness implements ONLY the Step 8 SELECTION + TRACE logic — stages
-(1)-(4) — and the corresponding STEP7_* stderr markers. It does NOT execute the
+(1)-(4) — and the corresponding STEP8_* stderr markers. It does NOT execute the
 "Dispatch payload" Agent call described in commands/commit.md (an inline
 spec-update Agent invocation requires the orchestrator's Claude Code session).
-The harness emits the STEP7_SPEC_UPDATE_DISPATCHED marker IMMEDIATELY before
+The harness emits the STEP8_SPEC_UPDATE_DISPATCHED marker IMMEDIATELY before
 the point at which the orchestrator would perform the real Agent dispatch.
 QA contract: the AC-05 marker assertion verifies the selection contract, not
 the Agent-dispatch contract. The Agent-dispatch contract is implicit in the
@@ -59,7 +62,7 @@ SPEC_BASENAME_RE = re.compile(r"^spec-\d{8}-\d{6}\.md$")
 
 
 def _trace_on() -> bool:
-    return os.environ.get("COMMIT_STEP7_TRACE", "") == "1"
+    return os.environ.get("COMMIT_STEP8_TRACE", "") == "1"
 
 
 def _emit(marker: str) -> None:
@@ -103,9 +106,9 @@ def _stage1_context_spec_path(task_id: str, dev_docs_root: pathlib.Path):
 
 
 def _stage2_close_report_continuation(task_id: str, dev_docs_root: pathlib.Path):
+    # The close report is there: close QA's own stop (G2) checked it, and /commit
+    # Step 3 admitted the task on its verdict before Step 8 runs (P1b E4).
     cr = dev_docs_root / f"close-report-{task_id}.md"
-    if not cr.is_file():
-        return None
     matches = []
     for line in _parse_close_report_lines_outside_fences(cr):
         m = CONTINUATION_RE.match(line)
@@ -123,8 +126,6 @@ def _stage2_close_report_continuation(task_id: str, dev_docs_root: pathlib.Path)
 
 def _stage3_mtime_glob(task_id: str, dev_docs_root: pathlib.Path):
     cr = dev_docs_root / f"close-report-{task_id}.md"
-    if not cr.is_file():
-        return []
     cr_mtime = cr.stat().st_mtime
     lo = cr_mtime - 24 * 3600
     hi = cr_mtime + 3600
@@ -158,18 +159,13 @@ def main() -> int:
     ap.add_argument("--dev-docs-root", required=True)
     ap.add_argument("--bulk", default="false", choices=["true", "false"])
     ap.add_argument("--dryrun", default="false", choices=["true", "false"])
-    # push_gate_reconciled: changelog-analyst wrote a missing push-gate token for an
-    # already-existing HEAD commit ATTRIBUTED to this task (attribution is by journal
-    # entry, not authorship — see hooks/lib/commit_journal.py) and created no new commit. It
-    # must be an accepted choice so the status routes to the normal
-    # "changelog_no_real_commit" skip below; without it argparse aborts before
-    # that branch is ever reached.
-    ap.add_argument("--changelog-status", default="committed",
-                    choices=["committed", "nothing_to_commit",
-                             "nothing_to_commit_precommitted",
-                             "push_gate_reconciled", "failed"])
-    ap.add_argument("--push-gate-token-path", default="",
-                    help="Path to push-gate token; empty/NONE => not present")
+    # The status is read verbatim: G2 validated changelog-analyst's status block
+    # against changelog-status.v1 at the analyst's own stop, and only
+    # `committed` is a real commit of this cycle.
+    ap.add_argument("--changelog-status", default="committed")
+    # Accepted and not read: hooks/push.sh is the push-gate token's one decider,
+    # and a `committed` status already says a token was written.
+    ap.add_argument("--push-gate-token-path", default="", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     task_id = args.task_id.strip()
@@ -179,35 +175,27 @@ def main() -> int:
 
     # SKIP branches (commit.md Step 8 SKIP block, in declared order)
     if bulk:
-        _emit("STEP7_SKIPPED: bulk=true")
+        _emit("STEP8_SKIPPED: bulk=true")
         print("Step 8 skipped: BULK=true")
         return 0
     if dryrun:
-        _emit("STEP7_SKIPPED: dryrun=true")
+        _emit("STEP8_SKIPPED: dryrun=true")
         print("Step 8 skipped: DRYRUN=true")
         return 0
     if not task_id:
-        _emit("STEP7_SKIPPED: task_id_empty")
+        _emit("STEP8_SKIPPED: task_id_empty")
         print("Step 8 skipped: TASK_ID is empty")
         return 0
-    push_gate_ok = (
-        args.push_gate_token_path
-        and args.push_gate_token_path != "NONE"
-        and pathlib.Path(args.push_gate_token_path).is_file()
-    )
-    if args.changelog_status != "committed" or not push_gate_ok:
-        _emit("STEP7_SKIPPED: changelog_no_real_commit")
-        print(
-            f"Step 8 skipped: changelog status={args.changelog_status} "
-            f"push_gate_ok={push_gate_ok}"
-        )
+    if args.changelog_status != "committed":
+        _emit("STEP8_SKIPPED: changelog_no_real_commit")
+        print(f"Step 8 skipped: changelog status={args.changelog_status}")
         return 0
 
     # Stage (1) context.spec_path
     sp1 = _stage1_context_spec_path(task_id, dev_docs_root)
     if sp1 is not None:
         _emit(
-            f"STEP7_SPEC_UPDATE_DISPATCHED: task-id={task_id} stage=1 "
+            f"STEP8_SPEC_UPDATE_DISPATCHED: task-id={task_id} stage=1 "
             f"spec_path={sp1}"
         )
         print(f"Stage 1 dispatch: {sp1}")
@@ -221,7 +209,7 @@ def main() -> int:
             file=sys.stderr,
         )
         _emit(
-            f"STEP7_SPEC_UPDATE_DISPATCHED: task-id={task_id} stage=2 "
+            f"STEP8_SPEC_UPDATE_DISPATCHED: task-id={task_id} stage=2 "
             f"spec_path={sp2}"
         )
         print(f"Stage 2 dispatch: {sp2}")
@@ -230,14 +218,14 @@ def main() -> int:
     # Stage (3) mtime + literal-task-id glob
     candidates = _stage3_mtime_glob(task_id, dev_docs_root)
 
-    # Stage (4) outcome (fail-closed)
+    # Stage (4) outcome (advisory: printed, nothing dispatched)
     if not candidates:
-        _emit(f"STEP7_NO_SPEC: task-id={task_id}")
+        _emit(f"STEP8_NO_SPEC: task-id={task_id}")
         print(f"No spec associated with task-id {task_id}")
         return 0
     paths_str = ",".join(str(p) for p in candidates)
     _emit(
-        f"STEP7_UNLINKED_SPEC: task-id={task_id} "
+        f"STEP8_UNLINKED_SPEC: task-id={task_id} "
         f"count={len(candidates)} paths={paths_str}"
     )
     if len(candidates) == 1:
@@ -251,7 +239,7 @@ def main() -> int:
             f"{paths_str}; explicit context.spec_path required",
             file=sys.stderr,
         )
-    return 2
+    return 0
 
 
 if __name__ == "__main__":
