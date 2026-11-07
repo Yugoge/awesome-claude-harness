@@ -734,6 +734,8 @@ def test_doc_sync_regenerated_lines_take_upstreams_side(tmp_path, env):
     assert (home / "scripts/INDEX.md").read_text(encoding="utf-8") == upstream
     assert len(git(env, home, "stash", "list").stdout.splitlines()) == 1
     assert "repair resolved=3 doc-sync=3 unstaged=0 unmerged-left=1" in landing_log(home)
+    log = landing_log(home)  # review LH-5: the owner's README left unmerged runs no repair at later Stops
+    assert land(env, home) == "" and landing_log(home) == log
     git(env, home, "checkout", "-q", "HEAD", "--", "agents/README.md")  # the owner's own conflict
     write(origin / "upstream-note.md", "next upstream change\n")
     git(env, origin, "add", "-A")
