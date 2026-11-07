@@ -518,9 +518,17 @@ reliable nextEligibleAt auto-suspend without escalation.
 - DO NOT restart a daemon the controller depends on (three options only, per
   Hard constraints).
 - DO NOT dispatch in the background — `run_in_background: false` always.
-- DO NOT bypass, wrap, or edit hooks; on hook rejection ask one specific
-  AskUserQuestion inside the turn naming the exact command and the hook output
-  (the pause; Subagent Hook Discipline), and retry nothing until it is answered.
+- DO NOT bypass, wrap, or edit hooks, and DO NOT retry, disguise or
+  circumvent a hook-rejected operation (controller or subagent). On a hook
+  rejection ask one specific AskUserQuestion inside the turn naming the
+  operation, the exact command and the hook output (the pause; it releases no
+  gate; Subagent Hook Discipline). The answer authorizes no retry: the
+  operation runs again only after the owner's `/allow` grant for it, typed as
+  his own prompt, where the refusing hook reads one (it lets the command
+  through once; a hook that reads no grant goes on refusing it), or the owner
+  runs it himself. If he declines, the same role resumes without it while
+  every acceptance criterion stays achievable without it (Hook Discipline #4);
+  a decline never ends the command.
 - DO NOT substitute for human-only `/restart` — in-session subagent quota
   interrupts escalate as class 5.
 - DO NOT write into `.claude/paseo-daemon/` except through the ledger CLI
