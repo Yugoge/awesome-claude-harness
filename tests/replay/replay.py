@@ -201,6 +201,11 @@ class Replay:
             for name, path in paths.items():
                 v = v.replace(name, path)
             env[k] = v
+        if env["CLAUDE_STATE_DIR"] == "" and lay.mode == "ns":
+            # `--env CLAUDE_STATE_DIR=` unsets it (P1b acceptance 9's runs with the variable unset), in
+            # mode ns only: there the hooks' default root /tmp is the sandbox's own private /tmp.
+            del env["CLAUDE_STATE_DIR"]
+            return env
         st = env["CLAUDE_STATE_DIR"]
         if not os.path.isabs(st) or os.path.normpath(st) == "/tmp":  # rule 8: never the shared default
             raise ValueError(f"CLAUDE_STATE_DIR must be an absolute directory other than /tmp, not {st!r}")

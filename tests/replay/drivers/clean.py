@@ -110,10 +110,13 @@ inspector's report is changed through the framework's fault hook (Replay.step): 
 `invalid` drops the first field the declared schema requires, `notjson` keeps the first half of the
 text. Each is meant to be stopped at the inspector's own stop and pass on its next round (above).
 
+`--arg then=push`: after /clean's Stop the owner types `/push` in the same session, played by
+drivers/push.py's PushRun from the tree's commands/push.md: on a branch no earlier token covers (no
+/commit ran), so its token gate passes only on the token the cleaner wrote for its own commit (P1b
+acceptance 9). facts.json records the toy and the agentic-commit trees before /clean and before /push.
+
 Not replayed: options 2-5 at Step 13 (a subset of option 1's relations: fewer approvals, or none and no
-cleaner), `--codex`, a coverage miss at Steps 10 and 10A (a re-dispatch of the same templates), and a
-/push after the cleaner's commit (push.sh reads the token through the same writer drivers/push.py
-replays after /commit).
+cleaner), `--codex` and a coverage miss at Steps 10 and 10A (a re-dispatch of the same templates).
 """
 from __future__ import annotations
 
@@ -1101,4 +1104,21 @@ class CleanRun:
 
 
 def run(rp) -> None:
-    CleanRun(rp, rp.args.get("gaps", "bridged"), rp.args.get("fault", "")).run()
+    then = rp.args.get("then", "none")
+    if then not in ("none", "push"):
+        raise ValueError(f"then must be none or push, not {then!r}")
+    cr = CleanRun(rp, rp.args.get("gaps", "bridged"), rp.args.get("fault", ""))
+    if then == "none":
+        return cr.run()
+    # `--arg then=push`: the owner types /push after /clean, in the same session (P1b acceptance 9). The
+    # toy's branch has no push-gate token before /clean (a fresh sandbox, no /commit): the one /push
+    # finds is the cleaner's, written for its commit (drivers/push.py plays /push).
+    from . import close as closedrv
+    from . import push as pushdrv
+    rp.pipeline = "clean+push"
+    closedrv.fact(rp, "before /clean", {"toy": pushdrv.origin_state(rp), "left": pushdrv.leftovers(rp)})
+    cr.run()
+    closedrv.fact(rp, "before /push", {"cleanup commit": (cr.cleaner_result.get("git_status") or {}).get(
+        "cleanup_commit", "") if getattr(cr, "cleaner_result", None) else "",
+        "toy": pushdrv.origin_state(rp), "left": pushdrv.leftovers(rp)})
+    pushdrv.PushRun(rp, cr.o.s, args="").run()

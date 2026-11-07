@@ -21,6 +21,13 @@ Driver arguments (cli.py --arg K=V):
   then=none           the /do turn only
   session=same|later  the session /close and /commit are typed in (default same)
 
+Acceptance 7's /do case, run by name (`--arg variant=blocked`; the artifact check's job list,
+tests/artifact_graph/runtime.py drivers(), keeps this driver's one default replay):
+  blocked             the /do work is not finished: the user abandons the task before the change is
+                      made, and Step 5 writes the do-report with the honest terminal status `blocked`
+                      the text names; /close's do-report lite preflight finds it not `completed` and
+                      dev is dispatched again under the same task id to complete the /do work
+
 Respellings: no harness-script call of the /do text needs one (row 7). One path is recorded in
 blocks.json "respellings" as "do sidecar dir": the base text reads the sidecar at the literal
 `/tmp/claude-do-task-$SID.json`, the historical state root; under rule 8 the replay's
@@ -58,8 +65,8 @@ class DoTurn:
     """One /do turn: the main agent works directly and writes the do-report."""
 
     def __init__(self, rp, session=None, deviations: Deviations | None = None, task: str = TASK,
-                 edits=(("toy/__init__.py", TOY_OLD, TOY_NEW),)):
-        self.rp, self.task, self.edits = rp, task, list(edits)
+                 edits=(("toy/__init__.py", TOY_OLD, TOY_NEW),), variant: str = "plain"):
+        self.rp, self.task, self.edits, self.variant = rp, task, list(edits), variant
         from .close import kept_only
         self.o = Orchestrator(rp, "do", session=session, deviations=kept_only(rp, deviations or DEVIATIONS))
         self.tid = ""
@@ -95,6 +102,10 @@ class DoTurn:
         for rel, old, new in self.edits:
             path = os.path.join(o.project, rel)
             self.call(s.read, path, label=self.label(f"Step 2 Read {rel}"))
+            if self.variant == "blocked":
+                # The user abandons the task before the change is made.
+                s.say("Stopping here at your request: toy.add is unchanged.")
+                return
             c = self.call(s.edit, path, old, new, label=self.label(f"Step 2 Edit {rel}"))
             if c.ok:
                 self.files_modified.append(rel)
@@ -105,6 +116,9 @@ class DoTurn:
         self.o.s.say("Step 3 skipped: --codex was not passed.")
 
     def step4(self) -> None:
+        if self.variant == "blocked":
+            self.o.s.say("Nothing changed: the task was abandoned before the change was made. Codex audit not run.")
+            return
         self.o.s.say(f"Changed toy.add: a non-number argument now raises TypeError naming it. "
                      f"Files modified: {', '.join(self.files_modified)}. Codex audit not run.")
 
@@ -153,6 +167,11 @@ class DoTurn:
         doc["do"].update(status="completed", files_modified=list(self.files_modified),
                          files_created=list(self.files_created),
                          summary="toy.add now raises TypeError naming the argument that is not a number.")
+        if self.variant == "blocked":
+            # "`blocked` — honest terminal state when the task could not be finished (user abandoned it ...).
+            # Fill `do.summary` with what blocked it."
+            doc["do"].update(status="blocked", summary="Not finished: the user abandoned the task before toy.add "
+                                                       "was changed.")
         text = json.dumps(doc, indent=2) + "\n"
         path = os.path.join(o.project, self.report_rel)
         # A text that has the hook pre-write a skeleton tells the agent to rewrite it; else the agent
@@ -169,15 +188,21 @@ class DoTurn:
             o.advance(label=self.label(f"TodoWrite Step {n - 1} done, Step {n} in_progress"))
             fn()
         o.advance(label=self.label("TodoWrite Step 5 done"))
-        o.s.stop(f"/do {self.tid} done: toy.add rejects non-numbers; do-report {self.report_rel}. "
+        done = ("blocked: the task was abandoned before the change" if self.variant == "blocked"
+                else "done: toy.add rejects non-numbers")
+        o.s.stop(f"/do {self.tid} {done}; do-report {self.report_rel}. "
                  f"Next: /close {self.tid}", label="/do Stop", deviation=o.devs.at("/do Stop"))
         return self.tid
 
 
 def run(rp) -> None:
     then = rp.args.get("then", "close-commit")
-    rp.pipeline = "do" if then == "none" else f"do+{then}"
-    turn = DoTurn(rp)
+    variant = rp.args.get("variant", "plain")
+    if variant not in ("plain", "blocked"):
+        raise ValueError(f"unknown variant {variant!r}")
+    rp.pipeline = ("do" if then == "none" else f"do+{then}") + (f"/{variant}" if variant != "plain" else "") + (
+        "/later" if rp.args.get("session") == "later" else "")
+    turn = DoTurn(rp, variant=variant)
     tid = turn.run()
     if then == "none":
         return
