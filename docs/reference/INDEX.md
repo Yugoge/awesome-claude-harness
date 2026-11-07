@@ -8,7 +8,6 @@
 ## Tree
 ```
 reference/
-├── `bash-write-targets-capability-gap-20261005.md` - bash_write_targets.py capability gap: a fail-open/fail-shut pair from one resolution gap
 ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
 ├── `close-commit-failure-inventory-20260927.md` - /close 与 /commit 失败方式全量清单(2026-09-27)
 ├── `close-commit-zero-failure-mechanism-20260928.md` - Close/commit zero-failure mechanism — converged design (2026-09-28/29)
@@ -33,10 +32,8 @@ reference/
 ├── `recoverable-discard-register-20261005.md` - Recoverable-discard register — 2026-10-05 tree-to-zero campaign
 ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
 ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
-├── `subagentstop-payload-s0-measurement-20260929.md` - SubagentStop payload availability — S0 measurement (2026-09-29)
 ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
-├── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
-└── `workflow-bookmark-orphans-20261005.md` - Root-level `workflow-*.json` bookmarks have no lifecycle management; 22/22 are orphans
+└── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
 ```
 <!-- /AUTO:index-stats -->
 
