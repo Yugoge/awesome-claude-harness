@@ -21,7 +21,7 @@ returns exactly one verdict:
                         baseline + foreign deltas reproduces the on-disk tail
                         byte for byte -> `stage_content` is the synthesized bytes.
   ENTANGLED             anything else with enough coverage to judge. NEVER
-                        auto-resolved, side-selected or merged: a durable
+                        auto-resolved, side-selected or merged: an
                         escalation record naming the exact conflicting edge
                         pair is emitted (schemas/owned-edits-ledger.v1.json
                         x-classification-contract.escalation_record_properties
