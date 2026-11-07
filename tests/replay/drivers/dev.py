@@ -45,7 +45,8 @@ Driver arguments (cli.py --arg K=V):
                        the lane's dev is dispatched again; the next QA passes
   variant=question     BA writes its producer question; the orchestrator relays it with one
                        AskUserQuestion inside the turn and re-dispatches BA (Step 5) with the answer
-  variant=ba-qa-fail   QA in BA-validation mode fails; BA is re-dispatched (Step 8); QA passes
+  variant=ba-qa-fail   QA in BA-validation mode fails; BA is re-dispatched (Step 8), keeps its unchanged
+                       acceptance criteria and must stop unblocked (else the replay raises); QA passes
   variant=formatter    as plain, the dev then running a formatter (FORMATTER) that rewrites toy/util.py,
                        a file it did not edit; it declares that file too and names none
   variant=fanout       a fan-out cycle of `lanes` lanes (default 2, at most 3), every lane passing
@@ -585,7 +586,11 @@ class DevCycle:
         o = self.o
         o.s.say(f"BA-QA iteration 1: QA found {len(self.objections)} objections in BA analysis. "
                 "Re-invoking BA to address objections.")
-        self.dispatch_ba("Step 8", self.L("Step 8 Agent(ba) BA-QA iteration 1"), addressed=self.objections)
+        d = self.dispatch_ba("Step 8", self.L("Step 8 Agent(ba) BA-QA iteration 1"), addressed=self.objections)
+        # D25 (1): the BA keeps its acceptance criteria unchanged, as a compliant re-dispatch may, and stops
+        # unblocked; raising fails the artifact check's armed replay of this variant (CI), not only its table.
+        if d.stop is not None and d.stop.still_blocked:
+            raise agents.PlayError(f"{d.label}: the compliant re-dispatched BA was blocked at its stop")
         self.step6(self.L("Step 8 (Step 6 again)"))
         report = self.step7(self.L("Step 8 (Step 7 again)"), "pass")
         assert report.get("verdict") == "pass", report
