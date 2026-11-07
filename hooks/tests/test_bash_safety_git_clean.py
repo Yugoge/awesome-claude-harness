@@ -151,7 +151,7 @@ def run_hook(command: str, session_id: str = None, hook: str = HOOK,
     """Invoke the real hook with a Bash tool_input and return its exit code.
 
     `agent_id` makes the hook's IS_SUBAGENT true, which is what selects the
-    4th grant channel; `cwd` keeps a granted clean's pre-clean WIP snapshot
+    subagent side; `cwd` keeps a granted clean's pre-clean WIP snapshot
     inside a throwaway repo instead of this one.
 
     `want_stderr` additionally returns the hook's stderr, so a BLOCK assertion
@@ -572,12 +572,12 @@ def test_AC15_quoted_fix_does_not_over_block(form):
     assert run_hook(form) == ALLOW
 
 
-# ── AC16: grant channel 4 of 4 — the subagent side of /do consent ────────────
-# The other three grant exits run BEFORE this deny, so they already reach lane
-# r03-c's pre-clean WIP snapshot guard. The subagent /do exit runs AFTER it, so
-# the deny preempted the snapshot and made an explicit human grant weaker on
-# this channel than on the other three. The deny now honours it, and the
-# release is exactly as wide as that exit's own predicate — never wider.
+# ── AC16: the subagent side ──────────────────────────────────────────────────
+# A subagent never holds /do consent (hooks/lib/allowlist.py has_do_consent,
+# the one consent rule): its session's /do flag releases nothing. The human's
+# route for a subagent's clean is an /allow grant, which the sentinel exit
+# honours in subagent context; like every grant exit it hands the command to
+# lane r03-c's FAIL-CLOSED pre-clean WIP snapshot guard, never around it.
 
 @pytest.fixture
 def throwaway_repo(tmp_path):
@@ -593,36 +593,43 @@ def throwaway_repo(tmp_path):
     return str(tmp_path)
 
 
-AC16_GRANTED_FORMS = ["git clean -fd", "git clean -fdx", '"/usr/bin/git" clean -fd']
+AC16_FORMS = ["git clean -fd", "git clean -fdx", '"/usr/bin/git" clean -fd']
 
 
-@pytest.mark.parametrize("form", AC16_GRANTED_FORMS)
-def test_AC16a_subagent_do_consent_reaches_the_snapshot_guard(
+@pytest.mark.parametrize("form", AC16_FORMS)
+def test_AC16a_subagent_session_do_flag_releases_nothing(
         granted_sid, throwaway_repo, form):
-    """A granted destructive clean on the subagent channel must proceed —
-    through the snapshot guard, not around this deny."""
+    """/do consent is the main agent's: a subagent of that session is denied."""
     assert run_hook(form, session_id=granted_sid, agent_id="agent-under-test",
-                    cwd=throwaway_repo) == ALLOW
+                    cwd=throwaway_repo) == BLOCK
 
 
-def test_AC16b_subagent_grant_still_denies_an_unprotectable_clean(
-        granted_sid, throwaway_repo):
+def test_AC16b_subagent_allow_grant_reaches_the_snapshot_guard(
+        sentinel_sid, throwaway_repo):
+    """A granted destructive clean on the subagent side must proceed —
+    through the snapshot guard, not around this deny."""
+    assert run_hook("git clean -fd", session_id=sentinel_sid,
+                    agent_id="agent-under-test", cwd=throwaway_repo) == ALLOW
+
+
+def test_AC16b2_subagent_grant_still_denies_an_unprotectable_clean(
+        sentinel_sid, throwaway_repo):
     """Releasing the deny hands the command to a FAIL-CLOSED guard: a clean
     whose target is a redirected tree cannot be snapshotted, so it is denied
     even though the grant is valid."""
-    assert run_hook("git -C /tmp/elsewhere clean -fd", session_id=granted_sid,
+    assert run_hook("git -C /tmp/elsewhere clean -fd", session_id=sentinel_sid,
                     agent_id="agent-under-test", cwd=throwaway_repo) == BLOCK
 
 
 @pytest.mark.parametrize("form", ["git clean -fd", '"/usr/bin/git" clean -fd'])
 def test_AC16c_subagent_without_a_grant_still_blocks(form, throwaway_repo):
-    """The carve-out is the grant, not the agent: no flag, no release."""
+    """The carve-out is the grant, not the agent: no grant, no release."""
     assert run_hook(form, agent_id="agent-under-test",
                     cwd=throwaway_repo) == BLOCK
 
 
 def test_AC16d_subagent_grant_for_another_session_does_not_release(
-        granted_sid, throwaway_repo):
+        sentinel_sid, throwaway_repo):
     """Session-scoped exactly like the main-agent channel (AC7b)."""
     assert run_hook("git clean -fd", session_id=fresh_sid(),
                     agent_id="agent-under-test", cwd=throwaway_repo) == BLOCK
@@ -1103,13 +1110,6 @@ AC17_ACCEPTED_OVER_BLOCKS = [
     # lane has been pulled up for twice.)
     "git rebase -x 'git clean -n' HEAD~2",
     "git submodule foreach 'git clean -n'",
-    # shape F — ROUND 4: a dry-run whose global option takes a SEPARATE value
-    # the shared classifier does not recognise (`--attr-source HEAD`) resolves
-    # to no invocation at all, so dry-run cannot be proven and the rule fails
-    # closed. The direct price of denying the same option's destructive
-    # spelling, which is proven to delete. `git --attr-source=HEAD clean -n`
-    # (inline) IS resolved and stays ALLOWED — see AC17t.
-    "git --attr-source HEAD clean -n", 'git --attr-source "HEAD" clean -n',
 ]
 
 
@@ -1133,6 +1133,7 @@ def test_AC17m_dry_run_chained_with_a_nested_payload_blocks(form):
     "git --namespace ns clean -n", "git --git-dir .git clean -n",
     "git --work-tree . clean -n", 'git -c "a=b" clean -n',
     "git --namespace='ns' clean -n", "git --attr-source=HEAD clean -n",
+    "git --attr-source HEAD clean -n", 'git --attr-source "HEAD" clean -n',
     "git --no-lazy-fetch clean -n", "git -p clean -n", "git --bare clean -n",
     "git --no-pager grep clean src/", "git -C /tmp grep clean",
     "git --git-dir=/tmp/x grep clean src/", "git --attr-source HEAD grep clean",

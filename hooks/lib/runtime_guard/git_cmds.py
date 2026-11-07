@@ -2,7 +2,8 @@
 """git destructive-subcommand argument parsing for the guard.
 
 Depends on shell_lex (`_strip_quotes`) + pathmatch (`_expand_leading_home`) +
-stdlib; references nothing from _core. See docs/reference/monolith-split-plan.md
+the git global-option table of hooks/lib/git_command_classifier.py + stdlib;
+references nothing from _core. See docs/reference/monolith-split-plan.md
 for the decomposition rationale (incl. why `_git_inspection_head` and the
 forward-referencing orchestrator `_git_destructive_pathspec_hits` stay in _core)
 and the INV-3 dual-context import contract.
@@ -19,6 +20,7 @@ ZERO project identifiers.
 from __future__ import annotations
 
 import os
+import sys
 from typing import Optional
 
 # git argv parsers key on the phase-1 quote stripper and the phase-3 leading-home
@@ -32,17 +34,20 @@ except ImportError:  # executed under the top-level-script shim (no package)
     from pathmatch import _expand_leading_home  # type: ignore[no-redef]
 
 
+try:
+    from ..git_command_classifier import GIT_GLOBAL_VALUE_OPTS
+except ImportError:  # executed under the top-level-script shim: hooks/lib is the parent
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # type: ignore[no-redef]
+
 # git GLOBAL options (before the subcommand) that consume the FOLLOWING token as
-# their argument (`git -C <dir> status`, `git -c k=v log`). Their operand must be
-# skipped when locating the subcommand, else the operand (`<dir>`) is mistaken for
-# the subcommand and a read-only `git -C <dir> status` is wrongly treated as a
-# non-inspection command (which then mis-fires the anchor scan on the dir operand
-# when the dir basename equals a protected command). Generic git CLI grammar, NOT
-# project names.
-_GIT_GLOBAL_OPTS_WITH_ARG = frozenset({
-    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
-    "--super-prefix",
-})
+# their argument (`git -C <dir> status`, `git -c k=v log`): the classifier's git
+# global-option table. Their operand must be skipped when locating the
+# subcommand, else the operand (`<dir>`) is mistaken for the subcommand and a
+# read-only `git -C <dir> status` is wrongly treated as a non-inspection command
+# (which then mis-fires the anchor scan on the dir operand when the dir basename
+# equals a protected command).
+_GIT_GLOBAL_OPTS_WITH_ARG = GIT_GLOBAL_VALUE_OPTS
 
 
 # Destructive git subcommands that DELETE / OVERWRITE / REVERT working-tree files

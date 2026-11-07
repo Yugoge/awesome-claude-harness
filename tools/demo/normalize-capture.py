@@ -39,7 +39,8 @@ import sys
 from pathlib import Path
 
 RESERVED_TASK_ID = "readme-hero-demo-reserved"
-PRESERVED_GRANT_PREFIX = f"/tmp/claude-grants/{RESERVED_TASK_ID}"
+# The reserved grant under the claude-grants directory of whichever state dir the capture ran with.
+PRESERVED_GRANT_COMPONENT = f"/claude-grants/{RESERVED_TASK_ID}"
 
 # Category 1 -- the leading timestamp column written by capture-hero-run.py.
 RE_TIMESTAMP = re.compile(r"^\[\s*\d+\.\d+\]\s")
@@ -71,7 +72,7 @@ def normalize_line(line: str) -> str:
         return sentinel
 
     out = re.sub(
-        re.escape(PRESERVED_GRANT_PREFIX) + r"[A-Za-z0-9._-]*", _stash, out
+        r"(?:/[A-Za-z0-9._-]+)*" + re.escape(PRESERVED_GRANT_COMPONENT) + r"[A-Za-z0-9._-]*", _stash, out
     )
 
     # DELIBERATELY NOT APPLIED. The path/PID/temp-dir rules are declared above as the

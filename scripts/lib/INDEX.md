@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-04T00:30:53Z*
-**Total entries**: 7
+*Last updated: 2026-10-29T07:57:38Z*
+**Total entries**: 9
 **Convention**: kebab
 
 ## Tree
@@ -15,6 +15,7 @@ lib/
 ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
 ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 ├── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
+└── `soundness_gate.py` - HUNK-level failure attribution
 ```
 <!-- /AUTO:index-stats -->
 

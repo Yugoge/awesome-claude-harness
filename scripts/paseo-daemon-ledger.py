@@ -1315,8 +1315,10 @@ def verbatim_prefix_ok(prev_entries, new_entries):
 
 def journal_prefix_ok(prev_records, new_records):
     """Decision journal is append-only across generations, with the ONLY
-    permitted in-place change being a status supersession
-    (active -> superseded/reversed)."""
+    permitted in-place change being a status supersession: an active record
+    leaves active. Its new status is one of the schema's (the dossier is
+    validated against paseo-dossier.v1 before this runs), so every status
+    other than active is a supersession, and the schema alone names them."""
     if len(new_records) < len(prev_records):
         return False
     for old_rec, new_rec in zip(prev_records, new_records):
@@ -1324,8 +1326,7 @@ def journal_prefix_ok(prev_records, new_records):
         o_status, n_status = o.pop("status", None), n.pop("status", None)
         if o != n:
             return False
-        if o_status != n_status and not (
-                o_status == "active" and n_status in ("superseded", "reversed")):
+        if o_status != n_status and o_status != "active":
             return False
     return True
 

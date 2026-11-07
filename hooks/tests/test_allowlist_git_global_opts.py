@@ -85,6 +85,14 @@ class TestStripGitGlobalOpts(unittest.TestCase):
             with self.subTest(opt=opt):
                 self.assertEqual(_strip_git_global_opts(opt + [VERB]), opt + [VERB])
 
+    def test_skippable_options_are_a_subset_of_the_option_table(self):
+        from lib import allowlist
+        from lib.git_command_classifier import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS
+        self.assertLessEqual(allowlist._GRANT_SKIPPABLE_GIT_VALUE_OPTS, GIT_GLOBAL_VALUE_OPTS)
+        self.assertLessEqual(allowlist._GRANT_SKIPPABLE_GIT_FLAGS, GIT_GLOBAL_FLAGS)
+        self.assertEqual(sorted(allowlist._GRANT_SKIPPABLE_GIT_ATTACHED_PREFIXES),
+                         ["--git-dir=", "--namespace=", "--work-tree="])
+
     def test_unknown_option_stops_the_skip(self):
         self.assertEqual(
             _strip_git_global_opts(["--totally-unknown", VERB]),

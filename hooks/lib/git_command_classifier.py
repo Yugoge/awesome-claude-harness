@@ -42,10 +42,10 @@ Prefilter hint for callers:
   python3 to avoid unnecessary subprocess overhead.
 
 Normalization contract:
-  In CLI mode this module does NOT call bash_context_strip/_norm before
-  _segments().  Normalization is the CALLER's responsibility.
-  pretool-bash-safety.sh MUST feed COMMAND_CONTEXT_STRIPPED (already
-  normalized by bash_context_strip.py at lines 733-743), NOT raw $COMMAND.
+  iter_git_invocations() and classify_git_command() normalise their own input,
+  in CLI mode too, so a caller passes the command as written (see
+  iter_git_invocations). pretool-bash-safety.sh's COMMAND_CONTEXT_STRIPPED, an
+  already-normalised command, reads the same.
 """
 
 import collections
@@ -53,6 +53,11 @@ import json
 import os
 import re
 import sys
+
+try:
+    from .bash_context_strip import strip_non_executable_contexts
+except ImportError:  # run as a script, or imported with hooks/lib on sys.path
+    from bash_context_strip import strip_non_executable_contexts
 
 # ---------------------------------------------------------------------------
 # Primitives (moved verbatim from pretool-block-branch-pr-worktree.py:115-219)
@@ -114,7 +119,8 @@ def _segments_with_kind(c):
     and load-bearing.  Making the splitter itself quote-aware would stop
     carving `git push --force` out of a multi-line quoted body, silently
     REMOVING an enumeration that iter_git_invocations() reports today — the
-    dangerous under-block direction.  Only _residual_shapes() reads the flag.
+    dangerous under-block direction.  Only _residual_shapes() and
+    iter_git_invocations() read the flag.
 
     Backslash-newline folding (2026-10-05) is a NARROW exception to the
     "never consulted when deciding where to split" rule above, and it does
@@ -357,11 +363,28 @@ def _command_token_index(toks):
     return None
 
 
-# git global options that consume a separate following value token.
-_GIT_GLOBAL_VALUE = {
-    '-C', '-c', '--git-dir', '--work-tree', '--namespace',
-    '--exec-path', '--super-prefix', '--config-env',
-}
+# The git global-option table: the options git accepts between `git` and the
+# subcommand, as git parses them. git 2.43 accepts each form below but
+# --super-prefix (dropped before it), --shallow-file=<file> (it takes the two-word
+# form only), --no-lazy-fetch and --no-advice (added after 2.43); the table keeps
+# them for the gits that take them. Every hook that locates a git subcommand or
+# reads a global option uses it.
+#   GIT_GLOBAL_VALUE_OPTS  take a value as the next word, the long ones also as
+#                          `--opt=<value>`; git rejects `-C<dir>` and `-cname=value`.
+#   GIT_GLOBAL_FLAGS       take no separate value; `--exec-path` and `--list-cmds`
+#                          take theirs only as `=<value>` (a bare `git --exec-path`
+#                          prints the path and exits).
+GIT_GLOBAL_VALUE_OPTS = frozenset({
+    '-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix',
+    '--config-env', '--attr-source', '--shallow-file',
+})
+GIT_GLOBAL_FLAGS = frozenset({
+    '-p', '--paginate', '-P', '--no-pager', '--bare', '--no-replace-objects',
+    '--literal-pathspecs', '--no-literal-pathspecs', '--glob-pathspecs',
+    '--noglob-pathspecs', '--icase-pathspecs', '--no-optional-locks',
+    '--no-lazy-fetch', '--no-advice', '--html-path', '--man-path', '--info-path',
+    '-v', '--version', '-h', '--help', '--exec-path', '--list-cmds',
+})
 
 
 def _git_subcommand(args):
@@ -369,7 +392,7 @@ def _git_subcommand(args):
     i = 0
     while i < len(args):
         a = args[i]
-        if a in _GIT_GLOBAL_VALUE:
+        if a in GIT_GLOBAL_VALUE_OPTS:
             i += 2
             continue
         if a.startswith('-'):
@@ -574,46 +597,74 @@ GitInvocation = collections.namedtuple(
 )
 
 
+def _invocation(seg):
+    """The GitInvocation of a segment whose command token is git, else None."""
+    toks = seg.split()
+    idx = _command_token_index(toks) if toks else None
+    if idx is None:
+        return None
+    token = toks[idx]
+    # Unquote before basenaming: bash strips the quotes before exec, so
+    # `"/usr/bin/git"` and `'git'` are git invocations (fail-closed fix).
+    if os.path.basename(_unquote_token(token)) != 'git':
+        return None
+    subcommand, remaining_args = _git_subcommand(toks[idx + 1:])
+    return GitInvocation(cmd_token=token, path_qualified=('/' in token),
+                         subcommand=subcommand, args=remaining_args)
+
+
 def iter_git_invocations(command_text):
     """Yield GitInvocation for every git invocation in command_text.
 
-    Uses token-aware parsing: tokenizes each shell segment, skips wrappers
-    and env-var assignments, then checks whether the command token is git
-    (basename match after stripping balanced surrounding quotes, so both
-    /usr/bin/git and "/usr/bin/git" are recognised).
+    Each shell segment's command token is found past wrappers, env-var
+    assignments, reserved words and redirections; it is git when its basename,
+    balanced surrounding quotes stripped, is `git` (/usr/bin/git, "git").
+    path_qualified is True when the token contains a '/'. _git_subcommand()
+    skips git's global options: `/usr/bin/git -C repo push --force` -> 'push',
+    ['--force'].
 
-    path_qualified is True when the token contains a '/' (e.g. /usr/bin/git),
-    False for bare 'git'.  subcommand and args are computed by _git_subcommand()
-    which skips git global options (-C, --git-dir, etc.) so that, e.g.,
-    /usr/bin/git -C repo push --force correctly yields subcommand='push',
-    args=['--force'].
-
-    Normalization note: this function does NOT normalize the command string
-    before segmenting.  Callers are responsible for passing normalized input
-    (e.g. COMMAND_CONTEXT_STRIPPED from bash_context_strip.py) when the raw
-    $COMMAND may contain multi-line quoted bodies that would produce false
-    positives.
+    The input is normalised here, so callers pass the command as written. The
+    splitter is quote-blind, so a segment it opens inside a quote may be text
+    (`echo "tip; git commit -m x"`) or code (`bash -c "cd x; git push"`). In a
+    one-line command without command substitution, such a segment counts only
+    when bash_context_strip.strip_non_executable_contexts() keeps it in the
+    executable view of the command owning the quote, read from that command's
+    command token on (`timeout 5 bash -c "..."` is a shell payload). Elsewhere
+    (an unclosed quote, a quote across lines, a substitution, where a comment,
+    a heredoc or nested quoting can mislead a static reading) every segment
+    counts. Each invocation keeps its tokens as written: the view empties
+    quoted arguments such as `-F "<file>"`.
     """
-    for seg in _segments(command_text):
-        toks = seg.split()
-        if not toks:
-            continue
-        idx = _command_token_index(toks)
-        if idx is None:
-            continue
-        token = toks[idx]
-        # Unquote before basenaming: bash strips the quotes before exec, so
-        # `"/usr/bin/git"` and `'git'` are git invocations (fail-closed fix).
-        if os.path.basename(_unquote_token(token)) != 'git':
-            continue
-        after_git = toks[idx + 1:]
-        subcommand, remaining_args = _git_subcommand(after_git)
-        yield GitInvocation(
-            cmd_token=token,
-            path_qualified=('/' in token),
-            subcommand=subcommand,
-            args=remaining_args,
-        )
+    # The appended ';' opens a last, empty segment that is in a quote exactly
+    # when command_text ends inside one.
+    segments = _segments_with_kind(command_text + ';')
+    starts = [i for i, (_seg, _kind, in_quote) in enumerate(segments) if not in_quote]
+    one_line = not re.search(r'\n|\$\(|<\(|>\(|`', command_text)
+    for start, end in zip(starts, starts[1:] + [len(segments)]):
+        yield from _owned_invocations([seg for seg, _kind, _q in segments[start:end]],
+                                      one_line and end < len(segments))
+
+
+def _owned_invocations(group, droppable):
+    """Invocations of a segment opened outside quotes and the in-quote ones after it."""
+    written = [_invocation(seg) for seg in group]
+    if written[0]:
+        yield written[0]
+    quoted = [inv for inv in written[1:] if inv]
+    if not (droppable and quoted):
+        yield from quoted
+        return
+    words = list(re.finditer(r'\S+', group[0]))
+    idx = _command_token_index([w.group() for w in words])
+    owner = group[0][words[idx].start():] if idx is not None else group[0]
+    kept = collections.Counter(inv.subcommand for inv in map(
+        _invocation, _segments(strip_non_executable_contexts(';'.join([owner] + group[1:])))) if inv)
+    if written[0]:
+        kept[written[0].subcommand] -= 1
+    for inv in quoted:
+        if kept[inv.subcommand] > 0:
+            kept[inv.subcommand] -= 1
+            yield inv
 
 
 def classify_git_command(command_text):
@@ -622,7 +673,9 @@ def classify_git_command(command_text):
     `invocations` is exactly `list(iter_git_invocations(command_text))`.
     `residuals` is a list of (kind, segment) from _residual_shapes(): command
     tokens that could not be resolved statically but look like they could be
-    git.
+    git. That scan reads the command as written, skipping segments opened in a
+    quote: the normaliser's view empties the quoted command words
+    (`env -i "$GIT" push`) it exists to report.
 
     Callers that enforce policy MUST NOT treat an empty `invocations` list as
     proof that no git runs.  The correct fail-closed test is:

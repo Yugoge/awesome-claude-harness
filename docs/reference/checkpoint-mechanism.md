@@ -12,7 +12,8 @@ hooks, fswatch daemon, manual `/checkpoint`) are written to
 `refs/checkpoints/<sanitized-branch>` via
 `~/.claude/hooks/lib/checkpoint-core.sh`. Branch HEADs are **never**
 advanced by automated snapshots. `git blame` on any line therefore points
-to a real semantic commit.
+to a real semantic commit. The checkpoint ref stays local unless
+`GIT_AUTO_PUSH` is exactly `1` (the shipped `settings.json` sets `0`).
 
 ---
 
@@ -76,9 +77,10 @@ After adding the refspec, `git fetch` mirrors checkpoints into
 
 - `~/.claude/logs/checkpoint.log` — CAS retries, build failures,
   empty-repo bootstraps.
-- `~/.claude/logs/checkpoint-push.log` — background push failures. Push
-  is rate-limited to once per 30 seconds per repo and never uses `-f`
-  (CAS guarantees the ref chain is always fast-forward).
+- `~/.claude/logs/checkpoint-push.log` — background push failures. The
+  push runs only when `GIT_AUTO_PUSH` is exactly `1`, at most once per 30
+  seconds per repo, and never uses `-f` (CAS guarantees the ref chain is
+  always fast-forward).
 
 ---
 
@@ -174,7 +176,9 @@ git filter-repo --commit-callback '
 
 ## `/push` behaviour change
 
-`/push` no longer auto-commits. If the working tree is dirty, `/push`
-exits non-zero with a "commit first" message. Use `/checkpoint`
-(snapshot-only, no HEAD move) or `git commit` (real semantic commit)
-before pushing.
+`/push` no longer auto-commits, and a dirty working tree does not block it:
+`hooks/push.sh` prints the number of dirty files ("not blocking") and pushes
+the commits HEAD already holds. Working-tree changes reach the remote only
+once committed through `/commit`; `/checkpoint` snapshots them without
+moving HEAD and pushes only its checkpoint ref, only when `GIT_AUTO_PUSH`
+is exactly `1`.

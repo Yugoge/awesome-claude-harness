@@ -181,7 +181,7 @@ transcript_path. Checks (stateless plus read-only transcript reads):
    this sub-check skipped with an advisory record (the roster stays safe via the disk-side
    lane_set echo, §1.4.2); checks 1-3's payload-only parts still enforced.
 Failure = exit 2 to the ORCHESTRATOR (it repairs its own dispatch — C5-compatible: no producer
-context is ever lost at dispatch time). Kill switch: OBLIGATION_GATE_MODE=advisory|block|off;
+context is ever lost at dispatch time). Kill switch: CLAUDE_OBLIGATION_GATE=advisory|block|off;
 armed per-pipeline during rollout. Fail-open wrapper on unexpected exceptions (pattern:
 subagentstop-artifact-contract-enforce.py:321-328).
 
@@ -213,7 +213,7 @@ not a correlation guess). Honest terminals (blocked / needs_review with schema-v
 rationale) PASS this gate; their chain-level meaning is G4's disposition. Profile-driven
 exemptions replace today's sentinel-sniffing (ba_validation :251-254, force-close :248-249,
 and the --codex residue close #146 via an obligation-profile-aware
-subagentstop-codex-enforce.py). Kill switch: ARTIFACT_CONTRACT_ENFORCE_MODE (existing, :282).
+subagentstop-codex-enforce.py). Kill switch: CLAUDE_OBLIGATION_STOPGATE=advisory|block|off (ARTIFACT_CONTRACT_ENFORCE_MODE governs only the legacy correlation path).
 This gate SUBSUMES and retires the timestamp-substring correlation heuristics of both stop
 hooks (artifact-contract :147-209 — whose own docstring admits per-lane attribution is
 "structurally unavailable" :160-166 — and subagentstop-e2e-enforce's missing-report guess-block
@@ -263,7 +263,7 @@ rationale. `incomplete` → CLOSE: NO, class-a — the load-bearing semantic arg
 defines class-a as "the development cycle itself failed"; a cycle whose orchestrator died
 before completion, or that exhausted its bounded Stop attempts, IS a failed cycle; /close
 reports that single fact with the disposition's evidence attached and names the resume route
-(/redev, or /restart for quota-interrupted children). No per-artifact class-b error ever
+(/restart). No per-artifact class-b error ever
 surfaces as a close failure — the b-facts live inside the disposition's evidence payload for
 the repair route. `forced` → the hand-edit path (§1.4.4). **Instrument-failure rule**: the
 disposition invocation's OWN runtime failures (entrypoint missing, module import — the

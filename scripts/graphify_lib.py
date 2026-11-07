@@ -195,8 +195,10 @@ def write_json_locked(path: Path, data: Any, indent: int = 2) -> None:
 def reset_semantic_mode_in_manifest(cache_dir: Path) -> bool:
     """Reset maintain's run-manifest.json semantic_mode -> 'ast_only' (OBJ-1, AC10/AC11).
 
-    Single source of reset logic shared by maintain's cmd_update (AC10) and
-    graphify-enrich.py's Step-1 update reconciliation (AC11). Loads
+    Single source of reset logic for graphify-maintain.py, the cache's one
+    writer: its update reconciliation (AC10/AC11) and the baseline update of its
+    semantic extract (graphify-enrich.py refreshes the cache through maintain's
+    update and never resets the manifest itself). Loads
     <cache_dir>/run-manifest.json, sets semantic_mode='ast_only', clears the
     semantic added-count fields, and writes it back atomically via
     write_json_locked. MUST be called AFTER the canonical graph.json overwrite
@@ -204,8 +206,8 @@ def reset_semantic_mode_in_manifest(cache_dir: Path) -> bool:
     never sees a fresh-AST graph beside a stale semantic:<backend> manifest.
 
     Returns True if a manifest was found and reset, False if no manifest exists
-    (nothing to reconcile). Both call sites treat this as advisory and swallow
-    any exception themselves.
+    (nothing to reconcile). Both call sites in maintain treat this as advisory and
+    swallow any exception themselves.
     """
     path = Path(cache_dir) / "run-manifest.json"
     if not path.exists():
@@ -462,7 +464,8 @@ def resolve_paths_to_node_ids(modified_paths: list[str], graph: dict,
 def empty_graph_context(status: str, reason: str = "") -> dict:
     """Return a minimal valid graph_context object for non-ok statuses.
 
-    DEV always receives this object; tool failure is advisory (never blocks DEV).
+    graphify-query.py writes it as pre_query.json, which BA's dispatch names only
+    on ok or degraded; tool failure is advisory (never blocks BA or DEV).
     """
     return {
         "status": status,

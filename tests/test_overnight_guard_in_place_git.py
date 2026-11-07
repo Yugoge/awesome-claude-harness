@@ -50,6 +50,14 @@ ALLOW_EXIT = 0
 # ---------------------------------------------------------------------------
 
 
+def test_keystone_config_scan_skips_every_value_option_of_the_table():
+    """--attr-source takes a value (the classifier's option table), so a config
+    injection after it is still in the global-option region."""
+    guard = _load_guard_module()
+    assert guard._git_invocation_injects_keystone_config(
+        ["--attr-source", "HEAD", "-c", "core.hooksPath=/dev/null", "commit"])
+
+
 def _load_guard_module():
     """Import the hyphenated hook file as a module for direct-invariant asserts."""
     spec = importlib.util.spec_from_file_location("overnight_hook_guard", HOOK)

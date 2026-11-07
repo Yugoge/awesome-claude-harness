@@ -3,16 +3,19 @@
 PreToolUse Hook: Orchestrator Gate (Unified)
 
 Three-tier policy for the main agent:
-  1. ALWAYS_ALLOWED whitelist tools pass, but Bash is capped at 5
-     consecutive same-name calls (6th blocked).
+  1. ALWAYS_ALLOWED whitelist tools pass, but Bash is capped at 5 calls
+     (6th blocked) until an Agent dispatch or the next prompt resets the
+     count; other tools between the Bash calls do not.
   2. Non-whitelist tools are allowed once TOTAL per tool name per turn
      (2nd same-name call blocked regardless of intervening tool calls).
-  3. PERMANENTLY_BLOCKED (EnterPlanMode, ExitPlanMode) are always
-     blocked, even with /do consent.
+  3. PERMANENTLY_BLOCKED (EnterPlanMode, ExitPlanMode) are blocked even
+     with /do consent; an /allow grant naming the tool is the one way
+     through.
 
 bash_consecutive is a Bash-ONLY accumulator: only a Bash tool call
-increments it, and it is cleared ONLY by an Agent (subagent) dispatch
-(reset to {"last_tool": "Agent", "count": 0}). Every other tool
+increments it. An Agent (subagent) dispatch resets it to
+{"last_tool": "Agent", "count": 0}, and hooks/prompt-workflow.py removes
+the whole state file (per_tool_counts too) at each prompt. Every other tool
 (Read, TodoWrite, Glob, Grep, and any non-whitelist tool) leaves
 bash_consecutive byte-unchanged — interleaving a non-Agent tool between
 Bash calls does NOT launder the streak. The Agent-clear lives in main()
@@ -20,13 +23,13 @@ and fires on the PreToolUse Agent attempt BEFORE the /allow and /do
 short-circuits, so a subagent dispatch resets the streak even under
 consent/grant.
 
-Subagents (agent_id present) are fully exempt and do NOT update
-the streak state.
+Subagents (lib.subagent.is_subagent_context) are fully exempt and do NOT
+update the streak state.
 
-/do consent (Design A) bypasses streak checks AND does not update
-the streak state, preserving clean exit semantics.
+/do consent (lib.allowlist.has_do_consent) bypasses the limits AND does not
+update the streak state.
 
-State file: /tmp/claude-tool-streak-<sid>.json --
+State file: <state dir>/claude-tool-streak-<sid>.json --
   {"schema_version": 2, "per_tool_counts": {"Edit": 1},
    "bash_consecutive": {"last_tool": "Bash", "count": 2}}
 """
@@ -38,8 +41,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.subagent import is_subagent_context  # noqa: E402
-from lib.allowlist import read_grant          # noqa: E402
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib.allowlist import (  # noqa: E402
+    has_do_consent, match_sentinel_grant_for_tool, tool_streak_path, write_tool_streak)
 
 ALWAYS_ALLOWED = {
     "Agent",
@@ -73,18 +76,6 @@ def get_session_id(data: dict) -> str:
     return "default"
 
 
-def has_consent(session_id: str) -> bool:
-    flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{session_id}.flag")
-    try:
-        return flag.exists() and flag.read_text().strip() == "true"
-    except Exception:
-        return False
-
-
-def get_streak_state_file(session_id: str) -> Path:
-    return Path(f"{harness_state_dir()}/claude-tool-streak-{session_id}.json")
-
-
 def _fresh_state() -> dict:
     return {"schema_version": 2, "per_tool_counts": {}, "bash_consecutive": {"last_tool": "", "count": 0}}
 
@@ -115,15 +106,8 @@ def read_streak_state(state_file: Path) -> dict:
     return _fresh_state()
 
 
-def write_streak_state(state_file: Path, state: dict) -> None:
-    try:
-        state_file.write_text(json.dumps(state))
-    except OSError:
-        pass
-
-
-def update_streak(state_file: Path, tool_name: str) -> int:
-    state = read_streak_state(state_file)
+def update_streak(session_id: str, tool_name: str) -> int:
+    state = read_streak_state(tool_streak_path(session_id))
 
     if tool_name in ALWAYS_ALLOWED:
         if tool_name == "Bash":
@@ -133,7 +117,7 @@ def update_streak(state_file: Path, tool_name: str) -> int:
             else:
                 bash["last_tool"] = "Bash"
                 bash["count"] = 1
-            write_streak_state(state_file, state)
+            write_tool_streak(session_id, state)
             return bash["count"]
         else:
             # Non-Bash whitelist (incl. Agent, Read, TodoWrite, Glob, Grep,
@@ -155,23 +139,25 @@ def update_streak(state_file: Path, tool_name: str) -> int:
         # increment.
         counts = state["per_tool_counts"]
         counts[tool_name] = counts.get(tool_name, 0) + 1
-        write_streak_state(state_file, state)
+        write_tool_streak(session_id, state)
         return counts[tool_name]
 
 
 def block_permanent(tool_name: str) -> None:
     allowed = ", ".join(sorted(ALWAYS_ALLOWED))
     sys.stderr.write(
-        f"[Orchestrator Gate] Permanently blocked: {tool_name}\n"
-        f"Delegate to subagents (Agent tool) or run /do to unlock.\n"
-        f"Allowed without /do: {allowed}\n"
+        f"[Orchestrator Gate] Permanently blocked: {tool_name} (/do does not unlock it).\n"
+        f"Delegate to a subagent (Agent tool), or the user grants one call with /allow {tool_name}.\n"
+        f"Whitelisted tools: {allowed}\n"
     )
     sys.exit(2)
 
 
 def block_streak(tool_name: str, count: int, limit: int) -> None:
     sys.stderr.write(
-        f"[Orchestrator Gate] BLOCKED: {tool_name} used consecutively beyond limit ({count}/{limit}).\n"
+        f"[Orchestrator Gate] BLOCKED: {tool_name} used consecutively beyond limit ({count}/{limit}): Bash "
+        f"counts its calls since the last Agent dispatch or prompt, any other non-whitelisted tool its calls "
+        f"this turn, whatever ran between them.\n"
         f"Delegate to a subagent (Agent tool) or ask the user to run /do to unlock.\n"
     )
     sys.exit(2)
@@ -232,10 +218,9 @@ def main():
     # placing it ahead of the bypasses changes no allow/deny outcome.
     if tool_name == "Agent":
         try:
-            state_file = get_streak_state_file(sid)
-            state = read_streak_state(state_file)
+            state = read_streak_state(tool_streak_path(sid))
             state["bash_consecutive"] = {"last_tool": "Agent", "count": 0}
-            write_streak_state(state_file, state)
+            write_tool_streak(sid, state)
         except Exception:
             pass
         sys.exit(0)
@@ -247,7 +232,7 @@ def main():
     # Note: /allow CAN rescue even perm-blocked tools (e.g., EnterPlanMode) if
     # the user explicitly /allow-ed that tool name. This is by design.
     try:
-        if read_grant(tool_name, sid):
+        if match_sentinel_grant_for_tool(sid, tool_name) is not None:
             sys.exit(0)
     except Exception:
         pass
@@ -255,25 +240,23 @@ def main():
     if tool_name in PERMANENTLY_BLOCKED:
         block_permanent(tool_name)
 
-    if has_consent(sid):
+    if has_do_consent(data):
         sys.exit(0)
 
     # A Write that pretool-write-guard.sh will reject (overwrite of an EXISTING
     # file — the guard forces Edit instead) must NOT consume the orchestrator's
-    # one-Write-per-turn budget. This gate runs FIRST, before write-guard, so
-    # without this skip a blocked overwrite-attempt still increments the streak
-    # and wrongly exhausts the budget for a later legitimate new-file Write
-    # (observed: a blocked requirement-doc overwrite blocked a later completion
-    # write). Replicate write-guard's "Write only creates new files" predicate and
-    # skip counting such a call — it cannot succeed via Write anyway, so it is not
-    # a real direct action. Writes blocked by OTHER downstream guards are out of
-    # scope for this targeted fix (fail-strict is preserved; the general
-    # PostToolUse-counting fix is deferred — see do-report).
+    # one-Write-per-turn budget. One event's hooks run in parallel, so this gate
+    # cannot see write-guard's verdict; without this skip a blocked
+    # overwrite-attempt would still increment the count and exhaust the budget
+    # for a later legitimate new-file Write. Replicate write-guard's "Write only
+    # creates new files" predicate and skip counting such a call — it cannot
+    # succeed via Write anyway, so it is not a real direct action. A Write that
+    # another guard blocks still counts (fail-strict).
     if tool_name == "Write":
         target = (data.get("tool_input") or {}).get("file_path") or ""
         try:
             # Match write-guard's predicate EXACTLY: it blocks only regular files
-            # (`[ -f "$FILE_PATH" ]`, pretool-write-guard.sh:141). Using is_file()
+            # (`[ -f "$FILE_PATH" ]` in pretool-write-guard.sh). Using is_file()
             # (not exists()) avoids skipping the count for an existing directory /
             # FIFO / symlink-to-dir, which write-guard would NOT reject — those must
             # still count so the once-per-turn limit is not silently loosened.
@@ -282,7 +265,7 @@ def main():
         except OSError:
             pass
 
-    count = update_streak(get_streak_state_file(sid), tool_name)
+    count = update_streak(sid, tool_name)
     enforce_streak_limit(tool_name, count)
     sys.exit(0)
 

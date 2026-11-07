@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """Patch CLAUDE.md dynamic sections using AUTO markers."""
 
-from datetime import datetime, timezone
 from pathlib import Path
-from .claude import ensure_claude_md
 from .docker import build_docker_table
 from .regions import (
     ArtifactKind, RegenRecord, RegenStatus, RegionShape, classify_region, replace_region,
 )
-from .systemd import build_systemd_table
 
 
 def _is_global_claude_md(claude_md: Path) -> bool:
@@ -110,29 +107,21 @@ def _patch_skills(content: str, project_dir: Path, notes: list | None = None) ->
                           [] if notes is None else notes)
 
 
-def _patch_last_updated(content: str, notes: list | None = None) -> str:
-    def build_body():
-        return f'> Last updated: {datetime.now(timezone.utc).strftime("%Y-%m-%d")}'
-    return _patch_section(content, 'last-updated', build_body, [] if notes is None else notes)
-
-
 def _patch_docker(content: str, notes: list | None = None) -> str:
     return _patch_section(content, 'docker-services', lambda: build_docker_table() or None,
-                          [] if notes is None else notes)
-
-
-def _patch_systemd(content: str, project_dir: Path, notes: list | None = None) -> str:
-    return _patch_section(content, 'systemd-services', lambda: build_systemd_table(project_dir) or None,
                           [] if notes is None else notes)
 
 
 def patch_claude_md(project_dir: Path) -> list:
     """Patch CLAUDE.md dynamic sections using AUTO markers.
 
+    Only an existing CLAUDE.md is patched, and only inside its marked sections: none is created
+    and no header is prepended. A `last-updated` block is no section of doc-sync's and is left
+    as it is.
+
     Returns one RegenRecord per opted-in section the classifier refused (nothing was written
     for it); a section without markers and a regenerated one produce no record.
     """
-    ensure_claude_md(project_dir)
     records: list = []
     candidates = [
         project_dir / 'CLAUDE.md',
@@ -151,13 +140,11 @@ def patch_claude_md(project_dir: Path) -> list:
         new_content = _patch_commands(new_content, project_dir, notes)
         new_content = _patch_agents(new_content, project_dir, notes)
         new_content = _patch_skills(new_content, project_dir, notes)
-        new_content = _patch_last_updated(new_content, notes)
-        # Project-specific infrastructure (docker/systemd) must never be patched
+        # Project-specific infrastructure (docker) must never be patched
         # into the global ~/.claude/CLAUDE.md — it leaks one project's service
         # status into every other project's context.
         if not is_global:
             new_content = _patch_docker(new_content, notes)
-            new_content = _patch_systemd(new_content, project_dir, notes)
         if new_content != content:
             claude_md.write_text(new_content)
         records = [

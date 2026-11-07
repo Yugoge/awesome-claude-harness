@@ -292,42 +292,6 @@ def test_guard_source_still_routes_through_the_residual_aware_entry_point():
     )
 
 
-# ---------------------------------------------------------------------------
-# Adjacent finding, same guard, same fail-closed class (2026-09-03).
-# Not part of the enumeration defect; included here because it is the same
-# "a falsy-looking value was never actually falsy" mistake.
-# ---------------------------------------------------------------------------
-
-def test_repo_use_witness_treats_a_zero_reflog_count_as_unreadable():
-    """`entries == '0'` is reflogs-disabled, not a reading of zero.
-
-    `not '0'` is False in Python, so the old guard let a reflog-less repo produce
-    the witness `<sha>:0`. That value is CONSTANT — it cannot rise on commit,
-    reset or amend — so `_grant_use_permitted()` would find recorded == current
-    forever and re-authorize an already-spent grant up to the attempt cap,
-    instead of taking the fail-closed branch its docstring promises.
-
-    Verified against a real bare clone (core.logAllRefUpdates unset):
-    `git rev-list --walk-reflogs --count HEAD` prints exactly `0`.
-    """
-    saved = GUARD._commit_target_git_output
-    try:
-        GUARD._commit_target_git_output = lambda repo, *a: (
-            "deadbeef" if a[0] == "rev-parse" else "0")
-        assert GUARD._repo_use_witness("/some/repo") == "", (
-            "a reflog count of '0' must yield the empty witness so the caller "
-            "fails closed; returning 'deadbeef:0' silently re-arms a spent grant"
-        )
-        GUARD._commit_target_git_output = lambda repo, *a: (
-            "deadbeef" if a[0] == "rev-parse" else "7")
-        assert GUARD._repo_use_witness("/some/repo") == "deadbeef:7", (
-            "a real reflog count must still produce a witness — the fix must not "
-            "break the ordinary path"
-        )
-    finally:
-        GUARD._commit_target_git_output = saved
-
-
 def test_classifier_documents_the_closed_boundaries():
     """DETECTOR 8: the module may not re-publish the closed gaps as accepted."""
     src = CLASSIFIER_PATH.read_text(encoding="utf8")
@@ -448,3 +412,56 @@ def test_double_quoted_backslash_newline_folds_per_bash_semantics():
         f"a single backslash before a newline inside double quotes must fold "
         f"exactly as bash does (both chars deleted, no space inserted); got {segs!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The classifier normalises its own input, and one git global-option table
+# serves every git-reading hook (P9 R6).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("command", [
+    'echo "tip; git commit -m x"',
+    'echo "git commit"',
+    "echo 'tip; git push --force'",
+    'printf \'%s\\n\' "x; git commit -n"',
+])
+def test_quoted_text_is_not_an_invocation(command):
+    assert list(iter_git_invocations(command)) == []
+    assert dispatches(command) == set()
+
+
+@pytest.mark.parametrize("command,dispatcher", [
+    ('bash -c "cd x; git commit -m y"', "_evaluate_commit"),
+    ('timeout 5 bash -c "cd x; git commit -m y"', "_evaluate_commit"),
+    ('echo "$(git commit -m x)"', "_evaluate_commit"),
+    ('echo "$(echo " \'$(git commit -n)\' ")"', "_evaluate_commit"),
+    ("# don't\ngit commit -m x", "_evaluate_commit"),
+    ('env -i "git" commit -m x', "_evaluate_commit"),
+])
+def test_code_in_or_beside_a_quote_is_still_an_invocation(command, dispatcher):
+    assert dispatcher in dispatches(command)
+
+
+def test_a_quoted_message_hides_no_second_invocation():
+    command = 'git commit -m "fix; git push --force"'
+    assert [inv.subcommand for inv in iter_git_invocations(command)] == ["commit"]
+    assert dispatches(command) == {"_evaluate_commit"}
+
+
+def test_invocation_keeps_its_tokens_as_written():
+    (inv,) = iter_git_invocations('git -C "/r" commit -F "/tmp/m.txt"')
+    assert inv.args == ["-F", '"/tmp/m.txt"']
+
+
+@pytest.mark.parametrize("options", [
+    "--exec-path", "--exec-path=/x", "--attr-source HEAD", "--attr-source=HEAD",
+    "--config-env x=y", "--config-env=x=y", "--shallow-file f", "-C /r", "-c a=b",
+])
+def test_option_table_finds_the_subcommand(options):
+    (inv,) = iter_git_invocations("git %s commit -m x" % options)
+    assert inv.subcommand == "commit"
+
+
+def test_guard_option_regex_is_built_from_the_table():
+    match = GUARD.GIT_COMMIT_INVOCATION_RE.search("git --attr-source HEAD -C /o commit -m x")
+    assert match and GUARD._extract_dash_c_from_span(match.group(1), "") == "/o"

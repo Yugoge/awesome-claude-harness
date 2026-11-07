@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests for hooks/subagentstop-e2e-enforce.py's registry-independent
-obligation fallback (ticket 20261001-161041-r06, M1).
+obligation path (ticket 20261001-161041-r06, M1; P6 R4).
 
 Pre-fix, this hook called resolve_dev_registry_entry(agent_id, project_dir)
 and exited 0 unconditionally when it returned None (agent_id absent from
@@ -9,55 +9,37 @@ registration), with no fallback at all. That made QA's e2e_enforcement.status
 obligation silently unenforceable for exactly the unregistered-agent
 population it exists to catch.
 
-This file covers the new fallback: when resolve_dev_registry_entry() returns
-None, the hook now calls obligation.resolve_own_obligation() (registry-
-independent; reads the agent's own dispatch transcript) and, only when that
-resolves to a qa-role obligation declaring a qa-report.v2 artifact, applies
-the SAME e2e_enforcement.status check the registered path applies -- against
-that artifact's exact declared path. Every other outcome (no session_id, no
-obligation block, role mismatch, no qa-report.v2 artifact declared) still
-exits 0 (LOW-10 preserved, AC3).
+Since P6 R4 the agent's own dispatch obligation (obligation.resolve_own_obligation)
+names its cycle for every agent, registered or not, and the role is the one
+Claude Code records (lib.agent_resolver.resolve_agent_type); an agent the CLI
+names no role for, as in these payloads, is a QA when its own obligation says
+so. Such a QA whose cycle armed e2e enforcement is judged on the qa-report.v2
+artifact its obligation declares, at that exact path. Every other outcome (no
+session_id, no obligation block, another role, no qa-report.v2 artifact
+declared) still exits 0 (LOW-10 preserved, AC3).
 
 AC1 and AC6 (the shared hooks/subagentstop-artifact-contract-enforce.py
 L0/L1-before-L2 reorder) are sibling lanes r02/r04's deliverable, not this
-file's -- this lane's dispatch scopes it exclusively to
-subagentstop-e2e-enforce.py.
+file's.
 
 Models hooks/tests/test_artifact_contract_enforce.py's fixture and
-invocation patterns (importlib for the hyphenated module under test,
-subprocess with CLAUDE_PROJECT_DIR/HOME, the obligation-transcript fixture
-helpers, and the "assert the fallback was actually invoked" spy pattern from
-that file's own AC5/AC6 tests).
+invocation patterns (subprocess with CLAUDE_PROJECT_DIR/HOME, the
+obligation-transcript fixture helpers).
 """
 
 from __future__ import annotations
 
 import ast
-import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOOK_PATH = REPO_ROOT / "hooks" / "subagentstop-e2e-enforce.py"
-
-
-def _load_hook_module():
-    spec = importlib.util.spec_from_file_location(
-        "subagentstop_e2e_enforce_under_test_r06", HOOK_PATH
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-HOOK = _load_hook_module()
 
 
 def _write(path: Path, value) -> None:
@@ -94,7 +76,8 @@ def _qa_report(task_id: str, status: str = "performed") -> dict:
 
 
 def _project_slug(project_dir: Path) -> str:
-    return str(project_dir.resolve()).replace("/", "-")
+    """Claude Code's folder name for the project: each non-alphanumeric character becomes "-"."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(project_dir.resolve()))
 
 
 def _write_obligation_transcript(
@@ -191,6 +174,7 @@ def test_ac2_unregistered_obligated_missing_report_blocks(tmp_path):
     task_id = "20261001-161041-r06-ac2"
     artifact_path = f"docs/dev/qa-report-{task_id}.json"
     project, home = _project_home(tmp_path)
+    _enable_e2e_enforcement(project, "dev-20261001-161041")  # the cycle its task names
     _write_obligation_transcript(
         home,
         project,
@@ -217,6 +201,7 @@ def test_ac2_unregistered_obligated_valid_report_passes(tmp_path):
     task_id = "20261001-161041-r06-ac2b"
     artifact_path = f"docs/dev/qa-report-{task_id}.json"
     project, home = _project_home(tmp_path)
+    _enable_e2e_enforcement(project, "dev-20261001-161041")  # the cycle its task names
     _write_obligation_transcript(
         home,
         project,
@@ -240,6 +225,7 @@ def test_ac2_unregistered_obligated_unjustified_skip_blocks(tmp_path):
     task_id = "20261001-161041-r06-ac2c"
     artifact_path = f"docs/dev/qa-report-{task_id}.json"
     project, home = _project_home(tmp_path)
+    _enable_e2e_enforcement(project, "dev-20261001-161041")  # the cycle its task names
     _write_obligation_transcript(
         home,
         project,
@@ -339,84 +325,23 @@ def test_ac3_qa_obligation_without_qa_report_artifact_fails_open(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# AC4: the fallback reuses the EXISTING obligation.resolve_own_obligation,
-# with the same parameter shape already used by
-# subagentstop-artifact-contract-enforce.py's obligation-mode block -- no
-# new resolver/fallback function invented anywhere.
+# AC4 (P6 R4): the hook takes its role from the one role reader and its cycle
+# from the agent's own obligation; it reads agent-index.json through neither
+# its own lookup nor a second resolver.
 # ---------------------------------------------------------------------------
 
 
-def test_ac4_fallback_invokes_resolve_own_obligation_with_expected_shape(
-    monkeypatch,
-):
-    """AC4 (code-review, exercised as a spy): the fallback calls
-    obligation.resolve_own_obligation exactly once, with the keyword-arg
-    shape (session_id, agent_id, project_dir, payload_agent_transcript_path,
-    expected_role) already used by subagentstop-artifact-contract-enforce.py
-    -- proving the fallback was actually invoked with the right shape, not
-    just asserting a final exit code (right-exit-code-wrong-reason guard,
-    per this ticket's Technical Hints)."""
-    calls = []
-
-    def _spy(**kwargs):
-        calls.append(kwargs)
-        return HOOK.obligation.NoObligationInPrompt(
-            prompt="", rung="L1", transcript_path="x", cross_check="ok"
-        )
-
-    monkeypatch.setattr(HOOK.obligation, "resolve_own_obligation", _spy)
-
-    HOOK._enforce_e2e_via_obligation(
-        {"agent_id": "agent-qa-r06-ac4", "session_id": "harness-r06-ac4"},
-        "agent-qa-r06-ac4",
-        "/tmp/claude-test-r06-ac4-project",
-    )
-
-    assert len(calls) == 1
-    kwargs = calls[0]
-    assert set(kwargs) == {
-        "session_id",
-        "agent_id",
-        "project_dir",
-        "payload_agent_transcript_path",
-        "expected_role",
+def test_ac4_role_comes_from_the_one_role_reader():
+    """hooks/subagentstop-e2e-enforce.py imports exactly resolve_agent_type
+    from hooks/lib/agent_resolver.py (no index lookup of its own)."""
+    tree = ast.parse(HOOK_PATH.read_text(encoding="utf-8"))
+    imported = {
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == "lib.agent_resolver"
+        for alias in node.names
     }
-    assert kwargs["expected_role"] == "qa"
-    assert kwargs["agent_id"] == "agent-qa-r06-ac4"
-    assert kwargs["session_id"] == "harness-r06-ac4"
-    assert kwargs["project_dir"] == "/tmp/claude-test-r06-ac4-project"
-
-
-def test_ac4_agent_resolver_unmodified_by_this_fix():
-    """AC4: hooks/lib/agent_resolver.py gained no new resolver/fallback
-    function as part of this fix -- resolve_dev_registry_entry and its
-    pre-existing private cp-state-scan helpers are exactly the function set
-    that existed before this ticket touched anything. The fallback logic
-    lives entirely in subagentstop-e2e-enforce.py and calls
-    obligation.resolve_own_obligation directly (see the AC4 spy test
-    above) rather than adding a new wrapper anywhere."""
-    resolver_src = (REPO_ROOT / "hooks" / "lib" / "agent_resolver.py").read_text(
-        encoding="utf-8"
-    )
-    tree = ast.parse(resolver_src)
-    top_level_funcs = {
-        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
-    }
-    baseline_funcs = {
-        "_checked_in_age_seconds",
-        "_is_stale",
-        "_read_json",
-        "_match_cp_state",
-        "_read_match",
-        "_pick_active",
-        "_lookup_dev_registry_index",
-        "resolve_dev_registry_entry",
-        "_glob_cp_state",
-        "_scan_cp_state_files",
-        "_resolve_by_id",
-        "resolve_agent_type",
-    }
-    assert top_level_funcs == baseline_funcs
+    assert imported == {"resolve_agent_type"}
 
 
 # ---------------------------------------------------------------------------
@@ -503,40 +428,3 @@ def test_ac5_registered_passing_status_exit0_unchanged(tmp_path):
     proc = _run_hook(project, home, agent_id)
 
     assert proc.returncode == 0, proc.stderr
-
-
-def test_ac5_registered_path_never_consults_obligation_module(tmp_path, monkeypatch):
-    """AC5 (spy direction): _enforce_e2e_via_obligation (the fallback entry
-    point) is only ever reached from main() when resolve_dev_registry_entry()
-    returns None -- it is never called on the registered-agent path. Direct
-    unit check of that control-flow invariant, independent of subprocess
-    message assertions above."""
-    calls = []
-    monkeypatch.setattr(
-        HOOK, "_enforce_e2e_via_obligation", lambda *a, **k: calls.append((a, k))
-    )
-    monkeypatch.setattr(
-        HOOK,
-        "resolve_dev_registry_entry",
-        lambda *_a, **_k: {"agent_type": "qa", "dev_session_id": "dev-20260505-000000"},
-    )
-    dev_session_id = "dev-20260505-000000"
-    task_id = "20260505-000000"
-    project, home = _project_home(tmp_path)
-    _enable_e2e_enforcement(project, dev_session_id)
-    _write(
-        project / ".claude" / "dev-registry" / dev_session_id / "qa.json",
-        {"agent_type": "qa", "session_id": dev_session_id},
-    )
-    _write(
-        project / "docs" / "dev" / f"qa-report-{task_id}.json",
-        _qa_report(task_id, status="performed"),
-    )
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-    monkeypatch.setattr(HOOK, "_load_stdin", lambda: {"agent_id": "agent-qa-r06-ac5-spy"})
-
-    with pytest.raises(SystemExit) as excinfo:
-        HOOK.main()
-
-    assert excinfo.value.code == 0
-    assert calls == []

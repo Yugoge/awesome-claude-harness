@@ -32,7 +32,6 @@ graph TD
     R --> S2["S2 · tests/generated AC skeletons<br/>566 tracked files · --ignore'd<br/>runner: NONE by default"]
     R --> S3["S3 · tests/*.sh smoke/integration<br/>4 scripts · runner: manual bash"]
     R --> S4["S4 · tests/scripts validate-*.py<br/>11 /dev quality gates · runner: agents"]
-    R --> S5["S5 · score-*-contract *.sh<br/>3 shell contracts · runner: manual bash"]
     R --> AUX["aux · hooks/tests/*.sh AC harnesses<br/>8 shell files · runner: manual bash"]
     R --> ORPH["fixtures + orphans<br/>ws2 gate · fixtures/ · instructions/<br/>dead snapshots"]
 ```
@@ -47,7 +46,6 @@ graph TD
 | **S2** | Generated AC skeletons | `tests/generated/` | 566 tracked (449 `test_*.py`) | none by default | ❌ `--ignore`'d | Archival provenance |
 | **S3** | Smoke / integration shell | `tests/*.sh` | 4 | manual `bash` | ❌ not collected | Real tests, manual runner |
 | **S4** | `/dev` quality-gate validators | `tests/scripts/validate-*.py` | 11 | agent-invoked | ❌ no `test_` prefix | Legitimate gates, orthogonal runner |
-| **S5** | Score-contract shell | `tests/score-*-contract/*.sh` | 3 | manual `bash` | ❌ not collected | Manual contract checks |
 | aux | AC-verification shell harnesses | `hooks/tests/*.sh` | 8 | manual `bash` | ❌ `.sh` not collected | Manual AC harnesses |
 
 > **Discovery rule:** pytest's default `python_files` collects BOTH `test_*.py` (prefix)
@@ -99,7 +97,7 @@ graph TD
 | Script | What it verifies | How to run |
 |---|---|---|
 | `fresh-clone-bootstrap-smoke.sh` | Fresh non-root clone: guards load their own clone helpers, block dangerous ops fail-closed, degrade optional capability gracefully. | `bash tests/fresh-clone-bootstrap-smoke.sh [--json out.json] [--keep]` |
-| `verify-stop-spec-session-isolation.sh` | `stop-spec-coverage-enforce.py` session isolation (AC1–AC5 + regressions); exit 0 = all pass | `bash tests/verify-stop-spec-session-isolation.sh` |
+| `verify-stop-spec-session-isolation.sh` | `stop-spec-coverage-enforce.py` is an exit-0 stub (its rule is G2's at the spec subagent's stop); exit 0 = all pass | `bash tests/verify-stop-spec-session-isolation.sh` |
 
 ---
 
@@ -112,15 +110,6 @@ graph TD
 `checklist-completeness` · `chinese-content` · `claude-md-protection` · `debug-file-age` ·
 `file-naming` · `optionality-language` · `posttool-ac-dev-20260524-205811` · `step-numbering` ·
 `todowrite-requirement` · `venv-usage` · `workflow-json-cleanup`.
-
----
-
-## S5 — score-contract shell (`tests/score-*-contract/*.sh`, manual)
-
-| Contract | Script | Verifies | How to run |
-|---|---|---|---|
-| `score-inject-contract/` | `test-inject-branches.sh` | `scripts/score-inject.sh` emits the `INJECTION_PROOF` block + correct `sha256[:8]` for populated/missing/malformed JSONL branches | `bash tests/score-inject-contract/test-inject-branches.sh` |
-| `score-lifecycle-contract/` | `test-lifecycle-cas.sh` | CAS + append-only invariants of `score-update.sh` / `lifecycle-baseline-import.sh` over a temp lifecycle JSONL | `bash tests/score-lifecycle-contract/test-lifecycle-cas.sh` |
 
 ---
 
@@ -150,7 +139,7 @@ strip comments from `hooks/*.sh` and assert AC behavior. Run individually:
 | Class | Surfaces | Runs on every change? | Source of truth for "is the repo green?" |
 |---|---|:--:|:--:|
 | **Authoritative** | S1 | ✅ `scripts/test` | ✅ **yes — the green floor** |
-| **Secondary (real, own runner)** | S3, S4, S5, aux | ❌ manual / agent | ❌ run deliberately, not on every change |
+| **Secondary (real, own runner)** | S3, S4, aux | ❌ manual / agent | ❌ run deliberately, not on every change |
 | **Archival provenance** | S2 (`tests/generated/`) | ❌ `--ignore`'d | ❌ AC record, not a gate (today) |
 | **Prunable / dead** | dated snapshots, orphans | ❌ never collected | ❌ scheduled for removal |
 

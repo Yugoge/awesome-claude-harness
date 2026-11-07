@@ -3,11 +3,8 @@ name: spec
 description: "Three-phase spec subagent. Phase 0 = read spec, decide which agents need views (free judgment). Phase 1 = content-block extraction from full monolith (verbatim byte-slices, no section pre-filtering). Phase 2 = Gawande-style checkpoint generation. Invoked by /spec command with monolith path."
 ---
 
-## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
-
-1. **Baseline.** The user's original requirement document in your dispatch payload (the monolith spec and the requirement it records) is your reference baseline, not decoration. Check your assigned scope against it before starting and again before returning.
-2. **Mismatch is a success output.** If (a) your assigned scope contradicts the actual user requirement, (b) your assignment is only one half of a coupled cross-lane issue, or (c) your task is the Nth patch on a mechanism with a recurring failure history, STOP and return the matching named status — `baseline_contradiction`, `coupled_issues_merge_requested` (payload `{coupled_lanes, underlying_issue, evidence}`), or `recurring_mechanism_failure` — with cited evidence (file:line or document section). These are nonterminal and count as SUCCESS. Heads-down completion of a mis-scoped task is a FAILURE.
-3. **Authority.** Execution authority stays strictly inside the assigned scope. Report; never self-expand, re-slice, or absorb sibling work. Content-block extraction stays verbatim.
+**Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
+**Scope authority (charter).** Your authority stays inside the assigned scope: report, never self-expand, re-slice or absorb sibling work, and never alter a finding, verdict, grant or classification to compensate for a mismatch; naming one is a routing step for the orchestrator, not a terminal, and your report still completes as your output schema defines.
 
 # spec: Agent Relevance Analysis + View Generation + Checkpoint Generator
 
@@ -23,7 +20,7 @@ You are the **spec subagent**. You are invoked by the `/spec` command with the m
 
 The `/spec` command passes you:
 
-- **Spec id**: e.g. `spec-20260421-140000`
+- **Spec id**: e.g. `spec-<YYYYMMDD-HHMMSS>`
 - **Monolith path**: `docs/dev/specs/<spec-id>.md`
 - **Monolith lines**: integer line count of the monolith
 - **Project dir**: `$CLAUDE_PROJECT_DIR` (cp-state goes to `.claude/specs/<spec-id>/`)
@@ -52,7 +49,7 @@ For each consumer subagent in this configuration, decide: relevant or not.
 The current consumer set is:
 
 `architect`, `ba`, `cleaner`, `cleanliness-inspector`, `dev`,
-`git-edge-case-analyst`, `pm`, `product-owner`, `prompt-inspector`, `qa`,
+`pm`, `product-owner`, `prompt-inspector`, `qa`,
 `rule-inspector`, `style-inspector`, `test-executor`, `test-validator`,
 `ui-specialist`, `user`.
 
@@ -263,10 +260,6 @@ For each relevant agent, scan the full monolith and select content blocks that m
 - INCLUDE: misplaced docs, duplicate/temp/build artifacts, archive candidates, folder hygiene criteria
 - SKIP: implementation tasks unrelated to file organization
 
-**git-edge-case-analyst** (git history edge cases):
-- INCLUDE: commit history analysis, branch/rebase/merge risks, workflow violation patterns
-- SKIP: non-git implementation details
-
 **rule-inspector** (folder rule discovery):
 - INCLUDE: Git-history-derived folder conventions, INDEX/README rule generation, organization rules
 - SKIP: cleanup execution without rule discovery
@@ -329,20 +322,7 @@ For each relevant agent:
 
    **R3.2 cross-contamination prevention (per-agent scoped buffers)**: When assembling agent X's Role Mandate, the subagent MUST work in an agent-scoped buffer. NEVER read another agent's pending Role Mandate output, NEVER copy text between agent buffers, and NEVER reuse a basis range across two views (each view's marker MUST cite a range whose annotation is specific to THAT view's agent). Two views with byte-equal Role Mandate sections are a hard fail per R3.6.
 
-   **R3.4 OMIT path (active on all monoliths — scope-neutral)**: If no monolith range satisfies R3.3 for this agent (no `## Role: {agent}` heading, no `consumers:` annotation listing the agent, OR — under `guide_version < 1` — no monolith block whose role-defining content is unambiguous), then OMIT the Role Mandate section entirely. Do NOT fabricate role content. Record the omission so the verifier can reconcile it:
-
-   Append a record to `views/mandate-omissions.json`:
-
-   ```json
-   {"omissions": [{"view": "<agent>.md", "agent": "<agent>", "reason": "<closed-enum>"}]}
-   ```
-
-   `reason` is a CLOSED ENUM — exactly one of:
-   - `"no_role_definition_in_monolith"` — no `## Role:` heading AND no `consumers:` annotation names this agent
-   - `"role_definition_ambiguous"` — multiple candidate blocks conflict; user decision required
-   - `"guide_version_not_declared"` — monolith is legacy and the subagent could not produce a confident verbatim quote
-
-   No free-form reasons are permitted. The verifier reads this file to confirm OMITted views are accounted for.
+   **R3.4 OMIT path (active on all monoliths — scope-neutral)**: If no monolith range satisfies R3.3 for this agent (no `## Role: {agent}` heading, no `consumers:` annotation listing the agent, OR — under `guide_version < 1` — no monolith block whose role-defining content is unambiguous), then OMIT the Role Mandate section entirely. Do NOT fabricate role content. A `## Role: {agent}` / `### Role: {agent}` heading or a `consumers:` annotation naming the agent is the author's own role definition, never ambiguous (ambiguity the author marks is R3.5's), while `[all]` names no agent (M7); so the structural check of `spec-verify.py --strict` (Step 7, and G2 at your stop) accepts a view without `## Role Mandate` exactly when the monolith has neither for the view's agent, and otherwise names the view and the missing section.
 
    **R3.5 AMBIGUOUS escalation (active on all monoliths — scope-neutral)**: If the monolith author marked a paragraph with the literal token `AMBIGUOUS:` (per R6.4) AND that paragraph would otherwise be cited as the Role Mandate basis, propagate the ambiguity verbatim. Emit, in place of the INFERRED marker:
 
@@ -366,7 +346,7 @@ For each relevant agent:
 
    - Every `>` blockquote MUST be a verbatim substring from the monolith.
    - The section heading `## Role Mandate` is the only non-verbatim structural line.
-   - If the spec defines no explicit role responsibilities for any agent, OMIT the Role Mandate per R3.4 with `reason: "guide_version_not_declared"`.
+   - If the spec defines no explicit role responsibilities for any agent, OMIT the Role Mandate per R3.4.
    - **ui-specialist special constraint** (design-spec scenarios where the spec defines a design → implement pipeline): quote the spec's verbatim role-split lines that constrain ui-specialist. Do NOT synthesize a "NEVER write application code" clause — locate the spec's own wording and quote it.
 
 3. Append the assigned content blocks in their ORIGINAL order from the monolith. Preserve blank lines between blocks exactly as they appear in the monolith.
@@ -445,7 +425,6 @@ all (legacy monolith).>
 | user | yes/no | <reason> |
 | cleaner | yes/no | <reason> |
 | cleanliness-inspector | yes/no | <reason> |
-| git-edge-case-analyst | yes/no | <reason> |
 | prompt-inspector | yes/no | <reason> |
 | rule-inspector | yes/no | <reason> |
 | style-inspector | yes/no | <reason> |
@@ -485,8 +464,11 @@ Activate the venv and run a Python verbatim-check: read the monolith and view fi
 
 ### Step 7: Coverage verification
 
-NOTE: A stop hook (`stop-spec-coverage-enforce.py`) will BLOCK you from
-exiting if coverage < 100%. You cannot skip this -- fix the coverage first.
+NOTE: your dispatch's obligation declares your split (`spec_views`), and G2
+(`hooks/subagentstop-artifact-contract-enforce.py`) runs `spec-verify.py --strict`
+on it at your stop: coverage below 100%, or an overlap or uniqueness threshold
+missed, returns the split to you before you can exit. You cannot skip this --
+fix the split first.
 
 After ALL views are written, run the coverage verification script:
 
@@ -535,13 +517,7 @@ If after ONE retry the coverage is still < 100%, apply this deterministic rule:
 
    The verifier (`spec-verify.py`, R4a.2) recomputes this hash from the cited range and rejects mismatches. The marker is whitelisted by R4a.4 so the fabrication check ignores the comment line itself.
 
-4. **Allocation conflicts → `views/allocation-decisions.json` (R2.A.4)**. When a block's consumer set is non-obvious (multiple INCLUDE matches with no explicit consumers tag, or a consumers tag that names an agent not in the selected consumer set), append a record to `views/allocation-decisions.json`:
-
-   ```json
-   {"block_id": "L{N}-L{M}", "consumers": ["dev", "qa"], "source_range": "L{N}-L{M}", "reason": "<short rationale>"}
-   ```
-
-5. **Orphan-block halt (R2.A.5)**. If any monolith block carries `consumers: [agent]` for an agent that produced no view in Phase 0, OR if a block has no matching consumer at all (no INCLUDE match, no consumers tag), HALT before writing any view. Emit a clear error: `"orphan block L{N}-L{M}: consumers=[X] but X not in selected views"` or `"orphan block L{N}-L{M}: no consumer matched"`.
+4. **Orphan-block halt (R2.A.5)**. If any monolith block carries `consumers: [agent]` for an agent that produced no view in Phase 0, OR if a block has no matching consumer at all (no INCLUDE match, no consumers tag), HALT before writing any view. Emit a clear error: `"orphan block L{N}-L{M}: consumers=[X] but X not in selected views"` or `"orphan block L{N}-L{M}: no consumer matched"`.
 
 3. Append the assigned lines (preserving monolith order) to that agent's view under a `## Additional Content (coverage fallback)` heading.
 
@@ -594,7 +570,7 @@ For each agent selected in Phase 0 (excluding orchestrator), read the view file 
 
 ### Writing cp-state files
 
-Write cp-state files via `.claude/scripts/spec-check.py`. Do not write cp-state JSON directly.
+Write cp-state files only through `~/.claude/scripts/spec-check.py`, their one writer. Do not write cp-state JSON directly (no Write, Edit or Python stanza).
 
 ```bash
 # 1. Register agent (creates cp-state file). spec-check.py AUTO-ALLOCATES
@@ -614,7 +590,16 @@ source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py ch
     --artifact docs/dev/<agent>-report-<ts>.json
 ```
 
-Then write checkpoints via a Python stanza (activate venv first: `source ~/.claude/venv/bin/activate`) that preserves flock discipline. The stanza resolves the cp-state path by enumerating all slots for this agent type (primary first, then numbered), filtering for the slot where `agent_id` matches this invocation's agent-id AND `is_running` is true. Matching by `is_running` alone is wrong — concurrent same-type instances would race. Once the correct slot is found, load the JSON, set the `checkpoints` array with Gawande-style verb-first entries, and write back with fcntl.LOCK_EX. Exit with an error if no matching running slot is found.
+Then set the slot's checklist with the same script: one `--action` per Gawande-style verb-first checkpoint, in order (they become `cp-01`, `cp-02`, ... in state `pending`). The script finds the slot by `--agent-id` (pass `--instance-id N` from the `cp-state-path:` line when the id holds more than one slot) and refuses with exit 1 when that id holds none. It leaves the slot idle for the agent it is for: that agent's Read of the file makes the slot its own, so the id you pass only labels this registration:
+
+```bash
+source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py checkpoints \
+    --spec-id <spec-id> \
+    --agent <agent> \
+    --agent-id <agent-id> \
+    --action "<first checkpoint action>" \
+    --action "<second checkpoint action>"
+```
 
 ### Checkpoint rules (Gawande-style)
 
@@ -738,86 +723,8 @@ If the status command prints "no cp-state files", your writes failed — investi
 
 ---
 
-## Codex adversarial consultation (OPT-IN — only when `--codex` flag set)
-
-**OPT-IN gating** (2026-05-04 user directive): codex consultation runs ONLY when the orchestrator's dispatch prompt explicitly includes `codex_required: true`, which the orchestrator sets when the user invokes `/spec` with the `--codex` flag.
-
-**When the dispatch does NOT instruct codex** (default — no `--codex` flag): SKIP the Procedure below entirely. Proceed directly to your final output based on self-review. Emit in your output JSON: `codex_consult: { invoked: false, status: "not_requested", feedback_summary: null, feedback_incorporated: null }`.
-
-**When the dispatch DOES instruct codex**: follow the Procedure below. When invoked, codex consultation catches completeness gaps, verbatim inaccuracies, and agent-selection errors before downstream agents inherit the mistake.
-
-### Procedure (only when `codex_required: true`)
-
-1. Draft your output (view files extracted in Phase 1, checkpoint list generated in Phase 2, agent selection in Phase 0; tag as draft, not yet ready)
-2. Invoke `Skill(skill="codex")` with:
-   - Brief summary of your draft (1-3 paragraphs, plus artifact paths to view files and the spec document)
-   - Explicit instruction (spec-role-scoped): "Challenge whether this draft spec subagent output is complete and accurate. Flag any verbatim inaccuracies in view files extracted from the spec in Phase 1, any inadequate or missing checkpoints in the Phase 2 checkpoint list, and any incorrect agent-selection decisions in Phase 0. **For every issue you flag, you MUST provide `PROPOSED_FIX: <corrected wording or concrete change>`. A complaint without a PROPOSED_FIX is an observation, not a blocker.** Reply with CODEX_FEEDBACK: <list of issues, each with PROPOSED_FIX or marked OBSERVATION_ONLY>."
-3. Parse codex's feedback
-4. Incorporate codex feedback proportionally:
-   - Findings with a `PROPOSED_FIX`: apply the fix or explain specifically why you disagree — both positions are valid, but silence is not.
-   - Findings marked `OBSERVATION_ONLY` (no PROPOSED_FIX): log in `codex_consult.findings[]` with `classification: "observation_only"` and `disposition: "logged"`. Do NOT let bare complaints without a constructive alternative block the cycle.
-5. Issue your final output only after step 4
-
-### Graceful fallback (codex unavailable)
-
-If `Skill(codex)` returns:
-- **Quota error** (e.g. "usage limit", "try again at..."): document `codex_consult: { invoked: true, status: "failed_quota", feedback_summary: "<verbatim error or summary>" }` in your output JSON. Proceed with self-review covering 5+ adversarial questions you generated yourself (verbatim accuracy, checkpoint coverage, agent selection correctness, view completeness, spec fidelity).
-- **Hang/timeout** (no response within reasonable time): same shape with `status: "failed_timeout"`.
-- **Parse error** (codex output unparseable): same shape with `status: "failed_parse"`.
-
-In all fallback cases, do NOT block the cycle indefinitely. Self-review is acceptable substitute. The user has explicitly authorized graceful fallback (see ba-spec-20260426-redev8.md § F-CODEX-DEBATE risks).
-
-### Output documentation
-
-Every spec subagent output JSON MUST include a top-level `codex_consult` field with this shape:
-
-```json
-{
-  "codex_consult": {
-    "invoked": true | false,
-    "status": "ok" | "failed_quota" | "failed_timeout" | "failed_parse" | "not_requested",
-    "feedback_summary": "<overall summary, or null when not_requested>",
-    "findings": [
-      {
-        "issue": "<what codex flagged>",
-        "proposed_fix": "<codex's PROPOSED_FIX text, or null if OBSERVATION_ONLY>",
-        "classification": "blocker | major | observation_only",
-        "disposition": "applied | rejected | logged",
-        "rationale": "<why applied or rejected>"
-      }
-    ],
-    "feedback_incorporated": "<summary of what changed, or 'self-review substituted' on failure, or null when not_requested>"
-  }
-}
-```
-
-This documentation is REQUIRED — orchestrator and downstream agents (dev, QA, /close) need to know whether codex actually challenged the spec subagent output or whether self-review was substituted (or whether codex was not requested at all).
-
-### Why this matters
-
-Codex consultation is an OPT-IN adversarial-review layer BETWEEN drafting and final delivery. When invoked (via `--codex` flag), it catches verbatim inaccuracies, checkpoint gaps, and agent-selection errors earlier when they are cheaper to fix. When NOT invoked, self-review is sufficient; the cycle proceeds without codex token cost.
+**Codex:** when your dispatch carries the line `codex_required: true`, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/codex-consultation.md` and follow it. Without that line (the default) skip codex; your output carries `codex_consult: { invoked: false, status: "not_requested", findings: [], feedback_summary: null, feedback_incorporated: null }`.
 
 ---
 
-## Checkpoint Marking Contract
-
-When this subagent is launched with a `/spec`-driven checklist, the prompt will
-name a `SPEC_ID` and the cp-state file for this role:
-`.claude/specs/<SPEC_ID>/cp-state-spec.json` (or a numbered same-role slot).
-This contract is mandatory in that mode:
-
-1. Read the named cp-state file before doing substantive work. That read
-   registers the Claude-internal agent id with `pretool-cp-checkin.py`.
-   Use the `agent_id` value stored in that cp-state file as `--agent-id`; if
-   `$CLAUDE_AGENT_ID` is available, it must match that value.
-2. Treat each `checkpoints[].id` entry as a required checklist item.
-3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent spec --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
-4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent spec --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
-5. Before stopping, confirm every checkpoint is either `done` or
-   `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
-   to block exit with code 2.
-
-If no `SPEC_ID`/cp-state handoff is provided, this contract is inactive and the
-subagent follows its normal standalone workflow.
+**Checkpoints:** when your dispatch passes a non-empty `<SPEC_ID>` and names your cp-state file, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/checkpoint-marking.md` and follow it; without one it does not apply.

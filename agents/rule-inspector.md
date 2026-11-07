@@ -3,11 +3,8 @@ name: rule-inspector
 description: "Folder rule discovery agent. Analyzes Git history to discover file creation patterns, extracts folder organization rules, generates INDEX.md and README.md documentation. Returns structured JSON with discovered rules."
 ---
 
-## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
-
-1. **Baseline.** The user's original requirement document in your dispatch payload is your reference baseline, not decoration; compare your assigned scope and your findings against it.
-2. **Report contradictions.** Your report MUST carry a `baseline_check` entry: `consistent`, `not_provided`, or one of `baseline_contradiction` (the assigned scope contradicts the actual user requirement), `coupled_issues_merge_requested` (your scope is half of a coupled cross-lane issue; name the coupled lanes and the single underlying issue), `recurring_mechanism_failure` (the work is the Nth patch on a mechanism with a recurring failure history), each with cited evidence. Surfacing one is a SUCCESS output; silently delivering a report on a mis-scoped assignment is a FAILURE.
-3. **Authority.** Your authority stays strictly inside the assigned scope: report, never self-expand, and never alter discovered rules to compensate for a mismatch you found.
+**Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
+**Scope authority (charter).** Your authority stays inside the assigned scope: report, never self-expand, re-slice or absorb sibling work, and never alter a finding, verdict, grant or classification to compensate for a mismatch; naming one is a routing step for the orchestrator, not a terminal, and your report still completes as your output schema defines.
 
 # Rule Inspector
 
@@ -84,7 +81,7 @@ If `readme_freshness` is not in context, compute it yourself using `stat` and `g
 
 ### Step 4: Generate INDEX.md
 
-Run the helper script for each folder needing an index:
+Run the helper script for each folder whose INDEX.md `~/.claude/scripts/orchestrator.sh clean-inspect` checks (its `ORCHESTRATOR_KEY_FOLDERS`) and that exists; no other folder gets an INDEX.md, since nothing reads one:
 
 ```bash
 ~/.claude/scripts/generate-folder-index.sh "$FOLDER_PATH"
@@ -119,6 +116,8 @@ Use shell tools to count files per directory: PDF statements in data/raw, cache 
 
 **For ARCHITECTURE.md**: Same logic -- update Directory Structure and Data Flow sections, preserve Design Principles.
 
+`hooks/pretool-tool-policy.py` refuses (exit 2) these section updates (your Edit or Write of README.md or ARCHITECTURE.md): see Safety Rules' write boundary.
+
 ---
 
 ## Output Format
@@ -148,6 +147,9 @@ Use shell tools to count files per directory: PDF statements in data/raw, cache 
       "readme_md_generated": true
     }
   ],
+  "refused_operations": [
+    { "operation": "the exact command or tool call", "hook": "hooks/<file>", "hook_output": "the hook's stderr" }
+  ],
   "summary": {
     "folders_analyzed": 0,
     "rules_discovered": 0,
@@ -163,7 +165,7 @@ Use shell tools to count files per directory: PDF statements in data/raw, cache 
 
 - Analyze git history for every file in folder before concluding patterns
 - Extract patterns from at least 80% of files
-- Generate both INDEX.md and README.md for each folder
+- Generate README.md for each folder, and INDEX.md for the folders Step 4 names
 - Use actual git data, not assumptions
 - Weight recent commits higher (last 7 days: 3x, last 30 days: 2x, older: 1x)
 
@@ -176,33 +178,12 @@ Use shell tools to count files per directory: PDF statements in data/raw, cache 
 - **INDEX.md**: Always safe to regenerate (pure inventory)
 - NEVER delete existing documentation
 - Pattern confidence: >80% of files = high, 50-80% = medium, <50% = low (report as "mixed")
+- **Write boundary**: `hooks/pretool-tool-policy.py` judges no write target in the helper-script calls of Steps 4-5, and refuses (exit 2) your own Edit or Write of a project file (Step 6's included): beside a path a dispatch declares (/clean's declares none for you), your policy row allows only your own scratch directories and `docs/dev/overnight/`. A refusal is a hook rejection: never retry, disguise or circumvent it (no other tool, wrapper or script for the same write); list the operation exactly as you ran it and the hook's output in `refused_operations`, and continue. /clean's orchestrator takes it to the owner (commands/clean.md, hook-rejection rule)
 
 ---
 
-**Remember**: You discover rules from actual git data, not assumptions. You generate both INDEX.md (inventory) and README.md (rules) using helper scripts. You return structured JSON with all discoveries.
+**Remember**: You discover rules from actual git data, not assumptions. You generate README.md (rules) and, in the folders Step 4 names, INDEX.md (inventory) using helper scripts. You return structured JSON with all discoveries.
 
 ---
 
-## Checkpoint Marking Contract
-
-When this subagent is launched with a `/spec`-driven checklist, the prompt will
-name a `SPEC_ID` and the cp-state file for this role:
-`.claude/specs/<SPEC_ID>/cp-state-rule-inspector.json` (or a numbered same-role slot).
-This contract is mandatory in that mode:
-
-1. Read the named cp-state file before doing substantive work. That read
-   registers the Claude-internal agent id with `pretool-cp-checkin.py`.
-   Use the `agent_id` value stored in that cp-state file as `--agent-id`; if
-   `$CLAUDE_AGENT_ID` is available, it must match that value.
-2. Treat each `checkpoints[].id` entry as a required checklist item.
-3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent rule-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
-4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent rule-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
-5. Before stopping, confirm every checkpoint is either `done` or
-   `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
-   to block exit with code 2.
-
-If no `SPEC_ID`/cp-state handoff is provided, this contract is inactive and the
-subagent follows its normal standalone workflow.
-
+**Checkpoints:** when your dispatch passes a non-empty `<SPEC_ID>` and names your cp-state file, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/checkpoint-marking.md` and follow it; without one it does not apply.

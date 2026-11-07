@@ -1,30 +1,21 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "cycle-contract.v1",
-  "title": "Cycle Contract Manifest",
-  "description": "Single source of truth per overnight cycle. Mirrors architect.contract_manifest_schema.json_shape from architect-spec-20260426-090235.json. Written by the orchestrator at end of Step 2c (PM Triage) and again at end of Step 3 (after pipeline IDs are known). Read by the contract-aware hooks (pretool-subagent-enforce, posttool-subagent-track, posttool-overnight-file-check) and check-overnight-reports.py.",
+  "title": "Cycle Contract",
+  "description": "The dispatches one /dev-overnight cycle allows after PM TRIAGE. Written only by the PM TRIAGE handler in hooks/posttool-subagent-track.py, when the PM TRIAGE dispatch returns, at <working root>/docs/dev/overnight/<sid>/cycle-<N>/cycle-contract.json, and never edited afterwards. Read by pretool-subagent-enforce.py at dispatch (G1) and posttool-overnight-file-check.py at collection (G3). An entry names no artifact: each dispatch's obligation declares its own.",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
   "required": [
     "schema_version",
-    "spec_id",
     "session_id",
     "cycle_id",
-    "required_calls",
-    "pipelines",
-    "specialist_selection",
     "created_at",
-    "monolith_sha256"
+    "required_calls"
   ],
   "properties": {
     "schema_version": {
       "type": "integer",
       "const": 1
-    },
-    "spec_id": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Stable identifier for the spec driving this cycle (e.g. 'spec-20260426-090235' or 'autonomous-<sid>')."
     },
     "session_id": {
       "type": "string",
@@ -32,14 +23,8 @@
     },
     "cycle_id": {
       "type": "integer",
-      "minimum": 1
-    },
-    "spec_mode": {
-      "type": "string",
-      "enum": ["autonomous", "user-provided"]
-    },
-    "spec_path": {
-      "type": ["string", "null"]
+      "minimum": 1,
+      "description": "lib.overnight.cycle_index of the session when PM TRIAGE returned."
     },
     "created_at": {
       "type": "string",
@@ -47,172 +32,41 @@
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$",
       "description": "ISO-8601 UTC with terminal Z."
     },
-    "monolith_sha256": {
-      "type": ["string", "null"],
-      "description": "SHA-256 of the monolithic spec file at cycle creation time, or null when no monolith exists (autonomous mode)."
-    },
-    "tool_policy_ref": {
-      "type": "string",
-      "default": "~/.claude/policies/tool-policy.v1.json",
-      "description": "Harness-home-relative default (resolved via the WS1 CLAUDE_HOME resolver / `~` expansion at runtime); install-rendered, never an author-absolute literal."
-    },
-    "ui_evidence_schema_ref": {
-      "type": "string",
-      "default": "~/.claude/schemas/qa-report.v1.json",
-      "description": "Harness-home-relative default (resolved via the WS1 CLAUDE_HOME resolver / `~` expansion at runtime); install-rendered, never an author-absolute literal."
-    },
-    "trace_log_path": {
-      "type": "string"
-    },
     "required_calls": {
       "type": "array",
-      "minItems": 0,
+      "description": "One entry per dispatch of a canonical step after PM TRIAGE (scripts/todo/dev-overnight.py _STEPS): once per pipeline the triage report creates, except a step whose dispatch carries a mode, once per cycle.",
       "items": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "required": [
           "step",
           "role",
-          "expected_output_path",
-          "schema_name"
+          "mode",
+          "pipeline_id"
         ],
         "properties": {
           "step": {
             "type": "string",
-            "description": "Step identifier (e.g. '2a', '2b-architect', '2c', '4', '5a', '6', '8', '9', '14')."
+            "minLength": 1,
+            "description": "The canonical todo step label (e.g. '8', '11g', '20')."
           },
           "role": {
             "type": "string",
-            "enum": ["pm", "ba", "dev", "qa", "graphify", "architect", "ui-specialist", "product-owner", "user"]
+            "minLength": 1,
+            "description": "The step's subagent_call.subagent_type."
           },
           "mode": {
             "type": ["string", "null"],
-            "description": "Sub-mode keyword expected to appear in the Agent prompt (PLAN | TRIAGE | RETRO | DESIGN_MODE | AUDIT_MODE | UI_MODE | null)."
+            "description": "The step's subagent_call.mode, a keyword the Agent prompt must carry, or null."
           },
           "pipeline_id": {
-            "type": ["string", "null"]
-          },
-          "expected_output_path": {
-            "oneOf": [
-              {"type": "string", "minLength": 1},
-              {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1}
-            ]
-          },
-          "schema_name": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Key into ~/.claude/schemas/registry.json"
-          },
-          "max_retries": {
-            "type": "integer",
-            "minimum": 0,
-            "default": 3
-          },
-          "must_run": {
-            "type": "boolean",
-            "default": true
-          },
-          "skip_reason": {
             "type": ["string", "null"]
           }
         }
       }
     },
-    "pipelines": {
-      "description": "Per-pipeline tracking. Object keyed by pipeline_id (per BA spec) OR array of pipeline records (per architect schema). Both forms are accepted.",
-      "oneOf": [
-        {
-          "type": "object",
-          "patternProperties": {
-            "^.+$": {
-              "type": "object",
-              "additionalProperties": true,
-              "required": ["ba_status", "dev_status", "qa_status", "artifact_paths"],
-              "properties": {
-                "ba_status": {"type": "string", "enum": ["pending", "done", "repair", "escalate"]},
-                "dev_status": {"type": "string", "enum": ["pending", "done", "repair", "escalate"]},
-                "qa_status": {"type": "string", "enum": ["pending", "done", "repair", "escalate"]},
-                "artifact_paths": {
-                  "type": "object",
-                  "required": ["ba", "dev", "qa"],
-                  "properties": {
-                    "ba": {"type": ["string", "null"]},
-                    "dev": {"type": ["string", "null"]},
-                    "qa": {"type": ["string", "null"]}
-                  }
-                },
-                "tier": {"type": ["integer", "string"]},
-                "issue_summary": {"type": "string"},
-                "ui_evidence_required": {"type": "boolean"}
-              }
-            }
-          }
-        },
-        {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true,
-            "required": ["pipeline_id"],
-            "properties": {
-              "pipeline_id": {"type": "string"},
-              "tier": {"type": ["integer", "string"]},
-              "issue_summary": {"type": "string"},
-              "ba": {"type": "object"},
-              "dev": {"type": "object"},
-              "qa": {"type": "object"},
-              "ui_evidence_required": {"type": "boolean"}
-            }
-          }
-        }
-      ]
-    },
-    "specialist_selection": {
-      "description": "Per-specialist scheduling decision. Object form keyed by specialist name OR array form (architect schema). Both accepted.",
-      "oneOf": [
-        {
-          "type": "object",
-          "patternProperties": {
-            "^.+$": {
-              "type": "object",
-              "additionalProperties": true,
-              "required": ["decision", "reason"],
-              "properties": {
-                "decision": {"type": "string", "enum": ["call", "skip"]},
-                "reason": {"type": "string"},
-                "scope": {"type": "object"},
-                "budget": {
-                  "type": "object",
-                  "properties": {
-                    "max_pages": {"type": ["integer", "null"]},
-                    "max_viewports": {"type": ["integer", "null"]},
-                    "max_minutes": {"type": ["integer", "null"]}
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true,
-            "required": ["specialist", "decision", "reason"],
-            "properties": {
-              "specialist": {"type": "string"},
-              "decision": {"type": "string", "enum": ["call", "skip"]},
-              "reason": {"type": "string"},
-              "scope": {"type": "object"},
-              "estimated_token_budget": {"type": "integer"},
-              "hard_budget_enforced": {"type": "boolean"}
-            }
-          }
-        }
-      ]
-    },
     "self_repair": {
-      "description": "T2.4 (BUG-B-Q0E-CONTRACT-SELF-REPAIR-GAP): optional contract-driven, audited grant that lets the cycle's dev role write to a narrow set of ~/.claude/* paths during an active overnight cycle. The object's absence (default) means self-repair is DISABLED and all existing hard blocks in pretool-overnight-hook-guard.py remain in force. When present and enabled, pretool-overnight-hook-guard.py allows the write iff (a) the acting role is in allowed_roles, (b) the realpath target startswith one of allowed_path_prefixes, (c) optional pipeline_id matches the active pipeline, (d) now() < expires_at, AND (e) audit_required is satisfied (audit JSONL append succeeded). Audit log lives at ~/.claude/logs/overnight-self-repair.jsonl. Fail-closed semantics: if any check or the audit append fails, the grant is REVOKED and the existing hard block path runs unchanged.",
+      "description": "T2.4 (BUG-B-Q0E-CONTRACT-SELF-REPAIR-GAP): optional contract-driven, audited grant that lets the cycle's dev role write to a narrow set of ~/.claude/* paths during an active overnight cycle. The object's absence (default) means self-repair is DISABLED and all existing hard blocks in pretool-overnight-hook-guard.py remain in force. When present and enabled, pretool-overnight-hook-guard.py allows the write iff (a) the acting role is in allowed_roles, (b) the realpath target startswith one of allowed_path_prefixes, (c) optional pipeline_id matches the active pipeline, (d) now() < expires_at. Fail-closed semantics: if any check fails, the grant is REVOKED and the existing hard block path runs unchanged.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -223,7 +77,7 @@
         },
         "reason": {
           "type": "string",
-          "description": "Free-text justification persisted with each audit row for post-mortem review."
+          "description": "Free-text justification for post-mortem review."
         },
         "allowed_roles": {
           "type": "array",
@@ -255,7 +109,7 @@
         "audit_required": {
           "type": "boolean",
           "default": true,
-          "description": "When true (default), the JSONL audit append MUST succeed before the write is allowed. When false, the write proceeds even if audit append fails (NOT recommended)."
+          "description": "Retained from the grant's original shape; the grant writes no audit record."
         }
       }
     }

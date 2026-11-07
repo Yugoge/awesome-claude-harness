@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 7
+- **Total files**: 9
 - **Subdirectories**: 0
 - **Naming convention**: lower
 
@@ -14,6 +14,7 @@
 - `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
 - `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 - `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
+- `soundness_gate.py` - HUNK-level failure attribution
 <!-- /AUTO:readme-stats -->
 
 ---

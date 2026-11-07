@@ -8,6 +8,12 @@
 ```
 templates/
 ├── `overnight-spec.md` - Spec: <issue_description>
+├── prompt-includes/
+│   ├── `anti-give-up.md` - Anti-Give-Up Discipline
+│   ├── `checkpoint-marking.md` - Checkpoint Marking Contract
+│   ├── `codex-consultation.md` - Codex adversarial consultation
+│   ├── `overnight-spec-integration.md` - Overnight Spec Integration
+│   └── `specialist-findings-intake.md` - Specialist Findings Intake Protocol
 └── `spec-template.md` - Spec: <issue_description>
 ```
 

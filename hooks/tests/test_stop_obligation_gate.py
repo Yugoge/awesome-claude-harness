@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Tests for hooks/stop-obligation-gate.py (G4 session-terminal obligation
-gate, ticket 20260930-132644-l4).
+"""Tests for hooks/stop-obligation-gate.py, G4's registered Stop hook, now an
+exit-0 stub (P1b row 3, Correction 6, D15).
 
-Covers Must-Have item 8's required scenarios (a), (c), (e), (f), (g) for
-this hook (scenarios (b), (d), (h) are the overnight-loop half, covered by
-test_posttool_overnight_loop_terminal_gate.py), plus the AC1 registration/
-validity check.
+Its re-validation of every dispatch's declared artifacts at the session's
+Stop is gone: each artifact is decided at its producer's own stop (G2) and at
+the next dispatch (G3). The file stays registered, reads nothing and decides
+nothing, whatever the session holds and whatever CLAUDE_OBLIGATION_TERMINAL
+says.
 
 Run: pytest hooks/tests/test_stop_obligation_gate.py -v
 """
@@ -17,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _fixtures_obligation_terminal as fx  # noqa: E402
 
@@ -24,9 +27,10 @@ HOOK = Path(__file__).resolve().parent.parent / "stop-obligation-gate.py"
 REPO_ROOT = HOOK.parent.parent
 
 
-def _run_gate(transcript_path, project_dir, home, mode=None, session_id="gate-test-sess"):
-    # The gate keeps its advisory log under the configuration directory
-    # (CLAUDE_CONFIG_DIR, else ~/.claude): pin both to the scratch home.
+def _run_gate(transcript_path, project_dir, home, mode=None, session_id="gate-test-sess",
+              raw_stdin=None):
+    # Pin HOME and the configuration directory (CLAUDE_CONFIG_DIR, else
+    # ~/.claude) to the scratch home so the gate never sees the real one.
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir), "HOME": str(home),
            "CLAUDE_CONFIG_DIR": str(home / ".claude")}
     if mode is None:
@@ -40,7 +44,7 @@ def _run_gate(transcript_path, project_dir, home, mode=None, session_id="gate-te
     }
     return subprocess.run(
         [sys.executable, str(HOOK)],
-        input=json.dumps(payload),
+        input=raw_stdin if raw_stdin is not None else json.dumps(payload),
         capture_output=True,
         text=True,
         env=env,
@@ -48,8 +52,8 @@ def _run_gate(transcript_path, project_dir, home, mode=None, session_id="gate-te
     )
 
 
-def _advisory_log(home):
-    return home / ".claude" / "logs" / "obligation-terminal-gate-advisory.jsonl"
+def _written_files(root):
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
 
 
 # --------------------------------------------------------------------------
@@ -58,8 +62,10 @@ def _advisory_log(home):
 
 def test_hook_registered_and_valid(tmp_path):
     """AC-L4-01: hook file exists, compiles, and settings.json's hooks.Stop
-    array registers it in the existing no-matcher shape."""
+    array registers it in the existing no-matcher shape; D15: its text holds
+    a line starting `# STUB:` saying what replaced it."""
     assert HOOK.is_file()
+    assert any(line.startswith("# STUB:") for line in HOOK.read_text().splitlines())
     # py_compile writes its .pyc even under PYTHONDONTWRITEBYTECODE; redirect it
     # out of the checkout's hooks/__pycache__/ (which may be read-only).
     compiled = subprocess.run(
@@ -79,180 +85,54 @@ def test_hook_registered_and_valid(tmp_path):
             assert "matcher" not in entry
 
 
-# --------------------------------------------------------------------------
-# Scenario (a): unresolved obligation -- advisory logs+passes, block rejects
-# with a three-element message (AC-L4-02)
-# --------------------------------------------------------------------------
-
-def test_unresolved_obligation_advisory_logs_and_block_exits2(tmp_path):
-    """Scenario (a) / AC-L4-02."""
-    project_dir = tmp_path / "project"
-    project_dir.mkdir()
-    home = tmp_path / "home"
-    home.mkdir()
+def _unresolved_dev_session(tmp_path, project_dir):
     token = "20260930-132644-l4"
-    doc = fx.build_obligation_doc(
-        task_id=token, lane="l4", role="dev",
-        artifact_path="docs/dev/dev-report-MISSING-a.json",
-    )
-    transcript = fx.make_dev_family_transcript(tmp_path, project_dir, token, obligation_doc=doc)
-    # Deliberately do NOT create docs/dev/dev-report-MISSING-a.json.
-
-    advisory_log = _advisory_log(home)
-    if advisory_log.exists():
-        advisory_log.unlink()
-
-    unset_result = _run_gate(transcript, project_dir, home, mode=None)
-    assert unset_result.returncode == 0
-    assert advisory_log.is_file()
-    lines = [line for line in advisory_log.read_text().splitlines() if line.strip()]
-    assert len(lines) == 1
-    record = json.loads(lines[0])
-    assert record.get("artifact_path") == "docs/dev/dev-report-MISSING-a.json"
-
-    block_result = _run_gate(transcript, project_dir, home, mode="block")
-    assert block_result.returncode == 2
-    stderr = block_result.stderr
-    assert "docs/dev/dev-report-MISSING-a.json" in stderr  # what is unmet
-    assert "dev" in stderr and "l4" in stderr  # whose responsibility (role + lane)
-    assert "fix:" in stderr  # how to satisfy it
+    doc = fx.build_obligation_doc(task_id=token, artifact_path="docs/dev/dev-report-MISSING-a.json")
+    return fx.make_dev_family_transcript(tmp_path, project_dir, token, obligation_doc=doc)
 
 
-# --------------------------------------------------------------------------
-# Scenario (c), UPDATED (ticket 20261001-161041-r21, M1): the unconditional
-# /close and /commit exemption is REMOVED. A /close- or /commit-first-message
-# session with an unresolved obligation is now classified and re-checked
-# exactly like any other dev-family session (AC1); a /close- or
-# /commit-first-message session with NO dev-family obligation at all still
-# exits 0 in every mode -- LOW-10 fail-open for genuinely non-obligated
-# sessions, preserved (AC2).
-# --------------------------------------------------------------------------
-
-def test_close_commit_session_with_unresolved_obligation_now_blocks(tmp_path):
-    """AC1: removing the exemption makes G4 reachable in block mode for a
-    /close or /commit session carrying an unresolved obligation -- advisory
-    mode still only logs, block mode exits 2 naming the artifact."""
-    project_dir = tmp_path / "project"
-    project_dir.mkdir()
-    home = tmp_path / "home"
-    home.mkdir()
+def _unresolved_close_session(tmp_path, project_dir):
     token = "20260930-132644-l4"
     doc = fx.build_obligation_doc(task_id=token, artifact_path="docs/dev/dev-report-MISSING-c.json")
-
-    for index, first_message in enumerate(("/close", "/commit --bulk")):
-        transcript_dir = tmp_path / f"formerly-exempt-{index}"
-        transcript_dir.mkdir()
-        transcript = fx.make_dev_family_transcript(
-            transcript_dir, project_dir, token, obligation_doc=doc,
-            first_user_message=first_message,
-        )
-        advisory_log = _advisory_log(home)
-        if advisory_log.exists():
-            advisory_log.unlink()
-
-        advisory_result = _run_gate(transcript, project_dir, home, mode=None)
-        assert advisory_result.returncode == 0, (first_message, advisory_result.stderr)
-        assert advisory_log.is_file(), first_message
-
-        block_result = _run_gate(transcript, project_dir, home, mode="block")
-        assert block_result.returncode == 2, (first_message, block_result.stderr)
-        assert "docs/dev/dev-report-MISSING-c.json" in block_result.stderr
+    return fx.make_dev_family_transcript(tmp_path, project_dir, token, obligation_doc=doc,
+                                         first_user_message="/close")
 
 
-def test_close_commit_non_obligated_session_still_exits_zero(tmp_path):
-    """AC2: a true non-obligated /close or /commit session (no dev-family
-    obligation at all) still exits 0 in any mode -- the former exemption is
-    gone, but LOW-10's fail-open for non-obligated sessions is unaffected."""
-    for index, first_message in enumerate(("/close", "/commit --bulk")):
-        case_dir = tmp_path / f"nonobligated-{index}"
-        case_dir.mkdir()
-        project_dir = case_dir / "project"
-        project_dir.mkdir()
-        home = case_dir / "home"
-        home.mkdir()
-        transcript = fx.make_non_dev_family_transcript(
-            case_dir, first_user_message=first_message
-        )
-        for mode in (None, "block", "off"):
-            result = _run_gate(transcript, project_dir, home, mode=mode)
-            assert result.returncode == 0, (first_message, mode, result.stderr)
+def _corrupt_transcript(tmp_path, project_dir):
+    path = tmp_path / "corrupt.jsonl"
+    path.write_text("{this is not valid json\n{neither is this\n")
+    return path
 
 
-# --------------------------------------------------------------------------
-# Scenario (e): no dev-registry reference anywhere -> exit 0 immediately,
-# any mode, no advisory write (AC-L4-09)
-# --------------------------------------------------------------------------
+SESSIONS = {
+    "dev_session_missing_declared_report": _unresolved_dev_session,
+    "close_session_missing_declared_report": _unresolved_close_session,
+    "no_dev_family_dispatch": lambda tmp_path, project_dir: fx.make_non_dev_family_transcript(tmp_path),
+    "corrupt_transcript": _corrupt_transcript,
+    "missing_transcript": lambda tmp_path, project_dir: tmp_path / "does-not-exist.jsonl",
+}
 
-def test_non_dev_family_session_exits_silently(tmp_path):
-    """Scenario (e) / AC-L4-09."""
+
+@pytest.mark.parametrize("mode", [None, "advisory", "block", "off"])
+@pytest.mark.parametrize("session", sorted(SESSIONS))
+def test_stub_decides_nothing(tmp_path, session, mode):
+    """Every Stop, armed or not, with or without a dispatch whose declared
+    artifact is missing: exit 0, no output, nothing written."""
     project_dir = tmp_path / "project"
     project_dir.mkdir()
     home = tmp_path / "home"
     home.mkdir()
-    transcript = fx.make_non_dev_family_transcript(tmp_path)
-    advisory_log = _advisory_log(home)
+    transcript = SESSIONS[session](tmp_path, project_dir)
+    before = _written_files(tmp_path)
 
-    for mode in (None, "block", "off"):
-        if advisory_log.exists():
-            advisory_log.unlink()
-        result = _run_gate(transcript, project_dir, home, mode=mode)
-        assert result.returncode == 0
-        assert not advisory_log.exists()
+    result = _run_gate(transcript, project_dir, home, mode=mode)
+
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert _written_files(tmp_path) == before
 
 
-# --------------------------------------------------------------------------
-# Scenario (f) (stop-hook half): off mode skips the new logic entirely --
-# no log write even when an unresolved obligation is present
-# --------------------------------------------------------------------------
-
-def test_off_mode_skips_entirely_stop_hook(tmp_path):
-    """Scenario f (stop-hook half): CLAUDE_OBLIGATION_TERMINAL=off is a
-    no-op, byte-identical to pre-lane behavior, even with an unresolved
-    obligation present."""
-    project_dir = tmp_path / "project"
-    project_dir.mkdir()
-    home = tmp_path / "home"
-    home.mkdir()
-    token = "20260930-132644-l4"
-    doc = fx.build_obligation_doc(task_id=token, artifact_path="docs/dev/dev-report-MISSING-f.json")
-    transcript = fx.make_dev_family_transcript(tmp_path, project_dir, token, obligation_doc=doc)
-    advisory_log = _advisory_log(home)
-    if advisory_log.exists():
-        advisory_log.unlink()
-
-    result = _run_gate(transcript, project_dir, home, mode="off")
-    assert result.returncode == 0
-    assert not advisory_log.exists()
-
-
-# --------------------------------------------------------------------------
-# Scenario (g) (stop-hook half): malformed/corrupted transcript or any
-# unexpected exception -> fail open (exit 0)
-# --------------------------------------------------------------------------
-
-def test_stop_hook_fails_open_on_malformed_transcript(tmp_path):
-    """Scenario g (stop-hook half) / AC-L4-06."""
-    project_dir = tmp_path / "project"
-    project_dir.mkdir()
-    home = tmp_path / "home"
-    home.mkdir()
-    transcript = tmp_path / "corrupt.jsonl"
-    transcript.write_text("{this is not valid json\n{neither is this\n")
-
-    for mode in (None, "block"):
-        result = _run_gate(transcript, project_dir, home, mode=mode)
-        assert result.returncode == 0
-
-
-def test_stop_hook_fails_open_on_missing_transcript(tmp_path):
-    """AC-L4-06 variant: a transcript_path that does not exist on disk at
-    all must also fail open, not raise."""
-    project_dir = tmp_path / "project"
-    project_dir.mkdir()
-    home = tmp_path / "home"
-    home.mkdir()
-    missing_transcript = tmp_path / "does-not-exist.jsonl"
-
-    for mode in (None, "block"):
-        result = _run_gate(missing_transcript, project_dir, home, mode=mode)
-        assert result.returncode == 0
+def test_stub_reads_no_stdin_it_could_fail_on(tmp_path):
+    """Malformed or empty stdin: exit 0 as well."""
+    for raw in ("", "{not json", "[]"):
+        result = _run_gate(tmp_path / "t.jsonl", tmp_path, tmp_path, mode="block", raw_stdin=raw)
+        assert (result.returncode, result.stdout, result.stderr) == (0, "", "")

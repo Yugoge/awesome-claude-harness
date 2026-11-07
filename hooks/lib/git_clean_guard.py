@@ -32,10 +32,8 @@ and the cwd-mutation scan all consume THAT word list, so a splice can no longer
 hide a negation, a `--work-tree` or a `cd` from one predicate while another
 sees it.
 
-git_command_classifier.py is NOT imported and NOT modified: its
-`_git_subcommand` signature is imported directly by
-pretool-block-branch-pr-worktree.py and must stay stable, and its `_WRAPPERS`
-set is a closed 12-name enumeration that this module must no longer treat as
+From git_command_classifier.py only the git global-option table is imported:
+its `_WRAPPERS` set is a closed enumeration that this module must not treat as
 exhaustive.
 
 Coverage bounds. TWICE this section has asserted a universal fail-closed
@@ -130,12 +128,13 @@ import os
 import re
 import sys
 
+try:
+    from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS
+except ImportError:  # run as a script: hooks/lib is on sys.path
+    from git_command_classifier import GIT_GLOBAL_VALUE_OPTS
+
 # git globals that point the invocation at a DIFFERENT repository / work tree.
 _REDIRECT_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})
-# git globals that consume an operand but do NOT redirect the target.
-_NEUTRAL_GLOBALS_WITH_ARG = frozenset({
-    "--namespace", "--exec-path", "--super-prefix",
-})
 # Environment assignments that redirect the target (QA obs-1: these aim at
 # ANOTHER tree, so mis-detection would be safe, but denying them keeps the
 # "deny ANY redirect" invariant honest rather than merely safe-by-accident).
@@ -566,7 +565,7 @@ def _git_invocation(words, start, ignore_dry_run=False):
                 redirect = True
             i += 1
             continue
-        if tok in _NEUTRAL_GLOBALS_WITH_ARG:
+        if tok in GIT_GLOBAL_VALUE_OPTS:  # any other value-taking global
             i += 2
             continue
         if tok.startswith("-"):
