@@ -394,12 +394,15 @@ def _differing(name: str) -> dict:
 
 def _gaps(text: str) -> list[tuple[str, str | None]]:
     """Each gap a COMMAND_GATE block names, with the WAITS phase it waits for (None: a gap of its own);
-    [] for any other text."""
+    a time-lock the gate cannot read is one gap; [] for any other text."""
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    if not lines or not lines[0].startswith("COMMAND_GATE /"):
+    if lines and lines[0].startswith("COMMAND_GATE time-lock: gate instrument failure: "):
+        gaps = [lines[0][len("COMMAND_GATE time-lock: "):].split("; the human can type /stop")[0]]
+    elif lines and lines[0].startswith("COMMAND_GATE /"):
+        gaps = [line[2:] for line in lines[1:] if line.startswith("- ")]
+    else:
         return []
-    return [(gap, next((ph for ph, _, rx in WAITS if rx.fullmatch(gap)), None))
-            for gap in (line[2:] for line in lines[1:] if line.startswith("- "))]
+    return [(gap, next((ph for ph, _, rx in WAITS if rx.fullmatch(gap)), None)) for gap in gaps]
 
 
 def _waits(text: str) -> list[str] | None:
