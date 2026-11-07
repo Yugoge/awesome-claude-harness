@@ -27,12 +27,13 @@ The held git index.lock (F4, F4c, F4s; R14, X7): the shared-index sync (scripts/
 sync-shared, the changelog-analyst's step after each commit) waits while a process holds the lock and
 removes, once and saying so, a lock no process holds that is older than the sync.
 
-An unfinished cycle the owner's /close or /commit meets (F8, F8q, F8p, F8c; tests/replay/routing.py):
+An unfinished cycle the owner's /close or /commit meets (F8, F8q, F8p, F8c, F8r; tests/replay/routing.py):
 the gap names the artifact's path and its check and no role (D21); /close's one chain call (Step 0),
-its close-QA round (F8p) or /commit's chain call (Step 5, F8c) finds it; the routing loop dispatches
+its close-QA round (F8p), /commit's chain call (Step 5, F8c) or its late-repair state (Step 5, F8r: the
+QA report of a `/close --late-repair` removed after CLOSE: YES) finds it; the routing loop dispatches
 again what P1b's E3 reader returns for that path (the same subagent_type, task id, lane and obligation
 template, a fresh dispatched_at), that dispatch's own agent writes the repair, and the typed /close or
-/commit (HX) is the only human event; /close ends in its Terminal form and F8c's commit lands.
+/commit (HX) is the only human event; /close ends in its Terminal form and F8c's and F8r's commits land.
 """
 from __future__ import annotations
 
@@ -382,7 +383,7 @@ def test_f4s_stale_lock_at_commit(replays, key):
     assert rec["sync_reports"] and not rec["lock_left_after_stop"], rec
 
 
-# ---------------------------------------------------------------- F8, F8q, F8p, F8c: an unfinished cycle met by /close or /commit
+# ---------------------------------------------------------------- F8, F8q, F8p, F8c, F8r: an unfinished cycle met by /close or /commit
 def _route_cases(scn: suite.Scenario, faults: tuple = ()) -> list:
     keys = [suite.replay_key(scn, s, faults) for s in suite.SETTINGS]
     return [pytest.param(k, id=s, marks=pytest.mark.replay(k, scn.cost)) for k, s in zip(keys, suite.SETTINGS)]
@@ -439,6 +440,23 @@ def test_f8p_lane_product_file_broken_then_close(replays, key):
 def test_f8c_lane_dev_report_removed_then_commit(replays, key):
     r = replays.get(key)
     f = routing.assert_routed(r, typed="commit", source="dispatch", check="resolve-dev-artifact-chain.py")
+    assert r.fact("commit")["commit_status"] == "committed", r.fact("commit")
+
+
+F8R = suite.Scenario("F8r", "commit", (("variant", "late-repair-qa"),), ("dev", "close", "commit"), 200)
+
+
+@pytest.mark.parametrize("key", _route_cases(F8R))
+def test_f8r_late_repair_qa_report_removed_then_commit(replays, key):
+    """Acceptance 7's late-repair-qa case: `/close --late-repair` lands CLOSE: YES, the task's QA report is removed
+    and /commit typed in a later session. Step 5's late-repair state is invalid on that report (State C); the QA
+    dispatch that declared it runs again and writes it, and the next round of the same check lets the commit land."""
+    r = replays.get(key)
+    tid = r.terminal("commit")["task"]
+    routing.assert_routed(r, typed="commit", source="dispatch", check="late-repair-controller.py resolve-effective-report",
+                          path=f"docs/dev/qa-report-{tid}.json", names=r"printed state invalid .*\(State C\)")
+    plans = [f["value"] for f in r.facts if f["key"] == "commit Step 5"]
+    assert [p["ok"] for p in plans] == [False, True] and plans[-1]["late_repair_state"] != "invalid", plans
     assert r.fact("commit")["commit_status"] == "committed", r.fact("commit")
 
 

@@ -1,4 +1,4 @@
-"""D25 (2) F8, F8q, F8p, F8c: an unfinished cycle the owner's /close or /commit meets (CC4/D7).
+"""D25 (2) F8, F8q, F8p, F8c, F8r: an unfinished cycle the owner's /close or /commit meets (CC4/D7).
 
 No hook blocks here: the gap is what /close's chain call (Step 0), its close-QA round, or /commit's
 chain call (Step 5) finds, recorded as the routing loop's entry, and the loop dispatches again what
@@ -65,11 +65,13 @@ def agent_writes(rd: str) -> dict:
     return out
 
 
-def facts(r) -> dict:
-    """What an F8 replay shows (suite.Result `r`)."""
+def facts(r, path: str | None = None) -> dict:
+    """What an F8 replay shows (suite.Result `r`); its human events are those after the injection of `path`
+    (where one removed or broke it), else after the first injection."""
     rd = r.run_dir
     inj = [f for f in _json(os.path.join(rd, "faults.json"), []) if f.get("kind") in ("remove", "break", "cut")]
-    at = inj[0].get("events_before", 0) if inj else 0
+    at = next((i.get("events_before", 0) for i in inj if i.get("path") == path),
+              inj[0].get("events_before", 0) if inj else 0)
     human = []
     for e in _jsonl(os.path.join(rd, "invocations.jsonl")):
         p = e["payload"]
@@ -105,11 +107,14 @@ def assert_routed(r, *, typed: str, source: str, check: str, path: str | None = 
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     assert not r.blocks, "an F8 fault met a gate block (it has none to meet):\n" + r.explain()
     assert not r.hook_errors, "an F8 fault met a hook error:\n" + r.explain()
-    f = facts(r)
+    f = facts(r, path)
     assert f["injection"], f"no injection recorded: {f['injection']}"
     path = path or f["injection"][0]["path"]
+
+    def named(p) -> bool:  # the path, or the project path a check printed for it
+        return isinstance(p, str) and (p == path or p.endswith("/" + path))
     # The gap: the routing loop's entry for the injected path, as the text's own call recorded it.
-    gaps = [e for e in f["entries"] if e["entry"].get("path") == path]
+    gaps = [e for e in f["entries"] if named(e["entry"].get("path"))]
     assert gaps, f"no routing entry names {path}: {f['entries']}"
     gap = gaps[0]["entry"]
     assert set(gap) == ENTRY_KEYS, f"the gap carries more than path, detail and check (D21): {gap}"
@@ -117,11 +122,11 @@ def assert_routed(r, *, typed: str, source: str, check: str, path: str | None = 
     assert re.search(names, gap["detail"]), f"the gap does not name the failing check ({names}): {gap}"
     assert not re.search(r"\b(producer|owner|role|fix)\b", gap["detail"], re.I), f"the gap names a role: {gap}"
     # The loop dispatched again what the reader returned for that path.
-    owing = [o for o in f["owing"] if o["path"] == path]
+    owing = [o for o in f["owing"] if named(o["path"])]
     assert owing and isinstance(owing[0].get("answer"), dict), f"no reader answer for {path}: {f['owing']}"
     ans = owing[0]["answer"]
     assert ans.get("source") == source, f"the reader answered {ans} for {path}, not a {source!r} answer"
-    routed = [d for d in f["routed"] if d["path"] == path]
+    routed = [d for d in f["routed"] if named(d["path"])]
     assert len(routed) == 1, f"not exactly one dispatch for {path}: {f['routed']}"
     new = f["dispatches"][routed[0]["tool_use_id"]]
     if source == "todo_step":
