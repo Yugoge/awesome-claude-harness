@@ -38,7 +38,8 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
                      the settings half of the landing (scripts/install/land, at every Stop, on a
                      home that ran pre-P7 code): undo what a conflicted pull left in the index,
                      migrate, seed private-literals.txt. --rev prints the pre-pull revision;
-                     --repair only undoes a conflicted pull (exit 1 while git refuses it).
+                     --repair only undoes a conflicted pull (exit 1 while git refuses it). Both
+                     drop the overlay's hook commands HEAD retired or already runs (R2).
 
 The record <git dir>/claude-settings.applied (mode 0600, never tracked) lists the layers smudge and
 render applied to the working file since the last render, so that an entry dropped from the overlay
@@ -1169,16 +1170,13 @@ def _script(hook):
 
 
 def _named(data, rel):
-    """The .py and .sh file names a script's code holds: a Python file's string constants
-    without whitespace (no docstring or message), a shell script's lines off comments."""
-    try:
-        lines = [n.value for n in ast.walk(ast.parse(data)) if isinstance(n, ast.Constant)
-                 and isinstance(n.value, str) and not re.search(r"\s", n.value)] \
-            if rel.endswith(".py") else [ln for ln in data.decode("utf-8", "replace").splitlines()
-                                         if ln.strip()[:1] != "#"]
-    except (SyntaxError, ValueError):
-        lines = []
-    return set(re.findall(r"[\w.+-]+\.(?:py|sh)(?![\w.-])", "\n".join(lines)))
+    """The .py and .sh file names a script's code holds, off comment lines: a whole quoted
+    literal in a Python file (no docstring or message), any word in a shell script."""
+    text = "\n".join(ln for ln in data.decode("utf-8", "replace").splitlines()
+                     if ln.strip()[:1] != "#")
+    name = r"([\w.+-]+\.(?:py|sh))"
+    return set(re.findall(r"""["'](?:[^"'\s]*/)?%s["']""" % name if rel.endswith(".py")
+                          else name + r"(?![\w.-])", text))
 
 
 def superseded(home, hooks, ref, past=()):
@@ -1195,7 +1193,8 @@ def superseded(home, hooks, ref, past=()):
     def gone(event, rel):
         data = blob(home, "HEAD:" + rel)
         if data is None:
-            return bool(_git_out(home, "log", "-1", "--format=%h", "HEAD", *past, "--", rel))
+            return bool(_git_out(home, "--literal-pathspecs", "log", "-1", "--format=%h", "HEAD",
+                                 *past, "--", rel))
         if event not in runs:
             todo, runs[event] = [_script(h) for g in _list(_d(ref.get("hooks")).get(event))
                                  for h in _list(_d(g).get("hooks")) if isinstance(h, dict)], set()
@@ -1203,8 +1202,9 @@ def superseded(home, hooks, ref, past=()):
                 run = todo.pop()
                 if run and run not in runs[event]:
                     runs[event].add(run)
-                    todo += [p for n in _named(blob(home, "HEAD:" + run) or b"", run)
-                             for p in names.get(n, [])]
+                    path = os.path.join(home, run)  # the code that runs: the checked-out file
+                    todo += [p for n in _named(_read(path) or b"" if os.path.isfile(path) else b"",
+                                               run) for p in names.get(n, [])]
         return any(ln.startswith(b"# STUB:") for ln in data.splitlines()) or rel in runs[event]
 
     for event, groups in list(hooks.items()):
@@ -1216,6 +1216,36 @@ def superseded(home, hooks, ref, past=()):
         if not groups:
             del hooks[event]
     return {event: n for event, n in out.items() if n}
+
+
+def repair_overlay(home):
+    """R2's overlay repair, run by the landing on every home: the migration's rule (superseded)
+    drops the overlay's hook commands HEAD retired or already runs. The overlay is replaced
+    atomically, owner-only, the rest unchanged, and the working file loses the same commands (its
+    other entries, a CLI write among them, stay). {event: count}; an unusable overlay is doctor's."""
+    try:
+        overlay = load_overlay(home) or {}
+    except OverlayError:
+        return {}
+    hooks, layers = copy.deepcopy(_d(overlay.get("hooks"))), layers_of(overlay)
+    below = merge_all(parse(blob(home, "HEAD:" + SETTINGS)) or {}, layers[:-1])
+    dropped = superseded(home, hooks, below) if hooks else {}
+    if dropped:
+        old = overlay["hooks"]
+        if hooks:
+            overlay["hooks"] = hooks
+        else:
+            del overlay["hooks"]
+        _write_atomic(os.path.join(home, OVERLAY), canon(overlay), 0o600)
+        working = parse(_read(os.path.join(home, SETTINGS)))
+        if working is not None:
+            for event, groups in old.items():
+                if isinstance(_d(working.get("hooks")).get(event), list):
+                    _unmerge_event(working["hooks"][event], groups,
+                                   _list(_d(below.get("hooks")).get(event)))
+            _write_atomic(os.path.join(home, SETTINGS), canon(merge(working, {"hooks": hooks})))
+            refresh_index(home)
+    return dropped
 
 
 def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
@@ -1555,6 +1585,13 @@ def seed_literals(home, rev):
     return counts
 
 
+def overlay_note(dropped):
+    if dropped:
+        _say("overlay repaired: %s" % " ".join("hooks.%s=%d" % kv for kv in dropped.items()))
+    return ["%d hook command(s) of settings.machine.json that HEAD retired or already runs dropped"
+            % sum(dropped.values())] if dropped else []
+
+
 def repaired(res):
     """The notice parts for repair_pop's result. A path git refused to take (a lock) stays unmerged
     and is tried again at the next Stop: named apart, a control or line-break character as "?"."""
@@ -1600,7 +1637,9 @@ def land(home, mode):
             if stash and SETTINGS in unmerged else [None]
         lost = describe(diff(diff(docs[0], docs[1]), docs[2])) if None not in docs else []
         res = repair_pop(home, stash) if unmerged else (0, 0, 0, 0, [])
-        _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])
+        if unmerged:
+            _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])
+        notes += overlay_note(repair_overlay(home))
         if lost and SETTINGS not in res[4]:
             _say("settings.json taken from HEAD; dropped: %s" % ", ".join(lost))
             notes.append("dropped from settings.json, as the overlay does not hold them: %s (in "
@@ -1626,6 +1665,7 @@ def land(home, mode):
     if not os.path.isfile(OVERLAY):
         _say("%s is not a regular file" % OVERLAY)
         return "overlay", 1
+    notes += overlay_note(repair_overlay(home))
     res = repair_pop(home, stash or pull_stash(home, rev, False), True) if unmerged else \
         (0, 0, 0, 0, [])
     _say("repair resolved=%d doc-sync=%d unstaged=%d unmerged-left=%d" % res[:4])

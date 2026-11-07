@@ -9,6 +9,8 @@ filter declared, the clean form, the scripts under test copied from this checkou
 CLAUDE_CONFIG_DIR and the global git config point into the test's temporary directory, and no
 Claude Code variable is inherited. All values are stand-ins (acct-test-*, demo-*, /opt/demo/*).
 """
+import copy
+import itertools
 import json
 import os
 import shutil
@@ -20,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_settings_filter import (CODE_NEW, CODE_OLD, canon, clean_form, hook,
-                                        previous_settings)
+from tests.test_settings_filter import (CODE_NEW, CODE_OLD, NOTIFY_GROUP, canon, clean_form,
+                                        hook, previous_settings)
 
 REPO = Path(__file__).resolve().parent.parent
 HARNESS_FILES = ("scripts/install/land", "scripts/install/render-settings", "scripts/bootstrap",
@@ -254,6 +256,132 @@ def test_migrate_skips_what_head_retired_or_runs_and_carries_other_personal_hook
     for word in ("gate", "coordinator", "phase", "/opt/demo"):
         assert word not in proc.stdout + proc.stderr
 
+
+
+# --------------------------------------------------------------- P10 R2: the overlay repair
+
+def repair_home(tmp_path, env):
+    """A landed home whose owner registered harness hooks in the overlay and rendered, then took a
+    revision (settings.json untouched, so no smudge runs) that marks one `# STUB:`, deletes one
+    and has the clean form's Stop hook run a third. The CLI then appended an allow entry. Returns
+    (home, the overlay's bytes, the overlay object the repair must leave)."""
+    home, _rev = make_home(tmp_path, env)
+    land(env, home)
+    assert_landed(env, home)
+    for rel in ("hooks/retired.py", "hooks/gone.py", "hooks/phase.sh", "hooks/live.py"):
+        write(home / rel, "exit 0\n")
+    git(env, home, "add", "-A")
+    git(env, home, "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "four harness hooks")
+    mine = lambda rel: hook("bash" if rel.endswith(".sh") else "python3", rel,  # noqa: E731
+                            prefix=str(home))
+    ov = overlay(home)
+    assert list(ov).index("hooks") not in (0, len(ov) - 1)  # in the middle: rest before and after
+    ov["hooks"]["Stop"] = [{"hooks": [mine("hooks/retired.py"), mine("hooks/gone.py")]},
+                           {"hooks": [mine("hooks/phase.sh")]}]
+    ov["hooks"]["PreToolUse"] = [{"matcher": "Write",
+                                  "hooks": [mine("hooks/live.py"), mine("hooks/gone.py")]}]
+    (home / "settings.machine.json").write_bytes(canon(ov))
+    run([sys.executable, str(home / "scripts/install/render-settings"), "render"], env,
+        cwd=str(home))
+    write(home / "hooks/retired.py", "#!/usr/bin/env python3\n# STUB: retired; exits 0.\n")
+    write(home / "hooks/stop-demo.py", 'PHASE = ("bash", "hooks/phase.sh")\n')
+    git(env, home, "rm", "-q", "hooks/gone.py")
+    git(env, home, "add", "-A")
+    git(env, home, "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "a later revision")
+    append_allow(home / "settings.json", "Bash(demo-cli-approved:*)")
+    want = copy.deepcopy(ov)
+    del want["hooks"]["Stop"]
+    want["hooks"]["PreToolUse"][0]["hooks"] = [mine("hooks/live.py")]
+    return home, canon(ov), want
+
+
+def hook_path_lines(env, home):
+    """The lines render-settings check prints under its hook paths line."""
+    out = run([sys.executable, str(home / "scripts/install/render-settings"), "check"], env,
+              cwd=str(home), check=False).stdout.splitlines()
+    start = next(i for i, ln in enumerate(out) if " hook paths: " in ln)
+    return list(itertools.takewhile(lambda ln: ln.startswith("       "), out[start + 1:]))
+
+
+def commands(home):
+    doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    return [h["command"] for groups in doc["hooks"].values() for g in groups for h in g["hooks"]]
+
+
+def test_the_landing_repairs_an_overlay_registering_what_head_retired_or_runs(tmp_path, env):
+    """P10 R2 (option (a) of experiment 2): at the next Stop the landing drops from the overlay,
+    through the migration's rule, the hook commands whose harness script HEAD marks `# STUB:` or
+    lacks, or that the clean form's Stop hook already runs: the overlay is replaced atomically,
+    mode 0600, every byte outside them as it was; settings.json loses the same commands and keeps
+    the rest (the CLI's allow entry too), and check passes. Only counts reach the log and the
+    notice; a second Stop does nothing and logs nothing."""
+    home, before, want = repair_home(tmp_path, env)
+    path = home / "settings.machine.json"
+    outside = "       %s: a hook outside the clean form (see settings.machine.json)"
+    personal = [outside % "Notification"]  # the stand-in personal hook, whose file is not here
+    assert hook_path_lines(env, home) == [
+        outside % "PreToolUse", "       Stop: hooks/retired.py is a stub the clean form does not "
+        "register", outside % "Stop"] + personal
+    inode, log = path.stat().st_ino, landing_log(home)
+    notice = land(env, home)
+    assert notice == ("Harness landing: 4 hook command(s) of settings.machine.json that HEAD "
+                      "retired or already runs dropped.\n")
+    after = path.read_bytes()
+    assert after == canon(want)
+    head, tail = before.index(b'  "hooks": {'), before.index(b'\n  },\n', before.index(b'"hooks"'))
+    assert after.startswith(before[:head]) and after.endswith(before[tail:])
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600 and path.stat().st_ino != inode
+    assert not list(home.glob(".settings.render.*"))
+    cmds = commands(home)
+    for gone in ("retired.py", "gone.py", "phase.sh"):
+        assert not any(gone in c for c in cmds), gone
+    assert sum("live.py" in c for c in cmds) == 1 and NOTIFY_GROUP["hooks"][0]["command"] in cmds
+    rendered = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    assert "Bash(demo-cli-approved:*)" in rendered["permissions"]["allow"]
+    assert hook_path_lines(env, home) == personal
+    check = run([sys.executable, str(home / "scripts/install/render-settings"), "check"], env,
+                cwd=str(home), check=False).stdout
+    assert "[ ok ] settings filter: registered, required, exact round trip" in check
+    added = landing_log(home)[len(log):]
+    assert "land: overlay repaired: hooks.Stop=3 hooks.PreToolUse=1\n" in added
+    for word in ("retired", "gone", "phase", "live.py", str(home)):
+        assert word not in added
+    assert land(env, home) == "" and path.read_bytes() == after
+    assert landing_log(home)[len(log):] == added
+
+
+def test_the_overlay_repair_waits_while_a_rebase_is_stopped(tmp_path, env):
+    """P7b's S4 rule holds for the repair: with a rebase stopped in the harness home the landing
+    changes nothing and logs nothing; once it is gone, the next Stop repairs."""
+    home, before, want = repair_home(tmp_path, env)
+    gd = home / ".git"
+    (gd / "rebase-merge").mkdir()
+    (gd / "rebase-merge" / "head-name").write_text("refs/heads/master\n")
+    log, working = landing_log(home), (home / "settings.json").read_bytes()
+    assert land(env, home) == ""
+    assert (home / "settings.machine.json").read_bytes() == before
+    assert (home / "settings.json").read_bytes() == working and landing_log(home) == log
+    shutil.rmtree(gd / "rebase-merge")
+    assert "4 hook command(s)" in land(env, home)
+    assert (home / "settings.machine.json").read_bytes() == canon(want)
+
+
+def test_an_upgraded_home_whose_overlay_exists_has_it_repaired_by_the_landing(tmp_path, env):
+    """The repair works on every home: one that pulled P7 alone and kept an overlay it wrote then
+    (the landing never rewrites it by migration) has it repaired when it lands."""
+    home, _rev = make_home(tmp_path, env)
+    write(home / "hooks/retired.py", "#!/usr/bin/env python3\n# STUB: retired; exits 0.\n")
+    git(env, home, "add", "-A")
+    git(env, home, "commit", "-q", "-m", "a retired hook")
+    kept = {"modules": {"paseo": True}, "env": {"CLAUDE_HOME": str(home)},
+            "hooks": {"Stop": [{"hooks": [hook("python3", "hooks/retired.py", prefix=str(home))]}],
+                      "Notification": [NOTIFY_GROUP]}}
+    write(home / "settings.machine.json", canon(kept).decode(), 0o600)
+    notice = land(env, home)
+    assert "P7 landed" in notice and "1 hook command(s) of settings.machine.json" in notice
+    assert overlay(home) == dict(kept, hooks={"Notification": [NOTIFY_GROUP]})
+    assert_landed(env, home)
+    assert not any("retired.py" in c for c in commands(home))
 
 # ------------------------------------------------------------------ R1, R3: the pre-pull revision
 
