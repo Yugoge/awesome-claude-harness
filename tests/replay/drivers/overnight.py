@@ -37,9 +37,10 @@ Then, in one session, the main agent:
     record Read, Step 12 in_progress again, dev; Step 13: the dev reports Read;
   - Step 14: the docker-compose lookup (none: nothing to rebuild), the base's QA verification
     plans Write; Step 15 per pipeline: pre-dispatch shell lines, QA final verification;
-    Step 16: the QA reports Read; Step 17: every pipeline passed, nothing to iterate (variant
-    qa-fail: Step 16 marks each pipeline's phase in the pipelines file the iteration plan reads, and
-    Step 17 iterates, see below);
+    Step 16: the QA reports Read and, for each pipeline whose QA passed, the completion report
+    where the text's Step 16 has its template (Write); Step 17: every pipeline passed, nothing to
+    iterate (variant qa-fail: Step 16 marks each pipeline's phase in the pipelines file the
+    iteration plan reads, and Step 17 iterates, see below);
   - Step 18: the permissions block; Step 19: the cycle log, the TIME CHECK, the per-cycle commit
     where the text has one (the base's; its failure logged); Step 20: PM RETRO, the retro Read;
     Step 21: marked completed, the loop hook's reset as the hook hands it to the main agent (its
@@ -75,7 +76,8 @@ Driver arguments (cli.py --arg K=V):
                   base's context refinement), the Step 11g precondition at the new iteration, dev from
                   Step 12's template with the lines Step 17 adds (the base's iteration context in place
                   of the context file), the qa_mode write the text has before QA (the base's), QA from
-                  Step 15's template, its report Read, and the pipeline marked done and fixed on a pass
+                  Step 15's template, its report Read, and the pipeline marked done and fixed on a pass,
+                  with its completion report where the text's Step 16 has the template
   variant=unattended  D20's unattended decision: one cycle in a window of `window` minutes typed as
                   the end time; pipeline 0 meets, inside the window, a producer question an
                   experiment settles (its BA, Step 8), a stand-in spec-declared user gate (its dev
@@ -1632,6 +1634,21 @@ class Night:
                          text_calls=[("Phase 6: Blast-Radius Phase 2 Verification", {})])
         return self.dispatch(fields, act, label, p.sfx, atype="qa", pipe=p)
 
+    def completion(self, p: Pipe, label: str) -> None:
+        """The completion report the tree's Step 16 has the main agent write for a pipeline whose QA
+        passed (at Step 16, or at its Step 17 loop exit): the step's template and the path its text
+        names, placeholders bound to the pipeline. A text with no such template (the base's) has the
+        main agent write none."""
+        o = self.o
+        try:
+            tpl = o.block("Step 16", anchor="Development Completion Report")
+        except cmdtext.TextNotFound:
+            return
+        m = re.search(r"Write `([^`\s]*completion-[^`\s]*\.md)`", o.section("Step 16"))
+        if m is None:
+            raise cmdtext.TextNotFound("Step 16's completion report template names no path")
+        self.write(fill_curly(o.bind(m.group(1)), p.rec, {}), fill_curly(o.bind(tpl), p.rec, {}), label)
+
     def step16(self) -> None:
         self.todo_to(16)
         self.failed = []
@@ -1640,6 +1657,8 @@ class Night:
             self.read(rel, f"Step 16 Read qa-report {p.index}")
             if (self.load(rel).get("qa") or {}).get("status") != "pass":
                 self.failed.append(p)
+            else:
+                self.completion(p, f"Step 16 Write completion report {p.index}")
         passed = len(self.pipes) - len(self.failed)
         self.o.s.say(f"Pipelines passed: {passed} of {len(self.pipes)}\nPipelines needing iteration: "
                      f"{len(self.failed)}")
@@ -1741,6 +1760,7 @@ class Night:
                 if (self.load(rel).get("qa") or {}).get("status") == "pass":  # the only exit
                     self.mark({p.index: {"phase": "done", "status": "fixed"}},
                               f"Step 17 Write pipelines.json (pipeline {p.index} fixed)")
+                    self.completion(p, f"Step 17 Write completion report {p.index}")
                     break
         self.failed = []
 
