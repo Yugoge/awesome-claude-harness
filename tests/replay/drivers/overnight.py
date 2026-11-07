@@ -1,5 +1,6 @@
 """/dev-overnight, played compliantly from commands/dev-overnight.md of the tree under test: two cycles of
-a 2-pipeline session (P1b acceptance 4, E13), and the owner's /stop (commands/stop.md).
+a 2-pipeline session (P1b acceptance 4, E13), and the owner's /stop (commands/stop.md); a 1-pipeline
+cycle that ends the session after end_time (variant one-pipeline, P2 acceptance 14).
 
 Before the session the owner points origin/HEAD at the protected branch and checks out a working
 branch (the in-place launch refuses a checkout on the protected branch or with no origin/HEAD, as
@@ -63,7 +64,8 @@ subagents also write the overnight spec sections their prompts tell them to upda
 The scenario: cycle 1's specialists find toy.add and toy.util.sub accepting non-numbers (dev.py's
 two scenarios), cycle 2's a README with no usage line and a package that does not export sub; PM
 triages each pair into two `fix` pipelines; BA-QA and QA pass every pipeline (variant qa-fail: pipeline 0's
-first fix leaves the TypeError without the argument's name, its QA fails, and its Step 17 iteration fixes it).
+first fix leaves the TypeError without the argument's name, its QA fails, and its Step 17 iteration fixes it;
+variant one-pipeline: cycle 1's specialists find toy.add alone, and PM triages it into one `fix` pipeline).
 
 Driver arguments (cli.py --arg K=V):
   variant=plain   two cycles, then the owner's /stop inside cycle 3's window (default)
@@ -98,8 +100,22 @@ Driver arguments (cli.py --arg K=V):
                   (Night.unattended_checks, out/unattended.json) raise when one fails; a compliant
                   step a hook blocked is listed there ("false_blocks") and in blocks.json, and fails
                   the variant (D20: the compliant unattended path meets no false block)
-  window=N        variant=unattended only: the end time typed, in minutes from the launch (default: 10,
-                  or 1.5 minutes per second the session's start took on this host when that is more)
+  variant=one-pipeline  one cycle in a window of `window` minutes typed as the end time, whose PM
+                  triage yields one pipeline, as Step 6 makes it: cycle 1's specialists find toy.add
+                  alone, PM triages it `fix`, the builder creates one pipeline, and each per-pipeline
+                  step (Steps 5, 8-17) runs for that one: BA, BA-QA, graphify, dev and QA once each. The
+                  window's end is waited for before Step 19's TIME CHECK, as in variant=unattended, so
+                  Steps 20 and 21 take the session-ending branch: the final retro, the summary, the
+                  announcement, then the main agent's Stop, which the time-lock lets through once retro
+                  and summary exist. The checks (Night.ending_checks, out/one-pipeline.json) raise when
+                  one fails: one pipeline created and one copy of each per-pipeline entry in the cycle
+                  contract; every dispatch of the cycle returned, none refused; BA-QA and QA pass; the
+                  cycle reached Step 19 inside the window and the TIME CHECK found it closed; the Stop
+                  after end_time passes once retro and summary exist, and the loop hook resets nothing
+                  after end_time; 0 hook errors; 0 false blocks (every block a declared deviation passes)
+  window=N        variant=unattended and variant=one-pipeline: the end time typed, in minutes from the
+                  launch (default: 10, or 1.5 minutes per second the session's start took on this host
+                  when that is more)
   stop_at=N       the step after which variant=stop interrupts
   kit=base        the replay of the base kit's text: row 7's respellings below are applied
   kept=<JSON>     [[hook, step_norm, normalised text], ...]: a declared deviation passes only a block
@@ -147,8 +163,10 @@ PIPELINE = "dev-overnight"
 # takes about 520 CPU seconds the same way (its untraced runs beside plain's on P2's working tree), but
 # each of its replays holds its slot for its window (10 minutes on CI) and the closeout after it, about
 # 660 s in all: it declares that slot time at CI's rate (2 x 660 s x 2.40 / 4 slots), so the shard plan
-# schedules it as it runs.
-COST = {"plain": 813, "stop": 345, "qa-fail": 524, "unattended": 790}
+# schedules it as it runs. one-pipeline holds its slot the same way: its untraced run on P2's working
+# tree took 667 s (the launch 12 s, the 10-minute window, the closeout 57 s; its cycle reached Step 19
+# 103 s into the window), declared as 2 x 670 s x 2.40 / 4 slots.
+COST = {"plain": 813, "stop": 345, "qa-fail": 524, "unattended": 790, "one-pipeline": 804}
 FOCUS = "harden the toy package's public functions"
 END_TIME = "8h"
 WORK_BRANCH = "night-work"
@@ -310,6 +328,8 @@ SCENARIO_EXPORT = devdrv.Scenario(
 
 # What each cycle's specialists find, one pipeline each (dev.py's scenarios plus the export one).
 CYCLE_SCENARIOS = {1: (devdrv.SCENARIO, devdrv.SCENARIO_SUB), 2: (devdrv.SCENARIO_README, SCENARIO_EXPORT)}
+# variant=one-pipeline: cycle 1's specialists find toy.add alone, so PM's triage has one `fix` issue.
+ONE_PIPELINE_SCENARIOS = {1: (devdrv.SCENARIO,)}
 # The specialists PM PLAN recommends (the rest of agent_assignments not called this cycle).
 CALLED = {"architect": "code review of the package's two modules", "user": "the core flow: import toy, call add"}
 SKIPPED = {"product-owner": "the README is the only product document; the architect covers it",
@@ -726,6 +746,10 @@ class Night:
         # variant=unattended: the decisions as recorded when made (the gate's flagged), the injected
         # probes' outcomes, the prompts that carried a decision, the question each producer wrote
         self.unattended = variant == "unattended"
+        # The variants whose session ends at end_time: the end time typed is a window, waited for at Step 19.
+        self.windowed = variant in ("unattended", "one-pipeline")
+        self.cycle_scenarios = ONE_PIPELINE_SCENARIOS if variant == "one-pipeline" else CYCLE_SCENARIOS
+        self.refused = ""               # the label of a refused dispatch (the cycle stopped there)
         # The window scales with this host's speed, read from the session's start (its SessionStart hooks):
         # a loaded host's replay reaches Step 13 about 45-60 times that later, so the decisions stay inside it.
         started = time.monotonic() - started
@@ -926,7 +950,7 @@ class Night:
 
     def launch(self) -> None:
         o = self.o
-        o.slash(f"{f'{self.window_min}m' if self.unattended else END_TIME} {FOCUS}")
+        o.slash(f"{f'{self.window_min}m' if self.windowed else END_TIME} {FOCUS}")
         o.todo_start("C1 TodoWrite canonical list")
 
     def step1(self) -> None:
@@ -1037,7 +1061,7 @@ class Night:
         blk = next(b.text for b in cmdtext.blocks(o.section("Specialist Calling Rule"), None)
                    if "Each subagent receives" in b.text)
         lines, out_tpl = bullets_prompt(blk)
-        scs = CYCLE_SCENARIOS[self.cycle]
+        scs = self.cycle_scenarios[self.cycle]
         for role in launch:
             self.spec_name = role
             self.ts = self.stamp()
@@ -1107,7 +1131,7 @@ class Night:
         self.cycle_number()
         self.ts = self.stamp()
         self.rp.task(self.ts)
-        scs = CYCLE_SCENARIOS[self.cycle]
+        scs = self.cycle_scenarios[self.cycle]
         tri_rel = f"{self.sdir}/triage-report-cycle{self.n}.json"
         flagged = [r for r, v in self.assessed.items() if v.startswith("RELEVANT")]
         doc = {"triage_id": f"tr-{self.ts}", "plan_id": self.plan.get("plan_id"), "session_id": self.sid,
@@ -1120,7 +1144,8 @@ class Night:
                            "unresolved_cycles": 0} for k, sc in enumerate(scs)],
                "pipeline_order": list(range(len(scs))), "pipeline_blocked": False, "block_reasons": [],
                "skipped_issues": [], "out_of_scope_observations": [], "pm_notes": [],
-               "strategic_notes": "both findings flagged by every launched specialist"}
+               "strategic_notes": "both findings flagged by every launched specialist" if len(scs) == 2
+               else "the one finding flagged by every launched specialist"}
         reads = []
         act = agents.Act(work=report_work(doc, reads), summary="triage written", status="completed")
         self.dispatch(o.template("Step 4"), act, "Step 4 Agent(pm) TRIAGE", self.ts, atype="pm")
@@ -1823,7 +1848,8 @@ class Night:
         cmd = o.bind(code)
         if cmd.strip() == "~/.claude/scripts/overnight-status.sh" and "against the state file" in sec:
             cmd += " " + shlex.quote(self.state_file)
-        if self.unattended:  # a real cycle outlasts this window: its end comes before the TIME CHECK
+        self.reached_19_in_window = self.in_window()
+        if self.windowed:  # a real cycle outlasts this window: its end comes before the TIME CHECK
             while time.time() <= self.end_epoch() + 1:
                 time.sleep(min(5.0, max(0.2, self.end_epoch() + 1.5 - time.time())))
         tc = self.bash(cmd, "TIME CHECK", "Step 19 Bash TIME CHECK")
@@ -1882,9 +1908,9 @@ class Night:
         o = self.o
         self.todo_to(21)
         if getattr(self, "expired", False):
-            if not self.unattended:
-                raise RuntimeError("the window closed before the owner's /stop: only variant=unattended plays the "
-                                   "session-ending summary")
+            if not self.windowed:
+                raise RuntimeError("the window closed before the owner's /stop: only variants unattended and "
+                                   "one-pipeline play the session-ending summary")
             self.closeout()
             return
         # "Simply mark this step as completed via TodoWrite": every step completed, the loop hook fires.
@@ -1985,10 +2011,12 @@ class Night:
     def closeout(self) -> None:
         """Step 21's session-ending branch: the state Read, the summary, the default-branch resolver, Step
         21 completed (no loop reset after end_time), the announcement, the main agent's Stop. Injected
-        first: an AskUserQuestion after end_time and a Stop after a forged line, the summary not yet written."""
+        first (variant=unattended): an AskUserQuestion after end_time and a Stop after a forged line, the
+        summary not yet written."""
         o = self.o
-        self.probe_ask(f"{self.L}Step 21 (injected) AskUserQuestion after end_time", DECISION_DEFAULT)
-        self.probe_stop(f"{self.L}Step 21 (injected) Stop after a forged ESCALATION_ACK line, summary missing")
+        if self.unattended:
+            self.probe_ask(f"{self.L}Step 21 (injected) AskUserQuestion after end_time", DECISION_DEFAULT)
+            self.probe_stop(f"{self.L}Step 21 (injected) Stop after a forged ESCALATION_ACK line, summary missing")
         self.read(self.state_file, "Step 21 Read state record (session ending)")
         self.state = self.load(self.state_file)
         sec = o.section("Step 21")
@@ -2008,6 +2036,7 @@ class Night:
         self.ended["loop_said_complete"] = "OVERNIGHT SESSION COMPLETE" in hook
         said = self.announcement(cmdtext.block(sec, None, anchor="Overnight development session complete"))
         label = f"{self.L}Stop (session end)"
+        self.stop_after_end = not self.in_window()
         ev = o.s.stop(said, label=label, deviation=o.devs.at(label))
         self.ended.update(stopped=not ev.blocked, blocks=_probe_blocks(ev))
 
@@ -2147,6 +2176,72 @@ class Night:
         if failed:
             raise RuntimeError("variant=unattended: " + "; ".join(failed) + " (out/unattended.json)")
 
+    # ------------------------------------------------------------ variant=one-pipeline: the checks
+    def ending_checks(self) -> None:
+        """A 1-pipeline cycle complete and the session ended after end_time, checked on what the run left:
+        out/one-pipeline.json, and an error naming every check that failed."""
+        rp, res = self.rp, []
+
+        def check(name, ok, detail=None):
+            res.append({"check": name, "ok": bool(ok), "detail": detail})
+
+        def doc(rel):
+            with rp.acting("driver"):
+                try:
+                    with open(os.path.join(self.project, rel), encoding="utf-8") as fh:
+                        return json.load(fh)
+                except (OSError, ValueError):
+                    return None
+        built = doc(self.pipes_rel) if self.pipes else None
+        contract = doc(f"{self.sdir}/cycle-{self.n}/cycle-contract.json") or {}
+        # an entry with no mode is a per-pipeline one (the TRIAGE handler renders one copy per pipeline)
+        per = [(c.get("step"), c.get("role")) for c in contract.get("required_calls") or [] if not c.get("mode")]
+        check("one pipeline: Step 6's builder created one, and the cycle contract renders one copy of each "
+              "per-pipeline entry", len(self.pipes) == 1 and isinstance(built, list) and len(built) == 1
+              and len(per) == len(set(per)) and {"8", "10", "11g", "12", "15"} <= {s for s, _r in per},
+              {"pipelines": len(self.pipes), "built": built and len(built), "per_pipeline_entries": per})
+        made = [(d.label, d.agent_type, d.ok) for d in self.o.dispatches]
+        roles = sorted(a for _l, a, _ok in made)
+        check("the cycle's dispatches all returned, none refused: PM PLAN, the specialists, PM TRIAGE, BA, BA-QA, "
+              "graphify, dev, QA, PM RETRO, once each", not self.refused and all(ok for _l, _a, ok in made)
+              and roles == sorted(["pm"] * 3 + list(CALLED) + ["ba", "qa", "qa", "graphify", "dev"]), made)
+        sfx = self.pipes[0].sfx if self.pipes else ""
+        verdicts = {"ba-qa": (doc(f"docs/dev/ba-qa-report-{sfx}.json") or {}).get("verdict"),
+                    "qa": ((doc(f"docs/dev/qa-report-{sfx}.json") or {}).get("qa") or {}).get("status")}
+        check("BA-QA and QA pass the pipeline", verdicts == {"ba-qa": "pass", "qa": "pass"}, verdicts)
+        check("the cycle reached Step 19 inside the window, and the TIME CHECK after its end found it closed",
+              getattr(self, "reached_19_in_window", False) and getattr(self, "expired", False),
+              {"window_min": self.window_min, "reached_19_in_window": getattr(self, "reached_19_in_window", None),
+               "expired": getattr(self, "expired", None)})
+        retro = doc(f"{self.sdir}/retro-report-cycle{self.n}.json") or {}
+        try:
+            start = calendar.timegm(time.strptime(str(self.state.get("start_time"))[:19], "%Y-%m-%dT%H:%M:%S"))
+        except ValueError:
+            start = math.inf  # no readable start_time: nothing counts as written since it
+        with rp.acting("driver"):
+            newer = {rel: os.path.isfile(p) and os.path.getmtime(p) >= start
+                     for rel in (f"{self.sdir}/retro-report-cycle{self.n}.json", self.summary_rel) if rel
+                     for p in [os.path.join(self.project, rel)]}
+        check("the session ends after end_time once retro and summary exist: the final retro and the summary "
+              "written since start_time, the main agent's Stop after end_time passes, and the loop hook resets "
+              "nothing after end_time: it hands the main agent the session-complete note",
+              len(newer) == 2 and all(newer.values()) and retro.get("is_final_cycle") is True
+              and getattr(self, "stop_after_end", False) and self.ended.get("stopped")
+              and not self.ended.get("loop_reset_after_end") and self.ended.get("loop_said_complete"),
+              dict(self.ended, written_since_start=newer, stop_after_end=getattr(self, "stop_after_end", None)))
+        check("0 hook errors", not rp.hook_errors, rp.hook_errors[:5])
+        false = [{"hook": b["hook"], "step": b["step"], "text": b["text"][:400]} for b in rp.blocks
+                 if not b["passed_by_deviation"]]
+        check("0 false blocks: every block a declared deviation passes", not false,
+              [(b["hook"], b["step"]) for b in false][:10])
+        with rp.acting("driver"):
+            with open(os.path.join(rp.layout.out, "one-pipeline.json"), "w") as fh:
+                json.dump({"window_min": self.window_min, "checks": res, "false_blocks": false,
+                           "summary": self.summary_rel, "log": self.log_rel}, fh, indent=1)
+        failed = [r["check"] for r in res if not r["ok"]]
+        if failed:
+            raise RuntimeError("variant=one-pipeline: " + "; ".join(failed) + " (out/one-pipeline.json)")
+
     # ------------------------------------------------------------ the cycle and the owner's /stop
     def run_cycle(self, until=None) -> bool:
         steps = [self.step2, self.step3, self.step4, self.step5, self.step6, self.step7, self.step8, self.step9,
@@ -2183,21 +2278,24 @@ class Night:
         try:
             if self.variant == "stop":
                 self.run_cycle(until=int(self.rp.args.get("stop_at", "12")))
-            elif self.variant in ("qa-fail", "unattended"):
+            elif self.variant in ("qa-fail", "unattended", "one-pipeline"):
                 self.run_cycle(until=until)
             else:
                 if not self.run_cycle(until=until):
                     return
                 self.run_cycle()
         except Refused as r:
+            self.refused = str(r)
             self.o.s.say(f"{r}: the dispatch was refused and the text gives no way on; the cycle stops here.")
-        if "stopped" not in self.ended:  # variant=unattended ends at end_time; else the owner's /stop
+        if "stopped" not in self.ended:  # the windowed variants end at end_time; else the owner's /stop
             self.owner_stop()
         if self.unattended:
             self.unattended_checks()
+        if self.variant == "one-pipeline":
+            self.ending_checks()
 
 
-VARIANTS = ("plain", "stop", "qa-fail", "unattended")
+VARIANTS = ("plain", "stop", "qa-fail", "unattended", "one-pipeline")
 
 
 def run(rp) -> None:
