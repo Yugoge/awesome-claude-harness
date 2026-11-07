@@ -121,17 +121,20 @@ def test_writer(tier_key: str = "complexity_tier", risk_key: str = "risk_level")
 # ---------------------------------------------------------------- dev
 
 def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None = None, creates: list | None = None,
-        produced: list | None = None):
+        produced: list | None = None, tools: list | None = None):
     """Apply `edits` [(rel, old, new)] (Read, then Edit), write each new file of `creates`
     [(rel, content)] (an existing one is Read, then edited in place), run each Bash command of
     `produced` [(command, rel)] that makes the file rel, write each generated test the per-task
     manifest gives a skeleton for and the disk lacks, replace each generated test's
-    TEST_INCOMPLETE sentinel line with `test_bodies[ac_uid]`, record the owned-edits ledger and
-    pre-edit snapshots, then declare the files as the agent text's file-list rule says: exactly the
-    files this dev wrote, dev.files_created those that did not exist before the cycle,
-    dev.files_modified the existing ones it changed. A file a Bash command made that the command
-    does not name is first named with the rule's own example command; a re-dispatch keeps the files
-    its earlier round's report lists that still exist."""
+    TEST_INCOMPLETE sentinel line with `test_bodies[ac_uid]`, run each Bash command of `tools` (a
+    formatter, an installer: a command that names no file it changes) between two `git status`
+    calls, record the owned-edits ledger and pre-edit snapshots, then declare the files as the
+    agent text's file-list rule says: exactly the files this dev wrote, dev.files_created those
+    that did not exist before the cycle, dev.files_modified the existing ones it changed. A file a
+    Bash command made that the command does not name is first named with the rule's own example
+    command; a tool's files (those `git status` shows changed after it and not before, outside the
+    pipeline's own trees) are declared unnamed; a re-dispatch keeps the files its earlier round's
+    report lists that still exist."""
 
     def work(sub, brief, player):
         project, prompt = brief.project, brief.prompt
@@ -206,6 +209,17 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
                 if m and body:
                     body = "\n".join(m.group(1) + l if l else l for l in body.strip("\n").split("\n"))
                     edit(rel, m.group(0), body)
+        for command in tools or []:
+            def status(when):
+                call = sub.bash("git status --porcelain -uall", f"Status {when} the tool",
+                                label=f"{sub.role} Bash git status {when} {command.split()[0]}")
+                return {line[3:]: line[:2] for line in (call.response or {}).get("stdout", "").splitlines()}
+            before = status("before")
+            if sub.bash(command, "Run the tool", label=f"{sub.role} Bash tool {command.split()[0]}").ok:
+                for rel, code in sorted(status("after").items()):
+                    if rel not in before and not rel.startswith(("docs/dev/", ".claude/")):
+                        touched.append(rel)
+                        new |= {rel} if code == "??" else set()
         for rel in fresh:  # a file this dispatch created: one Write of its final content in the ledger
             owned[rel] = [{"old": "", "new": peek(sub.rp, sub.role, os.path.join(project, rel))}]
         # A re-dispatch of the task and lane: the files its earlier round's report (the artifact
