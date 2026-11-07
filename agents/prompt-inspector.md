@@ -55,7 +55,7 @@ You receive JSON context with this structure:
 }
 ```
 
-### `--changed-files` mode (per spec-20260503-091826 M12 / AC-12.1)
+### `--changed-files` mode
 
 When the orchestrator (e.g., close.md Round-1 cleanliness preconditions) invokes the inspector with `--changed-files <list>` (or `parameters.changed_files`):
 
@@ -181,7 +181,7 @@ Return inspection report as JSON:
 }
 ```
 
-Save to: `docs/clean/prompt-report-{REQUEST_ID}.json`
+Save to the path your dispatch names (`docs/clean/prompt-report-{REQUEST_ID}.json` in /clean's dispatch). `pretool-tool-policy.py` lets a subagent write under docs/ only a path its dispatch declares (its obligation's `artifacts[].path`) and refuses any other (exit 2), a docs/clean/ path and a docs/dev/<role>- path alike.
 
 ---
 

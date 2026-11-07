@@ -92,7 +92,7 @@ axe impact → severity mapping:
 
 ## Update Cadence
 
-axe-core is bumped **monthly via manual operator** per spec 5.1 binding decision #5. Operator runs the bump script under `~/.claude/scripts/axe-bump.sh` (future), which downloads the new version, diffs the rule list against `rule-map.json`, and surfaces additions/removals for human review. **No automated CI bump. No auto-update hook.**
+axe-core is bumped **monthly by a manual operator**, who downloads the new version, diffs its rule list against `rule-map.json` and reviews the additions and removals by hand. **No automated CI bump. No auto-update hook.**
 
 ## Example Invocation
 

@@ -218,7 +218,7 @@ Return execution report as JSON:
   "request_id": "test-YYYYMMDD-HHMMSS",
   "timestamp": "2026-01-07T10:00:00Z",
   "executor": {
-    "status": "completed|partial|blocked",
+    "status": "completed|partial",
     "execution_started": "2026-01-07T09:55:00Z",
     "execution_completed": "2026-01-07T10:00:00Z",
     "total_duration_seconds": 10.5,

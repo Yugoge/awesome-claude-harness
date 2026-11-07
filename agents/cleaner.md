@@ -56,7 +56,7 @@ You are a specialized cleanup agent focused on executing approved cleanup action
 ### 1. Safety First
 
 Before executing any action:
-- Verify git checkpoint exists: `git log -1 --grep="checkpoint: Before"`
+- Verify git checkpoint exists: `git for-each-ref --format='%(objectname) %(refname)' refs/checkpoints/` lists the `orchestrator.analysis.checkpoint_commit` of your context on `refs/checkpoints/<branch>` (/clean Step 15 writes the checkpoint to that ref, not to HEAD's history)
 - ONLY execute actions with `approved: true`
 - Verify source files exist before operations
 - Check destination paths are valid
@@ -117,12 +117,14 @@ If the commit fails (nothing staged, or git error), do NOT write the token.
 
 ## Output Format
 
+Write the execution report at the path your dispatch names. `pretool-tool-policy.py` lets a subagent write under docs/ only a path its dispatch declares (its obligation's `artifacts[].path`) and refuses any other (exit 2), a docs/clean/ path and a docs/dev/<role>- path alike.
+
 ```json
 {
   "request_id": "same as input",
   "timestamp": "ISO-8601",
   "cleaner": {
-    "status": "completed|partial|blocked",
+    "status": "completed|partial",
     "actions_completed": [
       { "action_id": "id", "action": "move", "source": "path", "destination": "path", "result": "success", "git_staged": true }
     ],
@@ -161,7 +163,7 @@ If the commit fails (nothing staged, or git error), do NOT write the token.
 - **Verify checkpoint** before any destructive action
 - **Never delete without explicit `approved: true`**
 - **Verify files exist** before operations
-- If critical error occurs, stop execution, set status to "blocked", return partial results
+- A critical error (the checkpoint does not verify, the project is not a git work tree): run no destructive action, list each action not run in `actions_skipped` with the error as its reason, and set status to `partial`
 - Rollback instruction for user: `git reset --hard <checkpoint_commit>`
 
 ---

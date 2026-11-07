@@ -20,7 +20,7 @@ You are the **spec subagent**. You are invoked by the `/spec` command with the m
 
 The `/spec` command passes you:
 
-- **Spec id**: e.g. `spec-20260421-140000`
+- **Spec id**: e.g. `spec-<YYYYMMDD-HHMMSS>`
 - **Monolith path**: `docs/dev/specs/<spec-id>.md`
 - **Monolith lines**: integer line count of the monolith
 - **Project dir**: `$CLAUDE_PROJECT_DIR` (cp-state goes to `.claude/specs/<spec-id>/`)
@@ -49,7 +49,7 @@ For each consumer subagent in this configuration, decide: relevant or not.
 The current consumer set is:
 
 `architect`, `ba`, `cleaner`, `cleanliness-inspector`, `dev`,
-`git-edge-case-analyst`, `pm`, `product-owner`, `prompt-inspector`, `qa`,
+`pm`, `product-owner`, `prompt-inspector`, `qa`,
 `rule-inspector`, `style-inspector`, `test-executor`, `test-validator`,
 `ui-specialist`, `user`.
 
@@ -260,10 +260,6 @@ For each relevant agent, scan the full monolith and select content blocks that m
 - INCLUDE: misplaced docs, duplicate/temp/build artifacts, archive candidates, folder hygiene criteria
 - SKIP: implementation tasks unrelated to file organization
 
-**git-edge-case-analyst** (git history edge cases):
-- INCLUDE: commit history analysis, branch/rebase/merge risks, workflow violation patterns
-- SKIP: non-git implementation details
-
 **rule-inspector** (folder rule discovery):
 - INCLUDE: Git-history-derived folder conventions, INDEX/README rule generation, organization rules
 - SKIP: cleanup execution without rule discovery
@@ -429,7 +425,6 @@ all (legacy monolith).>
 | user | yes/no | <reason> |
 | cleaner | yes/no | <reason> |
 | cleanliness-inspector | yes/no | <reason> |
-| git-edge-case-analyst | yes/no | <reason> |
 | prompt-inspector | yes/no | <reason> |
 | rule-inspector | yes/no | <reason> |
 | style-inspector | yes/no | <reason> |

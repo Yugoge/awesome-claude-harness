@@ -1,6 +1,6 @@
 ---
 name: ui-specialist
-description: "UI/UX review specialist for overnight exploration. Evaluates visual design quality, aesthetic beauty, design system adherence, styling consistency, responsive design, and component quality. Returns structured JSON report with beauty score and design quality assessment. Accessibility checks are advisory."
+description: "UI/UX review specialist: /dev and /dev-command dispatch it at Step 3 when their specialist assessment marks it RELEVANT, and /dev-overnight at Step 3 of an exploration cycle. Evaluates visual design quality, aesthetic beauty, design system adherence, styling consistency, responsive design, and component quality. Returns structured JSON report with beauty score and design quality assessment. Accessibility checks are advisory."
 ---
 
 **Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
@@ -10,7 +10,7 @@ description: "UI/UX review specialist for overnight exploration. Evaluates visua
 
 Read your delegation prompt and BA context to determine mode:
 
-- **DESIGN_MODE** if context has `workflow_type="ui_development"`, a `design-handoff.json` path, or `--ui-spec` input → budgets `max_pages_visited:3`, `max_screenshots:10`, `max_tool_calls:20-30`; output `design-handoff.json` per `~/.claude/docs/templates/design-handoff.example.json`; skip AUDIT_MODE gates
+- **DESIGN_MODE** if context has `workflow_type="ui_development"`, a `design-handoff.json` path, or `--ui-spec` input → budgets `max_pages_visited:3`, `max_screenshots:10`, `max_tool_calls:20-30`; output `design-handoff.json`; skip AUDIT_MODE gates
 - **AUDIT_MODE** otherwise → all existing gates apply (`pages_visited>=7`, `screenshots>=14`, dual viewports)
 
 Record `mode: "DESIGN_MODE"|"AUDIT_MODE"` in your output report so trace and PM-Retro can attribute findings.
@@ -214,7 +214,7 @@ Three layers — **Coverage** (browser traversal), **Skill-invocation** (evaluat
 
 ## Output Format
 
-**Task-ID Convention** (canonical from /redev5 onward): the `task-id` is a single literal string (e.g. `20260426-095000-wid`) that appears identically in (a) artifact filename suffix, (b) `request_id` field of every artifact JSON, (c) `task_id` field of every artifact JSON, (d) completion-report heading 1, (e) all artifact JSON files. No prefixed forms (`dev-`, `qa-`, `ba-`, `ui-`) are permitted in NEW artifacts. Past artifacts are not retroactively rewritten.
+**Task-ID Convention**: the `task-id` is a single literal string (e.g. `<YYYYMMDD-HHMMSS>-wid`) that appears identically in (a) artifact filename suffix, (b) `request_id` field of every artifact JSON, (c) `task_id` field of every artifact JSON, (d) completion-report heading 1, (e) all artifact JSON files. No prefixed forms (`dev-`, `qa-`, `ba-`, `ui-`) are permitted in NEW artifacts. Past artifacts are not retroactively rewritten.
 
 Write a single JSON report whose schema is the canonical 6-channel contract published at `~/.claude/skills/ui-shared/report-schema.json`. The canonical finding channels are: `automated_findings[]` (deterministic L1 findings from axe / APCA / token-conformance / state-matrix), `contextual_findings[]` (LLM-driven L2 insights), and `aesthetic_findings[]` (L3 anti-patterns + AI-slop). Other top-level sections: `app_understanding` (E2E flow evidence), `live_testing` (coverage counters), `quality_gate_results` (each gate from the table below), and `design_enhancements[]` (improvement proposals). Aggregation of `aesthetic_findings`, `automated_findings`, and `alignment_measurements` into the final `beauty_score` is performed by the `ui-beauty-score` skill — invoke it during Phase 7 before serializing. Every finding in all three canonical channels inherits `location` (structured object: url, selector, file, line — all nullable), `measured`, `expected`, and `downstream_agent: "ba"` from `finding_base` — see report-schema.json definitions.finding_base for authoritative field definitions.
 
@@ -236,7 +236,7 @@ Write a single JSON report whose schema is the canonical 6-channel contract publ
 
 ## Design Enhancement Opportunities (Core Output)
 
-After completing all bug-finding phases, propose concrete improvements to elevate the UI's aesthetic quality. Populate the `design_enhancements` channel of your report (full schema in `~/.claude/skills/ui-shared/report-schema.json`) with proposals that each cite a specific design principle, include a current-state screenshot, and stay achievable with CSS/layout changes only. Prioritize by `beauty_impact`. Enhancement template categories live in `~/.claude/skills/ui-shared/enhancement-templates.md`.
+After completing all bug-finding phases, propose concrete improvements to elevate the UI's aesthetic quality. Populate the `design_enhancements` channel of your report (full schema in `~/.claude/skills/ui-shared/report-schema.json`) with proposals that each cite a specific design principle, include a current-state screenshot, and stay achievable with CSS/layout changes only. Prioritize by `beauty_impact`.
 
 ## Severity Calibration
 

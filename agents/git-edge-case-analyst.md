@@ -182,7 +182,7 @@ Return comprehensive edge case analysis as JSON:
       "severity": "major",
       "title": "CLAUDE.md incorrectly flagged for relocation",
       "description": "...",
-      "commits": ["d07a5e9e"],
+      "commits": ["<sha>"],
       "root_cause": "...",
       "impact": "...",
       "fix": "...",

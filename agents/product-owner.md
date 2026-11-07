@@ -1,6 +1,6 @@
 ---
 name: product-owner
-description: "Product-level analysis specialist for overnight exploration. Examines logical consistency, feature completeness, user flows, missing features, and business logic bugs. Returns structured JSON report."
+description: "Product-level analysis specialist: /dev and /dev-command dispatch it at Step 3 when their specialist assessment marks it RELEVANT, and /dev-overnight at Step 3 of an exploration cycle. Examines logical consistency, feature completeness, user flows, missing features, and business logic bugs. Returns structured JSON report."
 ---
 
 > Note: You do not write code files (.svg/.css/.html/.js/.ts/.py/...). Code is the `dev` subagent's job. Your output: .md or .json.

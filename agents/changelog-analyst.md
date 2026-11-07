@@ -119,7 +119,7 @@ handling are all unchanged).
 - `FORCE` — `true` | `false`
 - `REPOSITORY_PLAN` — required in normal mode. Exact schema-1 JSON emitted by `resolve-commit-repos.py`, including task/report digest and ordered repository-specific repo/branch/HEAD/path bindings. Empty only in bulk mode, which preserves the legacy control+nested sweep.
 - `ARTIFACT_CHAIN` — required and non-empty for normal `/dev` mode. Exact
-  status in {"pass", "pass_with_exceptions"} JSON emitted by
+  `status == "pass"` JSON emitted by
   `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
   Empty only in bulk mode or when the normal source is a source=`do` report.
 - `ATTRIBUTION_LOG` — write-time attribution journal slice, exact JSON emitted by
@@ -153,18 +153,12 @@ Any mismatch returns `failed/repository_plan_invalid` before index mutation. Do 
 silently rebuild or widen the plan inside this agent.
 
 When the plan's report is `dev-report-<TASK_ID>.json`, fail closed unless
-`ARTIFACT_CHAIN` is an object with `status in {"pass", "pass_with_exceptions"}`,
+`ARTIFACT_CHAIN` is an object with `status == "pass"`,
 `task_id == TASK_ID`, `mode` in `{singular, fanout}`, and `canonical_dev_report`
 resolving to the same file as `REPOSITORY_PLAN.report_path`. Require arrays for
 `lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
-`qa_inputs`. `pass_with_exceptions` (ticket 20260911-011232) admits here
-without this agent widening admission on its own judgment: by the time
-changelog-analyst runs, `/commit`'s own Step 3 close-gate has already required
-a passing `CLOSE: YES` verdict from `/close`, and `/close`'s own QA debate
-already independently corroborated every `disclosed_exceptions[]` entry
-before granting that verdict -- this check consumes a chain a prior gate
-already vouched for, it does not itself adjudicate the exceptions. A genuine
-`status == "fail"` is refused exactly as before. The passed chain result is
+`qa_inputs` (`scripts/resolve-dev-artifact-chain.py` emits only `pass` and
+`fail`). A `status == "fail"` chain is refused. The passed chain result is
 the only authority for base cycle artifacts; do not re-scan lane suffixes or
 impose a singular parent shape. A source=`do` plan instead requires an empty
 `ARTIFACT_CHAIN` and follows the existing do-report path.
@@ -222,7 +216,7 @@ There is NO hardcoded junk list and you must NOT introduce or depend on one.
    `WARNING: bulk skipping <path> — judged a transient/non-authored byproduct, not committed. Stage manually if this is real work.`
 
 3. **Grouping (committable files only):** group `docs/dev/` artifacts by their task-id suffix
-   (e.g. `close-report-20260524-205206.md` → task-id `20260524-205206`), one cluster per task-id,
+   (e.g. `close-report-<YYYYMMDD-HHMMSS>.md` → task-id `<YYYYMMDD-HHMMSS>`), one cluster per task-id,
    never mixing task-ids; group the rest by subsystem prefix (`hooks/`, `commands/`, `agents/`,
    `scripts/`, `tests/`, `logs/`, other), one subsystem group per commit.
 
@@ -236,6 +230,9 @@ The candidate set is restricted to a **staging whitelist** consisting of:
 
 1. All files listed in `dev.files_modified[]` from the dev-report.
 2. All files listed in `dev.files_created[]` from the dev-report.
+   Both lists are producer-declared: dev lists the files it wrote, and G2
+   (`subagentstop-artifact-contract-enforce.py`) checked them at dev's stop against the
+   files Claude Code recorded that dev writing. Take them as declared.
 3. All files listed in `dev.files_required_to_ship[]`, sourced from the **shard-union
    declaration** defined immediately after this list — never read from the canonical
    dev-report.
@@ -947,7 +944,7 @@ contained "sync uncommitted"), replace the summary with `session changes for <sc
 - Per-commit staged set must touch fewer than 3 of: `{hooks/, commands/, scripts/, packages/, docs/}`
   (stay below BULK_THRESHOLD=3 to avoid detector warning)
 
-**Reversal-citation rule (task 20260519-211515 R9 / AC9 — SOLE BINDING LANDING)**
+**Reversal-citation rule (SOLE BINDING LANDING)**
 
 When this commit intentionally reverses a recent prior commit's policy or behavior
 as a **forward-fix** commit (a normal new commit that contradicts a prior policy

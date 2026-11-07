@@ -34,7 +34,7 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
 **If not triggered**: skip to Step 3.
 
 **If triggered**:
-1. Ask ONE targeted question at a time. Wait for user response.
+1. Ask ONE targeted question at a time, with AskUserQuestion inside the turn: a real, specific question about what Section 5 should say.
 2. Re-evaluate: can Section 5 now be sketched? If yes, proceed to Step 3.
 3. Repeat max 3 rounds. After the 3rd answer, proceed regardless — write the spec with whatever Section 5 content you can extract plus an `_Assumption_` note.
 
@@ -92,7 +92,7 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
 
 ### Step 4: Multi-turn accumulation loop
 
-Copied from `ask.md` Step 6 (multi-turn dialogue loop architecture). One `/spec` invocation spans multiple user messages; each message lands in the SAME `spec_path`.
+One `/spec` invocation spans multiple user messages; each message lands in the SAME `spec_path`.
 
 After Step 3, wait for the next user message. For EVERY user turn, FIRST run the
 capture precondition, THEN branch:
@@ -126,7 +126,7 @@ After the capture precondition has run, branch on the turn's requirement/closure
   Section 5 at all — the design/evidence is already persisted to Section 9 + companion files,
   so there is nothing left to record. Simply loop back to wait. This turn shape is now fully
   captured — it can never fall through uncaptured.
-- **Exploration findings arrive** → integrate into Section 1 (Before) silently (`spec-write.py append --spec <spec_path> --section 1`). If a finding contradicts the user's description, surface one targeted question — for example, "I looked at X and found Y — does that match?" — then loop back. Never gate the loop on exploration.
+- **Exploration findings arrive** → integrate into Section 1 (Before) silently (`spec-write.py append --spec <spec_path> --section 1`). If a finding contradicts the user's description, ask one targeted question with AskUserQuestion inside the turn — for example, "I looked at X and found Y — does that match?" — then loop back. Never gate the loop on exploration.
 - **Mid-loop vague input** → apply Step 2 logic (max 3 rounds) to that single message before appending, then loop back. (The capture precondition already handled any design/evidence in the triggering turn.) Each clarification RESPONSE collected by Step 2 is itself a fresh Step 4 user turn: run the capture precondition (the Design & Evidence Capture Routine) on it FIRST, before re-evaluating Step 2 / appending — do NOT process a clarification answer in a bypass path that skips capture, or design/evidence supplied in a clarification reply would be dropped.
 
 Maintain `turn_count` internally (not user-visible), increment after each user response. No hard turn cap — termination is signal-driven.
@@ -264,8 +264,6 @@ design and evidence are first-class material and MUST NOT be silently dropped (M
 
 ### Step 5: Natural-conclusion detection
 
-Copied verbatim from `ask.md` Step 8 (lines 495-510).
-
 **Strong signals** (trigger finalize):
 - Gratitude: "thanks", "thank you", "appreciate it"
 - Satisfaction: "perfect", "got it", "i understand now", "that's helpful"
@@ -305,6 +303,7 @@ Only proceed to Step 6 when a STRONG signal fires.
    ```
    Use Agent tool with:
    - subagent_type: "spec"
+   - run_in_background: false
    - description: "Spec agent: split + checkpoints for <spec-id>"
    - prompt: "
      You are the spec subagent. Read and follow the instructions in ~/.claude/agents/spec.md EXACTLY.
@@ -329,6 +328,7 @@ Only proceed to Step 6 when a STRONG signal fires.
    ```
    Use Agent tool with:
    - subagent_type: "qa"
+   - run_in_background: false
    - description: "Validate spec split quality for <spec-id>"
    - prompt: "
      Validate the spec split at docs/dev/specs/<spec-id>/views/.
@@ -374,23 +374,22 @@ Only proceed to Step 6 when a STRONG signal fires.
      "
    ```
 
-   **Split-QA auto-iteration loop** (mirrors `/dev` Step 7; max 3 rounds, no user prompt between rounds):
-
-   **Iteration guard**: Maximum 3 split-QA rounds to prevent infinite loops.
+   **Split-QA loop** (no user prompt between rounds): a `fail` verdict is a step of the loop, not an end of it.
 
    **Current split-QA round**: Track internally as `SPLIT_QA_ROUND` (starts at 1).
 
    **If QA verdict == `pass`** (at any round): exit loop, proceed to sub-step 4 (mark split complete).
 
-   **If QA verdict == `fail` and `SPLIT_QA_ROUND` < 3**:
+   **If QA verdict == `fail`**:
 
-   Announce: `Split-QA round <N>/3: QA found <count> issue(s). Re-invoking spec subagent with feedback.`
+   Announce: `Split-QA round <N>: QA found <count> issue(s). Re-invoking spec subagent with feedback.`
 
    Re-invoke the spec subagent with the same Agent pattern as sub-step 2, appending the QA `issues` array verbatim under the label `qa_feedback_from_previous_round` in the prompt:
 
    ```
    Use Agent tool with:
    - subagent_type: "spec"
+   - run_in_background: false
    - description: "Spec agent re-split (round <N>) addressing QA feedback for <spec-id>"
    - prompt: "
      You are the spec subagent. Read and follow the instructions in ~/.claude/agents/spec.md EXACTLY.
@@ -425,18 +424,9 @@ Only proceed to Step 6 when a STRONG signal fires.
 
    Increment `SPLIT_QA_ROUND` and re-run the QA validation (sub-step 3) against the refreshed split.
 
-   **If QA verdict == `fail` and `SPLIT_QA_ROUND` == 3** (all rounds exhausted — auto-proceed, do NOT prompt the user):
-
-   1. Print to stdout (non-blocking): `Spec split QA: 3 rounds exhausted. Proceeding with best-effort split. Unresolved issues: <list of QA issues>.`
-   2. Write the round-3 `issues` array verbatim to `docs/dev/specs/<spec-id>/split-qa-unresolved.json`.
-   3. Continue to sub-step 4 (mark split complete); the caveat line is appended there.
-   4. Include the caveat in the Step 7 displayed output so reviewers are notified.
-
-   **Rule**: Every spec subagent invocation MUST be followed by QA validation. The loop exits only on `pass` or on round-3 exhaustion.
+   **Rule**: Every spec subagent invocation MUST be followed by QA validation. The loop exits only on `pass`.
 
 4. **Mark split as complete**: Write `"split-complete: $(date -Iseconds)"` to `docs/dev/specs/<spec-id>/.split-complete`.
-
-   If the loop exited via round-3 exhaustion (sub-step 3), also append `"warning: unresolved split-QA issues (<N>); see split-qa-unresolved.json"` so reviewers see the warning inline with the marker.
 
 5. The split's own predicates (its manifest of this monolith and the views the manifest references)
    were checked at the spec subagent's own stop (G2, with `resolve-spec-artifacts.py`'s own rule), which
@@ -458,7 +448,7 @@ Before the final stdout response, create a compact temp update using
 `/spec-update --temp`. Default to `mktemp -t update-XXXXXX.md`; do not write this
 update into the repo unless the user explicitly asks. The update focuses on
 the next `/dev` session and references the spec path, split marker, views
-folder, checkpoints, and unresolved split-QA file by path instead of duplicating
+folder and checkpoints by path instead of duplicating
 their contents. Do NOT use continuation-spec mode here because `/spec` already
 produced the spec.
 
@@ -472,9 +462,6 @@ Update:      <temp update path for the next /dev session>
 Sections populated:
 - Section 5 (User's Acceptance Criterion): populated (N requirements accumulated)
 - Section 1 (Before): <populated from Explore findings, or empty>
-
-<If split-QA exhausted 3 rounds, include:>
-⚠ Split-QA: 3 rounds exhausted with unresolved issues — see docs/dev/specs/<spec-id>/split-qa-unresolved.json
 
 Usage:
   /dev                                        ← in this session: uses this spec (the session's last spec write)
@@ -498,7 +485,7 @@ Usage:
   `docs/dev/specs/<de-prefixed-id>/design/*` and
   `docs/dev/specs/<de-prefixed-id>/evidence/*`. It MUST NOT write `views/` or
   `manifest.json` (the spec subagent's, created at finalize); its own `.split-complete`
-  and `split-qa-unresolved.json` are written only in Step 6. No other existing file may be modified.
+  is written only in Step 6. No other existing file may be modified.
 - **Use absolute paths** in all output messages.
 - **Spec Creation Mode is the only mode.** It acts immediately on whatever the user provides, accumulates multiple requirements into one file per session, and finalizes only on a natural-conclusion strong signal.
 - **Section 5 verbatim — DO NOT invent nested sub-section structure.** Section 5 holds the user's requirement text verbatim. The only structure the /spec orchestrator may ADD beneath Section 5 is the `### 5.N: <title>` accumulation header defined in Step 4 (one per follow-up turn); any other bullets, headings, or sub-headings must come verbatim from the user, not be invented. DO NOT decompose the user's natural-language paragraph into invented `#### A.`, `#### B.`, `#### C.` (or any `5.X.A`, `5.X.B`-style) sub-headings, machine-voice checklist bullets, or parallel "should/should-not" AC ladders below a `§5.N` block. This prohibition governs both Step 3 (first-write of Section 5) and Step 4 (multi-turn append of `### 5.N`). If the user's paragraph contains multiple ideas, leave them as one paragraph; downstream agents (BA, dev, QA) will decompose during their own phases — not the /spec orchestrator.

@@ -1184,13 +1184,6 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# resolver is at ../hooks/lib), NEVER the author literal <author-path>.\""
     },
     {
-      "path": "scripts/spec-verify/spec_verify_parsers.py",
-      "fingerprint": "d08b965ca6991816",
-      "ordinal": 1,
-      "class": "doctest_or_docstring_example",
-      "rationale": "module docstring — illustrative literal inside documentation/usage text; not executed as a path."
-    },
-    {
       "path": "scripts/step7-spec-update.py",
       "fingerprint": "7b795a0b11a45879",
       "ordinal": 1,

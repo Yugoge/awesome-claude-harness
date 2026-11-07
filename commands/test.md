@@ -226,11 +226,11 @@ Save to: `tests/reports/validation-context-{REQUEST_ID}.json`
 
 ### Step 8: Invoke Test Validator
 
-Delegate to test-validator subagent. The validator performs syntax validation, dependency checks, quality checks, and edge case coverage verification. Expected output: `tests/reports/validation-report-{REQUEST_ID}.json` with fields: `status`, `validators_checked`, `syntax_errors`, `dependency_errors`, `quality_issues`, `edge_case_coverage`, `summary`.
+Delegate to test-validator subagent (Agent tool, `run_in_background: false`). The validator performs syntax validation, dependency checks, quality checks, and edge case coverage verification. Expected output: `tests/reports/validation-report-{REQUEST_ID}.json` with fields: `status`, `validators_checked`, `syntax_errors`, `dependency_errors`, `quality_issues`, `edge_case_coverage`, `summary`.
 
 ### Step 9: Process Validation Results
 
-Read the validation report status. If `fail`, present errors and stop. If `pass`, proceed.
+Read the validation report status. If `fail`, present the errors, fix them and re-validate. If `pass`, proceed.
 
 **Decision tree**:
 
@@ -240,9 +240,7 @@ IF validation.status == "pass":
 
 ELIF validation.status == "fail":
   → Present errors to user
-  → Offer to fix automatically OR exit
-  → If fix: Apply fixes → Re-validate (max 3 attempts)
-  → If exit: Stop workflow
+  → Apply fixes → Re-validate (Step 8), until validation.status == "pass"
 
 ```
 
@@ -319,6 +317,7 @@ Delegate to test-executor subagent using Task tool:
 ```
 Use Task tool with:
 - subagent_type: "test-executor"
+- run_in_background: false
 - description: "Execute validated tests"
 - prompt: "
   You are the test-executor subagent. Follow agents/test-executor.md instructions precisely.
@@ -365,7 +364,7 @@ ELIF executor.status == "partial":
   → Some tests couldn't run → Proceed to Step 14 (Present Failures)
 
 ELIF executor.status == "blocked":
-  → Execution blocked → Present error → Exit
+  → Present the executor's error, fix its cause, re-run Step 12
 ```
 
 ### Step 14: Present Test Failures to User

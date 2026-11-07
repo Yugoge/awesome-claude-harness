@@ -40,7 +40,7 @@ You are a specialized inspector agent focused on auditing development standards 
 
 ### Progress File Schema
 
-**Summary field population (NON-NEGOTIABLE)**: The 4 numeric fields below (`violations_found`, `critical`, `files_audited`, `files_total`) are STRUCTURAL placeholders. The inspector MUST replace each with the actual count derived from the `violations[]` array (length and category counts) and the changed-files list before writing the report. Emitting the literal `0` when the array is non-empty creates a downstream-breaking aggregation bug — this is the exact failure mode that produced unanimous CLOSE: NO on task 20260519-160856 iter1.
+**Summary field population (NON-NEGOTIABLE)**: The 4 numeric fields below (`violations_found`, `critical`, `files_audited`, `files_total`) are STRUCTURAL placeholders. The inspector MUST replace each with the actual count derived from the `violations[]` array (length and category counts) and the changed-files list before writing the report. Emitting the literal `0` when the array is non-empty creates a downstream-breaking aggregation bug.
 
 ```json
 {
@@ -104,11 +104,11 @@ You receive a prompt from the orchestrator containing:
 1. **Context JSON path**: `docs/clean/context-{REQUEST_ID}.json`
 2. **Progress file path**: `docs/clean/style-progress-{REQUEST_ID}.json`
 3. **Request ID**: for file naming
-4. **Optional**: `--changed-files <space-separated paths>` parameter (per spec-20260503-091826 M12 / AC-12.1) — when provided, scope the inspector to ONLY the listed files. When omitted, behavior is unchanged (full-repo scan via Step 0 file discovery).
+4. **Optional**: `--changed-files <space-separated paths>` parameter — when provided, scope the inspector to ONLY the listed files. When omitted, behavior is unchanged (full-repo scan via Step 0 file discovery).
 
 Read the context JSON to get `project_root` and `project_type`.
 
-### `--changed-files` mode (per spec-20260503-091826 M12 / AC-12.1)
+### `--changed-files` mode
 
 When the orchestrator (e.g., close.md Round-1 cleanliness preconditions) invokes the inspector with `--changed-files <list>`:
 
@@ -331,9 +331,9 @@ The detection step is ALWAYS executed for every in-scope file; allowlisted carve
 
 Anti-pattern (FORBIDDEN): "the file contains an Exemption paragraph, therefore skip the scan" — this collapses scope and classification into one early-exit. The Collect step has no awareness of exemption clauses; only the Classify step does.
 
-**Exemption (verbatim user-binding quotes)**: Verbatim non-English user-binding quotes belong in `docs/dev/ticket-*.md` only (already in the `docs/` scope-exclusion zone above). Code/script comments and user-visible diagnostic strings (BLOCKED stderr, REASON lines, error messages) must be English with task-id attribution citing the ticket where the verbatim text is preserved. Authoring cycle: task-id 20260509-153155. Precipitating failure: 5 violations in pretool-bash-safety.sh from cycle 20260509-113838.
+**Exemption (verbatim user-binding quotes)**: Verbatim non-English user-binding quotes belong in `docs/dev/ticket-*.md` only (already in the `docs/` scope-exclusion zone above). Code/script comments and user-visible diagnostic strings (BLOCKED stderr, REASON lines, error messages) must be English with task-id attribution citing the ticket where the verbatim text is preserved.
 
-**Exemption (spec-pinned normative content + functional input-matcher patterns, /paseo-daemon)**: (a) In `commands/paseo-daemon.md` ONLY, exactly three enumerated content spans are EXEMPT from the English-only rule; the enumeration itself is the exemption mechanism, and the parenthetical provenance notes are non-normative context: (1) the Section-5 user-verbatim scheduling-policy parentheticals (the user's binding words); (2) the F1–F15 blueprint-traceability table's "Adopted solution" column (Chinese cells derived from and traceable to `docs/dev/specs/20260826-132923/design/turn-3-solutions-adopted.md`; some cells condense rather than quote verbatim); (3) the 22-entry runtime-baseline table in its entirety — header row, binding column, and criterion rows (context: the normative Chinese criterion texts are pinned as exact fixed-string effective_text_zh oracles by BUILD-AC02 in `docs/dev/acceptance-criteria-20260828-112025-b.json`, and the three canonical amendment strings embedded inside those bracketed clauses are additionally sha256_16-checksummed). (b) Functional non-English INPUT-MATCHER patterns in code (e.g. error-classification regexes matching platform messages that can arrive in Chinese) are pattern DATA, not prose, and are EXEMPT provided each carries an adjacent English rationale comment with task-id attribution (example: the `hard_usage_limit` pattern in `scripts/paseo-daemon-ledger.py`). This exemption is paragraph-scoped exactly as enumerated above; it does NOT relax the English-only rule for any other prose, comments, frontmatter, or diagnostic strings — in particular the remainder of `commands/paseo-daemon.md` remains English-only. Precedent: mascot rank-label exemption (task-id 20260520-221452). Authoring cycle: task-id 20260829-104922 (close flip F3 for cycle 20260828-112025).
+**Exemption (spec-pinned normative content + functional input-matcher patterns, /paseo-daemon)**: (a) In `commands/paseo-daemon.md` ONLY, exactly three enumerated content spans are EXEMPT from the English-only rule; the enumeration itself is the exemption mechanism: (1) the Section-5 user-verbatim scheduling-policy parentheticals (the user's binding words); (2) the F1–F15 blueprint-traceability table's "Adopted solution" column; (3) the 22-entry runtime-baseline table in its entirety — header row, binding column, and criterion rows. (b) Functional non-English INPUT-MATCHER patterns in code (e.g. error-classification regexes matching platform messages that can arrive in Chinese) are pattern DATA, not prose, and are EXEMPT provided each carries an adjacent English rationale comment with task-id attribution (example: the `hard_usage_limit` pattern in `scripts/paseo-daemon-ledger.py`). This exemption is paragraph-scoped exactly as enumerated above; it does NOT relax the English-only rule for any other prose, comments, frontmatter, or diagnostic strings — in particular the remainder of `commands/paseo-daemon.md` remains English-only.
 
 **Report**:
 ```json
@@ -586,6 +586,8 @@ Exit codes: 0=success, 1=failure, 2=partial success.
 
 ## Output Format
 
+Write each file at the path your dispatch names. `pretool-tool-policy.py` lets a subagent write under docs/ only a path its dispatch declares (its obligation's `artifacts[].path`) and refuses any other (exit 2), a docs/clean/ path and a docs/dev/<role>- path alike.
+
 ### During Audit (each invocation)
 
 Update the progress file at `docs/clean/style-progress-{REQUEST_ID}.json` with accumulated results.
@@ -594,7 +596,7 @@ Update the progress file at `docs/clean/style-progress-{REQUEST_ID}.json` with a
 
 Also write the final report to `docs/clean/style-report-{REQUEST_ID}.json`:
 
-**Summary field population (NON-NEGOTIABLE)**: The 4 numeric fields below (`violations_found`, `critical`, `files_audited`, `files_total`) are STRUCTURAL placeholders. The inspector MUST replace each with the actual count derived from the `violations[]` array (length and category counts) and the changed-files list before writing the report. Emitting the literal `0` when the array is non-empty creates a downstream-breaking aggregation bug — this is the exact failure mode that produced unanimous CLOSE: NO on task 20260519-160856 iter1.
+**Summary field population (NON-NEGOTIABLE)**: The 4 numeric fields below (`violations_found`, `critical`, `files_audited`, `files_total`) are STRUCTURAL placeholders. The inspector MUST replace each with the actual count derived from the `violations[]` array (length and category counts) and the changed-files list before writing the report. Emitting the literal `0` when the array is non-empty creates a downstream-breaking aggregation bug.
 
 ```json
 {

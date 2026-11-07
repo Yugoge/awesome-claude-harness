@@ -27,7 +27,7 @@ When emitting `pipeline_recommendation: "skip"` in your triage report, the follo
 1. **"Manual user setup task"** — if a UI session, test data, or environment artifact is required for verification, that is a Tier 1 SETUP pipeline owned by QA-prep or by a user-agent click-path attempt. It is NEVER "out of subagent scope". Subagents have Playwright. They click buttons. If the UI lacks the affordance, that itself is a bug to be reported, not a skip.
 2. **"Out of worktree scope"** for items the worktree CAN influence indirectly. If the item lives in `~/.claude/hooks/`, that is a real escalation; flag it with `pipeline_recommendation: "escalate_to_user"` (new value) including full instructions, NOT silent `skip`. Do not bury escalations in the `skipped_issues` array — they need their own visibility.
 3. **"Cannot be fixed by a fix pipeline"** — if a setup task is required, MAKE IT a setup pipeline. Setup pipelines are valid pipelines. They have BA → Dev → QA stages where Dev = "click + button via Playwright to create the prerequisite" and QA = "verify the prerequisite now exists and is usable".
-4. **"Live verification gap (acceptable)"** / **"Live evidence gap (BA-sanctioned)"** — these phrases are red flags. UI-rendering pipelines have NO acceptable live-evidence gap. If you see BA writing `fallback_plan: source+bundle+typecheck` for a UI pipeline, your triage MUST flag the BA spec as defective and the cycle as blocked, not silently inherit the fallback. Add a `pm_notes` entry: `"BA fallback_plan rejected — UI pipelines require live evidence per CLAUDE.md E2E mandate"`.
+4. **"Live verification gap (acceptable)"** / **"Live evidence gap (BA-sanctioned)"** — these phrases are red flags. UI-rendering pipelines have NO acceptable live-evidence gap. If you see BA writing `fallback_plan: source+bundle+typecheck` for a UI pipeline, your triage MUST flag the BA spec as defective, not silently inherit the fallback. Add a `pm_notes` entry: `"BA fallback_plan rejected — UI pipelines require live evidence per CLAUDE.md E2E mandate"`.
 5. **"Deferred to next cycle"** without an explicit blocker — `defer` requires (a) a concrete reason that the current cycle CANNOT proceed (e.g., multi-package change exceeding remaining time budget with documented hour estimate, repro harness not yet built), (b) a documented `next_cycle_action` with files + line numbers + acceptance criteria. "Time pressure" alone is not enough; if the item is Tier 1, it stays Tier 1 and lower-tier work gets cut first.
 
 **Required `skip_validation` block when `pipeline_recommendation: "skip"`**:
@@ -562,7 +562,7 @@ For NON-UI issues (CLI-only, server-only, refactor, dead-code-removal): the rule
 
 Rule: Step 3 (Live-Evidence Mandate Check) is a hard gate; source, bundle, and typecheck evidence never substitute for a live render of a UI surface.
 
-### Step 4: User-Need Path Relevance Filter (TRIAGE only — MANDATORY per spec-20260503-091826 Section 5.5 decision #2)
+### Step 4: User-Need Path Relevance Filter (TRIAGE only — MANDATORY)
 
 After Step 3 (Live-Evidence) and BEFORE Step 5 (Tier Classification), classify each issue's relationship to the cycle's user-need path. The user's binding directive: all work centers on user needs — pipelines exist to land user-need; out-of-path findings are recorded but NOT pipelined.
 
@@ -576,7 +576,7 @@ After Step 3 (Live-Evidence) and BEFORE Step 5 (Tier Classification), classify e
 - `pipe_category: "dependency"` — path-external code that the user-need path actually depends on (utils / types / adjacent modules per Section 5.4 rule 1); eligible for pipeline creation when the dependency materially affects user-need success.
 - `pipe_category: "out_of_scope_observation"` — path-external, non-security, non-dependency. **Does NOT become a pipeline.** Routed to the triage report's `out_of_scope_observations[]` array (see triage-report schema below) for the cycle's BA handoff. Tier and pipeline_recommendation fields are not applied.
 
-**Specialists' free exploration is preserved** (per spec-20260503-091826 Section 5.7 anti-pattern #5): this filter constrains pipelines, NOT specialists' discovery. Specialists continue to scan broadly; PM Step 4 governs only what becomes a pipeline.
+**Specialists' free exploration is preserved**: this filter constrains pipelines, NOT specialists' discovery. Specialists continue to scan broadly; PM Step 4 governs only what becomes a pipeline.
 
 ### Step 5: Classify Issues into Tiers
 

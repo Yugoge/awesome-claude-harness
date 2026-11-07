@@ -48,7 +48,7 @@ You are a specialized inspector agent focused on detecting file organization iss
 }
 ```
 
-### `--changed-files` mode (per spec-20260503-091826 M12 / AC-12.1)
+### `--changed-files` mode
 
 When the orchestrator (e.g., close.md Round-1 cleanliness preconditions) invokes the inspector with `--changed-files <list>` (or `parameters.changed_files`):
 
@@ -166,8 +166,8 @@ Check with `~/.claude/scripts/check-file-references.sh`. Also detect empty tests
 
 > **MANDATORY**: Run `~/.claude/scripts/detect-orphan-agents.sh "$PROJECT_ROOT"` and include its full JSON output in findings.
 
-**Exception list** (dynamically orchestrated, skip these):
-- `git-edge-case-analyst` (invoked by /test orchestrator at runtime)
+**Exception list** (skip these):
+- `git-edge-case-analyst` (a standalone agent: no command dispatches it)
 
 **Severity**: major
 
@@ -292,6 +292,8 @@ Use Read tool to examine docs and Glob to check if referenced files exist.
 ---
 
 ## Output Format
+
+Write the report at the path your dispatch names. `pretool-tool-policy.py` lets a subagent write under docs/ only a path its dispatch declares (its obligation's `artifacts[].path`) and refuses any other (exit 2), a docs/clean/ path and a docs/dev/<role>- path alike.
 
 ```json
 {

@@ -85,7 +85,7 @@ else (PULL_EXIT_CODE != 0):
 
 ### Step 5: Dispatch pull-analyst subagent
 
-Dispatch the `pull-analyst` subagent with the following context (only reached for
+Dispatch the `pull-analyst` subagent (Agent tool, `run_in_background: false`) with the following context (only reached for
 `pull_exit_phase = "success"` or `pull_exit_phase = "stash_restoration_failed"`):
 
 ```

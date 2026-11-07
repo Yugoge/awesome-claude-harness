@@ -9,10 +9,9 @@ Read-only lifecycle table. Runs `scripts/dev-lifecycle.py scan` and renders
 the result. Never writes to `docs/dev/`, `.git` (HEAD/refs/index/worktree), or
 any commit-grant or bulk-commit-sentinel file: the scan writes nothing at all.
 
-Root-cause reference: `docs/dev/ticket-20260808-035658-lanel.md` (5.2 — the
-user's requirement for an always-available table showing what state every
-ticket and every spec has reached in the development lifecycle, like
-Unfuddle; verbatim original preserved in that ticket file).
+It answers the owner's requirement for an always-available table showing what
+state every ticket and every spec has reached in the development lifecycle,
+like Unfuddle.
 
 ## Invocation
 
@@ -42,7 +41,7 @@ Unfuddle; verbatim original preserved in that ticket file).
 | `analyzed` | a ticket or ba-spec with no dev-report, ba-qa-report or do-report yet | `develop` |
 | `ba_approved` | no dev-report; ba-qa-report verdict pass | `develop` |
 | `ba_rejected` | no dev-report; ba-qa-report verdict fail | `resume_ba` |
-| `close_pending` | no close-report yet, and either the dev-report's one chain call (`scripts/resolve-dev-artifact-chain.py`) passes (`pass` or `pass_with_exceptions`, its result carried whole as `artifact_chain`) or a do-report whose terminal status is `completed` | `close` |
+| `close_pending` | no close-report yet, and either the dev-report's one chain call (`scripts/resolve-dev-artifact-chain.py`) passes (its `status` is `pass`, its result carried whole as `artifact_chain`) or a do-report whose terminal status is `completed` | `close` |
 | `close_failed` | close-report's last-line verdict (`hooks/lib/close-verdict.py`) is `no`/`unknown` | `resume_close` |
 | `commit_pending` | close-report verdict `yes`; not every task-owned repo proven committed | `commit` |
 | `committed` | every task-owned repo has a HEAD-reachable `Task-id:` trailer and zero dirty owned content | `none` |

@@ -18,10 +18,10 @@ Merge a source commit-ish into the repository default branch using a proper merg
 
 | Source shape | Example | Lifecycle cleanup |
 |---|---|---|
-| Local branch | `worktree-overnight-20260809-685c203b` | worktree removal + branch deletion + overnight-state removal, subject to the in_place rules below |
+| Local branch | `worktree-overnight-<date>-<id>` | worktree removal + branch deletion + overnight-state removal, subject to the in_place rules below |
 | Remote-tracking ref | `origin/master`, `refs/remotes/origin/master` | none applicable -- skipped and announced |
 | Tag (annotated or lightweight) | `v1.2.3` | none applicable -- skipped and announced |
-| Bare commit hash | `fa0aea69ccedee7a9fdc71f3b0bfece0fc86c983` | none applicable -- skipped and announced |
+| Bare commit hash | `<40-hex commit id>` | none applicable -- skipped and announced |
 
 Validation is "does `<ref>` resolve to a commit object", never a `refs/heads/` prefix match.
 Accepting every ref shape relaxes NO check: the clean-tree precondition, the untracked-overlap
@@ -109,7 +109,7 @@ reached through this document).
 
 ### Step 2: Dispatch merge-analyst subagent
 
-Dispatch the `merge-analyst` subagent with the following context:
+Dispatch the `merge-analyst` subagent (Agent tool, `run_in_background: false`) with the following context:
 
 ```
 RESOLVED_REF=<RESOLVED_REF>

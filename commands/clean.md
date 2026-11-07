@@ -36,13 +36,15 @@ The orchestrator (the LLM executing this command) MUST NOT:
 
 ## Workflow Overview
 
-This command orchestrates three specialized subagents:
+This command dispatches five subagent types:
 
-1. **cleanliness-inspector**: Detects file organization issues
-2. **style-inspector**: Audits development standards compliance
-3. **cleaner**: Executes approved cleanup actions
+1. **rule-inspector** (Step 4): updates folder READMEs and INDEX.md files
+2. **cleanliness-inspector** (Step 5): detects file organization issues
+3. **style-inspector** (Steps 8 and 10, one per file group): audits development standards compliance
+4. **prompt-inspector** (Step 10A): audits `agents/*.md` and `commands/*.md` verbosity
+5. **cleaner** (Step 16): executes approved cleanup actions
 
-All agents communicate via JSON in `docs/clean/`.
+Every dispatch is an Agent call with `run_in_background: false`. The request's JSON files live in `docs/clean/` (`scripts/orchestrator.sh`'s default `clean_output_dir`). A subagent may write there only a path its dispatch declares (`hooks/pretool-tool-policy.py`); Steps 5 and 10A declare their inspectors' reports in obligation blocks.
 
 ---
 
@@ -129,7 +131,7 @@ Run rule-inspector to update folder documentation with recent changes:
 1. Discover all folders: `~/.claude/scripts/discover-folders.sh "$PROJECT_ROOT"`
 2. Run freshness check: `~/.claude/scripts/check-readme-freshness.sh "$PROJECT_ROOT"` and save to `docs/clean/freshness-${REQUEST_ID}.json`
 3. Build rule-inspector context JSON at `docs/clean/rule-context-${REQUEST_ID}.json` including request_id, timestamp, project_root, folders, freshness data, and parameters `freshness_check: true`, `update_stale_readmes: true`
-4. Invoke: `~/.claude/scripts/orchestrator.sh rule-inspect "$RULE_CONTEXT"`
+4. Invoke: `~/.claude/scripts/orchestrator.sh rule-inspect "$RULE_CONTEXT"`, then dispatch the rule-inspector subagent with that context (Agent tool, `run_in_background: false`)
 5. Verify `docs/clean/rule-context-${REQUEST_ID}.json` exists; abort with error if not
 6. For each stale folder, verify the README was actually modified after the script start time; warn if not
 
@@ -142,7 +144,7 @@ Run rule-inspector to update folder documentation with recent changes:
 - Regenerates INDEX.md with current file inventory in the folders Step 5's clean-inspect checks
 - Applies recency weighting (recent commits weighted 3x higher)
 
-**Root documentation special processing** (ref: commit 590881d5 fix):
+**Root documentation special processing**:
 - Root `README.md` and `ARCHITECTURE.md` describe entire project structure, not folder-specific rules
 - Freshness check compares against last structural change (new folders, archived folders, major commits)
 - Update triggers when structural changes > 7 days old compared to documentation files
@@ -160,7 +162,7 @@ Rule: rule-inspector runs on EVERY execution with freshness detection, never con
 
 ### Step 5: Invoke Cleanliness Inspector
 
-Delegate to cleanliness-inspector subagent. The dispatch prompt MUST include:
+Delegate to cleanliness-inspector subagent (Agent tool, `run_in_background: false`). The dispatch prompt MUST include:
 
 ```
 Context file: docs/clean/context-{REQUEST_ID}.json
@@ -209,7 +211,7 @@ Expected output structure:
 
 ### Step 6: Invoke Style Inspectors (Parallel Multi-Agent)
 
-The style-inspector uses a **budget protocol** to avoid context overflow. Instead of looping sequentially, the orchestrator plans the inspection upfront and launches ALL inspector agents in parallel, one per file group.
+The style-inspector uses a **budget protocol** to avoid context overflow. Instead of looping sequentially, the orchestrator plans the inspection upfront and launches ALL inspector agents in one message, one per file group.
 
 **Plan file**: `docs/clean/style-plan-{REQUEST_ID}.json`
 **Partial reports**: `docs/clean/style-partial-{REQUEST_ID}-group{N}.json`
@@ -225,7 +227,7 @@ If AGENT_COUNT is 0, skip to Step 11 (no files to audit).
 
 #### Step 8: Launch Parallel Style Inspectors
 
-For EACH group in the plan JSON, launch a style-inspector agent using the **Agent tool** with `run_in_background: true`. All agents MUST be launched in a SINGLE message (parallel, not sequential).
+For EACH group in the plan JSON, launch a style-inspector agent using the **Agent tool** with `run_in_background: false`. All N calls MUST be made in a SINGLE message: N synchronous calls that run in parallel, the turn resuming when every one has returned.
 
 Each agent's prompt MUST contain:
 
@@ -269,7 +271,7 @@ You MUST read each file fully before auditing it. Check all 11 standards against
 Your audit scope is exactly the files listed above. After auditing all of them, treat this as `STATUS: complete` for this invocation.
 ```
 
-After launching all agents, log: "Launched {AGENT_COUNT} style-inspector agents in parallel"
+After all calls have returned, log: "Launched {AGENT_COUNT} style-inspector agents in parallel"
 
 #### Step 9: Collect and Merge Results
 
@@ -292,11 +294,11 @@ If ANY file from `all_files` is missing from the merged `files_audited`:
 
 1. Log which files were missed and their count
 2. Build a new group containing ONLY the missed files
-3. Launch a targeted style-inspector agent for the missed files (same prompt format as Step 8, including `codex_required: true` when `codex_required = true`)
+3. Launch a targeted style-inspector agent for the missed files (Agent tool, `run_in_background: false`; same prompt format as Step 8, including `codex_required: true` when `codex_required = true`)
 4. After the targeted agent completes, merge its results into the final report
-5. Repeat coverage check -- if files are still missing after one retry, log an error and proceed
+5. Repeat the coverage check, and items 1-4 for any file still missing
 
-**BLOCK Step 11 until coverage verification passes** (all files in the plan appear in files_audited) OR the retry has been attempted.
+**BLOCK Step 11 until coverage verification passes** (all files in the plan appear in files_audited).
 
 ---
 
@@ -329,9 +331,9 @@ Expected final output structure:
 
 ### Step 10A: Invoke Prompt Inspector (agents/ and commands/ verbosity)
 
-The prompt-inspector is the only inspector that audits `agents/*.md` and `commands/*.md`; no other inspector in this workflow reaches those directories, so this step is MANDATORY on every /clean run. Delegate to the prompt-inspector subagent with `docs/clean/context-{REQUEST_ID}.json` plus the literal lines `command_files: <every commands/*.md>` and `agent_files: <every agents/*.md>`, the block `<obligation v="1">{"task_id": null, "lane": null, "lane_set": null, "role": "prompt-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/prompt-report-{REQUEST_ID}.json", "schema": "prompt-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}</obligation>`, and `codex_required: true` only when `codex_required = true`. It writes `docs/clean/prompt-report-{REQUEST_ID}.json` (top-level `findings` array, one entry per file), the report the obligation declares: the inspector's stop checks it (present, valid JSON of its schema, this request's id) and returns a missing or invalid report to the inspector.
+The prompt-inspector is the only inspector that audits `agents/*.md` and `commands/*.md`; no other inspector in this workflow reaches those directories, so this step is MANDATORY on every /clean run. Delegate to the prompt-inspector subagent (Agent tool, `run_in_background: false`) with `docs/clean/context-{REQUEST_ID}.json` plus the literal lines `command_files: <every commands/*.md>` and `agent_files: <every agents/*.md>`, the block `<obligation v="1">{"task_id": null, "lane": null, "lane_set": null, "role": "prompt-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/prompt-report-{REQUEST_ID}.json", "schema": "prompt-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}</obligation>`, and `codex_required: true` only when `codex_required = true`. It writes `docs/clean/prompt-report-{REQUEST_ID}.json` (top-level `findings` array, one entry per file), the report the obligation declares: the inspector's stop checks it (present, valid JSON of its schema, this request's id) and returns a missing or invalid report to the inspector.
 
-Coverage gate: every `commands/*.md` and `agents/*.md` file MUST appear in the report's audited-file list or be named in a finding; otherwise re-dispatch once for the missed files and BLOCK Step 11 on a second miss.
+Coverage gate: every `commands/*.md` and `agents/*.md` file MUST appear in the report's audited-file list or be named in a finding; otherwise re-dispatch the prompt-inspector for the missed files, again until every file is covered, before Step 11.
 
 ### Step 11: Merge Inspection Reports
 
@@ -397,7 +399,7 @@ Format and display findings:
 
 ### Step 13: Collect User Approval
 
-Based on user selection, build approval context:
+Ask the user to pick one of the Step 12 options with one AskUserQuestion inside the turn, then build the approval context from the answer:
 
 **Option 1: Execute all (aggressive) -- MECHANICAL GENERATION**
 
@@ -440,7 +442,7 @@ Procedure:
 
 **Option 3: Critical/major only** (filter by severity)
 
-**Option 4: Interactive** (ask for each action)
+**Option 4: Interactive** (one AskUserQuestion per action)
 
 **Option 5: Report only** (skip to completion report)
 
@@ -513,12 +515,13 @@ jq -s --arg commit "<checkpoint_commit from Step 15>" \
   > docs/clean/context-with-approvals-{REQUEST_ID}.json
 ```
 
-Invoke the cleaner subagent using the Agent tool:
+Invoke the cleaner subagent using the Agent tool (`run_in_background: false`):
 
 The orchestrator MUST use the Agent tool with the cleaner subagent prompt. The cleaner subagent reads `docs/clean/context-with-approvals-{REQUEST_ID}.json`, executes ALL approved actions, and writes its execution report.
 
 ```
 Agent tool invocation:
+  run_in_background: false
   prompt: "You are the cleaner subagent.
 
 Read these report files directly from the filesystem:
@@ -772,4 +775,4 @@ The orchestrator will guide you through all steps interactively.
 
 **Remember**: This is an aggressive cleanup command with safety features. First-time users should select "Report only" mode to review findings before executing cleanup actions.
 
-**Graphify**: Graphify knowledge graph integration is **disabled** for /clean. No graphify-query.py or graphify-enrich.py calls are made during clean cycles. (Command Coverage: spec-20260527-061433 §5, /clean: disabled.)
+**Graphify**: Graphify knowledge graph integration is **disabled** for /clean. No graphify-query.py or graphify-enrich.py calls are made during clean cycles.
