@@ -25,7 +25,8 @@ tree's text spells each one, read at run time:
 * Step 6: the planning dispatch (changelog-analyst with Step 7's prompt, DRYRUN=true), the
   pre-commit QA dispatch from the step's prompt block, the decision read of the
   commit-qa-report's last line (the base text's file cross-check reads the same file).
-* Step 7: changelog-analyst from the step's prompt block, the real commit in the toy project and
+* Step 7: changelog-analyst from the step's prompt block (its obligation's plan roots, where the text
+  declares them, filled with the plan's repo_root values in order), the real commit in the toy project and
   the push-gate token as the tree's agent text writes it; the status block read and handled per
   its commit_status.
 * Step 8: the selection algorithm as the text orders it (context spec_path, the close-report's
@@ -377,6 +378,10 @@ class CommitRun:
         o = self.o
         tpl = next(b.text for b in cmdtext.blocks(o.section("Step 7")) if "CONTROL_ROOT=<" in b.text)
         tpl = re.sub(r'<"([^"]*)" when BULK=false, else [^>]*>', lambda m: json.dumps(m.group(1).replace("$TASK_ID", self.tid)), tpl)
+        # The obligation's plan roots, where the text declares them: the plan's repo_root values in order.
+        roots = [e["repo_root"] for e in self.plan.get("repositories") or []]
+        tpl = re.sub(r"<the JSON array of REPOSITORY_PLAN\.repositories\[\]\.repo_root\b[^>]*>",
+                     lambda m: json.dumps(roots), tpl)
         values = {"CONTROL_ROOT": o.values.get("CONTROL_ROOT", ""), "NESTED_REPO": o.values.get("NESTED_REPO", ""),
                   "REPOSITORY_PLAN": json.dumps(self.plan), "ARTIFACT_CHAIN": json.dumps(self.chain) if self.chain else "",
                   "ATTRIBUTION_LOG": o.values.get("ATTRIBUTION_LOG", ""), "TASK_ID": self.tid, "BULK": "false",

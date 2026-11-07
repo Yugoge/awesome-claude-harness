@@ -587,7 +587,8 @@ def main() -> None:
                     # jsonschema call path (see
                     # contract_runtime.validate_response_block_for_obligation).
                     result = contract_runtime.validate_response_block_for_obligation(
-                        last_assistant_message, art.get("begin"), art.get("end"), art["schema"]
+                        last_assistant_message, art.get("begin"), art.get("end"), art["schema"],
+                        repo_roots=art.get("repo_roots"),
                     )
                     if result.get("status") == "skip":
                         continue

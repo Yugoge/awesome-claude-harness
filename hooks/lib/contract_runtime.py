@@ -1065,7 +1065,8 @@ def validate_response_line_for_obligation(
 
 
 def validate_response_block_for_obligation(
-    last_assistant_message, begin: Optional[str], end: Optional[str], schema_id: str
+    last_assistant_message, begin: Optional[str], end: Optional[str], schema_id: str,
+    repo_roots: Optional[list] = None,
 ) -> dict:
     """Obligation-authority response_block gate (ticket 20261001-161041-r21, M2).
 
@@ -1094,6 +1095,13 @@ def validate_response_block_for_obligation(
         same infra fail-safe every obligation-authority gate shares).
       - ``'pass'`` -- the delimited substring parses as JSON and validates
         against ``schema_id``.
+
+    ``repo_roots`` (the obligation's own list of the dispatch's planned
+    repository roots, in order; /commit's REPOSITORY_PLAN) adds one
+    requirement on a schema-valid block: its ``repository_results[]`` name
+    exactly those roots, the result at index i with ``order`` i, else
+    ``'fail'`` with ``reason`` containing ``'plan_mismatch'``. ``None`` (bulk
+    mode, or an obligation that declares no plan) adds none.
     """
     if not isinstance(begin, str) or not begin or not isinstance(end, str) or not end:
         return _gate_result(
@@ -1125,10 +1133,20 @@ def validate_response_block_for_obligation(
     skip_reason = _skip_reason_if_unvalidatable(result)
     if skip_reason is not None:
         return _gate_result('skip', schema_id, [], skip_reason)
-    if result.get('ok'):
-        return _gate_result('pass', schema_id, [], 'valid against obligation-supplied response_block schema')
-    return _gate_result(
-        'fail', schema_id, result.get('errors', []),
-        'schema-invalid under obligation-supplied response_block schema',
-    )
+    if not result.get('ok'):
+        return _gate_result(
+            'fail', schema_id, result.get('errors', []),
+            'schema-invalid under obligation-supplied response_block schema',
+        )
+    if isinstance(repo_roots, list):
+        results = record.get('repository_results') if isinstance(record, dict) else None
+        reported = [[r.get('order'), r.get('repo_root')] for r in results or [] if isinstance(r, dict)]
+        planned = [[i, root] for i, root in enumerate(repo_roots)]
+        if reported != planned:
+            return _gate_result(
+                'fail', schema_id,
+                [f'repository_results (order, repo_root) {reported!r} != the obligation\'s repo_roots {planned!r}'],
+                'plan_mismatch: repository_results do not name the obligation\'s repo_roots in order',
+            )
+    return _gate_result('pass', schema_id, [], 'valid against obligation-supplied response_block schema')
 

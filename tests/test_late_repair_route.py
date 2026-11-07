@@ -143,8 +143,9 @@ def test_ac8_eligible_chain_no_drift_requires_separate_verify_disclosure_step(tm
         "--stage", "ba", "--report-path", str(ticket), "--repair-run-id", run_id,
     )
     assert ba.returncode == 0
-    ba_sha = _last_json(ba)["sha256"]
-    assert ba_sha == __import__("hashlib").sha256(ticket.read_bytes()).hexdigest()
+    # record-stage records the stage and the report's path, and no hash of it
+    # (P1b row 6: G2 checked the report at its producer's stop).
+    assert _last_json(ba) == {"outcome": "recorded", "stage": "ba"}
 
     context = dev_dir / f"context-{task_id}.json"
     context.write_text(json.dumps({"request_id": task_id, "task_id": task_id}), encoding="utf-8")
@@ -158,12 +159,14 @@ def test_ac8_eligible_chain_no_drift_requires_separate_verify_disclosure_step(tm
     )
     assert dev_stage.returncode == 0
 
-    duplicate = _run_controller(
+    # A stage recorded again (its producer's next round) replaces its entry:
+    # row 6 drops the duplicate refusal, which only kept a stored hash.
+    again = _run_controller(
         "record-stage", "--task-id", task_id, "--project-dir", str(root),
         "--stage", "dev", "--report-path", str(dev_dir / f"dev-report-{task_id}.json"),
         "--repair-run-id", run_id,
     )
-    assert duplicate.returncode == 3
+    assert again.returncode == 0, again.stdout
 
     qa_stage = _run_controller(
         "record-stage", "--task-id", task_id, "--project-dir", str(root),
@@ -187,14 +190,16 @@ def test_ac8_eligible_chain_no_drift_requires_separate_verify_disclosure_step(tm
     assert verify.returncode == 0
     assert _last_json(verify)["outcome"] == "admitted"
 
-    # A corrupted-after-the-fact artifact causes a mismatch.
-    ticket.write_text(ticket.read_text(encoding="utf-8") + "\ntampered\n", encoding="utf-8")
-    verify_after_tamper = _run_controller("verify-disclosure", "--task-id", task_id, "--project-dir", str(root))
-    assert verify_after_tamper.returncode != 0
-    refused = _last_json(verify_after_tamper)
+    # verify-disclosure compares no stage report (P1b row 6): it reads
+    # finalize's recorded outcome. A record finalize has not carried to its
+    # outcome is refused, naming the run record's path.
+    record["outcome"] = None
+    _run_record_path(root, task_id).write_text(json.dumps(record), encoding="utf-8")
+    unfinalized = _run_controller("verify-disclosure", "--task-id", task_id, "--project-dir", str(root))
+    assert unfinalized.returncode == 3
+    refused = _last_json(unfinalized)
     assert "not independently corroborated" in refused["reason"]
-    # The refusal names the artifact's path, not a stage label.
-    assert refused["path"] == f"docs/dev/ticket-{task_id}.md"
+    assert refused["path"] == f"docs/dev/late-repair-run-{task_id}.json"
 
 
 def test_ac8_wrong_role_report_path_is_refused(tmp_path: Path) -> None:
@@ -573,17 +578,17 @@ def test_ac9_tri_state_fail_closed_on_uncorroborated_effective_state(tmp_path: P
     run_id = _init_and_record_all_stages(root, task_id)
     finalize = _run_controller("finalize", "--task-id", task_id, "--project-dir", str(root), "--repair-run-id", run_id)
     assert finalize.returncode == 0
-    # Tamper with the run record's stored dev-stage hash to simulate a later
-    # corroboration failure (drift/corruption discovered after finalize).
+    # A record that no longer holds finalize's outcome (finalize's refusal on
+    # a later run, or a record rewritten since) fails closed.
     run_record_path = _run_record_path(root, task_id)
     record = json.loads(run_record_path.read_text(encoding="utf-8"))
-    record["stages"]["ba"]["sha256"] = "0" * 64
+    record["outcome"] = "honest_refuse"
     run_record_path.write_text(json.dumps(record), encoding="utf-8")
 
     state, path = CONTROLLER.resolve_effective_report_state(root, task_id)
     assert state == "invalid"
-    # The path to route the finding on: the report verify-disclosure refused.
-    assert path == root.resolve() / "docs" / "dev" / f"ticket-{task_id}.md"
+    # The path to route the finding on: the run record, whose outcome is not finalize's.
+    assert path == run_record_path.resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -618,23 +623,36 @@ def test_ac10_disclosure_negative_controls_and_positive_control(tmp_path: Path) 
     assert "no matching run record" in payload_i["reason"]
     assert payload_i["path"] == f"docs/dev/late-repair-run-{other_task}.json"
 
-    # (ii) repair_run_id matches, but hash mismatches (corrupt after the fact).
+    # (ii) a stage report changed after the fact, and (iii) one removed: no
+    # stage report is compared here (P1b row 6; G2 checked each at its
+    # producer's stop), so the run stays admitted, and a removed report is the
+    # gap the chain function names (/commit Step 5's call, row 7).
     ticket_path.write_text(original_ticket + "\ncorrupted\n", encoding="utf-8")
     case_ii = _run_controller("verify-disclosure", "--task-id", task_id, "--project-dir", str(root))
-    assert case_ii.returncode != 0
-    assert "hash mismatch" in _last_json(case_ii)["reason"]
-    assert _last_json(case_ii)["path"] == f"docs/dev/ticket-{task_id}.md"
+    assert case_ii.returncode == 0
+    assert _last_json(case_ii)["outcome"] == "admitted"
     ticket_path.write_text(original_ticket, encoding="utf-8")  # restore
 
-    # (iii) a recorded stage report removed after the fact.
     qa_path = dev_dir / f"qa-report-{task_id}.json"
     qa_backup = qa_path.read_bytes()
     qa_path.unlink()
     case_iii = _run_controller("verify-disclosure", "--task-id", task_id, "--project-dir", str(root))
-    assert case_iii.returncode != 0
-    assert "recorded stage report missing" in _last_json(case_iii)["reason"]
-    assert _last_json(case_iii)["path"] == f"docs/dev/qa-report-{task_id}.json"
+    assert case_iii.returncode == 0
+    resolver = CONTROLLER._load_sibling_module("resolve-dev-artifact-chain.py")
+    chain = resolver.resolve_chain(root, task_id)
+    assert chain["status"] == "fail"
+    assert f"docs/dev/qa-report-{task_id}.json" in [e.get("path") for e in chain["errors"]]
     qa_path.write_bytes(qa_backup)
+
+    # (iv) a run record finalize has not carried to its outcome.
+    run_record_path = _run_record_path(root, task_id)
+    record_bytes = run_record_path.read_bytes()
+    unfinalized = dict(json.loads(record_bytes), outcome=None)
+    run_record_path.write_text(json.dumps(unfinalized), encoding="utf-8")
+    case_iv = _run_controller("verify-disclosure", "--task-id", task_id, "--project-dir", str(root))
+    assert case_iv.returncode != 0
+    assert _last_json(case_iv)["path"] == f"docs/dev/late-repair-run-{task_id}.json"
+    run_record_path.write_bytes(record_bytes)
 
     # Confirm the fixture is still admitted after every restore (sanity that
     # the negative controls did not leave permanent damage).
@@ -1044,7 +1062,7 @@ def test_ac9_companion_resolve_commit_repos_fails_closed_when_uncorroborated(tmp
     effective_path = _produce_verified_effective_report(root, task_id)
     run_record_path = _run_record_path(root, task_id)
     record = json.loads(run_record_path.read_text(encoding="utf-8"))
-    record["stages"]["ba"]["sha256"] = "0" * 64
+    record["outcome"] = "honest_refuse"  # no longer finalize's outcome: State C
     run_record_path.write_text(json.dumps(record), encoding="utf-8")
 
     repos_module = _load(REPO_ROOT / "scripts" / "resolve-commit-repos.py", "_resolve_commit_repos_under_test_c")
@@ -1181,13 +1199,19 @@ def test_record_stage_writes_nothing_into_the_stage_reports(tmp_path: Path) -> N
 
     record = json.loads(_run_record_path(root, task_id).read_text(encoding="utf-8"))
     assert record["repair_run_id"] == run_id
-    import hashlib
     for stage, path in reports.items():
         assert path.read_bytes() == before[stage], stage
-        assert record["stages"][stage]["sha256"] == hashlib.sha256(before[stage]).hexdigest()
+        # the stage and its report's path; no hash of the report (P1b row 6)
+        assert record["stages"][stage]["report_path"] == path.relative_to(root).as_posix()
+        assert "sha256" not in record["stages"][stage]
 
 
-def test_a_removed_stage_report_is_invalid_on_that_path_at_commit(tmp_path: Path) -> None:
+def test_a_removed_stage_report_is_named_by_the_chain_call_at_commit(tmp_path: Path) -> None:
+    """P1b row 6 and acceptance 7: a stage report removed after /close is no
+    late-repair state (resolve-effective-report still prints none, comparing
+    no stage report); /commit Step 5's chain call names it, and the dispatch
+    that declared it runs again. A fresh report from that dispatch needs no
+    re-record: nothing holds its old hash."""
     task_id = "20260101-000910"
     root = tmp_path
     fx.build_beyond_qa_clean(root, task_id)
@@ -1197,14 +1221,22 @@ def test_a_removed_stage_report_is_invalid_on_that_path_at_commit(tmp_path: Path
     assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
 
     qa_path = root / "docs" / "dev" / f"qa-report-{task_id}.json"
+    qa_bytes = qa_path.read_bytes()
     qa_path.unlink()
-    state, path = CONTROLLER.resolve_effective_report_state(root, task_id)
-    assert state == "invalid"
-    assert path == qa_path.resolve()
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
     printed = _last_json(_run_controller(
         "resolve-effective-report", "--task-id", task_id, "--project-dir", str(root),
     ))
-    assert printed == {"state": "invalid", "path": str(qa_path.resolve())}
+    assert printed == {"state": "none", "path": None}
+    resolver = CONTROLLER._load_sibling_module("resolve-dev-artifact-chain.py")
+    chain = resolver.resolve_chain(root, task_id)
+    assert [e.get("path") for e in chain["errors"]] == [f"docs/dev/qa-report-{task_id}.json"]
+
+    # The QA dispatch's next round writes the report afresh, in other bytes.
+    qa_path.write_text(json.dumps(json.loads(qa_bytes), indent=2), encoding="utf-8")
+    assert qa_path.read_bytes() != qa_bytes
+    assert resolver.resolve_chain(root, task_id)["errors"] == []
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
 
 
 def test_verify_disclosure_takes_no_reading_of_the_effective_report(tmp_path: Path) -> None:
