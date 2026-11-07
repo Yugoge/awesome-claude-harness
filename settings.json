@@ -120,7 +120,6 @@
       "Bash(rm -f /tmp/*.tmp:*)",
       "Bash(rm:*)",
       "Bash(rustc:*)",
-      "Bash(scripts/analyze-folder-history.sh:*)",
       "Bash(scripts/checkpoint-prune.sh:*)",
       "Bash(scripts/discover-folders.sh:*)",
       "Bash(scripts/generate-folder-index.sh:*)",
