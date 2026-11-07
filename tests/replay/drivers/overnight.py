@@ -192,12 +192,15 @@ DEVIATIONS = Deviations([
     ("C* Step 15 Bash qa_mode *", Deviation(
         "hooks/pretool-bash-safety.sh", "UNRESOLVED census_obligation_undischarged:substitution",
         "the base text's Step 15 qa_mode flip as it spells it")),
-    # DEVIATION: "CONTRACT BLOCK (pretool-subagent-enforce): ... no required_calls entry for step '2'"
-    # The launcher's seed contract (required_calls: []) switches the hook into enforce mode, so the
-    # dispatches the text makes before its own contract exists (PM PLAN, the specialists, PM TRIAGE)
-    # are refused (E13).
-    ("C* Step [234] Agent(*", Deviation(
-        "hooks/pretool-subagent-enforce.py", "CONTRACT BLOCK (pretool-subagent-enforce)",
+    # DEVIATION: "CONTRACT BLOCK (pretool-subagent-enforce): ... diagnosis: Case C (incomplete contract)
+    # ... action: do not retry by re-bookmarking; ... no required_calls entry for step '2'" The launcher's
+    # seed contract (required_calls: []) switches the base tree's hook into enforce mode, so the
+    # dispatches the text makes in cycle 1 before its own contract exists (PM PLAN, the specialists,
+    # PM TRIAGE) are refused (E13). The quote is that hook's own wording for a contract with no step;
+    # this tree's hook derives Steps 2-4 from the canonical steps and words its refusals otherwise
+    # ("re-marking the step"), so none of its refusals is passed here.
+    ("C1 Step [234] Agent(*", Deviation(
+        "hooks/pretool-subagent-enforce.py", "do not retry by re-bookmarking",
         "the Steps 2-4 dispatches the text makes before its contract exists")),
     # DEVIATION: "CONTRACT BLOCK (pretool-subagent-enforce): step=17 ... errors: - no required_calls entry for
     # step '17'" The cycle contract has entries for the dispatches of Steps 2-4, 8, 10, 11g, 12, 15 and 20
