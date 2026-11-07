@@ -545,9 +545,9 @@ def _producer_question(project_dir: str, ob: dict):
     return {"path": rel, "reason": "producer_question_invalid", "errors": errors}
 
 
-# P3 R14: an artifact stands for this stop only when written for this dispatch,
-# and a lane's report echoes its dispatch's lane and roster. These checks block
-# like the rest (they warned in the commit that introduced them).
+# P3 R14: a stop's artifacts stand for it only when its dispatch wrote one of
+# them, and a lane's report echoes its dispatch's lane and roster. These checks
+# block like the rest (they warned in the commit that introduced them).
 DISPATCH_ECHO_BLOCKS = True
 
 
@@ -559,31 +559,43 @@ def _declares_lane_echo(schema_id) -> bool:
     return "lane" in props and "lane_set" in props
 
 
-def _dispatch_echo_findings(project_dir: str, ob: dict, art: dict, record) -> list:
-    """R14 for one checked artifact: written before the dispatch (mtime, the
-    filesystem's clock, against dispatched_at; none counts as stale), and for
-    a json record whose schema declares lane and lane_set, a lane or roster
-    other than the obligation's (exact: the aggregator reads a reordered
-    roster as a conflict)."""
+def _stale_findings(project_dir: str, ob: dict, declared: list, checked: list) -> list:
+    """R14(a): the checked artifacts stand for this dispatch once it wrote any
+    file it declares (mtime, the filesystem's clock, against dispatched_at;
+    none counts as stale). Judged per dispatch, not per file: a re-dispatched
+    producer keeps a file it judges still right (the write guard refuses a
+    Write over it, an Edit needs a change); a dispatch that wrote none of its
+    files left an older round's, and each checked one is named."""
+    mtimes = {}
+    for art in declared:
+        try:
+            mtimes[art["path"]] = (Path(project_dir) / art["path"]).stat().st_mtime
+        except OSError:
+            mtimes[art["path"]] = None
+    if any(obligation.artifact_freshness_satisfied(a["kind"], mtimes[a["path"]], ob.get("dispatched_at")) is True
+           for a in declared):
+        return []
     findings = []
-    try:
-        mtime = (Path(project_dir) / art["path"]).stat().st_mtime
-    except OSError:
-        mtime = None
-    if obligation.artifact_freshness_satisfied(art["kind"], mtime, ob.get("dispatched_at")) is not True:
+    for art in checked:
+        mtime = mtimes.get(art["path"])
         written = datetime.fromtimestamp(mtime, timezone.utc).isoformat() if mtime is not None else None
         findings.append({"path": art["path"], "reason": "stale_for_dispatch", "errors": [
-            f"written {written}, dispatched_at {ob.get('dispatched_at')!r}: not rewritten for this "
-            f"dispatch (slack {obligation.FILE_FRESHNESS_SLACK_SECONDS}s)"]})
-    if (isinstance(record, dict) and ob.get("lane") is not None and ob.get("lane_set") is not None
-            and _declares_lane_echo(art.get("schema"))):
-        same = {"lane": record.get("lane") == ob["lane"],
-                "lane_set": obligation.lane_sets_identical(record.get("lane_set"), ob["lane_set"])}
-        errors = [f"{key}: obligation declares {ob[key]!r}, file has {record.get(key)!r}"
-                  for key, ok in same.items() if not ok]
-        if errors:
-            findings.append({"path": art["path"], "reason": "lane_echo_mismatch", "errors": errors})
+            f"written {written}, dispatched_at {ob.get('dispatched_at')!r}: this dispatch wrote none of the "
+            f"{len(declared)} file(s) it declares (slack {obligation.FILE_FRESHNESS_SLACK_SECONDS}s)"]})
     return findings
+
+
+def _lane_echo_findings(ob: dict, art: dict, record) -> list:
+    """R14(b): a json record whose schema declares lane and lane_set carries the
+    obligation's (exact: the aggregator reads a reordered roster as a conflict)."""
+    if not (isinstance(record, dict) and ob.get("lane") is not None and ob.get("lane_set") is not None
+            and _declares_lane_echo(art.get("schema"))):
+        return []
+    same = {"lane": record.get("lane") == ob["lane"],
+            "lane_set": obligation.lane_sets_identical(record.get("lane_set"), ob["lane_set"])}
+    errors = [f"{key}: obligation declares {ob[key]!r}, file has {record.get(key)!r}"
+              for key, ok in same.items() if not ok]
+    return [{"path": art["path"], "reason": "lane_echo_mismatch", "errors": errors}] if errors else []
 
 
 def _finding_lines(findings: list) -> str:
@@ -664,7 +676,7 @@ def main() -> None:
                     + response_block_artifacts + spec_views_artifacts
                 )
                 failures = []
-                echo = []
+                echo, checked = [], []
                 question = _producer_question(project_dir, resolution.obligation)
                 if question == "valid":
                     # The question stands in for every declared artifact; nothing
@@ -706,7 +718,8 @@ def main() -> None:
                                     ],
                                 }
                             )
-                    echo += _dispatch_echo_findings(project_dir, resolution.obligation, art, record)
+                    checked.append(art)
+                    echo += _lane_echo_findings(resolution.obligation, art, record)
                 markdown_waived_paths: set[str] = set()
                 for art in markdown_artifacts:
                     # M3: markdown-kind entries get the same producer-side
@@ -744,7 +757,9 @@ def main() -> None:
                             }
                         )
                     elif result.get("status") == "pass":
-                        echo += _dispatch_echo_findings(project_dir, resolution.obligation, art, None)
+                        checked.append(art)
+                echo += _stale_findings(project_dir, resolution.obligation, [
+                    a for a in json_artifacts + markdown_artifacts if a["path"] not in markdown_waived_paths], checked)
                 if DISPATCH_ECHO_BLOCKS:
                     failures, echo = failures + echo, []
                 for art in response_line_artifacts:
