@@ -655,7 +655,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Control** | `/codex` | OpenAI Codex adversarial delegation. | You want an adversarial second opinion from an outside model. |
 | **Control** | `/paseo-daemon` | Multi-session monitoring and three-account scheduling control plane. | Bootstrapping or advancing the persistent scheduling state machine. |
 
-> Full, auto-maintained list: [`commands/README.md`](commands/README.md).
+> Each command's own file: [`commands/`](commands/).
 
 ---
 
