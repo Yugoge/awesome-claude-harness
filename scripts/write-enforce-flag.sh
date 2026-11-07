@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 # Write one or more enforcement-flag sentinels into a dev-registry session dir.
 #
-# Merges the bodies of write-codex-enforce.sh and write-e2e-enforce.sh, which
-# were byte-for-byte identical apart from the output filename. Both remain as
-# thin wrappers around this script (command text written before this change
-# calls them by name), so this is a consolidation, not a rename.
-#
 # --flag is repeatable, and that is the point: one invocation writes every flag
 # a cycle's registry needs (hooks/prompt-workflow.py _arm_registry). A flag
 # says only that its gate is armed for the session; which agents a gate applies

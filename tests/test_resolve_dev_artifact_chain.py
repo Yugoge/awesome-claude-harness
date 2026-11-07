@@ -204,27 +204,10 @@ def _run_cli(root: Path) -> subprocess.CompletedProcess[str]:
 # dev-report carrying a status rationale.  Strict pass reads neither.
 # ---------------------------------------------------------------------------
 
-ROUTE_SELECT_PATH = REPO_ROOT / "scripts" / "close-route-select.py"
 HISTORIC_ATTESTATION = (
     "This is a disclosed, evidenced, non-defect exception -- not a defect in "
     "this lane's deliverable."
 )
-
-
-def _run_route_select(root: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            sys.executable,
-            str(ROUTE_SELECT_PATH),
-            "--task-id",
-            TASK_ID,
-            "--project-dir",
-            str(root),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
 
 
 def _run_aggregate(root: Path) -> subprocess.CompletedProcess[str]:
@@ -1304,16 +1287,12 @@ def test_a_dev_report_lacking_completed_fails_even_without_a_rationale(tmp_path:
 
 
 def test_former_disclosure_fixture_fails_with_exit_two_end_to_end(tmp_path: Path) -> None:
-    """Before: "pass_with_exceptions", exit 0 from the resolver and the route
-    selector.  Now: "fail", exit 2 from both."""
+    """Before: "pass_with_exceptions", exit 0 from the resolver.  Now: "fail", exit 2."""
     parents = _make_singular(tmp_path)
     _write(parents["qa"], _qa_document_with_disclosure(TASK_ID))
     process = _run_cli(tmp_path)
     assert process.returncode == 2
     assert '"status":"fail"' in process.stdout
-    route = _run_route_select(tmp_path)
-    assert route.returncode == 2
-    assert json.loads(route.stdout)["artifact_chain"]["status"] == "fail"
 
 
 def test_a_fanout_lane_with_a_status_rationale_fails_lane_and_historic_canonical(
@@ -1340,7 +1319,6 @@ def test_a_fanout_lane_with_a_status_rationale_fails_lane_and_historic_canonical
         codes_by_path.setdefault(entry["path"], set()).add(entry["code"])
     for path in (parents["dev"], lanes["lane-b"]["dev"]):
         assert {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"} <= codes_by_path[_relative(tmp_path, path)]
-    assert _run_route_select(tmp_path).returncode == 2
 
     parents["dev"].unlink()
     aggregate = _run_aggregate(tmp_path)

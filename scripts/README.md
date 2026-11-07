@@ -31,7 +31,6 @@ Organization and usage documentation for `scripts/`.
 - `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
-- `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
 - `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
 - `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 - `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
@@ -102,9 +101,7 @@ Organization and usage documentation for `scripts/`.
 - `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
 - `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
 - `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
-- `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 - `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
-- `write-e2e-enforce.sh` - Writes e2e-enforce.json into the dev-registry for the given session.
 - `write-enforce-flag.sh` - Write one or more enforcement-flag sentinels into a dev-registry session dir.
 - `write-git-residual-override.py` - Answers the "could not be statically classified" refusal emitted by
 - `write-push-gate-token.py` - Run after its own commit by both of the token's callers: changelog-analyst under
