@@ -1427,6 +1427,49 @@ def test_response_block_not_naming_the_planned_roots_blocks(tmp_path, name, resu
     assert "plan_mismatch" in proc.stderr
 
 
+def _plan_block(status: str, results: list) -> str:
+    return f"{_CA_BEGIN}\n{json.dumps({'commit_status': status, 'repository_results': results})}\n{_CA_END}\n"
+
+
+def test_plan_roots_hold_without_a_schema_validator(monkeypatch):
+    """The comparison /commit made needed no jsonschema, so G2's needs none:
+    with the validator unavailable (Draft7Validator None) a landing that
+    leaves out a planned repository still fails with plan_mismatch, while a
+    block naming the plan in order is skipped as before."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from lib import contract_runtime as runtime
+    monkeypatch.setattr(runtime, "Draft7Validator", None)
+    roots = ["/r/control", "/r/nested"]
+    missing = runtime.validate_response_block_for_obligation(
+        _plan_block("nothing_to_commit", [_ca_result(0, "/r/control")]),
+        _CA_BEGIN, _CA_END, "changelog-status.v1", repo_roots=roots)
+    assert missing["status"] == "fail" and "plan_mismatch" in missing["reason"], missing
+    planned = runtime.validate_response_block_for_obligation(
+        _plan_block("nothing_to_commit", [_ca_result(0, "/r/control"), _ca_result(1, "/r/nested")]),
+        _CA_BEGIN, _CA_END, "changelog-status.v1", repo_roots=roots)
+    assert planned["status"] == "skip", planned
+
+
+def test_a_failed_result_is_not_held_to_the_plan(tmp_path):
+    """/commit Step 7 compared the roots only for a landing: a schema-valid
+    `failed` block that reports fewer repositories than planned is returned
+    to the analyst by no plan rule."""
+    harness_session = "harness-rb-roots-failed"
+    agent_id = "agent-ca-rb-roots-failed"
+    project, home = _standard_setup(tmp_path, "changelog-analyst", agent_id)
+    _write_obligation_transcript(
+        home, project, harness_session, agent_id,
+        _response_block_obligation("20260101-000207", repo_roots=["/r/control", "/r/nested"]),
+    )
+    body = json.dumps({"commit_status": "failed", "failure_code": "staging_error",
+                       "failure_reason": "git add failed", "repository_results": []})
+    proc = _run_hook(
+        project, home, agent_id, session_id=harness_session, stopgate_mode="block",
+        last_assistant_message=f"{_CA_BEGIN}\n{body}\n{_CA_END}\n",
+    )
+    assert "plan_mismatch" not in proc.stderr, proc.stderr
+
+
 def test_response_block_with_null_repo_roots_has_no_plan_requirement(tmp_path):
     """Bulk mode declares no plan (repo_roots null): no roots requirement."""
     proc = _run_plan_roots_case(tmp_path, "roots-null", None, [_ca_result(0, "/r/anything")])

@@ -1098,10 +1098,13 @@ def validate_response_block_for_obligation(
 
     ``repo_roots`` (the obligation's own list of the dispatch's planned
     repository roots, in order; /commit's REPOSITORY_PLAN) adds one
-    requirement on a schema-valid block: its ``repository_results[]`` name
-    exactly those roots, the result at index i with ``order`` i, else
-    ``'fail'`` with ``reason`` containing ``'plan_mismatch'``. ``None`` (bulk
-    mode, or an obligation that declares no plan) adds none.
+    requirement on a block that reports a landing (any ``commit_status`` but
+    ``failed``, as /commit Step 7 applied it): its ``repository_results[]``
+    name exactly those roots, the result at index i with ``order`` i, else
+    ``'fail'`` with ``reason`` containing ``'plan_mismatch'``. The comparison
+    needs no schema validator, so it holds when jsonschema is unavailable
+    too, as /commit's own comparison did. ``None`` (bulk mode, or an
+    obligation that declares no plan) adds none.
     """
     if not isinstance(begin, str) or not begin or not isinstance(end, str) or not end:
         return _gate_result(
@@ -1129,24 +1132,39 @@ def validate_response_block_for_obligation(
             'fail', schema_id, [f'unparseable JSON between sentinels: {exc}'],
             'unparseable_json: response_block content between sentinels is not valid JSON',
         )
+    plan_errors = _plan_mismatch(record, repo_roots)
+    plan_fail = _gate_result(
+        'fail', schema_id, plan_errors,
+        'plan_mismatch: repository_results do not name the obligation\'s repo_roots in order',
+    ) if plan_errors else None
     result = validate(record, schema_id)
     skip_reason = _skip_reason_if_unvalidatable(result)
     if skip_reason is not None:
-        return _gate_result('skip', schema_id, [], skip_reason)
+        return plan_fail or _gate_result('skip', schema_id, [], skip_reason)
     if not result.get('ok'):
         return _gate_result(
             'fail', schema_id, result.get('errors', []),
             'schema-invalid under obligation-supplied response_block schema',
         )
-    if isinstance(repo_roots, list):
-        results = record.get('repository_results') if isinstance(record, dict) else None
-        reported = [[r.get('order'), r.get('repo_root')] for r in results or [] if isinstance(r, dict)]
-        planned = [[i, root] for i, root in enumerate(repo_roots)]
-        if reported != planned:
-            return _gate_result(
-                'fail', schema_id,
-                [f'repository_results (order, repo_root) {reported!r} != the obligation\'s repo_roots {planned!r}'],
-                'plan_mismatch: repository_results do not name the obligation\'s repo_roots in order',
-            )
+    if plan_fail:
+        return plan_fail
     return _gate_result('pass', schema_id, [], 'valid against obligation-supplied response_block schema')
+
+
+def _plan_mismatch(record, repo_roots) -> list:
+    """The plan requirement of validate_response_block_for_obligation: [] when
+    ``repo_roots`` declares no plan, the block reports no landing (its
+    ``commit_status`` is ``failed``), or its repository_results name exactly
+    those roots in order; else the one error naming both."""
+    if not isinstance(repo_roots, list) or not isinstance(record, dict):
+        return []
+    if record.get('commit_status') == 'failed':
+        return []
+    results = record.get('repository_results')
+    reported = [[r.get('order'), r.get('repo_root')] for r in results if isinstance(r, dict)] \
+        if isinstance(results, list) else []
+    planned = [[i, root] for i, root in enumerate(repo_roots)]
+    if reported == planned:
+        return []
+    return [f'repository_results (order, repo_root) {reported!r} != the obligation\'s repo_roots {planned!r}']
 
