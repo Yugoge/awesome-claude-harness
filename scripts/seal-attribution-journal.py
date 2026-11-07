@@ -7,8 +7,9 @@ reboot. This copies:
   * every session journal  -> <dest>/journals/<session>.jsonl   (atomic replace)
   * every blob referenced by any event's pre_sha/post_sha
                            -> <dest>/objects.git  (bare repo, same blob ids)
-Default dest: attribution-seals/ beside the journal's own state dir
-(<harness>/state/attribution-seals, ignored like the rest of state/)
+Default dest: $CLAUDE_CONFIG_DIR/attribution-seals when that directory is
+outside the harness tree, else attribution-seals/ beside the journal's own
+state dir (<harness>/state/attribution-seals, ignored like the rest of state/)
 -- override with $ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
 destination unless --allow-volatile.
 
