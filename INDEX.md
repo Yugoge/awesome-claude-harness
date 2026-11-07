@@ -576,7 +576,6 @@ dot-claude/
 │   ├── `test` - test file
 │   ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 │   ├── `verify-attribution-chain.py` - Folds each file's events across ALL session journals into a hash chain and
-│   ├── `verify-claims-extended.sh` - Description: Extended headline-claims gate. Binds the slash-command count and the
 │   ├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Runs ALL THREE hero-provenance audits in
 │   ├── `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
 │   ├── `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
