@@ -470,9 +470,9 @@ class TestAC5SessionBinding(unittest.TestCase):
     def test_row_5_7_record_has_no_session_id_field(self):
         """A blank/absent record id must NOT broadcast.
 
-        hooks/posttool-overnight-loop.py:156-159 guards with
-        `if state_session_id and ...`, so mirroring it literally would still
-        deliver this record to every session. Strict binding delivers nothing.
+        A record without its own session_id names no session, so the one
+        locator (lib/overnight.py `locate`, selecting by file name and the
+        record's session_id) finds nothing for it. Strict binding delivers nothing.
         """
         state = build_state('CCCC', future_z(1), cycles_done=1, omit_session_id=True)
         self._assert_zero(self._run_row([('CCCC', state)], 'CCCC'))

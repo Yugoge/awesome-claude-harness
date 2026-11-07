@@ -55,10 +55,15 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
                           second /dev first: acceptance 9)
   variant=auto-task       `/close --auto <task>`: the Close mode question first (acceptance 5)
   parents=1|2             --auto: the number of /dev cycles closed
+  cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
+                          fan-out cycle with `lanes` lanes)
   rating=label|4|skip|afk|decline|free[,...]   Step 4's answer, per landed task in order (default label:
                           the dialog's first option)
   session=same|later      /close typed in the /dev's session or a later one (default same for plain,
                           later otherwise)
+
+P1b's acceptance 7 names three of these cases otherwise; each name plays its case (ALIASES): qa-never
+is lane-qa, noartifact is noart, unwritten is stray.
 
 Deviations: DEVIATIONS below, one entry per block the replays meet, each with a comment quoting
 the hook's text; nothing else passes a block.
@@ -228,10 +233,17 @@ def role_function(defs: str) -> str | None:
                  if "case" in m.group(2) and re.search(r"echo (?:dev|qa|ba|orchestrator)\b", m.group(2))), None)
 
 
-def summarize_answer(ans):
+def summarize_answer(ans, session=None):
+    """The answer's fields the report quotes; with `session` (the asking session), whether the dispatch it names
+    was made in an earlier session than the one asking (the reader keys records by task id, never by session)."""
     if not isinstance(ans, dict):
         return ans
-    return {k: ans.get(k) for k in ("source", "role", "subagent_type", "lane", "step", "command") if k in ans}
+    out = {k: ans.get(k) for k in ("source", "role", "subagent_type", "lane", "step", "command") if k in ans}
+    if session is not None and ans.get("session_id"):
+        out["dispatched_in"] = "this session" if ans["session_id"] == getattr(session, "sid", None) else "an earlier session"
+    if isinstance(ans.get("template"), dict):
+        out["template_role"] = ans["template"].get("role")
+    return out
 
 
 def act_for(run, role: str, edits=None):
@@ -271,6 +283,9 @@ def dispatch_answer(run, ans, path: str, detail: str, label: str, edits=None):
                                      note=f"{path}: {detail}", edits=edits), role
     if isinstance(ans, dict) and ans.get("source") == "todo_step" and not call and not ans.get("template"):
         # "with none, the step is the main agent's own: run it yourself under the same task id"
+        if ans.get("command") != run.o.typed and getattr(run.producer, "plays_step", lambda a: False)(ans):
+            # a step of the cycle's own command (/dev Step 17, the completion report): its text, run here
+            return run.producer.run_step(ans, o.s, run.devs, run.label(label)), "orchestrator"
         return own_work(run, path, detail, label)
     raise RuntimeError(f"the reader's answer for {path} is not one this driver plays: {summarize_answer(ans)}")
 
@@ -441,6 +456,22 @@ class DevProducer:
                 return o.dispatch(fields, act, label, self.tid, subagent_type="dev")
         raise NotImplementedError(f"no cycle template for role {role!r}")
 
+    @staticmethod
+    def plays_step(ans: dict) -> bool:
+        """The main-agent step run_step plays: /dev Step 17."""
+        m = re.match(r"Step (\d+)", str(ans.get("step") or ""))
+        return ans.get("command") == "dev" and bool(m) and m.group(1) == "17"
+
+    def run_step(self, ans: dict, session, devs, label: str):
+        """A canonical step of the cycle's command that is the main agent's own (the reader's todo_step with
+        neither subagent call nor template), run by the asking command's main agent under the same task id:
+        /dev Step 17, which writes the completion report, as the cycle's text spells it."""
+        if not self.plays_step(ans):
+            raise NotImplementedError(f"no main-agent step {ans.get('command')} {ans.get('step')!r} in this driver")
+        with self.on(session, devs):
+            self.cyc.step17(prefix=label)
+        return None
+
 
 class DoProducer:
     """A /do task: its only producer is the main agent's /do work. close.md routes an unfinished
@@ -453,6 +484,17 @@ class DoProducer:
 
     def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None):
         raise NotImplementedError(f"/do has no dispatch template for role {role!r} ({note})")
+
+    def pending_edits(self) -> list:
+        """The /do turn's changes not yet on disk (the user abandoned the task before them): the work dev,
+        dispatched along the do-report's route, completes."""
+        turn, out = self.turn, []
+        with turn.rp.acting("driver"):
+            for rel, old, new in turn.edits:
+                with open(os.path.join(turn.o.project, rel), encoding="utf-8") as fh:
+                    if old in fh.read():
+                        out.append((rel, old, new))
+        return out
 
 
 # ---------------------------------------------------------------- the close run
@@ -629,7 +671,7 @@ class CloseRun:
         cmd, fn = call
         c = self.run_text(cmd, self.label(f"{label} Bash {fn}"), "Who owes the artifact")
         ans = last_json(c.response.get("stdout") or "") if c.ok else None
-        fact(self.rp, "owing dispatch", {"label": label, "path": path, "answer": summarize_answer(ans)})
+        fact(self.rp, "owing dispatch", {"label": label, "path": path, "answer": summarize_answer(ans, self.o.s)})
         return ans
 
     @staticmethod
@@ -679,6 +721,8 @@ class CloseRun:
         arts = agents.obligation_of(prompt)["artifacts"]
         short = self.rp.args.get("dev_stop") if not any(r["role"] == "dev" for r in self.routed) else None
         done: dict = {}
+        if edits is None and hasattr(self.producer, "pending_edits"):
+            edits = self.producer.pending_edits()
         dev_work = roles.dev(list(edits or []), baseline_fallback=True)
 
         def work(sub, brief, player):
@@ -1155,8 +1199,13 @@ def dev_cycle(rp, after: str, scenario=None, stop_before: int | None = None):
         cyc.run()
         return DevProducer(cyc), cyc.tid, cyc.o.s, cyc
     from . import dev as devdrv
-    kw = {"scenario": scenario} if scenario is not None else {}
-    cyc = devdrv.DevCycle(rp, rp.args.get("cycle_variant", "plain"), rp.args.get("tier", "STANDARD"), **kw)
+    cv = rp.args.get("cycle_variant", "plain")
+    if cv.startswith("fanout"):
+        cyc = devdrv.FanoutCycle(rp, cv, rp.args.get("tier", "STANDARD"), int(rp.args.get("lanes", "2")),
+                                 rp.args.get("lane_id", "text"))
+    else:
+        kw = {"scenario": scenario} if scenario is not None else {}
+        cyc = devdrv.DevCycle(rp, cv, rp.args.get("tier", "STANDARD"), **kw)
     if stop_before:
         to = cyc.to
 
@@ -1201,15 +1250,25 @@ def break_resolver(rp) -> None:
 # acceptance variants of P4 run on demand only (`--arg variant=...`).
 VARIANTS = ("plain", "route", "append", "auto")
 ACCEPTANCE_VARIANTS = ("auto-task", "lane-qa", "stray", "noart", "stalled")
+# P1b's acceptance 7 names of three of those cases.
+ALIASES = {"qa-never": "lane-qa", "noartifact": "noart", "unwritten": "stray"}
+
+
+def pipeline_name(after: str, rp) -> str:
+    cv = rp.args.get("cycle_variant", "plain")
+    if cv.startswith("fanout") and rp.args.get("lanes", "2") != "2":
+        cv += "-" + rp.args["lanes"]
+    return after + (f"/{cv}" if cv != "plain" else "")
 
 
 def run(rp) -> None:
     after = rp.args.get("after", "dev")
-    variant = rp.args.get("variant", "plain")
+    variant = ALIASES.get(rp.args.get("variant", "plain"), rp.args.get("variant", "plain"))
     if variant not in VARIANTS + ACCEPTANCE_VARIANTS:
         raise ValueError(f"unknown variant {variant!r}")
     session_kind = rp.args.get("session", "same" if variant == "plain" else "later")
-    rp.pipeline = f"{after}+close" + (f"/{variant}" if variant != "plain" else "") + ("/later" if session_kind == "later" else "")
+    rp.pipeline = (pipeline_name(after, rp) + "+close" + (f"/{variant}" if variant != "plain" else "")
+                   + ("/later" if session_kind == "later" else ""))
     producer, tid, s, cyc = dev_cycle(rp, after, stop_before=13 if variant == "lane-qa" else None)
     producers = {tid: producer}
     if variant == "auto" and int(rp.args.get("parents", "1")) > 1:

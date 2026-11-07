@@ -72,6 +72,14 @@ def _run_hook(tmpdir: Path, payload: dict) -> subprocess.CompletedProcess:
     )
 
 
+def _said(result: subprocess.CompletedProcess) -> str:
+    """The text the hook hands the agent: its PostToolUse JSON's additionalContext (the hooks
+    reference; a PostToolUse hook's plain stdout reaches the debug log only)."""
+    hso = json.loads(result.stdout)['hookSpecificOutput']
+    assert hso['hookEventName'] == 'PostToolUse'
+    return hso['additionalContext']
+
+
 def _exec_case(end_time_iso: str, sid: str, cycle_count: int = 0):
     tmp = tempfile.TemporaryDirectory()
     tmpdir = Path(tmp.name)
@@ -91,8 +99,8 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
         result, tmp = _exec_case(future, 'test-future-aware')
         try:
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertNotIn('OVERNIGHT SESSION COMPLETE', result.stdout)
-            self.assertIn('Starting cycle 1.', result.stdout)
+            self.assertNotIn('OVERNIGHT SESSION COMPLETE', _said(result))
+            self.assertIn('Starting cycle 1.', _said(result))
         finally:
             tmp.cleanup()
 
@@ -101,7 +109,7 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
         result, tmp = _exec_case(past, 'test-past-aware', cycle_count=2)
         try:
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertIn('OVERNIGHT SESSION COMPLETE', result.stdout)
+            self.assertIn('OVERNIGHT SESSION COMPLETE', _said(result))
         finally:
             tmp.cleanup()
 
@@ -111,7 +119,7 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
         result, tmp = _exec_case(future_z, 'test-z-suffix')
         try:
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertNotIn('OVERNIGHT SESSION COMPLETE', result.stdout)
+            self.assertNotIn('OVERNIGHT SESSION COMPLETE', _said(result))
         finally:
             tmp.cleanup()
 
@@ -134,9 +142,9 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
                             [sys.executable, str(HOOK_PATH)], input=json.dumps(_build_payload('test-naive')),
                             capture_output=True, text=True, env=env, timeout=10)
                         self.assertEqual(result.returncode, 0, msg=result.stderr)
-                        self.assertEqual('OVERNIGHT SESSION COMPLETE' in result.stdout, complete, result.stdout)
+                        self.assertEqual('OVERNIGHT SESSION COMPLETE' in _said(result), complete, result.stdout)
                         if not complete:
-                            self.assertIn('Time remaining: 0h 59m', result.stdout)
+                            self.assertIn('Time remaining: 0h 59m', _said(result))
                     finally:
                         tmp.cleanup()
 
@@ -170,8 +178,26 @@ class OvernightLoopTimezoneTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             self.assertIn('OVERNIGHT LOOP: Cycle 2 complete (PM retro filed). '
-                          'Starting cycle 3.', result.stdout)
+                          'Starting cycle 3.', _said(result))
             self.assertEqual(state_path.read_bytes(), before)
+        finally:
+            tmp.cleanup()
+
+    def test_a_replay_sees_the_continuation_and_never_plain_stdout(self) -> None:
+        """tests/replay/hookrun.context, the text a replay's driver acts on, is
+        the hook's additionalContext; the same text printed plain, as the hook
+        did before, hands the agent nothing on PostToolUse."""
+        from tests.replay import hookrun
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        result, tmp = _exec_case(future, 'test-replay-view')
+        try:
+            run = {'verdict': hookrun.interpret(result.returncode, result.stdout)[0], 'stdout': result.stdout}
+            self.assertEqual(run['verdict'], 'ok')
+            seen = hookrun.context('PostToolUse', run)
+            self.assertEqual(seen, _said(result))
+            self.assertIn('Reset your todo list', seen)
+            self.assertEqual(hookrun.context('PostToolUse', {'verdict': 'ok', 'stdout': seen + '\n'}), '')
+            self.assertEqual(hookrun.context('Stop', run), '')
         finally:
             tmp.cleanup()
 

@@ -81,6 +81,8 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
                           closes it), its first Step 7 commit is refused by a hook (the
                           Authorize question, then Steps 5-7 again); then `/commit --auto --force`
                           (the Flags question) (P4 acceptance 5's /commit cases)
+  cycle_variant=V         the /dev variant (drivers/dev.py): with variant=commit-route and a fan-out
+                          cycle (fanout), the report removed after /close is the canonical aggregate
   session=same|later      /close and /commit typed in the cycle's session or a later one
                           (default same for plain, later for every other variant)
 
@@ -306,7 +308,7 @@ class CommitRun:
         c = self.run_text(cmd, self.label(f"{label} Bash {fn}"), "Who owes the artifact")
         ans = closedrv.last_json(c.response.get("stdout") or "") if c.ok else None
         closedrv.fact(self.rp, "owing dispatch", {"label": label, "path": path, "blocked": c.blocked,
-                                                   "answer": closedrv.summarize_answer(ans)})
+                                                   "answer": closedrv.summarize_answer(ans, o.s)})
         if self.commit_qa_answer(ans, path):
             return self.rerun_commit_qa(ans, label)
         d, role = closedrv.dispatch_answer(self, ans, path, detail, label, edits=edits)
@@ -326,6 +328,10 @@ class CommitRun:
         for k in range(rounds + 1):
             c = self.run_text(block, self.label(f"Step 5 Bash plan {k}"),
                               "Step 5: late-repair state and repository plan", capture=caps)
+            closedrv.fact(self.rp, "commit Step 5", {
+                "label": f"Step 5 Bash plan {k}", "ok": c.ok,
+                "late_repair_state": o.values.get("LATE_REPAIR_STATE") if c.ok else None,
+                "late_repair_json": o.values.get("LATE_REPAIR_JSON")})
             try:
                 late = json.loads(o.values.get("LATE_REPAIR_JSON") or "{}")
                 self.plan = json.loads(o.values.get("REPOSITORY_PLAN") or "{}")
@@ -942,7 +948,7 @@ def run(rp) -> None:
         raise ValueError(f"unknown variant {variant!r}")
     # Acceptance 7 types the /close or /commit of its routing cases in a later session than the /dev.
     session_kind = rp.args.get("session", "same" if variant in ("plain", "reject") else "later")
-    rp.pipeline = (f"{after}+close+commit" + (f"/{variant}" if variant != "plain" else "")
+    rp.pipeline = (closedrv.pipeline_name(after, rp) + "+close+commit" + (f"/{variant}" if variant != "plain" else "")
                    + ("/later" if session_kind == "later" else ""))
     if variant == "laneqa":  # the /dev session interrupted before its QA (Step 13) was ever dispatched
         producer, tid, s, cyc = closedrv.dev_cycle(rp, after, stop_before=13)
@@ -964,7 +970,8 @@ def run(rp) -> None:
             return
         cr.run()
     if variant in ("commit-route", "full"):
-        # The lane dev report removed after /close landed (acceptance 7): Step 3's call names it.
+        # The lane dev report (in a fan-out cycle the canonical aggregate) removed after /close landed
+        # (acceptance 7): Step 3's call names it.
         closedrv.remove(rp, [f"docs/dev/dev-report-{tid}.json"])
     if variant == "aggregate":
         closedrv.remove(rp, [f"docs/dev/dev-report-{tid}.json"])  # the canonical aggregate

@@ -42,7 +42,8 @@ Then, in one session, the main agent:
     Step 17 iterates, see below);
   - Step 18: the permissions block; Step 19: the cycle log, the TIME CHECK, the per-cycle commit
     where the text has one (the base's; its failure logged); Step 20: PM RETRO, the retro Read;
-    Step 21: marked completed, the loop hook's reset (a fresh checklist, Step 1 done, Step 2 in
+    Step 21: marked completed, the loop hook's reset as the hook hands it to the main agent (its
+    PostToolUse additionalContext, hookrun.context; a fresh checklist, Step 1 done, Step 2 in
     progress);
 * the owner interrupts and types /stop; the main agent runs stop.md's Implementation block once
   and stops.
@@ -93,7 +94,8 @@ Driver arguments (cli.py --arg K=V):
                   the window and after it) and of dev (in the window), and a Stop after a forged
                   ESCALATION_ACK line (in the window, and after it before the summary). The checks
                   (Night.unattended_checks, out/unattended.json) raise when one fails; a compliant
-                  step a hook blocked is listed there ("false_blocks") and in blocks.json
+                  step a hook blocked is listed there ("false_blocks") and in blocks.json, and fails
+                  the variant (D20: the compliant unattended path meets no false block)
   window=N        variant=unattended only: the end time typed, in minutes from the launch (default: 10,
                   or 1.5 minutes per second the session's start took on this host when that is more)
   stop_at=N       the step after which variant=stop interrupts
@@ -584,6 +586,13 @@ def run_experiment(sub, exp: dict) -> dict:
     return {"decision": q["need"], "options": [o["label"] for o in q["options"]], "experiment": exp["run"],
             "result": f"printed {out}" if c.ok else f"failed: {out[:200]}",
             "chosen": exp["supports"].get(out, exp["otherwise"]) if c.ok else q["default"]}
+
+
+def loop_context(call) -> str:
+    """What the TodoWrite's PostToolUse hooks hand the main agent (hookrun.context: the loop's
+    additionalContext), never their raw stdout: the agent acts on that and nothing else."""
+    said = (hookrun.context("PostToolUse", h) for h in (call.post.hooks if call.post else []))
+    return "\n".join(t for t in said if t)
 
 
 def _probe_blocks(ev) -> list:
@@ -1862,7 +1871,7 @@ class Night:
         i = o.current()
         o.todos[i]["status"] = "completed"
         call = o._todo(f"{self.L}TodoWrite Step 21 done (all completed)")
-        hook = "\n".join(h["stdout"] for h in (call.post.hooks if call.post else []) if h["verdict"] == "ok")
+        hook = loop_context(call)
         if "Reset your todo list" in hook:
             # A fresh checklist (all pending, the first step in progress), then Step 1 done: the
             # working root is already established; resume from Step 2.
@@ -1974,8 +1983,9 @@ class Night:
         i = o.current()
         o.todos[i]["status"] = "completed"
         call = o._todo(f"{self.L}TodoWrite Step 21 done (session ending)")
-        hook = "\n".join(h["stdout"] for h in (call.post.hooks if call.post else []) if h["verdict"] == "ok")
+        hook = loop_context(call)
         self.ended["loop_reset_after_end"] = "Reset your todo list" in hook
+        self.ended["loop_said_complete"] = "OVERNIGHT SESSION COMPLETE" in hook
         said = self.announcement(cmdtext.block(sec, None, anchor="Overnight development session complete"))
         label = f"{self.L}Stop (session end)"
         ev = o.s.stop(said, label=label, deviation=o.devs.at(label))
@@ -2078,8 +2088,9 @@ class Night:
               [{"label": pr["label"], "blocks": [(b["hook"], b["rc"], b["text"][:160]) for b in pr["blocks"]]}
                for pr in stops])
         check("the session ends after end_time once retro and summary exist (the main agent's Stop passes), and the "
-              "loop hook resets nothing after end_time",
-              self.ended.get("stopped") and not self.ended.get("loop_reset_after_end"), self.ended)
+              "loop hook resets nothing after end_time: it hands the main agent the session-complete note",
+              self.ended.get("stopped") and not self.ended.get("loop_reset_after_end")
+              and self.ended.get("loop_said_complete"), self.ended)
         def qa_status(p):
             try:
                 return (json.loads(read(os.path.join(self.project, f"docs/dev/qa-report-{p.sfx}.json"))).get("qa")
@@ -2098,11 +2109,13 @@ class Night:
         check("no file under an escalations/, escalation-admissions/, progress/ or deferred-checks/ directory",
               not stores, sorted(set(stores))[:20])
         check("0 hook errors", not rp.hook_errors, rp.hook_errors[:5])
-        # The compliant steps a hook blocked, for the report as every variant's blocks.json is (a block is
-        # recorded, not raised): a block at one of the variant's own dispatches counts even where a base
-        # kit's deviation quotes its hook's words, since no base replay has those steps.
+        # The compliant steps a hook blocked (D20: none): a block at one of the variant's own dispatches
+        # counts even where a base kit's deviation quotes its hook's words, since no base replay has
+        # those steps.
         false = [{"hook": b["hook"], "step": b["step"], "text": b["text"][:400]} for b in rp.blocks
                  if not b["passed_by_deviation"] or re.sub(r" stop$", "", b["step"]) in self.own]
+        check("0 false blocks: no hook blocks a compliant step of the unattended path", not false,
+              [(b["hook"], b["step"]) for b in false][:10])
         with rp.acting("driver"):
             with open(os.path.join(rp.layout.out, "unattended.json"), "w") as fh:
                 json.dump({"window_min": self.window_min, "checks": res, "false_blocks": false,

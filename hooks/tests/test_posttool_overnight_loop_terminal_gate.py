@@ -68,8 +68,18 @@ def _written_logs(home):
     return sorted(p.name for p in logs.rglob("*")) if logs.is_dir() else []
 
 
+def _said(result):
+    """What the CLI hands the agent: the hooks reference's PostToolUse JSON, one object on stdout,
+    hookSpecificOutput.additionalContext (a PostToolUse hook's plain stdout reaches the debug log only)."""
+    out = json.loads(result.stdout)
+    assert out == {"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                                          "additionalContext": out["hookSpecificOutput"]["additionalContext"]}}
+    assert isinstance(out["hookSpecificOutput"]["additionalContext"], str)
+    return out["hookSpecificOutput"]["additionalContext"]
+
+
 def _continued(result):
-    return "Starting cycle" in result.stdout
+    return "Starting cycle" in _said(result)
 
 
 def _unresolved_obligation(tmp_path, project_dir):
@@ -126,7 +136,7 @@ def test_reset_continues_whatever_the_artifacts(tmp_path, cycle, mode):
 
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
-    assert "Cycle 3 complete (PM retro filed). Starting cycle 4." in result.stdout
+    assert "Cycle 3 complete (PM retro filed). Starting cycle 4." in _said(result)
     assert "BLOCKED" not in result.stdout
     assert state_path.read_bytes() == before
     assert _written_logs(home) == []
@@ -188,7 +198,56 @@ def test_closed_window_completes_the_session(tmp_path):
 
     result = _run_loop(payload, project_dir, home, mode="block")
     assert result.returncode == 0
-    assert "OVERNIGHT SESSION COMPLETE" in result.stdout
+    assert "OVERNIGHT SESSION COMPLETE" in _said(result)
     assert "BLOCKED" not in result.stdout
     assert not _continued(result)
     assert state_path.read_bytes() == before
+
+
+# --------------------------------------------------------------------------
+# The output: the hooks reference's PostToolUse JSON, never a block.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("hours", [1, -1])
+def test_the_text_reaches_the_agent_as_posttool_additional_context(tmp_path, hours):
+    """In the window (the continuation) and after end_time (the session-complete
+    note) alike: stdout is exactly one JSON object, {"hookSpecificOutput":
+    {"hookEventName": "PostToolUse", "additionalContext": <the text>}}, exit 0,
+    nothing on stderr, no decision, no continue:false."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    session_id = "overnight-sess-json"
+    state_path = _state_path(project_dir, session_id)
+    fx.write_overnight_state(state_path, session_id, cycle_count=1, end_time_minutes_from_now=60 * hours)
+    _retro_reports(project_dir, session_id, 1)
+
+    result = _run_loop(fx.all_completed_todo_payload(session_id, transcript_path=""), project_dir, home)
+
+    assert result.returncode == 0 and result.stderr == ""
+    text = _said(result)
+    lines = text.split("\n")
+    if hours > 0:
+        assert lines[0] == "OVERNIGHT LOOP: Cycle 1 complete (PM retro filed). Starting cycle 2."
+        assert "INSTRUCTIONS: Reset your todo list to all-pending and begin Step 1 again." in lines
+        assert lines[-1] == "Resume from Step 2 (exploration) -- Step 1 setup is already done."
+    else:
+        assert lines == ["OVERNIGHT SESSION COMPLETE: the time-lock window has closed. Cycles: 1, Fixed: 0",
+                         "Generate your summary and finish up."]
+
+
+def test_nothing_to_say_prints_nothing(tmp_path):
+    """Todos not all completed, or no state record of this session: empty stdout, exit 0."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    payload = fx.all_completed_todo_payload("overnight-sess-none", transcript_path="")
+    assert _run_loop(payload, project_dir, home).stdout == ""
+    session_id = "overnight-sess-open"
+    fx.write_overnight_state(_state_path(project_dir, session_id), session_id, cycle_count=1)
+    payload = fx.all_completed_todo_payload(session_id, transcript_path="")
+    payload["tool_input"]["todos"][-1]["status"] = "in_progress"
+    result = _run_loop(payload, project_dir, home)
+    assert result.returncode == 0 and result.stdout == ""

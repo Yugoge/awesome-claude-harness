@@ -340,36 +340,6 @@ def _spec_views_failure(project_dir: str, art: dict):
     return {"path": art["path"], "reason": "spec_verify_strict_failed", "errors": (failed or lines)[-10:]}
 
 
-def _producer_question(project_dir: str, ob: dict):
-    """TC-33: docs/dev/producer-question-<task_id>-<role>.json named by the
-    obligation's own task_id and role. Which producers may ask is the
-    producer-question.v1 schema's role enum (ba and dev, D23), so a question
-    from any other role is schema-invalid. Returns None when absent or not
-    fresh against the obligation's dispatched_at (a file from an earlier
-    round; None freshness counts as stale), "valid" when it stands in for the
-    declared artifacts, else a failure naming why it is invalid."""
-    rel = f"docs/dev/producer-question-{ob.get('task_id')}-{ob.get('role')}.json"
-    full = Path(project_dir) / rel
-    try:
-        mtime = full.stat().st_mtime
-    except OSError:
-        return None
-    if obligation.artifact_freshness_satisfied("json", mtime, ob.get("dispatched_at")) is not True:
-        return None
-    result = contract_runtime.validate_artifact_for_obligation(str(full), "producer-question.v1")
-    errors = list(result.get("errors", []))[:10] or [str(result.get("reason"))]
-    if result.get("status") == "pass":
-        record = _read_json(full)
-        labels = [o.get("label") for o in record.get("options", []) if isinstance(o, dict)]
-        errors = [f"{key}: obligation declares {ob.get(key)!r}, file has {record.get(key)!r}"
-                  for key in ("task_id", "role") if record.get(key) != ob.get(key)]
-        if record.get("default") not in labels:
-            errors.append(f"default {record.get('default')!r} is not one of the option labels {labels}")
-        if not errors:
-            return "valid"
-    return {"path": rel, "reason": "producer_question_invalid", "errors": errors}
-
-
 # P3 R14: an artifact stands for this stop only when written for this dispatch,
 # and a lane's report echoes its dispatch's lane and roster. These checks block
 # like the rest (they warned in the commit that introduced them).
@@ -478,7 +448,7 @@ def main() -> None:
                 )
                 failures = []
                 echo = []
-                question = _producer_question(project_dir, resolution.obligation)
+                question = contract_runtime.producer_question(project_dir, resolution.obligation)
                 if question == "valid":
                     # The question stands in for every declared artifact; nothing
                     # that reads those artifacts runs for this stop.
