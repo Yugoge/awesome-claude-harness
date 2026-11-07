@@ -416,3 +416,29 @@ def test_last_todos_is_the_last_ok_todowrite(tmp_path):
     # A PostToolUse reader names its own call: the list before it.
     assert span.last_todos(before=second) == _todos("in_progress", "pending")
     assert span.last_todos(before=first) is None
+
+
+def test_body_is_the_text_the_cli_recorded_for_the_typed_command(tmp_path):
+    """Span.body(): the isMeta record whose parentUuid is the opener's uuid
+    (the command's text as the session loaded it), not a later Skill
+    expansion's text and not the file on disk; each typed command has its
+    own; None when no record links to the opener or the opener has no uuid."""
+    tx = _Transcript()
+    tx.queue_operations()
+    tx.command("dev", "build it")
+    tx.skill("spec", "<command-name>/spec</command-name> Skill text")
+    path = tx.write(tmp_path / "first.jsonl")
+    assert command_span.active_span(path).body() == "# /dev\nCommand body for dev."
+    tx.command("close")
+    assert command_span.active_span(tx.write(tmp_path / "second.jsonl")).body() == \
+        "# /close\nCommand body for close."
+
+    bare = _Transcript()
+    bare.typed("<command-name>/dev</command-name><command-args></command-args>")
+    bare.attachment()  # the record after the opener is no isMeta text
+    assert command_span.active_span(bare.write(tmp_path / "bare.jsonl")).body() is None
+    unlinked = _Transcript()
+    unlinked.command("dev")
+    for record in unlinked.records:
+        record.pop("uuid", None)
+    assert command_span.active_span(unlinked.write(tmp_path / "unlinked.jsonl")).body() is None

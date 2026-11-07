@@ -328,6 +328,34 @@ class Span:
                 todos = call.input["todos"]
         return todos
 
+    def body(self) -> str | None:
+        """The command's text as this session loaded it: the isMeta record the
+        CLI writes when the command is typed, whose parentUuid is the opener's
+        uuid (CLI 2.1.319: commands/<command>.md minus its frontmatter, with
+        $ARGUMENTS filled in). It is written once, so a later edit of the file
+        leaves it as it was: a session that started before an update follows
+        this text, not the file on disk. None when no such record follows the
+        opener."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return None
+        opener = _decode(lines.data[lines.data.rfind(b"\n", 0, floor - 1) + 1:floor - 1])
+        ident = opener.get("uuid") if opener else None
+        if not isinstance(ident, str) or not ident:
+            return None
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            if not record or record.get("parentUuid") != ident:
+                continue
+            if record.get("type") != "user" or not record.get("isMeta"):
+                return None
+            content = record["message"].get("content") if isinstance(record.get("message"), dict) else None
+            if isinstance(content, str):
+                return content
+            return "".join(b.get("text", "") for b in _blocks(record) if b.get("type") == "text")
+        return None
+
 
 def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):
     """(begin, end, block) of each main-session tool_use block from offset
