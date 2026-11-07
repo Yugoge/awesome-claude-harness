@@ -138,9 +138,9 @@ CMDEOF
 
 It prints what the hook printed at this command's start, found through this session's bookmark (`$CLAUDE_CODE_SESSION_ID`); when the hook recorded no start of this command, it starts the cycle there exactly as the hook does, under a task id of its own. Never mint an id, pick a registry by name or age, or write a registry, requirement or flag file yourself.
 
-```bash
-REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
-```
+Its output also holds the `Spec:` line and the checklist, so it is the first Bash call of this command, before the views block above; make it after the Read of the command-development patterns document (Command Development Best Practices). While the checklist is not started, `hooks/pretool-workflow-gate.py` refuses that Read with the exact todos array: pass it to TodoWrite, then Read again. `hooks/pretool-orchestrator-gate.py` refuses a sixth Bash call in a row, and only an Agent dispatch clears the count; this order keeps the start function at five with this step's views and cp-state blocks, Step 2's hydrator and Step 4's retry-signal query, before Step 4's BA dispatch.
+
+`$REGISTRY_DIR` below is `$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID`, spelled out in the call that uses it: it is not a Bash call of its own, since a Bash call keeps no variable for the next one.
 
 Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
 
