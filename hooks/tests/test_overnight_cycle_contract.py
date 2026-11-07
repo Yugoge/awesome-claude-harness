@@ -6,6 +6,10 @@
 - The PM TRIAGE handler renders `_STEPS` labels and each compliant re-dispatch
   (BA at steps 9 and 11, dev at 13, dev and QA at 17); no entry names a schema,
   a path or max_retries; the contract validates against cycle-contract.v1.json.
+- A session on origin/master's prose (the text the CLI recorded when it was
+  typed sets no PM_MODE at Step 2) passes its Step 2 PM PLAN dispatch; one on
+  the branch's prose keeps the mode check, and so does one with no record of
+  its text.
 - A contract that holds no JSON object is Case M (exit 2) at dispatch and at
   collection, the PM TRIAGE dispatch still passes and its return replaces it;
   a contract that lists calls (an old-prose one) stays byte for byte.
@@ -78,9 +82,11 @@ def _cycle_dir(working: Path, cycle: int = 1) -> Path:
     return working / "docs" / "dev" / "overnight" / SID / f"cycle-{cycle}"
 
 
-def _checklist(working: Path, label: str, cycles: int = 1) -> Path:
+def _checklist(working: Path, label: str, cycles: int = 1, loaded: str | None = None) -> Path:
     """The transcript: /dev-overnight, then a checklist per cycle, the last with
-    ``label`` in progress and every step before it completed."""
+    ``label`` in progress and every step before it completed. With ``loaded``,
+    the command's text follows the opener as the CLI records it when the
+    command is typed (an isMeta record whose parentUuid is the opener's uuid)."""
     def todos(current, done_all=False):
         out, before = [], True
         for n in LABELS:
@@ -93,7 +99,10 @@ def _checklist(working: Path, label: str, cycles: int = 1) -> Path:
     for _ in range(cycles - 1):
         lists += [todos(LABELS[-1]), todos(None, done_all=True), todos(None)]
     lists.append(todos(label))
-    records = [{"type": "user", "message": {"role": "user", "content": "/dev-overnight 2h"}}]
+    records = [{"type": "user", "uuid": "u-open", "message": {"role": "user", "content": "/dev-overnight 2h"}}]
+    if loaded is not None:
+        records.append({"type": "user", "isMeta": True, "parentUuid": "u-open", "uuid": "u-text",
+                        "message": {"role": "user", "content": loaded}})
     for n, item in enumerate(lists):
         records.append({"type": "assistant", "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": f"tw{n}", "name": "TodoWrite", "input": {"todos": item}}]}})
@@ -117,8 +126,9 @@ def _agent(role: str, prompt: str = "x") -> dict:
     return {"tool_input": {"subagent_type": role, "prompt": prompt, "description": "x"}}
 
 
-def _enforce(working: Path, label: str, role: str, prompt: str = "x", cycles: int = 1):
-    _checklist(working, label, cycles)
+def _enforce(working: Path, label: str, role: str, prompt: str = "x", cycles: int = 1,
+             loaded: str | None = None):
+    _checklist(working, label, cycles, loaded)
     return _run("pretool-subagent-enforce.py", working, _agent(role, prompt))
 
 
@@ -270,6 +280,68 @@ def test_cycle_two_of_a_session_on_the_old_prose_has_its_contract(main_root, pro
     else:
         assert not contract.exists() and "CYCLE CONTRACT NOT WRITTEN: cycle 2" in rendered.stderr
         assert ba.returncode == 2 and "Case A" in ba.stderr
+
+
+# origin/master's /dev-overnight as far as its PM dispatch templates go: Step 2
+# sets no mode (agents/pm.md: a PM without PM_MODE runs PLAN), Step 4 and
+# Step 20 set theirs; the envelope's list of mode flags names one in passing.
+OLD_PROSE = """- Mode flags (e.g., `PM_MODE: TRIAGE`, `RETRO`, `BA-VALIDATION MODE`, `UI_MODE`)
+#### Step 2: Launch PM Subagent
+- prompt: "
+  You are the PM subagent. Follow agents/pm.md instructions precisely.
+  Output test plan to: docs/dev/overnight/<session_id>/test-plan.json
+  "
+#### Step 4: Launch PM-Triage Subagent
+- prompt: "
+  PM_MODE: TRIAGE
+  "
+### Step 20: PM Retrospective
+- prompt: "
+  PM_MODE: RETRO
+  "
+"""
+# origin/master's Step 2 dispatch as a session instantiates it: no mode keyword.
+OLD_PLAN_PROMPT = ("You are the PM subagent. Follow agents/pm.md instructions precisely.\n"
+                   f"Output test plan to: docs/dev/overnight/{SID}/test-plan.json\n")
+PLAN_OBLIGATION = '<obligation v="1">' + json.dumps({"role": "pm", "artifacts": [
+    {"kind": "json", "path": f"docs/dev/overnight/{SID}/test-plan.json", "schema": "test-plan.v1"}]}) + "</obligation>\n"
+
+
+def _branch_prose() -> str:
+    """commands/dev-overnight.md as the CLI records it when typed: no frontmatter."""
+    text = (REPO / "commands" / "dev-overnight.md").read_text(encoding="utf-8")
+    return re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.S)
+
+
+@pytest.mark.parametrize("cycles", [1, 2])
+def test_step_two_follows_the_mode_flags_of_the_text_the_session_loaded(main_root, cycles):
+    """A session that started before the pull dispatches Step 2 from origin/master's
+    template, which sets no PM_MODE: the dispatch passes (it is refused before this
+    change), while Step 2's role and Step 4's TRIAGE, which that text sets, still bind.
+    A session on the branch's prose, and one with no record of its text, keep the
+    Step 2 mode check: a dispatch without PM_MODE: PLAN is refused, with or without
+    its obligation."""
+    working = _session(main_root, main_root)
+    if cycles == 2:
+        base = working / "docs" / "dev" / "overnight" / SID
+        base.mkdir(parents=True)
+        (base / "retro-report-cycle1.json").write_text("{}")
+    old = _enforce(working, "2", "pm", OLD_PLAN_PROMPT, cycles, loaded=OLD_PROSE)
+    assert old.returncode == 0, old.stderr
+    wrong_role = _enforce(working, "2", "dev", OLD_PLAN_PROMPT, cycles, loaded=OLD_PROSE)
+    assert wrong_role.returncode == 2 and "role mismatch on step '2'" in wrong_role.stderr
+    no_triage = _enforce(working, "4", "pm", "triage the findings", cycles, loaded=OLD_PROSE)
+    assert no_triage.returncode == 2 and "mode missing on step '4'" in no_triage.stderr
+    new = _branch_prose()
+    assert "PM_MODE: PLAN" in new
+    for loaded in (new, None):
+        for prompt in (OLD_PLAN_PROMPT, PLAN_OBLIGATION + OLD_PLAN_PROMPT):
+            refused = _enforce(working, "2", "pm", prompt, cycles, loaded=loaded)
+            assert refused.returncode == 2, refused.stdout
+            assert "mode missing on step '2': contract requires mode='PLAN'" in refused.stderr
+        compliant = _enforce(working, "2", "pm", PLAN_OBLIGATION + "PM_MODE: PLAN\n" + OLD_PLAN_PROMPT,
+                             cycles, loaded=loaded)
+        assert compliant.returncode == 0, compliant.stderr
 
 
 # --------------------------------------------------------------------------
