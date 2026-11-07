@@ -296,41 +296,8 @@ def _declare_own(project: Path, home: Path, agent_id: str, agent_type: str,
 
 
 # ---------------------------------------------------------------------------
-# Flag writer: the artifact-contract flag is a first-class write-enforce-flag
+# Flag writer: an unknown flag is refused, naming the flags it writes
 # ---------------------------------------------------------------------------
-
-
-def test_flag_writer_supports_artifact_contract(tmp_path):
-    env = dict(os.environ)
-    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
-    proc = subprocess.run(
-        [
-            "bash",
-            str(FLAG_WRITER),
-            "--source-command",
-            "dev",
-            "--session-id",
-            SESSION,
-            "--flag",
-            "artifact-contract",
-        ],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=30,
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert "Artifact-contract enforcement active:" in proc.stdout
-    flag_path = (
-        tmp_path / ".claude" / "dev-registry" / SESSION
-        / "artifact-contract-enforce.json"
-    )
-    data = json.loads(flag_path.read_text(encoding="utf-8"))
-    assert data["enabled"] is True
-    # A flag names no agent types: which roles a gate covers is the gate's own
-    # decision, never a list in the flag.
-    assert "enforced_agent_types" not in data
-    assert data["source_command"] == "dev"
 
 
 def test_flag_writer_rejects_unknown_flag_naming_known_set(tmp_path):
@@ -353,7 +320,7 @@ def test_flag_writer_rejects_unknown_flag_naming_known_set(tmp_path):
         timeout=30,
     )
     assert proc.returncode == 1
-    assert "artifact-contract" in proc.stderr
+    assert "(expected: codex, e2e)" in proc.stderr
 
 
 # ---------------------------------------------------------------------------
