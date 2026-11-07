@@ -190,9 +190,9 @@ def test_derive_state_a_passing_chain_is_close_pending_with_the_chain_verbatim(t
     [("blocked", "pass"), ("completed", None), ("completed", "fail")],
     ids=["dev-blocked", "qa-missing", "qa-fail"],
 )
-def test_derive_state_an_unfinished_chain_is_the_chain_s_own_failure(tmp_path, dev_status, qa_status):
+def test_derive_state_an_unfinished_chain_is_close_pending_with_the_chain_verbatim(tmp_path, dev_status, qa_status):
     # The lifecycle derives no stage of its own: dev and QA status reach the
-    # row only as the chain's errors, used verbatim.
+    # row only as the chain's errors, used verbatim; /close completes the cycle (D7).
     project = make_project(tmp_path)
     task_id = "20260101-000003"
     _passing_singular(project, task_id)
@@ -203,7 +203,7 @@ def test_derive_state_an_unfinished_chain_is_the_chain_s_own_failure(tmp_path, d
     else:
         write_json(qa_path, qa_report(task_id, status=qa_status))
     row = dlc.derive_state(project, task_id)
-    assert (row["state"], row["next_action"], row["blocker"]) == ("blocked", "inspect", "RESOLVER_FAIL")
+    assert (row["state"], row["next_action"]) == ("close_pending", "close") and "blocker" not in row
     assert row["artifact_chain"] == _chain(project, task_id)
     assert row["artifact_chain"]["status"] == "fail"
     assert row["artifact_chain"]["errors"] != []
@@ -215,8 +215,38 @@ def test_derive_state_never_crashes_on_garbage(tmp_path):
     task_id = "20260101-000005"
     write_text(dd / f"dev-report-{task_id}.json", "{not json")
     row = dlc.derive_state(project, task_id)
-    assert row["state"] == "blocked"
-    assert row["next_action"] == "inspect"
+    # The disposition takes a malformed dev-report as a gap dev repairs: /close completes it.
+    assert (row["state"], row["next_action"]) == ("close_pending", "close")
+    assert "MALFORMED_JSON" in {error["code"] for error in row["artifact_chain"]["errors"]}
+
+
+def test_an_instrument_failure_of_the_chain_stays_blocked(tmp_path, monkeypatch):
+    # The disposition's dev-chain check raises on it (a failing aggregator): no close for it.
+    project = make_project(tmp_path)
+    task_id = "20260101-000004"
+    _passing_singular(project, task_id)
+
+    def unimportable():
+        raise ImportError("aggregator unimportable")
+
+    monkeypatch.setattr(dlc._load_resolver_module(), "_load_aggregate_module", unimportable)
+    row = dlc.derive_state(project, task_id)
+    assert (row["state"], row["next_action"]) == ("blocked", "inspect")
+    assert "AGGREGATE_IMPLEMENTATION_ERROR" in row["blocker"]
+    assert dlc.actionable_parents(dlc.scan(project), "close") == []
+
+
+@pytest.mark.parametrize(("name", "text", "blocker"), [
+    ("ba-qa-report", "{not json", "MALFORMED_BA_QA_REPORT"),
+    ("do-report", "{not json", "MALFORMED_DO_REPORT"),
+    ("do-report", '{"source": "spec"}', "MALFORMED_DO_REPORT_FIELD:source"),
+])
+def test_a_malformed_record_the_scan_reads_itself_stays_blocked(tmp_path, name, text, blocker):
+    project = make_project(tmp_path)
+    task_id = "20260101-000013"
+    write_text(dev_dir(project) / f"{name}-{task_id}.json", text)
+    row = dlc.derive_state(project, task_id)
+    assert (row["state"], row["next_action"], row["blocker"]) == ("blocked", "inspect", blocker)
 
 
 def test_derive_state_close_failed_on_no_verdict(tmp_path):
@@ -247,10 +277,8 @@ def test_derive_state_committed_end_to_end(tmp_path):
     assert row["next_action"] == "none"
 
 
-def test_scan_marks_lane_rows_non_actionable(tmp_path):
-    project = make_project(tmp_path)
+def _fanout(project, parent):
     dd = dev_dir(project)
-    parent = "20260101-000008"
     write_text(dd / f"ticket-{parent}.md", f"Task-id: {parent}\n")
     write_json(dd / f"dev-report-{parent}.json",
                dev_report(parent, parallel_workers=["a", "b"]))
@@ -260,10 +288,15 @@ def test_scan_marks_lane_rows_non_actionable(tmp_path):
         write_json(dd / f"dev-report-{lane_id}.json", dev_report(lane_id))
         write_json(dd / f"qa-report-{lane_id}.json", qa_report(lane_id))
 
+
+def test_scan_marks_lane_rows_non_actionable(tmp_path):
+    project = make_project(tmp_path)
+    parent = "20260101-000008"
+    _fanout(project, parent)
     rows = dlc.scan(project)
     by_id = {r["task_id"]: r for r in rows}
     parent_row = by_id[parent]
-    # The lanes are the ones the parent's chain lists; its state is the chain's.
+    # The lanes are the ones the parent's chain lists.
     assert parent_row["artifact_chain"] == _chain(project, parent)
     assert parent_row["artifact_chain"]["mode"] == "fanout"
     assert [lane["task_id"] for lane in parent_row["lanes"]] == [f"{parent}-a", f"{parent}-b"]
@@ -272,6 +305,20 @@ def test_scan_marks_lane_rows_non_actionable(tmp_path):
         assert lane_row["kind"] == "lane"
         assert lane_row["next_action"] == "none"
         assert lane_row["parent_task_id"] == parent
+
+
+def test_a_fanout_whose_lane_qa_never_ran_is_close_actionable(tmp_path):
+    # D7: /close completes the cycle, its disposition naming the lane's qa-report as a gap, so the
+    # --auto discovery offers the parent (never its lanes), as /close <task> completes it.
+    project = make_project(tmp_path)
+    parent = "20260101-000009"
+    _fanout(project, parent)
+    (dev_dir(project) / f"qa-report-{parent}-b.json").unlink()
+    row = {r["task_id"]: r for r in dlc.scan(project)}[parent]
+    assert (row["state"], row["next_action"]) == ("close_pending", "close")
+    assert ("MISSING_ARTIFACT", f"docs/dev/qa-report-{parent}-b.json") in {
+        (error["code"], error["path"]) for error in row["artifact_chain"]["errors"]}
+    assert [line.split(" ", 1)[0] for line in _list_actionable(project, "close")] == [parent]
 
 
 def test_actionable_parents_excludes_lanes_and_specs():
@@ -317,6 +364,21 @@ def test_list_actionable_close_hands_each_dev_parent_its_chain_result(tmp_path):
     assert chain == resolver_cli.stdout.strip()
     assert json.loads(chain)["status"] == "pass"
     assert lines[1] == "20260101-000012"  # a /do parent: no chain
+
+
+@pytest.mark.parametrize("with_dev", [False, True], ids=["no-dev-report", "dev-report"])
+def test_a_blocked_do_task_is_close_actionable_with_or_without_dev_s_report(tmp_path, with_dev):
+    # Q7: /close routes the do-report to dev, whose report concludes the task (the disposition's /do
+    # branch); neither row is blocked, nor run through the /dev chain, so /close --auto offers it.
+    project = make_project(tmp_path)
+    task_id = "20260101-000014"
+    write_json(dev_dir(project) / f"do-report-{task_id}.json", do_report(task_id, status="blocked"))
+    if with_dev:
+        write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id))
+    row = dlc.derive_state(project, task_id)
+    assert (row["state"], row["next_action"], row["invoke_resolver"]) == ("close_pending", "close", False)
+    assert "blocker" not in row and "artifact_chain" not in row
+    assert _list_actionable(project, "close") == [task_id]
 
 
 def test_list_actionable_commit_selects_without_the_chain(tmp_path):
@@ -415,8 +477,8 @@ def test_scan_and_list_actionable_load_legacy_blocked_and_needs_review_records(t
         assert "Traceback" not in done.stderr
 
     rows = {row["task_id"]: row for row in dlc.scan(project)}
-    for task_id in (fanout, singular):
+    for task_id in (fanout, singular):  # unfinished cycles /close completes (D7)
         row = rows[task_id]
-        assert (row["state"], row["next_action"], row["blocker"]) == ("blocked", "inspect", "RESOLVER_FAIL")
+        assert (row["state"], row["next_action"]) == ("close_pending", "close") and "blocker" not in row
         assert row["artifact_chain"]["status"] == "fail"
-    assert [line.split(" ", 1)[0] for line in _list_actionable(project, "close")] == [passing]
+    assert [line.split(" ", 1)[0] for line in _list_actionable(project, "close")] == [fanout, singular, passing]

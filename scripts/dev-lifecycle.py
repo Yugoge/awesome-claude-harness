@@ -9,8 +9,9 @@ Derives, per on-disk task-id, a state (docs/dev/ticket-20260808-035658-lanel.md)
                (hooks/lib/obligation.terminal_status)
   dev chain -- a dev-report and no close-report: ONE call of the chain function
                (resolve-dev-artifact-chain.py resolve_chain), its result used
-               verbatim; the --auto close discovery hands that same result to
-               the walked task's own step, so the task's chain is called once
+               verbatim: close_pending whether it passes or not, as the
+               disposition takes an incomplete chain (D7); its instrument
+               failure, which the disposition's dev-chain check raises, blocked
   close     -- a close-report exists: the one classifier's class of its last
                line (hooks/lib/close-verdict.py), then commit detection; the
                chain is not called
@@ -36,6 +37,7 @@ from types import ModuleType
 from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from hooks.lib import obligation  # noqa: E402
 from hooks.lib.obligation import terminal_status  # noqa: E402  (the one terminal decision)
 
 # A docs/dev/ file names a task only when its id part passes the one task-id
@@ -163,12 +165,14 @@ def do_report_lite_preflight(doc: dict) -> Optional[str]:
 
 
 def chain_state(task_id: str, result: dict) -> dict:
-    """The row a dev-chain task takes from its one chain call.
-
-    The chain's own verdict decides (its `exit_status`); its result is carried
-    whole (`artifact_chain`), and a fan-out's lanes are the ones it lists.
+    """The row a dev-chain task takes from its one chain call: close_pending
+    whether the chain passes or not, as the disposition takes an incomplete
+    chain (/close completes the cycle, D7); its result is carried whole
+    (`artifact_chain`), and a fan-out's lanes are the ones it lists.
     """
     row: dict[str, Any] = {
+        "state": "close_pending",
+        "next_action": "close",
         "invoke_resolver": True,
         "artifact_chain": result,
         "lanes": [
@@ -176,10 +180,6 @@ def chain_state(task_id: str, result: dict) -> dict:
             for lane in result["lanes"]
         ],
     }
-    if _load_resolver_module().exit_status(result) == 0:
-        row.update(state="close_pending", next_action="close")
-    else:
-        row.update(state="blocked", next_action="inspect", blocker="RESOLVER_FAIL")
     return row
 
 
@@ -307,20 +307,10 @@ def close_and_commit(
 
 
 def derive_state(project_root: Path, task_id: str) -> dict:
-    """Derive one task-id's lifecycle row.
-
-    Precedence resolution (dev implementation decision, documented in the dev
-    report): the ba-qa-report check and the do-report branch are both
-    reached only when no canonical dev-report exists; between them, a
-    ba-qa-report's PRESENCE takes precedence over a do-report's presence,
-    because a ba-qa-report is direct evidence of an in-progress /dev-track
-    attempt for this id. A do-report is a deliberate /do-track substitute for
-    the ENTIRE dev-chain (BA-QA included by design -- the disposition checks a
-    /do task's do-report alone, no ticket/context/QA), so it is
-    consulted only when no ba-qa-report exists either. This keeps AC-L1/L2/L3
-    (ba-qa-report-driven) and AC-L9/L10 (do-report-driven, real corpus has no
-    ba-qa-report for that id) both satisfied without contradiction.
-    """
+    """Derive one task-id's lifecycle row, by precedence: a dev-report (its close-report's verdict, else
+    the /dev chain's, unless it is dev's report concluding a /do task whose do-report is not completed:
+    Q7); else a ba-qa-report, direct evidence of a /dev-track attempt; else a do-report, the /do track's
+    substitute for the whole chain, BA-QA included (AC-L1-L3 and AC-L9/L10 hold together)."""
     project_root = Path(project_root)
     dev_dir = project_root / "docs" / "dev"
     row: dict[str, Any] = {
@@ -346,7 +336,14 @@ def derive_state(project_root: Path, task_id: str) -> dict:
                     _load_close_verdict_module(), _load_commit_repos_module(),
                 ))
                 return row
-            row.update(chain_state(task_id, _load_resolver_module().resolve_chain(project_root, task_id)))
+            if do_report_lite_preflight(_read_json(do_report_path) or {}) == "do.status":
+                row.update(state="close_pending", next_action="close", invoke_resolver=False, chain_origin="do_report")
+                return row
+            resolver = _load_resolver_module()
+            result = resolver.resolve_chain(project_root, task_id)
+            if resolver.exit_status(result):  # incomplete: its instrument failure raises, a blocked row (below)
+                resolver._check_dev_chain(resolver.ChainValidator(project_root, task_id), task_id, obligation)
+            row.update(chain_state(task_id, result))
             return row
 
         if ba_qa_path.is_file():
@@ -369,7 +366,7 @@ def derive_state(project_root: Path, task_id: str) -> dict:
                 row.update(state="blocked", next_action="inspect", invoke_resolver=False, blocker="MALFORMED_DO_REPORT")
                 return row
             malformed_field = do_report_lite_preflight(do_doc)
-            if malformed_field is not None:
+            if malformed_field not in (None, "do.status"):  # not completed: /close routes it to dev (Q7)
                 row.update(
                     state="blocked", next_action="inspect", invoke_resolver=False,
                     blocker=f"MALFORMED_DO_REPORT_FIELD:{malformed_field}",

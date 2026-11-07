@@ -2,19 +2,19 @@
 """SubagentStop Hook: Block QA subagents that did not perform E2E verification.
 
 What a QA owes is in its own dispatch obligation (P1b E7): the qa-report.v2
-artifact it declares, read from a resolved obligation or, when the block
-fails the grammar (an earlier template's), as declared. That report alone is
-judged, at exactly the declared path, never another report of the session or
-the task. Activation:
+artifact it declares, as the one reader G2 and the codex gate take resolves it
+(obligation.resolve_own_obligation). That report alone is judged, at exactly
+the declared path, never another report of the session or the task; a block
+the grammar refuses resolves to nothing here (G1's to decide). Activation:
   1. Read agent_id from stdin. If absent, exit 0 (non-subagent stop).
   2. A registered agent (resolve_dev_registry_entry) is judged only while its
      session's .claude/dev-registry/<dev_session_id>/e2e-enforce.json is
      enabled; one with no dev_session_id (legacy flat entry) is not judged.
      An agent the registry does not resolve (a skipped FIRST ACTION read) is
      judged on its obligation alone.
-  3. Both: an obligation whose role is "qa" and that declares a qa-report.v2
-     is enforced (_enforce_e2e_via_obligation); every other dispatch (none
-     declared, BA validation, close QA, another role) exits 0.
+  3. Both: a resolved obligation whose role is "qa" and that declares a
+     qa-report.v2 is enforced (_enforce_e2e_via_obligation); every other
+     dispatch (none resolved, BA validation, close QA, another role) exits 0.
   4. The declared report missing: exit 2. Its e2e_enforcement.status (under
      qa.* or top level) passes when the schema's vocabulary lists it and it is
      not "skipped_without_justification"; that value, another or none exits 2
@@ -113,10 +113,9 @@ def _enforce_e2e_status(qa_report_path: Path, agent_id: str, task_id) -> None:
     sys.exit(2)
 
 
-def _own_obligation(data: dict, agent_id: str, project_dir: str) -> dict:
-    """This QA's own dispatch obligation as declared, read also when the block
-    fails the grammar (a pre-P1 template); {} when there is none or it cannot
-    be read."""
+def _enforce_e2e_via_obligation(data: dict, agent_id: str, project_dir: str) -> None:
+    """Steps 3 and 4 above, on the resolver's verdict alone (as G2's obligation branch takes it):
+    only a Resolved qa obligation declares a report to judge; a resolver bug judges nothing."""
     try:
         resolution = obligation.resolve_own_obligation(
             session_id=data.get("session_id") or data.get("sessionId"),
@@ -126,37 +125,12 @@ def _own_obligation(data: dict, agent_id: str, project_dir: str) -> dict:
             expected_role=ENFORCED_AGENT_TYPE,
         )
     except Exception:
-        # A resolver bug judges nothing: never a block on an internal error.
-        return {}
-    if isinstance(resolution, obligation.Resolved):
-        return dict(resolution.obligation)
-    block = obligation.extract_obligation_block(getattr(resolution, "prompt", "") or "")
-    if not isinstance(block, obligation.ExtractedBlock):
-        return {}
-    try:
-        doc = json.loads(block.body)
-    except ValueError:
-        return {}
-    return doc if isinstance(doc, dict) else {}
-
-
-def _enforce_e2e_via_obligation(data: dict, agent_id: str, project_dir: str) -> None:
-    """Steps 3 and 4 above, on exactly the qa-report.v2 this QA's own obligation declares, at its
-    declared path (P1b row 3). A declared path the grammar's path rule refuses (only a block that
-    fails the grammar carries one) is the dispatch's defect, G1's to decide, and is never read."""
-    declared = _own_obligation(data, agent_id, project_dir)
-    if declared.get("role") != ENFORCED_AGENT_TYPE:
         return
-    qa_artifact = next(
-        (
-            a
-            for a in declared.get("artifacts") or []
-            if isinstance(a, dict) and a.get("kind") == "json"
-            and a.get("schema") == "qa-report.v2"
-            and obligation._legal_repo_relative_path(a.get("path"))
-        ),
-        None,
-    )
+    if not isinstance(resolution, obligation.Resolved):
+        return
+    declared = resolution.obligation
+    qa_artifact = next((a for a in declared.get("artifacts") or []
+                        if a.get("kind") == "json" and a.get("schema") == "qa-report.v2"), None)
     if qa_artifact is None:
         return
 

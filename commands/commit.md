@@ -109,9 +109,10 @@ session is found. Act on its JSON answer:
   step is the main agent's own (as `/dev` Step 11): run it yourself under the same task id.
 - A `/do` task's do-report, and a file the answer names no owner for (`null`) in a `/do`
   task (its main agent wrote it): dispatch dev under the same task id with the obligation
-  `<obligation v="1">{"task_id": "<TASK_ID>", "role": "dev", "pipeline": "do", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call>", "artifacts": [{"kind": "json", "path": "docs/dev/do-report-<TASK_ID>.json", "schema": "do-report.v1", "identity": {"task_id": "<TASK_ID>"}}]}</obligation>`
-  to complete the `/do` work, never `/do`'s own steps; the `/commit` orchestrator writes
-  no report.
+  `<obligation v="1">{"task_id": "<TASK_ID>", "role": "dev", "pipeline": "do", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call>", "artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<TASK_ID>.json", "schema": "dev-report.v2", "identity": {"task_id": "<TASK_ID>"}}]}</obligation>`
+  to complete the `/do` work, never `/do`'s own steps; its dev-report, which G2 verifies at
+  dev's stop, concludes a `/do` task whose do-report is not `completed` (Step 3's call takes
+  it), and the `/commit` orchestrator writes no report.
 - `null` in a commit-QA round, and a commit-QA finding that cites no artifact: the path
   becomes that round's own report, `docs/dev/commit-qa-report-<TASK_ID>.md`, whose QA
   dispatch runs again (Step 6) and names a path, routed as above.
