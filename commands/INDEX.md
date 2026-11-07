@@ -22,7 +22,7 @@ commands/
 ├── `paseo-daemon.md` - paseo multi-session monitoring and three-account dynamic scheduling control plane — bootstrap of a persistent disk-backed state machine (blueprint F1–F15, amended 22-entry runtime baseline). Human-only.
 ├── `pull.md` - Pull Command
 ├── `push.md` - Push Command
-├── `redev.md` - dev workflow harness re-attach — for conversations where the /dev workflow context has already appeared; may be invoked with no new requirement text to purely re-attach the harness (canonical TodoList, gates, dev-registry, artifact conventions) to that context. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
+├── `redev.md` - /redev is /dev when saving context — the /dev workflow (same arguments, steps, gates and artifacts) without re-emitting its text, under a fresh task id on every invocation. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
 ├── `restart.md` - Resume every quota-interrupted subagent in the current Claude Code parent session from its original transcript and agent ID; when none is recoverable, continue the invoking session's own main agent.
 ├── `spec-update.md` - Update an existing spec, continue unfinished development, or write a temp session note.
 ├── `spec.md` - Create spec files for any dev workflow (/dev, /dev-overnight, or standalone reference). Pass --codex to enable adversarial codex consultation on each spec-subagent / QA dispatch; default is self-review only.
