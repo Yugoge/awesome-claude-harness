@@ -38,11 +38,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
 from harness_state_dir import harness_state_dir  # noqa: E402
+from git_command_classifier import RESIDUAL_KINDS as VALID_KINDS  # noqa: E402
 
 DEFAULT_DIR = os.path.join(harness_state_dir(), "claude-git-residual-override")
 DEFAULT_TTL_MINUTES = 15
 MAX_TTL_MINUTES = 60
-VALID_KINDS = {"obfuscated_git_token", "dynamic_git_token", "substituted_git_token"}
 AGENT_ENV_VARS = ("CLAUDE_AGENT_ID", "CLAUDE_SUBAGENT_ID")
 
 
