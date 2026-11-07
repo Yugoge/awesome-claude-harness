@@ -63,7 +63,14 @@ def mount_class(path: Path) -> dict:
 
 def default_dest() -> Path:
     env = os.environ.get("ATTRIBUTION_SEAL_DEST")
-    return Path(env) if env else aj.state_dir().parent / "attribution-seals"
+    if env:
+        return Path(env)
+    # A config dir apart from the harness tree keeps the seals off a volatile checkout (a tree on
+    # tmpfs); else beside the journal's state, which the harness .gitignore ignores.
+    config = os.environ.get("CLAUDE_CONFIG_DIR")
+    if config and not Path(config).resolve().is_relative_to(aj.harness_root().resolve()):
+        return Path(config) / "attribution-seals"
+    return aj.state_dir().parent / "attribution-seals"
 
 
 def _git(gd, *args, inp=None):

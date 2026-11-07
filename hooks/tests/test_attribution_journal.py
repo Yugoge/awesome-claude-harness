@@ -482,12 +482,17 @@ def test_autoseal_disabled_by_default_is_a_true_noop(tmp_path, monkeypatch):
 
 
 def test_default_seal_store_is_beside_the_journal_state_dir_in_ignored_state(tmp_path, monkeypatch):
-    """No override: <harness>/state/attribution-seals, whatever CLAUDE_CONFIG_DIR says, and the
-    harness's .gitignore ignores it (the old default was an unignored store at the home's root)."""
+    """No override: <harness>/state/attribution-seals when CLAUDE_CONFIG_DIR is unset or inside the
+    harness tree, and the harness's .gitignore ignores it (the old default was an unignored store at
+    the home's root); a config dir apart from the tree keeps the seals there (a tmpfs checkout)."""
     for name in ("ATTRIBUTION_SEAL_DEST", "ATTRIBUTION_STATE_DIR", "ATTRIBUTION_HARNESS_ROOT"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
+    assert seal.default_dest() == tmp_path / "config" / "attribution-seals"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ROOT))
     assert seal.default_dest() == aj.state_dir().parent / "attribution-seals" == ROOT / "state" / "attribution-seals"
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    assert seal.default_dest() == ROOT / "state" / "attribution-seals"
     repo = tmp_path / "home"
     repo.mkdir()
     (repo / ".gitignore").write_bytes((ROOT / ".gitignore").read_bytes())
