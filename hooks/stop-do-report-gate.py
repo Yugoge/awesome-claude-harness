@@ -14,8 +14,8 @@ ADVISORY-FIRST shipped the gate deliberately conservatively — a buggy blocking
 Stop hook on the MAIN session traps every session exit, worse blast radius
 than the SubagentStop analogue that taught this lesson
 (subagentstop-cp-enforce.py). The advisory period has since shown low false
-positives, so spec-20260930-092323 L5 flips the default to "block"; the
-MAX_BLOCKS deadlock guard below still prevents a true deadlock.
+positives, so spec-20260930-092323 L5 flips the default to "block". No count of
+refused stops releases it (D23, D25): the Write its message names always clears it.
 
 Compliance (all required to allow stop in block mode):
   1. docs/dev/do-report-<task_id>.json exists and parses as a JSON object.
@@ -32,11 +32,6 @@ The gate checks SHAPE only. It never derives or verifies files_modified against
 git diff (forbidden by commands/do.md — git is session-unaware), and it never
 writes the report.
 
-DEADLOCK GUARD (block mode): per-session attempt counter
-<state dir>/claude-do-report-gate-<sid>.json; after MAX_BLOCKS blocks for the same
-task_id the gate force-allows with a loud stderr warning (an unwritable
-docs/dev or a confused agent must not trap the session forever).
-
 FAIL-SAFE: any unexpected error -> exit 0 (allow). No network, no subprocess.
 
 Exit codes: 0 = allow stop; 2 = block stop (block mode only, stderr tells the
@@ -52,8 +47,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
-
-MAX_BLOCKS = 2
 
 # Identifier-safety pattern reused from subagentstop-e2e-enforce.py: an unsafe/
 # path-shaped sidecar task_id degrades silently to "no enforcement" rather than
@@ -107,28 +100,6 @@ def _compliance_problems(report_path: Path, task_id: str) -> list[str]:
     return problems
 
 
-def _counter_path(sid: str) -> Path:
-    return Path(f"{harness_state_dir()}/claude-do-report-gate-{sid}.json")
-
-
-def _read_blocks(sid: str, task_id: str) -> int:
-    try:
-        data = json.loads(_counter_path(sid).read_text(encoding="utf-8"))
-        if data.get("task_id") == task_id:
-            return int(data.get("blocks", 0))
-    except Exception:
-        pass
-    return 0
-
-
-def _write_blocks(sid: str, task_id: str, blocks: int) -> None:
-    try:
-        _counter_path(sid).write_text(
-            json.dumps({"task_id": task_id, "blocks": blocks}), encoding="utf-8")
-    except Exception:
-        pass
-
-
 def main() -> int:
     mode = (os.environ.get("DO_REPORT_GATE_MODE", "block") or "block").strip().lower()
     if mode == "off":
@@ -163,25 +134,9 @@ def main() -> int:
     report_path = project_dir / "docs" / "dev" / f"do-report-{task_id}.json"
 
     problems = _compliance_problems(report_path, task_id)
-    if not problems:
-        try:
-            _counter_path(sid).unlink()
-        except OSError:
-            pass
+    if not problems or mode != "block":
         return 0
 
-    if mode != "block":
-        return 0
-
-    blocks = _read_blocks(sid, task_id)
-    if blocks >= MAX_BLOCKS:
-        sys.stderr.write(
-            f"[do-report-gate] FORCED ALLOW after {blocks} blocks — do-report for task "
-            f"{task_id} is STILL non-compliant ({'; '.join(problems)})."
-            " /close will reject this task until the report is completed.\n")
-        return 0
-
-    _write_blocks(sid, task_id, blocks + 1)
     sys.stderr.write(
         "DO_REPORT_GATE_BLOCKED — the /do contract (commands/do.md) requires a completed "
         f"do-report before this session may stop.\n"

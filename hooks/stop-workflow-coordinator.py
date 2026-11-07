@@ -246,13 +246,6 @@ def run_coordinator(
             "phases": [],
             "finalizer_called": False,
         }, 2
-    if tuple(phase.name for phase in selected) != PHASE_ORDER:
-        return {
-            "status": "blocked",
-            "reason": "invalid_phase_order",
-            "phases": [],
-            "finalizer_called": False,
-        }, 2
     resource_broker_configured = bool(trust_environment.get(session_resources.TRUST_KEY_ENV)) and bool(
         trust_environment.get(session_resources.TRUST_ROOT_ENV)
     )

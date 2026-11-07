@@ -24,9 +24,12 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from typing import Dict, Mapping, Optional
 
 SESSION_ENV_KEYS = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID")
+WAIT_S = 5  # the sync's wait-line interval while the shared index.lock is held
+_PROC = "/proc"
 INDEX_DIR_NAME = "session-indexes"
 _KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -57,8 +60,9 @@ def _private_env(index: str) -> Dict[str, str]:
 
 
 def _shared_env() -> Dict[str, str]:
-    # Strip any inherited GIT_INDEX_FILE so the call really addresses the shared index.
-    env = dict(os.environ)
+    # Strip any inherited GIT_INDEX_FILE so the call really addresses the shared index (LC_ALL=C: the
+    # lock refusal in the words _update_shared reads).
+    env = dict(os.environ, LC_ALL="C")
     env.pop("GIT_INDEX_FILE", None)
     return env
 
@@ -208,6 +212,59 @@ def _empty_tree(git_root: str) -> str:
     return proc.stdout.decode("utf-8", "replace").strip()
 
 
+def _same(path: str, st) -> bool:
+    try:
+        return os.path.samestat(os.stat(path), st)
+    except OSError:
+        return False
+
+
+def _holders(lock: str, top: str):
+    """[(pid, command)] of each process holding `lock`, read from /proc: an open descriptor on it, or
+    git working in `top` (`git commit` in its editor holds its lock with the descriptor closed).
+    None without /proc: then nobody is ruled out."""
+    if not os.path.isdir(os.path.join(_PROC, "self", "fd")):
+        return None
+    lk, tp, found = os.stat(lock), os.stat(top), []
+    for pid in (p for p in os.listdir(_PROC) if p.isdigit() and int(p) != os.getpid()):
+        base = os.path.join(_PROC, pid)
+        try:
+            with open(base + "/cmdline", "rb") as fh:
+                argv = fh.read().split(b"\0")
+            held = any(_same("%s/fd/%s" % (base, fd), lk) for fd in os.listdir(base + "/fd"))
+            if not held and re.match(rb"git(-|$)", os.path.basename(argv[0])):
+                held = any(_same(base + "/cwd" + "/.." * k, tp)
+                           for k in range(os.readlink(base + "/cwd").count("/") + 1))
+        except OSError:
+            continue
+        if held:
+            found.append((pid, " ".join(b" ".join(argv).decode("utf-8", "replace").split())))
+    return found
+
+
+def _update_shared(git_root: str, args: list, start: float):
+    """`git update-index <args>` on the shared index, waiting while index.lock is held (its holders
+    printed every WAIT_S s). A lock no process holds that predates the sync's `start` is removed with
+    one unlink, said on stdout; without /proc no holder is ruled out, so it only waits."""
+    lock = os.path.join(_absolute_git_dir(git_root), "index.lock")
+    while True:
+        proc = _run(["update-index"] + args, git_root, env=_shared_env())
+        if proc.returncode == 0 or b"index.lock': File exists" not in proc.stderr:
+            return proc
+        try:
+            holders = _holders(lock, git_root)
+            if holders == [] and os.stat(lock).st_mtime < start:
+                os.unlink(lock)
+                print("SESSION-INDEX: removed %s: no process holds it, older than this sync" % lock)
+                continue
+        except FileNotFoundError:
+            continue  # released since the refusal
+        print("SESSION-INDEX WAIT: %s is held (%s); retrying every %d s" % (lock, "; ".join(
+            "pid %s: %s" % h for h in holders) if holders else "holder unknown: no /proc"
+            if holders is None else "no holder, newer than this sync", WAIT_S), flush=True)
+        time.sleep(WAIT_S)
+
+
 def sync_shared_after_commit(git_root: str, key: Optional[str] = None) -> Dict[str, list]:
     """Bring the shared index's entries for committed paths up to the new HEAD.
 
@@ -216,8 +273,10 @@ def sync_shared_after_commit(git_root: str, key: Optional[str] = None) -> Dict[s
     the commit as reverted (and a plain `git commit` would revert it). For each path
     the commit touched, the shared entry is moved to the committed blob only when it
     still equals the pre-commit entry. A path that a peer has staged in the shared
-    index is left alone and reported, never overwritten.
+    index is left alone and reported, never overwritten. A path is reported synced only
+    once update-index wrote it; a held index.lock is waited for (_update_shared).
     """
+    start = time.time()
     index = index_path(git_root, key)
     base = _read_base(index)
     new = head_sha(git_root)
@@ -245,14 +304,10 @@ def sync_shared_after_commit(git_root: str, key: Optional[str] = None) -> Dict[s
         if current != before:
             report["left_foreign"].append(path)
             continue
-        if after is None:
-            _run(["update-index", "--force-remove", "--", path], git_root, env=_shared_env())
-        else:
-            mode, sha = after
-            proc = _run(["update-index", "--add", "--cacheinfo",
-                         "%s,%s,%s" % (mode, sha, path)], git_root, env=_shared_env())
-            if proc.returncode != 0:
-                raise SessionIndexError(
-                    "sync_failed", proc.stderr.decode("utf-8", "replace").strip())
+        args = ["--force-remove", "--", path] if after is None else \
+            ["--add", "--cacheinfo", "%s,%s,%s" % (after[0], after[1], path)]
+        proc = _update_shared(git_root, args, start)
+        if proc.returncode != 0:
+            raise SessionIndexError("sync_failed", proc.stderr.decode("utf-8", "replace").strip())
         report["synced"].append(path)
     return report

@@ -58,7 +58,8 @@ def _print_loop_instructions(state: dict, end_time: datetime, state_path: Path) 
     print(f'State file: {state_path} (read it for current state)')
     print(f'Worktree: {wt} (already exists, DO NOT create another)')
     print()
-    print('Resume from Step 2 (exploration) -- Step 1 setup is already done.')
+    print('Resume from Step 2 (exploration) -- Step 1 setup is already done, and the wake Step 0'
+          ' scheduled still runs (no second CronCreate).')
 
 
 def main() -> None:

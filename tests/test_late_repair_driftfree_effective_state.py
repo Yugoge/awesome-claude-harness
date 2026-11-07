@@ -314,7 +314,9 @@ def test_not_yet_finalized_run_is_state_invalid(tmp_path: Path) -> None:
     between its last record-stage call and finalize: outcome still the null
     cmd_init wrote, effective_report still that same null.  No drift
     comparison has been performed at all, so there is no basis whatsoever
-    for telling a caller the canonical dev-report is current.
+    for telling a caller the canonical dev-report is current.  The path is
+    the effective report finalize writes, so the finding routes to finalize
+    (the run record has no owner a routing loop could dispatch).
     """
     root = tmp_path
     paths = _build_beyond_qa_chain_with_one_current_file(root, TASK_ID)
@@ -331,7 +333,7 @@ def test_not_yet_finalized_run_is_state_invalid(tmp_path: Path) -> None:
         "a repair run that had not yet run drift detection was reported as having "
         "found nothing to reconcile"
     )
-    assert path == _record_path(root)
+    assert path == root / "docs" / "dev" / f"dev-report-{TASK_ID}.effective.json"
 
 
 def test_fail_closed_run_is_state_invalid(tmp_path: Path) -> None:

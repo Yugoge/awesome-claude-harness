@@ -70,6 +70,11 @@ done < <(git worktree list --porcelain 2>/dev/null | awk '
 echo "$STALE_COUNT" > "$CACHE_FILE"
 
 if [ "$STALE_COUNT" -gt 0 ]; then
+  # The remedy named below stays callable: refusing it too would leave no call that clears the alert.
+  INPUT=$(cat)
+  if grep -qE '"command"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?worktree[[:space:]]+(remove|prune)\b' <<<"$INPUT"; then
+    exit 0
+  fi
   echo "⚠️ STALE WORKTREE ALERT: ${STALE_COUNT} agent worktree(s) behind ${MAIN_BRANCH}:${WARNINGS}" >&2
   echo "" >&2
   echo "Action required: Remove stale worktrees before they cause merge conflicts:" >&2

@@ -169,7 +169,7 @@ scripts/
 ├── `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
 ├── `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 ├── `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
-├── `write-e2e-enforce.sh` - Writes e2e-enforce.json into the dev-registry for the given session.
+├── `write-e2e-enforce.sh` - STUB: the E2E gate (hooks/subagentstop-e2e-enforce.py) has no flag; it judges
 ├── `write-enforce-flag.sh` - Write one or more enforcement-flag sentinels into a dev-registry session dir.
 ├── `write-git-residual-override.py` - Answers the "could not be statically classified" refusal emitted by
 ├── `write-push-gate-token.py` - Run after its own commit by both of the token's callers: changelog-analyst under

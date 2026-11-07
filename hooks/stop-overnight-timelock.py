@@ -7,7 +7,10 @@ Logic:
   2. Load only the session's own record (lib.overnight.session_state)
   3. If no state file: exit 0 (allow stop)
   4. If the record's window is live (lib.overnight.state_verdicts): exit 2
-  5. Otherwise: exit 0 (allow stop)
+  5. After end_time (the owner's /stop backdates it): exit 2 until Step 21's
+     summary is written, then until the session's wake (a CronCreate of
+     lib.overnight.WAKE_PROMPT in its transcript) has a later CronDelete
+  6. Otherwise: exit 0 (allow stop)
 
 Exit codes:
   0: Allow stop
@@ -58,35 +61,28 @@ def is_session_mismatch(current_id: str, state: dict) -> bool:
     return current_id != state_id
 
 
-def _path_exists(value: object) -> bool:
-    if not isinstance(value, str) or not value:
-        return False
-    return Path(value).expanduser().exists()
-
-
-def _closeout_artifact_blockers(state: dict) -> list[str]:
-    blockers: list[str] = []
-    if state.get('unresolved_issues') or state.get('current_issues'):
-        blockers.append('unresolved_backlog')
-    if not _path_exists(state.get('final_summary_path') or state.get('summary_path')):
-        blockers.append('final_summary')
-    retro = state.get('pm_retro_reports')
-    if not isinstance(retro, list) or not retro:
-        blockers.append('retro_status')
-    checkpoint_status = state.get('artifact_checkpoint_status') or state.get('checkpoint_status')
-    if checkpoint_status not in {'checkpointed', 'intentionally_uncommitted'}:
-        blockers.append('artifact_checkpoint_status')
-    return blockers
-
-
 def _block_closeout_artifacts(session_id: str, cycle_id_str: str, blockers: list[str]) -> None:
     sys.stderr.write(
         "\n CLOSEOUT GATE: final overnight artifacts are incomplete.\n"
         f" session={session_id} cycle={cycle_id_str}\n"
         f" missing={', '.join(blockers)}\n"
-        " Record backlog, final summary, PM retro, and checkpoint/artifact status before terminating.\n"
+        " final_summary: no non-empty docs/dev/overnight-summary-*.md written after start_time"
+        " (Step 21's summary).\n"
     )
     sys.exit(2)
+
+
+def _block_open_wake(transcript_path: str) -> None:
+    """The session's wake must be deleted before it ends: a recurring job left behind would
+    fire into the idle session (P1c X8). A transcript with no wake meets nothing."""
+    jobs = overnight.open_wakes(transcript_path) if transcript_path else []
+    if jobs:
+        sys.stderr.write(
+            f"\n WAKE STILL SCHEDULED: the session's wake, CronCreate job {', '.join(jobs)}, has no later"
+            " CronDelete.\n Call CronDelete with that id (the last step of dev-overnight.md Step 21's"
+            " session-ending branch, or of stop.md), then end the session.\n"
+        )
+        sys.exit(2)
 
 
 def block_with_message(end_time: datetime, state: dict) -> None:
@@ -134,7 +130,8 @@ def _publish_terminal_receipt(
         return False
     return result.get('status') == 'pass'
 
-def _enforce_timelock(session_id: str, state: dict, project_dir: Path | None = None) -> None:
+def _enforce_timelock(session_id: str, state: dict, project_dir: Path | None = None,
+                      transcript_path: str = '') -> None:
     """Apply the time-lock and the closeout-artifact rules. Exits 0 or 2 directly."""
     project_dir = project_dir or Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
     terminal_hint = state.get('terminal_status') or state.get('status')
@@ -147,10 +144,13 @@ def _enforce_timelock(session_id: str, state: dict, project_dir: Path | None = N
     # A subagent's report is checked at that subagent's own stop (G2) and at
     # its collection (posttool-overnight-file-check.py), never again here.
     if end_time_expired:
-        blockers = _closeout_artifact_blockers(state)
+        # The closeout is Step 21's summary on disk (overnight.closeout_gaps); the record holds
+        # no closeout field, since no session step writes one.
+        blockers = overnight.closeout_gaps(state)
         if blockers:
             # The completed cycles, as master's cycle_count was (cycle_index is the one in progress).
             _block_closeout_artifacts(session_id, str(overnight.cycle_index(state) - 1), blockers)
+        _block_open_wake(transcript_path)
     if end_time is None:
         sys.exit(0)
     if verdicts.window_live:
@@ -185,7 +185,7 @@ def main():
     if is_session_mismatch(session_id, state):
         sys.exit(0)
 
-    _enforce_timelock(session_id, state, project_dir)
+    _enforce_timelock(session_id, state, project_dir, str(context.get('transcript_path') or ''))
 
 
 if __name__ == '__main__':

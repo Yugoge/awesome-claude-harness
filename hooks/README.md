@@ -40,8 +40,8 @@
 - `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
 - `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 - `posttool-subagent-track.py` - PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark
-- `posttool-todo-count.py` - PostToolUse Hook: Enforce canonical todo count immediately after TodoWrite
-- `posttool-todo-sequence.py` - PostToolUse Hook: Enforce one-step-at-a-time progression in workflow checklists
+- `posttool-todo-count.py` - It blocked a TodoWrite whose list held fewer steps than the active command's
+- `posttool-todo-sequence.py` - PostToolUse Hook: the first-call rule of a workflow checklist
 - `posttool-todo-tracker.py` - PostToolUse Hook: Output checklist progress after every TodoWrite call
 - `pre-commit-check.sh` - pre-commit-check.sh - Detect untracked files before commit
 - `pre_slashcommand_validate.sh` - pre_slashcommand_validate.sh
