@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """The one reader of the score log (logs/lifecycle.jsonl).
 
-``scripts/score-update.sh`` (the log's writer) and ``scripts/score-inject.sh`` read
-the whole log before they act. Both call ``read_lines``, so one rule decides which
+``scripts/score-update.sh`` (whose rows go through the log's one writer,
+``hooks/lib/close_rating.append_row``) and ``scripts/score-inject.sh`` read the
+whole log before they act. Both call ``read_lines``, so one rule decides which
 lines count and when the log is refused; each script keeps its own exit code for a
 refusal.
 
