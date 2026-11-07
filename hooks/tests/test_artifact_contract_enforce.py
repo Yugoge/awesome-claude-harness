@@ -1275,7 +1275,7 @@ _CA_BEGIN = "--- CHANGELOG-ANALYST-STATUS-BEGIN ---"
 _CA_END = "--- CHANGELOG-ANALYST-STATUS-END ---"
 
 
-def _response_block_obligation(task_id: str) -> str:
+def _response_block_obligation(task_id: str, **extra) -> str:
     return _obligation_block_multi(
         task_id,
         [
@@ -1285,6 +1285,7 @@ def _response_block_obligation(task_id: str) -> str:
                 "end": _CA_END,
                 "format": "json",
                 "schema": "changelog-status.v1",
+                **extra,
             },
         ],
         role="changelog-analyst",
@@ -1372,6 +1373,107 @@ def test_response_block_unparseable_json_blocks(tmp_path):
     assert proc.returncode == 2, proc.stderr
     assert "<response_block>" in proc.stderr
     assert "unparseable_json" in proc.stderr
+
+
+def _ca_result(order: int, root: str) -> dict:
+    return {"order": order, "repo_root": root, "status": "nothing_to_commit",
+            "expected_head": "0" * 40, "push_gate_written": False}
+
+
+def _run_plan_roots_case(tmp_path, name: str, repo_roots, results) -> subprocess.CompletedProcess:
+    harness_session = f"harness-rb-{name}"
+    agent_id = f"agent-ca-rb-{name}"
+    project, home = _standard_setup(tmp_path, "changelog-analyst", agent_id)
+    _write_obligation_transcript(
+        home, project, harness_session, agent_id,
+        _response_block_obligation("20260101-000206", repo_roots=repo_roots),
+    )
+    body = json.dumps({"commit_status": "nothing_to_commit", "repository_results": results})
+    return _run_hook(
+        project, home, agent_id, session_id=harness_session, stopgate_mode="block",
+        last_assistant_message=f"{_CA_BEGIN}\n{body}\n{_CA_END}\n",
+    )
+
+
+def test_response_block_naming_the_planned_roots_in_order_passes(tmp_path):
+    """/commit's obligation carries REPOSITORY_PLAN's roots (repo_roots): a
+    block whose repository_results name exactly those roots, result i with
+    order i, passes."""
+    proc = _run_plan_roots_case(
+        tmp_path, "roots-ok", ["/r/control", "/r/nested"],
+        [_ca_result(0, "/r/control"), _ca_result(1, "/r/nested")],
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("name,results", [
+    ("roots-missing", [{"order": 0, "repo_root": "/r/control"}]),
+    ("roots-reordered", [{"order": 0, "repo_root": "/r/nested"}, {"order": 1, "repo_root": "/r/control"}]),
+    ("roots-extra", [{"order": 0, "repo_root": "/r/control"}, {"order": 1, "repo_root": "/r/nested"},
+                     {"order": 2, "repo_root": "/r/other"}]),
+    ("roots-order-field", [{"order": 1, "repo_root": "/r/control"}, {"order": 0, "repo_root": "/r/nested"}]),
+    ("roots-none", []),
+])
+def test_response_block_not_naming_the_planned_roots_blocks(tmp_path, name, results):
+    """The rule /commit Step 7 applied to the read status block (a result
+    whose repository roots/order do not exactly equal REPOSITORY_PLAN is not
+    a landing), now G2's at the analyst's own stop: a schema-valid block
+    that omits, reorders or adds a repository is returned to the analyst,
+    naming the block and the failing check."""
+    full = [dict(_ca_result(r["order"], r["repo_root"])) for r in results]
+    proc = _run_plan_roots_case(tmp_path, name, ["/r/control", "/r/nested"], full)
+    assert proc.returncode == 2, proc.stderr
+    assert "<response_block>" in proc.stderr
+    assert "plan_mismatch" in proc.stderr
+
+
+def _plan_block(status: str, results: list) -> str:
+    return f"{_CA_BEGIN}\n{json.dumps({'commit_status': status, 'repository_results': results})}\n{_CA_END}\n"
+
+
+def test_plan_roots_hold_without_a_schema_validator(monkeypatch):
+    """The comparison /commit made needed no jsonschema, so G2's needs none:
+    with the validator unavailable (Draft7Validator None) a landing that
+    leaves out a planned repository still fails with plan_mismatch, while a
+    block naming the plan in order is skipped as before."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from lib import contract_runtime as runtime
+    monkeypatch.setattr(runtime, "Draft7Validator", None)
+    roots = ["/r/control", "/r/nested"]
+    missing = runtime.validate_response_block_for_obligation(
+        _plan_block("nothing_to_commit", [_ca_result(0, "/r/control")]),
+        _CA_BEGIN, _CA_END, "changelog-status.v1", repo_roots=roots)
+    assert missing["status"] == "fail" and "plan_mismatch" in missing["reason"], missing
+    planned = runtime.validate_response_block_for_obligation(
+        _plan_block("nothing_to_commit", [_ca_result(0, "/r/control"), _ca_result(1, "/r/nested")]),
+        _CA_BEGIN, _CA_END, "changelog-status.v1", repo_roots=roots)
+    assert planned["status"] == "skip", planned
+
+
+def test_a_failed_result_is_not_held_to_the_plan(tmp_path):
+    """/commit Step 7 compared the roots only for a landing: a schema-valid
+    `failed` block that reports fewer repositories than planned is returned
+    to the analyst by no plan rule."""
+    harness_session = "harness-rb-roots-failed"
+    agent_id = "agent-ca-rb-roots-failed"
+    project, home = _standard_setup(tmp_path, "changelog-analyst", agent_id)
+    _write_obligation_transcript(
+        home, project, harness_session, agent_id,
+        _response_block_obligation("20260101-000207", repo_roots=["/r/control", "/r/nested"]),
+    )
+    body = json.dumps({"commit_status": "failed", "failure_code": "staging_error",
+                       "failure_reason": "git add failed", "repository_results": []})
+    proc = _run_hook(
+        project, home, agent_id, session_id=harness_session, stopgate_mode="block",
+        last_assistant_message=f"{_CA_BEGIN}\n{body}\n{_CA_END}\n",
+    )
+    assert "plan_mismatch" not in proc.stderr, proc.stderr
+
+
+def test_response_block_with_null_repo_roots_has_no_plan_requirement(tmp_path):
+    """Bulk mode declares no plan (repo_roots null): no roots requirement."""
+    proc = _run_plan_roots_case(tmp_path, "roots-null", None, [_ca_result(0, "/r/anything")])
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_response_block_advisory_mode_never_blocks(tmp_path):

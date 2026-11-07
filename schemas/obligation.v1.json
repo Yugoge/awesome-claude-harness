@@ -155,6 +155,11 @@
                 "schema": {
                   "type": "string",
                   "minLength": 1
+                },
+                "repo_roots": {
+                  "type": ["array", "null"],
+                  "items": {"type": "string", "minLength": 1},
+                  "description": "The repository roots of the dispatch's plan, in order (/commit: REPOSITORY_PLAN.repositories[].repo_root). A list makes G2 require the block's repository_results[] to name exactly these roots, the result at index i with order i; null (bulk mode) or absent: no such requirement."
                 }
               }
             }
