@@ -18,7 +18,7 @@ All counts below were established by enumerating the actual repository, not copi
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **20** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
-| `permissions.allow` / `deny` / `ask` entries | 151 / 96 / 0 | keys of `settings.json.permissions` (clean form) |
+| `permissions.allow` / `deny` / `ask` entries | 167 / 96 / 0 | keys of `settings.json.permissions` (clean form) |
 
 > Note on hook files: more hook *files* exist on disk than are *wired*. The unwired files are install scripts, libraries, legacy/`.bak` variants, hooks run as phases of `stop-workflow-coordinator.py`, the paseo module's hook, and intentionally-staged hooks. What matters for behavior is **what `settings.json` wires**: `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart`, with `hooks/posttool-allowlist-consume.py` wired twice (under `PostToolUse` and `PostToolUseFailure`). The lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SessionEnd`, `SubagentStop`. This is the clean form's wiring with the paseo module off; turning the module on adds one `UserPromptSubmit` entry (`hooks/userprompt-usage-snapshot.py`) and a `mcp__paseo__browser_run_code` matcher alternative on the two runcode-watchdog groups.
 

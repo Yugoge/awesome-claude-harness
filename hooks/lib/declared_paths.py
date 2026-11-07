@@ -64,8 +64,8 @@ def _question_roles() -> frozenset:
         return frozenset()
 
 
-# The question G2 takes in place of the declared artifacts
-# (subagentstop-artifact-contract-enforce.py _producer_question).
+# The question G2 and the overnight file check take in place of the declared
+# artifacts (contract_runtime.producer_question, their one rule).
 _QUESTION_PATH = "docs/dev/producer-question-{task_id}-{role}.json"
 # A path a command file's template declares, as its JSON writes it, and a
 # placeholder in one: <task_id>, <TASK_ID or "bulk">, {pipeline.x}. Any text
