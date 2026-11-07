@@ -170,7 +170,7 @@ def chain_state(task_id: str, result: dict) -> dict:
     chain (/close completes the cycle, D7); its result is carried whole
     (`artifact_chain`), and a fan-out's lanes are the ones it lists.
     """
-    return {
+    row: dict[str, Any] = {
         "state": "close_pending",
         "next_action": "close",
         "invoke_resolver": True,
@@ -180,6 +180,7 @@ def chain_state(task_id: str, result: dict) -> dict:
             for lane in result["lanes"]
         ],
     }
+    return row
 
 
 # --------------------------------------------------------------------------
