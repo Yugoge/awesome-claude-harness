@@ -457,7 +457,7 @@ dot-claude/
 │   │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
 │   │   ├── `score_log.py` - ``scripts/score-update.sh`` (whose rows go through the log's one writer,
 │   │   ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
-│   │   ├── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
+│   │   ├── `sibling_loader.py` - ``scripts/late-repair-controller.py`` and
 │   │   └── `soundness_gate.py` - HUNK-level failure attribution
 │   ├── modern-git-slot/
 │   ├── overnight-git/
@@ -505,7 +505,6 @@ dot-claude/
 │   ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 │   ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 │   ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
-│   ├── `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
 │   ├── `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
 │   ├── `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 │   ├── `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).

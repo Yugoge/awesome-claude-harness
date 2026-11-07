@@ -218,22 +218,17 @@ def _dev_report_missing_at_init(root: Path, task_id: str, record: dict[str, Any]
     return dev_report_rel in record.get("live_snapshot", {}).get("stage_gaps", [])
 
 
-def init_run(root: Path, task_id: str) -> tuple[int, dict[str, Any], dict[str, Any]]:
-    """init's decision: (exit code, payload, the chain result it decided on).
-
-    The chain result is /close --late-repair's one call of the chain
-    function; close-route-select.py hands it on verbatim when init declines,
-    so the ordinary route never resolves the chain a second time.
-    """
+def init_run(root: Path, task_id: str) -> tuple[int, dict[str, Any]]:
+    """init's decision: (exit code, payload)."""
     resolver = load_sibling_module("resolve-dev-artifact-chain.py", __file__)
     result = resolver.resolve_chain(root, task_id)
     if not resolver.late_repair_eligible(result):
-        return 1, {"outcome": "refuse", "reason": "not a beyond-QA gap; use R1's route"}, result
+        return 1, {"outcome": "refuse", "reason": "not a beyond-QA gap; use R1's route"}
 
     run_record_path = _run_record_path(root, task_id)
     if run_record_path.is_file():
         existing = json.loads(run_record_path.read_text(encoding="utf-8"))
-        return 0, {"outcome": "already_initialized", "repair_run_id": existing["repair_run_id"]}, result
+        return 0, {"outcome": "already_initialized", "repair_run_id": existing["repair_run_id"]}
 
     parents = resolver._parent_paths(root / "docs" / "dev", task_id)
     pre_route_hashes: dict[str, str | None] = {}
@@ -263,13 +258,13 @@ def init_run(root: Path, task_id: str) -> tuple[int, dict[str, Any], dict[str, A
         "effective_report": None,
     }
     _write_json(run_record_path, record)
-    return 0, {"outcome": "initialized", "repair_run_id": repair_run_id}, result
+    return 0, {"outcome": "initialized", "repair_run_id": repair_run_id}
 
 
 def cmd_init(ns: argparse.Namespace) -> int:
     if ns.force:
         return _refuse("--late-repair combined with --force is not permitted", 2)
-    rc, payload, _chain = init_run(Path(ns.project_dir).resolve(), ns.task_id)
+    rc, payload = init_run(Path(ns.project_dir).resolve(), ns.task_id)
     _emit(payload)
     return rc
 
