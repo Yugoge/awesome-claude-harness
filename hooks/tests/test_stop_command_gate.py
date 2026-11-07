@@ -641,6 +641,31 @@ def test_a6_with_no_source_from_git_steps_pick_is_the_merge_analysts_grant(env, 
     assert run(env) == (0, "")
 
 
+@pytest.mark.parametrize("content", ["#" * 300, "[]"])
+@pytest.mark.parametrize("on", ["feature", "master"])
+def test_a6_a_grant_that_is_no_json_object_is_none_as_the_check_on_its_write_removes_it(env, repo, on, content):
+    """hooks/lib/merge_grant.py's check on the merge-analyst's Write removes a grant that is no JSON
+    object (the artifact check's invalid content); the gate reads the grant through that check's own
+    load(), so such a grant is none, never a gap or a release of the gate's own. In place on the
+    source (the /merge replays) Step 0's pick from git decides; on the default branch the merge stays
+    the gap a missing grant leaves until the merge-analyst writes the grant again."""
+    branches(repo, "feature")
+    git(repo, "checkout", "-q", on)
+    opener_now(env, "merge")
+    write_grant(env, repo, "feature")
+    grant = next(Path(gate._lib("merge_grant").grant_root()).rglob("*.json"))
+    stamp = grant.stat().st_mtime
+    grant.write_text(content)
+    os.utime(grant, (stamp, stamp))
+    git(repo, "checkout", "-q", "master")
+    git(repo, "merge", "-q", "--no-ff", "--no-edit", "feature")
+    if on == "master":
+        code, text = run(env)
+        assert code == 2 and "no merge-analyst grant of this session since the opener names its source" in text
+        write_grant(env, repo, "feature")
+    assert run(env) == (0, "")
+
+
 @pytest.mark.parametrize("finish", ["commit", "abort"])
 def test_a6_merge_no_commit_finalized_or_aborted_decides_as_a_committed_merge(env, repo, finish):
     branches(repo, "feature")

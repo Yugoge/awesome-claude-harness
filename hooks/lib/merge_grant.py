@@ -49,13 +49,23 @@ def is_grant_path(path: str) -> bool:
     return len(parts) == 3 and not rel.startswith("..")
 
 
+def load(path) -> dict | str:
+    """The grant at `path` as a JSON object, else why it is none: fault()'s first check."""
+    try:
+        grant = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as exc:
+        return f"the grant is not valid JSON ({exc})"
+    return grant if isinstance(grant, dict) else "the grant is not a JSON object"
+
+
 def newest(repo_root: str, session_id: str, since: float, analyst: str = "merge-analyst") -> dict:
-    """The session's last grant for the repository at `repo_root`, if written at or
-    after `since` (fault() passed it on that Write), else {}: the Stop gate's source.
-    The push-analyst's grant has the same path rule (agents/push-analyst.md Phase 7)."""
+    """The session's last grant for the repository at `repo_root`, if written at or after `since`
+    (fault() passed it on that Write; it removes one load() rejects, so that one is none), else {}:
+    the Stop gate's source. The push-analyst's grant has the same path rule (agents/push-analyst.md Phase 7)."""
     folder = Path(grant_root()).with_name(analyst) / hashlib.sha256(os.path.realpath(repo_root).encode()).hexdigest()[:16]
     found = sorted((p.stat().st_mtime, p) for p in (folder / session_id).glob("*.json")) if session_id else []
-    return json.loads(found[-1][1].read_text()) if found and found[-1][0] >= since else {}
+    grant = load(found[-1][1]) if found and found[-1][0] >= since else {}
+    return grant if isinstance(grant, dict) else {}
 
 
 def _git(cwd: str, *args: str) -> str:
@@ -72,12 +82,9 @@ def fault(path: str) -> str:
     repo_hash, session_id, name = os.path.relpath(
         os.path.abspath(path), grant_root()).split(os.sep)
     request_id = name[:-len(".json")]
-    try:
-        grant = json.loads(Path(path).read_text())
-    except (OSError, ValueError) as exc:
-        return f"the grant is not valid JSON ({exc})"
-    if not isinstance(grant, dict):
-        return "the grant is not a JSON object"
+    grant = load(path)
+    if isinstance(grant, str):
+        return grant
     for field, expected in (("nonce", request_id), ("session_id", session_id)):
         if grant.get(field) != expected:
             return f"`{field}` is {grant.get(field)!r}; the grant's path says {expected!r}"
