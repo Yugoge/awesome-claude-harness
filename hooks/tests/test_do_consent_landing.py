@@ -4,10 +4,10 @@ hooks/prompt-workflow.py, the flag's one writer, writes it on a `/do ...` UserPr
 the hook state dir (CLAUDE_STATE_DIR points at the test's own directory). Every hook decides
 through hooks/lib/allowlist.py has_do_consent: the orchestrator gate and the branch firewall
 honour it for the main agent; the git-privilege guard honours it for every rule but git commit,
-git push and a git merge into the protected branch (the branch refs/remotes/origin/HEAD names),
-and a git command it cannot classify, whose blocks name the commands that land them; no hook
-honours it for a subagent. A valid /allow
-or /push grant authorizes what it authorized before.
+git push and a git command it cannot classify, and under it refuses a git operation that can move
+the protected branch (the branch refs/remotes/origin/HEAD names) or whose landing branch it cannot
+tell; its blocks name the commands that land them. No hook honours it for a subagent. A valid
+/allow or /push grant authorizes what it authorized before.
 
 Hooks run as subprocesses with PreToolUse payloads shaped as the CLI sends them, in a product
 repository whose origin is a local bare repository.
@@ -120,8 +120,19 @@ def test_gate_and_firewall_honour_do_for_the_main_agent_only(product):
 def test_guard_honours_do_for_an_operation_it_still_covers(product):
     assert product.bash(GUARD, "git reset --hard HEAD").returncode == 0
     assert product.bash(GUARD, "git update-ref refs/heads/scratch HEAD").returncode == 0
+    # On the protected branch, operations that leave its ref where it is.
+    for command in ("git reset --hard", "git reset -- README.md", "git reset README.md",
+                    "git cherry-pick -n feat", "git branch -f other master",
+                    "git branch -c master backup", "git branch --list master",
+                    "git checkout -B other",
+                    "git update-ref --no-deref HEAD feat", "git rebase master feat",
+                    "git fetch origin '+refs/heads/*:refs/remotes/origin/*'"):
+        assert product.bash(GUARD, command).returncode == 0, command
     product.git("checkout", "-q", "feat")
     assert product.bash(GUARD, "git merge master").returncode == 0  # not the protected branch
+    for command in ("git rebase master", "git reset --hard master", "git cherry-pick master",
+                    "git pull . master", "git update-ref HEAD master", "git branch -m feat2"):
+        assert product.bash(GUARD, command).returncode == 0, command
     assert product.bash(GUARD, "git reset --hard HEAD", subagent=True).returncode == 2
     assert product.bash(GUARD, "git merge master", subagent=True).returncode == 2
     product.prompt("next turn")
@@ -134,6 +145,7 @@ def test_guard_ignores_do_for_commit_push_and_a_protected_merge(product):
     assert "BLOCKED: agent git push" in product.bash(GUARD, "git push").stderr
     # A git command the guard cannot classify may be a push: refused as without /do.
     _blocked_naming(product.bash(GUARD, "$GIT push origin master"), "/push")
+    _blocked_naming(product.bash(GUARD, "$GIT status"), "cannot classify", "/close", "/commit")
     _blocked_naming(product.bash(GUARD, "git merge feat"), "/merge")  # on master
     # A merge the guard cannot place in its own cwd counts as protected.
     product.git("checkout", "-q", "feat")
@@ -147,6 +159,46 @@ def test_guard_ignores_do_for_commit_push_and_a_protected_merge(product):
     assert proc.returncode == 2 and "/do consent" not in proc.stderr
 
 
+def test_guard_refuses_under_do_what_can_move_the_protected_branch(product):
+    # On the protected branch: an operation that moves the branch HEAD is on.
+    for command in ("git reset --hard feat", "git reset --soft feat", "git reset --hard feat --",
+                    "git pull . feat", "git rebase feat", "git cherry-pick feat", "git revert HEAD",
+                    "git am x.patch", "git update-ref HEAD feat", "git branch -m old"):
+        _blocked_naming(product.bash(GUARD, command), "/close", "/commit", "/merge")
+    product.git("tag", "master")  # `git symbolic-ref --short HEAD` now prints heads/master
+    _blocked_naming(product.bash(GUARD, "git merge feat"), "/merge")
+    product.git("checkout", "-q", "feat")
+    # From another branch: a ref write naming it.
+    for command in ("git update-ref refs/heads/master feat", "git update-ref -d refs/heads/master",
+                    "git update-ref -m 'a b' refs/heads/master feat", "git update-ref --stdin",
+                    "git branch -f master feat", "git branch -f 'master' feat",
+                    "git branch -M feat master", "git branch -C feat master",
+                    "git branch -D master",
+                    "git checkout -B master feat", "git switch --force-create=master feat",
+                    "git worktree add -B master ../wt feat", "git fetch . feat:master",
+                    "git pull origin feat:master", "git rebase feat master",
+                    "git symbolic-ref refs/heads/master refs/heads/feat",
+                    "git filter-branch -- --all"):
+        _blocked_naming(product.bash(GUARD, command), "/merge")
+    # An operation whose landing branch the guard cannot tell from its own cwd and HEAD.
+    for command in ("git checkout -q master && git merge feat", "git switch master; git merge feat",
+                    "git merge master; git checkout master", 'bash -c "cd . && git merge master"',
+                    "pushd . && git rebase master", "export GIT_DIR=.git; git merge master",
+                    ". ./env.sh && git merge master", "timeout 60 git rebase master",
+                    "git symbolic-ref HEAD refs/heads/master && git reset --soft feat",
+                    "git branch -f $B feat"):
+        _blocked_naming(product.bash(GUARD, command), "/merge")
+    product.git("checkout", "-q", "--detach")
+    _blocked_naming(product.bash(GUARD, "git rebase master"), "/merge")
+    # A subagent, and the main agent without /do, are judged as before, with no /do line.
+    product.git("checkout", "-q", "feat")
+    proc = product.bash(GUARD, "git branch -f master feat", subagent=True)
+    assert proc.returncode == 2 and "/do consent" not in proc.stderr
+    product.prompt("next turn")
+    proc = product.bash(GUARD, "git branch -f master feat")
+    assert proc.returncode == 2 and "/do consent" not in proc.stderr
+
+
 def test_valid_grants_are_unchanged_under_do(product):
     now = int(time.time())
     grants = product.state / "claude-grants"
@@ -155,6 +207,10 @@ def test_valid_grants_are_unchanged_under_do(product):
         "task_id": SID, "session_id": SID, "created_at": now, "expires_at": now + 300,
         "allowed_operations": [{"op": "git", "target": "commit"}]}))
     assert product.bash(GUARD, "git commit -m wip").returncode == 0
+    (grants / f"{SID}.json").write_text(json.dumps({
+        "task_id": SID, "session_id": SID, "created_at": now, "expires_at": now + 300,
+        "allowed_operations": [{"op": "git", "target": "branch"}]}))
+    assert product.bash(GUARD, "git branch -f master feat").returncode == 0
     (grants / f"{SID}.json").unlink()
     head = product.git("rev-parse", "HEAD")
     grant = product.state / f"claude-push-grant-{SID}-0001.json"

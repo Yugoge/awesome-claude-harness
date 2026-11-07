@@ -195,8 +195,10 @@ shell as a human.
 **Q: A commit or push is being blocked.**
 
 A: That is the git kernel working as designed. An agent's commit lands through `/close` then
-`/commit`, a push through `/push`. `/do` consent does not cover `git commit`, `git push` or a
-merge into the protected branch; `/allow <command>` grants one matching call. As a human you can
+`/commit`, a push through `/push`. `/do` consent does not cover `git commit`, `git push` or a git
+operation that can move the protected branch (a merge, reset, rebase or ref write onto it, or one
+whose landing branch the guard cannot tell); a merge into it lands through `/merge`.
+`/allow <command>` grants one matching call. As a human you can
 also run the git command from your own shell. Confirm `gh auth status` and `git remote -v` if a
 manual push fails.
 

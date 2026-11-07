@@ -1326,7 +1326,8 @@ Pipelines parked: {count}
 
 ### Step 17: Per-Pipeline Iteration Loops (if QA fails)
 
-QA fail: re-dispatch this lane's dev with the QA report path, the same task_id, lane and obligation template, and a fresh dispatched_at; the Stop gate keeps the command open until the disposition is chain_pass.
+QA fail: re-dispatch this lane's dev with the QA report path, the same task_id, lane and obligation template, and a fresh dispatched_at; once it returns, Steps 13-16 run again for that pipeline, and this loop repeats until its QA passes (Step 16 marks it done).
+No hook reads a pipeline's QA verdict: `stop-overnight-timelock.py` refuses the session's Stop while the window is live and, after `end_time`, while the state's closeout fields are missing.
 Dispatch line: `QA report file: docs/dev/qa-report-{pipeline.timestamp_suffix}.json`.
 
 ### Step 18: Update Settings.json Permissions (Aggregated)

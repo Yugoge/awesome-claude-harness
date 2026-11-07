@@ -35,7 +35,7 @@ Step 11  Validate dev implementation
 Step 12  Delegate to QA subagent (verification)
 Step 13  Process QA results
 Step 14  QA pass → apply the permissions QA validated
-Step 15  QA warning or fail → this lane's dev again with the QA report → Steps 11-14 again
+Step 15  QA warning or fail → this lane's dev again with the QA report → Steps 11-13 again until QA passes
 Step 16  Completion report + artifact-chain postcondition
 ```
 
@@ -706,7 +706,8 @@ You can now use these scripts without permission prompts.
 
 ### Step 15: Iteration Loop (QA warning or fail)
 
-QA fail: re-dispatch this lane's dev with the QA report path, the same task_id, lane and obligation template, and a fresh dispatched_at; the Stop gate keeps the command open until the disposition is chain_pass.
+QA fail: re-dispatch this lane's dev with the QA report path, the same task_id, lane and obligation template, and a fresh dispatched_at; once it returns, Steps 11-13 run again, and this loop repeats until QA passes (then Step 14).
+No hook holds the command open on a QA fail; completion waits on Step 16's artifact-chain postcondition, whose resolver exits 2 (`INVALID_QA_STATUS`) until the QA report's `qa.status` is `pass`.
 Dispatch line: `QA report file: docs/dev/qa-report-<timestamp>.json`.
 
 ### Step 16: Generate Completion Report

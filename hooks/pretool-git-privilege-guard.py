@@ -1272,10 +1272,11 @@ DO_NOT_COVERED = (
     'a merge into the protected branch through /merge.\n'
 )
 
-# E2: after these words the hook's own cwd may not be where git runs, and after
-# _BRANCH_CHANGE_RE's its HEAD may not be the branch an operation on HEAD lands
-# on. Read anywhere in the command: `&`, `|`, loops, functions and traps run its
-# parts in an order the text does not give. `\.` is the dot builtin (source).
+# E2: with one of these words in a command, git may run in another directory
+# than the hook's (_DIR_CHANGE_RE) or on another branch than the hook-time HEAD
+# (_BRANCH_CHANGE_RE). Read anywhere in the command: `&`, `|`, loops, functions
+# and traps run its parts in an order the text does not give. `\.` is the dot
+# builtin (source).
 _DIR_CHANGE_RE = re.compile(
     r'(?<![\w./-])(?:cd|pushd|popd|source|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)(?![\w./-])'
     r'|(?:^|[;&|(){]|\b(?:then|do|else))\s*\.\s')
@@ -1370,8 +1371,10 @@ def _names_protected(name, protected):
 
 def _protected_branch():
     """The branch refs/remotes/origin/HEAD names (local refs, as the overnight
-    launcher resolves it), or ''."""
-    return _git_output(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).split('/', 1)[-1]
+    launcher resolves it), or ''. Full ref names: `--short` prints `heads/main`
+    once a tag is named `main` too."""
+    ref = _git_output(['symbolic-ref', 'refs/remotes/origin/HEAD'])
+    return ref[len('refs/remotes/origin/'):] if ref.startswith('refs/remotes/origin/') else ''
 
 
 def _moves_protected_branch(command, invocations):
@@ -1391,13 +1394,15 @@ def _moves_protected_branch(command, invocations):
         return True
     for seg in _shell_segments(command):
         toks = seg.split()
-        if any(any(_branch_writes(inv)) and (_cmd_token_index(toks) or toks[1:2] != [inv.subcommand])
+        if any(any(_branch_writes(inv)) and (
+                _cmd_token_index(toks) or toks[1:2] != [inv.subcommand])
                for inv in iter_git_invocations(seg)):
             return True
     protected = _protected_branch()
     if not protected or any(_names_protected(name, protected) for name in names):
         return True
-    return on_head and _git_output(['symbolic-ref', '--quiet', '--short', 'HEAD']) in ('', protected)
+    head = _git_output(['symbolic-ref', '--quiet', 'HEAD']) if on_head else None
+    return head in ('', 'refs/heads/' + protected)
 
 
 def _evaluate_protected_move(command, data):

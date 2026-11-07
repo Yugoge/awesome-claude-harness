@@ -364,8 +364,11 @@ def _command_token_index(toks):
 
 
 # The git global-option table: the options git accepts between `git` and the
-# subcommand, as git parses them (each form checked against git 2.43). Every
-# hook that locates a git subcommand or reads a global option uses it.
+# subcommand, as git parses them. git 2.43 accepts each form below but
+# --super-prefix (dropped before it), --shallow-file=<file> (it takes the two-word
+# form only), --no-lazy-fetch and --no-advice (added after 2.43); the table keeps
+# them for the gits that take them. Every hook that locates a git subcommand or
+# reads a global option uses it.
 #   GIT_GLOBAL_VALUE_OPTS  take a value as the next word, the long ones also as
 #                          `--opt=<value>`; git rejects `-C<dir>` and `-cname=value`.
 #   GIT_GLOBAL_FLAGS       take no separate value; `--exec-path` and `--list-cmds`

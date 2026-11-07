@@ -898,7 +898,8 @@ You can now use these scripts without permission prompts.
 
 ### Step 16: Iteration Loop (QA warning or fail)
 
-QA fail: re-dispatch this lane's dev with the QA report path, the same task_id, lane and obligation template, and a fresh dispatched_at; the Stop gate keeps the command open until the disposition is chain_pass.
+QA fail: re-dispatch this lane's dev with the QA report path, the same task_id, lane and obligation template, and a fresh dispatched_at; once it returns, Steps 12-14 run again for this lane, and this loop repeats until QA passes (then Step 15).
+No hook holds the command open on a QA fail; completion waits on Step 17's artifact-chain postcondition, whose resolver exits 2 (`INVALID_QA_STATUS`) until the QA report's `qa.status` is `pass`.
 Dispatch line: `QA report file: docs/dev/qa-report-<timestamp>.json`.
 
 ### Step 17: Generate Completion Report + Workflow Update
