@@ -10,7 +10,7 @@ Public surface:
     contract_path(state, cycle_id) -> Path   # the contract's one path
     load_contract(session_id, cycle_id, state=None) -> dict | None
     overnight_steps() -> [(label, subagent_call)]   # scripts/todo/dev-overnight.py _STEPS
-    exploration_calls(steps) -> [entry]       # steps 2-4, allowed before the contract
+    exploration_calls(steps, text=None) -> [entry]   # steps 2-4, allowed before the contract
     post_triage_steps(steps) -> [(label, subagent_call)]   # what the contract renders
     triage_call(steps) -> dict                # the PM TRIAGE step's subagent_call
     call_entry(label, subagent_call) -> dict  # a required_calls entry for one step
@@ -93,6 +93,9 @@ _MODE_KEYWORDS = ('PLAN', 'TRIAGE', 'RETRO', 'DESIGN_MODE', 'AUDIT_MODE', 'UI_MO
 # The modes of the PM dispatches that open and close a cycle's exploration.
 PLAN_MODE = 'PLAN'
 TRIAGE_MODE = 'TRIAGE'
+# A dispatch template's line that sets a PM's mode (agents/pm.md "Mode
+# Routing": the orchestrator sets PM_MODE; a PM dispatched without it runs PLAN).
+_MODE_FLAG_RE = re.compile(r'^\s*PM_MODE:\s*([A-Z_]+)\s*$', re.M)
 
 
 def session_record(session_id: str, payload: Optional[dict] = None) -> Optional[dict]:
@@ -159,16 +162,25 @@ def _mode_index(steps: list[tuple[str, dict]], mode: str) -> Optional[int]:
     return next((i for i, (_label, call) in enumerate(steps) if call.get('mode') == mode), None)
 
 
-def exploration_calls(steps: list[tuple[str, dict]]) -> list[dict]:
+def exploration_calls(steps: list[tuple[str, dict]], text: Optional[str] = None) -> list[dict]:
     """The calls of a cycle's exploration, PM PLAN through PM TRIAGE (steps 2-4).
 
     Every cycle allows them before its contract exists, since the contract is
-    written when PM TRIAGE returns.
+    written when PM TRIAGE returns. ``text`` is /dev-overnight as the session
+    loaded it (command_span.Span.body): a step's mode binds only when one of
+    that text's templates sets it. A session that started before an update
+    dispatches from the prose it loaded, and origin/master's sets no mode at
+    Step 2; with no text, every step's mode binds.
     """
     first, last = _mode_index(steps, PLAN_MODE), _mode_index(steps, TRIAGE_MODE)
     if first is None or last is None:
         return []
-    return [call_entry(label, call) for label, call in steps[first:last + 1]]
+    entries = [call_entry(label, call) for label, call in steps[first:last + 1]]
+    if text is not None:
+        modes = set(_MODE_FLAG_RE.findall(text))
+        for entry in entries:
+            entry['mode'] = entry['mode'] if entry['mode'] in modes else None
+    return entries
 
 
 # The steps after PM TRIAGE that dispatch again what an earlier step dispatched

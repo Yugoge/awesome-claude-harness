@@ -74,7 +74,14 @@ _STEPS = [
         "Running QA subagents in parallel",
         {"subagent_call": {"agent": "qa", "subagent_type": "qa"}},
     ),
-    ("16", "Process QA results", "Processing QA results", None),
+    # A pipeline whose QA passes is a /dev chain under its own task id; the main agent writes its
+    # completion report here (or at Step 17's loop exit), as /dev's Step 17 does.
+    (
+        "16",
+        "Process QA results",
+        "Processing QA results",
+        {"artifacts": [{"kind": "markdown", "path": "docs/dev/completion-<task>.md"}]},
+    ),
     ("17", "Run iteration loops for failed pipelines", "Running iteration loops for failed pipelines", None),
     ("18", "Update settings.json permissions (aggregated)", "Updating settings.json permissions", None),
     ("19", "Log cycle results and check time", "Logging cycle results and checking time", None),

@@ -1309,10 +1309,36 @@ Read QA report: `docs/dev/qa-report-{pipeline.timestamp_suffix}.json`
 
 ```
 IF qa.status == "pass":
-  → Mark pipeline phase = "done", status = "fixed"
+  → Mark pipeline phase = "done", status = "fixed", and write its completion report (below)
 
 ELIF qa.status == "warning" OR qa.status == "fail":
   → Mark pipeline phase = "qa_failed" (a process step: it enters iteration in Step 17; only pass ends the loop)
+```
+
+**Completion report** (each pipeline whose QA passes, here or at its Step 17 loop exit): a pipeline's chain is a `/dev` chain under its own task id `{pipeline.timestamp_suffix}`: ticket and context (its BA, Step 8), dev report (Step 12), QA report (Step 15), and this report, which the main agent writes when the pipeline's QA passes, as `/dev`'s Step 17 does. `/close --auto` (Post-loop flow) finds a pipeline only through it: its discovery lists a task once the artifact chain (`resolve-dev-artifact-chain.py`) passes for it, and the chain names this report, so a pipeline without it is never closed or committed. Write `docs/dev/completion-{pipeline.timestamp_suffix}.md`:
+
+```markdown
+# Development Completion Report — {pipeline.timestamp_suffix}
+
+**Request ID**: {pipeline.timestamp_suffix}
+**Task ID**: {pipeline.timestamp_suffix}
+**Completed**: <ISO-8601>
+**Source**: /dev-overnight session <session_id>, cycle <N>, pipeline {pipeline.index}
+
+## Requirement
+
+{pipeline.description}
+
+## Quality Verification
+
+**Status**: PASSED
+
+## Files Generated
+
+- Ticket: `docs/dev/ticket-{pipeline.timestamp_suffix}.md`
+- Context: `docs/dev/context-{pipeline.timestamp_suffix}.json`
+- Dev Report: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`
+- QA Report: `docs/dev/qa-report-{pipeline.timestamp_suffix}.json`
 ```
 
 **Tally results**:
@@ -1373,7 +1399,7 @@ For each entry in `iteration_plan[]`, the orchestrator runs the Dev+QA inner loo
 - `Agent(subagent_type: "qa")` with new dev report. Obligation block (same template as Step 15's qa dispatch; §1.2): embed `<obligation v="1">{...}</obligation>` with role="qa", pipeline="dev-overnight", profile="final_verification", task_id/dispatched_at bound to this pipeline's {pipeline.timestamp_suffix} and THIS iteration's fresh dispatch time, artifacts=[{"kind":"json","path":"docs/dev/qa-report-{pipeline.timestamp_suffix}.json","schema":"qa-report.v2","identity":{"task_id":"{pipeline.timestamp_suffix}","request_id":"{pipeline.timestamp_suffix}"}}]. Include in QA prompt: `Overnight spec file: <pipeline.spec_path>`. Also include: `User requirement document: <resolved $REQUIREMENT_DOC path>`. QA reads spec first and does not write it; Section 4 (and Sections 6-7 if fail) go in its report's `qa.spec_section_updates`.
 
 Loop termination:
-- `qa.status == "pass"` → set `phase=done`, `status=fixed`, BREAK. This is the only exit.
+- `qa.status == "pass"` → set `phase=done`, `status=fixed`, write its completion report (Step 16), BREAK. This is the only exit.
 - `qa.status == "warning"` or `"fail"` → run the next iteration (dispatch dev with the QA report, then QA).
 - A producer question from BA or dev → Hard Rule 5: decided without the owner and recorded; the loop continues with the chosen option.
 
@@ -1568,8 +1594,9 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 ## Files Generated
 
 - Context files: `docs/dev/context-*.json`
-- Dev reports: `docs/dev/dev-report-overnight-*.json`
-- QA reports: `docs/dev/qa-report-overnight-*.json`
+- Dev reports: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`, one per pipeline
+- QA reports: `docs/dev/qa-report-{pipeline.timestamp_suffix}.json`, one per pipeline
+- Completion reports: `docs/dev/completion-{pipeline.timestamp_suffix}.md`, one per passed pipeline
 - Running log: `docs/dev/overnight-log-<date>.md`
 
 ## Recommendations
@@ -1644,7 +1671,7 @@ The closeout is on disk; the time-lock lets the session end.
 After the whole overnight session has ended, the owner lands its work once, typing each command himself, in this order: four commands under `registered_worktree` / `fresh_clone_checkout`, three under `in_place`, which has no branch to merge. The overnight session runs none of them.
 
 1. **`/close --auto`** — always first. Under `registered_worktree` / `fresh_clone_checkout`: in a session opened at `<worktree_path>`. Under `in_place`: in the checkout.
-   - Discovers every task waiting to be closed (`close_pending`) and closes each through the normal `/close` route, one after another
+   - Discovers every task waiting to be closed (`close_pending`), each pipeline the session completed among them (its chain ends in the completion report Step 16 writes), and closes each through the normal `/close` route, one after another
 
 2. **`/commit --auto`** — not optional; in the same place as `/close --auto`
    - Discovers every task waiting to be committed (`commit_pending`) and walks each through the normal `/commit` route, batched the way `/close --auto` batches; this is where the session's work becomes commits on `<worktree_branch>`
