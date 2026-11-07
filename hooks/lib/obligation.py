@@ -377,7 +377,8 @@ def extract_obligation_block(prompt: str) -> ExtractedBlock | NoBlock | Rejectio
         return NoBlock()
     if opener_count > 1:
         return Rejection(reason="multiple_blocks")
-    match = _OPEN_TAG_RE.search(prompt)
+    # The tag can start only at the one opener token: searched from there.
+    match = _OPEN_TAG_RE.search(prompt, prompt.find(OBLIGATION_OPEN_TOKEN))
     if match is None:
         return Rejection(reason="unsupported_version", detail="malformed opening tag")
     attrs = _VERSION_ONLY_ATTRS_RE.fullmatch(match.group(1))
@@ -718,6 +719,10 @@ def registry_dir_for(project_dir: str | Path, task_id: Any) -> Path | None:
 # --------------------------------------------------------------------------
 
 _READ_ON = object()  # _first_line_record: the first line does not decide
+# The first read of a subagent transcript, then each further one of a longer
+# first line. A dispatch prompt's record fits in the first: copying 64 KB of a
+# long transcript to find a newline in its first few was most of that read.
+_FIRST_READ_HEAD = 1 << 14
 _FIRST_READ = 1 << 16
 
 
@@ -733,11 +738,12 @@ def _first_line_record(path):
     session, and the text reader's layers were most of what each cost."""
     fd = os.open(path, os.O_RDONLY)
     try:
-        chunks, end = [], -1
+        chunks, end, size = [], -1, _FIRST_READ_HEAD
         while end < 0:
-            chunk = os.read(fd, _FIRST_READ)
+            chunk = os.read(fd, size)
             if not chunk:
                 break
+            size = _FIRST_READ
             end = chunk.find(b"\n")
             chunks.append(chunk if end < 0 else chunk[:end])
     finally:

@@ -31,6 +31,11 @@ Driver arguments (cli.py --arg K=V):
                       declares as it is, or written with its terminal field short of completed; on
                       G2's block it writes it completed and stops again (whether G2 stops a missing
                       completion at dev's stop)
+  variant=abandoned   P1b's acceptance 7 /do case (P1b ran it as variant=blocked): the user abandons
+                      the task before the change is made, and Step 5 writes the do-report with the
+                      honest terminal status `blocked` the text names (default then=close): /close's
+                      Step 0 names the do-report and Routes' /do bullet dispatches dev under the same
+                      task id, which makes the change
 The artifact check replays the plain /do (VARIANTS); the variants run on demand.
 
 Respellings: no harness-script call of the /do text needs one (row 7). One path is recorded in
@@ -66,15 +71,16 @@ TOY_NEW = ("def add(a, b):\n    for name, x in ((\"a\", a), (\"b\", b)):\n"
 DEVIATIONS = Deviations([])
 # The do-report's summary per terminal status (Step 5: "blocked" says what blocked it).
 SUMMARY = {"completed": "toy.add now raises TypeError naming the argument that is not a number.",
-           "blocked": "toy.add is changed, but the toy tests were not run: the operation stayed unauthorized."}
+           "blocked": "toy.add is changed, but the toy tests were not run: the operation stayed unauthorized.",
+           "abandoned": "Not finished: the user abandoned the task before toy.add was changed."}
 
 
 class DoTurn:
     """One /do turn: the main agent works directly and writes the do-report."""
 
     def __init__(self, rp, session=None, deviations: Deviations | None = None, task: str = TASK,
-                 edits=(("toy/__init__.py", TOY_OLD, TOY_NEW),), status: str = "completed"):
-        self.rp, self.task, self.edits, self.status = rp, task, list(edits), status
+                 edits=(("toy/__init__.py", TOY_OLD, TOY_NEW),), status: str = "completed", variant: str = "plain"):
+        self.rp, self.task, self.edits, self.status, self.variant = rp, task, list(edits), status, variant
         from .close import kept_only
         self.o = Orchestrator(rp, "do", session=session, deviations=kept_only(rp, deviations or DEVIATIONS))
         self.tid = ""
@@ -110,6 +116,10 @@ class DoTurn:
         for rel, old, new in self.edits:
             path = os.path.join(o.project, rel)
             self.call(s.read, path, label=self.label(f"Step 2 Read {rel}"))
+            if self.variant == "abandoned":
+                # The user abandons the task before the change is made.
+                s.say("Stopping here at your request: toy.add is unchanged.")
+                return
             c = self.call(s.edit, path, old, new, label=self.label(f"Step 2 Edit {rel}"))
             if c.ok:
                 self.files_modified.append(rel)
@@ -120,6 +130,9 @@ class DoTurn:
         self.o.s.say("Step 3 skipped: --codex was not passed.")
 
     def step4(self) -> None:
+        if self.variant == "abandoned":
+            self.o.s.say("Nothing changed: the task was abandoned before the change was made. Codex audit not run.")
+            return
         self.o.s.say(f"Changed toy.add: a non-number argument now raises TypeError naming it. "
                      f"Files modified: {', '.join(self.files_modified)}. Codex audit not run.")
 
@@ -166,7 +179,7 @@ class DoTurn:
                 doc[k] = self.tid
         doc["request"] = self.task
         doc["do"].update(status=self.status, files_modified=list(self.files_modified),
-                         files_created=list(self.files_created), summary=SUMMARY[self.status])
+                         files_created=list(self.files_created), summary=self.summary())
         text = json.dumps(doc, indent=2) + "\n"
         path = os.path.join(o.project, self.report_rel)
         # A text that has the hook pre-write a skeleton tells the agent to rewrite it; else the agent
@@ -174,6 +187,10 @@ class DoTurn:
         if "skeleton" in sec and os.path.exists(path):
             self.call(s.read, path, label=self.label("Step 5 Read do-report skeleton"))
         self.call(s.write, path, text, label=self.label("Step 5 Write do-report"))
+
+    def summary(self) -> str:
+        """do.summary: what blocked a `blocked` report (Step 5)."""
+        return SUMMARY["abandoned" if self.variant == "abandoned" else self.status]
 
     def run(self) -> str:
         o = self.o
@@ -183,7 +200,7 @@ class DoTurn:
             o.advance(label=self.label(f"TodoWrite Step {n - 1} done, Step {n} in_progress"))
             fn()
         o.advance(label=self.label("TodoWrite Step 5 done"))
-        o.s.stop(f"/do {self.tid} {self.status}: {SUMMARY[self.status]} do-report {self.report_rel}. "
+        o.s.stop(f"/do {self.tid} {self.status}: {self.summary()} do-report {self.report_rel}. "
                  f"Next: /close {self.tid}", label="/do Stop", deviation=o.devs.at("/do Stop"))
         return self.tid
 
@@ -191,7 +208,7 @@ class DoTurn:
 # The variant the artifact check replays ("": the plain /do, then /close and /commit); the acceptance
 # variants run on demand only (`--arg variant=...`).
 VARIANTS = ("",)
-ACCEPTANCE_VARIANTS = ("blocked", "main-file")
+ACCEPTANCE_VARIANTS = ("blocked", "main-file", "abandoned")
 
 
 def run(rp) -> None:
@@ -199,8 +216,10 @@ def run(rp) -> None:
     if variant not in VARIANTS + ACCEPTANCE_VARIANTS:
         raise ValueError(f"unknown variant {variant!r}")
     then = rp.args.get("then", "close" if variant else "close-commit")
-    rp.pipeline = ("do" if then == "none" else f"do+{then}") + (f"/{variant}" if variant else "")
-    turn = DoTurn(rp, status="blocked" if variant == "blocked" else "completed")
+    rp.pipeline = ("do" if then == "none" else f"do+{then}") + (f"/{variant}" if variant else "") + (
+        "/later" if rp.args.get("session") == "later" else "")
+    turn = DoTurn(rp, status="blocked" if variant in ("blocked", "abandoned") else "completed",
+                  variant=variant or "plain")
     tid = turn.run()
     if then == "none":
         return

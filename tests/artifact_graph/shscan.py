@@ -229,6 +229,9 @@ class ShellAnalyzer:
         self.instantiated: dict[int, int] = {}
         self.all_param_effects: list = []
         self.memo: dict = {}
+        # scripts parsed mid-walk, kept to the run's end: memo and summaries key by id() of
+        # their nodes (pyscan.Analyzer.parsed)
+        self.parsed: list = []
         self.prints: list = []
         self.id_forms: list = []
         self.depth = 0
@@ -1433,6 +1436,7 @@ class ShWalk:
                     code = self.word(args[i + 1], n)
                     if isinstance(code, Str) and len(code.alts) == 1 and P.L not in code.alts[0]:
                         sub = S.parse(code.alts[0], args[i + 1].line)
+                        self.an.parsed.append(sub)
                         self.walk(sub.body, False)
                 return
             if lit == "-m" and i + 1 < len(args) and is_py:

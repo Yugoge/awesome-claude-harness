@@ -12,7 +12,10 @@ against its identity anchor and terminal line
 (contract_runtime.validate_markdown_artifact_for_obligation). The contract
 names no artifact and no schema: the obligation is the one declaration, so a
 contract and a dispatch can never disagree on a schema version. A dispatch
-that carries no obligation declares nothing to check here.
+that carries no obligation declares nothing to check here. A fresh producer
+question its role wrote is decided by G2's one rule
+(contract_runtime.producer_question): valid, it stands in for every declared
+artifact; invalid, it is refused.
 
 The session is the one whose overnight state record the returned call's
 session owns; whether its window is live is lib.overnight.state_verdicts's
@@ -120,11 +123,16 @@ def _run_check(data: dict) -> int:
     entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt))
     if entry is None:
         return 0
-    errors = [error for artifact in artifacts for error in _artifact_errors(artifact, root)]
+    # G2's one rule: a fresh producer question stands in for every declared artifact when valid.
+    question = contract_runtime.producer_question(root, parsed.obligation)
+    errors = [f"{question['path']}: {e}" for e in question['errors']] if isinstance(question, dict) else []
+    errors += [error for artifact in (artifacts if question != 'valid' else [])
+               for error in _artifact_errors(artifact, root)]
     if errors:
         _emit_block(agent_type, session_id, cycle_id, errors)
         return 2
-    print(f'OVERNIGHT FILE CHECK: {agent_type} obligation artifacts valid '
+    print(f'OVERNIGHT FILE CHECK: {agent_type} '
+          f'{"producer question" if question == "valid" else "obligation artifacts"} valid '
           f'(step={entry.get("step")}).')
     return 0
 

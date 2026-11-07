@@ -37,6 +37,23 @@ def _parts(path: str) -> tuple:
     return tuple(p for p in os.path.normpath(path).split(os.sep) if p and p != ".")
 
 
+_LAST_UNKNOWN = object()  # _last_part: only normpath tells
+
+
+def _last_part(path: str):
+    """The last of _parts(path) (None when it has none), read without
+    normpath where the path names no ".." part and holds no NUL: normpath
+    then only drops its empty and "." segments. _LAST_UNKNOWN otherwise (a
+    ".." may take a part back)."""
+    segments = path.split(os.sep)
+    if ".." in segments or "\x00" in path:
+        return _LAST_UNKNOWN
+    for segment in reversed(segments):
+        if segment and segment != ".":
+            return segment
+    return None
+
+
 def _question_roles() -> frozenset:
     """Roles schemas/producer-question.v1.json lets write a producer question."""
     try:
@@ -47,8 +64,8 @@ def _question_roles() -> frozenset:
         return frozenset()
 
 
-# The question G2 takes in place of the declared artifacts
-# (subagentstop-artifact-contract-enforce.py _producer_question).
+# The question G2 and the overnight file check take in place of the declared
+# artifacts (contract_runtime.producer_question, their one rule).
 _QUESTION_PATH = "docs/dev/producer-question-{task_id}-{role}.json"
 # A path a command file's template declares, as its JSON writes it, and a
 # placeholder in one: <task_id>, <TASK_ID or "bulk">, {pipeline.x}. Any text
@@ -351,7 +368,11 @@ def _bounds_may_cover_back(prompt: str, targets, bounds, multi) -> bool:
     of one of the prompt's lines (dispatch_template binds no other), so a
     pair whose paths all bind one value in their last segment (not in
     ``multi``) covers a target's part p ending with its tail only through a
-    value ending in "/" + p without its tail: one the prompt then holds."""
+    value ending in "/" + p without its tail. No part of the target starts
+    with the pair's prefix (else it would cover without "/.."), so that value
+    also takes back the segment the prefix starts, with a ".." segment of its
+    own before that end: one line of the prompt holds "/.." and that end
+    after it (_takes_back_to)."""
     if bounds is _ANY:
         return True
     for forms in targets:
@@ -361,8 +382,22 @@ def _bounds_may_cover_back(prompt: str, targets, bounds, multi) -> bool:
             if (shape, prefix) in multi:
                 return True
             tail = shape[1]
-            if any(part.endswith(tail) and "/" + part[:-len(tail)] in prompt for form in forms for part in form):
+            if any(part.endswith(tail) and _takes_back_to(prompt, "/" + part[:-len(tail)])
+                   for form in forms for part in form):
                 return True
+    return False
+
+
+def _takes_back_to(prompt: str, end: str) -> bool:
+    """Whether one line of ``prompt`` holds "/.." and, after it, ``end``: the
+    text of a value that takes a segment back and ends in ``end``. A line here
+    ends only at "\\n", so it holds every line str.splitlines makes of it."""
+    at = prompt.find("/..")
+    while at >= 0:  # the first "/.." of each line that holds one
+        stop = prompt.find("\n", at)
+        if prompt.find(end, at + 1, len(prompt) if stop < 0 else stop) >= 0:
+            return True
+        at = prompt.find("/..", stop) if stop >= 0 else -1
     return False
 
 
@@ -424,14 +459,23 @@ def _obligation_may_declare(prompt: str, targets) -> bool:
         paths = []
         for entry in doc["artifacts"]:
             if isinstance(entry, dict):
-                if any(field in entry for field in _PATTERN_FIELDS):
-                    return True
+                for field in _PATTERN_FIELDS:
+                    if field in entry:
+                        return True
                 if isinstance(entry.get("path"), str) and entry["path"]:
                     paths.append(entry["path"])
         role, task_id = doc.get("role"), doc.get("task_id")
         if isinstance(role, str) and isinstance(task_id, str) and task_id:
             paths.append(_QUESTION_PATH.format(task_id=task_id, role=role))
+        ends = None  # every part of every target form
         for path in paths:
+            last = _last_part(path)
+            if last is not _LAST_UNKNOWN:
+                # A path covers a target form only through its last part, one of that form's parts.
+                if ends is None:
+                    ends = {part for forms in targets for form in forms for part in form}
+                if last not in ends:
+                    continue
             parts = _parts(path)
             if (parts and ".." not in parts and not path.startswith("/")
                     and any(_covers(parts, form) for forms in targets for form in forms)):
@@ -525,14 +569,14 @@ def _started_dispatches(transcript) -> list:
         names = sorted(n for n in os.listdir(folder) if n.startswith("agent-") and n.endswith(".meta.json"))
     except OSError:
         return []
-    folder = os.fspath(folder)
+    prefix = os.fspath(folder) + os.sep  # os.path.join(folder, name): folder ends in "subagents"
     calls = []
     for name in names:
         agent_id = name[len("agent-"):-len(".meta.json")]
         if not _plain_agent_id(agent_id):
             continue
         # _agent_files' two paths, spelled once per dispatch as strings
-        agent_transcript, meta = os.path.join(folder, f"agent-{agent_id}.jsonl"), os.path.join(folder, name)
+        agent_transcript, meta = f"{prefix}agent-{agent_id}.jsonl", prefix + name
         try:
             doc = _load_json(meta)
         except (OSError, ValueError):
