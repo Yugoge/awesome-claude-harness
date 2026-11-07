@@ -452,7 +452,6 @@ dot-claude/
 │   │   └── `uninstall` - uninstall file
 │   ├── lib/
 │   │   ├── `attribution_adjudicator.py` - Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
-│   │   ├── `attribution_aggregate_view.py` - Emits the canonical dev-report document shape that /close and /commit
 │   │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 │   │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
@@ -485,12 +484,10 @@ dot-claude/
 │   │   ├── `site-navigate.py` - Python script
 │   │   ├── `spec.py` - Mirrors the ask.py structure in the knowledge-system scripts/todo directory
 │   │   └── `test.py` - Preloaded TodoList for /test workflow
-│   ├── `adjudicate-attribution-staging.py` - CLI: journal-based three-way staging adjudicator (read-only unless --capture-dispatch-baselines-into or --escalation-store is given; see scripts/lib/attribution_adjudicator.py).
 │   ├── `aggregate-dev-report.py` - Scans docs/dev/ for per-worker shard dev-reports matching a given task-id,
 │   ├── `aggregate-permissions.py` - Usage: aggregate-permissions.py <qa-glob-or-dir> [pipelines.json]
 │   ├── `analyze-git-edge-cases.sh` - Description: Analyze git history for edge cases from bug fix commits
 │   ├── `apply-permissions.sh` - apply-permissions.sh — merge aggregated permissions JSON list into settings.json
-│   ├── `attribution-aggregate-view.py` - CLI: journal-backed canonical aggregate view (read-only unless --escalation-store is given; see scripts/lib/attribution_aggregate_view.py).
 │   ├── `blast-radius-tool.py` - Two phases:
 │   ├── `bootstrap` - bootstrap file
 │   ├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
