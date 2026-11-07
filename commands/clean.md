@@ -44,7 +44,7 @@ This command dispatches five subagent types:
 4. **prompt-inspector** (Step 10A): audits `agents/*.md` and `commands/*.md` verbosity
 5. **cleaner** (Step 16): executes approved cleanup actions
 
-Every dispatch is an Agent call with `run_in_background: false`. The request's JSON files live in `docs/clean/` (`scripts/orchestrator.sh`'s default `clean_output_dir`). A subagent may write there only a path its dispatch declares (`hooks/pretool-tool-policy.py`); Steps 5 and 10A declare their inspectors' reports in obligation blocks.
+Every dispatch is an Agent call with `run_in_background: false`. The request's JSON files live in `docs/clean/` (`scripts/orchestrator.sh`'s default `clean_output_dir`). A subagent may write there only a path its dispatch declares (`hooks/pretool-tool-policy.py`); the obligation blocks of Steps 5, 8, 10A and 16 declare the reports their subagents write.
 
 ---
 
@@ -238,6 +238,9 @@ Request ID: {REQUEST_ID}
 Group ID: {N}
 Project root: {PROJECT_ROOT}
 Context file: docs/clean/context-{REQUEST_ID}.json
+<obligation v="1">
+{"task_id": null, "lane": null, "lane_set": null, "role": "style-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/style-partial-{REQUEST_ID}-group{N}.json", "schema": "style-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}
+</obligation>
 <If codex_required = true, include the literal next line; otherwise omit it>
 codex_required: true
 
@@ -249,10 +252,13 @@ Files to audit (audit EVERY file in this list, no others):
 5. {file_path_5}
 
 Write your partial report to: docs/clean/style-partial-{REQUEST_ID}-group{N}.json
+It is also your progress file and your final report: write no other file (Step 9 merges the partials into the style report).
 
 The partial report MUST use this schema:
 {
   "request_id": "{REQUEST_ID}",
+  "timestamp": "ISO-8601",
+  "inspector": "style-inspector",
   "group_id": {N},
   "files_audited": ["list of files you actually audited"],
   "violations": [
@@ -264,6 +270,8 @@ The partial report MUST use this schema:
       "recommendation": "how to fix"
     }
   ],
+  "summary": {"standards_checked": 11, "violations_found": 0, "critical": 0, "files_audited": 0, "files_total": 0},
+  "codex_consult": {"invoked": false, "status": "not_requested", "findings": [], "feedback_summary": null, "feedback_incorporated": null},
   "status": "complete"
 }
 
@@ -293,7 +301,7 @@ Read the plan file `docs/clean/style-plan-{REQUEST_ID}.json` and extract the `al
 If ANY file from `all_files` is missing from the merged `files_audited`:
 
 1. Log which files were missed and their count
-2. Build a new group containing ONLY the missed files
+2. Build a new group containing ONLY the missed files, with the next unused group ID
 3. Launch a targeted style-inspector agent for the missed files (Agent tool, `run_in_background: false`; same prompt format as Step 8, including `codex_required: true` when `codex_required = true`)
 4. After the targeted agent completes, merge its results into the final report
 5. Repeat the coverage check, and items 1-4 for any file still missing
@@ -531,9 +539,14 @@ Read these report files directly from the filesystem:
 - User approvals: docs/clean/user-approvals-{REQUEST_ID}.json
 
 The merged context with approvals is at: docs/clean/context-with-approvals-{REQUEST_ID}.json
+<obligation v="1">
+{"task_id": null, "lane": null, "lane_set": null, "role": "cleaner", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "markdown", "path": "docs/clean/cleanup-execution-{REQUEST_ID}.json", "identity_anchor": "{REQUEST_ID}"}]}
+</obligation>
 
 Execute ALL approved_actions. Write results to docs/clean/cleanup-execution-{REQUEST_ID}.json."
 ```
+
+The obligation declares the execution report (kind `markdown`: no registered schema covers it, so the cleaner's stop checks that it exists and names this request's id, and returns a missing one to the cleaner). It declares none of the project files the approved actions move or edit: a declaration would hold each of them for this cleaner for the rest of the session. `hooks/pretool-tool-policy.py` refuses the cleaner's write of an undeclared path (its policy row allows only its scratch and overnight directories), so such an action fails and the cleaner records it in `actions_failed`.
 
 The orchestrator MUST NOT supplement, assist, or "help" the cleaner by making additional edits. If the cleaner fails on specific actions, those failures are recorded in the execution report -- the orchestrator does not retry them directly.
 

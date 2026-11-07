@@ -37,14 +37,17 @@ What each step does is taken from the tree's commands/clean.md:
   its Output Format with the scenario's finding.
 * Steps 6-10: Step 6 has no call of its own (its text is the heading of Steps 7-10); Step 7's planner,
   saved where the step says, then Read; Step 8 one style-inspector dispatch per plan group from the
-  step's prompt block, `run_in_background: true` as the text says; Step 9 each partial Read and the
+  step's prompt block (its obligation block, where the text has one, instantiated as Step 5's), with
+  the `run_in_background` value the step names; each inspector Writes its partial report in the
+  schema its prompt gives, the one file the prompt lets it write; Step 9 each partial Read and the
   merged report Written; Step 10 the plan Read again and the coverage compared.
 * Step 10A (no checklist item: done while Step 10 is in progress): the prompt-inspector dispatch with
   the context path, the `command_files:` and `agent_files:` lines (Glob of commands/*.md and
   agents/*.md), the obligation block the step names, where it names one (instantiated as Step 5's),
   and the report path; its report Read for the coverage gate.
-* A stop that returns an inspector's declared report (G2 naming that report): the inspector writes the
-  report its work drafted again, as the block asks, and stops again (its next round).
+* A stop that returns a subagent's declared report (G2 naming that report; an inspector's, a style
+  partial, the cleaner's execution report): the subagent writes the report its work drafted again, as
+  the block asks, and stops again (its next round).
 * Step 11: the merge call as the text spells it. On a text whose call names a context no step wrote
   and whose helper returns a combined report outside docs/clean/ (the base, A116/A124), see "Gaps".
 * Step 12: the combined report Read and presented with the text's options.
@@ -54,7 +57,8 @@ What each step does is taken from the tree's commands/clean.md:
 * Step 14: the two counts Read from their files and compared.
 * Step 15: the checkpoint hook, the checkpoint ref read, the step's `record-checkpoint` call.
 * Step 16: the step's jq block (the checkpoint commit bound where the text has the placeholder), then
-  the cleaner dispatch from the step's `Agent tool invocation:` prompt. The cleaner is played from its
+  the cleaner dispatch from the step's `Agent tool invocation:` prompt (its obligation block, where the
+  text has one, instantiated as Step 5's). The cleaner is played from its
   agent file: the report files the prompt names Read, the checkpoint check (Safety First), each
   approved action by the operation its Action Types table gives (move with `mkdir -p` and `mv`, the
   `fix_style` replacement with the Edit tool; an action the table has no row for is skipped with its
@@ -72,7 +76,8 @@ Text points the driver resolves (each also reported as a text defect):
   driver completes Step 6 when the text's Step 6 has nothing left to do (a block, if a hook refuses
   it, is recorded).
 * Step 10A has no checklist item: its dispatch is made while Step 10 is in progress.
-* Step 8's `run_in_background: true` is dispatched as written (a hook that refuses it is recorded).
+* Step 8's `run_in_background` value is dispatched as written (the base's `true`: a hook that refuses
+  it is recorded).
 * Step 5's prompt names the report only in its obligation, where it has one (the base's names only the
   context); the report path is the one the step says the inspector writes, added as a `Write your
   report to:` line (likewise for Step 10A's report). Step 5's Bash block
@@ -106,9 +111,11 @@ quoting the hook's text; nothing else passes a block. `--arg kept=<JSON>` makes 
 base block (drivers/dev.py KeptOnly).
 
 Faults (`--arg fault=<role>:<missing|invalid|notjson>`, none by default): the first Write of that
-inspector's report is changed through the framework's fault hook (Replay.step): `missing` skips it,
-`invalid` drops the first field the declared schema requires, `notjson` keeps the first half of the
-text. Each is meant to be stopped at the inspector's own stop and pass on its next round (above).
+subagent's report (an inspector's report, a style partial, the cleaner's execution report) is changed
+through the framework's fault hook (Replay.step): `missing` skips it, `invalid` drops the first field
+the declared schema requires (a markdown-kind report, which has none: its first field), `notjson` keeps
+the first half of the text. Each is meant to be stopped at the subagent's own stop and pass on its next
+round (above).
 
 `--arg then=push`: after /clean's Stop the owner types `/push` in the same session, played by
 drivers/push.py's PushRun from the tree's commands/push.md: on a branch no earlier token covers (no
@@ -585,7 +592,7 @@ class CleanRun:
             else:
                 text = text[: len(text) // 2]
             step["input"] = dict(step["input"], content=text)
-        self.rp.faults.append((f"agent:{role} Write report", fn))
+        self.rp.faults.append((f"agent:{role} Write*report", fn))
 
     def cleanliness_work(self, role: str, report: str):
         o = self.o
@@ -671,14 +678,19 @@ class CleanRun:
                                   for k, p in enumerate(g["files"], 1)]
                     continue
                 lines.append(line)
-            prompt = "\n".join(lines)
+            prompt = o.instantiate("\n".join(lines), None)
             partial = re.search(r"Write your partial report to:\s*(\S+)", prompt).group(1)
             self.partials.append(partial)
-            self.dispatch(role, prompt, self.style_work(role, n, g["files"], partial), f"Step 8 Agent({role}) group {n}",
-                          extra_input=extra, description=f"Style inspection group {n}")
+            self.dispatch(role, prompt, self.style_work(role, n, g["files"], partial, prompt),
+                          f"Step 8 Agent({role}) group {n}", extra_input=extra,
+                          description=f"Style inspection group {n}", report=partial)
         self.say(f"Launched {len(self.partials)} style-inspector agents in parallel")
 
-    def style_work(self, role: str, n: int, files: list, partial: str):
+    def style_work(self, role: str, n: int, files: list, partial: str, prompt: str):
+        # the partial's fields: the JSON object the prompt gives after "MUST use this schema:"
+        at = prompt.find("{", prompt.index("MUST use this schema:"))
+        fields = list(json.JSONDecoder().raw_decode(prompt[at:])[0])
+
         def work(sub, brief, player):
             violations = []
             for p in files:
@@ -695,10 +707,18 @@ class CleanRun:
                                            "finding": "bare python3 invocation",
                                            "recommendation": "run it with the project venv's python",
                                            "old_line": line, "new_line": line.replace("python3", "python", 1)})
-            doc = {"request_id": self.rid, "group_id": n,
-                   "files_audited": [os.path.relpath(self.abs(p), self.project) for p in files],
-                   "violations": violations, "status": "complete"}
-            agents.put(sub, self.abs(partial), json.dumps(doc, indent=2) + "\n", f"{sub.role} Write partial report")
+            audited = [os.path.relpath(self.abs(p), self.project) for p in files]
+            values = {"request_id": self.rid, "timestamp": utc_now(), "inspector": role, "group_id": n,
+                      "files_audited": audited, "violations": violations,
+                      "summary": {"standards_checked": 11, "violations_found": len(violations),
+                                  "critical": sum(1 for v in violations if v.get("severity") == "critical"),
+                                  "files_audited": len(audited), "files_total": len(files)},
+                      "codex_consult": {"invoked": False, "status": "not_requested", "findings": [],
+                                        "feedback_summary": None, "feedback_incorporated": None},
+                      "status": "complete"}
+            doc = {k: values[k] for k in fields if k in values}
+            self.reports[partial] = json.dumps(doc, indent=2) + "\n"
+            agents.put(sub, self.abs(partial), self.reports[partial], f"{sub.role} Write partial report")
             return {"_final": f"Audited {len(files)} files; {len(violations)} violations.\n\nSTATUS: complete"}
         return work
 
@@ -904,10 +924,11 @@ class CleanRun:
         self.bash(text, "Step 16 Bash context-with-approvals", "Merge the approvals into the cleaner's context")
         inv = cmdtext.block(o.text, "Step 16", anchor="Agent tool invocation:")
         m = re.search(r'prompt:\s*"(.*)"\s*$', inv.rstrip("\n"), re.S)
-        prompt = self.fill(m.group(1))
+        prompt = o.instantiate(self.fill(m.group(1)), None)
         role = self.checklist_role(16) or self.role_in("Step 16")
+        out_rel = re.search(r"Write results to\s+(\S+?\.json)", prompt).group(1)
         self.dispatch(role, prompt, self.cleaner_work(role, prompt), f"Step 16 Agent({role})",
-                      description="Execute approved cleanup actions")
+                      description="Execute approved cleanup actions", report=out_rel)
 
     def cleaner_work(self, role: str, prompt: str):
         o = self.o
@@ -999,7 +1020,8 @@ class CleanRun:
                 "git_status": {"checkpoint_commit": (ctx.get("orchestrator") or {}).get("analysis", {}).get(
                     "checkpoint_commit", self.checkpoint), "cleanup_commit": commit_sha,
                     "files_staged": len(staged), "ready_for_review": bool(commit_sha)}}}
-            agents.put(sub, self.abs(out_rel), json.dumps(doc, indent=2) + "\n", f"{sub.role} Write execution report")
+            self.reports[out_rel] = json.dumps(doc, indent=2) + "\n"
+            agents.put(sub, self.abs(out_rel), self.reports[out_rel], f"{sub.role} Write execution report")
             self.execution_rel = out_rel
             self.cleaner_result = doc["cleaner"]
             return doc
