@@ -30,7 +30,6 @@ Organization and usage documentation for `scripts/`.
 - `check-overnight-reports.sh` - STUB: each specialist's dispatch obligation declares its report and schema, and G2
 - `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 - `check-readme-freshness.sh` - Check README.md freshness for all major folders
-- `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 - `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
