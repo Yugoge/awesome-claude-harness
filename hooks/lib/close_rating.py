@@ -1,6 +1,6 @@
 """The owner's close rating (D9, D9a, D9b): the writer posttool-close-rating.py calls and the predicates P5's
 Stop gate imports. The /close Step 4 question (source ``close-rating:<task-id>``) is required asked, never
-answered: nothing here blocks. Rows share the score scripts' log and lock; its readers skip a row without ``agent``."""
+answered: nothing here blocks. Rows share the score scripts' log, lock and writer; they skip rows without ``agent``."""
 from __future__ import annotations
 
 import fcntl
@@ -56,6 +56,14 @@ def rating_asked(transcript_path, task_id: str) -> bool:
                               == canonical(task_id) for call in span.calls("AskUserQuestion"))
 
 
+def append_row(log, row: dict) -> None:
+    """The lifecycle log's one writer: a row appended and fsynced under the caller's exclusive lock on
+    <log>.lock (append_rating's rating; score-update.sh's rows, which its heredoc hands here)."""
+    with open(log, "a", encoding="utf-8") as handle:
+        print(json.dumps(row, ensure_ascii=False), file=handle, flush=True)
+        os.fsync(handle.fileno())
+
+
 def append_rating(task_id: str, rating: int, tool_use_id) -> None:
     """Append {ts, task_id, rating, tool_use_id} to the lifecycle log under an exclusive lock on
     the score scripts' <log>.lock; the task's first rating wins (canonical ids), read under the lock."""
@@ -64,9 +72,7 @@ def append_rating(task_id: str, rating: int, tool_use_id) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(f"{log}.lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        with open(log, "a+", encoding="utf-8", errors="replace") as handle:
-            handle.seek(0)
-            if canonical(task_id) not in {canonical(m[1]) for m in map(TASK_ID_FIELD.search, handle) if m}:
-                print(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "task_id": task_id,
-                                  "rating": rating, "tool_use_id": tool_use_id}), file=handle, flush=True)
-                os.fsync(handle.fileno())
+        rows = log.read_text(encoding="utf-8", errors="replace").splitlines() if log.exists() else ()
+        if canonical(task_id) not in {canonical(m[1]) for m in map(TASK_ID_FIELD.search, rows) if m}:
+            append_row(log, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "task_id": task_id,
+                             "rating": rating, "tool_use_id": tool_use_id})

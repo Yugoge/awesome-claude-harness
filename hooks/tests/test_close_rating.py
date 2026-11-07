@@ -220,14 +220,15 @@ def test_the_score_scripts_pass_over_rating_rows(tmp_path: Path, config: Path) -
         shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
     shutil.copy2(REPO_ROOT / "scripts" / "lib" / "score_log.py", root / "scripts" / "lib")
     (root / "hooks" / "lib").mkdir(parents=True)
-    shutil.copy2(REPO_ROOT / "hooks" / "lib" / "roster.py", root / "hooks" / "lib")
+    for name in ("roster.py", "close_rating.py"):
+        shutil.copy2(REPO_ROOT / "hooks" / "lib" / name, root / "hooks" / "lib")
     shutil.copytree(REPO_ROOT / "agents", root / "agents")
     _silent(_run(_payload("4 - Minor gaps"), config))
     _silent(_run(_payload("1-2 - Not met", task=OTHER), config))
 
-    def score(script: str, *arguments: str) -> subprocess.CompletedProcess:
+    def score(script: str, *arguments: str, log: Path = _log(config)) -> subprocess.CompletedProcess:
         return subprocess.run(["bash", str(root / "scripts" / script), *arguments,
-                               "--lifecycle-file", str(_log(config))], capture_output=True, text=True, timeout=60)
+                               "--lifecycle-file", str(log)], capture_output=True, text=True, timeout=60)
 
     inject = score("score-inject.sh", "--agent", "dev")
     assert inject.returncode == 0 and "INJECTION_PROOF" in inject.stdout, inject.stderr
@@ -235,6 +236,12 @@ def test_the_score_scripts_pass_over_rating_rows(tmp_path: Path, config: Path) -
     assert update.returncode == 0, update.stderr
     rows = _rows(config)
     assert [row.get("rating") for row in rows[:2]] == [4, 1] and rows[2]["agent"] == "dev" and len(rows) == 3
+    # score-update.sh appends through the rating's writer (append_row): no log yet, its row as before
+    fresh = tmp_path / "fresh" / "lifecycle.jsonl"
+    update = score("score-update.sh", "--agent", "dev", "--event", "qa_first_pass", "--note", "naïve", log=fresh)
+    assert update.returncode == 0, update.stderr
+    [line] = fresh.read_text(encoding="utf-8").splitlines()
+    assert '"reason": "naïve"' in line and json.loads(line)["prev_score"] == 50 and len(json.loads(line)) == 9
 
 
 # --------------------------------------------------------------------------
