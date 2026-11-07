@@ -1594,8 +1594,9 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 ## Files Generated
 
 - Context files: `docs/dev/context-*.json`
-- Dev reports: `docs/dev/dev-report-overnight-*.json`
-- QA reports: `docs/dev/qa-report-overnight-*.json`
+- Dev reports: `docs/dev/dev-report-{pipeline.timestamp_suffix}.json`, one per pipeline
+- QA reports: `docs/dev/qa-report-{pipeline.timestamp_suffix}.json`, one per pipeline
+- Completion reports: `docs/dev/completion-{pipeline.timestamp_suffix}.md`, one per passed pipeline
 - Running log: `docs/dev/overnight-log-<date>.md`
 
 ## Recommendations
