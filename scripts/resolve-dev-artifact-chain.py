@@ -2252,8 +2252,8 @@ def late_repair_eligible(result: dict[str, Any]) -> bool:
 def do_report_gaps(
     project_root: Path | str, task_id: str, path: Path, transcript: str | None = None
 ) -> list[tuple[str, str, str]]:
-    """The do branch's checks beyond do.status (P5 R8), as (code, artifact,
-    detail): the report fails its versioned schema; and, with the session
+    """The Stop gate's /do checks beyond the record and do.status (P5 R8), as
+    (code, artifact, detail): the report fails its versioned schema; and, with the session
     ``transcript``, its files_modified and files_created (a created file may
     sit in either) differ from the write set of every /do span of the task in
     it: the main agent's own Write/Edit/MultiEdit/NotebookEdit targets with an
@@ -2303,16 +2303,13 @@ def do_report_gaps(
     return gaps
 
 
-def disposition_lines(
-    project_root: Path | str, task_id: str, stage: str, transcript: str | None = None
-) -> list[str]:
+def disposition_lines(project_root: Path | str, task_id: str, stage: str) -> list[str]:
     """The task's disposition at ``stage`` as the Stop gate prints it (P5
     R7): no line for chain_pass (D2: nothing else passes), else one gap_line
     per gap, where an artifact no dispatch declared yet also names the
-    canonical todo step the DDR says owes it. ``transcript`` reaches the do
-    branch (do_report_gaps). Raises on an instrument failure, as disposition
-    does; disposition and gap_line are P3's."""
-    outcome = disposition(project_root, task_id, stage, transcript=transcript)
+    canonical todo step the DDR says owes it. Raises on an instrument
+    failure, as disposition does; disposition and gap_line are P3's."""
+    outcome = disposition(project_root, task_id, stage)
     if outcome["disposition"] == "chain_pass":
         return []
     harness = str(Path(__file__).resolve().parent.parent)

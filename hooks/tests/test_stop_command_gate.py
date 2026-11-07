@@ -339,10 +339,15 @@ def do_span(env, context=f"[/do] Consent granted.\n[/do] task-id minted: {DO_ID}
 
 def test_a4_a_pending_report_blocks_every_stop_without_a_forced_allow(env):
     do_span(env)
-    env.fake.answers[(DO_ID, "dev")] = [gap(f"docs/dev/do-report-{DO_ID}.json", "do.status:pending", "pending")]
+    do_report(env)
+    path = env.project / "docs" / "dev" / f"do-report-{DO_ID}.json"
+    record = json.loads(path.read_text())
+    record["do"]["status"] = "pending"
+    path.write_text(json.dumps(record))
     results = [run(env) for _ in range(4)]
-    assert all(code == 2 and "do.status:pending" in text and "FORCED" not in text for code, text in results)
-    assert {c[3] for c in env.fake.calls} == {str(env.tx.path)}  # the do branch takes the transcript (R8)
+    assert all(code == 2 and f"do-report-{DO_ID}.json: do.status is not a terminal status" in text
+               and "FORCED" not in text for code, text in results)
+    assert env.fake.calls == []  # the do-report's own readers decide it, not P3's disposition
 
 
 def test_a4_the_task_is_the_hook_minted_id_not_the_sidecar_or_an_echo(env):
@@ -351,10 +356,14 @@ def test_a4_the_task_is_the_hook_minted_id_not_the_sidecar_or_an_echo(env):
                 result="[/do] task-id minted: 20990101-000000")
     env.tx.say("[/do] task-id minted: 20990101-000001")
     (env.state / f"claude-do-task-{SID}.json").write_text(json.dumps({"task_id": "20990101-000002"}))
-    run(env)
-    (env.state / f"claude-do-task-{SID}.json").unlink()
-    run(env)
-    assert [c[1] for c in env.fake.calls] == [DO_ID, DO_ID]
+    for other in ("20990101-000000", "20990101-000001", "20990101-000002"):
+        (env.project / "docs" / "dev" / f"do-report-{other}.json").write_text(json.dumps({
+            "task_id": other, "source": "do", "do": {"status": "completed", "summary": "done",
+                                                     "files_modified": [], "files_created": []}}))
+    for _ in range(2):
+        code, text = run(env)
+        assert code == 2 and f"docs/dev/do-report-{DO_ID}.json: do-report absent" in text
+        (env.state / f"claude-do-task-{SID}.json").unlink(missing_ok=True)
 
 
 def test_a4_a_do_span_with_no_minted_line_names_the_gap(env):
@@ -363,9 +372,34 @@ def test_a4_a_do_span_with_no_minted_line_names_the_gap(env):
     assert code == 2 and "no hook-minted task id" in text
 
 
+@pytest.mark.parametrize("content,needle", [
+    (None, "do-report absent"),
+    ("{}", "do.status is not a terminal status of schemas/do-report.v1.json"),
+    ("[]", "do-report is not a JSON object"),
+    ("#####", "do-report unreadable/unparseable"),
+    ("lists", "FILES_NOT_WRITE_SET"),
+])
+def test_a4_the_do_stop_decides_on_the_do_report_itself(env, monkeypatch, content, needle):
+    """The /do Stop takes the do-report's verdict from its own readers (do_report.load, the
+    schema's terminal status, the chain's do branch), with P3's disposition absent as on this
+    tree: the complete report lets the Stop pass, an absent or invalid one blocks naming it."""
+    monkeypatch.delattr(resolver, "disposition")  # never reached for /do
+    do_span(env)
+    write_files(env, ["src/a.py"])
+    path = do_report(env, modified=["src/a.py"])
+    assert run(env) == (0, "")
+    if content is None:
+        path.unlink()
+    elif content == "lists":
+        do_report(env)
+    else:
+        path.write_text(content)
+    code, text = run(env)
+    assert code == 2 and f"docs/dev/do-report-{DO_ID}.json" in text and needle in text, text
+
+
 def test_a4_the_gate_creates_and_deletes_no_file(env):
     do_span(env)
-    env.fake.answers[(DO_ID, "dev")] = [gap("docs/dev/do-report-x.json", "MISSING_ARTIFACT", "absent")]
     before = sorted(p for p in env.tmp.rglob("*"))
     for mode in ("block", "advisory"):
         run(env, mode)

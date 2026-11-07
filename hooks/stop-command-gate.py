@@ -25,7 +25,8 @@ Each fact comes from the one producer that writes it: the transcript through
 command_span (the CLI's record of typed prompts, tool calls and hook context),
 git, and the producers' own deciders, called, never copied: P3's disposition
 as the chain's own disposition_lines (scripts/resolve-dev-artifact-chain.py,
-through the one adapter `disposition`), P2's overnight locator and window
+through the one adapter `disposition`), the do-report's one reading
+(hooks/lib/do_report.py) and the chain's do branch, P2's overnight locator and window
 (hooks/lib/overnight.py), P4's close rating (hooks/lib/close_rating.py),
 dev-lifecycle's --auto target function, the merge-analyst's and push-analyst's
 grants (hooks/lib/merge_grant.py) and the push-gate token's path
@@ -86,13 +87,12 @@ def _repository(root) -> None:
 
 
 # ---------------------------------------------------------------- P3's disposition
-def disposition(root, task: str, stage: str, transcript: str | None = None) -> list[str]:
+def disposition(root, task: str, stage: str) -> list[str]:
     """The task's disposition at ``stage`` as gap lines, [] for chain_pass:
     the one adapter, the chain's own disposition_lines (over P3's
-    `disposition(project_root, task_id, stage)`), used verbatim; the do
-    branch also takes the session transcript (R8). Its instrument failure
-    raises."""
-    return _script("scripts/resolve-dev-artifact-chain.py").disposition_lines(root, task, stage, transcript)
+    `disposition(project_root, task_id, stage)`), used verbatim. Its
+    instrument failure raises."""
+    return _script("scripts/resolve-dev-artifact-chain.py").disposition_lines(root, task, stage)
 
 
 # ---------------------------------------------------------------- the todo half
@@ -162,13 +162,22 @@ def p_dev(span, root, payload) -> list[str]:
 
 
 def p_do(span, root, payload) -> list[str]:
-    """/do: the hook-minted id of the span, --stage dev through P3's do branch
-    with the transcript (R8: schema-valid, do.status completed, lists equal to
-    the write set)."""
+    """/do: the do-report of the span's hook-minted id is a record (do_report.load, its one
+    reading), do.status a terminal status of its schema (obligation.terminal_status, R21), and
+    the chain's do branch holds (do_report_gaps: its schema, its lists equal to the write set, R8)."""
     task = span.minted_id()
     if not task:
         return ["do: the /do opener has no hook-minted task id ([/do] task-id minted: <id>)"]
-    return disposition(root, task, "dev", transcript=span.transcript_path)
+    from lib import do_report  # the report's one reading (E8)
+    rel = f"docs/dev/do-report-{task}.json"
+    record, problem = do_report.load(Path(root) / rel)
+    if record is None:
+        return [f"{rel}: {problem}"]
+    status = [] if _lib("obligation").terminal_status("do-report.v1", record) else [
+        f"{rel}: do.status is not a terminal status of schemas/do-report.v1.json"]
+    chain = _script("scripts/resolve-dev-artifact-chain.py")
+    return status + [f"{artifact}: {code}: {detail}" for code, artifact, detail in
+                     chain.do_report_gaps(root, task, Path(root) / rel, span.transcript_path)]
 
 
 def p_overnight(span, root, payload) -> list[str]:
