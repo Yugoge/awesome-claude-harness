@@ -9,15 +9,18 @@ Only timelock and coverage may block (TC-11). A block relays failed_phase=<name>
 last 4 KB of that phase's stderr. An auto_commit or cleanup failure, and a coverage failure
 other than exit 2, is recorded in the result JSON and allowed; the loop continues. A
 timelock instrument failure (exit outside {0, 2}, timeout, launch error, missing file,
-invalid structured decision) blocks with a fixed line only while the human-typed command
-is /dev-overnight (stop_contract.active_command), where /stop releases it; otherwise it is
-recorded and allowed. The finalizer runs only when every phase allowed cleanly.
+invalid structured decision) blocks with a fixed line naming /stop while the human-typed
+command is /dev-overnight (stop_contract.active_command) or, whatever the command, while
+the session's time-lock window is open (overnight.window_open); otherwise it is recorded
+and allowed. The finalizer runs only when every phase allowed cleanly.
 
 Resource preflight/finalize is opt-in: LANEB_SESSION_RESOURCE_TRUST_KEY and _TRUST_ROOT
 are set nowhere by default (no SessionStart provisioning). Without both, only the phases
 run and session_resources.resolve_current_resource_session() must NOT be called: it
 raises when the trust authority is unconfigured, which would make that default state a
 permanent Stop block. Fail-closed finalization applies once a resource session exists.
+Then the timelock phase alone also gets both keys: it publishes the terminal receipt
+finalize reads, and that writer needs them (no other phase receives either key).
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ HOOKS = Path(__file__).resolve().parent
 if str(HOOKS) not in sys.path:
     sys.path.insert(0, str(HOOKS))
 
-from lib import session_resources, stop_contract
+from lib import overnight, session_resources, stop_contract
 
 
 PHASE_ORDER = ("timelock", "coverage", "auto_commit", "cleanup")
@@ -145,11 +148,7 @@ def _run_phase(
     phase_environment: Mapping[str, str],
 ) -> dict:
     child_env = {
-        **{
-            key: value
-            for key, value in phase_environment.items()
-            if key not in TRUST_ENVIRONMENT_KEYS
-        },
+        **phase_environment,
         "CLAUDE_PROJECT_DIR": str(project_dir),
         "LANEB_COORDINATED_STOP": "1",
     }
@@ -285,7 +284,11 @@ def run_coordinator(
             phase,
             raw_payload=raw_payload,
             project_dir=root,
-            phase_environment=phase_environment,
+            phase_environment=(
+                {**phase_environment, **trust_environment}
+                if phase.name == "timelock" and resource_session_id is not None
+                else phase_environment
+            ),
         )
         results.append(result)
         stderr = result.pop("_stderr", "")
@@ -295,6 +298,7 @@ def run_coordinator(
             relay = f"failed_phase={phase.name}\n{stderr}"
         elif phase.name == "timelock" and (
             stop_contract.active_command(payload.get("transcript_path")) == "dev-overnight"
+            or overnight.window_open(payload)
         ):
             relay = f"timelock instrument failure: {result['failure']}; the human can type /stop\n"
         else:

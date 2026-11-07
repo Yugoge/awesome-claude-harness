@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Load a standalone sibling script as a module by path, and hash bytes.
 
-``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
+``scripts/late-repair-controller.py`` and
 ``scripts/check-late-repair-provenance.py`` are standalone CLI scripts, not an
 importable package, so each one loads other sibling scripts by exec'ing the
 sibling's source into a fresh module object rather than a package import.

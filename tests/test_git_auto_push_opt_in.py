@@ -17,12 +17,12 @@ variable was unset or even "0":
       (the watcher is never started; only its functions are loaded).
 
 Each path runs with GIT_AUTO_PUSH unset, set but empty, "0", the near misses
-"true", "yes", " 1" and "01", and "1". Every case has its own scratch
+"true", "yes", " 1", "1 ", "01" and "10", and "1". Every case has its own scratch
 repository whose origin is a local bare repository, and every subprocess gets
 an explicit environment (scratch HOME, state and log dirs, no system or global
 git config). Every value except "1" must leave origin exactly as it was; "1"
 must push. The near misses are what tell an exact guard from a loose one (a
-non-empty, numeric or truthy-word test passes unset/"0"/"1" just as well).
+non-empty, numeric, truthy-word or prefix test passes unset/"0"/"1" just as well).
 
 All cases are triggered once, up front, by one module fixture. A "1" case then
 polls its origin for up to POSITIVE_TIMEOUT seconds; any other case is only
@@ -64,8 +64,8 @@ SHIPPED_SETTINGS = ("settings.json",)
 
 # "unset" leaves the variable out of the environment; every other entry is the
 # literal value. Only "1" may push.
-CASES = ("unset", "", "0", "true", "yes", " 1", "01", "1")
-_CASE_IDS = {"": "empty", " 1": "space-1"}
+CASES = ("unset", "", "0", "true", "yes", " 1", "1 ", "01", "10", "1")
+_CASE_IDS = {"": "empty", " 1": "space-1", "1 ": "1-space"}
 BRANCH = "master"
 POSITIVE_TIMEOUT = 20.0
 NEGATIVE_SETTLE = 5.0
@@ -128,7 +128,6 @@ def _scratch_env(base: Path, case: str) -> dict:
         "CHECKPOINT_LOG_DIR": str(checkpoint_logs),
         "CLAUDE_STATE_DIR": str(state),
         "CHECKPOINT_PUSH_MIN_INTERVAL": "0",
-        "CLAUDE_BACKUP_LOG": str(base / "post-commit-auto-push.log"),
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": str(global_config),
         "GIT_TERMINAL_PROMPT": "0",
@@ -288,8 +287,8 @@ def _trigger_fswatch(base: Path, env: dict, case: str) -> Run:
                  f"origin/{BRANCH}..HEAD")
     head = _git(env, "-C", repo, "rev-parse", "HEAD")
     origin_before = _origin_refs(env, origin)
-    # Sourcing installs an EXIT trap that exits 0 and writes a state file:
-    # clear it before calling safe_push so the exit status is safe_push's own.
+    # Sourcing installs an EXIT trap that exits 0: clear it before calling
+    # safe_push so the exit status is safe_push's own.
     script = ('source "$1" "$2"; loaded=$?; trap - EXIT INT TERM; '
               '[ "$loaded" -eq 0 ] || exit 90; safe_push')
     proc = _run(["bash", "-c", script, "bash", functions, repo], env,
@@ -397,9 +396,14 @@ def test_fswatch_safe_push_only_on_opt_in(runs, case):
 
 @pytest.mark.parametrize("name", SHIPPED_SETTINGS)
 def test_shipped_settings_keep_auto_push_off(name):
-    env = json.loads((ROOT / name).read_text(encoding="utf-8")).get("env", {})
+    text = (ROOT / name).read_text(encoding="utf-8")
+    env = json.loads(text).get("env", {})
     assert env.get("GIT_AUTO_PUSH") == "0", (
         f"{name} ships GIT_AUTO_PUSH={env.get('GIT_AUTO_PUSH')!r}, expected '0'")
+    # The env key is the only mention: a hook command that sets the variable
+    # itself (GIT_AUTO_PUSH=1 <command>) would push despite the "0" above.
+    assert text.count("GIT_AUTO_PUSH") == 1, (
+        f"{name} names GIT_AUTO_PUSH {text.count('GIT_AUTO_PUSH')} times, expected once")
 
 
 # ---------------------------------------------------------------------------
@@ -438,12 +442,14 @@ def test_checkpoint_command_message_matches_the_switch(tmp_path, case):
 # acts like the real one with --source=. --remote=origin, against a local bare
 # repository at GH_STUB_ORIGIN: it creates it, adds it as origin and pushes HEAD
 # to it only when --push is passed. Any later push to origin (from the hook or
-# anything else) therefore lands there too.
+# anything else) therefore lands there too. With GH_STUB_CREATE_FAILS set,
+# `gh repo create` fails and creates nothing.
 GH_STUB = """#!/bin/bash
 printf '%s\\0' "$@" >> "$GH_STUB_LOG"
 printf '\\n' >> "$GH_STUB_LOG"
 if [ "$1" = "api" ]; then echo stub-user; fi
 if [ "$1" = "repo" ] && [ "$2" = "create" ]; then
+  [ -z "$GH_STUB_CREATE_FAILS" ] || exit 1
   git init -q --bare "$GH_STUB_ORIGIN" || exit 1
   git remote add origin "$GH_STUB_ORIGIN" || exit 1
   for arg in "$@"; do
@@ -454,14 +460,16 @@ exit 0
 """
 PROJECT_NAME = "proj"
 CREATE_VALUES = ("1", "true", "TRUE", "yes", "YES")
-NO_CREATE_VALUES = ("0", "no", "FALSE", "false")
+NO_CREATE_VALUES = ("0", "no", "NO", "FALSE", "false")
+UNRECOGNISED_VALUES = ("True", "on", "y")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def _run_session_git_init(base: Path, push_case: str, create=None):
+def _run_session_git_init(base: Path, push_case: str, create=None,
+                          create_fails: bool = False):
     """Run the hook in a fresh non-git directory; return (output, gh calls
     that create a repository, refs of the stub's origin or None if gh never
-    created it)."""
+    created it). The hook exits 1 only when `gh repo create` fails."""
     env = _scratch_env(base, push_case)
     stub_dir = base / "stub-bin"
     stub_dir.mkdir()
@@ -476,11 +484,13 @@ def _run_session_git_init(base: Path, push_case: str, create=None):
     env["CLAUDE_SESSION_GIT_INIT"] = "1"
     if create is not None:
         env["CLAUDE_AUTO_CREATE_REPO"] = create
+    if create_fails:
+        env["GH_STUB_CREATE_FAILS"] = "1"
     project = base / PROJECT_NAME
     project.mkdir()
     proc = _run(["bash", SESSION_GIT_INIT], env, check=False, cwd=project)
     output = ANSI.sub("", proc.stdout + proc.stderr)
-    assert proc.returncode == 0, output
+    assert proc.returncode == (1 if create_fails else 0), output
     assert _git(env, "-C", project, "rev-parse", "--verify", "-q", "HEAD"), (
         f"no initial commit was made\n{output}")
     lines = log.read_text().split("\n") if log.exists() else []
@@ -516,7 +526,27 @@ def test_session_git_init_creates_for_each_truthy_value(tmp_path, create):
 def test_session_git_init_never_creates_for_a_falsy_value(tmp_path, create):
     output, creates, _ = _run_session_git_init(tmp_path, "1", create=create)
     assert creates == [], f"CLAUDE_AUTO_CREATE_REPO={create!r} created: {creates}"
-    assert "Auto-create disabled" in output, output
+    assert "Auto-create disabled" in output and "not recognised" not in output, output
+
+
+@pytest.mark.parametrize("create", UNRECOGNISED_VALUES)
+def test_session_git_init_names_the_accepted_values_for_an_unrecognised_value(tmp_path, create):
+    output, creates, _ = _run_session_git_init(tmp_path, "1", create=create)
+    assert creates == [], f"CLAUDE_AUTO_CREATE_REPO={create!r} created: {creates}"
+    named = [line for line in output.splitlines()
+             if "CLAUDE_AUTO_CREATE_REPO" in line and "not recognised" in line
+             and "true/1/yes create" in line and "false skips" in line]
+    assert len(named) == 1 and "Auto-create disabled" not in output, output
+
+
+@pytest.mark.parametrize("case", ("unset", "1"), ids=_case_id)
+def test_session_git_init_failed_create_keeps_the_push_note(tmp_path, case):
+    output, creates, _ = _run_session_git_init(tmp_path, case, create="true",
+                                               create_fails=True)
+    assert len(creates) == 1, creates
+    assert "Failed to create GitHub repository" in output, output
+    assert 'create it manually: gh repo create "proj"' in output, output
+    assert ("not pushed" in output and "/push" in output) == (case != "1"), output
 
 
 @pytest.mark.parametrize("case", ("unset", "1"), ids=_case_id)

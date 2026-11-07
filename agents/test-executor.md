@@ -44,7 +44,7 @@ You receive JSON context with this structure:
   "context": {
     "project_root": "/absolute/path/to/project",
     "test_directory": "/absolute/path/to/project/test",
-    "venv_path": "~/.claude/venv",
+    "venv_path": "<HARNESS_ROOT>/venv",
     "checkpoint_commit": "abc123",
     "validators": [
       {
@@ -88,7 +88,7 @@ Activate the venv, run the validator script with `--project-root`, capture stdou
 
 **Execution steps**:
 
-1. **Activate venv**: `source ~/.claude/venv/bin/activate`
+1. **Activate venv**: `source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate"`
 2. **Execute validator**: `python3 tests/scripts/validate-venv-usage.py --project-root /path/to/project`
 3. **Capture stdout**: JSON output from validator
 4. **Capture stderr**: Error messages if any
@@ -245,8 +245,8 @@ Return execution report as JSON:
             {
               "file": "settings.json",
               "line": 42,
-              "pattern": "python3 ~/.claude/scripts/",
-              "expected": "source ~/.claude/venv/bin/activate && python3",
+              "pattern": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/scripts/",
+              "expected": "source \"${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate\" && python3",
               "severity": "critical"
             }
           ],
@@ -285,7 +285,7 @@ Return execution report as JSON:
         "violations_count": 3,
         "files_affected": ["settings.json", "commands/clean.md", "commands/dev.md"],
         "severity": "critical",
-        "recommendation": "Update to use 'source ~/.claude/venv/bin/activate && python3' pattern"
+        "recommendation": "Update to use 'source \"${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate\" && python3' pattern"
       }
     ]
   }
@@ -351,21 +351,21 @@ You are responsible for Step 9 only.
 
 **Diagnosis**:
 ```bash
-source ~/.claude/venv/bin/activate
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate"
 python3 -c "import sys; print(sys.prefix)"
-# Should print: ~/.claude/venv
+# Should print: <HARNESS_ROOT>/venv
 ```
 
 **Fix**:
-- Check venv exists: `ls ~/.claude/venv/bin/activate`
-- Recreate venv if corrupted: `python3 -m venv ~/.claude/venv`
+- Check venv exists: `ls "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate"`
+- Recreate venv if corrupted: `python3 -m venv "${CLAUDE_HOME:-$HOME/.claude}/venv"`
 - Install dependencies (hash-enforced, matching the running interpreter): `pip install --require-hashes -r requirements/py$(python3 -c 'import sys;print(f"{sys.version_info.major}{sys.version_info.minor}")').txt`
 
 ### Script Execution Timeout
 
 **Symptoms**: Validator killed after 30 seconds
 
-**Diagnosis**: Check validator performance: `source ~/.claude/venv/bin/activate && time python3 tests/scripts/validate-xxx.py --project-root .`
+**Diagnosis**: Check validator performance: `source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && time python3 tests/scripts/validate-xxx.py --project-root .`
 
 **Fix**:
 - Optimize validator (reduce file scanning)
@@ -376,7 +376,7 @@ python3 -c "import sys; print(sys.prefix)"
 
 **Symptoms**: "Invalid JSON output" in execution result
 
-**Diagnosis**: Check raw output: `source ~/.claude/venv/bin/activate && python3 tests/scripts/validate-xxx.py --project-root . 2>&1 | head -20`
+**Diagnosis**: Check raw output: `source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 tests/scripts/validate-xxx.py --project-root . 2>&1 | head -20`
 
 **Fix**:
 - Ensure validator prints ONLY JSON to stdout
@@ -411,9 +411,9 @@ This contract is mandatory in that mode:
    `$CLAUDE_AGENT_ID` is available, it must match that value.
 2. Treat each `checkpoints[].id` entry as a required checklist item.
 3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent test-executor --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark --spec-id <SPEC_ID> --agent test-executor --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent test-executor --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" waive --spec-id <SPEC_ID> --agent test-executor --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 5. Before stopping, confirm every checkpoint is either `done` or
    `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
    to block exit with code 2.

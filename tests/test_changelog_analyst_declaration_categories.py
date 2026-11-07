@@ -158,7 +158,6 @@ def test_membership_still_requires_a_report(doc):
 
 def test_landed_whole_ledger_mechanism_is_retired_by_the_attribution_journal_cutover(doc):
     """Superseded test (attribution-journal cutover, stage 1 — see
-    docs/reference/attribution-journal-cutover-flip-plan-20261003.md and
     agents/changelog-analyst.md's "Historical note" paragraphs).
 
     This test used to pin files_landed_whole's TOCTOU-safe stage-then-verify digest

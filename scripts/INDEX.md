@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-06T03:19:24Z*
-**Total entries**: 176
+*Last updated: 2026-10-29T07:57:38Z*
+**Total entries**: 166
 **Convention**: kebab
 
 ## Tree
@@ -15,6 +15,7 @@ scripts/
 │   │   └── `installer-acceptance.py` - Runs every acceptance criterion (AC1-AC8) of the installer lane against real
 │   ├── `install` - install file
 │   ├── `installer.py` - Subcommands: plan | apply | uninstall | snapshot
+│   ├── `land` - land file
 │   ├── `preflight` - preflight file
 │   ├── `render-settings` - render-settings file
 │   ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
@@ -24,13 +25,12 @@ scripts/
 │   └── `uninstall` - uninstall file
 ├── lib/
 │   ├── `attribution_adjudicator.py` - Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
-│   ├── `attribution_aggregate_view.py` - Emits the canonical dev-report document shape that /close and /commit
 │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
-│   ├── `dispatch_metadata.py` - answer "which bytes are this task's" -- (1) nothing records which agent identity
 │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
+│   ├── `score_log.py` - ``scripts/score-update.sh`` (whose rows go through the log's one writer,
 │   ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
-│   ├── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
+│   ├── `sibling_loader.py` - ``scripts/late-repair-controller.py`` and
 │   └── `soundness_gate.py` - HUNK-level failure attribution
 ├── modern-git-slot/
 ├── overnight-git/
@@ -46,33 +46,21 @@ scripts/
 ├── todo/
 │   ├── `clean.py` - Preloaded TodoList for /clean workflow
 │   ├── `close.py` - Three user-visible TodoSteps (flat-integer per agents/style-inspector.md
-│   ├── `code-review.py` - Python script
 │   ├── `deep-search.py` - Python script
 │   ├── `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
 │   ├── `dev-overnight.py` - Preloaded TodoList for /dev-overnight workflow
 │   ├── `dev.py` - Preloaded TodoList for /dev workflow
 │   ├── `do.py` - Injects the 5-step /do workflow checklist via hook-todo-injection
-│   ├── `doc-gen.py` - Python script
-│   ├── `explain-code.py` - Python script
-│   ├── `file-analyze.py` - Preloaded TodoList for /file-analyze workflow
-│   ├── `optimize.py` - Python script
-│   ├── `playwright-helper.py` - Python script
-│   ├── `quick-prototype.py` - Preloaded TodoList for /quick-prototype workflow
 │   ├── `redev.py` - Preloaded TodoList for /redev workflow. Delegates to dev.py (single source of truth).
-│   ├── `refactor.py` - Python script
 │   ├── `reflect-search.py` - Preloaded TodoList for /reflect-search workflow
 │   ├── `research-deep.py` - Python script
-│   ├── `security-check.py` - Python script
 │   ├── `site-navigate.py` - Python script
 │   ├── `spec.py` - Mirrors the ask.py structure in the knowledge-system scripts/todo directory
 │   └── `test.py` - Preloaded TodoList for /test workflow
-├── `adjudicate-attribution-staging.py` - CLI: journal-based three-way staging adjudicator (read-only unless --capture-dispatch-baselines-into or --escalation-store is given; see scripts/lib/attribution_adjudicator.py).
 ├── `aggregate-dev-report.py` - Scans docs/dev/ for per-worker shard dev-reports matching a given task-id,
 ├── `aggregate-permissions.py` - Usage: aggregate-permissions.py <qa-glob-or-dir> [pipelines.json]
-├── `analyze-folder-history.sh` - Description: Analyze Git history for folder to discover file creation patterns
 ├── `analyze-git-edge-cases.sh` - Description: Analyze git history for edge cases from bug fix commits
 ├── `apply-permissions.sh` - apply-permissions.sh — merge aggregated permissions JSON list into settings.json
-├── `attribution-aggregate-view.py` - CLI: journal-backed canonical aggregate view (read-only unless --escalation-store is given; see scripts/lib/attribution_aggregate_view.py).
 ├── `blast-radius-tool.py` - Two phases:
 ├── `bootstrap` - bootstrap file
 ├── `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
@@ -81,23 +69,16 @@ scripts/
 ├── `capability-doctor-strict.py` - Two properties this file exists to guarantee:
 ├── `capability-handshake.py` - Proves (or refuses to claim) that this harness's hook-based security boundary is
 ├── `capability-status-line.sh` - Description: statusLine command that renders the persistent host-capability marker.
-├── `capture-dispatch-metadata.py` - dispatch-time baseline content for files already dirty at dispatch) in the --lanes
 ├── `capture-hero-run.py` - Description: Builds a hermetic fixture, installs one narrowly-scoped single-use grant,
 ├── `check-enforcement-evidence.py` - Three subcommands, one consumer each:
 ├── `check-file-references.sh` - File reference detection script - used by /clean command
 ├── `check-late-repair-provenance.py` - Takes ONLY ``--task-id`` and ``--project-dir`` (never a caller-supplied file
-├── `check-overnight-reports.py` - Description: Validates all overnight required outputs declared by the active
-├── `check-overnight-reports.sh` - DEPRECATED — replaced by check-overnight-reports.py per spec-20260426-090235 P0/M5.
-├── `check-public-core.sh` - Description: Public/private boundary gate. Recomputes the top-level tracked-path set from
+├── `check-overnight-reports.sh` - STUB: each specialist's dispatch obligation declares its report and schema, and G2
+├── `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
-├── `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
-├── `cleanup-close-force-sentinel.sh` - Removes the force-close sentinel file for a given dev session.
-├── `close-commit-repair-orchestrate.py` - Consumes schemas/repair-map.v1.json; given a findings list, looks up each
 ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
-├── `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
-├── `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
-├── `commit.sh` - Description: Discoverable canonical entrypoint for commands/dev-overnight.md's
+├── `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
 ├── `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 ├── `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
 ├── `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
@@ -107,15 +88,13 @@ scripts/
 ├── `detect-orphan-agents.sh` - Description: Detect agents not referenced by any command
 ├── `detect-orphan-commands.sh` - Description: Detect orphan commands (one-time patterns, no todo script, unused)
 ├── `detect-orphan-scripts.sh` - Description: Detect scripts not referenced by any command/agent/other script
-├── `dev-lifecycle.py` - Derives, per on-disk task-id, a state using the TOTAL REDUCTION ORDER from
+├── `dev-lifecycle.py` - Derives, per on-disk task-id, a state (docs/dev/ticket-20260808-035658-lanel.md):
 ├── `discover-folders.sh` - Description: Dynamically discover project folders excluding system directories
 ├── `doctor` - doctor file
 ├── `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
-├── `gen-test-baseline.py` - Usage:
 ├── `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 ├── `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
 ├── `generate-hero-status.py` - Description: One source of truth emits THREE marker-delimited canonical regions -- the
-├── `generate-repair-map.py` - Part A of ticket-20260930-132644-l8 (spec-20260930-092323 lane L8). Joins:
 ├── `graphify-enrich.py` - graphify-enrich.py — pre-DEV focused subgraph extractor (runs between Step 7 and Step 8)
 ├── `graphify-maintain.py` - graphify-maintain.py — Global Graphify cache lifecycle manager (REAL CLI)
 ├── `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
@@ -124,7 +103,6 @@ scripts/
 ├── `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
 ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
 ├── `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
-├── `lifecycle-baseline-import.sh` - Description: One-time idempotent migration — import current agent scores from agent-scores.json
 ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 ├── `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
 ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
@@ -144,8 +122,7 @@ scripts/
 ├── `prune-orphaned-workflow-bookmarks.sh` - scripts/prune-orphaned-workflow-bookmarks.sh
 ├── `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 ├── `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
-├── `refine-context.sh` - refine-context.sh — merge QA-refined context with original context
-├── `regen-index-dirs.py` - hand-written prose outside the generated stats+tree block), then regenerate the
+├── `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
 ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 ├── `resolve-commit-repos.py` - The normal ``/commit`` workflow uses this helper before it writes any commit
@@ -160,24 +137,22 @@ scripts/
 ├── `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 ├── `session-index.py` - Subcommands (all take --git-root):
 ├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
-├── `spec-check.py` - Subcommands: check-in, mark, waive, status, check-out, unlock
+├── `spec-check.py` - Subcommands: check-in, register, checkpoints, mark, waive, status, check-out, unlock
+├── `spec-write.py` - Every write of a spec file runs through this script: /spec's own writes (the
 ├── `stage-owned-hunks.py` - Stages ONLY this cycle's owned hunks within a single already-authorized file,
 ├── `step7-spec-update.py` - Step 8 (Spec-update dispatch) reference harness — task 20260524-205206 iter-2
 ├── `test` - test file
 ├── `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
-├── `update-overnight-state.sh` - update-overnight-state.sh — Atomically update overnight state file
 ├── `verify-attribution-chain.py` - Folds each file's events across ALL session journals into a hash chain and
-├── `verify-claims-extended.sh` - Description: Extended headline-claims gate. Closes the four documented coverage gaps in
-├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Recomputes the wired-hook entry count and
+├── `verify-claims.sh` - Description: Self-verifying headline-claims gate. Runs ALL THREE hero-provenance audits in
 ├── `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
 ├── `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
 ├── `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
-├── `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 ├── `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
-├── `write-e2e-enforce.sh` - Writes e2e-enforce.json into the dev-registry for the given session.
 ├── `write-enforce-flag.sh` - Write one or more enforcement-flag sentinels into a dev-registry session dir.
 ├── `write-git-residual-override.py` - Answers the "could not be statically classified" refusal emitted by
-└── `write-qa-mode.sh` - Write or update qa_mode field in the QA sentinel file for a dev-registry session.
+├── `write-push-gate-token.py` - Run after its own commit by both of the token's callers: changelog-analyst under
+└── `write-qa-mode.sh` - STUB: P1b E7 replaced the qa_mode switch with the record: each QA dispatch's
 ```
 <!-- /AUTO:index-stats -->
 

@@ -47,7 +47,7 @@ ALLOW_SET_REFRESH_ENV = "POL_REFRESH_ALLOW_SET"
 # entire argv without inspecting a single word of it.
 INADMISSIBLE_REASON_CODES = ("inert_argv_consumer",)
 
-# AC-R02-10's CLOSED admissible-proof-kind set, now TEN kinds. (6)/(7) were
+# AC-R02-10's CLOSED admissible-proof-kind set, now ELEVEN kinds. (6)/(7) were
 # admitted by revision 3 and (8)/(9) by revision 4, each because it is FORCED
 # by the unrelaxable AC-R02-01 over named pinned expected_exit=0 fixture rows —
 # so the conflict is resolved on the criteria side, never by denying a pinned
@@ -57,7 +57,11 @@ INADMISSIBLE_REASON_CODES = ("inert_argv_consumer",)
 # /tmp/y` (test_runtime_guard.py TestCycle14LiveHook), which the
 # pre-membership analyzer denied as unproven_boundary_with_removal_reference;
 # like (3)/(4)/(5) it spans the operand and declared-data-value shapes of one
-# consumer model rather than being single-shape-bound.
+# consumer model rather than being single-shape-bound. (11) was admitted when a
+# non-forced `git rm` became PROVEN_SAFE_REMOVAL (P10 R13: git refuses a file
+# that differs from HEAD or the index, and the hook proves at run time that no
+# pathspec matches a gitlink outside the harness home); it is bound to the
+# git rm shape.
 ADMISSIBLE_PROOF_KINDS = (
     "proven-safe cached-git removal",
     "proven-safe container/image resource removal",
@@ -69,6 +73,7 @@ ADMISSIBLE_PROOF_KINDS = (
     "stdin-delivered redirection payload of a consumer that does not execute its stdin",
     "pre-command variable binding the following command does not execute",
     "path operand of a non-executing relocator",
+    "proven-recoverable non-forced git removal",
 )
 
 # Revision 4 binds each added kind to exactly ONE shape, so widening the proof
@@ -78,6 +83,7 @@ PROOF_KIND_SHAPE_BOUND = {
     "its stdin": B.SHAPE_HEREDOC_BODY,
     "pre-command variable binding the following command does not execute":
         B.SHAPE_ASSIGNMENT_PREFIX,
+    "proven-recoverable non-forced git removal": B.SHAPE_SUBCOMMAND_RESOURCE,
 }
 
 
@@ -1332,7 +1338,9 @@ def test_ac_r02_16_seeded_sample_agrees_with_the_real_hook(sweeps):
         sample = G.seeded_sample(pool, FIDELITY_PER_SWEEP, name)
         for command in sample:
             sampled += 1
-            in_process = G.analyze_allowed(command)
+            # The hook also runs a non-forced git rm's run-time proof, in the directory it runs in.
+            in_process = G.analyze_allowed(command) and B.prove_git_rm(
+                B.analyze(command), H.REPO_ROOT, H.REPO_ROOT)["allowed"]
             code, _out, err = H.run_hook_command(command)
             if bool(code == 0) == in_process:
                 continue

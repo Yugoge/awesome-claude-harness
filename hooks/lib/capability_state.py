@@ -26,10 +26,12 @@ preflight yet, because a blocking preflight cannot be landed until the handshake
 can actually reach PASS on a live host.
 
 Deliberate structural property (do not "optimise" it away): the consumer NEVER
-parses the `hooks` arrays of any settings layer. Settings files are read as raw
-BYTES for hashing only. A consumer that inspected gate registration could defer
-whenever the gate looks registered and would deliver zero protection on the real
-threat host -- one that lists the gate in settings.json and never dispatches it.
+inspects the `hooks` arrays of any settings layer. A settings layer's presence and
+usability are the verdict of the one load of a settings file (claude_home.py
+`load_settings`); its content is bound as raw BYTES for hashing only. A consumer that
+inspected gate registration could defer whenever the gate looks registered and would
+deliver zero protection on the real threat host -- one that lists the gate in
+settings.json and never dispatches it.
 
 Normalisation notes (stated rather than implied):
   - harness_version is the VERSION file's content with surrounding whitespace
@@ -54,8 +56,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
+    from lib.claude_home import load_settings
     from lib.harness_state_dir import harness_state_dir
 except ImportError:  # hooks/lib itself is on sys.path
+    from claude_home import load_settings
     from harness_state_dir import harness_state_dir
 
 SCHEMA_VERSION = 1
@@ -231,15 +235,19 @@ def sha256_bytes(data: bytes) -> str:
 def settings_records(home: Path) -> list[dict]:
     """Fixed-order, path-tagged SHA-256 records for the three settings layers.
 
-    An unreadable-but-present layer yields present=True with sha256=None, which
-    binding_failure() treats as fail-closed. Reading is byte-level only: this
-    function must never parse hook arrays (see module docstring).
+    Presence is load_settings' verdict: an absent layer is present=False. A layer it
+    finds unusable yields present=True with sha256=None and its reason under
+    "unusable", which binding_failure() treats as fail-closed. What is bound is the
+    bytes: this function must never inspect hook arrays (see module docstring).
     """
     out: list[dict] = []
     for rel in SETTINGS_LAYERS:
         p = home / rel
         rec: dict = {"path": rel, "present": False, "sha256": None}
-        if p.is_file():
+        settings, problem = load_settings(p)
+        if problem:
+            rec.update(present=True, unusable=problem)
+        elif settings is not None:
             rec["present"] = True
             try:
                 rec["sha256"] = sha256_bytes(p.read_bytes())
@@ -305,7 +313,7 @@ def binding_failure(binding: dict) -> str | None:
         if not isinstance(rec, dict) or rec.get("path") != rel:
             return "binding_records_malformed"
         if rec.get("present") and not rec.get("sha256"):
-            return "binding_layer_unreadable"
+            return "binding_layer_unreadable" + (f": {rec['unusable']}" if rec.get("unusable") else "")
     hv = binding.get("harness_version")
     hb = binding.get("host_build")
     if not hv:

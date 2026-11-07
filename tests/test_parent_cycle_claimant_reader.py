@@ -217,8 +217,7 @@ def measure(root: Path, agg_mod: ModuleType) -> dict:
     bare = agg_mod._bare_task_id(_TASK_ID)
     loaded, _ = agg_mod._load_all_shards(agg_mod._scan_shards(dev_dir, bare, _TASK_ID))
     aggregate = agg_mod._build_aggregate(loaded, _TASK_ID)
-    expanded = agg_mod._expand_shards_with_superseded_rounds(loaded, dev_dir, bare)
-    lane_only = agg_mod._lane_candidates_for_file(expanded, _SUBJECT)
+    lane_only = agg_mod._lane_candidates_for_file(loaded, _SUBJECT)
     claimants = agg_mod._cycle_claimant_index(dev_dir, bare, _TASK_ID)
     lane_only_ok, lane_only_diagnostic = agg_mod._completeness_check_file(
         root, aggregate["baseline_head_sha"], _SUBJECT,
@@ -415,7 +414,7 @@ def test_reverting_the_reader_turns_the_invariant_red(tmp_path):
     source = reverted_path.read_text(encoding="utf-8")
     original_call = (
         "            widened = _lane_candidates_for_file(\n"
-        "                expanded_shards or [], rel,\n"
+        "                loaded or [], rel,\n"
         "                cycle_claimants=claimants[rel], project_root=project_root,\n"
         "            )\n"
     )

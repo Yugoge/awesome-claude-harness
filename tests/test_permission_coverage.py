@@ -1,0 +1,321 @@
+"""Every Bash command the command, agent and skill texts run through the harness home keeps the allow
+entry that covers it (P2 R6/R17, D14: entries are respelled, none granted or withdrawn).
+
+The texts name the harness home through one channel, `"${CLAUDE_HOME:-$HOME/.claude}/..."`, and the
+allow list's harness entries are spelled the same way, because the CLI matches a Bash rule against the
+literal command text (code.claude.com/docs/en/permissions, Bash rules: no `~` or variable expansion; a
+rule `P:*` matches `P` and `P <args>`; a compound command is split at `&&`, `||`, `;`, `|`, `&` and
+newlines and each part must be allowed). The cases model that prefix rule:
+
+* each simple command of a rewritten line that starts a program from the harness home (`python3`,
+  `bash`, ...) has a covering entry (its respelled entry, or `Bash(python3:*)` / `Bash(bash:*)`);
+* no rewritten command loses coverage: whatever its old `~/.claude` spelling was covered by under the
+  old list (this list with its harness entries spelled back), the new spelling is covered by this list;
+* a running session reloads `permissions` when settings.json changes (code.claude.com/docs/en/settings)
+  while a command already in flight keeps the old text it loaded, so the old spelling of every
+  rewritten command stays covered by this list too; RUNNING_SESSION_SPELLINGS are the old entries kept
+  for that, each beside its successor, to be removed once no session predates the respelling.
+"""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+CHANNEL = "${CLAUDE_HOME:-$HOME/.claude}"
+OLD = "~/.claude/"
+PROGRAMS = {"python3", "python", "bash", "sh"}
+SHELL_LANGS = {"", "bash", "sh", "shell", "text", "console"}
+
+# The old `~/.claude` spellings kept beside their successors for sessions that loaded command text
+# before the respelling (P2's permission-coverage experiment): each one covers a line origin/master's
+# texts run that no generic entry covers.
+RUNNING_SESSION_SPELLINGS = [
+    "Bash(~/.claude/scripts/check-overnight-reports.sh:*)",
+    "Bash(~/.claude/scripts/detect-orphan-agents.sh:*)",
+    "Bash(~/.claude/scripts/detect-orphan-commands.sh:*)",
+    "Bash(~/.claude/scripts/detect-orphan-scripts.sh:*)",
+    "Bash(~/.claude/scripts/orchestrator.sh clean-inspect:*)",
+    "Bash(~/.claude/scripts/orchestrator.sh clean-merge-reports:*)",
+    "Bash(~/.claude/scripts/orchestrator.sh record-checkpoint:*)",
+    "Bash(~/.claude/scripts/orchestrator.sh rule-inspect:*)",
+    "Bash(~/.claude/scripts/scan-project.sh:*)",
+    "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py:*)",
+    "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py:*)",
+    "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-query.py:*)",
+    "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-verify/spec-verify.py:*)",
+    "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/clean.py:*)",
+    "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/close.py:*)",
+    "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/test.py:*)",
+]
+
+
+# ------------------------------------------------------------------ the CLI's prefix rule
+def bash_rules(allow: list[str]) -> list[str]:
+    return [e[5:-1] for e in allow if e.startswith("Bash(") and e.endswith(")")]
+
+
+def rule_covers(rule: str, cmd: str) -> bool:
+    """`P:*` (or `P *`) matches `P` and `P <args>`; any other `*` matches any text; else exact."""
+    if rule.endswith(":*"):
+        rule = rule[:-2] + " *"
+    if "*" not in rule:
+        return cmd == rule
+    if rule.endswith(" *") and rule.count("*") == 1 and cmd == rule[:-2]:
+        return True
+    rx = ".*".join(re.escape(part) for part in rule.split("*"))
+    return re.fullmatch(rx, cmd, re.S) is not None
+
+
+def covering(rules: list[str], *cmds: str) -> str | None:
+    for rule in rules:
+        if any(rule_covers(rule, c) for c in cmds):
+            return rule
+    return None
+
+
+# ------------------------------------------------------------------ the old spelling
+def tilde(text: str) -> str:
+    """The channel spelled back as `~/.claude/`."""
+    text = re.sub(r'"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/([^"]*)"', r"~/.claude/\1", text)
+    return text.replace(CHANNEL + "/", OLD)
+
+
+def old_rule(rule: str) -> str:
+    """An entry's old spelling: a directly run harness script gained `bash` in the respelling."""
+    return re.sub(r"^bash (~/\.claude/scripts/\S+?\.sh)(?=[\s:]|$)", r"\1", tilde(rule))
+
+
+def old_spellings(cmd: str) -> list[str]:
+    """A rewritten command's two candidate old spellings: as written, and, for a script it now runs
+    through an interpreter, run directly (both the same for a line still in the old spelling)."""
+    if CHANNEL not in cmd:
+        return [cmd, cmd]
+    text = tilde(cmd)
+    bare = re.sub(r"^(?:bash|python3) (~/\.claude/scripts/\S+?\.(?:sh|py))(?=\s|$)", r"\1", text)
+    return [text, bare]
+
+
+def old_rules(rules: list[str]) -> list[str]:
+    return list(dict.fromkeys(old_rule(r) for r in rules))
+
+
+# ------------------------------------------------------------------ the texts' Bash commands
+def _texts() -> list[Path]:
+    return sorted([*REPO.glob("commands/*.md"), *REPO.glob("agents/*.md"), *REPO.glob("skills/*/SKILL.md")])
+
+
+def shell_commands(md: str):
+    """(line, command) for each logical line of a shell fence (continuations joined, heredoc bodies and
+    comment or data lines left out) and each inline code span outside fences."""
+    lines = md.split("\n")
+    i, fence = 0, None
+    while i < len(lines):
+        line = lines[i]
+        m = re.match(r"^\s*```+\s*([\w-]*)", line)
+        if m:
+            fence = None if fence is not None else m.group(1).lower()
+            i += 1
+            continue
+        if fence is None:
+            for span in re.findall(r"`([^`\n]+)`", line):
+                yield i + 1, span.strip()
+            i += 1
+            continue
+        if fence not in SHELL_LANGS:
+            i += 1
+            continue
+        start, text = i + 1, line
+        while text.rstrip().endswith("\\") and i + 1 < len(lines):
+            i += 1
+            text = text.rstrip()[:-1] + " " + lines[i].strip()
+        i += 1
+        tag = re.search(r"<<-?\s*['\"]?(\w+)['\"]?", text)
+        if tag:
+            while i < len(lines) and lines[i].strip() != tag.group(1):
+                i += 1
+            i += 1
+        body = text.strip()
+        if body and not body.startswith(("#", '"', "{", "}", "//", "|")):
+            yield start, body
+
+
+def _scan(text: str, i: int, close: str) -> int:
+    """Index just past the `close` that ends the construct opened before `i` (quotes and $( ) nest)."""
+    while i < len(text):
+        c = text[i]
+        if c == "\\":
+            i += 2
+            continue
+        if close in ('"', "'") and c == close:
+            return i + 1
+        if close == "'":
+            i += 1
+            continue
+        if text.startswith("$(", i):
+            i = _scan(text, i + 2, ")")
+            continue
+        if close == ")" and c == ")":
+            return i + 1
+        if close != '"' and c in "'\"":
+            i = _scan(text, i + 1, c)
+            continue
+        i += 1
+    return i
+
+
+def simple_commands(cmd: str) -> list[str]:
+    """The simple commands of a command line: split at top-level separators, each `$( )` body too."""
+    out, cur, i = [], "", 0
+    while i < len(cmd):
+        if cmd.startswith("$(", i):
+            j = _scan(cmd, i + 2, ")")
+            out += simple_commands(cmd[i + 2:j - 1])
+            cur += cmd[i:j]
+            i = j
+            continue
+        c = cmd[i]
+        if c in "'\"":
+            j = _scan(cmd, i + 1, c)
+            if c == '"':
+                for k in re.finditer(r"\$\(", cmd[i:j]):
+                    end = _scan(cmd[i:j], k.end(), ")")
+                    out += simple_commands(cmd[i:j][k.end():end - 1])
+            cur += cmd[i:j]
+            i = j
+            continue
+        sep = re.match(r"&&|\|\||\|&|[;|&\n]", cmd[i:])
+        if sep:
+            out.append(cur)
+            cur, i = "", i + len(sep.group(0))
+            continue
+        cur += c
+        i += 1
+    out.append(cur)
+    words = []
+    for s in out:
+        s = s.strip().lstrip("({").rstrip(")}").strip()
+        s = re.sub(r"^(?:(?:if|then|else|elif|do|while|until|!)\s+)+", "", s)
+        s = re.sub(r"\s+\d?>(?:&\d|\s*/dev/null)$", "", s)
+        if s and not _assignment_only(s):
+            words.append(s)
+    return words
+
+
+def _assignment_only(s: str) -> bool:
+    """`NAME=value` with no command after it (its `$( )` bodies are commands of their own)."""
+    m = re.match(r"[A-Za-z_]\w*=", s)
+    if not m:
+        return False
+    i = m.end()
+    while i < len(s) and not s[i].isspace():
+        if s[i] in "'\"":
+            i = _scan(s, i + 1, s[i])
+        elif s.startswith("$(", i):
+            i = _scan(s, i + 2, ")")
+        else:
+            i += 1
+    return not s[i:].strip()
+
+
+def rewritten_commands():
+    """(file:line, logical line, simple command) for each simple command naming the harness home."""
+    for path in _texts():
+        for n, line in shell_commands(path.read_text(encoding="utf-8")):
+            if CHANNEL not in line and OLD not in line:
+                continue
+            for simple in simple_commands(line):
+                if CHANNEL in simple or OLD in simple:
+                    yield f"{path.relative_to(REPO)}:{n}", line, simple
+
+
+def _allow() -> list[str]:
+    return json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]["allow"]
+
+
+# ------------------------------------------------------------------ the cases
+def test_the_allow_list_spells_the_harness_home_through_the_channel():
+    allow = _allow()
+    old = [e for e in allow if OLD in e]
+    assert old == [e for e in RUNNING_SESSION_SPELLINGS if e in allow] and set(old) == set(RUNNING_SESSION_SPELLINGS)
+    successors = {old_rule(r): r for r in bash_rules(allow) if CHANNEL in r}
+    for entry in old:
+        assert entry[5:-1] in successors, f"{entry} is kept for running sessions without its successor"
+        assert allow.index(entry) == allow.index("Bash(%s)" % successors[entry[5:-1]]) + 1
+    assert len(allow) == len(set(allow))
+
+
+def test_every_harness_program_line_has_its_covering_entry():
+    rules = bash_rules(_allow())
+    seen, missing = 0, []
+    for where, line, simple in rewritten_commands():
+        if CHANNEL not in simple or simple.split()[0] not in PROGRAMS:
+            continue
+        seen += 1
+        if covering(rules, line, simple) is None:
+            missing.append(f"{where}: {simple}")
+    assert seen > 100 and not missing, "\n".join(missing)
+
+
+def test_no_rewritten_command_loses_its_permission():
+    rules = bash_rules(_allow())
+    before = old_rules(rules)
+    lost = []
+    for where, line, simple in rewritten_commands():
+        was = covering(before, *old_spellings(line), *old_spellings(simple))
+        if was and covering(rules, line, simple) is None:
+            lost.append(f"{where}: {simple} (was {was})")
+    assert not lost, "\n".join(lost)
+
+
+def test_a_running_session_keeps_the_old_spellings_it_loaded():
+    rules = bash_rules(_allow())
+    before = old_rules(rules)
+    asks = []
+    for where, line, simple in rewritten_commands():
+        old = (old_spellings(line)[0], old_spellings(simple)[0])
+        if covering(before, *old) and covering(rules, *old) is None:
+            asks.append(f"{where}: {old[1]}")
+    assert not asks, "\n".join(asks)
+
+
+# Old lines a running session can still hold whose text P1b's G2 arming deleted from today's
+# commands (origin/master's commands/dev-overnight.md ran it at Steps 2, 3 and 4), so no rewritten
+# line stands for them.
+DELETED_OLD_LINES = [
+    ("commands/dev-overnight.md (origin/master, Steps 2-4)",
+     "~/.claude/scripts/check-overnight-reports.sh docs/dev/overnight/<session_id>"),
+]
+
+
+def test_each_kept_old_spelling_covers_a_line_only_it_covers():
+    """Each kept entry covers the old spelling (as written, or with the script run directly, as the
+    old text ran it) of a line the texts run, or of a deleted line a running session still holds,
+    which no other entry covers."""
+    allow = _allow()
+    rows = list(rewritten_commands()) + [(where, line, line) for where, line in DELETED_OLD_LINES]
+    for entry in RUNNING_SESSION_SPELLINGS:
+        others = bash_rules([e for e in allow if e != entry])
+        needed = [where for where, line, simple in rows
+                  for old in zip(old_spellings(line), old_spellings(simple))
+                  if rule_covers(entry[5:-1], old[0]) or rule_covers(entry[5:-1], old[1])
+                  if covering(others, *old) is None]
+        assert needed, f"{entry} covers no old spelling a running session holds"
+
+
+def test_the_prefix_rule_model():
+    assert rule_covers("python3:*", 'python3 "%s/scripts/x.py" --a' % CHANNEL)
+    assert rule_covers("python3:*", "python3")
+    assert not rule_covers("python3:*", "python3x y")
+    assert rule_covers('bash "%s/scripts/x.sh":*' % CHANNEL, 'bash "%s/scripts/x.sh" --task-id t' % CHANNEL)
+    assert not rule_covers('bash "%s/scripts/x.sh":*' % CHANNEL, 'bash "%s/scripts/x.sh2"' % CHANNEL)
+    assert rule_covers("source venv/bin/activate && python*", "source venv/bin/activate && python3 a.py")
+    assert simple_commands('A="$(python3 "%s/s.py" x)" && eval "$A" || { echo no; }' % CHANNEL) == [
+        'python3 "%s/s.py" x' % CHANNEL, 'eval "$A"', "echo no"]
+    assert old_spellings('bash "%s/scripts/x.sh" a' % CHANNEL) == ["bash ~/.claude/scripts/x.sh a",
+                                                                   "~/.claude/scripts/x.sh a"]
+    assert old_rule('bash "%s/scripts/x.sh" sub:*' % CHANNEL) == "~/.claude/scripts/x.sh sub:*"
+    assert old_rule('python3 "%s/scripts/y.py":*' % CHANNEL) == "python3 ~/.claude/scripts/y.py:*"
+    assert old_spellings('source "%s/venv/bin/activate" && python3 "%s/scripts/y.py"' % (CHANNEL, CHANNEL)) == [
+        "source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/y.py"] * 2

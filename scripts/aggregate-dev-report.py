@@ -15,32 +15,28 @@ the canonical prefixed filename is excluded before legacy role-first matching.
 Bare timestamp role-first/task-first behavior remains unchanged.
 
 Usage:
-    python3 scripts/aggregate-dev-report.py --task-id <TASK_ID>
+    python3 scripts/aggregate-dev-report.py --task-id <TASK_ID> [--project-dir <root>]
     python3 scripts/aggregate-dev-report.py --task-id <TASK_ID> --dry-run
+
+Every shard's dev.status must be 'completed', so every canonical this writes
+is 'completed'. A shard that fails to load or validate, or a roster shrink
+whose missing lanes have no completed dev-report on disk, writes nothing, so
+no canonical stands in for a lane that did not complete; the reasons go to
+stderr and the exit is 1. A shrink whose every missing lane has a completed
+dev-report on disk is re-aggregated from the shards found, with `shrunk_from`.
 
 Exit codes:
     0   Success (action: aggregated | validated | skipped)
-    1   Validation failure or I/O error (descriptive message on stderr)
+    1   Shard load/validation mismatch, uncovered shrink, same-cycle
+        completeness gap (its canonical is still written), or I/O error
+        (itemized reasons on stderr)
     2   Bad arguments
 
 stdout (on exit 0):
     JSON: {"status": "ok", "action": "aggregated"|"validated"|"skipped",
            "output_path": "<path>", "reason": "<human-readable>"}
 stderr (on non-zero exit):
-    Human-readable error describing the failure.
-
-Shard-mismatch side effect (spec-20260904-harness-fixes.md R29): on exit 1
-from a shard-load failure, a _validate_shards mismatch, or the
-len(shards_info)<2 skip branch when a pre-existing canonical's own recorded
-roster establishes the cycle was genuinely parallel (not --dry-run), this
-now ALSO writes docs/dev/dev-report-<task-id>.json as a 'blocked' canonical
-aggregate with an itemized blocking_issues array -- IN ADDITION TO, never
-instead of, the stderr diagnostic above -- so downstream /close and /commit
-get an auditable record instead of a missing artifact. A write-time
-reconciliation step (Layer-Escalation Review, spec-20260904-harness-fixes.md)
-additionally ensures this write never silently discards a pre-existing
-canonical's own recorded baseline_head_sha or parallel_workers -- any
-conflict is preserved and disclosed, never silently overwritten.
+    "aggregate-dev-report: <headline>:" then one indented line per reason.
 """
 
 import argparse
@@ -66,12 +62,11 @@ from types import ModuleType
 # exactly" comments on both sides).
 #
 # Resolved via CLAUDE_PROJECT_DIR / cwd, deliberately NOT __file__: this
-# module's source is also exec'd into a bare namespace with no __file__ by
-# tests/test_ac_deviation_fanout_consumer.py::bare_aggregator(), and a
-# module-top-level __file__ reference there raises NameError (see
-# _ledger_contract()'s docstring below for the established precedent this
-# follows). Any failure (unresolvable root, import error) falls back to
-# byte-identical literal copies so classification behavior never changes.
+# module's source is also exec'd into a bare namespace with no __file__ (a
+# test fixture builds its canonical that way), and a module-top-level
+# __file__ reference there raises NameError. Any failure
+# (unresolvable root, import error) falls back to byte-identical literal
+# copies so classification behavior never changes.
 # ---------------------------------------------------------------------------
 
 try:
@@ -112,16 +107,10 @@ except Exception:
         re.IGNORECASE,
     )
 
-# Superseded-round shard, discovered under docs/dev/superseded-<task-id>/ for
-# a lane already present in the primary shard set (backlog #99): a QA-FAIL'd
-# round-N attempt archived there before a corrective retry was promoted as
-# that lane's own top-level shard.
-SUPERSEDED_ROUND_RE = re.compile(
-    r"^dev-report-(?P<task_id>\d{8}-\d{6})-(?P<lane>[A-Za-z0-9][A-Za-z0-9.\-]*)-round(?P<round>\d+)\.json$"
-)
-
-# Strips a superseded-round label's "-round<N>" suffix back to its lane's own
-# base label (backlog #99 iteration 1): e.g. "d-round0" -> "d". Used by
+# Strips a round shard's "-round<N>" label suffix back to its lane's own base
+# label (backlog #99 iteration 1): e.g. "d-round0" -> "d". _scan_shards keeps
+# that label for a dev-report-<task-id>-<lane>-round<N>.json that declares no
+# usable lane identity (see _attribute_shards_by_identity). Used by
 # _merge_owned_edits to recognise that a round shard and its lane's own
 # promoted shard are the SAME lane, for the same-anchor collapse there.
 _ROUND_LABEL_SUFFIX_RE = re.compile(r"-round\d+$")
@@ -170,11 +159,17 @@ COUNT_SUMMARY_RE = re.compile(r"^\s*(\d+)\b")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_project_root() -> Path:
-    """Derive project root from CLAUDE_PROJECT_DIR env var or script location.
+def _resolve_project_root(project_dir: str | None = None) -> Path:
+    """Derive project root from --project-dir, CLAUDE_PROJECT_DIR or script location.
 
+    --project-dir has the resolver's meaning (resolve-dev-artifact-chain.py
+    --project-dir; an empty value is the cwd). Its callers run the harness's
+    own copy of this script, which lives outside the project, from a Bash that
+    exports no CLAUDE_PROJECT_DIR, so they name the project themselves.
     Never hardcodes an absolute path.
     """
+    if project_dir is not None:
+        return Path(project_dir).resolve()
     env_root = os.environ.get("CLAUDE_PROJECT_DIR", "")
     if env_root:
         return Path(env_root)
@@ -383,7 +378,7 @@ def _load_shard_with_diagnostic(path: Path) -> tuple[dict | None, str | None]:
     (roster_preview()) is an independent caller that depends on it exactly
     (spec-20260904-harness-fixes.md R29, QA objection 1). This helper is used
     only by main()'s own shard-load loop, which needs the real parse/read
-    error text for blocking_issues, not just stderr.
+    error text for its itemized stderr reasons.
 
     A syntactically-valid but non-object JSON root (bare list/string/number --
     json.loads does not require an object root) is also classified as a load
@@ -392,9 +387,9 @@ def _load_shard_with_diagnostic(path: Path) -> tuple[dict | None, str | None]:
 
     A non-UTF-8 shard file (Path.read_text() raises UnicodeDecodeError, a
     ValueError subclass -- NOT an OSError) is also caught here: an uncaught
-    UnicodeDecodeError would crash this helper's caller with zero artifact
-    written, the exact zero-artifact-on-crash regression R29 exists to close
-    (dev-level codex consultation, finding 1, live-reproduced).
+    UnicodeDecodeError would crash this helper's caller with a traceback
+    instead of an itemized reason (dev-level codex consultation, finding 1,
+    live-reproduced).
     """
     try:
         parsed = json.loads(path.read_text())
@@ -409,8 +404,8 @@ def _load_all_shards(
     shards_info: list[tuple[str, Path]]
 ) -> tuple[list[tuple[str, dict]], list[tuple[str, str]]]:
     """Load every discovered shard, collecting ALL load outcomes instead of
-    stopping at the first failure (R29 -- a caller here must not assume >=1
-    loaded shard; the all-fail case is possible and must not crash). Shared
+    stopping at the first failure (so every reason is itemized; the all-fail
+    case is possible and must not crash). Shared
     by main()'s >=2-shard load loop and the len(shards_info)<2 skip-branch
     extension (Layer-Escalation Review item F, AC-09), which also needs to
     load whatever 0 or 1 shard(s) it found.
@@ -678,29 +673,15 @@ def _retire_serialized_wave_details(
 def _validate_shards(
     shards: list[tuple[str, dict]],
     task_id: str,
-    deviation=None,
     project_root: Path | None = None,
 ) -> list[str]:
     """Return list of validation error strings (empty = all pass).
-
-    `deviation` (harness backlog #92 residual) is the optional provider the
-    resolver exposes (`ac_deviation_provider()`); None keeps the behavior below
-    byte-identical.  With a provider, a `blocked` shard is accepted exactly
-    when the provider's single validator accepts its AC-deviation record, and a
-    blocked shard that carries a flag but a defective record gets one extra
-    explicit rejection line after today's line.
 
     Each shard must have:
     - Non-empty task_id or request_id matching the target (bare-timestamp normalized)
     - Non-empty baseline_head_sha (empty string is rejected)
     - Explicit baseline_dirty_snapshot key (may be empty string if clean)
-    - dev.status in ('completed', 'needs_review') -- 'needs_review' is a disclosed,
-      narrower sibling of 'completed' (ticket 20260911-011232 M5); it is NEVER a
-      relaxation of 'blocked', which stays a hard shard-validation failure --
-      except, when a deviation provider is passed, for a lane whose AC-deviation
-      record its single validator accepts (harness backlog #92 residual).
-      Substantive eligibility for the resulting needs_review canonical is decided
-      downstream by resolve-dev-artifact-chain.py's reclassification pass, not here.
+    - dev.status == 'completed', dev's one terminal (dev-report.v2)
     - Consistent baseline_head_sha across all shards
     - baseline_dirty_snapshot: when ANY shard's baseline_head_sha disagrees
       with another's, byte-equality is still required for every shard that
@@ -753,8 +734,7 @@ def _validate_shards(
     heads_agree = len(non_empty_heads) <= 1 and len(shards) == sum(
         1 for _, data in shards if data.get("baseline_head_sha")
     )
-    m_target = re.search(r"(\d{8}-\d{6})", task_id)
-    normalized_target = m_target.group(1) if m_target else task_id
+    normalized_target = _bare_task_id(task_id)
     labels = [label for label, _ in shards]
     duplicate_labels = sorted({label for label in labels if labels.count(label) > 1})
     if duplicate_labels:
@@ -768,30 +748,17 @@ def _validate_shards(
                 f"shard '{label}': missing or empty task_id / request_id field"
             )
         else:
-            m = re.search(r"(\d{8}-\d{6})", shard_task_id)
-            normalized_shard = m.group(1) if m else shard_task_id
+            normalized_shard = _bare_task_id(shard_task_id)
             if normalized_shard != normalized_target:
                 errors.append(
                     f"shard '{label}': task_id {shard_task_id!r} does not match target {task_id!r}"
                 )
 
-        # Check dev.status is 'completed' or the disclosed 'needs_review' sibling
-        # (ticket 20260911-011232 M5).  'blocked' (and any other value) stays a
-        # hard failure here -- only the resolver's M3 cross-check may later admit
-        # a needs_review shard into pass_with_exceptions.
-        dev = data.get("dev", {})
-        status = dev.get("status") if isinstance(dev, dict) else None
-        if status not in ("completed", "needs_review"):
-            violations = deviation.violations(data) if deviation is not None else None
-            if violations != []:
-                errors.append(
-                    f"shard '{label}': dev.status is {status!r}, expected 'completed' or 'needs_review'"
-                )
-                if violations:
-                    errors.append(
-                        f"shard '{label}': AC-deviation record rejected: "
-                        + "; ".join(violations)
-                    )
+        status = _shard_status(data)
+        if status != "completed":
+            errors.append(
+                f"shard '{label}': dev.status is {status!r}, expected 'completed'"
+            )
 
         # Require non-empty baseline_head_sha.
         sha = data.get("baseline_head_sha", "")
@@ -873,37 +840,35 @@ def _merge_owned_edits(shards: list[tuple[str, dict]]) -> dict:
     guess. A shard whose owned_edits is not a dict, or a per-file value that
     is not a list, is skipped for that shard/file rather than raising.
 
-    Same-anchor collapse (backlog #99 iteration 1): when
-    _expand_shards_with_superseded_rounds feeds a lane's own superseded
-    round(s) ahead of its promoted shard, the promoted report is free to
-    re-declare a hunk for the SAME `old` anchor a round already declared --
-    e.g. a squashed "final authored text of the region" hunk that already
-    incorporates the round's own edit plus later revisions (observed on the
-    real cycle 20260921-134709's lane a: round0 and promoted both anchor a
-    hunk on the identical `old` text, but promoted's `new` text differs and
-    carries an extra 'note' key). Exact-JSON-value dedup does not recognise
-    these as the same edit, so BOTH would ship, and stage-owned-hunks.py's
-    sequential replay then double-applies the same region -- corrupting the
-    ledger even though a naive anchor search may still "succeed" (a large
-    `new` block can happen to re-embed the anchor text at its own tail).
-    Two hunks sharing an `old` anchor can never BOTH be truthfully replayed,
-    so only one may survive: within a single lane's OWN fold sequence (its
-    round(s), then its own promoted shard -- `_base_lane` strips the
-    "-roundN" suffix _expand_shards_with_superseded_rounds adds, to
-    recognise this), the LATER declaration wins on CONTENT (it is that
-    lane's own final authored state for the region -- verified empirically
-    against the real cycle: taking the promoted shard's hunks alone already
-    byte-replays the live file), while keeping the EARLIER declaration's
-    ledger POSITION so replay order is otherwise unaffected. No information
-    is lost by discarding the earlier declaration here: it remains fully
-    recoverable from its own archived docs/dev/superseded-<task-id>/ report
-    (untouched by this fix); it is excluded only from this replay-facing
-    ledger. The winning hunk's own auxiliary metadata (e.g. 'note') is kept
-    as-is, since the entry is kept wholesale, not merged field-by-field.
-    This collapse is intentionally scoped to a single base lane -- two
-    DIFFERENT lanes sharing an `old` anchor (never observed in practice,
-    and not this ticket's defect) are NOT collapsed, so ordinary cross-lane
-    merges keep their pre-existing exact-JSON-only dedup, unchanged.
+    Same-anchor collapse (backlog #99 iteration 1): when a lane's round
+    shard reaches this merge beside its own promoted shard, the promoted
+    report is free to re-declare a hunk for the SAME `old` anchor a round
+    already declared -- e.g. a squashed "final authored text of the region"
+    hunk that already incorporates the round's own edit plus later revisions
+    (observed on the real cycle 20260921-134709's lane a: round0 and
+    promoted both anchor a hunk on the identical `old` text, but promoted's
+    `new` text differs and carries an extra 'note' key). Exact-JSON-value
+    dedup does not recognise these as the same edit, so BOTH would ship, and
+    stage-owned-hunks.py's sequential replay then double-applies the same
+    region -- corrupting the ledger even though a naive anchor search may
+    still "succeed" (a large `new` block can happen to re-embed the anchor
+    text at its own tail). Two hunks sharing an `old` anchor can never BOTH
+    be truthfully replayed, so only one may survive: within a single lane's
+    OWN fold sequence (its round shard(s) and its own promoted shard --
+    `_base_lane` strips the "-roundN" label suffix to recognise this), the
+    LATER declaration wins on CONTENT (it is that lane's own final authored
+    state for the region -- verified empirically against the real cycle:
+    taking the promoted shard's hunks alone already byte-replays the live
+    file), while keeping the EARLIER declaration's ledger POSITION so replay
+    order is otherwise unaffected. No information is lost by discarding the
+    earlier declaration here: it remains fully recoverable from its own
+    report on disk; it is excluded only from this replay-facing ledger. The
+    winning hunk's own auxiliary metadata (e.g. 'note') is kept as-is, since
+    the entry is kept wholesale, not merged field-by-field. This collapse is
+    intentionally scoped to a single base lane -- two DIFFERENT lanes
+    sharing an `old` anchor (never observed in practice, and not this
+    ticket's defect) are NOT collapsed, so ordinary cross-lane merges keep
+    their pre-existing exact-JSON-only dedup, unchanged.
     """
     result: dict[str, list] = {}
     seen_json: dict[str, set] = {}
@@ -959,83 +924,6 @@ def _merge_pre_edit_snapshots(shards: list[tuple[str, dict]]) -> dict:
     return result
 
 
-def _scan_superseded_shards(
-    dev_dir: Path, bare_tid: str, lanes: set[str]
-) -> dict[str, list[tuple[int, Path]]]:
-    """Discover per-lane superseded-round shards for lanes already present in
-    the primary shard set (backlog #99): scans docs/dev/superseded-<task-id>/
-    directories whose own bare timestamp matches bare_tid, for files named
-    dev-report-<bare_tid>-<lane>-round<N>.json, restricted to `lanes`.
-
-    Ordering within a lane is derived strictly from the filename's numeric
-    round suffix -- never mtime or directory-listing order, per
-    commands/dev.md:858's existing "never discovered by mtime" principle. A
-    lane with no superseded rounds on disk is simply absent from the result,
-    leaving the no-retry case untouched.
-    """
-    by_lane: dict[str, list[tuple[int, Path]]] = {}
-    if not dev_dir.is_dir():
-        return by_lane
-    try:
-        top_level = list(dev_dir.iterdir())
-    except OSError:
-        return by_lane
-    for entry in top_level:
-        if not entry.is_dir() or not entry.name.startswith("superseded-"):
-            continue
-        if _bare_task_id(entry.name[len("superseded-"):]) != bare_tid:
-            continue
-        try:
-            children = list(entry.iterdir())
-        except OSError:
-            continue
-        for child in children:
-            if not child.is_file():
-                continue
-            m = SUPERSEDED_ROUND_RE.match(child.name)
-            if not m or m.group("task_id") != bare_tid:
-                continue
-            lane = m.group("lane")
-            if lane not in lanes:
-                continue
-            by_lane.setdefault(lane, []).append((int(m.group("round")), child))
-    for entries in by_lane.values():
-        entries.sort(key=lambda t: t[0])
-    return by_lane
-
-
-def _expand_shards_with_superseded_rounds(
-    shards: list[tuple[str, dict]], dev_dir: Path, bare_tid: str
-) -> list[tuple[str, dict]]:
-    """Fold each lane's superseded-round reports ahead of its own promoted
-    shard, for owned_edits/pre_edit_snapshots merge input ONLY (backlog #99).
-
-    A retried lane's promoted report may record only a delta on top of its
-    superseded round(s) rather than full re-attribution; without this, the
-    round(s)' owned_edits/pre_edit_snapshots entries would be invisible to
-    _merge_owned_edits/_merge_pre_edit_snapshots. Callers must use the
-    returned list ONLY for that merge -- every OTHER field
-    (tasks_completed/files_modified/etc.) keeps using the original `shards`
-    unchanged. `shards`' own alphabetical-by-lane order (from _scan_shards)
-    is preserved; only each lane's own superseded rounds are inserted
-    immediately before that lane's entry, in ascending round order. When no
-    lane in `shards` has any superseded round on disk (the ordinary
-    no-retry case), this returns `shards` itself, unmodified.
-    """
-    lanes = {label for label, _ in shards}
-    superseded = _scan_superseded_shards(dev_dir, bare_tid, lanes)
-    if not superseded:
-        return shards
-    expanded: list[tuple[str, dict]] = []
-    for label, data in shards:
-        for round_num, round_path in superseded.get(label, []):
-            round_data = _load_shard(round_path)
-            if round_data is not None:
-                expanded.append((f"{label}-round{round_num}", round_data))
-        expanded.append((label, data))
-    return expanded
-
-
 # Ownership-completeness diagnostics (backlog #99 criterion C) travel on THIS
 # top-level key and never on `blocking_issues`.
 #
@@ -1052,12 +940,15 @@ def _expand_shards_with_superseded_rounds(
 # The key is deliberately OUTSIDE the projection because a completeness gap is
 # a live property of the worktree, not a fact about the lane reports -- the two
 # things the projection compares.  That does NOT make a real gap unreportable:
-# main() still writes the canonical and still returns 1 on any gap, and
-# scripts/resolve-dev-artifact-chain.py RECOMPUTES the gaps through
-# `_apply_completeness_check` -- this one implementation, not a second copy --
-# and reports them under its own OWNERSHIP_COMPLETENESS_GAP code.  The stored
-# value here is an audit record that no gate reads, so a stale or forged record
-# can neither suppress a real gap nor manufacture a phantom one.
+# main() writes the canonical with both completeness keys and returns 1 only on
+# a same-cycle gap (OWNERSHIP_COMPLETENESS_BLOCKING_KEY below); a gap on this
+# cross-cycle key alone exits 0.  scripts/resolve-dev-artifact-chain.py
+# RECOMPUTES both through `_apply_completeness_check` -- this one
+# implementation, not a second copy -- reporting same-cycle gaps under its
+# OWNERSHIP_COMPLETENESS_GAP code and this key's as the informational
+# `ownership_completeness_informational`.  The stored value here is an audit
+# record that no gate reads, so a stale or forged record can neither suppress a
+# real gap nor manufacture a phantom one.
 COMPLETENESS_GAPS_KEY = "ownership_completeness_gaps"
 
 # Same-cycle-only completeness gate (spec-20260914-052140 S5.3 design-
@@ -1092,14 +983,8 @@ COMPLETENESS_GAPS_KEY = "ownership_completeness_gaps"
 OWNERSHIP_COMPLETENESS_BLOCKING_KEY = "ownership_completeness_blocking_gaps"
 
 
-def _canonical_projection(document: dict, deviation=None) -> dict:
-    """Select deterministic aggregate fields; timestamp is intentionally excluded.
-
-    With a provider (`deviation`), the fields it names for this document (the
-    AC-deviation flag and record, only when they apply) join the projection so
-    a canonical that lost or gained the record compares stale; None keeps the
-    eleven baseline keys exactly.
-    """
+def _canonical_projection(document: dict) -> dict:
+    """Select deterministic aggregate fields; timestamp is intentionally excluded."""
     keys = (
         "request_id",
         "task_id",
@@ -1113,10 +998,7 @@ def _canonical_projection(document: dict, deviation=None) -> dict:
         "owned_edits",
         "pre_edit_snapshots",
     )
-    projection = {key: document.get(key) for key in keys}
-    if deviation is not None:
-        projection.update(deviation.projection(document))
-    return projection
+    return {key: document.get(key) for key in keys}
 
 
 def _carry_forward_unbuilt_keys(built: dict, canonical_path: Path) -> list[str]:
@@ -1172,405 +1054,14 @@ def _atomic_write_json(path: Path, document: dict) -> None:
         raise
 
 
-_HOOK_LEDGER_ENTRY_FIELDS = ("path", "diff_sha256", "reason")
-
-
-def _ledger_contract():
-    """hooks/doc_sync/ledger_contract.py -- the ONE authoritative declaration
-    of the ledger layout (M6), which the producer imports too.
-
-    Imported lazily HERE for the same reason _diff_sha256 is (see
-    _merge_hook_ledger_into_singular): a module-top-level __file__ reference
-    breaks tests/test_ac_deviation_fanout_consumer.py's bare_aggregator()
-    helper, which execs this file's source into a namespace with no __file__.
-    """
-    own_repo_root = Path(__file__).resolve().parent.parent
-    if str(own_repo_root) not in sys.path:
-        sys.path.insert(0, str(own_repo_root))
-    from hooks.doc_sync import ledger_contract
-    return ledger_contract
-
-
-def _hook_ledger_discovery(project_root: Path, task_id: str) -> dict:
-    """Which producer directories this task-id may consume, and what the
-    AUTHORITY gate rejected (backlog #122 M3a/M3b).
-
-    Replaces a two-name candidate list -- `(task_id, f"dev-{bare_tid}")` --
-    whose second element hardcoded the `dev-` dispatch prefix. That list
-    could not see a directory minted under any third prefix, and a
-    `/dev-command` cycle mints exactly such a name, so five real records sat
-    in a directory neither candidate named. Adding `"dev-command-"` beside
-    `"dev-"` would only move the blind spot to the next dispatch shape.
-
-    Authority now comes from hook-authored evidence: a registry directory is
-    a producer identity only when its co-minted docs/dev/user-requirement-<id>.md
-    exists. Selection still matches on the embedded timestamp and is LABELLED
-    `binding_provenance: timestamp_inferred` rather than presented as exact --
-    the artifact that would make it exact does not exist and is escalated.
-
-    See ledger_contract.select_producers for the full contract; nothing about
-    the layout is restated here.
-    """
-    contract = _ledger_contract()
-    return contract.select_producers(project_root, task_id)
-
-
-def _load_hook_ledger_entries(dir_pairs: list) -> list:
-    """[(registry_file, producer_identity, record)] for every readable, well-shaped record.
-
-    Mirrors _load_shard_with_diagnostic's per-entry fail-closed read
-    pattern: an unreadable or malformed individual ledger file is skipped,
-    never fatal to the whole merge.
-
-    Every record is now retained WITH its own registry file path and the
-    identity of the directory it came from, because M8 requires freshness to
-    be evaluated per RECORD before any path-level aggregation, and because a
-    record excluded later must be nameable: a diagnostic that cannot say
-    which file on disk it is talking about is not a diagnostic.
-    """
-    loaded: list = []
-    for ledger_dir, identity in dir_pairs:
-        if not ledger_dir.is_dir():
-            continue
-        try:
-            children = sorted(ledger_dir.iterdir())
-        except OSError:
-            continue
-        for child in children:
-            if not child.is_file() or child.suffix != ".json":
-                continue
-            try:
-                parsed = json.loads(child.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError, UnicodeError):
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            if not all(
-                isinstance(parsed.get(field), str) and parsed.get(field)
-                for field in _HOOK_LEDGER_ENTRY_FIELDS
-            ):
-                continue
-            loaded.append((str(child), identity, parsed))
-    return loaded
-
-
-def _hook_ledger_exclusion_warning(exclusion: dict) -> str:
-    """One bounded WARNING for one LOSS-class record exclusion.
-
-    Mirrors the field set agents/changelog-analyst.md already emits for the
-    identical condition one layer later (find it by the literal 'declared
-    files_landed_whole, but the staged diff does not match'), and adds the
-    claimant that message lacks -- which is the whole point: a refusal that
-    cannot name whose record it dropped cannot name both sides of a contested
-    region.
-    """
-    claimant = exclusion["claimant"]
-    recomputed = exclusion["recomputed_diff_sha256"]
-    tail = f"recomputed {recomputed}" if recomputed is not None else "the digest could not be recomputed"
-    return (
-        f"WARNING: excluding {exclusion['path']} -- ledger record "
-        f"{exclusion['registry_file']}, declared by task {claimant['task']} "
-        f"(agent {claimant['agent'] or 'unrecorded'}, task_provenance "
-        f"{claimant['task_provenance']}), is classified {exclusion['class']}: "
-        f"declared {exclusion['declared_diff_sha256']}, {tail}. The claimant is retained "
-        f"in hook_ledger_exclusions; only its landing declaration is dropped."
-    )
-
-
-def _hook_ledger_unauthorised_warning(dropped: dict) -> str:
-    """One bounded WARNING for one DISCOVERY-layer directory exclusion.
-
-    The record count is mandatory in the message. Without it the operator
-    learns that something was dropped but not how much -- which is the same
-    silent-loss shape, in miniature, that this whole change exists to remove.
-    """
-    return (
-        f"WARNING: excluding producer directory {dropped['directory']} -- identity "
-        f"{dropped['identity']!r} is not an authorised producer identity because its "
-        f"co-minted {dropped['absent_document']} does not exist, so "
-        f"{dropped['records_not_loaded']} record(s) were NOT loaded. "
-        f"class={dropped['class']} (unit: directory). The records remain on disk at that "
-        f"directory, so their identity is recoverable."
-    )
-
-
-def _emit_hook_ledger_summary(contract, counts: dict, discovery: dict) -> None:
-    """Two SEPARATELY LABELLED blocks, because the two classes count different units.
-
-    The record-level block accounts for records excluded AFTER they were
-    loaded. The discovery-level block counts DIRECTORIES excluded BEFORE any
-    record was loaded. They are never summed, and the discovery-level class
-    contributes nothing to the record-level totals -- that separation is what
-    keeps the record census meaningful.
-    """
-    record_line = ", ".join(f"{name}={counts[name]}" for name in contract.RECORD_LEVEL_CLASSES)
-    _emit_error(
-        f"hook-ledger exclusions [{contract.SUMMARY_BLOCK_RECORD_LEVEL}] (unit: record): {record_line}"
-    )
-    _emit_error(
-        f"hook-ledger exclusions [{contract.SUMMARY_BLOCK_DISCOVERY_LEVEL}] (unit: directory): "
-        f"{contract.CLASS_PRODUCER_IDENTITY_UNAUTHORISED}={len(discovery.get('unauthorised') or [])}"
-    )
-    _emit_error(
-        "hook-ledger discovery: "
-        f"{contract.BINDING_PROVENANCE_FIELD}={discovery.get(contract.BINDING_PROVENANCE_FIELD)}, "
-        f"consumed={discovery.get('consumed')}"
-    )
-
-
-def _merge_hook_ledger_into_singular(
-    existing_doc: dict, discovery: dict, project_root: Path
-) -> bool:
-    """Merge validated hook-ledger entries into existing_doc['files_landed_whole'].
-
-    Backlog #122 M3: additive-only, dedupe by path, never drops a
-    pre-existing entry. Mirrors resolve-commit-repos.py:523-535's own
-    dual-listing constraint (belt-and-suspenders, not a substitute for it --
-    that gate still independently enforces it at admission time): a path
-    already claimed by owned_edits or pre_edit_snapshots is never routed
-    through files_landed_whole instead.
-
-    Freshness recheck (backlog #122 M4, ticket dev-20260926-044454): a
-    ledger entry's diff_sha256 is only ever true AT RECORD TIME -- the path
-    may have been edited again since. Before folding a surviving entry in,
-    recompute sha256(git diff --no-ext-diff --no-textconv HEAD -- path)
-    against project_root using hook_ledger.py's own _diff_sha256 (imported
-    directly, not re-derived) and require byte-for-byte equality with the
-    recorded value. Any mismatch -- including a None/failed recompute -- is
-    rejected on the same fail-closed terms, with NO special-case exemption
-    for a recorded sha256("") (a legitimate "no diff existed at record
-    time" write-side value per hook_ledger.py::_diff_sha256's own
-    docstring, but not exempt from this comparison: recorded-empty vs.
-    now-non-empty is a mismatch like any other). This mirrors
-    agents/changelog-analyst.md:792-832's own recompute/compare/fail-closed
-    pattern for the same files_landed_whole channel at a later point (there
-    stage-then-verify against the index, since staging is the operation it
-    protects) -- defense-in-depth, not a duplicate of that later check.
-
-    Every excluded record is CLASSIFIED (M4). Three of the four classes are a
-    genuine loss and get a bounded per-record WARNING plus a durable entry in
-    hook_ledger_exclusions; the fourth, dual_listing_admission, is DELIBERATE
-    behaviour (see the mirrored gate named above) and is counted under its own
-    label with no warning -- it is the majority class on live data, so warning
-    on it would bury the three that matter under correct behaviour.
-
-    Freshness is evaluated for EVERY loaded record BEFORE any path-level
-    dedupe (M8). Previously the dedupe ran first, so once one claimant's
-    record for a path was folded, a second claimant's record for that path was
-    skipped without ever being freshness-checked and without any diagnostic --
-    a second silent-loss path invisible to any single-record test.
-
-    Returns True iff THE DOCUMENT WAS MUTATED AT ALL -- an entry was appended
-    OR an exclusion was recorded. Widened from "at least one entry was
-    appended": a cycle whose records are ALL excluded appends nothing, so
-    under the old contract its exclusions would never reach disk, which is
-    exactly the both-claimants-stale case this change exists to make durable.
-    The byte-for-byte-unchanged-when-empty guarantee is untouched, because
-    zero records still yields zero appends AND zero exclusions.
-    """
-    contract = _ledger_contract()
-    dir_pairs = [
-        (contract.ledger_dir(project_root, identity), identity)
-        for identity in (discovery.get("consumed") or [])
-    ]
-    loaded = _load_hook_ledger_entries(dir_pairs)
-    unauthorised = discovery.get("unauthorised") or []
-    binding_provenance = discovery.get(contract.BINDING_PROVENANCE_FIELD)
-    counts = {name: 0 for name in contract.RECORD_LEVEL_CLASSES}
-
-    # The discovery layer reports even when nothing was loaded: a gate that
-    # silently drops a record-bearing directory is the defect, not the remedy.
-    for dropped in unauthorised:
-        _emit_error(_hook_ledger_unauthorised_warning(dropped))
-    if discovery.get("ambiguous"):
-        _emit_error(
-            "WARNING: more than one record-bearing minted identity resolves for task-id "
-            f"{discovery.get('task_id')!r}: {discovery.get('matched')}. None was consumed -- "
-            "choosing between them would be a landing verdict this step does not make."
-        )
-
-    if not loaded:
-        if unauthorised or discovery.get("ambiguous"):
-            _emit_hook_ledger_summary(contract, counts, discovery)
-        return False
-
-    # Reuse hook_ledger.py's own _diff_sha256 directly (not a re-derived
-    # hashing scheme), imported lazily HERE rather than at module top level --
-    # mirrors the scripts/*.py -> hooks.doc_sync.* import precedent already
-    # established by scripts/regen-index-dirs.py:18-26. A module-top-level
-    # __file__ reference breaks
-    # tests/test_ac_deviation_fanout_consumer.py's bare_aggregator() helper,
-    # which execs this file's source into a bare namespace with no __file__
-    # at all (test_c8_..._bare_namespace__pin); deferring the reference into
-    # this function body means it is only evaluated when this function
-    # actually runs, which that helper never does.
-    own_repo_root = Path(__file__).resolve().parent.parent
-    if str(own_repo_root) not in sys.path:
-        sys.path.insert(0, str(own_repo_root))
-    from hooks.doc_sync.hook_ledger import _diff_sha256 as hook_ledger_diff_sha256
-
-    owned_paths = set(existing_doc.get("owned_edits") or {})
-    snapshot_paths = set(existing_doc.get("pre_edit_snapshots") or {})
-    existing_landed = existing_doc.get("files_landed_whole")
-    if not isinstance(existing_landed, list):
-        existing_landed = []
-    existing_paths = {item.get("path") for item in existing_landed if isinstance(item, dict)}
-    appended = False
-    exclusions: list = []
-    folded: dict = {}
-
-    def _exclude(failure_class, registry_file, path, claimant, declared, recomputed):
-        """Classify, count, warn, and retain durably -- in that order, always together.
-
-        Exclusion from LANDING is permitted; loss of IDENTITY is not. Every
-        loss-class record therefore leaves both an ephemeral WARNING an
-        operator can see now and a durable hook_ledger_exclusions entry the
-        sibling conflict-classification lane can read later without touching
-        the registry, stderr, or this process's exit status.
-        """
-        counts[failure_class] += 1
-        exclusion = {
-            "registry_file": registry_file,
-            "path": path,
-            "claimant": claimant,
-            "declared_diff_sha256": declared,
-            "recomputed_diff_sha256": recomputed,
-            "class": failure_class,
-            contract.BINDING_PROVENANCE_FIELD: binding_provenance,
-        }
-        exclusions.append(exclusion)
-        _emit_error(_hook_ledger_exclusion_warning(exclusion))
-
-    for registry_file, identity, record in loaded:
-        path = record["path"]
-        declared = record["diff_sha256"]
-        claimant = contract.claimant_of(record, identity)
-        if path in owned_paths or path in snapshot_paths or path in existing_paths:
-            # DELIBERATE admission behaviour, not loss: counted under its own
-            # label, no WARNING, and no hook_ledger_exclusions entry.
-            counts[contract.CLASS_DUAL_LISTING_ADMISSION] += 1
-            continue
-        current_diff_sha256 = hook_ledger_diff_sha256(path, project_root)
-        if current_diff_sha256 is None:
-            # Distinguishable from a digest that merely DIFFERS: "could not be
-            # computed" and "computed to something else" are different facts
-            # and an operator needs to tell them apart.
-            _exclude(contract.CLASS_RECOMPUTE_FAILURE, registry_file, path, claimant, declared, None)
-            continue
-        if current_diff_sha256 != declared:
-            _exclude(
-                contract.CLASS_FRESHNESS_MISMATCH, registry_file, path, claimant,
-                declared, current_diff_sha256,
-            )
-            continue
-        already = folded.get(path)
-        if already is None:
-            entry = {"path": path, "diff_sha256": declared, "reason": record["reason"]}
-            existing_landed.append(entry)
-            folded[path] = (entry, [claimant])
-            appended = True
-            continue
-        entry, claimants = already
-        if entry["diff_sha256"] != declared:
-            # Two records for one path that EACH passed freshness against
-            # their own recompute -- reachable only when the shared working
-            # tree moved between the two recomputes, which is the ordinary
-            # condition of this repository. The path-level entry carries ONE
-            # digest, so this claimant's declared state cannot be represented
-            # in it. It is classified and retained rather than dropped, and no
-            # side is picked: choosing a winner is a landing verdict.
-            _exclude(
-                contract.CLASS_PATH_DEDUPE_SECOND_CLAIMANT, registry_file, path, claimant,
-                declared, current_diff_sha256,
-            )
-            continue
-        claimants.append(claimant)
-
-    # ADDITIVE metadata only: `path`, `diff_sha256` and `reason` keep their
-    # existing shape and values, path cardinality is unchanged, and nothing
-    # below alters entry membership, digest selection, the emitted action or
-    # the return code. Grouping collapses two agents of ONE task into ONE
-    # claimant, because the claimant unit is the task -- handing the sibling
-    # escalation lane a "contested" pair that is one task's two agents would
-    # be a fabricated conflict.
-    for entry, claimants in folded.values():
-        entry["claimants"] = contract.group_claimants(claimants)
-    if appended:
-        existing_doc["files_landed_whole"] = existing_landed
-    if exclusions:
-        # ABSENT, not empty, when nothing was excluded by a loss class, so a
-        # report with nothing to disclose stays byte-identical to today's.
-        existing_doc[contract.EXCLUSIONS_FIELD] = exclusions
-    _emit_hook_ledger_summary(contract, counts, discovery)
-    return appended or bool(exclusions)
-
-
-def _synthesize_status_rationale(shards: list[tuple[str, dict]], needs_review_labels: list[str]) -> dict:
-    """Aggregate the contributing needs_review shards' own status_rationale.
-
-    Ticket 20260911-011232 M5: lets the canonical's own INVALID_DEV_STATUS
-    become reclassifiable by the SAME resolver M3 algorithm as a single lane --
-    no special-casing of "the canonical" vs. "a lane" anywhere in the resolver.
-    """
-    by_label = {label: data for label, data in shards}
-    classifications: set[str] = set()
-    blocked_by_parts: list[str] = []
-    for label in needs_review_labels:
-        rationale = by_label[label].get("dev", {}).get("status_rationale")
-        if isinstance(rationale, dict):
-            classification = rationale.get("classification")
-            if isinstance(classification, str) and classification:
-                classifications.add(classification)
-            blocked_by = rationale.get("blocked_by")
-            blocked_by_parts.append(
-                f"{label}: {blocked_by}" if blocked_by else f"{label}: (no blocked_by recorded)"
-            )
-        else:
-            blocked_by_parts.append(f"{label}: (no status_rationale recorded)")
-    classification = classifications.pop() if len(classifications) == 1 else "other_disclosed_handoff"
-    return {
-        "classification": classification,
-        "blocked_by": "; ".join(blocked_by_parts),
-        "forbidden_action": "see per-lane status_rationale in the referenced lane dev-report(s)",
-    }
-
-
-def _build_aggregate(
-    shards: list[tuple[str, dict]], task_id: str, deviation=None
-) -> dict:
+def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
     """Construct the canonical aggregate document from the given shards.
 
-    `deviation` (harness backlog #92 residual) is the optional provider the
-    resolver exposes; None keeps every behavior below byte-identical.  With a
-    provider, a shard whose AC-deviation record the single validator accepts
-    makes the canonical `blocked` (worst-of: blocked > needs_review >
-    completed), the provider's merged record is added to the document, and the
-    needs_review rationale is synthesized only when the canonical stays
-    needs_review.
-
-    On the successful path, called only after _validate_shards passes (all
-    shards 'completed' or the disclosed 'needs_review' sibling, consistent
-    baseline).  R29 (spec-20260904-harness-fixes.md) also reuses this as the
-    base for a 'blocked' aggregate on a shard-load or shard-validation
-    mismatch -- in that case `shards` may not have passed _validate_shards
-    (may contain a malformed dev field); the caller overrides dev.status to
-    'blocked' and pops dev.status_rationale afterward, so entering the
-    needs_review-synthesis branch below transiently is harmless -- the final
-    written document is what is contracted, not whether this branch was
-    entered. `shards` is never duplicate-labeled here: R29's own
-    _write_blocked_aggregate deduplicates by label (see
-    _dedupe_shards_by_label) before calling this function, so the
-    needs_review-correlation logic below -- OWNED BY TICKET 20260911-011232,
-    reverted byte-for-byte to that ticket's own original by_label form
-    (Revision 9 Decision 1, cross-task-boundary ruling) -- never sees one.
-
-    When any contributing shard declares dev.status == 'needs_review' (ticket
-    20260911-011232 M5), the canonical's own dev.status becomes 'needs_review'
-    too, with a synthesized dev.status_rationale aggregating the contributing
-    shard(s); otherwise dev.status is 'completed' exactly as before.
+    Called only with shards that passed _validate_shards (every dev.status
+    'completed', consistent baseline), so the canonical is 'completed'.
     """
     # The shard-carried lane_set (when authoritative) restricts ONLY this worker
-    # count; every shard below still feeds the status fold and unions.
+    # count; every shard below still feeds the unions.
     worker_ids = [label for label, _ in _partition_roster(shards)[0]]
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -1578,22 +1069,8 @@ def _build_aggregate(
     sha = next((d.get("baseline_head_sha", "") for _, d in shards), "")
     dirty = next((d.get("baseline_dirty_snapshot", "") for _, d in shards), "")
 
-    needs_review_labels = [
-        label
-        for label, data in shards
-        if isinstance(data.get("dev"), dict) and data["dev"].get("status") == "needs_review"
-    ]
-
-    has_deviation = deviation is not None and any(
-        deviation.violations(data) == [] for _, data in shards
-    )
-    if has_deviation:
-        canonical_status = "blocked"
-    else:
-        canonical_status = "needs_review" if needs_review_labels else "completed"
-
     dev_block = {
-        "status": canonical_status,
+        "status": "completed",
         "tasks_completed": _union_list(shards, ["dev", "tasks_completed"]),
         "scripts_created": _union_list(shards, ["dev", "scripts_created"]),
         "permissions_to_add": _union_list(shards, ["dev", "permissions_to_add"]),
@@ -1601,24 +1078,6 @@ def _build_aggregate(
         "files_created": _union_list(shards, ["dev", "files_created"]),
         "observed_preexisting": _union_list(shards, ["dev", "observed_preexisting"]),
     }
-    if needs_review_labels and not has_deviation:
-        dev_block["status_rationale"] = _synthesize_status_rationale(shards, needs_review_labels)
-
-    # backlog #99: fold each lane's superseded-round reports (a QA-FAIL'd
-    # attempt archived under docs/dev/superseded-<task-id>/) ahead of that
-    # lane's own promoted contribution, for owned_edits/pre_edit_snapshots
-    # ONLY -- every other field above still unions the original `shards`.
-    # _resolve_project_root()'s __file__ fallback is unavailable when this
-    # module is exec()'d into a bare namespace without CLAUDE_PROJECT_DIR set
-    # (e.g. tests/test_ac_deviation_record_chain.py's minimal loader) -- fall
-    # back to `shards` unchanged rather than crash a caller that never asked
-    # for superseded-round discovery in the first place.
-    try:
-        owned_edit_shards = _expand_shards_with_superseded_rounds(
-            shards, _resolve_dev_dir(_resolve_project_root()), _bare_task_id(task_id)
-        )
-    except NameError:
-        owned_edit_shards = shards
 
     aggregate = {
         "request_id": task_id,
@@ -1635,8 +1094,8 @@ def _build_aggregate(
         # main() overwrites it with what it actually measured.  Emitting it
         # here is what stops `_carry_forward_unbuilt_keys` from resurrecting a
         # previous run's gap list on any write path that does not re-measure
-        # (e.g. `_write_blocked_aggregate`): a key the builder produces always
-        # wins over the one the existing canonical carried.
+        # (the shrink route): a key the builder produces always wins over the
+        # one the existing canonical carried.
         COMPLETENESS_GAPS_KEY: [],
         # Same reasoning, same key-always-wins mechanism, for the narrower
         # same-cycle-only BLOCKING channel (see OWNERSHIP_COMPLETENESS_
@@ -1645,14 +1104,12 @@ def _build_aggregate(
         # actually measured.
         OWNERSHIP_COMPLETENESS_BLOCKING_KEY: [],
         "recommendations": _union_list(shards, ["recommendations"]),
-        "owned_edits": _merge_owned_edits(owned_edit_shards),
-        "pre_edit_snapshots": _merge_pre_edit_snapshots(owned_edit_shards),
+        "owned_edits": _merge_owned_edits(shards),
+        "pre_edit_snapshots": _merge_pre_edit_snapshots(shards),
     }
     wave = _baseline_wave_projection(shards)
     if wave is not None:
         aggregate["baseline_wave_projection"] = wave
-    if deviation is not None:
-        aggregate.update(deviation.merge(shards))
     return aggregate
 
 
@@ -1671,9 +1128,7 @@ def _baseline_wave_projection(shards: list[tuple[str, dict]]) -> dict | None:
 
     Facts only, read straight off the shards: this reports what the lanes
     DECLARE and RECORD, never that a declaration was verified -- verification
-    is _retire_serialized_wave_details'/the resolver's to assert, and
-    _build_aggregate is also reached with unvalidated shards via
-    _write_blocked_aggregate.
+    is _retire_serialized_wave_details'/the resolver's to assert.
 
     Returns None when no shard declares BASELINE_WAVE_KEY, so a fan-out that
     is simultaneous (every pre-existing cycle) gains no key and every
@@ -1724,10 +1179,39 @@ def _baseline_wave_projection(shards: list[tuple[str, dict]]) -> dict | None:
     }
 
 
+def _obligation_module():
+    """hooks/lib/obligation.py, loaded from this file's own harness (its flat
+    sibling imports find hooks/lib), whatever `hooks` package the project's
+    path already resolved; else the caller's import path (a bare namespace has
+    no __file__); None where neither holds it (a copy of this file alone)."""
+    name = "_aggregate_dev_report_obligation"
+    if name in sys.modules:
+        return sys.modules[name]
+    own_file = globals().get("__file__")
+    lib = Path(own_file).resolve().parent.parent / "hooks" / "lib" if own_file else None
+    try:
+        if lib is not None and (lib / "obligation.py").is_file():
+            import importlib.util
+            if str(lib) not in sys.path:
+                sys.path.append(str(lib))
+            spec = importlib.util.spec_from_file_location(name, lib / "obligation.py")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        else:
+            from hooks.lib import obligation as module
+    except Exception:
+        module = None
+    sys.modules[name] = module
+    return module
+
+
 def _bare_task_id(task_id: str) -> str:
-    """Extract YYYYMMDD-HHMMSS portion from a potentially-prefixed task-id."""
-    m = re.search(r"(\d{8}-\d{6})", task_id)
-    return m.group(1) if m else task_id
+    """The YYYYMMDD-HHMMSS portion of a potentially-prefixed task-id (the one
+    reading of an id's timestamp, hooks/lib/obligation.py task_stamp), else the
+    id itself (also where the harness library is missing: ids then compare
+    exactly, which only adds mismatches, never hides one)."""
+    module = _obligation_module()
+    return (module.task_stamp(task_id) if module is not None else None) or task_id
 
 
 def _roster_authority(shards: list[tuple[str, dict]]) -> tuple[list[str] | None, list[str]]:
@@ -1759,9 +1243,9 @@ def _roster_authority(shards: list[tuple[str, dict]]) -> tuple[list[str] | None,
 def _partition_roster(shards: list[tuple[str, dict]]):
     """Split shards into (counted, excluded, conflict_labels) for the roster.
 
-    The roster governs ONLY the worker count (`parallel_workers`); validation,
-    the canonical status fold and stdout outcome always use the full set.  A
-    shard carrying the lane_set is never excluded.
+    The roster governs ONLY the worker count (`parallel_workers`); validation
+    and stdout outcome always use the full set.  A shard carrying the lane_set
+    is never excluded.
     """
     lane_set, conflict = _roster_authority(shards)
     if lane_set is None:
@@ -1786,9 +1270,6 @@ def _outcome_fields(dev_status, loaded: list[tuple[str, dict]], shards_info) -> 
     fields: dict = {}
     if isinstance(dev_status, str):
         fields["dev_status"] = dev_status
-    needs_review = sorted(l for l, d in loaded if _shard_status(d) == "needs_review")
-    if needs_review:
-        fields["needs_review_lanes"] = needs_review
     _, excluded, conflict = _partition_roster(loaded)
     files = {label: path.name for label, path in shards_info}
     if excluded:
@@ -1796,10 +1277,6 @@ def _outcome_fields(dev_status, loaded: list[tuple[str, dict]], shards_info) -> 
             {"file": files.get(l), "label": l, "declared_status": _shard_status(d)}
             for l, d in excluded
         ]
-        nr_reports = [{"file": files.get(l), "label": l}
-                      for l, d in excluded if _shard_status(d) == "needs_review"]
-        if nr_reports:
-            fields["needs_review_reports"] = nr_reports
     if conflict:
         fields["lane_set_conflict"] = conflict
     return fields
@@ -1813,11 +1290,6 @@ def _emit_ok(action: str, output_path: str, reason: str, extra: dict | None = No
         "reason": reason,
     }
     if extra:
-        if extra.get("dev_status") == "needs_review":
-            payload["reason"] = (
-                f"{reason} Canonical dev.status is needs_review"
-                f" (lanes: {extra.get('needs_review_lanes', [])})."
-            )
         payload.update(extra)
     print(json.dumps(payload))
 
@@ -1826,311 +1298,46 @@ def _emit_error(reason: str) -> None:
     sys.stderr.write(f"aggregate-dev-report: {reason}\n")
 
 
-_DEVIATION_PROVIDER_CACHE: list = []
-
-
-def _load_deviation_provider():
-    """The AC-deviation provider of the resolver next to this script, or None.
-
-    The resolver owns the ONE definition of the deviation record's shape and
-    exposes it through `ac_deviation_provider()`.  It is loaded lazily and only
-    by `main` (the resolver loads this module inside `resolve_chain`, so an
-    import here would be a cycle), by executing the resolver source located
-    next to this file -- the mirror of the resolver's own loader -- and cached
-    for the process.  FAILS CLOSED: when the source is absent, cannot be
-    executed or exposes no provider, exactly one stderr line names the loss and
-    None is returned, so the caller keeps the baseline behavior (a blocked lane
-    is rejected) and never releases a lane on a guess.
-    """
-    if _DEVIATION_PROVIDER_CACHE:
-        return _DEVIATION_PROVIDER_CACHE[0]
-    try:
-        path = Path(__file__).with_name("resolve-dev-artifact-chain.py")
-        module = ModuleType("_dev_resolver_provider")
-        module.__file__ = str(path)
-        exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
-        provider = module.ac_deviation_provider()
-    except Exception as exc:
-        _emit_error("AC-deviation provider unavailable: " + " ".join(str(exc).split()))
-        provider = None
-    _DEVIATION_PROVIDER_CACHE.append(provider)
-    return provider
-
-
-def _has_blocked_shard(shards: list[tuple[str, dict]]) -> bool:
-    """Whether any shard reports dev.status == 'blocked' (the only shards the
-    deviation provider can affect)."""
-    return any(
-        isinstance(data.get("dev"), dict) and data["dev"].get("status") == "blocked"
-        for _, data in shards
-    )
-
-
 def _is_str_list(value) -> bool:
-    """True iff value is a list whose every element is a str.
-
-    Layer-Escalation Review item G: baseline_head_sha/parallel_workers are
-    validated and reconciled INDEPENDENTLY of each other -- a wrong-typed
-    roster must never block a valid sha's reconciliation, and vice versa
-    (AC-09, QA BA-validation-escalation objection 4).
-    """
+    """True iff value is a list whose every element is a str."""
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
-def _dedupe_shards_by_label(loaded: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
-    """Deduplicate loaded shards by label -- for use ONLY as the argument
-    passed into _build_aggregate from _write_blocked_aggregate (R29,
-    Revision 9 Decision 1, cross-task-boundary ruling).
-
-    _build_aggregate's needs_review-correlation logic (_synthesize_status_
-    rationale's by_label dict) is owned by ticket 20260911-011232 and has
-    been reverted to that ticket's own original form, which resolves a
-    duplicate label via last-write-wins independent of which shard actually
-    matched as needs_review -- crashing with an unhandled AttributeError if
-    the OTHER duplicate's dev field is malformed. Rather than touch 011232's
-    owned code, R29 removes the ambiguity BEFORE _build_aggregate ever runs.
-
-    Deterministic, content-based tie-break: if exactly one of a label's
-    duplicates has a well-formed dict `dev` field, keep that one; otherwise
-    (all well-formed, or all malformed) keep the first shard in scan order.
-
-    Every OTHER computation in _write_blocked_aggregate (the sha-unanimity
-    candidate, the write-time roster/sha reconciliation, mismatch_entries)
-    continues to operate on the ORIGINAL, non-deduplicated `loaded`/
-    `full_roster` -- those already have their own duplicate-safe multiset
-    semantics and must not have a duplicate label silently collapsed before
-    they run. The duplicate-label fact itself is independently disclosed via
-    _validate_shards' own blocking_issues entry, computed on the original,
-    non-deduplicated list.
-    """
-    by_label: dict[str, list[tuple[str, dict]]] = {}
-    order: list[str] = []
-    for label, data in loaded:
-        if label not in by_label:
-            order.append(label)
-        by_label.setdefault(label, []).append((label, data))
-
-    deduped: list[tuple[str, dict]] = []
-    for label in order:
-        entries = by_label[label]
-        if len(entries) == 1:
-            deduped.append(entries[0])
-            continue
-        well_formed = [entry for entry in entries if isinstance(entry[1].get("dev"), dict)]
-        deduped.append(well_formed[0] if len(well_formed) == 1 else entries[0])
-    return deduped
-
-
-def _current_run_candidate_sha(loaded: list[tuple[str, dict]]) -> str:
-    """Candidate baseline_head_sha for a blocked aggregate, computed ONLY
-    from the CURRENT run's own successfully-loaded shards -- never from an
-    existing canonical, and never an arbitrary "first shard" pick.
-
-    Layer-Escalation Review item D: '' unless every shard reporting a
-    non-empty value agrees on the SAME one (closes codex round-6 finding 3 --
-    _build_aggregate's own next(...) first-loaded-shard pick is a naive
-    selection, not a unanimity check, and could silently prefer one shard's
-    value over a disagreeing sibling's).
-    """
-    shas = {data.get("baseline_head_sha", "") for _, data in loaded}
-    non_empty = {sha for sha in shas if sha}
-    if len(non_empty) == 1:
-        return next(iter(non_empty))
-    return ""
-
-
-def _reconcile_write_time(
-    canonical_path: Path,
-    candidate_sha: str,
-    current_full_roster: list[str],
-) -> tuple[str, list[str], list[str]]:
-    """Reconcile the current run's own write-time candidates against
-    whatever a pre-existing canonical at canonical_path already recorded, so
-    a mismatch write (or the len(shards_info)<2 skip-branch extension) never
-    silently discards prior sha/roster evidence (Layer-Escalation Review,
-    items B'/E/G; AC-09).
-
-    Returns (final_sha, final_roster, disclosure_entries). sha and roster
-    reconcile INDEPENDENTLY of each other (item G, QA BA-validation-
-    escalation objection 4): a malformed baseline_head_sha field never blocks
-    a valid parallel_workers field from reconciling normally, and vice
-    versa. On any full-document read failure (unreadable, non-UTF-8, or a
-    non-dict JSON root), BOTH fields fail closed together, since neither can
-    be independently examined.
-
-    No existing canonical at all (first-ever write for this task-id) means
-    nothing to reconcile against -- the current run's own candidates are
-    written as-is.
-    """
-    disclosures: list[str] = []
-    if not canonical_path.exists():
-        return candidate_sha, sorted(current_full_roster), disclosures
-
-    existing, read_error = _load_shard_with_diagnostic(canonical_path)
-    if existing is None:
-        # Full-document read failure -- neither field can be independently
-        # examined. Fail closed on sha (never the current run's own
-        # candidate: a real successful run's candidate is always non-empty
-        # per _validate_shards' existing non-empty-sha requirement, so ''
-        # can never accidentally satisfy a future legitimate recovery);
-        # best-effort fall back to the current scan alone for the roster.
-        disclosures.append(
-            f"existing canonical {canonical_path} could not be read for write-time "
-            f"reconciliation ({read_error}); baseline_head_sha forced to '' "
-            "(fail-closed) and parallel_workers falls back to the current scan alone"
-        )
-        return "", sorted(current_full_roster), disclosures
-
-    existing_sha_raw = existing.get("baseline_head_sha", "")
-    if isinstance(existing_sha_raw, str):
-        if existing_sha_raw != candidate_sha:
-            final_sha = existing_sha_raw
-            disclosures.append(
-                f"existing canonical's baseline_head_sha {existing_sha_raw!r} conflicts "
-                f"with this run's candidate {candidate_sha!r}; the existing value is "
-                "preserved -- manual reconciliation required"
-            )
-        else:
-            final_sha = candidate_sha
-    else:
-        final_sha = ""
-        disclosures.append(
-            f"existing canonical's baseline_head_sha is {type(existing_sha_raw).__name__}, "
-            "not a string; unusable for write-time reconciliation -- forced to '' (fail-closed)"
-        )
-
-    existing_roster_raw = existing.get("parallel_workers", [])
-    if _is_str_list(existing_roster_raw):
-        existing_counter = Counter(existing_roster_raw)
-        current_counter = Counter(current_full_roster)
-        final_roster = sorted((existing_counter | current_counter).elements())
-        missing = existing_counter - current_counter
-        for label, count in sorted(missing.items()):
-            disclosures.append(
-                f"shard '{label}': existing canonical's parallel_workers records "
-                f"{count} occurrence(s) no longer found in the current scan"
-            )
-    else:
-        final_roster = sorted(current_full_roster)
-        disclosures.append(
-            "existing canonical's parallel_workers is not a list of strings; unusable "
-            "for write-time reconciliation -- falls back to the current scan alone"
-        )
-
-    return final_sha, final_roster, disclosures
-
-
-def _write_blocked_aggregate(
-    loaded: list[tuple[str, dict]],
-    task_id: str,
-    full_roster: list[str],
-    mismatch_entries: list[str],
-    canonical_path: Path,
-    dry_run: bool,
-) -> int:
-    """Write a 'blocked' canonical aggregate on a shard-mismatch, per
-    commands/dev.md Step 11's construction rule (spec-20260904-harness-fixes.md
-    R29) -- so downstream /close and /commit get an itemized, auditable
-    record instead of a missing artifact when a shard-load or
-    shard-validation mismatch is detected, or when the len(shards_info)<2
-    skip branch is extended (Layer-Escalation Review item F, AC-09). Always
-    returns 1 (the mismatch exit code is unchanged; this only adds the write
-    as a side effect).
-
-    Reuses the EXISTING _build_aggregate(loaded, task_id) directly as the
-    base -- not a bespoke helper that re-derives the union logic -- so all 8
-    of its unioned fields (blocking_issues plus its 7 siblings per
-    commands/dev.md:883-893) carry forward from every successfully-loaded
-    shard by construction. `loaded` is deduplicated by label (see
-    _dedupe_shards_by_label) for THIS call only; every other computation
-    below operates on the ORIGINAL, non-deduplicated `loaded`/`full_roster`.
-
-    Exactly 5 fields are then overridden: dev.status, dev.status_rationale
-    (popped), blocking_issues (union + appended mismatch/reconciliation
-    entries), baseline_head_sha, and parallel_workers -- the last two via the
-    write-time reconciliation (items A/D/B'/E/G, Layer-Escalation Review)
-    that preserves a pre-existing canonical's own recorded evidence rather
-    than silently discarding it. No sha-provenance heuristic marker is
-    written or read anywhere (item A -- `_classify_sha_provenance`/
-    `_sha_provenance` are deleted entirely; recovery from a genuine sha
-    conflict is manual, for every predecessor status, exactly as it already
-    was for 'completed'/'needs_review').
-
-    --dry-run preserves the existing 'validate only, never write' contract,
-    whether or not a canonical already exists at canonical_path.
-    """
-    if dry_run:
-        return 1
-    aggregate = _build_aggregate(_dedupe_shards_by_label(loaded), task_id)
-    aggregate["dev"]["status"] = "blocked"
-    aggregate["dev"].pop("status_rationale", None)
-
-    candidate_sha = _current_run_candidate_sha(loaded)
-    final_sha, final_roster, reconciliation_entries = _reconcile_write_time(
-        canonical_path, candidate_sha, full_roster
-    )
-    aggregate["baseline_head_sha"] = final_sha
-    aggregate["parallel_workers"] = final_roster
-    aggregate["blocking_issues"] = (
-        aggregate["blocking_issues"] + list(mismatch_entries) + reconciliation_entries
-    )
-    _carry_forward_unbuilt_keys(aggregate, canonical_path)
-    try:
-        _atomic_write_json(canonical_path, aggregate)
-    except OSError as exc:
-        _emit_error(f"Cannot write blocked canonical aggregate to {canonical_path}: {exc}")
-    return 1
-
-
 # ---------------------------------------------------------------------------
-# Shrink-handling (ticket-20260930-132644-l8 Part C1): a shard-roster shrink
-# must never hard-exit without first WRITING a canonical record. Either
-# every missing label has a terminal trace on disk (reaggregate the shards
-# actually found, annotated `shrunk_from`) or it does not (fall back to the
-# existing, already-correct `_write_blocked_aggregate` naming the missing
-# labels) -- see Edge Case 4 (the aggregator's shrink bug is TWO separate
-# branches in main(), both fixed identically via this shared helper).
+# Shrink handling (ticket-20260930-132644-l8 Part C1): a shard-roster shrink
+# is re-aggregated from the shards actually found, annotated `shrunk_from`,
+# only when every missing lane has a completed dev-report on disk; otherwise
+# nothing is written. Shared by main()'s two shrink branches.
 # ---------------------------------------------------------------------------
 
 _ITER_SHARD_RE = re.compile(
     r"^dev-report-iter\d+-(?P<task_id>[A-Za-z0-9][A-Za-z0-9.\-]*)-(?P<worker>[A-Za-z0-9][A-Za-z0-9.\-]*)\.json$"
 )
 
-_TERMINAL_DEV_STATUSES = frozenset({"completed", "blocked", "needs_review"})
+def _terminal_dev_statuses() -> frozenset:
+    """The dev-report.v2 dev.status values the one terminal vocabulary
+    (hooks/lib/obligation.py TERMINAL_VOCABULARY) calls terminal.
+
+    Imported lazily from this script's own harness: a module-top-level
+    __file__ reference breaks the bare-namespace exec of this file (see the
+    filename-patterns comment at the top).
+    """
+    own_repo_root = Path(__file__).resolve().parent.parent
+    if str(own_repo_root) not in sys.path:
+        sys.path.insert(0, str(own_repo_root))
+    from hooks.lib import obligation
+    return obligation.TERMINAL_VOCABULARY["dev-report.v2"]["dev.status"]
 
 
 def _label_has_terminal_trace(
-    dev_dir: Path, bare_tid: str, original_task_id: str, label: str, existing_doc: dict | None,
+    dev_dir: Path, bare_tid: str, original_task_id: str, label: str,
 ) -> bool:
-    """A missing shard label counts as having a 'terminal trace' when EITHER
-    (a) some on-disk file for this task-id and label -- a normal shard OR an
-    iterN- archival variant (commands/dev.md:1275, deliberately excluded
-    from _scan_shards per trap 9) -- parses with dev.status in
-    {completed,blocked,needs_review}, OR (b) the EXISTING canonical's own
-    blocking_issues/disclosure text already names this label. No exact
-    file-format is pinned by the design docs for case (a) beyond the
-    existing worker-shard patterns plus the iterN- convention; this is a
-    deliberately permissive ANY-match check (never a strict schema gate) --
-    the point is to avoid discarding real evidence that happens to sit
-    outside the current scan's own narrow shard-roster window.
+    """Whether some on-disk dev-report for this task-id and lane -- a normal
+    shard OR an iterN- archival variant (commands/dev.md:1275, deliberately
+    excluded from _scan_shards per trap 9) -- parses with a terminal
+    dev.status (_terminal_dev_statuses). A mention of the lane in an existing
+    canonical's text is no trace: it cannot show the lane completed.
     """
-    if existing_doc is not None:
-        # All three disclosure channels, not just `blocking_issues`.
-        # Completeness diagnostics moved to COMPLETENESS_GAPS_KEY and they
-        # routinely name a lane label ("[snapshot=r02 order=r02]"), so reading
-        # only `blocking_issues` here would have silently NARROWED this
-        # deliberately-permissive evidence scan the moment the channel changed
-        # -- discarding exactly the real evidence the docstring says must not
-        # be discarded. OWNERSHIP_COMPLETENESS_BLOCKING_KEY joined the same
-        # way when the gate was rescoped to same-cycle-only (task
-        # dev-20260927-135305): a lane label can now appear there instead of
-        # (or as well as) COMPLETENESS_GAPS_KEY.
-        for key in ("blocking_issues", COMPLETENESS_GAPS_KEY, OWNERSHIP_COMPLETENESS_BLOCKING_KEY):
-            disclosures = existing_doc.get(key)
-            if isinstance(disclosures, list):
-                for item in disclosures:
-                    if isinstance(item, str) and label in item:
-                        return True
     if not dev_dir.is_dir():
         return False
     try:
@@ -2154,75 +1361,62 @@ def _label_has_terminal_trace(
         if not is_match:
             continue
         doc, _ = _load_shard_with_diagnostic(child)
-        if not isinstance(doc, dict):
-            continue
-        dev_obj = doc.get("dev")
-        status = dev_obj.get("status") if isinstance(dev_obj, dict) else None
-        if status in _TERMINAL_DEV_STATUSES:
+        if doc is not None and _shard_status(doc) in _terminal_dev_statuses():
             return True
     return False
 
 
-def _all_missing_labels_have_terminal_trace(
-    dev_dir: Path, bare_tid: str, original_task_id: str, missing_labels: list[str],
-    existing_doc: dict | None,
-) -> bool:
-    if not missing_labels:
-        return False
-    return all(
-        _label_has_terminal_trace(dev_dir, bare_tid, original_task_id, label, existing_doc)
-        for label in missing_labels
-    )
-
-
-def _reaggregate_with_shrunk_from_or_block(
+def _reaggregate_shrunk(
     loaded: list[tuple[str, dict]],
     task_id: str,
-    full_roster: list[str],
     missing_labels: list[str],
-    mismatch_entries: list[str],
     canonical_path: Path,
     dry_run: bool,
     dev_dir: Path,
     bare_tid: str,
-    deviation,
-    existing_doc: dict | None,
 ) -> int:
-    """Shared Part-C1 decision (AC9/AC10): when EVERY missing label has a
-    terminal trace, reaggregate from the shards actually loaded and
-    annotate `shrunk_from`; otherwise fall back to the existing, unchanged
-    `_write_blocked_aggregate` naming the missing labels. Either way a
-    canonical record is written before any nonzero return -- never a hard
-    exit with nothing written (M5).
+    """Part-C1 decision (AC9/AC10): when EVERY missing label has a terminal
+    trace, reaggregate from the (validated) shards actually loaded and
+    annotate `shrunk_from`; otherwise write nothing and return 1, naming
+    each missing label without one.
     """
     if dry_run:
         return 1
-    if _all_missing_labels_have_terminal_trace(dev_dir, bare_tid, task_id, missing_labels, existing_doc):
-        aggregate = _build_aggregate(_dedupe_shards_by_label(loaded), task_id, deviation=deviation)
-        aggregate["shrunk_from"] = missing_labels
-        _carry_forward_unbuilt_keys(aggregate, canonical_path)
-        try:
-            _atomic_write_json(canonical_path, aggregate)
-        except OSError as exc:
-            _emit_error(f"Cannot write canonical aggregate at {canonical_path}: {exc}")
-            return 1
-        _emit_ok(
-            action="aggregated",
-            output_path=str(canonical_path),
-            reason=(
-                f"Reaggregated from {len(loaded)} current shard(s) for task-id "
-                f"{task_id!r}; shrunk_from {missing_labels} (terminal trace "
-                "confirmed for each missing label)."
-            ),
-            extra=_outcome_fields(
-                aggregate["dev"]["status"], loaded,
-                _scan_shards(dev_dir, bare_tid, task_id),
-            ),
+    untraced = [
+        label for label in missing_labels
+        if not _label_has_terminal_trace(dev_dir, bare_tid, task_id, label)
+    ]
+    if untraced:
+        _emit_error(
+            "Roster shrink not re-aggregated, nothing written:\n  "
+            + "\n  ".join(
+                f"shard '{label}': no completed dev-report on disk for task-id {task_id!r}"
+                for label in untraced
+            )
         )
-        return 0
-    return _write_blocked_aggregate(
-        loaded, task_id, full_roster, mismatch_entries, canonical_path, dry_run
+        return 1
+    aggregate = _build_aggregate(loaded, task_id)
+    aggregate["shrunk_from"] = missing_labels
+    _carry_forward_unbuilt_keys(aggregate, canonical_path)
+    try:
+        _atomic_write_json(canonical_path, aggregate)
+    except OSError as exc:
+        _emit_error(f"Cannot write canonical aggregate at {canonical_path}: {exc}")
+        return 1
+    _emit_ok(
+        action="aggregated",
+        output_path=str(canonical_path),
+        reason=(
+            f"Reaggregated from {len(loaded)} current shard(s) for task-id "
+            f"{task_id!r}; shrunk_from {missing_labels} (terminal trace "
+            "confirmed for each missing label)."
+        ),
+        extra=_outcome_fields(
+            aggregate["dev"]["status"], loaded,
+            _scan_shards(dev_dir, bare_tid, task_id),
+        ),
     )
+    return 0
 
 
 _BLOB_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -2572,14 +1766,14 @@ def _evidenced_claimant_candidates(
 
 
 def _lane_candidates_for_file(
-    expanded_shards: list[tuple[str, dict]], rel: str,
+    shards: list[tuple[str, dict]], rel: str,
     cycle_claimants: list | None = None, project_root: Path | None = None,
 ) -> list[tuple[str, object, list]]:
     """Per-declaring-lane (snapshot, hunks) candidates for `rel` (task
     20261001-close-multilane-stall), each folded through the SAME
     _merge_owned_edits/_merge_pre_edit_snapshots functions used for the real
-    merge, scoped to only that lane's own shard(s) (its superseded round(s),
-    if any, plus its promoted shard) -- so a retried lane's own round-fold
+    merge, scoped to only that lane's own shard(s) (its round shard(s), if
+    any, plus its promoted shard) -- so a retried lane's own same-anchor
     collapse happens exactly as it would in the real merge. Lanes not
     declaring `rel` are omitted. Empty when no lane declares `rel`.
 
@@ -2598,14 +1792,14 @@ def _lane_candidates_for_file(
     replay output and so structurally cannot reach backwards past it."""
     base_lanes: list[str] = []
     seen: set[str] = set()
-    for label, _ in expanded_shards:
+    for label, _ in shards:
         base = _base_lane(label)
         if base not in seen:
             seen.add(base)
             base_lanes.append(base)
     candidates = []
     for base in base_lanes:
-        subset = [(label, data) for label, data in expanded_shards if _base_lane(label) == base]
+        subset = [(label, data) for label, data in shards if _base_lane(label) == base]
         lane_hunks = _merge_owned_edits(subset).get(rel)
         if not isinstance(lane_hunks, list) or not lane_hunks:
             continue
@@ -3287,10 +2481,8 @@ def _completeness_check_file(
     if not require_full_coverage:
         # Same-cycle-only mode (OWNERSHIP_COMPLETENESS_BLOCKING_KEY) is the
         # ONE blocking call of this function (require_full_coverage=True's
-        # global diagnostic below is advisory-only and untouched). Attribution-
-        # journal consumer cutover (docs/reference/attribution-journal-
-        # cutover-flip-plan-20261003.md, superseded by the zero-blocking
-        # constraint of the follow-up consumer-cutover task): the self-
+        # global diagnostic below is advisory-only and untouched). Since the
+        # attribution-journal consumer cutover, the self-
         # reported-ledger replay combinatorics below this branch (still used
         # by the advisory call) are no longer this gate's authority. A file
         # with no write-time journal evidence, or evidence that does not
@@ -3532,10 +2724,9 @@ def _tracked_at_baseline(project_root: Path, baseline_head_sha: str, rel: str) -
     own earlier partial /commit of another lane) must stay skipped -- the
     live index/HEAD is not this check's reference point, baseline_head_sha
     is. When baseline_head_sha itself is empty (never true for a shard that
-    passed _validate_shards, but _write_blocked_aggregate's own
-    reconciliation-failure path can leave it '' on the aggregate), falls
-    back to the current index so a missing baseline never makes this check
-    MORE permissive than before this fix.
+    passed _validate_shards, but possible on a canonical a caller hands in),
+    falls back to the current index so a missing baseline never makes this
+    check MORE permissive than before this fix.
     """
     if not baseline_head_sha:
         rc, _, _ = _git(project_root, ["ls-files", "--error-unmatch", "--", rel])
@@ -3563,8 +2754,7 @@ def _apply_completeness_check(
 
     `loaded` (task 20261001-close-multilane-stall): the per-lane shards this
     aggregate was built from. When supplied, recovers each declaring lane's
-    OWN (snapshot, hunks) pair per file (via `_lane_candidates_for_file`,
-    folding in superseded rounds exactly as `_build_aggregate` does) so
+    OWN (snapshot, hunks) pair per file (via `_lane_candidates_for_file`) so
     `_completeness_check_file` can try the declaring lanes' own (snapshot,
     order) combinations instead of assuming shard-alphabetical order is
     dependency order. Optional and defaulting to None for back-compat with
@@ -3592,14 +2782,6 @@ def _apply_completeness_check(
     baseline_head_sha = aggregate.get("baseline_head_sha") or ""
     dev_dir = _resolve_dev_dir(project_root)
     own_bare_tid = _bare_task_id(str(aggregate.get("task_id") or ""))
-    expanded_shards = None
-    if loaded:
-        try:
-            expanded_shards = _expand_shards_with_superseded_rounds(
-                loaded, dev_dir, own_bare_tid,
-            )
-        except Exception:
-            expanded_shards = None
     claimants = _cycle_claimant_index(
         dev_dir, own_bare_tid, str(aggregate.get("task_id") or "")
     )
@@ -3608,7 +2790,7 @@ def _apply_completeness_check(
         if not _tracked_at_baseline(project_root, baseline_head_sha, rel):
             continue  # untracked at baseline / new-at-cycle-time -- AC-6, skip
         lane_candidates = (
-            _lane_candidates_for_file(expanded_shards, rel) if expanded_shards else None
+            _lane_candidates_for_file(loaded, rel) if loaded else None
         )
         ok, diagnostic = _completeness_check_file(
             project_root, baseline_head_sha, rel, owned[rel], snapshots.get(rel),
@@ -3628,7 +2810,7 @@ def _apply_completeness_check(
             # by no declaration" figure on scripts/aggregate-dev-report.py
             # with a bare BOUNDARY_INDETERMINATE from a deeper permutation.
             widened = _lane_candidates_for_file(
-                expanded_shards or [], rel,
+                loaded or [], rel,
                 cycle_claimants=claimants[rel], project_root=project_root,
             )
             if len(widened) > len(lane_candidates or []):
@@ -3663,6 +2845,11 @@ def main(argv: list[str] | None = None) -> int:
         default=False,
         help="Validate shards without writing the canonical aggregate.",
     )
+    parser.add_argument(
+        "--project-dir",
+        default=None,
+        help="Project whose docs/dev/ holds the shards (an empty value is the cwd).",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     task_id = args.task_id.strip()
@@ -3673,7 +2860,7 @@ def main(argv: list[str] | None = None) -> int:
     # Bare timestamp needed for shard filename matching (patterns use YYYYMMDD-HHMMSS).
     bare_tid = _bare_task_id(task_id)
 
-    project_root = _resolve_project_root()
+    project_root = _resolve_project_root(args.project_dir)
     dev_dir = _resolve_dev_dir(project_root)
     # Canonical path uses the FULL task_id (not bare timestamp) so that
     # dev-report-dev-20260524-170335.json ≠ dev-report-20260524-170335.json.
@@ -3682,8 +2869,8 @@ def main(argv: list[str] | None = None) -> int:
     # Scan for shards scoped to this task-id (using bare timestamp for pattern matching).
     shards_info = _scan_shards(dev_dir, bare_tid, task_id)
 
-    # Full scanned label roster, independent of load/validate outcome — used
-    # as parallel_workers on a blocked aggregate (R29).
+    # Full scanned label roster, independent of load/validate outcome: a
+    # roster shrink is measured against it.
     full_roster = [label for label, _ in shards_info]
 
     if len(shards_info) < 2:
@@ -3706,9 +2893,8 @@ def main(argv: list[str] | None = None) -> int:
         if existing_doc is not None and "parallel_workers" not in existing_doc:
             # The existing canonical has no `parallel_workers` key AT ALL.
             # _build_aggregate (the ONLY producer of an aggregate-shaped
-            # document, via either the successful path or
-            # _write_blocked_aggregate) always sets this key -- even to an
-            # empty list -- on every document it writes. Total absence
+            # document) always sets this key -- even to an empty list -- on
+            # every document it writes. Total absence
             # therefore proves this canonical was NEVER built via
             # _build_aggregate: it is a genuine SINGULAR dev-report written
             # directly by a dev subagent per agents/dev.md's own Output
@@ -3717,27 +2903,9 @@ def main(argv: list[str] | None = None) -> int:
             # must never be read as "ambiguous, assume parallel": that
             # conflation previously caused this skip branch to silently
             # overwrite a plain, non-fan-out /dev cycle's own canonical
-            # dev-report with a generic blocked aggregate the moment
-            # /close's Step 0 invoked this script (the single most common
-            # invocation shape) -- see
+            # dev-report the moment /close's Step 0 invoked this script (the
+            # single most common invocation shape) -- see
             # test_len_below_2_singular_dev_report_with_no_parallel_workers_key_is_skipped_untouched.
-            #
-            # backlog #122 M3: before the no-op return, merge any
-            # hook-authored side-effect-file declarations (hooks/doc_sync/
-            # hook_ledger.py's write side) into this genuine singular
-            # report's files_landed_whole exemption channel, so a
-            # hook-regenerated file (e.g. an INDEX.md doc-sync rewrites as a
-            # side effect of a dev cycle's own edit) gets a legitimate
-            # declaration path into build_plan()'s ownership gate. Writes
-            # ONLY when there is something new to merge -- an empty or
-            # absent ledger leaves this branch's own untouched guarantee
-            # (see test_len_below_2_singular_dev_report_with_no_parallel_
-            # workers_key_is_skipped_untouched) unaffected. `action` stays
-            # "skipped" either way -- this insertion never invents a 4th
-            # action value.
-            ledger_discovery = _hook_ledger_discovery(project_root, task_id)
-            if _merge_hook_ledger_into_singular(existing_doc, ledger_discovery, project_root):
-                _atomic_write_json(canonical_path, existing_doc)
             _emit_ok(action="skipped", output_path=str(canonical_path), reason=skip_reason,
                      extra=_outcome_fields(_shard_status(existing_doc), [], shards_info))
             return 0
@@ -3756,63 +2924,44 @@ def main(argv: list[str] | None = None) -> int:
 
         # Do not skip: the existing canonical's presence (item F/G --
         # presence, not readability, withholds the skip) either establishes
-        # >=2 workers or cannot be confirmed to cover fewer than 2. Load
-        # whatever 0 or 1 shard(s) the current scan DID find and write a
-        # blocked aggregate naming what is missing/unusable.
+        # >=2 workers or cannot be confirmed to cover fewer than 2. Only a
+        # shrink of an enumerable roster over shards that load and validate
+        # can be re-aggregated.
         loaded, load_failures = _load_all_shards(shards_info)
-        mismatch_entries = [
+        reasons = [
             f"shard '{label}': failed to load: {err}" for label, err in load_failures
         ]
-        if not existing_roster_usable:
-            mismatch_entries.append(
+        if not load_failures:
+            reasons += _validate_shards(loaded, task_id, project_root=project_root)
+        missing_labels: list[str] = []
+        if existing_roster_usable:
+            missing = Counter(existing_doc["parallel_workers"]) - Counter(full_roster)
+            missing_labels = sorted(missing.elements())
+            shrink_entries = [
+                f"shard '{label}': existing canonical's parallel_workers records "
+                f"{count} occurrence(s) no longer found in the current scan"
+                for label, count in sorted(missing.items())
+            ]
+        else:
+            shrink_entries = [
                 f"existing canonical {canonical_path} roster could not be confirmed as "
                 "covering fewer than 2 workers (unreadable, malformed, or wrong-typed "
                 "parallel_workers); treating this cycle as parallel"
-            )
-            # Unknown roster -- "missing" cannot be enumerated, so the
-            # Part-C1 reaggregate-with-shrunk_from decision does not apply
-            # here; this sub-case is unchanged from before this ticket.
-            _emit_error(
-                "Shard roster mismatch (fewer than 2 shards found this scan, but "
-                "an existing canonical established a larger parallel roster):\n  "
-                + "\n  ".join(mismatch_entries)
-            )
-            return _write_blocked_aggregate(
-                loaded, task_id, full_roster, mismatch_entries, canonical_path, args.dry_run
-            )
-        # _reconcile_write_time (called inside _write_blocked_aggregate, when
-        # that fallback path is taken below) independently recomputes this
-        # exact missing-shard roster-diff against the same existing
-        # canonical and appends the byte-identical disclosure to
-        # blocking_issues itself (item E). Keep it in `mismatch_entries` for
-        # the stderr diagnostic immediately below, but exclude it from what
-        # is handed onward so the same fact is not written into
-        # blocking_issues twice (QA round-4 code-quality finding).
-        write_mismatch_entries = list(mismatch_entries)
-        missing = Counter(existing_doc["parallel_workers"]) - Counter(full_roster)
-        missing_labels = sorted(missing.elements())
-        for label, count in sorted(missing.items()):
-            mismatch_entries.append(
-                f"shard '{label}': existing canonical's parallel_workers records "
-                f"{count} occurrence(s) no longer found in the current scan"
-            )
-        # Preserve the stderr diagnostic here too, matching the load-failure
-        # and validate-failure branches above and the module docstring's own
-        # claim (lines 32-43) -- the file write must never be the ONLY signal
-        # of this mismatch (QA round-3 code-quality finding, this revision).
+            ]
         _emit_error(
             "Shard roster mismatch (fewer than 2 shards found this scan, but "
             "an existing canonical established a larger parallel roster):\n  "
-            + "\n  ".join(mismatch_entries)
+            + "\n  ".join(reasons + shrink_entries)
         )
-        return _reaggregate_with_shrunk_from_or_block(
-            loaded, task_id, full_roster, missing_labels, write_mismatch_entries,
-            canonical_path, args.dry_run, dev_dir, bare_tid, None, existing_doc,
+        if reasons or not existing_roster_usable:
+            return 1
+        return _reaggregate_shrunk(
+            loaded, task_id, missing_labels, canonical_path, args.dry_run, dev_dir, bare_tid,
         )
 
     # Load all shards, collecting EVERY load outcome instead of returning on
-    # the first failure (R29 -- a builder here must not assume >=1 loaded
-    # shard; the all-fail case is possible and must not crash).
+    # the first failure, so every reason is itemized (the all-fail case is
+    # possible and must not crash).
     loaded, load_failures = _load_all_shards(shards_info)
 
     if load_failures:
@@ -3824,30 +2973,16 @@ def main(argv: list[str] | None = None) -> int:
             "Failed to load shard(s):\n  "
             + "\n  ".join(f"'{label}': {err}" for label, err in load_failures)
         )
-        mismatch_entries = [
-            f"shard '{label}': failed to load: {err}" for label, err in load_failures
-        ]
-        return _write_blocked_aggregate(
-            loaded, task_id, full_roster, mismatch_entries, canonical_path, args.dry_run
-        )
-
-    # A blocked lane can be legitimate only through the resolver's deviation
-    # provider, so it is fetched (fail closed to None) only when some shard is
-    # blocked: no other document is affected by it.
-    deviation = _load_deviation_provider() if _has_blocked_shard(loaded) else None
+        return 1
 
     # Validate consistency — fail closed on any mismatch.  project_root opts
     # this call in to the serialized-fan-out route (a divergence a lane
     # DECLARES and the resolver's adjudicator fully verifies); a set that
     # declares nothing is adjudicated by the untouched equality invariant.
-    errors = _validate_shards(
-        loaded, task_id, deviation=deviation, project_root=project_root
-    )
+    errors = _validate_shards(loaded, task_id, project_root=project_root)
     if errors:
         _emit_error("Shard validation failed:\n  " + "\n  ".join(errors))
-        return _write_blocked_aggregate(
-            loaded, task_id, full_roster, errors, canonical_path, args.dry_run
-        )
+        return 1
 
     if canonical_path.exists():
         # Preserve the legacy fail-closed identity/baseline checks, then
@@ -3863,8 +2998,7 @@ def main(argv: list[str] | None = None) -> int:
         existing_sha = existing.get("baseline_head_sha", "")
         # No sha bypass survives for ANY predecessor dev.status
         # (Layer-Escalation Review item A) -- recovery from a genuine sha
-        # conflict is manual, for a 'blocked' predecessor exactly as it
-        # already was for 'completed'/'needs_review'. Two prior
+        # conflict is manual, whatever the predecessor recorded. Two prior
         # dev-implementation rounds (a naive blocking_issues substring
         # match; an explicit `_sha_provenance` corroboration marker) were
         # each rejected by QA's live adversarial reproduction for producing
@@ -3872,8 +3006,7 @@ def main(argv: list[str] | None = None) -> int:
         # class this ticket exists to eliminate -- see AC-08.
         #
         # Multiset (Counter) containment, not plain set containment, for the
-        # workers check too (item H, generalizing what revision 6/7 already
-        # used for a 'blocked' predecessor to EVERY predecessor status): a
+        # workers check too (item H, for EVERY predecessor status): a
         # duplicated worker-label occurrence a predecessor recorded is
         # meaningful evidence (>=2 real shard files sharing a label), never
         # silently collapsed by treating {'A','B'} as satisfying
@@ -3901,23 +3034,17 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if workers_missing:
             # ticket-20260930-132644-l8 Part C1, Branch B: the ONLY stale
-            # clause is a workers shrink (no baseline_sha mismatch) -- never
-            # hard-exit without writing (M5); branch exactly as Branch A.
-            missing_labels = sorted(workers_missing.elements())
-            mismatch_entries = [
-                f"shard '{label}': existing canonical's parallel_workers records "
-                f"{count} occurrence(s) no longer found in the current scan"
-                for label, count in sorted(workers_missing.items())
-            ]
+            # clause is a workers shrink (no baseline_sha mismatch); decided
+            # exactly as Branch A.
             _emit_error(
                 f"Existing canonical {canonical_path} is stale: "
                 f"workers {existing_workers} (expected {expected_workers})"
             )
-            return _reaggregate_with_shrunk_from_or_block(
-                loaded, task_id, full_roster, missing_labels, mismatch_entries,
-                canonical_path, args.dry_run, dev_dir, bare_tid, deviation, existing,
+            return _reaggregate_shrunk(
+                loaded, task_id, sorted(workers_missing.elements()), canonical_path,
+                args.dry_run, dev_dir, bare_tid,
             )
-        expected = _build_aggregate(loaded, task_id, deviation=deviation)
+        expected = _build_aggregate(loaded, task_id)
         # A refresh must not erase audit history the builder has no opinion
         # about; see _carry_forward_unbuilt_keys.  Done before the freshness
         # comparison below so a canonical that differs ONLY by preserved keys
@@ -3956,9 +3083,7 @@ def main(argv: list[str] | None = None) -> int:
                 + "\n  ".join(blocking_completeness_gaps)
             )
             return 1
-        if _canonical_projection(existing, deviation) != _canonical_projection(
-            expected, deviation
-        ):
+        if _canonical_projection(existing) != _canonical_projection(expected):
             if args.dry_run:
                 _emit_ok(
                     action="skipped",
@@ -3999,14 +3124,14 @@ def main(argv: list[str] | None = None) -> int:
             output_path=str(canonical_path),
             reason=f"Dry-run: would aggregate {len(loaded)} shards for task-id {task_id!r}.",
             extra=_outcome_fields(
-                _build_aggregate(loaded, task_id, deviation=deviation)["dev"]["status"],
+                _build_aggregate(loaded, task_id)["dev"]["status"],
                 loaded, shards_info,
             ),
         )
         return 0
 
     # Build and write canonical aggregate.
-    aggregate = _build_aggregate(loaded, task_id, deviation=deviation)
+    aggregate = _build_aggregate(loaded, task_id)
     completeness_gaps = _apply_completeness_check(aggregate, project_root, loaded)
     # same_cycle_only=True is the GATING question; see the refresh path above
     # and OWNERSHIP_COMPLETENESS_BLOCKING_KEY for why `completeness_gaps`

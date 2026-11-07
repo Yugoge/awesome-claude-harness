@@ -1,33 +1,25 @@
 #!/usr/bin/env python3
-"""Preloaded TodoList for /close workflow.
+"""Preloaded TodoList for /close: commands/close.md's "### Step 0" to "### Step 4",
+the same five steps under every prompt (--auto walks each step over its parents;
+--force is accepted and ignored).
 
-Three user-visible TodoSteps (flat-integer per agents/style-inspector.md
-Standard 4):
-  1. Dispatch three inspectors in parallel
-  2. Delegate close debate to QA subagent
-  3. Generate close-report and spec/temp update
-
-For --force path, returns a 2-step list (no QA dispatch — spec: "the primary
-protection is that the todo list never contains a QA dispatch step").
-
-Flag handling (--codex / --force) and task-id resolution still happen in
-commands/close.md body but are no longer TodoSteps — they are script
-plumbing, not user-visible work.
+Under --late-repair, Step 0 also declares the effective report finalize writes
+(the main agent's own step), so a gap on that report routes back to Step 0.
 """
 
 import os
 
 
 _STEPS = [
+    ("0", "Resolve the disposition; complete the cycle when incomplete",
+     "Resolving the disposition; completing the cycle when incomplete", None),
     ("1", "Dispatch three inspectors in parallel", "Dispatching three inspectors in parallel", None),
     ("2", "Delegate close debate to QA subagent", "Delegating close debate to QA subagent", {"subagent_call": {"agent": "qa", "subagent_type": "qa"}}),
     ("3", "Generate close-report and spec/temp update", "Generating close-report and spec/temp update", None),
+    ("4", "Ask the user to rate each landed cycle", "Asking the user to rate each landed cycle", None),
 ]
 
-_STEPS_FORCED = [
-    ("1", "Write forced close-report", "Writing forced close-report", None),
-    ("2", "Write audit log + temp update + clean up sentinel", "Writing audit log + temp update + cleaning up sentinel", None),
-]
+_LATE_REPAIR_STEP_0 = {"artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<task>.effective.json"}]}
 
 
 def _build_step(label, desc, active, meta):
@@ -41,14 +33,10 @@ def _build_step(label, desc, active, meta):
     return item
 
 
-def _is_forced():
-    prompt = os.environ.get("CLAUDE_TODO_PROMPT", "")
-    return "--force" in prompt.split()
-
-
 def get_todos():
-    steps = _STEPS_FORCED if _is_forced() else _STEPS
-    return [_build_step(label, desc, active, meta) for label, desc, active, meta in steps]
+    late_repair = "--late-repair" in os.environ.get("CLAUDE_TODO_PROMPT", "").split()
+    return [_build_step(label, desc, active, _LATE_REPAIR_STEP_0 if late_repair and label == "0" else meta)
+            for label, desc, active, meta in _STEPS]
 
 
 if __name__ == "__main__":

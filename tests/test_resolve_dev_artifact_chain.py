@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESOLVER_PATH = REPO_ROOT / "scripts" / "resolve-dev-artifact-chain.py"
 TASK_ID = "dev-20260724-120000"
@@ -139,7 +141,6 @@ def _make_fanout(
     root: Path,
     *,
     workers: list[str] | None = None,
-    optional_parent: bool = False,
 ) -> tuple[dict[str, Path], dict[str, dict[str, Path]]]:
     workers = workers or list(WORKERS)
     parents = _parent_paths(root)
@@ -167,10 +168,6 @@ def _make_fanout(
     aggregate = RESOLVER._load_aggregate_module()._build_aggregate(loaded, TASK_ID)
     _write(parents["dev"], aggregate)
     _write(parents["completion"], _completion(TASK_ID, references))
-    if optional_parent:
-        _write(parents["ticket"], _ticket(TASK_ID))
-        _write(parents["context"], {"request_id": TASK_ID, "task_id": TASK_ID})
-        _write(parents["qa"], _qa_document(TASK_ID))
     return parents, lanes
 
 
@@ -203,30 +200,14 @@ def _run_cli(root: Path) -> subprocess.CompletedProcess[str]:
 
 
 # ---------------------------------------------------------------------------
-# Disclosed-exception vocabulary fixtures (ticket 20260911-011232).  Small,
-# focused builders layered on top of the existing _dev_document/_qa_document
-# helpers above -- neither of those two functions is modified, matching the
-# ticket's Contract D constraint that validate_dev()/validate_qa() (and, by
-# extension, the fixtures exercising their happy path) stay untouched.
+# Historic report shapes: a qa-report carrying an environmental disclosure, a
+# dev-report carrying a status rationale.  Strict pass reads neither.
 # ---------------------------------------------------------------------------
 
-ROUTE_SELECT_PATH = REPO_ROOT / "scripts" / "close-route-select.py"
-
-
-def _run_route_select(root: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            sys.executable,
-            str(ROUTE_SELECT_PATH),
-            "--task-id",
-            TASK_ID,
-            "--project-dir",
-            str(root),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+HISTORIC_ATTESTATION = (
+    "This is a disclosed, evidenced, non-defect exception -- not a defect in "
+    "this lane's deliverable."
+)
 
 
 def _run_aggregate(root: Path) -> subprocess.CompletedProcess[str]:
@@ -245,47 +226,35 @@ def _run_aggregate(root: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _qa_document_with_disclosed_exception(
+def _qa_document_with_disclosure(
     identity: str,
     *,
-    classification: str = "shared_working_tree_concurrency",
-    evidence: list[str] | None = None,
-    attestation: str | None = None,
-    iteration_needed: bool = False,
-    findings: list[dict] | None = None,
+    evidence: tuple[str, ...] = ("docs/dev/evidence.log:1",),
+    attestation: str = HISTORIC_ATTESTATION,
+    **qa: object,
 ) -> dict:
-    """A qa.status=='fail' document declaring a complete M2 disclosure block."""
+    """A failing qa-report declaring a historic environmental disclosure."""
     doc = _qa_document(identity, status="fail")
-    doc["iteration_needed"] = iteration_needed
+    doc["iteration_needed"] = False
     doc["qa"]["disclosed_exception"] = {
-        "classification": classification,
-        "evidence": ["docs/dev/evidence.log:1"] if evidence is None else evidence,
-        "attestation": RESOLVER.DISCLOSED_EXCEPTION_ATTESTATION if attestation is None else attestation,
+        "classification": "shared_working_tree_concurrency",
+        "evidence": list(evidence),
+        "attestation": attestation,
     }
-    if findings is not None:
-        doc["qa"]["all_findings"] = findings
+    doc["qa"].update(qa)
     return doc
 
 
-def _dev_document_needs_review(
-    identity: str,
-    *,
-    modified: list[str] | None = None,
-    created: list[str] | None = None,
-    classification: str = "pending_commit_handoff",
-    blocked_by: str = "commit verb forbidden to dev subagent",
-    forbidden_action: str = "agents/dev.md No Band-Aid Rule item 7",
-    blocking_issues: list[str] | None = None,
-) -> dict:
-    """A dev.status=='needs_review' document declaring a complete M3 rationale."""
-    doc = _dev_document(identity, modified=modified, created=created)
-    doc["dev"]["status"] = "needs_review"
+def _dev_document_with_rationale(identity: str, status: str, **kwargs: object) -> dict:
+    """A non-completed dev-report carrying a complete historic status rationale."""
+    doc = _dev_document(identity, **kwargs)
+    doc["dev"]["status"] = status
     doc["dev"]["status_rationale"] = {
-        "classification": classification,
-        "blocked_by": blocked_by,
-        "forbidden_action": forbidden_action,
+        "classification": "pending_commit_handoff",
+        "blocked_by": "commit verb forbidden to dev subagent",
+        "forbidden_action": "agents/dev.md No Band-Aid Rule item 7",
     }
-    doc["blocking_issues"] = ["awaiting /commit hand-off"] if blocking_issues is None else blocking_issues
+    doc["blocking_issues"] = ["awaiting /commit hand-off"]
     return doc
 
 
@@ -301,7 +270,7 @@ def test_singular_chain_passes_with_stable_consumer_fields(tmp_path: Path) -> No
         _relative(tmp_path, parents["dev"]),
         _relative(tmp_path, parents["qa"]),
     ]
-    assert result["optional_parent_artifacts"] == {}
+    assert "optional_parent_artifacts" not in result
 
 
 def test_markdown_identity_accepts_generated_bullet_style(tmp_path: Path) -> None:
@@ -335,9 +304,7 @@ def test_fanout_without_parent_optional_artifacts_is_read_only_and_stable(
             for kind in ("dev", "qa")
         ],
     ]
-    assert all(
-        not item["present"] for item in result["optional_parent_artifacts"].values()
-    )
+    assert "optional_parent_artifacts" not in result
     assert before == middle == after
     assert not parents["ticket"].exists()
     assert not parents["context"].exists()
@@ -391,16 +358,6 @@ def test_missing_canonical_is_aggregated_before_read_only_resolution(
     assert result["status"] == "pass"
     assert result["mode"] == "fanout"
     assert [lane["worker"] for lane in result["lanes"]] == WORKERS
-
-
-def test_fanout_accepts_valid_optional_parent_artifacts(tmp_path: Path) -> None:
-    parents, _ = _make_fanout(tmp_path, optional_parent=True)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass"
-    assert all(
-        item["present"] for item in result["optional_parent_artifacts"].values()
-    )
-    assert result["report_paths"][-1] == _relative(tmp_path, parents["qa"])
 
 
 def test_current_three_lane_shape_with_r01_identity_and_full_index_passes(
@@ -512,13 +469,6 @@ def test_singular_with_worker_shard_is_ambiguous(tmp_path: Path) -> None:
     _write(lane, _dev_document(f"{TASK_ID}-lane-a"))
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
     assert "AMBIGUOUS_SINGULAR_CHAIN" in _error_codes(result)
-
-
-def test_invalid_optional_parent_artifact_is_not_ignored(tmp_path: Path) -> None:
-    parents, _ = _make_fanout(tmp_path)
-    _write(parents["qa"], _qa_document("wrong-parent"))
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert "IDENTITY_MISMATCH" in _error_codes(result)
 
 
 def test_cli_validation_failure_is_json_and_exit_two(tmp_path: Path) -> None:
@@ -1165,14 +1115,8 @@ import _late_repair_fixtures as _lrfx  # noqa: E402
 
 GOLDEN_DIR = REPO_ROOT / "tests" / "fixtures" / "late_repair_golden"
 NEW_GAP_FIELDS = {"stage_gaps", "non_gap_errors", "late_repair_eligible", "gap_classification"}
-# ticket 20260911-011232 M1: disclosed_exceptions is a second purely-additive
-# field, following the exact same golden-baseline exemption as the R4 fields
-# above -- none of the golden fixtures exercise a disclosed exception, so the
-# field is always [] for them and is excluded from the pinned-baseline diff
-# the same way NEW_GAP_FIELDS already is.
-NEW_GAP_FIELDS = NEW_GAP_FIELDS | {"disclosed_exceptions"}
 # task dev-20260927-135305 (spec-20260914-052140 S5.3, same-cycle-only gate
-# rescope): ownership_completeness_informational is a third purely-additive
+# rescope): ownership_completeness_informational is a second purely-additive
 # field, same exemption -- none of the golden fixtures exercise a fan-out
 # chain with a real ownership-completeness gap, so the field is always []
 # for them.
@@ -1274,489 +1218,113 @@ def test_ac15_new_fields_are_purely_additive_against_a_pinned_golden_baseline(
 
 
 # ---------------------------------------------------------------------------
-# Disclosed-exception vocabulary (ticket 20260911-011232).  Bidirectional:
-# AC-P* prove the new intermediate state is REACHABLE for a genuine, complete
-# disclosure; AC-N* prove every pre-existing hard-fail shape (incomplete,
-# mislabeled, untrustworthy, or simply undeclared) keeps failing exactly as
-# before -- disclosed_exceptions[] must stay empty on every AC-N case.
+# Strict pass: status is "pass" or "fail" and only "pass" exits 0.  Every
+# shape a former reclassification pass read is a plain failure under its own
+# code (A7: such a fixture prints "status":"fail" and exits 2).
 # ---------------------------------------------------------------------------
 
+MALFORMED_FINDINGS = {"severity": "critical", "primary_cause": "dev_implementation", "blocks_release": True}
+QA_SHAPES = {
+    "complete environmental disclosure": lambda: _qa_document_with_disclosure(TASK_ID),
+    "empty evidence": lambda: _qa_document_with_disclosure(TASK_ID, evidence=()),
+    "paraphrased attestation": lambda: _qa_document_with_disclosure(
+        TASK_ID, attestation="This is a disclosed exception, not a defect."),
+    "mislabeled blocking finding": lambda: _qa_document_with_disclosure(
+        TASK_ID, all_findings=[MALFORMED_FINDINGS]),
+    "non-blocking finding only": lambda: _qa_document_with_disclosure(
+        TASK_ID, failures=[{"blocks_release": False, "severity": "minor"}]),
+    "dict all_findings": lambda: _qa_document_with_disclosure(
+        TASK_ID, all_findings={"smuggled": MALFORMED_FINDINGS}),
+    "null failures": lambda: _qa_document_with_disclosure(TASK_ID, failures=None),
+    "scalar all_findings": lambda: _qa_document_with_disclosure(TASK_ID, all_findings="a string"),
+    "warning without disclosure": lambda: _qa_document(TASK_ID, status="warning"),
+    "fail without disclosure": lambda: _qa_document(TASK_ID, status="fail"),
+}
 
-def test_ac_p1_qa_environmental_disclosed_exception_reaches_pass_with_exceptions(
-    tmp_path: Path,
-) -> None:
+
+@pytest.mark.parametrize("shape", sorted(QA_SHAPES))
+def test_a_failing_qa_report_fails_whatever_it_discloses(tmp_path: Path, shape: str) -> None:
     parents = _make_singular(tmp_path)
-    _write(parents["qa"], _qa_document_with_disclosed_exception(TASK_ID))
+    _write(parents["qa"], QA_SHAPES[shape]())
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass_with_exceptions", result["errors"]
-    assert result["errors"] == []
-    assert len(result["disclosed_exceptions"]) == 1
-    entry = result["disclosed_exceptions"][0]
-    assert entry["code"] == "INVALID_QA_STATUS"
-    assert entry["path"] == _relative(tmp_path, parents["qa"])
-    assert entry["lane_task_id"] == TASK_ID
-    assert entry["kind"] == "qa_environmental"
-    assert entry["classification"] == "shared_working_tree_concurrency"
-    assert entry["evidence_ref_count"] == 1
+    assert result["status"] == "fail"
+    assert [(e["code"], e["path"]) for e in result["errors"]] == [
+        ("INVALID_QA_STATUS", _relative(tmp_path, parents["qa"]))
+    ]
+    assert "disclosed_exceptions" not in result
+    assert RESOLVER.exit_status(result) == 2
 
 
-def test_ac_p2_dev_side_handoff_reaches_pass_with_exceptions(tmp_path: Path) -> None:
-    # Singular mode: the parent IS the lane, and its own qa-report is the
-    # "same lane's own qa-report" M3(b) requires.
+DEV_SHAPES = {
+    "rationale with a passing qa-report": ("needs_review", "pass"),
+    "rationale with a failing qa-report": ("needs_review", "fail"),
+    "blocked with a rationale": ("blocked", "pass"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(DEV_SHAPES))
+def test_a_non_completed_dev_report_fails_whatever_it_records(tmp_path: Path, shape: str) -> None:
+    dev_status, qa_status = DEV_SHAPES[shape]
     parents = _make_singular(tmp_path)
-    _write(parents["dev"], _dev_document_needs_review(TASK_ID, modified=["scripts/one.py"]))
-    _write(parents["qa"], _qa_document(TASK_ID, status="pass"))
+    _write(parents["dev"], _dev_document_with_rationale(TASK_ID, dev_status, modified=["scripts/one.py"]))
+    _write(parents["qa"], _qa_document(TASK_ID, status=qa_status))
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass_with_exceptions", result["errors"]
-    assert result["errors"] == []
-    codes = {entry["code"] for entry in result["disclosed_exceptions"]}
-    assert codes == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
-    for entry in result["disclosed_exceptions"]:
-        assert entry["path"] == _relative(tmp_path, parents["dev"])
-        assert entry["lane_task_id"] == TASK_ID
-        assert entry["kind"] == "dev_handoff"
-        assert entry["classification"] == "pending_commit_handoff"
+    assert result["status"] == "fail"
+    dev_codes = {e["code"] for e in result["errors"] if e["path"] == _relative(tmp_path, parents["dev"])}
+    assert dev_codes == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
+    assert "disclosed_exceptions" not in result
 
 
-def test_ac_p3_fanout_dev_handoff_lane_propagates_through_aggregate_and_route_select(
+def test_a_dev_report_lacking_completed_fails_even_without_a_rationale(tmp_path: Path) -> None:
+    parents = _make_singular(tmp_path)
+    doc = _dev_document(TASK_ID, modified=["scripts/one.py"])
+    doc["dev"]["status"] = "needs_review"
+    doc["blocking_issues"] = ["awaiting /commit hand-off"]
+    _write(parents["dev"], doc)
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    assert {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"} <= _error_codes(result)
+
+
+def test_former_disclosure_fixture_fails_with_exit_two_end_to_end(tmp_path: Path) -> None:
+    """Before: "pass_with_exceptions", exit 0 from the resolver.  Now: "fail", exit 2."""
+    parents = _make_singular(tmp_path)
+    _write(parents["qa"], _qa_document_with_disclosure(TASK_ID))
+    process = _run_cli(tmp_path)
+    assert process.returncode == 2
+    assert '"status":"fail"' in process.stdout
+
+
+def test_a_fanout_lane_with_a_status_rationale_fails_lane_and_historic_canonical(
     tmp_path: Path,
 ) -> None:
-    # The full motivating shape (task 20260808-035658's lanesumatdoc10): one
-    # lane whose dev.status is a disclosed needs_review handoff, its OWN
-    # qa-report passes, and (per M5) the canonical inherits needs_review too
-    # -- exercised end to end through aggregate-dev-report.py and
-    # close-route-select.py, not just resolve_chain() directly.
-    parents = _parent_paths(tmp_path)
-    lanes: dict[str, dict[str, Path]] = {}
-    loaded: list[tuple[str, dict]] = []
-    references = [_relative(tmp_path, parents["dev"])]
-
-    identity_a = f"{TASK_ID}-lane-a"
-    paths_a = _lane_paths(tmp_path, "lane-a")
-    lanes["lane-a"] = paths_a
-    _materialise(tmp_path, "scripts/lane-a.py")
-    dev_a = _dev_document(identity_a, modified=["scripts/lane-a.py"])
-    _write(paths_a["ticket"], _ticket(identity_a))
-    _write(paths_a["context"], {"request_id": identity_a, "task_id": identity_a})
-    _write(paths_a["dev"], dev_a)
-    _write(paths_a["qa"], _qa_document(identity_a))
-    loaded.append(("lane-a", dev_a))
-    references.extend(_relative(tmp_path, paths_a[k]) for k in ("ticket", "context", "dev", "qa"))
-
-    identity_b = f"{TASK_ID}-lane-b"
-    paths_b = _lane_paths(tmp_path, "lane-b")
-    lanes["lane-b"] = paths_b
-    _materialise(tmp_path, "scripts/lane-b.py")
-    dev_b = _dev_document_needs_review(identity_b, modified=["scripts/lane-b.py"])
-    _write(paths_b["ticket"], _ticket(identity_b))
-    _write(paths_b["context"], {"request_id": identity_b, "task_id": identity_b})
-    _write(paths_b["dev"], dev_b)
-    _write(paths_b["qa"], _qa_document(identity_b, status="pass"))
-    loaded.append(("lane-b", dev_b))
-    references.extend(_relative(tmp_path, paths_b[k]) for k in ("ticket", "context", "dev", "qa"))
-
-    aggregate_module = RESOLVER._load_aggregate_module()
-    fresh_canonical = aggregate_module._build_aggregate(loaded, TASK_ID)
-    _write(parents["dev"], fresh_canonical)
-    _write(parents["qa"], _qa_document(TASK_ID, status="pass"))
-    _write(parents["completion"], _completion(TASK_ID, references))
-
-    # M5: the canonical itself declares needs_review with a synthesized
-    # status_rationale aggregating the contributing lane.
-    assert fresh_canonical["dev"]["status"] == "needs_review"
-    assert fresh_canonical["dev"]["status_rationale"]["classification"] == "pending_commit_handoff"
-    assert "lane-b" in fresh_canonical["dev"]["status_rationale"]["blocked_by"]
-
-    # AC-P3 / M5: aggregate-dev-report.py no longer rejects the needs_review
-    # shard before the resolver is even reached (was exit 1 pre-fix).
-    aggregate_result = _run_aggregate(tmp_path)
-    assert aggregate_result.returncode == 0, aggregate_result.stderr
-
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass_with_exceptions", result["errors"]
-    assert result["errors"] == []
-    by_path: dict[str, set[str]] = {}
-    for entry in result["disclosed_exceptions"]:
-        by_path.setdefault(entry["path"], set()).add(entry["code"])
-        assert entry["kind"] == "dev_handoff"
-    assert by_path[_relative(tmp_path, paths_b["dev"])] == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
-    assert by_path[_relative(tmp_path, parents["dev"])] == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
-
-    # AC-P3 / M4: close-route-select.py (the fixed production entrypoint
-    # /close's Step 0 shells out to) exits 0, not 2, on this chain.
-    route_result = _run_route_select(tmp_path)
-    assert route_result.returncode == 0, route_result.stdout
-    route_payload = json.loads(route_result.stdout)
-    assert route_payload["outcome"] == "not_selected"
-    assert route_payload["artifact_chain"]["status"] == "pass_with_exceptions"
-
-
-def _make_fanout_with_one_needs_review_lane(
-    tmp_path: Path, *, contributing_lane_qa_status: str = "pass"
-) -> tuple[dict[str, Path], Path, Path]:
-    """Shared scaffold for the iteration-2 parent-reclassification tests.
-
-    Builds the real-world fan-out shape (no parent ticket/context/qa-report
-    ever written -- commands/close.md documents those as optional, and the
-    live motivating task 20260808-035658 has no qa-report-<task-id>.json on
-    disk at all) with one clean lane-a and one needs_review lane-b whose own
-    qa-report status is the caller-supplied `contributing_lane_qa_status`.
-    """
-    parents = _parent_paths(tmp_path)
-    loaded: list[tuple[str, dict]] = []
-    references = [_relative(tmp_path, parents["dev"])]
-
-    identity_a = f"{TASK_ID}-lane-a"
-    paths_a = _lane_paths(tmp_path, "lane-a")
-    _materialise(tmp_path, "scripts/lane-a.py")
-    dev_a = _dev_document(identity_a, modified=["scripts/lane-a.py"])
-    _write(paths_a["ticket"], _ticket(identity_a))
-    _write(paths_a["context"], {"request_id": identity_a, "task_id": identity_a})
-    _write(paths_a["dev"], dev_a)
-    _write(paths_a["qa"], _qa_document(identity_a))
-    loaded.append(("lane-a", dev_a))
-    references.extend(_relative(tmp_path, paths_a[k]) for k in ("ticket", "context", "dev", "qa"))
-
-    identity_b = f"{TASK_ID}-lane-b"
-    paths_b = _lane_paths(tmp_path, "lane-b")
-    _materialise(tmp_path, "scripts/lane-b.py")
-    dev_b = _dev_document_needs_review(identity_b, modified=["scripts/lane-b.py"])
-    _write(paths_b["ticket"], _ticket(identity_b))
-    _write(paths_b["context"], {"request_id": identity_b, "task_id": identity_b})
-    _write(paths_b["dev"], dev_b)
-    _write(paths_b["qa"], _qa_document(identity_b, status=contributing_lane_qa_status))
-    loaded.append(("lane-b", dev_b))
-    references.extend(_relative(tmp_path, paths_b[k]) for k in ("ticket", "context", "dev", "qa"))
-
-    aggregate_module = RESOLVER._load_aggregate_module()
-    fresh_canonical = aggregate_module._build_aggregate(loaded, TASK_ID)
-    _write(parents["dev"], fresh_canonical)
-    _write(parents["completion"], _completion(TASK_ID, references))
-    assert not parents["qa"].exists()
-    assert not parents["ticket"].exists()
-    assert not parents["context"].exists()
-    return parents, paths_a["dev"], paths_b["dev"]
-
-
-def test_ac_p3b_fanout_parent_reclassifies_via_contributing_lane_qa_with_no_parent_qa_report(
-    tmp_path: Path,
-) -> None:
-    """Ticket 20260911-011232 iteration 2: the exact empirically-found gap.
-
-    `test_ac_p3_...` above happens to write a parent-level qa-report showing
-    qa.status == "pass", which coincidentally satisfied
-    `_dev_handoff_eligible`'s sibling-qa-report lookup for the parent path
-    too -- masking the real bug.  In real fan-out mode (and in the live
-    motivating task 20260808-035658) NO parent-level qa-report file exists on
-    disk at all.  The parent/canonical's own INVALID_DEV_STATUS /
-    UNRESOLVED_BLOCKERS errors must still reclassify into
-    disclosed_exceptions[] by cross-checking the CONTRIBUTING lane's (lane-b,
-    the one whose dev.status == "needs_review" actually drove the parent's
-    synthesized status_rationale) own qa-report -- not a nonexistent
-    qa-report-<bare-task-id> sibling of the parent.
-    """
-    parents, dev_a_path, dev_b_path = _make_fanout_with_one_needs_review_lane(
-        tmp_path, contributing_lane_qa_status="pass"
-    )
-
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass_with_exceptions", result["errors"]
-    assert result["errors"] == []
-    by_path: dict[str, set[str]] = {}
-    for entry in result["disclosed_exceptions"]:
-        by_path.setdefault(entry["path"], set()).add(entry["code"])
-        assert entry["kind"] == "dev_handoff"
-    assert by_path[_relative(tmp_path, dev_b_path)] == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
-    assert by_path[_relative(tmp_path, parents["dev"])] == {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"}
-
-
-def test_ac_n5_fanout_parent_stays_hard_fail_when_contributing_lane_qa_does_not_pass(
-    tmp_path: Path,
-) -> None:
-    """Rejection counterpart of the P3b case above.
-
-    If the contributing needs_review lane's OWN qa-report does not show a
-    genuine pass (undisclosed fail here), the parent's exception must NOT be
-    granted and the parent's errors must stay hard exactly as before this
-    iteration's fix -- proving the new cross-check does not relax anything,
-    it only relocates where the same-lane-QA evidence is looked up from.
-    """
-    parents, dev_a_path, dev_b_path = _make_fanout_with_one_needs_review_lane(
-        tmp_path, contributing_lane_qa_status="fail"
-    )
+    """A lane that stopped short of completed, its own qa-report passing, under
+    a historic canonical that inherited the lane's status: both fail, exit 2,
+    and the aggregator writes no canonical for that lane set."""
+    parents, lanes = _make_fanout(tmp_path)
+    lane_b = f"{TASK_ID}-lane-b"
+    _write(lanes["lane-b"]["dev"], _dev_document_with_rationale(
+        lane_b, "needs_review", modified=["scripts/lane-1.py"], created=["tests/lane-1.py"]))
+    canonical = json.loads(parents["dev"].read_text(encoding="utf-8"))
+    historic = _dev_document_with_rationale(TASK_ID, "needs_review")
+    canonical["dev"]["status"] = "needs_review"
+    canonical["dev"]["status_rationale"] = historic["dev"]["status_rationale"]
+    canonical["blocking_issues"] = historic["blocking_issues"]
+    _write(parents["dev"], canonical)
 
     result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
     assert result["status"] == "fail"
     codes_by_path: dict[str, set[str]] = {}
     for entry in result["errors"]:
         codes_by_path.setdefault(entry["path"], set()).add(entry["code"])
-    assert codes_by_path[_relative(tmp_path, parents["dev"])] == {
-        "INVALID_DEV_STATUS",
-        "UNRESOLVED_BLOCKERS",
-    }
-    assert codes_by_path[_relative(tmp_path, dev_b_path)] == {
-        "INVALID_DEV_STATUS",
-        "UNRESOLVED_BLOCKERS",
-    }
-    assert result["disclosed_exceptions"] == []
+    for path in (parents["dev"], lanes["lane-b"]["dev"]):
+        assert {"INVALID_DEV_STATUS", "UNRESOLVED_BLOCKERS"} <= codes_by_path[_relative(tmp_path, path)]
 
-
-def test_ac_5_exit_code_plumbing_is_consistent_end_to_end(tmp_path: Path) -> None:
-    parents = _make_singular(tmp_path)
-    _write(parents["qa"], _qa_document_with_disclosed_exception(TASK_ID))
-
-    resolver_process = _run_cli(tmp_path)
-    assert resolver_process.returncode == 0
-    assert json.loads(resolver_process.stdout)["status"] == "pass_with_exceptions"
-
-    route_process = _run_route_select(tmp_path)
-    assert route_process.returncode == 0
-    route_payload = json.loads(route_process.stdout)
-    assert route_payload["artifact_chain"]["status"] == "pass_with_exceptions"
-
-
-def test_ac_n1_incomplete_disclosure_stays_hard_fail(tmp_path: Path) -> None:
-    parents = _make_singular(tmp_path)
-
-    # Missing/empty evidence[].
-    _write(parents["qa"], _qa_document_with_disclosed_exception(TASK_ID, evidence=[]))
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    assert "INVALID_QA_STATUS" in _error_codes(result)
-    assert result["disclosed_exceptions"] == []
-
-    # Missing attestation entirely.
-    doc = _qa_document_with_disclosed_exception(TASK_ID)
-    del doc["qa"]["disclosed_exception"]["attestation"]
-    _write(parents["qa"], doc)
-    result2 = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result2["status"] == "fail"
-    assert "INVALID_QA_STATUS" in _error_codes(result2)
-    assert result2["disclosed_exceptions"] == []
-
-    # Attestation present but not the exact literal (paraphrased).
-    doc2 = _qa_document_with_disclosed_exception(
-        TASK_ID, attestation="This is a disclosed exception, not a defect."
-    )
-    _write(parents["qa"], doc2)
-    result3 = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result3["status"] == "fail"
-    assert "INVALID_QA_STATUS" in _error_codes(result3)
-    assert result3["disclosed_exceptions"] == []
-
-
-def test_ac_n2_mislabeled_real_defect_stays_hard_fail(tmp_path: Path) -> None:
-    parents = _make_singular(tmp_path)
-    doc = _qa_document_with_disclosed_exception(
-        TASK_ID,
-        findings=[
-            {"blocks_release": True, "severity": "critical", "primary_cause": "dev_implementation"},
-        ],
-    )
-    _write(parents["qa"], doc)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    assert "INVALID_QA_STATUS" in _error_codes(result)
-    assert result["disclosed_exceptions"] == []
-
-    # A non-blocking finding with a non-environment cause must NOT disqualify
-    # -- only a finding that actually blocks release (or is severity=critical)
-    # is examined.
-    doc2 = _qa_document_with_disclosed_exception(
-        TASK_ID,
-        findings=[
-            {"blocks_release": False, "severity": "minor", "primary_cause": "dev_implementation"},
-        ],
-    )
-    _write(parents["qa"], doc2)
-    result2 = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result2["status"] == "pass_with_exceptions", result2["errors"]
-
-
-def test_qa_findings_malformed_dict_all_findings_stays_hard_fail(tmp_path: Path) -> None:
-    """AC1 (dev-20260914-075954): a dict-shaped qa.all_findings must not be
-    silently treated as zero findings -- a critical dev_implementation
-    finding smuggled inside it must still hard-fail the chain, matching the
-    already-correct list-shaped behavior in test_ac_n2 above."""
-    parents = _make_singular(tmp_path)
-    doc = _qa_document_with_disclosed_exception(TASK_ID)
-    doc["qa"]["all_findings"] = {
-        "smuggled": {
-            "severity": "critical",
-            "primary_cause": "dev_implementation",
-            "blocks_release": True,
-        }
-    }
-    _write(parents["qa"], doc)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    assert "INVALID_QA_STATUS" in _error_codes(result)
-    assert result["disclosed_exceptions"] == []
-
-
-def test_qa_findings_malformed_dict_failures_stays_hard_fail(tmp_path: Path) -> None:
-    """AC2 (dev-20260914-075954): same bypass via qa.failures instead of
-    qa.all_findings -- both container keys share the vulnerable path."""
-    parents = _make_singular(tmp_path)
-    doc = _qa_document_with_disclosed_exception(TASK_ID)
-    doc["qa"]["failures"] = {
-        "smuggled": {
-            "severity": "critical",
-            "primary_cause": "dev_implementation",
-            "blocks_release": True,
-        }
-    }
-    _write(parents["qa"], doc)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    assert "INVALID_QA_STATUS" in _error_codes(result)
-    assert result["disclosed_exceptions"] == []
-
-
-def test_qa_findings_malformed_explicit_null_stays_hard_fail(tmp_path: Path) -> None:
-    """AC3 (dev-20260914-075954): an explicit JSON null for a present
-    all_findings key is malformed, not "no findings" -- only a truly absent
-    key means zero findings, so this must hard-fail exactly like the
-    dict-shaped cases above."""
-    parents = _make_singular(tmp_path)
-    doc = _qa_document_with_disclosed_exception(TASK_ID)
-    doc["qa"]["all_findings"] = None
-    _write(parents["qa"], doc)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    assert "INVALID_QA_STATUS" in _error_codes(result)
-    assert result["disclosed_exceptions"] == []
-
-
-def test_qa_findings_absent_key_guard_preserved_pass_with_exceptions(tmp_path: Path) -> None:
-    """AC4 (dev-20260914-075954): guard preservation -- a truly absent
-    all_findings key (the pre-existing, legitimate shape almost every
-    fixture relies on) must still resolve to pass_with_exceptions; the fix
-    must fail closed only on a present-but-malformed container, never on
-    plain absence."""
-    parents = _make_singular(tmp_path)
-    doc = _qa_document_with_disclosed_exception(TASK_ID)
-    assert "all_findings" not in doc["qa"]
-    _write(parents["qa"], doc)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass_with_exceptions", result["errors"]
-    assert result["errors"] == []
-
-
-def test_qa_findings_malformed_scalar_shapes_stay_hard_fail(tmp_path: Path) -> None:
-    """Codex round-1 finding #1 (dev-20260914-075954): the fix's isinstance
-    check is a general "not a list" guard, not special-cased to dict/null --
-    prove that generality holds for scalar JSON shapes too (string, number,
-    boolean), for BOTH all_findings and failures."""
-    parents = _make_singular(tmp_path)
-    for container_key in ("all_findings", "failures"):
-        for malformed_value in ("a string", 42, True):
-            doc = _qa_document_with_disclosed_exception(TASK_ID)
-            doc["qa"][container_key] = malformed_value
-            _write(parents["qa"], doc)
-            result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-            assert result["status"] == "fail", (container_key, malformed_value)
-            assert "INVALID_QA_STATUS" in _error_codes(result)
-            assert result["disclosed_exceptions"] == []
-
-
-def test_qa_findings_malformed_explicit_null_via_failures_stays_hard_fail(tmp_path: Path) -> None:
-    """Symmetric counterpart of AC3 via the failures key (Codex round-1
-    finding #1)."""
-    parents = _make_singular(tmp_path)
-    doc = _qa_document_with_disclosed_exception(TASK_ID)
-    doc["qa"]["failures"] = None
-    _write(parents["qa"], doc)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    assert "INVALID_QA_STATUS" in _error_codes(result)
-    assert result["disclosed_exceptions"] == []
-
-
-def test_qa_findings_absent_all_findings_with_valid_list_failures_still_pass_with_exceptions(
-    tmp_path: Path,
-) -> None:
-    """Symmetric counterpart of AC4 (Codex round-1 finding #1): all_findings
-    entirely absent while failures IS present and list-shaped with only a
-    non-blocking finding must still resolve to pass_with_exceptions -- the
-    fix must not regress this valid mixed-presence case either."""
-    parents = _make_singular(tmp_path)
-    doc = _qa_document_with_disclosed_exception(TASK_ID)
-    assert "all_findings" not in doc["qa"]
-    doc["qa"]["failures"] = [
-        {"blocks_release": False, "severity": "minor", "primary_cause": "dev_implementation"},
-    ]
-    _write(parents["qa"], doc)
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "pass_with_exceptions", result["errors"]
-    assert result["errors"] == []
-
-
-def test_ac_n3_needs_review_without_same_lane_qa_pass_stays_hard_fail(tmp_path: Path) -> None:
-    parents = _make_singular(tmp_path)
-    _write(parents["dev"], _dev_document_needs_review(TASK_ID, modified=["scripts/one.py"]))
-    _write(parents["qa"], _qa_document(TASK_ID, status="fail"))
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    codes = _error_codes(result)
-    assert "INVALID_DEV_STATUS" in codes
-    assert "UNRESOLVED_BLOCKERS" in codes
-    # The undisclosed qa fail also stays hard -- no disclosure block supplied.
-    assert "INVALID_QA_STATUS" in codes
-    assert result["disclosed_exceptions"] == []
-
-
-def test_ac_n4_reverted_2026_08_06_warning_shape_still_hard_fails(tmp_path: Path) -> None:
-    # Today's exact reverted-attempt shape: qa.status=='warning' (or 'fail')
-    # with NO qa.disclosed_exception block at all -- proves the base binary
-    # check validate_qa() (the subject of the reverted attempt) is untouched.
-    parents = _make_singular(tmp_path)
-    for bad_status in ("warning", "fail"):
-        _write(parents["qa"], _qa_document(TASK_ID, status=bad_status))
-        result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-        assert result["status"] == "fail"
-        assert "INVALID_QA_STATUS" in _error_codes(result)
-        assert result["disclosed_exceptions"] == []
-
-
-def test_ac_6_blocked_status_is_never_reclassification_eligible(tmp_path: Path) -> None:
-    parents = _make_singular(tmp_path)
-    doc = _dev_document(TASK_ID, modified=["scripts/one.py"])
-    doc["dev"]["status"] = "blocked"
-    # Even a fully-formed status_rationale block must not rescue 'blocked' --
-    # it is unconditionally hard-fail regardless of any disclosure attempt.
-    doc["dev"]["status_rationale"] = {
-        "classification": "pending_commit_handoff",
-        "blocked_by": "irrelevant",
-        "forbidden_action": "irrelevant",
-    }
-    doc["blocking_issues"] = ["something"]
-    _write(parents["dev"], doc)
-    _write(parents["qa"], _qa_document(TASK_ID, status="pass"))
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    codes = _error_codes(result)
-    assert "INVALID_DEV_STATUS" in codes
-    assert "UNRESOLVED_BLOCKERS" in codes
-    assert result["disclosed_exceptions"] == []
-
-
-def test_missing_disclosure_field_on_an_otherwise_needs_review_lane_stays_hard_fail(
-    tmp_path: Path,
-) -> None:
-    # dev.status=='needs_review' but status_rationale is entirely absent.
-    parents = _make_singular(tmp_path)
-    doc = _dev_document(TASK_ID, modified=["scripts/one.py"])
-    doc["dev"]["status"] = "needs_review"
-    doc["blocking_issues"] = ["awaiting /commit hand-off"]
-    _write(parents["dev"], doc)
-    _write(parents["qa"], _qa_document(TASK_ID, status="pass"))
-    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
-    assert result["status"] == "fail"
-    codes = _error_codes(result)
-    assert "INVALID_DEV_STATUS" in codes
-    assert "UNRESOLVED_BLOCKERS" in codes
-    assert result["disclosed_exceptions"] == []
+    parents["dev"].unlink()
+    aggregate = _run_aggregate(tmp_path)
+    assert aggregate.returncode == 1, aggregate.stdout
+    assert "lane-b" in aggregate.stderr
+    assert not parents["dev"].exists()
 
 
 # --- Serialized-wave baseline route -----------------------------------------

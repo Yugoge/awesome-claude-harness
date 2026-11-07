@@ -2,15 +2,18 @@
 
 commands/dev-overnight.md:1561 previously called a bare, unqualified
 `commit.sh` via PATH lookup; scripts/commit.sh did not exist anywhere on this
-branch, producing a reproducible exit 127. This test proves the invocation is
-now REACHABLE (never exits 127), bounded strictly to reachability -- it does
+branch, producing a reproducible exit 127. These tests prove the script is
+REACHABLE (never exits 127), bounded strictly to reachability -- they do
 NOT assert scripts/commit.sh performs a full CAS/content-bound-ledger commit
 (that redesign is explicitly out of this Must-Have's scope).
+
+Step 19 no longer commits at all: the overnight session's work stays in
+refs/checkpoints/<branch> until the owner types the post-loop flow, so
+commands/dev-overnight.md names no commit.sh (the script stays in scripts/).
 """
 
 from __future__ import annotations
 
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -69,33 +72,32 @@ def test_commit_sh_dirty_repo_fails_closed_not_127(tmp_path):
     assert len(log.strip().splitlines()) == 1  # still just the initial commit
 
 
-def test_dev_overnight_step19_no_longer_references_bare_unqualified_commit_sh():
-    """The actual defect: commands/dev-overnight.md:1561 called bare
-    `commit.sh` (PATH lookup) with no discoverable script on this branch,
-    producing a reproducible exit 127. This test extracts the LITERAL
-    documented invocation out of commands/dev-overnight.md and subprocess-
-    executes it (from the project root, with a minimal PATH that deliberately
-    excludes scripts/ so a bare `commit.sh` could not resolve via PATH
-    lookup), then asserts the exit code is never 127. A prior version of this
-    test only checked that the substring 'commit.sh' appeared in the doc and
-    that scripts/commit.sh existed on disk -- both were true before AND after
-    the doc's invocation text was actually fixed, so it stayed green while
-    the real defect remained unfixed. This version fails if that regresses."""
-    dev_overnight_md = (REPO_ROOT / "commands" / "dev-overnight.md").read_text(encoding="utf-8")
+def test_dev_overnight_step19_has_no_commit_sh_and_the_owner_lands_the_work():
+    """Step 19's per-cycle commit is gone: commands/dev-overnight.md names no
+    commit.sh and no `/commit --bulk`, and Step 19 keeps the cycle's work in
+    refs/checkpoints/<branch>. The work lands once, after the session, by the
+    four commands the owner types: the announcement and the Post-loop flow
+    both list /close --auto, /commit --auto, /merge <worktree_branch>
+    (isolated modes) and /push in that order, with where each runs; the
+    in_place announcement lists the same flow without /merge."""
+    text = (REPO_ROOT / "commands" / "dev-overnight.md").read_text(encoding="utf-8")
+    assert "commit.sh" not in text
+    assert "commit --bulk" not in text
+    step19 = text.split("### Step 19:", 1)[1].split("### Step 20:", 1)[0]
+    assert "refs/checkpoints/" in step19
+    assert "**TIME CHECK**" in step19
 
-    match = re.search(r"Call `([^`]*?commit\.sh[^`]*?)`", dev_overnight_md)
-    assert match, "commands/dev-overnight.md must document a `Call `...commit.sh...`` Step-19 invocation"
-    invocation = match.group(1)
-
-    minimal_path = "/usr/bin:/bin"  # deliberately excludes scripts/ -- only a resolvable path works
-    proc = subprocess.run(
-        ["bash", "-c", invocation],
-        cwd=REPO_ROOT,
-        env={"PATH": minimal_path},
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode != 127, (
-        f"documented Step-19 invocation {invocation!r} exited 127 (command not found) "
-        f"when executed literally from the project root; stderr={proc.stderr!r}"
-    )
+    announce = text.split("**Announce completion**:", 1)[1].split("### Post-loop flow", 1)[0]
+    flow = text.split("### Post-loop flow", 1)[1].split("\n## ", 1)[0]
+    order = ("/close --auto", "/commit --auto", "/merge <worktree_branch>", "/push")
+    for part in (announce, flow):
+        positions = [part.find(cmd) for cmd in order]
+        assert -1 not in positions, (order, positions)
+        assert positions == sorted(positions), (order, positions)
+    isolated, in_place = announce.split("<If isolation_kind == 'in_place', include instead:>", 1)
+    assert "In a session opened at <worktree_path>" in isolated
+    assert "in the main checkout" in isolated
+    in_place_order = [in_place.find(cmd) for cmd in ("/close --auto", "/commit --auto", "/push")]
+    assert -1 not in in_place_order and in_place_order == sorted(in_place_order), in_place_order
+    assert "/merge <" not in in_place
+    assert "in the main checkout" in flow and "a session opened at `<worktree_path>`" in flow

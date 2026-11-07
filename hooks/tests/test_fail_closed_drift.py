@@ -33,9 +33,8 @@ semantic equivalence with the engine's lexer, and passing it does NOT mean any f
 is fail-CLOSED family-wide. The single authoritative account of the fallback's coverage
 and its limits (which lexical forms the regex fallback does not match, and why only full
 semantic equivalence with the engine's lexer is impossible) lives at
-`hooks/pretool-bash-safety.sh::_runtime_guard_fail_closed`;
-the residual gaps (STEP0/P3/P4/P7 fail-OPEN on a crash) live in
-`docs/reference/core-context-refactor-plan.md`. Do not restate them here.
+`hooks/pretool-bash-safety.sh::_runtime_guard_fail_closed`, with the residual gaps
+(STEP0/P3/P4/P7 fail-OPEN on a crash). Do not restate them here.
 
 SAFETY: every command below is a STRING fed to the helper. Nothing is executed, and no
 real service, endpoint, or process is ever contacted. Vocabulary is assembled from

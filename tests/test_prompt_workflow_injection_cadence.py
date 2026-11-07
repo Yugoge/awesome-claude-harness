@@ -11,7 +11,7 @@ the invariant half made the recurring cost unbounded in prompts-per-cycle.
 After the fix the light half rides every prompt (withholding it would strand a
 resuming orchestrator on the phase that was current at the last cycle boundary)
 and the heavy half is gated on a delivery marker keyed by
-(session_id, cycle_count, context epoch, spec fingerprint).
+(session_id, cycle index, context epoch, spec fingerprint).
 
 Structured after ``tests/test_prompt_workflow_liveness_tz.py``.
 
@@ -66,7 +66,7 @@ OTHER_SID = 'zzzzzzzz-9999-8888-7777-666666666666'
 
 
 def spec_body_probe(length: int = 400) -> str:
-    """A prefix of the spec AS INJECTED -- read_command_spec strips frontmatter."""
+    """A prefix of the spec AS INJECTED -- _try_read_spec strips frontmatter."""
     text = COMMAND_DOC.read_text()
     if text.startswith('---'):
         end = text.find('\n---', 3)
@@ -96,9 +96,11 @@ LIGHT_FLOOR_CHARS = 1500
 LIGHT_CEILING_CHARS = 3000
 # The same block measured against the state create-overnight-state.sh actually
 # writes: main_root and actor_git_env populated, registered_worktree isolation.
-# Measured 3,595 chars (2,880 cadence payload + a 715-char sibling-owned
-# enforcement-registry warning), so the ceiling is the measured value plus
-# roughly 11% headroom for the path-length-dependent terms. Asserted TOGETHER
+# Measured 3,595 chars while every prompt also carried a 715-char
+# enforcement-registry verification notice; that per-prompt re-check of the
+# registry is gone (its one producer writes it at launch), and the block now
+# measures 2,879, inside the fixture ceiling too. The ceiling stays the
+# production figure the sibling publishes. Asserted TOGETHER
 # with the relational bound below, because an absolute cap alone would drift
 # loose as the command document grows and a ratio alone would drift loose in
 # absolute chars for the same reason.
@@ -142,7 +144,7 @@ def load_hook_module(path: Path = HOOK_PATH):
 class Fixture:
     """A hermetic project + HOME + transcript, never touching the repo."""
 
-    def __init__(self, tmp: str, session_id: str = SID, cycle_count: int = 0,
+    def __init__(self, tmp: str, session_id: str = SID, cycles_done: int = 0,
                  isolation_kind: str = 'registered_worktree',
                  with_transcript: bool = True, with_spec: bool = True,
                  with_todo: bool = True):
@@ -171,17 +173,31 @@ class Fixture:
         if with_transcript:
             self.transcript.write_text(json.dumps({'type': 'user', 'uuid': 'u0'}) + '\n')
         self.state_path = self.project / '.claude' / f'overnight-state-{session_id}.json'
-        self.write_state(cycle_count=cycle_count, isolation_kind=isolation_kind)
+        self.worktree = self.root / 'wt'
+        self.write_state(cycles_done=cycles_done, isolation_kind=isolation_kind)
 
-    def write_state(self, cycle_count: int = 0, phase: str = 'exploring',
+    def write_state(self, cycles_done: int = 0, phase: str = 'exploring',
                     isolation_kind: str = 'registered_worktree') -> None:
+        """The record, and the cycles the session has completed.
+
+        The record holds no cycle count: hooks/lib/overnight.py cycle_index
+        reads the cycle in progress from the retro reports in the session's
+        directory under its working root, so the completed cycles are written
+        there.
+        """
+        self.cycles_done = cycles_done
+        session_dir = self.worktree / 'docs' / 'dev' / 'overnight' / self.session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+        for report in session_dir.glob('retro-report-cycle*.json'):
+            report.unlink()
+        for cycle in range(1, cycles_done + 1):
+            (session_dir / f'retro-report-cycle{cycle}.json').write_text('{}')
         self.state_path.write_text(json.dumps({
             'session_id': self.session_id,
             'end_time': '2099-01-01T00:00:00Z',
-            'cycle_count': cycle_count,
             'current_phase': phase,
             'isolation_kind': isolation_kind,
-            'worktree_path': '/tmp/wt',
+            'worktree_path': str(self.worktree),
             'worktree_branch': 'wt-branch',
             'protected_branch': 'master',
             'issues_fixed': 0,
@@ -405,10 +421,6 @@ class TestAC1RecurringCostIsBounded(unittest.TestCase):
                 with self.subTest(prompt=index):
                     size = measured_len(out, fixture)
                     self.assertNotIn(SPEC_HEADER, out)
-                    self.assertGreater(size, LIGHT_CEILING_CHARS,
-                                       'production shape no longer exceeds the '
-                                       'fixture ceiling; the two bounds have '
-                                       'converged and this case is now vacuous')
                     self.assertLessEqual(size, PRODUCTION_LIGHT_CEILING_CHARS)
                     self.assertLessEqual(
                         size, boundary * PRODUCTION_LIGHT_MAX_RATIO_OF_BOUNDARY)
@@ -446,7 +458,7 @@ class TestAC2FailSafePolarity(unittest.TestCase):
             ('2.2', 'zero-length', '', 'heavy'),
             ('2.3', 'malformed JSON', '{not json', 'heavy'),
             ('2.4', 'not an object', [], 'heavy'),
-            ('2.5', 'missing session_id', {'cycle_count': 0}, 'heavy'),
+            ('2.5', 'missing session_id', {'cycle_index': 1}, 'heavy'),
             ('2.6', 'foreign session_id', {'session_id': OTHER_SID}, 'heavy'),
             ('2.7', 'cycle lower', 'CYCLE:-1', 'heavy'),
             ('2.8', 'cycle higher', 'CYCLE:+1', 'heavy'),
@@ -461,11 +473,11 @@ class TestAC2FailSafePolarity(unittest.TestCase):
                     if payload in ('VALID', 'CYCLE:-1', 'CYCLE:+1', 'CYCLE:str'):
                         marker = self._valid_marker(fixture)
                         if payload == 'CYCLE:-1':
-                            marker['cycle_count'] = marker['cycle_count'] - 1
+                            marker['cycle_index'] = marker['cycle_index'] - 1
                         elif payload == 'CYCLE:+1':
-                            marker['cycle_count'] = marker['cycle_count'] + 1
+                            marker['cycle_index'] = marker['cycle_index'] + 1
                         elif payload == 'CYCLE:str':
-                            marker['cycle_count'] = 'zero'
+                            marker['cycle_index'] = 'one'
                         fixture.marker_path().write_text(json.dumps(marker))
                     elif payload == 'UNREADABLE':
                         # DISCREPANCY -- AC-2 row 2.10 specifies mode 0o000, but
@@ -490,7 +502,7 @@ class TestAC2FailSafePolarity(unittest.TestCase):
     def test_no_exception_escapes_the_decision(self):
         """Direct in-process call: any raise fails here, unlike a subprocess."""
         for label, payload in (('malformed', '{not json'), ('non-object', '[]'),
-                               ('zero-length', ''), ('wrong types', '{"cycle_count": {}}')):
+                               ('zero-length', ''), ('wrong types', '{"cycle_index": {}}')):
             with self.subTest(marker=label):
                 with tempfile.TemporaryDirectory() as tmp:
                     fixture = Fixture(tmp)
@@ -513,7 +525,7 @@ class TestAC3ValidityKeyDiscrimination(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp)
             deliver(fixture)
-            fixture.write_state(cycle_count=fixture.state()['cycle_count'] + 1)
+            fixture.write_state(cycles_done=fixture.cycles_done + 1)
             self.assertIn(SPEC_HEADER, deliver(fixture))
 
     def test_3_2_session_change_redelivers(self):
@@ -530,7 +542,7 @@ class TestAC3ValidityKeyDiscrimination(unittest.TestCase):
 
         Here the other session gets a live state in the SAME project and a
         byte-identical copy of the first session's marker, so every other term
-        of the key (cycle_count, spec fingerprint, transcript path / inode /
+        of the key (cycle index, spec fingerprint, transcript path / inode /
         offset, epoch reading) matches and only the session term can decide.
         """
         with tempfile.TemporaryDirectory() as tmp:
@@ -648,33 +660,33 @@ class TestAC5CycleBoundaryStillDelivers(unittest.TestCase):
 
     def test_advance_redelivers_and_rearms(self):
         with tempfile.TemporaryDirectory() as tmp:
-            fixture = Fixture(tmp, cycle_count=4)
+            fixture = Fixture(tmp, cycles_done=4)
             deliver(fixture)
             self.assertNotIn(SPEC_HEADER, deliver(fixture))
 
-            # posttool-overnight-loop.py:100-101 -- cycle_count +1, phase reset.
-            fixture.write_state(cycle_count=5, phase='exploring')
+            # Cycle 5's PM retrospective lands (Step 20), then the loop reset.
+            fixture.write_state(cycles_done=5, phase='exploring')
             out = deliver(fixture)
 
             self.assertIn(SPEC_HEADER, out)
             self.assertIn(spec_body_probe(), out)
             self.assertIn('OVERNIGHT CONTINUATION - Cycle 6', out.splitlines()[0])
-            self.assertIn('resume from phase="exploring"', out)
+            self.assertIn(f'Read {fixture.state_path.resolve()} and resume from phase="exploring"', out)
             self.assertIn('Phase mapping:', out)
 
             marker = json.loads(fixture.marker_path().read_text())
-            self.assertEqual(5, marker['cycle_count'])
+            self.assertEqual(6, marker['cycle_index'])
             self.assertNotIn(SPEC_HEADER, deliver(fixture))
 
     def test_phase_advance_within_a_cycle_updates_routing(self):
         """The light half must track current_phase, which moves mid-cycle."""
         with tempfile.TemporaryDirectory() as tmp:
-            fixture = Fixture(tmp, cycle_count=2)
+            fixture = Fixture(tmp, cycles_done=2)
             deliver(fixture)
-            fixture.write_state(cycle_count=2, phase='implementing')
+            fixture.write_state(cycles_done=2, phase='implementing')
             out = deliver(fixture)
             self.assertNotIn(SPEC_HEADER, out)
-            self.assertIn('resume from phase="implementing"', out)
+            self.assertIn(f'Read {fixture.state_path.resolve()} and resume from phase="implementing"', out)
             self.assertIn('Phase: implementing', out)
 
 
@@ -702,7 +714,7 @@ class TestAC6SessionIsolation(unittest.TestCase):
 class TestAC8SelfHealPointer(unittest.TestCase):
     """AC-8 -- the pointer names the resolved path, never a literal."""
 
-    def test_pointer_equals_read_command_spec_resolution(self):
+    def test_pointer_equals_the_resolved_spec_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Fixture(tmp)
             block = fixture.call_direct()
@@ -714,8 +726,8 @@ class TestAC8SelfHealPointer(unittest.TestCase):
             resolved = module.resolve_command_spec_path('dev-overnight')
             self.assertIsNotNone(resolved)
             self.assertIn(f'{SELF_HEAL_PREFIX}{resolved}', block)
-            # The resolved path is the file read_command_spec actually reads.
-            self.assertEqual(module.read_command_spec('dev-overnight'),
+            # The resolved path is the file whose text the resolver returns.
+            self.assertEqual(module._resolve_command_spec('dev-overnight')[1],
                              module._try_read_spec(resolved))
             # ...and it is NOT the repository literal.
             self.assertNotIn(str(COMMAND_DOC), block)
@@ -948,32 +960,6 @@ class TestDeliveryReceiptIsTrustworthy(unittest.TestCase):
                 self.assertFalse(module.commit_overnight_delivery(SID, light))
             self.assertFalse(fixture.marker_path().exists())
 
-    def test_candidate_list_matches_read_command_spec(self):
-        """The self-heal fallback must name the paths actually searched.
-
-        read_command_spec keeps its own copy of this list (rewriting it is
-        outside this lane's scope), so a pointer built from a drifted copy
-        would send the orchestrator to the wrong place -- worse than absent.
-
-        The two list expressions are compared whole, not by their path
-        literals: candidates that differ only in their base (the hook's own
-        location against $HOME, say) share every literal, so a literal-only
-        comparison would pass a copy that searches a different directory.
-        """
-        source = ast.parse(HOOK_PATH.read_text())
-        bodies = {node.name: node for node in source.body
-                  if isinstance(node, ast.FunctionDef)}
-        self.assertIn('_command_spec_candidates', bodies)
-
-        def candidate_list(name: str) -> str:
-            lists = [element for element in ast.walk(bodies[name])
-                     if isinstance(element, ast.List)]
-            self.assertEqual(1, len(lists), f'{name}: expected one list literal')
-            return ast.dump(lists[0])
-
-        self.assertEqual(candidate_list('_command_spec_candidates'),
-                         candidate_list('read_command_spec'))
-
 
 class TestPerAccountConfigDirStillFindsTheSpec(unittest.TestCase):
     """REG-E: a CLAUDE_CONFIG_DIR without commands/ must not lose the spec.
@@ -1017,7 +1003,7 @@ class TestPerAccountConfigDirStillFindsTheSpec(unittest.TestCase):
                         os.environ.update(env)
                         self.assertEqual(harness_spec,
                                          module.resolve_command_spec_path('dev-overnight'))
-                        self.assertTrue(module.read_command_spec('dev-overnight')
+                        self.assertTrue(module._resolve_command_spec('dev-overnight')[1]
                                         .startswith(spec_body_probe()))
 
                     first = fixture.run(extra_env=env).stdout
@@ -1039,13 +1025,13 @@ class TestPerAccountConfigDirStillFindsTheSpec(unittest.TestCase):
                 os.environ.update(env)
                 self.assertEqual(account_spec,
                                  module.resolve_command_spec_path('dev-overnight'))
-                self.assertIn('PER-ACCOUNT COPY', module.read_command_spec('dev-overnight'))
+                self.assertIn('PER-ACCOUNT COPY', module._resolve_command_spec('dev-overnight')[1])
 
 
 class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
     """The resolver must never name a file the reader would skip.
 
-    read_command_spec falls through to the next candidate when one exists but
+    The spec read falls through to the next candidate when one exists but
     cannot be READ. A resolver that stops at the first candidate that merely
     EXISTS therefore answered a different file, and both things built from that
     answer were wrong at once: the self-heal pointer sent the orchestrator to a
@@ -1159,14 +1145,14 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
                         self.assertIsNotNone(resolved)
                         # The one operation: whatever the resolver names must
                         # be the file whose decoded bytes the reader returns.
-                        self.assertEqual(module.read_command_spec('dev-overnight'),
+                        self.assertEqual(module._resolve_command_spec('dev-overnight')[1],
                                          module._try_read_spec(resolved))
 
 
 class TestScopeConfinement(unittest.TestCase):
     """AC-9 -- the lane boundary is honoured and the collision is not absorbed."""
 
-    TZ_OWNED = ('_is_active_state', 'find_any_overnight_state')
+    TZ_OWNED = ('find_any_overnight_state',)
 
     def test_tz_owned_symbols_are_not_edited_by_this_lane(self):
         """The tz lane's landed fix must be intact, byte for byte."""
@@ -1178,13 +1164,15 @@ class TestScopeConfinement(unittest.TestCase):
             if isinstance(node, ast.FunctionDef) and node.name in self.TZ_OWNED:
                 bodies[node.name] = '\n'.join(lines[node.lineno - 1:node.end_lineno])
         self.assertEqual(set(self.TZ_OWNED), set(bodies))
-        # tz's session binding and its fail-closed liveness predicate.
-        self.assertIn("state.get('session_id') != session_id",
-                      bodies['find_any_overnight_state'])
+        # tz's session binding is lib/overnight.py's locator (the session-keyed
+        # file and its own session_id field) and the liveness verdict its
+        # window_open (P2 R1); no predicate of the hook's own survives.
+        self.assertIn('overnight.locate(session_id, payload)', bodies['find_any_overnight_state'])
+        self.assertIn('overnight.window_open(payload)', bodies['find_any_overnight_state'])
+        self.assertNotIn('_is_active_state', source)
         # No project-wide scan survives (a prose mention in the docstring
         # explaining the removed glob is not a call site).
         self.assertNotIn('.glob(', bodies['find_any_overnight_state'])
-        self.assertIn("replace('Z', '+00:00')", bodies['_is_active_state'])
 
     def test_handle_phase_b_still_threads_the_session_id(self):
         """tz asserts this literal; the cadence fix must not break it."""
@@ -1260,14 +1248,20 @@ class TestScopeConfinement(unittest.TestCase):
 class TestSlashChecklistDoesNotResendTheCommandFile(unittest.TestCase):
     """Claude Code already expands a slash command's body into the prompt, so
     the Phase A checklist must not append the same command file a second time
-    (about 108 KB for /dev and 120 KB for /close). The overnight continuation
-    re-send is a different delivery and is pinned by the cases above.
+    (tens of KB each). The overnight continuation re-send is a different
+    delivery and is pinned by the cases above.
 
     Judged on what the real UserPromptSubmit hook prints across the main()
     process boundary, so a re-send from any code path counts, with or without
     a COMMAND SPECIFICATION header."""
 
     LONG_LINE = 80  # the checklist never quotes a command-file line this long
+    # Measured when set, PROJECT_ROOT and HARNESS_ROOT lines included: /dev
+    # printed 3,222 chars and /close 1,188, against 89,968 in commands/dev.md
+    # and 64,308 in commands/close.md. The bound is near the geometric mean of
+    # the largest output and the smallest file, about 4x from each, so a
+    # re-send in any shape (re-wrapped, unheaded) fails on its size alone.
+    MAX_STDOUT_CHARS = 14_000
 
     def test_dev_and_close_hook_output_carries_no_command_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1282,22 +1276,35 @@ class TestSlashChecklistDoesNotResendTheCommandFile(unittest.TestCase):
             with fixture.module() as module:
                 for cmd in ('dev', 'close'):
                     # The document resolves, so a re-send would have content.
-                    self.assertTrue(module.read_command_spec(cmd))
+                    self.assertTrue(module._resolve_command_spec(cmd)[1])
             resent = []
             for cmd in ('dev', 'close'):
-                result = fixture.run(session_id=f'{cmd}-checklist-{SID}',
-                                     prompt=f'/{cmd} probe requirement')
+                envelope = {'session_id': f'{cmd}-checklist-{SID}',
+                            'prompt': f'/{cmd} probe requirement'}
+                result = fixture.run(**envelope)
                 self.assertEqual(0, result.returncode, result.stderr)
-                out = result.stdout
-                self.assertIn(f'CHECKLIST PRE-INITIALIZED for /{cmd.upper()}:', out)
+                outputs = [(f'/{cmd}', result.stdout)]
+                if cmd == 'dev':
+                    # The same envelope delivered again replays the start record
+                    # verbatim, task id included, so nothing is masked: the
+                    # replay prints exactly what the first delivery printed.
+                    again = fixture.run(**envelope)
+                    self.assertEqual(0, again.returncode, again.stderr)
+                    outputs.append(('/dev replayed', again.stdout))
+                    if again.stdout != result.stdout:
+                        resent.append(f'/dev replayed differs ({len(result.stdout)} '
+                                      f'-> {len(again.stdout)} chars)')
                 spec = (fixture.home / '.claude' / 'commands' / f'{cmd}.md').read_text()
-                quoted = [line for line in spec.splitlines()
-                          if len(line.strip()) >= self.LONG_LINE and line in out]
-                # Collected, not asserted inline: a 100 KB repr per command
-                # would bury which commands still re-send their file.
-                if 'COMMAND SPECIFICATION' in out or quoted:
-                    resent.append(f'/{cmd} ({len(out)} chars, '
-                                  f'{len(quoted)} command-file lines)')
+                for label, out in outputs:
+                    self.assertIn(f'CHECKLIST PRE-INITIALIZED for /{cmd.upper()}:', out)
+                    quoted = [line for line in spec.splitlines()
+                              if len(line.strip()) >= self.LONG_LINE and line in out]
+                    # Collected, not asserted inline: a 100 KB repr per command
+                    # would bury which commands still re-send their file.
+                    if ('COMMAND SPECIFICATION' in out or quoted
+                            or len(out) > self.MAX_STDOUT_CHARS):
+                        resent.append(f'{label} ({len(out)} chars, '
+                                      f'{len(quoted)} command-file lines)')
             self.assertEqual([], resent)
 
 

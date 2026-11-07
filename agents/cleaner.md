@@ -69,16 +69,18 @@ Before executing any action:
 | Action | Operation | Tools |
 |--------|-----------|-------|
 | **move** | `mkdir -p` dest dir, move file | Bash (mv) |
-| **archive** | Same as move, destination in `docs/archive/YYYY-MM/` | Bash (mv) |
-| **delete** | Remove file (ONLY if approved) | Bash (rm) |
+| **archive** | Discard, as **delete** does: git history is the archive | Bash (git rm) |
+| **delete** | Discard a tracked path: `git rev-parse HEAD`, `git rm -q -- <path>` (`-r` for a directory), print `DISCARDED <path> - recover: git checkout <sha> -- <path>` | Bash (git rm) |
 | **rename** | Rename file | Bash (mv) |
 | **fix_style** | Replace old_line with new_line | Edit tool |
-| **update_gitignore** | Run `~/.claude/scripts/update-gitignore.sh "$PROJECT_ROOT"` | Bash |
-| **generate_index** | Run `~/.claude/scripts/generate-folder-index.sh "$TARGET_DIR"` | Bash |
-| **merge_test_folders** | Run `~/.claude/scripts/migrate-test-to-tests.sh "$PROJECT_ROOT"` | Bash |
-| **cleanup_tests** | Run `~/.claude/scripts/cleanup-tests-folder.sh "$PROJECT_ROOT"` | Bash |
+| **update_gitignore** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/update-gitignore.sh" "$PROJECT_ROOT"` | Bash |
+| **generate_index** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/generate-folder-index.sh" "$PROJECT_ROOT/docs"` (docs/INDEX.md, the index commands/clean.md names) | Bash |
+| **merge_test_folders** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/migrate-test-to-tests.sh" "$PROJECT_ROOT"` | Bash |
+| **cleanup_tests** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/cleanup-tests-folder.sh" "$PROJECT_ROOT"` | Bash |
 
-After each operation, stage changes: `git add <affected files>`
+After each operation, stage changes: `git add <affected files>` (a discard is staged by its `git rm`).
+
+**Discards (archive, delete).** `<sha>` is HEAD at the removal. bash-safety passes a non-forced `git rm` of literal paths outside the harness home (`${CLAUDE_HOME:-$HOME/.claude}`) unless a path is a submodule; it refuses `rm`, `unlink`, every forced or wrapped git rm and every git rm that removes a file in the harness home. git refuses a file that differs from HEAD or the index: record it in `actions_failed` with git's message (the file stays). Skip, with no removal call, an untracked path (reason `untracked`: no recoverable removal exists) and a path in the harness home (reason `harness home`: the harness repository drops it by a git rm in a clone, landed by /pull). Print each DISCARDED line in your final message and in its action's `discarded` field.
 
 ### 3. Execution Order
 
@@ -88,7 +90,7 @@ After each operation, stage changes: `git add <affected files>`
 4. Fix style violations
 5. Delete approved temp files
 6. Update .gitignore
-7. Generate INDEX.md
+7. Generate docs/INDEX.md
 
 ### 4. Error Handling
 
@@ -106,9 +108,13 @@ cleanup: Execute approved cleanup actions
 - Moved X files, Archived Y files, Deleted Z files, Fixed W violations
 ```
 
-After each successful commit (exit code 0), write the push-gate token so `/push` can proceed:
+After each successful commit (exit code 0), write the push-gate token so `/push` can proceed, with the token's one writer (the same one changelog-analyst runs under `/commit`):
 
-Export `GIT_ROOT`, `BRANCH`, `COMMIT_SHA` as shell env vars, then activate the venv and run a Python script to write the push-gate token. The script: computes `repo_hash = sha256(realpath(GIT_ROOT))[:16]`; resolves `session_id = CLAUDE_CODE_SESSION_ID or CLAUDE_SESSION_ID or "unknown"` and derives `session_digest = sha256(session_id)[:16]` — the raw id is never used as a path segment, because it arrives from the environment and a value carrying `/` or `..` would escape the session directory; sets `token_dir = /tmp/agentic-commit/push/<repo_hash>/<session_digest>` (session-scoped: `/push` reads exactly this path, and per-session directories stop two sessions on one branch from contending for a single token slot); creates `token_dir`; writes a JSON token `{commit_sha, branch, repo_root, session_id}` — `session_id` carries the raw, undigested value — to `{token_dir}/{branch.replace('/','__')}.json`. Before overwriting, if an existing token belongs to a different session_id, print a WARNING and skip the write; that rule is unchanged and still correct, it simply stops firing in the ordinary case now that each session writes to its own directory. Print the final token path on success.
+```bash
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
+```
+
+`GIT_ROOT` is `git rev-parse --show-toplevel`, `BRANCH` is `git branch --show-current`, and `COMMIT_SHA` is the sha `git rev-parse HEAD` printed right after your commit. The writer resolves the token's path under the hook state directory (the one `/push` reads), writes nothing unless the commit is live HEAD (exit 3), and never overwrites another session's token (exit 4: print a WARNING and continue). It prints the token path on success.
 
 If the commit fails (nothing staged, or git error), do NOT write the token.
 
@@ -123,7 +129,8 @@ If the commit fails (nothing staged, or git error), do NOT write the token.
   "cleaner": {
     "status": "completed|partial|blocked",
     "actions_completed": [
-      { "action_id": "id", "action": "move", "source": "path", "destination": "path", "result": "success", "git_staged": true }
+      { "action_id": "id", "action": "move", "source": "path", "destination": "path", "result": "success", "git_staged": true },
+      { "action_id": "id", "action": "delete", "file": "path", "result": "success", "discarded": "DISCARDED path - recover: git checkout <sha> -- path" }
     ],
     "actions_failed": [
       { "action_id": "id", "action": "delete", "file": "path", "result": "failed", "error": "reason" }
@@ -161,7 +168,7 @@ If the commit fails (nothing staged, or git error), do NOT write the token.
 - **Never delete without explicit `approved: true`**
 - **Verify files exist** before operations
 - If critical error occurs, stop execution, set status to "blocked", return partial results
-- Rollback instruction for user: `git reset --hard <checkpoint_commit>`
+- Recovery: a DISCARDED line's command restores its file
 
 ---
 
@@ -182,9 +189,9 @@ This contract is mandatory in that mode:
    `$CLAUDE_AGENT_ID` is available, it must match that value.
 2. Treat each `checkpoints[].id` entry as a required checklist item.
 3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent cleaner --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark --spec-id <SPEC_ID> --agent cleaner --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent cleaner --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" waive --spec-id <SPEC_ID> --agent cleaner --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 5. Before stopping, confirm every checkpoint is either `done` or
    `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
    to block exit with code 2.

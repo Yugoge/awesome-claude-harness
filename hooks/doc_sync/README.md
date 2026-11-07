@@ -2,19 +2,22 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 10
-- **Subdirectories**: 1
+- **Total files**: 12
+- **Subdirectories**: 0
 - **Naming convention**: lower
 
 ## Files
 - `claude.py` - CLAUDE.md auto-creation and patching.
+- `config.py` - The git-tracked helpers (WS5, AC-WS5-1) let the INDEX/README generators list
 - `docker.py` - Parse docker-compose.yml and generate markdown table.
 - `extract.py` - Extract description from various file types.
+- `folder_doc.py` - doc-sync's regeneration, /clean's scripts/generate-folder-index.sh and
 - `main.py` - Main entry point for doc-sync hook.
+- `notice.py` - A skipped README, INDEX or CLAUDE.md section is a deliberate outcome (regeneration is opt-in
 - `patch.py` - Patch CLAUDE.md dynamic sections using AUTO markers.
 - `regen_index.py` - Regenerate INDEX.md for a directory.
 - `regen_readme.py` - Regenerate README.md for a directory.
-- `systemd.py` - Query systemctl for known services and generate markdown table.
+- `regions.py` - Four unrelated predicates used to decide what a file's AUTO region is (README first
 - `tree.py` - Build directory trees for INDEX.md.
 
 ---

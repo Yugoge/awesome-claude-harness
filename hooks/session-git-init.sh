@@ -42,45 +42,10 @@ echo -e "${BLUE}🚀 No Git repository found. Initializing...${NC}"
 # Initialize git
 git init > /dev/null 2>&1
 
-# Create .gitignore (if doesn't exist)
-if [ ! -f .gitignore ]; then
-  cat > .gitignore << 'EOF'
-# Dependencies
-node_modules/
-venv/
-__pycache__/
-*.pyc
-.Python
-env/
-build/
-dist/
-*.egg-info/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Claude Code local settings
-.claude/settings.local.json
-EOF
+# Create .gitignore (if doesn't exist), through the one writer of a project's
+# .gitignore, scripts/update-gitignore.sh.
+HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ "$(bash "$HARNESS_DIR/scripts/update-gitignore.sh" "$PWD" --init)" = "created" ]; then
   echo -e "${GREEN}✅ Created .gitignore${NC}"
 fi
 
@@ -126,7 +91,7 @@ fi
 # Remote repository step (environment variables):
 #   CLAUDE_AUTO_CREATE_REPO  unset or "ask": print the manual command and skip;
 #                            {1,true,TRUE,yes,YES} (the gate set above): create it;
-#                            anything else: skip.
+#                            {0,false,FALSE,no,NO}: skip; anything else: skip, saying so.
 #   GIT_AUTO_PUSH            push the initial commit only when exactly "1";
 #                            otherwise create without pushing (push later with /push).
 AUTO_CREATE=${CLAUDE_AUTO_CREATE_REPO:-ask}
@@ -145,8 +110,11 @@ case "$AUTO_CREATE" in
     echo -e "${YELLOW}   Skipping for now. Run manually: $MANUAL_CMD${NC}"
     [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
     exit 0 ;;
-  *)
+  0|false|FALSE|no|NO)
     echo -e "${YELLOW}⚠️  Auto-create disabled. Skipping GitHub repository creation.${NC}"
+    exit 0 ;;
+  *)
+    echo -e "${YELLOW}⚠️  CLAUDE_AUTO_CREATE_REPO value not recognised (true/1/yes create, false skips). Skipping GitHub repository creation.${NC}"
     exit 0 ;;
 esac
 
@@ -161,6 +129,7 @@ if gh repo create "$REPO_NAME" "${CREATE_ARGS[@]}" > /dev/null 2>&1; then
 else
   echo -e "${RED}❌ Failed to create GitHub repository.${NC}"
   echo -e "${YELLOW}   You can create it manually: $MANUAL_CMD${NC}"
+  [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
   exit 1
 fi
 

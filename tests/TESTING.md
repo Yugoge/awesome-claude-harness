@@ -1,11 +1,8 @@
 # Test Topology & Runner Map (authoritative)
 
 > The map a new contributor needs to answer **"how do I run the tests / which are
-> authoritative?"** in one place. Companion to
-> [../docs/reference/test-suite-overhaul-plan.md](../docs/reference/test-suite-overhaul-plan.md)
-> (this doc realizes that plan's §1 inventory + §3 target as Phase 1) and
-> [../docs/reference/generated-tests-policy.md](../docs/reference/generated-tests-policy.md)
-> (policy for the `tests/generated/` skeletons).
+> authoritative?"** in one place. Policy for the `tests/generated/` skeletons:
+> [../docs/reference/generated-tests-policy.md](../docs/reference/generated-tests-policy.md).
 > Counts **measured** on 2026-07-16 under the repo `venv`.
 
 ---
@@ -99,7 +96,7 @@ graph TD
 | Script | What it verifies | How to run |
 |---|---|---|
 | `fresh-clone-bootstrap-smoke.sh` | Fresh non-root clone: guards load their own clone helpers, block dangerous ops fail-closed, degrade optional capability gracefully. | `bash tests/fresh-clone-bootstrap-smoke.sh [--json out.json] [--keep]` |
-| `verify-stop-spec-session-isolation.sh` | `stop-spec-coverage-enforce.py` session isolation (AC1–AC5 + regressions); exit 0 = all pass | `bash tests/verify-stop-spec-session-isolation.sh` |
+| `verify-stop-spec-session-isolation.sh` | `stop-spec-coverage-enforce.py` is an exit-0 stub (its rule is G2's at the spec subagent's stop); exit 0 = all pass | `bash tests/verify-stop-spec-session-isolation.sh` |
 
 ---
 
@@ -120,7 +117,7 @@ graph TD
 | Contract | Script | Verifies | How to run |
 |---|---|---|---|
 | `score-inject-contract/` | `test-inject-branches.sh` | `scripts/score-inject.sh` emits the `INJECTION_PROOF` block + correct `sha256[:8]` for populated/missing/malformed JSONL branches | `bash tests/score-inject-contract/test-inject-branches.sh` |
-| `score-lifecycle-contract/` | `test-lifecycle-cas.sh` | CAS + append-only invariants of `score-update.sh` / `lifecycle-baseline-import.sh` over a temp lifecycle JSONL | `bash tests/score-lifecycle-contract/test-lifecycle-cas.sh` |
+| `score-lifecycle-contract/` | `test-lifecycle-cas.sh` | CAS + append-only invariants of `score-update.sh` / `score-inject.sh` over a temp lifecycle JSONL | `bash tests/score-lifecycle-contract/test-lifecycle-cas.sh` |
 
 ---
 
