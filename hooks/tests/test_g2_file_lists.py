@@ -6,8 +6,12 @@ contract-enforce.py, _file_lists_errors).
 W is P1b's write-set reader (command_span.write_set) on the stopping dev's
 own transcript and on every earlier dev dispatch of its task id and lane (a
 QA loop, a completion dispatch from another session); N is the paths its own
-Bash commands name. D is dev.files_modified + dev.files_created. (a) each D
-path is in W + N; (b) each W path git has a change for is in D.
+Bash commands name; T the files a tool its Bash ran changed (a formatter, a
+generator, an installer's lockfile): git has a change for the file, its mtime
+lies in one of those Bash calls (its records' timestamps) run in the file's
+work tree, and no live subagent's record wrote it. D is dev.files_modified +
+dev.files_created. (a) each D path is in W + N + T; (b) each W path git has a
+change for is in D.
 
 A difference blocks dev's stop: exit 2 with the lines as a G2 finding. The
 check only warned in the commit that introduced it, so each case also runs a
@@ -21,6 +25,7 @@ and tool calls, and its meta.json the dispatch's toolUseId.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -72,9 +77,13 @@ class Cycle:
         return str(self.project / rel)
 
     def dispatch(self, session: str, agent_id: str, calls=(), task: str = TASK, lane=None, lane_set=None,
-                 transcript: bool = True) -> dict:
+                 transcript: bool = True, clock: bool = False, cwd=None) -> dict:
         """One dev dispatch: the Agent call in the session's main transcript,
-        the subagent's transcript (prompt, then its own tool calls) and meta."""
+        the subagent's transcript (prompt, then its own tool calls) and meta.
+        With `clock`, each tool record carries the timestamp Claude Code
+        writes, 10 s apart from the dispatch on (call i's tool_use at
+        +20i+10 s, its tool_result at +20i+20 s); `cwd` replaces the tool
+        records' cwd."""
         self.at += timedelta(minutes=1)
         task_id = f"{task}-{lane}" if lane else task
         doc = {"task_id": task_id, "role": "dev", "pipeline": "dev",
@@ -100,10 +109,21 @@ class Cycle:
         if transcript:
             records = [{"type": "user", "isSidechain": True, "cwd": str(self.project),
                         "message": {"role": "user", "content": prompt}}]
-            records += base._tool_records(self.project, calls)
-            own.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+            tools = base._tool_records(self.project, calls)
+            for n, r in enumerate(tools):
+                r.update({"timestamp": (self.at + timedelta(seconds=10 * (n + 1))).isoformat().replace("+00:00", "Z")}
+                         if clock else {},
+                         **({"cwd": str(cwd)} if cwd else {}))
+            own.write_text("".join(json.dumps(r) + "\n" for r in records + tools), encoding="utf-8")
         return {"session": session, "agent_id": agent_id, "task": task_id, "lane": lane, "lane_set": lane_set,
-                "report": f"docs/dev/dev-report-{task_id}.json", "transcript": str(own)}
+                "report": f"docs/dev/dev-report-{task_id}.json", "transcript": str(own), "at": self.at}
+
+    def during(self, d: dict, call: int, *rels: str, offset: float = 5) -> None:
+        """Set each file's mtime to `offset` s after call `call`'s tool_use
+        (in the call while 0 < offset < 10), as a tool that call ran leaves it."""
+        t = (d["at"] + timedelta(seconds=20 * call + 10 + offset)).timestamp()
+        for rel in rels:
+            os.utime(self.project / rel, (t, t))
 
     def stop(self, d: dict, modified, created, hook=None, env=None) -> subprocess.CompletedProcess:
         """dev writes its schema-valid report with these lists and stops."""
@@ -188,9 +208,19 @@ def _git_derived(c: Cycle) -> tuple:
 # A9 / A10: the T6 replay ---------------------------------------------------
 
 
-def test_a9_t6_git_derived_lists_warn_with_the_expected_lists(tmp_path, warning):
+@pytest.mark.parametrize("clock", [False, True], ids=["unstamped", "stamped"])
+def test_a9_t6_git_derived_lists_warn_with_the_expected_lists(tmp_path, warning, clock):
+    """Stamped as Claude Code writes the records, on T6's own timeline: the
+    sentinel predates the dispatch, doc-sync's edits land in the Write's
+    PostToolUse, the generator's output in its Bash call, another session's
+    scratch.txt after it. A tool's change counts only inside its Bash call,
+    so the over-claimed paths stay listed as before."""
     c = Cycle(tmp_path)
-    d = c.dispatch("session-t6", "agent-t6dev", _t6(c))
+    d = c.dispatch("session-t6", "agent-t6dev", _t6(c), clock=clock)
+    if clock:
+        c.during(d, 0, f".claude/dev-registry/dev-{TASK}/dev.json", offset=-30)
+        c.during(d, 1, "src/new.py", "CLAUDE.md", "src/INDEX.md", "src/README.md")
+        c.during(d, 2, "generated.txt")
     modified, created = _git_derived(c)
     assert modified == ["CLAUDE.md"]
     assert created == [f".claude/dev-registry/dev-{TASK}/dev.json", "generated.txt", "scratch.txt",
@@ -204,10 +234,19 @@ def test_a9_t6_git_derived_lists_warn_with_the_expected_lists(tmp_path, warning)
     assert not list((c.project / "docs" / "dev").glob("journal-view-*.json"))
 
 
-def test_a10_generator_output_unnamed_until_dev_names_it(tmp_path, warning):
+def test_a10_generator_output_counts_without_naming_and_unmeasured_output_once_named(tmp_path, warning):
+    """Repinned (review of PR #13): A10's `python3 gen.py` dev, its output
+    unnamed, listed exactly its files. Its output changed during its own Bash
+    call: 0, no naming step. Output the records do not place in that call
+    (its mtime after the call's tool_result): named in the dev's Bash, 0."""
     c = Cycle(tmp_path)
     calls = _t6(c, bash="python3 gen.py")
-    d = c.dispatch("session-gen", "agent-gendev", calls)
+    d = c.dispatch("session-gen0", "agent-gendev0", calls, clock=True)
+    c.during(d, 2, "generated.txt")
+    for hook in (None, warning):
+        _clean(c.stop(d, [], ["src/new.py", "generated.txt"], hook))
+    d = c.dispatch("session-gen", "agent-gendev", calls, clock=True)
+    c.during(d, 2, "generated.txt", offset=11)
     args = (d["report"], "generated.txt", "(none)", "files_modified: []; files_created: src/new.py")
     blocked = _blocked(c.stop(d, [], ["src/new.py", "generated.txt"]), *args)
     warned = _warned(c.stop(d, [], ["src/new.py", "generated.txt"], warning), *args)
@@ -317,6 +356,9 @@ def test_a10_writes_in_another_account_roots_copy_are_the_devs(tmp_path):
     d = c.dispatch("session-a", "agent-round2",
                    [("Write", {"file_path": c.path("src/extra.py"), "content": "extra = 1\n"}, True)])
     _clean(c.stop(d, [], ["src/new.py", "generated.txt", "src/extra.py"], env=env))
+    # A root holding no copy of a transcript is no reason to judge nothing: a file nobody wrote still counts.
+    _blocked(c.stop(d, [], ["src/new.py", "generated.txt", "src/extra.py", "src/none.py"], env=env), d["report"],
+             "src/none.py", "(none)", "files_modified: []; files_created: generated.txt, src/extra.py, src/new.py")
 
 
 def test_a10_dispatch_stamp_without_a_zone_still_inherits(tmp_path):
@@ -388,6 +430,116 @@ def test_a10_fanout_lanes_each_against_their_own_writes(tmp_path, warning):
     args = (la["report"], "src/b.py", "(none)", "files_modified: []; files_created: src/a.py")
     _blocked(c.stop(la, [], ["src/a.py", "src/b.py"]), *args)
     _warned(c.stop(la, [], ["src/a.py", "src/b.py"], warning), *args)
+
+
+# A tool the dev's Bash ran (review of PR #13) -------------------------------
+
+
+def _formatted(c: Cycle) -> list:
+    """A dev Writes src/new.py, then runs a formatter and an installer whose
+    command names no file: black rewrites the tracked src/app.py, npm writes
+    the new package-lock.json (the test leaves both files as the tools do)."""
+    base._write(c.project / "src" / "new.py", "def new():\n    return 1\n")
+    base._write(c.project / "src" / "app.py", "x = 1  # formatted\n")
+    base._write(c.project / "package-lock.json", "{}\n")
+    return [("Write", {"file_path": c.path("src/new.py"), "content": "def new():\n    return 1\n"}, True),
+            ("Bash", {"command": "black . && npm install", "description": "format, install"}, True)]
+
+
+def test_formatter_and_installer_changes_count_without_naming(tmp_path, warning):
+    """The reviewer's case: the dev lists exactly the files it and its tools
+    changed and names none of them in a Bash command: 0."""
+    c = Cycle(tmp_path)
+    d = c.dispatch("session-fmt", "agent-fmtdev", _formatted(c), clock=True)
+    c.during(d, 1, "src/app.py", "package-lock.json")
+    for hook in (None, warning):
+        _clean(c.stop(d, ["src/app.py"], ["src/new.py", "package-lock.json"], hook))
+
+
+def test_a_formatter_call_admits_only_what_changed_in_it(tmp_path, warning):
+    """Beside the tools' changes, still declared but not written: a file
+    nobody changed, one the call rewrote with its own bytes (nothing for git
+    to land), one changed before the dispatch, one another session changed
+    after the call's tool_result, one the call removed unnamed (a removal
+    counts once named, as `rm` and `git rm` name it), and a bookkeeping file
+    the call wrote (.claude/scratch/)."""
+    c = Cycle(tmp_path)
+    base._write(c.project / "src" / "old.py", "old = 1\n")
+    base._write(c.project / "src" / "same.py", "same = 1\n")
+    _git(c.project, "add", ".")
+    _git(c.project, "commit", "-q", "-m", "old")
+    calls = _formatted(c)
+    base._write(c.project / "CLAUDE.md", "# toy, edited before the cycle\n")
+    base._write(c.project / "scratch.txt", "another session's\n")
+    base._write(c.project / ".claude" / "scratch" / "fmt.log", "log\n")
+    (c.project / "src" / "old.py").unlink()
+    d = c.dispatch("session-fmt", "agent-fmtdev", calls, clock=True)
+    c.during(d, 1, "src/app.py", "package-lock.json", ".claude/scratch/fmt.log", "src/same.py")
+    c.during(d, 0, "CLAUDE.md", offset=-30)
+    c.during(d, 1, "scratch.txt", offset=11)
+    modified = ["src/app.py", "gen.py", "src/same.py", "CLAUDE.md", "src/old.py"]
+    created = ["src/new.py", "package-lock.json", "scratch.txt", ".claude/scratch/fmt.log"]
+    args = (d["report"], ".claude/scratch/fmt.log, CLAUDE.md, gen.py, scratch.txt, src/old.py, src/same.py", "(none)",
+            "files_modified: src/app.py; files_created: package-lock.json, src/new.py")
+    _blocked(c.stop(d, modified, created), *args)
+    _warned(c.stop(d, modified, created, warning), *args)
+
+
+def test_a_formatter_call_does_not_take_a_live_peers_write(tmp_path, warning):
+    """Another session's agent, live while the dev's formatter ran, recorded
+    writing peer.py, whose mtime falls in that call: it is the peer's."""
+    c = Cycle(tmp_path)
+    base._write(c.project / "peer.py", "peer = 1\n")
+    c.dispatch("session-peer", "agent-peerdev", [("Write", {"file_path": c.path("peer.py"), "content": "x"}, True)],
+               task="20261012-111111")
+    d = c.dispatch("session-own", "agent-owndev", _formatted(c), clock=True)
+    c.during(d, 1, "src/app.py", "package-lock.json", "peer.py")
+    args = (d["report"], "peer.py", "(none)", "files_modified: src/app.py; files_created: package-lock.json, src/new.py")
+    _blocked(c.stop(d, ["src/app.py"], ["src/new.py", "package-lock.json", "peer.py"]), *args)
+    _warned(c.stop(d, ["src/app.py"], ["src/new.py", "package-lock.json", "peer.py"], warning), *args)
+
+
+def test_a_formatter_call_counts_only_in_the_tree_it_ran_in(tmp_path, warning):
+    """The dev's Bash ran in another repository: the project's files that
+    changed meanwhile are not its tools'."""
+    c = Cycle(tmp_path)
+    other = tmp_path / "other"
+    other.mkdir()
+    _git(other, "init", "-q", "-b", "main")
+    d = c.dispatch("session-tree", "agent-treedev", _formatted(c), clock=True, cwd=other)
+    c.during(d, 1, "src/app.py", "package-lock.json")
+    args = (d["report"], "package-lock.json, src/app.py", "(none)", "files_modified: []; files_created: src/new.py")
+    _blocked(c.stop(d, ["src/app.py"], ["src/new.py", "package-lock.json"]), *args)
+    _warned(c.stop(d, ["src/app.py"], ["src/new.py", "package-lock.json"], warning), *args)
+
+
+def test_a_background_call_runs_on_to_the_stop(tmp_path, warning):
+    """A Bash call run in the background goes on after its tool_result: its
+    tool's output written since counts; a foreground call's does not."""
+    c = Cycle(tmp_path)
+    base._write(c.project / "build.out", "built\n")
+    for background in (True, False):
+        bash = {"command": "python3 gen.py --watch", "run_in_background": background}
+        d = c.dispatch(f"session-bg-{background}", f"agent-bg-{background}", [("Bash", bash, True)],
+                       task=f"20261012-00000{int(background)}", clock=True)
+        proc = c.stop(d, [], ["build.out"])
+        if background:
+            _clean(proc)
+        else:
+            _blocked(proc, d["report"], "build.out", "(none)", "files_modified: []; files_created: []")
+
+
+def test_a_formatter_call_of_an_earlier_round_is_the_cycles(tmp_path, warning):
+    """QA loop: round 1 ran the formatter, round 2 writes src/extra.py and
+    lists the cycle's files, the tools' included: 0."""
+    c = Cycle(tmp_path)
+    r1 = c.dispatch("session-a", "agent-round1", _formatted(c), clock=True)
+    c.during(r1, 1, "src/app.py", "package-lock.json")
+    base._write(c.project / "src" / "extra.py", "extra = 1\n")
+    d = c.dispatch("session-a", "agent-round2",
+                   [("Write", {"file_path": c.path("src/extra.py"), "content": "extra = 1\n"}, True)], clock=True)
+    for hook in (None, warning):
+        _clean(c.stop(d, ["src/app.py"], ["src/new.py", "package-lock.json", "src/extra.py"], hook))
 
 
 # Path canonicalisation and the written-set edge cases ----------------------
@@ -495,7 +647,7 @@ def test_dev_md_lists_exactly_the_files_it_wrote():
     assert rule, "the file-list rule"
     for phrase in ("`dev.files_created` = the files you created that did not exist before the cycle",
                    "`dev.files_modified` = the existing files you changed or deleted",
-                   "counts only if one of your Bash commands names it", "(for example `ls -l <path>`)",
+                   "counts when git shows it changed and it was written while that command ran", "(for example `ls -l <path>`)",
                    "doc-sync's `CLAUDE.md`, `INDEX.md`, `README.md`", "`.claude/dev-registry/`",
                    "write scratch under `.claude/scratch/`",
                    "keeps the files earlier rounds of the cycle wrote that still exist",

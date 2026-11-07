@@ -321,16 +321,24 @@ def _recorded(transcript):
 
 
 def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, deadline: float) -> list:
-    """A3.a: each declared path written or named by this dev or an earlier dev
-    dispatch of its task id and lane (QA loop, completion dispatch, any session
-    of the project); each written path git has a change for declared."""
+    """A3.a: each declared path written or named by this dev or an earlier dev dispatch of its task id and lane (QA
+    loop, completion dispatch, any session of the project), or changed by a tool their Bash ran (a formatter, a
+    generator); each written path git has a change for declared."""
     if (own := _recorded(getattr(resolution, "transcript_path", None))) is None:
         return []
-    (written, named), unreadable = own, []
+    (written, named), unreadable, ran, tool, uses, spans = own, [], [resolution.transcript_path], set(), {}, []
     ours = ("dev", ob.get("lane"), obligation.canonical_task_id(ob.get("task_id")))
     # A stamp without a zone reads as UTC (parse_iso8601's "Z"), so an aware and a naive one compare.
     stamp = lambda v: (d := obligation.parse_iso8601(v)) and (d if d.tzinfo else d.replace(tzinfo=timezone.utc))
     mine = stamp(ob.get("dispatched_at"))
+    dev, root = report.get("dev") or {}, Path(project_dir).resolve()
+    # resolve-commit-repos.py _canonical_owned_path's form; an absolute path stays itself.
+    declared = {key: {(root / os.path.expanduser(p)).resolve(): p for p in dev.get(key) or []}
+                for key in ("files_modified", "files_created")}
+    raw = {**declared["files_created"], **declared["files_modified"]}
+    change = lambda p: (t := _tree_rel(p))[0] and subprocess.run(  # git's status line for p; "" or None: none
+        ["git", "--no-optional-locks", "--literal-pathspecs", "-C", str(t[0]), "status", "--porcelain", "-uall", "--",
+         t[1]], capture_output=True, text=True, timeout=10).stdout
 
     def inherit():  # _task_records reads the sessions modified since a day before the id's stamp
         for rec in obligation._task_records(ob.get("task_id"), project_dir, None):
@@ -345,23 +353,29 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
             if sets is None:
                 unreadable.append(f"dev dispatch {rec['tool_use_id']} in session {rec['transcript'].stem}")
             else:
-                written.update(sets[0]), named.update(sets[1])
+                written.update(sets[0]), named.update(sets[1]), ran.append(meta["agent_transcript_path"])
+        # A tool's change: git has one, its mtime lies in such a Bash call run in its tree (its tool_use record to
+        # its tool_result, a background call's to now) and no live subagent's record wrote it.
+        for at, b, cwd in ((stamp(r.get("timestamp")), b, r.get("cwd")) for t in ran if set(raw) - written - named
+                           for c in subagent_restart._child_transcript_copies(t) if c.is_file()  # a root may hold none
+                           for _, r in command_span._records(c)
+                           for b in (r.get("message") or {}).get("content") or () if isinstance(b, dict)):
+            if at and b.get("name") == "Bash":
+                uses[b.get("id")] = (Path(cwd or "/").resolve(), at.timestamp(), b.get("input") or {})
+            elif at and (use := uses.pop(b.get("tool_use_id"), None)):
+                spans.append((*use[:2], time.time() if use[2].get("run_in_background") else at.timestamp()))
+        live = (a for t in obligation._session_transcripts(project_dir, None) if spans for a in t.with_suffix(
+            "").glob("subagents/agent-*.jsonl") if a.stat().st_mtime >= min(s[1] for s in spans))
+        tool.update(p for p in set(raw) - written - named - set().union(*(s[0] for s in map(_recorded, live) if s))
+                    if p.is_file() and change(p) and not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)
+                    and any(s <= p.stat().st_mtime <= e and c.is_relative_to(_tree_rel(p)[0]) for c, s, e in spans))
     try:
         _with_alarm(deadline - time.monotonic(), inherit)
     except _WireTimeout:
         unreadable.append("the search for earlier dev dispatches (wire budget spent)")
-    dev, root = report.get("dev") or {}, Path(project_dir).resolve()
-    # resolve-commit-repos.py _canonical_owned_path's form; an absolute path stays itself.
-    declared = {key: {(root / os.path.expanduser(p)).resolve(): p for p in dev.get(key) or []}
-                for key in ("files_modified", "files_created")}
-    raw = {**declared["files_created"], **declared["files_modified"]}
-    missing, extra = set(raw) - written - named, {}
+    missing, extra = set(raw) - written - named - tool, {}
     for p in written - set(raw):  # nothing to land (unchanged, ignored, gone, outside a tree): nothing to declare
-        tree, rel = _tree_rel(p)
-        out = tree and subprocess.run(["git", "--no-optional-locks", "--literal-pathspecs", "-C", str(tree),
-                                       "status", "--porcelain", "-uall", "--", rel],  # rel is a path, never a glob
-                                      capture_output=True, text=True, timeout=10).stdout
-        if out:
+        if out := change(p):
             extra[p] = "files_created" if out[:2] == "??" or out[0] == "A" else "files_modified"
     if not missing and not extra:
         return []
@@ -372,9 +386,8 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     lines = [f"declared but not written by this dev: {listed(raw[p] for p in missing)}",
              f"written but not declared: {listed(map(show, extra))}", "set dev.files_modified and dev.files_created "
              "to exactly: " + "; ".join(f"{key}: {', '.join(sorted(v)) or '[]'}" for key, v in expected.items())]
-    if missing:
-        lines.append("a file your own Bash produced counts once one of your Bash commands names it "
-                     "(for example `ls -l <path>`): name it and keep it listed")
+    lines += ["a file your own Bash produced counts once one of your Bash commands names it (for example "
+              "`ls -l <path>`): name it and keep it listed"] if missing else []
     if unreadable:
         lines.append(f"unreadable, so its files count only once your own Bash names them: {listed(unreadable)}")
     return lines

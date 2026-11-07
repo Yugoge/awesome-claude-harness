@@ -46,6 +46,8 @@ Driver arguments (cli.py --arg K=V):
   variant=question     BA writes its producer question; the orchestrator relays it with one
                        AskUserQuestion inside the turn and re-dispatches BA (Step 5) with the answer
   variant=ba-qa-fail   QA in BA-validation mode fails; BA is re-dispatched (Step 8); QA passes
+  variant=formatter    as plain, the dev then running a formatter (FORMATTER) that rewrites toy/util.py,
+                       a file it did not edit; it declares that file too and names none
   variant=fanout       a fan-out cycle of `lanes` lanes (default 2, at most 3), every lane passing
   variant=fanout-qa-fail  a fan-out cycle whose first lane's first QA fails; Step 16 re-dispatches
                        that lane's dev only and its QA passes; the other lanes are untouched
@@ -103,7 +105,8 @@ from ..replay import Deviation
 PIPELINE = "dev"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
-COST = {"plain": 301, "qa-fail": 366, "question": 300, "ba-qa-fail": 322, "fanout": 430, "fanout-qa-fail": 508}
+COST = {"plain": 301, "qa-fail": 366, "question": 300, "ba-qa-fail": 322, "fanout": 430, "fanout-qa-fail": 508,
+        "formatter": 310}
 
 REQUIREMENT = ("add input validation to toy.add: raise TypeError naming the offending argument "
                "when an argument is not a number")
@@ -179,6 +182,9 @@ class KeptOnly(Deviations):
 
 # ---------------------------------------------------------------- the scenario
 
+# A formatter built from git and sed (no package to install): comma spacing over the tracked Python files, which
+# rewrites the toy's unformatted toy/util.py as black would; its command names no file it changes.
+FORMATTER = "git ls-files -z -- '*.py' | xargs -0 sed -i -E 's/,([^ ])/, \\1/g'"
 TOY_OLD = "def add(a, b):\n    return a + b\n"
 TOY_PARTIAL = ("def add(a, b):\n    if not all(isinstance(x, (int, float)) for x in (a, b)):\n"
                "        raise TypeError()\n    return a + b\n")
@@ -662,7 +668,7 @@ class DevCycle:
         baseline = {"baseline_head_sha": o.values.get("baseline_head_sha", ""),
                     "baseline_dirty_snapshot": o.values.get("baseline_dirty_snapshot", "")}
         work = roles.dev([(sc.rel, old_code, new_code)], test_bodies={"*": sc.test_body} if self.tw_expected
-                         else None)
+                         else None, tools=[FORMATTER] if self.variant == "formatter" else None)
         act = agents.Act(work=work, content={"*": baseline}, summary=sc.dev_summary)
         return self._dispatch(fields, act, label, subagent_type=self.step_role(10))
 
@@ -1039,7 +1045,7 @@ class FanoutCycle(DevCycle):
         self.stop()
 
 
-VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-fail")
+VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-fail", "formatter")
 
 
 def run(rp) -> None:
