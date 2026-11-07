@@ -93,7 +93,10 @@ def test_two_replays_reduce_and_derive_the_same(tmp_path):
     _require()
     pairs = RT.drivers()
     cost = SH.plan(pairs).variant_cost
-    driver, variant = min(pairs, key=lambda p: (cost.get(SH.label(*p), float("inf")), p))
+    # The receipt driver waits out a wall-clock end_time between its Stops, so its timing is its own,
+    # not the reduction's: it is left out of the choice.
+    driver, variant = min((p for p in pairs if p[0] != "receipt"),
+                          key=lambda p: (cost.get(SH.label(*p), float("inf")), p))
     work = str(tmp_path)
     box: dict = {}
 
