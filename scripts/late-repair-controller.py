@@ -16,6 +16,8 @@ Owns the run-record lifecycle for the deliberately-invoked ``/close
                      recomputing its hash from the on-disk bytes -- never a
                      caller-supplied hash.  It writes nothing into the
                      report: each report has one producer, its stage's role.
+                     It records each dispatch once: a stage dispatched again
+                     records its new report in place of the earlier one.
   finalize          Runs the drift-detection + per-file routing phase
                      (scripts/check-late-repair-provenance.py) and decides
                      finalized_pending_verification / honest_refuse /
@@ -299,8 +301,6 @@ def cmd_record_stage(ns: argparse.Namespace) -> int:
         and _dev_report_missing_at_init(root, ns.task_id, record)
     ):
         return _fail_closed_no_evidence(_run_record_path(root, ns.task_id), record, ns.stage)
-    if ns.stage in record["stages"]:
-        return _refuse(f"stage {ns.stage!r} already recorded for this repair_run_id", 3)
     index = stages.index(ns.stage)
     for earlier in stages[:index]:
         if earlier not in record["stages"]:
@@ -321,6 +321,12 @@ def cmd_record_stage(ns: argparse.Namespace) -> int:
             f"no {ns.stage} dispatch of this task declares it (declared by: {owner_role!r})",
             3,
         )
+    # One record per dispatch: a stage dispatched again (to repair its report
+    # after the record, at /close or /commit) is recorded again; the dispatch
+    # already recorded never is.
+    prior, dispatch = record["stages"].get(ns.stage), owner.get("tool_use_id")
+    if prior is not None and (not dispatch or prior.get("tool_use_id") in (None, dispatch)):
+        return _refuse(f"stage {ns.stage!r} already recorded for this repair_run_id", 3)
 
     sha256 = _sha256_file(report_path)
     root_rel = report_path.relative_to(root).as_posix()
@@ -328,6 +334,7 @@ def cmd_record_stage(ns: argparse.Namespace) -> int:
         "report_path": root_rel,
         "sha256": sha256,
         "recorded_at": _now_iso(),
+        "tool_use_id": dispatch,
     }
     _write_json(_run_record_path(root, ns.task_id), record)
     _emit({"outcome": "recorded", "stage": ns.stage, "sha256": sha256})

@@ -83,8 +83,10 @@ Acceptance 7's late-repair cases, run by name (`--arg variant=<name>`); the arti
                           session: Step 5's resolve-effective-report and chain call as the text has
                           them
   late-repair-qa          the same to CLOSE: YES, then the task's QA report removed and /commit typed
-                          in a later session; each Step 5 loop stops after three rounds (a round: one
-                          routed finding and the re-run of its check)
+                          in a later session (F8r): the late-repair state names the report, its QA
+                          dispatch runs again and, where the routing loop has the step, its report is
+                          recorded (record-stage); each Step 5 loop stops after three rounds (a round:
+                          one routed finding and the re-run of its check)
 
 Respellings: RESPELLINGS below (base-text paths, row 7). Deviations: none (DEVIATIONS stays empty).
 """
@@ -126,9 +128,10 @@ RESPELLINGS = [
 # Blocks the replays meet: none (a compliant run needs no deviation).
 DEVIATIONS = Deviations([])
 
-# (the stand-in also prints the late-repair answer the block holds when it is called, for the report)
+# (the stand-in also prints the late-repair answer the block holds when it is called, for the report, and the
+# values the block has set by then, which the main agent holds when it routes the finding: `{caps}`)
 STAND_IN = ('route_finding() { printf "ROUTE_FINDING\\t%s\\t%s\\t%s\\t%s\\n" "$1" "$2" "$3" "${LATE_REPAIR_JSON:-}" >&2; '
-            'exit 3; }\n')
+            'declare -p {caps} 2>/dev/null; exit 3; }\n')
 STATUS_BEGIN, STATUS_END = "--- CHANGELOG-ANALYST-STATUS-BEGIN ---", "--- CHANGELOG-ANALYST-STATUS-END ---"
 
 
@@ -222,7 +225,7 @@ class CommitRun:
                 "LATE_REPAIR_STATE", "TASK_REPORT", "ARTIFACT_CHAIN", "FANOUT_MODE", "CANONICAL_DEV_REPORT",
                 "REPOSITORY_PLAN", "ATTRIBUTION_LOG")
         for k in range(rounds + 1):
-            c = self.run_text(STAND_IN + block, self.label(f"Step 5 Bash plan {k}"),
+            c = self.run_text(STAND_IN.replace("{caps}", " ".join(caps)) + block, self.label(f"Step 5 Bash plan {k}"),
                               "Step 5: late-repair state, artifact chain and repository plan", capture=caps)
             err = (c.error or "") if not c.ok else (c.response.get("stderr") or "")
             found = [l.split("\t") for l in err.split("\n") if l.startswith("ROUTE_FINDING\t")]
@@ -282,6 +285,8 @@ class CommitRun:
                 closedrv.fact(self.rp, "routed dispatch", {"label": lab, "path": path, "role": role,
                                                            "lane": ans.get("lane") if isinstance(ans, dict) else None,
                                                            "agent_id": d.agent_id, "tool_use_id": d.tool_use_id})
+                if check.startswith("late-repair-controller.py"):
+                    self.record_stage(role, path, lab)
             return None
         table = closedrv.role_function(defs)
         c = self.run_text(f"{defs}\n{table} {shlex.quote(path)}", self.label(f"{lab} Bash {table}"),
@@ -294,6 +299,22 @@ class CommitRun:
         if self.producer is None or not role:
             raise RuntimeError(f"Step 5 finding on {path} routes to {role!r}, which this driver cannot play")
         self.producer.dispatch(role, o.s, self.devs, self.label(f"{lab} Agent({role})"), note=f"{path}: {detail}")
+
+    def record_stage(self, role: str, path: str, lab: str) -> None:
+        """The loop's late-repair stage record, where the text has one: after a dispatch on the late-repair site
+        returns, the report it wrote recorded with the text's record-stage call, its role and the entry's path."""
+        try:
+            sec = self.o.section("Required-action dispatch-and-recheck loop")
+        except cmdtext.TextNotFound:
+            return
+        code = next((c for c in re.findall(r"`([^`]+)`", sec) if "late-repair-controller.py record-stage" in c), None)
+        if code is None:
+            return
+        code = code.replace("<role>", role).replace("<path>", shlex.quote(path))
+        c = self.run_text(code, self.label(f"{lab} Bash record-stage {role}"), f"Record the {role} stage's report")
+        closedrv.fact(self.rp, "late-repair record-stage", {"label": f"{lab} record-stage {role}", "ok": c.ok,
+                                                           "result": closedrv.last_json(c.response.get("stdout") or "")
+                                                           if c.ok else c.error})
 
     def do_task(self) -> bool:
         return isinstance(self.producer, closedrv.DoProducer)

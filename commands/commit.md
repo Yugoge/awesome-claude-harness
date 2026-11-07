@@ -152,6 +152,12 @@ routing, Step 7 failure routing). Per failed check:
      `docs/dev/commit-qa-report-<TASK_ID>.md`, whose QA dispatch runs again and
      names an artifact; outside a QA round, print the awaiting-input line
      naming the check (re-running `/close`, for example).
+   - On the late-repair site, a dispatch of one of the route's stages (a role
+     `record-stage` takes): the run record holds each stage's report by hash,
+     so when the dispatch returns, record the report it wrote as
+     `/close --late-repair` records each stage (`<role>` its role, `<path>`
+     the entry's path):
+     `python3 ~/.claude/scripts/late-repair-controller.py record-stage --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT" --stage <role> --report-path <path> --repair-run-id "$(jq -r .repair_run_id "$TASK_PROJECT_ROOT/docs/dev/late-repair-run-$TASK_ID.json")"`
 3. Rerun ONLY the entry's `source_check` (e.g. `resolve-dev-artifact-chain.py`,
    `resolve-commit-repos.py`, `late-repair-controller.py
    resolve-effective-report`, the close-report resolver) — never the whole

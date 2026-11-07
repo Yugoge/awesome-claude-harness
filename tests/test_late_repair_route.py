@@ -1207,6 +1207,47 @@ def test_a_removed_stage_report_is_invalid_on_that_path_at_commit(tmp_path: Path
     assert printed == {"state": "invalid", "path": str(qa_path.resolve())}
 
 
+def test_a_stage_dispatched_again_is_recorded_again_and_admitted(tmp_path: Path) -> None:
+    """/commit's late-repair-qa case: the recorded QA report removed after CLOSE: YES, and the QA
+    dispatch that declared it run again, which writes the report afresh (its own timestamp). The
+    verifier, unchanged, refuses the new bytes until they are recorded; a second record of the
+    dispatch already recorded is refused, and the fresh dispatch's report is recorded once."""
+    import hashlib
+    import os
+    task_id = "20260101-000920"
+    root = tmp_path
+    fx.build_beyond_qa_clean(root, task_id)
+    run_id = _init_and_record_all_stages(root, task_id)
+    _run_controller("finalize", "--task-id", task_id, "--project-dir", str(root), "--repair-run-id", run_id)
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
+    qa_path = root / "docs" / "dev" / f"qa-report-{task_id}.json"
+    qa_path.unlink()
+    qa_path.write_text(json.dumps(dict(fx._qa_document(task_id), timestamp="2026-01-02T00:00:00Z")), encoding="utf-8")
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("invalid", qa_path.resolve())
+    record_qa = ("record-stage", "--task-id", task_id, "--project-dir", str(root), "--stage", "qa",
+                 "--report-path", str(qa_path), "--repair-run-id", run_id)
+    same = _run_controller(*record_qa)  # no dispatch ran since the record: the same dispatch's report
+    assert same.returncode == 3 and "already recorded" in _last_json(same)["reason"]
+    assert CONTROLLER.resolve_effective_report_state(root, task_id)[0] == "invalid"
+
+    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / str(root.resolve()).replace("/", "-")
+    transcript = store / f"late-repair-{task_id}.jsonl"
+    records = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
+    qa = next(r for r in records if r["type"] == "assistant"
+              and r["message"]["content"][0]["input"]["subagent_type"] == "qa")
+    again = json.loads(json.dumps(qa).replace("2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"))
+    again["message"]["content"][0]["id"] = f"toolu_qa_again_{task_id}"
+    with transcript.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(again) + "\n")
+    recorded = _run_controller(*record_qa)
+    assert recorded.returncode == 0, recorded.stdout
+    entry = json.loads(_run_record_path(root, task_id).read_text(encoding="utf-8"))["stages"]["qa"]
+    assert entry["sha256"] == hashlib.sha256(qa_path.read_bytes()).hexdigest()
+    assert entry["tool_use_id"] == f"toolu_qa_again_{task_id}"
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
+    assert _run_controller(*record_qa).returncode == 3
+
+
 def test_verify_disclosure_takes_no_reading_of_the_effective_report(tmp_path: Path) -> None:
     """finalize's effective report is checked by finalize when it writes it;
     after that verify-disclosure, resolve_effective_report_state and its
