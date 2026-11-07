@@ -27,14 +27,15 @@ paths recorded inside it — a set exactly equal to the canonical's own recorded
 file lists filtered to gitignored non-contract paths. Its obligations are pinned
 in the E4 section at the bottom of this file.
 
-The FIFTH step (2026-09-17) covers /commit Step 7's changelog-analyst dispatch —
-a legitimate read of a task's dev-report to build its own staging classification,
+The FIFTH step covers /commit's changelog-analyst dispatch (Steps 6 and 7) — a
+legitimate read of a task's dev-report to build its own staging classification,
 with no lane-matrix span and no close-report deliverable to anchor E3 or E4 on.
-Discriminator E5 exempts it only when the prompt cites a live, unexpired
-<state root>/claude-commit-grant-*.json whose own task_id (read off disk, never
-off the prompt) matches the report being opened — an artifact only /commit's own Step 5
-can mint, after a prior CLOSE: YES verdict for that exact task-id. Its
-obligations are pinned in the E5 section at the bottom of this file.
+Discriminator E5 exempts it when the dispatch's own obligation (profile
+commit-landing, parsed as G1 parses it) names the report's task as its task_id;
+the commit grant is no longer read here (P1b row 11: the privilege guard is the
+grant's one decider). The same rule is G3's (hooks/pretool-aggregate-check.py
+calls gitignored_deliverables()). Its obligations are pinned in the E5 section
+at the bottom of this file.
 
 Synthetic cases run against a throwaway git repo containing a copy of the gate, so
 the gate's repo-root derivation (dirname(dirname(__file__))) lands inside the
@@ -43,7 +44,6 @@ live fan-out cycle 20260809-013317 that produced the original refusal.
 """
 
 import contextlib
-import datetime
 import glob
 import importlib.util
 import io
@@ -52,7 +52,6 @@ import os
 import shutil
 import subprocess
 import sys
-import uuid
 
 import pytest
 
@@ -79,9 +78,11 @@ def run_gate(hook_path, prompt):
 
 
 @pytest.fixture
-def sandbox(tmp_path):
-    """Throwaway git repo with the gate installed at <root>/hooks/."""
+def sandbox(tmp_path, monkeypatch):
+    """Throwaway git repo with the gate installed at <root>/hooks/; it is the
+    project whose dispatch records E2 reads (declare_cycle)."""
     root = tmp_path / 'repo'
+    monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(root))
     (root / 'hooks').mkdir(parents=True)
     (root / 'docs' / 'dev').mkdir(parents=True)
     (root / 'tests' / 'generated').mkdir(parents=True)
@@ -89,6 +90,10 @@ def sandbox(tmp_path):
     # The gate imports lib.harness_state_dir from its own directory.
     shutil.copytree(os.path.join(REPO_ROOT, 'hooks', 'lib'), root / 'hooks' / 'lib',
                     ignore=shutil.ignore_patterns('__pycache__'))
+    # The declarations E2 reads: the roster, the command files and their
+    # canonical todo scripts, the schemas (read through the copied lib).
+    for name in ('agents', 'commands', 'schemas', 'scripts'):
+        os.symlink(os.path.join(REPO_ROOT, name), root / name)
     # Mirrors the real .gitignore:142 rule under test. Not a modification of the
     # repository's own ignore rules — this is a fixture.
     (root / '.gitignore').write_text('docs/dev/\ntests/generated/\n')
@@ -110,6 +115,47 @@ def sandbox_hook(root):
     return str(root / 'hooks' / 'pretool-gitignore-preflight.py')
 
 
+TS = '20261028-120000'
+
+
+def declare_cycle(root, task_id, paths, writes=()):
+    """A /close session of the project in the transcript store the test's
+    CLAUDE_CONFIG_DIR names: one dispatch of task_id whose obligation declares
+    `paths` (E2 admits what the cycle declares), and whose own Write calls
+    wrote `writes` (a written file is no declaration)."""
+    store = os.path.join(os.environ['CLAUDE_CONFIG_DIR'], 'projects',
+                         os.path.realpath(str(root)).replace('/', '-'))
+    os.makedirs(store, exist_ok=True)
+    artifacts = [
+        {'kind': 'markdown', 'path': p, 'identity_anchor': task_id} if p.endswith('.md') else
+        {'kind': 'json', 'path': p, 'schema': 'qa-report.v2', 'identity': {'task_id': task_id}}
+        for p in paths]
+    block = {'task_id': task_id, 'lane': None, 'lane_set': None, 'role': 'qa', 'pipeline': 'close',
+             'profile': 'final_verification', 'dispatched_at': '2026-10-28T12:00:00Z',
+             'artifacts': artifacts}
+    records = [
+        {'type': 'user', 'message': {'role': 'user', 'content': '/close %s' % task_id}},
+        {'type': 'assistant', 'message': {'role': 'assistant', 'content': [
+            {'type': 'tool_use', 'id': 'toolu_%s' % task_id, 'name': 'Agent',
+             'input': {'subagent_type': 'qa',
+                       'prompt': '<obligation v="1">\n%s\n</obligation>' % json.dumps(block)}}]}},
+    ]
+    with open(os.path.join(store, 'close-%s.jsonl' % task_id), 'w') as fh:
+        fh.write(''.join(json.dumps(r) + '\n' for r in records))
+    if writes:
+        sub = os.path.join(store, 'close-%s' % task_id, 'subagents')
+        os.makedirs(sub, exist_ok=True)
+        with open(os.path.join(sub, 'agent-a1.meta.json'), 'w') as fh:
+            json.dump({'toolUseId': 'toolu_%s' % task_id}, fh)
+        with open(os.path.join(sub, 'agent-a1.jsonl'), 'w') as fh:
+            for i, path in enumerate(writes):
+                fh.write(json.dumps({'type': 'assistant', 'message': {'role': 'assistant', 'content': [
+                    {'type': 'tool_use', 'id': 'w%d' % i, 'name': 'Write',
+                     'input': {'file_path': os.path.join(str(root), path), 'content': 'x'}}]}}) + '\n')
+                fh.write(json.dumps({'type': 'user', 'message': {'role': 'user', 'content': [
+                    {'type': 'tool_result', 'tool_use_id': 'w%d' % i, 'content': 'ok'}]}}) + '\n')
+
+
 def close_step1_prompt(changed_files, task_id):
     """The /close Step 1 inspector dispatch shape (commands/close.md:348-356)."""
     return (
@@ -118,17 +164,6 @@ def close_step1_prompt(changed_files, task_id):
         'Write your report to docs/dev/style-inspector-report-%s.json\n'
         % (' '.join(changed_files), task_id)
     )
-
-
-def state_root():
-    """The state root the gate resolves (hooks/lib/harness_state_dir.py), read
-    at call time so it follows CLAUDE_STATE_DIR exactly as the gate does."""
-    spec = importlib.util.spec_from_file_location(
-        'harness_state_dir_under_test',
-        os.path.join(REPO_ROOT, 'hooks', 'lib', 'harness_state_dir.py'))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.harness_state_dir()
 
 
 def load_gate_module():
@@ -177,25 +212,45 @@ def test_live_instance_close_step1_now_admitted():
 
 
 # --------------------------------------------------------------------------
-# E2 — the close contract's own mandated paths are admitted
+# E2 — the paths the cycle's dispatches declare are admitted (P1b E3)
 # --------------------------------------------------------------------------
 
 @pytest.mark.parametrize('name', [
-    'style-inspector-report-T1.json',
-    'cleanliness-inspector-report-T1.json',
-    'prompt-inspector-report-T1.json',
-    'close-report-T1.md',
+    'style-inspector-report-%s.json',
+    'cleanliness-inspector-report-%s.json',
+    'prompt-inspector-report-%s.json',
+    'close-report-%s.md',
 ])
 def test_contract_mandated_deliverables_admitted(sandbox, name):
-    rel = write_report(sandbox, 'T1', created=['docs/dev/%s' % name])
+    path = 'docs/dev/%s' % (name % TS)
+    declare_cycle(sandbox, TS, [path])
+    rel = write_report(sandbox, TS, created=[path])
     prompt = 'Dev report file: %s\n' % rel
     rc, err = run_gate(sandbox_hook(sandbox), prompt)
     assert rc == 0, 'contract path %s still refused: %s' % (name, err)
 
 
+def test_an_undeclared_path_of_the_same_shape_is_refused(sandbox):
+    """The name decides nothing: with no dispatch declaring it, a close-report
+    path is a work product like any other."""
+    rel = write_report(sandbox, TS, created=['docs/dev/close-report-%s.md' % TS])
+    rc, err = run_gate(sandbox_hook(sandbox), 'Dev report file: %s\n' % rel)
+    assert rc == 2
+    assert err == 'BLOCKED: gitignored deliverables detected: docs/dev/close-report-%s.md' % TS
+
+
+def test_a_file_a_dispatch_only_wrote_is_refused(sandbox):
+    """A dispatch's own write is no declaration: the work product stays refused."""
+    declare_cycle(sandbox, TS, ['docs/dev/close-report-%s.md' % TS], writes=['tests/generated/x.py'])
+    rel = write_report(sandbox, TS, created=['tests/generated/x.py'])
+    rc, err = run_gate(sandbox_hook(sandbox), 'Dev report file: %s\n' % rel)
+    assert rc == 2 and 'tests/generated/x.py' in err
+
+
 def test_lane_report_may_carry_parent_close_artifacts(sandbox):
     """Close artifacts are written under the parent TASK_ID; lanes may record them."""
-    rel = write_report(sandbox, 'T1-lane', created=['docs/dev/close-report-T1.md'])
+    declare_cycle(sandbox, TS, ['docs/dev/close-report-%s.md' % TS])
+    rel = write_report(sandbox, TS + '-lane', created=['docs/dev/close-report-%s.md' % TS])
     rc, err = run_gate(sandbox_hook(sandbox), 'Dev report file: %s\n' % rel)
     assert rc == 0, err
 
@@ -383,9 +438,10 @@ def test_step2_admits_every_contract_projection(sandbox):
 
 def test_step2_admits_the_close_report_deliverable(sandbox):
     """The dispatch's own deliverable, recorded by a lane report, is admitted (E2)."""
-    write_report(sandbox, 'T1-adj', created=['docs/dev/close-report-T1.md'])
+    declare_cycle(sandbox, TS, ['docs/dev/close-report-%s.md' % TS])
+    write_report(sandbox, TS + '-adj', created=['docs/dev/close-report-%s.md' % TS])
     rc, err = run_gate(sandbox_hook(sandbox),
-                       'Dev report file: docs/dev/dev-report-T1-adj.json\n')
+                       'Dev report file: docs/dev/dev-report-%s-adj.json\n' % TS)
     assert rc == 0, err
 
 
@@ -930,12 +986,14 @@ def test_e2_still_admits_the_parent_and_the_four_mandated_shapes(sandbox):
     a fan-out cycle's close dying at Step 1 on this gate.
     """
     write_report(sandbox, '20260809-013317', created=[])
-    rel = write_report(sandbox, COLLIDING_LANE, created=[
+    declared = [
         'docs/dev/close-report-20260809-013317.md',
         'docs/dev/style-inspector-report-20260809-013317.json',
         'docs/dev/cleanliness-inspector-report-20260809-013317.json',
         'docs/dev/prompt-inspector-report-20260809-013317.json',
-    ])
+    ]
+    declare_cycle(sandbox, '20260809-013317', declared)
+    rel = write_report(sandbox, COLLIDING_LANE, created=declared)
     rc, err = run_gate(sandbox_hook(sandbox), 'Dev report file: %s\n' % rel)
     assert rc == 0, 'the mandated shapes were over-narrowed away: %s' % err
 
@@ -948,9 +1006,10 @@ def test_e2_dashed_worker_label_still_resolves_to_its_parent(sandbox):
     last-dash split would refuse every one of them, so the parent is resolved
     from on-disk evidence instead.
     """
-    write_report(sandbox, 'T1', created=[])
-    rel = write_report(sandbox, 'T1-worker-q7x',
-                       created=['docs/dev/close-report-T1.md'])
+    write_report(sandbox, TS, created=[])
+    declare_cycle(sandbox, TS, ['docs/dev/close-report-%s.md' % TS])
+    rel = write_report(sandbox, TS + '-worker-q7x',
+                       created=['docs/dev/close-report-%s.md' % TS])
     rc, err = run_gate(sandbox_hook(sandbox), 'Dev report file: %s\n' % rel)
     assert rc == 0, 'a real dashed worker label was over-narrowed away: %s' % err
 
@@ -970,57 +1029,34 @@ def test_e2_parent_is_exactly_one_task_id_not_a_family(sandbox):
     assert gate.parent_task_id('A-B-C-D', root) == 'A-B-C'
 
 
-def test_e2_extension_binding_is_the_close_md_mandate():
-    """Each mandated prefix carries the extension close.md mandates for it."""
-    gate = load_gate_module()
-    assert gate.CONTRACT_DELIVERABLE_PREFIXES == {
-        'style-inspector-report-': '.json',
-        'cleanliness-inspector-report-': '.json',
-        'prompt-inspector-report-': '.json',
-        'close-report-': '.md',
-    }
-
-
-def test_e2_narrowing_admits_nothing_new(sandbox):
-    """This step may only REFUSE more; it must never admit more.
-
-    Anything E2 admitted before and still admits is fine; anything it admits now
-    but did not before would be a widening, which is out of scope for a
-    narrowing step.
-    """
+def test_e2_admits_exactly_what_the_cycle_declares(sandbox):
+    """E2 admits a path for a report of the task or of its lanes exactly when a
+    dispatch of the task declares it: every other extension, task-id or name of
+    the same shape is refused."""
     gate = load_gate_module()
     root = str(sandbox)
-    write_report(sandbox, 'T1', created=[])
-    write_report(sandbox, 'T1-a', created=[])
-    for src in ('T1', 'T1-a', 'T1-a-b', 'OTHER'):
-        for prefix in gate.CONTRACT_DELIVERABLE_PREFIXES:
-            for ext in ('.md', '.json', '.py', '.sh', ''):
-                for tid in ('T1', 'T1-a', 'T1-a-b', 'OTHER', ''):
+    declared = {'docs/dev/close-report-%s.md' % TS, 'docs/dev/style-inspector-report-%s.json' % TS}
+    declare_cycle(sandbox, TS, sorted(declared))
+    # The task ran /close, whose Step 1 template also declares the prompt
+    # inspector's report for it: a declaration as well.
+    declared.add('docs/dev/prompt-inspector-report-%s.json' % TS)
+    write_report(sandbox, TS, created=[])
+    for src in (TS, TS + '-a', '20261028-130000'):
+        for prefix in ('close-report-', 'style-inspector-report-', 'prompt-inspector-report-'):
+            for ext in ('.md', '.json', '.py', ''):
+                for tid in (TS, TS + '-a', '20261028-130000'):
                     path = 'docs/dev/%s%s%s' % (prefix, tid, ext)
-                    now = gate.is_contract_deliverable(path, src, root)
-                    if not now:
-                        continue
-                    # the pre-fix predicate, inlined verbatim
-                    base = os.path.basename(path)
-                    before = False
-                    for pre in gate.CONTRACT_DELIVERABLE_PREFIXES:
-                        if not base.startswith(pre):
-                            continue
-                        old = base[len(pre):].rsplit('.', 1)[0]
-                        before = bool(old) and (
-                            old == src or src.startswith(old + '-'))
-                        break
-                    assert before, 'E2 now admits %s for %s but did not before' \
-                        % (path, src)
+                    owned = src != '20261028-130000' and path in declared
+                    assert gate.is_contract_deliverable(path, src, root, root) is owned, (path, src)
 
 
 # ==========================================================================
-# E5 — /commit Step 7 changelog-analyst dispatch (FIFTH step, 2026-09-17)
+# E5 — /commit's changelog-analyst dispatch (Steps 6 and 7)
 # ==========================================================================
 #
 # E1/E3/E4 are all anchored on /close Step 1/Step 2 dispatch shapes (an
 # auditor's --changed-files list, a QA gatekeeper's lane matrix, its
-# canonical-parent citation). /commit Step 7's changelog-analyst dispatch
+# canonical-parent citation). /commit's changelog-analyst dispatch
 # legitimately reads a task's dev-report to build its OWN staging
 # classification, but declares no close-report deliverable, so none of E1/E3/
 # E4 can anchor an exemption for it. The measured live refusal (2026-09-17,
@@ -1029,15 +1065,33 @@ def test_e2_narrowing_admits_nothing_new(sandbox):
 # by a changelog-analyst-shaped prompt with no lane-matrix span and no
 # close-report deliverable.
 #
-# Discriminator E5 exempts this shape ONLY when the prompt cites a live,
-# unexpired <state root>/claude-commit-grant-*.json whose own task_id (read off disk,
-# never off the prompt) equals the report's src_task_id, and whose expires_at
-# has not passed. A commit-grant file can only be minted by /commit's own
-# Step 5, itself gated on a prior CLOSE: YES verdict for that exact task-id,
-# so E5 cannot be satisfied by prompt text alone.
+# Discriminator E5 exempts this shape when the dispatch's own obligation,
+# parsed through obligation.py as G1 parses it, has profile commit-landing and
+# names the report's task as its task_id (P1b rows 6 and 11). The commit grant
+# is not read: a prompt line naming one admits nothing.
+
+LANDED = '20261028-101010'
 
 
-def commit_step7_prompt(dev_report_rel, grant_path=None):
+def landing_obligation(task_id=LANDED, profile='commit-landing', role='changelog-analyst'):
+    """The obligation block commands/commit.md's Step 7 template carries."""
+    return '<obligation v="1">%s</obligation>\n' % json.dumps({
+        'task_id': task_id,
+        'role': role,
+        'pipeline': 'commit',
+        'profile': profile,
+        'dispatched_at': '2026-10-28T10:10:10Z',
+        'artifacts': [{
+            'kind': 'response_block',
+            'begin': '--- CHANGELOG-ANALYST-STATUS-BEGIN ---',
+            'end': '--- CHANGELOG-ANALYST-STATUS-END ---',
+            'format': 'json',
+            'schema': 'changelog-status.v1',
+        }],
+    })
+
+
+def commit_step7_prompt(dev_report_rel, obligation=None, grant_path=None):
     """The /commit Step 7 changelog-analyst dispatch shape.
 
     A legitimate READ of the report to build a staging classification — no
@@ -1050,138 +1104,165 @@ def commit_step7_prompt(dev_report_rel, grant_path=None):
         'Read the dev report yourself and classify files for staging: %s\n'
         % dev_report_rel
     )
+    if obligation:
+        prompt += obligation
     if grant_path:
         prompt += 'Commit grant: %s\n' % grant_path
     return prompt
 
 
-def _iso_offset(seconds):
-    return (datetime.datetime.now(datetime.timezone.utc)
-            + datetime.timedelta(seconds=seconds)).isoformat()
-
-
 @pytest.fixture
-def commit_grant():
-    """Create a real <state root>/claude-commit-grant-<unique>.json; clean up after.
-
-    The gate's COMMIT_GRANT_PATTERN is anchored on the state-root
-    claude-commit-grant-*.json prefix, so this cannot be redirected under
-    tmp_path — it must be a real file at that exact location, same as
-    production.
-    """
-    created = []
-
-    def _make(task_id, expires_at, extra=None):
-        path = os.path.join(state_root(), 'claude-commit-grant-%s.json' % uuid.uuid4().hex)
-        body = {'task_id': task_id, 'expires_at': expires_at}
-        if extra:
-            body.update(extra)
-        with open(path, 'w') as f:
-            json.dump(body, f)
-        created.append(path)
-        return path
-
-    yield _make
-
-    for path in created:
-        with contextlib.suppress(FileNotFoundError):
-            os.remove(path)
+def landing_sandbox(sandbox):
+    """The sandbox plus the schemas obligation.py reads its enums from and the
+    agent and command files it checks a block's role and pipeline against."""
+    for name in ('schemas', 'agents', 'commands'):
+        if not (sandbox / name).exists():  # the sandbox links them already
+            shutil.copytree(os.path.join(REPO_ROOT, name), sandbox / name)
+    return sandbox
 
 
-# --- AC2.1 — E5 positive: live, unexpired, task-id-matched grant -----------
-
-def test_e5_live_matched_grant_admits_dispatch(sandbox, commit_grant):
-    rel = write_report(sandbox, 'T1', created=['docs/dev/my-analysis.json'])
-    grant = commit_grant('T1', _iso_offset(1800))
-    prompt = commit_step7_prompt(rel, grant)
-    rc, err = run_gate(sandbox_hook(sandbox), prompt)
-    assert rc == 0, 'live unexpired task-id-matched grant still refused: %s' % err
+def test_e5_commit_landing_obligation_for_the_reports_task_admits(landing_sandbox):
+    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    prompt = commit_step7_prompt(rel, landing_obligation())
+    rc, err = run_gate(sandbox_hook(landing_sandbox), prompt)
+    assert rc == 0, 'commit-landing dispatch of the report\'s own task refused: %s' % err
     assert err == ''
 
 
-# --- AC2.2 — E5 negative: no grant reference -> identical pre-E5 refusal ---
-
-def test_e5_no_grant_reference_refused_identically_to_pre_e5(sandbox):
-    rel = write_report(sandbox, 'T1', created=['docs/dev/my-analysis.json'])
-    prompt = commit_step7_prompt(rel)
-    rc, err = run_gate(sandbox_hook(sandbox), prompt)
+def test_e5_without_obligation_refused_identically(landing_sandbox):
+    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    rc, err = run_gate(sandbox_hook(landing_sandbox), commit_step7_prompt(rel))
     assert rc == 2
-    assert err == 'BLOCKED: gitignored deliverables detected: docs/dev/my-analysis.json'
+    assert err == 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py'
 
 
-# --- AC2.3 — E5 negative: grant referenced but expired ---------------------
-
-def test_e5_expired_grant_still_refused(sandbox, commit_grant):
-    rel = write_report(sandbox, 'T1', created=['docs/dev/my-analysis.json'])
-    grant = commit_grant('T1', _iso_offset(-1800))
-    prompt = commit_step7_prompt(rel, grant)
-    rc, err = run_gate(sandbox_hook(sandbox), prompt)
+def test_e5_grant_line_admits_nothing(landing_sandbox, tmp_path):
+    """The preflight no longer reads the grant: a live grant named in the
+    prompt (at either state root) leaves the verdict where the obligation
+    puts it."""
+    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    grant = tmp_path / ('claude-commit-grant-%s-sid-nonce.json' % LANDED)
+    grant.write_text(json.dumps({'task_id': LANDED, 'expires_at': '2999-01-01T00:00:00+00:00'}))
+    rc, err = run_gate(sandbox_hook(landing_sandbox),
+                       commit_step7_prompt(rel, grant_path=str(grant)))
     assert rc == 2
-    assert err == 'BLOCKED: gitignored deliverables detected: docs/dev/my-analysis.json'
+    assert err == 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py'
+    rc, _ = run_gate(sandbox_hook(landing_sandbox),
+                     commit_step7_prompt(rel, landing_obligation(), grant_path=str(grant)))
+    assert rc == 0
+    with open(HOOK) as fh:
+        assert 'claude-commit-grant' not in fh.read()
 
 
-# --- AC2.4 — E5 negative: grant referenced but task_id mismatched ----------
-
-def test_e5_task_id_mismatched_grant_still_refused(sandbox, commit_grant):
-    rel = write_report(sandbox, 'T1', created=['docs/dev/my-analysis.json'])
-    grant = commit_grant('T1-SOMEONE-ELSE', _iso_offset(1800))
-    prompt = commit_step7_prompt(rel, grant)
-    rc, err = run_gate(sandbox_hook(sandbox), prompt)
+@pytest.mark.parametrize('obligation', [
+    landing_obligation(task_id='20261028-202020'),               # another task
+    landing_obligation(profile='commit-qa', role='qa'),          # another profile
+    landing_obligation(profile='commit-bulk', task_id=None),     # bulk landing
+    landing_obligation().replace('"commit"', '"nonsense"'),      # G1 rejects it
+])
+def test_e5_other_obligations_refused(landing_sandbox, obligation):
+    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    rc, err = run_gate(sandbox_hook(landing_sandbox), commit_step7_prompt(rel, obligation))
     assert rc == 2
-    assert err == 'BLOCKED: gitignored deliverables detected: docs/dev/my-analysis.json'
+    assert err == 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py'
 
 
-# --- structural properties of the discriminator ---------------------------
+def test_e5_never_widens_the_admissible_path_set(landing_sandbox):
+    """E5 conjunct (1): it can only re-permit the landed task's report.
 
-def test_has_live_commit_grant_reads_task_id_and_ttl_off_disk(commit_grant):
-    """Direct unit coverage of has_live_commit_grant's own conjuncts."""
-    gate = load_gate_module()
-
-    live = commit_grant('T1', _iso_offset(1800))
-    prompt = 'Commit grant: %s\n' % live
-    assert gate.has_live_commit_grant(prompt, 'T1')
-    # A prompt cannot claim a grant for a task-id it does not hold one for.
-    assert not gate.has_live_commit_grant(prompt, 'T1-OTHER')
-
-    expired = commit_grant('T1', _iso_offset(-1800))
-    prompt_expired = 'Commit grant: %s\n' % expired
-    assert not gate.has_live_commit_grant(prompt_expired, 'T1')
-
-
-def test_has_live_commit_grant_missing_file_fails_closed():
-    gate = load_gate_module()
-    prompt = 'Commit grant: %s\n' % os.path.join(
-        state_root(), 'claude-commit-grant-does-not-exist-e5test.json')
-    assert not gate.has_live_commit_grant(prompt, 'T1')
-
-
-def test_has_live_commit_grant_malformed_json_fails_closed(commit_grant):
-    gate = load_gate_module()
-    path = commit_grant('T1', _iso_offset(1800))
-    with open(path, 'w') as f:
-        f.write('{not json')
-    prompt = 'Commit grant: %s\n' % path
-    assert not gate.has_live_commit_grant(prompt, 'T1')
-
-
-def test_e5_never_widens_the_admissible_path_set(sandbox, commit_grant):
-    """E5 conjunct (1): it can only re-permit the report's OWN declared paths.
-
-    A live grant for src_task_id must not admit an UNRELATED report's citation
-    in the same prompt — E5 fires per-report, not per-prompt.
+    The landing of LANDED must not admit an UNRELATED report's citation in the
+    same prompt — E5 fires per-report, not per-prompt.
     """
-    rel_a = write_report(sandbox, 'T1', created=['docs/dev/my-analysis.json'])
-    rel_b = write_report(sandbox, 'T2', created=['docs/dev/other-analysis.json'])
-    grant = commit_grant('T1', _iso_offset(1800))
-    prompt = commit_step7_prompt(rel_a, grant) + 'Also read: %s\n' % rel_b
-    rc, err = run_gate(sandbox_hook(sandbox), prompt)
-    assert rc == 2, 'a T1 grant exempted an unrelated T2 report'
+    rel_a = write_report(landing_sandbox, LANDED, created=['docs/dev/my-analysis.json'])
+    rel_b = write_report(landing_sandbox, '20261028-202020',
+                         created=['docs/dev/other-analysis.json'])
+    prompt = commit_step7_prompt(rel_a, landing_obligation()) + 'Also read: %s\n' % rel_b
+    rc, err = run_gate(sandbox_hook(landing_sandbox), prompt)
+    assert rc == 2, 'the landing of one task exempted an unrelated report'
     assert err == 'BLOCKED: gitignored deliverables detected: docs/dev/other-analysis.json'
 
 
+def test_e5_effective_report_belongs_to_the_task_resolve_verifies(landing_sandbox, monkeypatch):
+    """A late repair's effective report is the landed task's when
+    resolve_effective_report_state returns its path for that task in state
+    `verified`, never by the task its name gives (`<task>.effective`)."""
+    gate = load_gate_module()
+    root = str(landing_sandbox)
+    rel = write_report(landing_sandbox, LANDED + '.effective',
+                       created=['tests/generated/x/test_a.py'])
+    monkeypatch.setattr(gate, 'get_repo_root', lambda: root)
+    assert gate.source_task_id(rel) == LANDED + '.effective'
+    prompt = commit_step7_prompt(rel, landing_obligation())
+    asked = []
+
+    def state(repo_root, task_id, result):
+        asked.append(task_id)
+        return result
+
+    for result, admitted in (
+        (('verified', os.path.join(root, rel)), True),
+        (('verified', os.path.join(root, 'docs/dev/dev-report-%s.json' % LANDED)), False),
+        (('none', None), False),
+        (('invalid', None), False),
+    ):
+        monkeypatch.setattr(gate, '_effective_report_state',
+                            lambda r, t, result=result: state(r, t, result))
+        findings = gate.gitignored_deliverables(prompt)
+        assert (findings == []) is admitted, (result, findings)
+    assert set(asked) == {LANDED}
+
+
+def test_e5_effective_report_state_is_the_controllers(tmp_path):
+    """_effective_report_state runs scripts/late-repair-controller.py's own
+    resolve_effective_report_state; a task with no run record is `none`."""
+    gate = load_gate_module()
+    assert gate._effective_report_state(REPO_ROOT, LANDED) == ('none', None)
+    assert gate._effective_report_state(str(tmp_path), LANDED) == ('invalid', None)
+
+
 def test_e1_e4_predicates_unchanged_when_e5_does_not_apply(sandbox):
-    """E5 addition must not alter E1-E4 behaviour for dispatch shapes with no grant."""
-    rel = write_report(sandbox, 'T1-adj', created=['docs/dev/close-report-T1.md'])
+    """E5 must not alter E1-E4 behaviour for dispatch shapes with no obligation."""
+    declare_cycle(sandbox, TS, ['docs/dev/close-report-%s.md' % TS])
+    write_report(sandbox, TS + '-adj', created=['docs/dev/close-report-%s.md' % TS])
     rc, err = run_gate(sandbox_hook(sandbox),
-                       'Dev report file: docs/dev/dev-report-T1-adj.json\n')
+                       'Dev report file: docs/dev/dev-report-%s-adj.json\n' % TS)
     assert rc == 0, err
+
+
+# ==========================================================================
+# G3 applies the same rule (P1b row 6) — one function, two callers
+# ==========================================================================
+
+G3_HOOK = os.path.join(REPO_ROOT, 'hooks', 'pretool-aggregate-check.py')
+
+
+def run_g3(root, prompt, mode):
+    """G3 from the sandbox's hooks/, as the CLI runs it, switch set or unset."""
+    env = dict(os.environ)
+    env.pop('CLAUDE_OBLIGATION_BARRIER', None)
+    if mode:
+        env['CLAUDE_OBLIGATION_BARRIER'] = mode
+    env['CLAUDE_PROJECT_DIR'] = str(root)
+    proc = subprocess.run(
+        [sys.executable, str(root / 'hooks' / 'pretool-aggregate-check.py')],
+        input=json.dumps({'tool_name': 'Agent', 'tool_input': {
+            'subagent_type': 'changelog-analyst', 'prompt': prompt}}),
+        capture_output=True, text=True, env=env, cwd=str(root))
+    return proc.returncode, proc.stderr.strip()
+
+
+def test_g3_applies_the_preflight_rule_only_when_armed(landing_sandbox):
+    shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
+    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    refused = commit_step7_prompt(rel)
+    admitted = commit_step7_prompt(rel, landing_obligation())
+    assert run_g3(landing_sandbox, refused, None) == (0, '')
+    rc, err = run_g3(landing_sandbox, refused, 'block')
+    assert rc == 2
+    assert err == ('[gitignored_deliverable] %s: tests/generated/x/test_a.py declared in its '
+                   'dev.files_modified/files_created match .gitignore and it carries no '
+                   'gitignore_waiver' % rel)
+    assert run_g3(landing_sandbox, admitted, 'block') == (0, '')
+    # The copy this hook keeps decides the same dispatches the same way.
+    assert run_gate(sandbox_hook(landing_sandbox), refused)[0] == 2
+    assert run_gate(sandbox_hook(landing_sandbox), admitted)[0] == 0

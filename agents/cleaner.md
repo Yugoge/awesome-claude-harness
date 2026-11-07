@@ -74,7 +74,7 @@ Before executing any action:
 | **rename** | Rename file | Bash (mv) |
 | **fix_style** | Replace old_line with new_line | Edit tool |
 | **update_gitignore** | Run `~/.claude/scripts/update-gitignore.sh "$PROJECT_ROOT"` | Bash |
-| **generate_index** | Run `~/.claude/scripts/generate-folder-index.sh "$TARGET_DIR"` | Bash |
+| **generate_index** | Run `~/.claude/scripts/generate-folder-index.sh "$PROJECT_ROOT/docs"` (docs/INDEX.md, the index commands/clean.md names) | Bash |
 | **merge_test_folders** | Run `~/.claude/scripts/migrate-test-to-tests.sh "$PROJECT_ROOT"` | Bash |
 | **cleanup_tests** | Run `~/.claude/scripts/cleanup-tests-folder.sh "$PROJECT_ROOT"` | Bash |
 
@@ -88,7 +88,7 @@ After each operation, stage changes: `git add <affected files>`
 4. Fix style violations
 5. Delete approved temp files
 6. Update .gitignore
-7. Generate INDEX.md
+7. Generate docs/INDEX.md
 
 ### 4. Error Handling
 
@@ -106,9 +106,13 @@ cleanup: Execute approved cleanup actions
 - Moved X files, Archived Y files, Deleted Z files, Fixed W violations
 ```
 
-After each successful commit (exit code 0), write the push-gate token so `/push` can proceed:
+After each successful commit (exit code 0), write the push-gate token so `/push` can proceed, with the token's one writer (the same one changelog-analyst runs under `/commit`):
 
-Export `GIT_ROOT`, `BRANCH`, `COMMIT_SHA` as shell env vars, then activate the venv and run a Python script to write the push-gate token. The script: computes `repo_hash = sha256(realpath(GIT_ROOT))[:16]`; resolves `session_id = CLAUDE_CODE_SESSION_ID or CLAUDE_SESSION_ID or "unknown"` and derives `session_digest = sha256(session_id)[:16]` — the raw id is never used as a path segment, because it arrives from the environment and a value carrying `/` or `..` would escape the session directory; sets `token_dir = /tmp/agentic-commit/push/<repo_hash>/<session_digest>` (session-scoped: `/push` reads exactly this path, and per-session directories stop two sessions on one branch from contending for a single token slot); creates `token_dir`; writes a JSON token `{commit_sha, branch, repo_root, session_id}` — `session_id` carries the raw, undigested value — to `{token_dir}/{branch.replace('/','__')}.json`. Before overwriting, if an existing token belongs to a different session_id, print a WARNING and skip the write; that rule is unchanged and still correct, it simply stops firing in the ordinary case now that each session writes to its own directory. Print the final token path on success.
+```bash
+python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
+```
+
+`GIT_ROOT` is `git rev-parse --show-toplevel`, `BRANCH` is `git branch --show-current`, and `COMMIT_SHA` is the sha `git rev-parse HEAD` printed right after your commit. The writer resolves the token's path under the hook state directory (the one `/push` reads), writes nothing unless the commit is live HEAD (exit 3), and never overwrites another session's token (exit 4: print a WARNING and continue). It prints the token path on success.
 
 If the commit fails (nothing staged, or git error), do NOT write the token.
 

@@ -11,7 +11,7 @@ WHAT IT DELIVERS, stated without inflation
 ------------------------------------------
 For each Bash tool call, if the command names a REPLACING verb whose target
 resolves to an EXISTING REGULAR FILE, that call is refused unless a matching
-single-use grant names that exact file — and either outcome is recorded. The
+single-use grant names that exact file. The
 grant is SPENT by this guard at the moment it authorizes (see
 ``_consume_grants``), because the registered PostToolUse consumer cannot match
 a ``Write`` grant against a shell command and so never spent it at all.
@@ -31,19 +31,12 @@ uncovered, because denying it would deny CREATION — which must never happen.
 
 FAILURE BEHAVIOUR
 -----------------
-Bootstrap failure (this guard's own imports) FAILS OPEN, loudly, with an audit
-row. A guard that cannot load cannot tell ``2>&1`` from a real replacement, and
+Bootstrap failure (this guard's own imports) FAILS OPEN, loudly. A guard that
+cannot load cannot tell ``2>&1`` from a real replacement, and
 failing closed would deny nearly every Bash call in the session — including the
 diagnostics needed to repair the guard. The repair path is never sealed: the
 edit tools are never gated, appending is never denied, and creating a file that
 does not yet exist is never denied.
-
-ATTRIBUTION
------------
-Every refusal AND every grant-permitted replacement appends a structured audit
-row. If the append fails, the operation is DENIED on both paths: a replacement
-that cannot be attributed must not proceed, because unattributability is
-precisely the defect this guard exists to fix.
 
 Exit codes: 0 = allowed (or not our surface), 2 = blocked.
 """
@@ -54,12 +47,10 @@ import json
 import os
 import stat
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 #: Named in the fail-open warning so an operator can find the broken file.
 GUARD_RELPATH = "hooks/pretool-overwrite-guard.py"
-AUDIT_RELPATH = "logs/overwrite-guard.jsonl"
 
 _HOOKS_DIR = Path(__file__).resolve().parent
 
@@ -86,53 +77,6 @@ try:
     )
 except Exception as exc:  # pragma: no cover - exercised via injected failure
     _BOOTSTRAP_ERROR = f"{type(exc).__name__}: {exc}"
-
-try:  # WS1 shared harness-home resolver; fail-soft, the sink has a fallback.
-    from lib import claude_home as _claude_home  # noqa: E402
-except Exception:  # pragma: no cover - fail-soft when the resolver is absent
-    _claude_home = None  # type: ignore[assignment]
-
-
-# ---------------------------------------------------------------------------
-# Attribution sink
-# ---------------------------------------------------------------------------
-
-def audit_log_path() -> Path:
-    """Resolve the audit sink via the shared harness-home resolver.
-
-    Order: resolved harness home -> CLAUDE_PROJECT_DIR/.claude -> this hook's
-    own parent directory. Never an author literal.
-    """
-    if _claude_home is not None:
-        home = _claude_home.resolve()
-        if home is not None:
-            return home / AUDIT_RELPATH
-        return _claude_home.project_dir() / ".claude" / AUDIT_RELPATH
-    return _HOOKS_DIR.parent / AUDIT_RELPATH
-
-
-def persist_audit_row(row: dict) -> bool:
-    """Append one JSONL row with flush + fsync. True iff fully persisted.
-
-    Wrapped in a blanket except so a resolver or filesystem failure degrades to
-    a soft False rather than crashing this PreToolUse guard and bypassing its
-    block path. A False return DENIES the operation on both the refusal and the
-    grant path.
-    """
-    try:
-        path = audit_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, default=str) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        return True
-    except Exception:
-        return False
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _identifiers(payload: dict) -> tuple[str, str]:
@@ -407,7 +351,7 @@ def _consume_grants(grants: list[dict], session_id: str) -> list[str]:
 # Messages
 # ---------------------------------------------------------------------------
 
-def _deny_message(offenders: list[dict], sink: str) -> str:
+def _deny_message(offenders: list[dict]) -> str:
     lines = [
         "BLOCKED: wholesale replacement of an existing file "
         f"({GUARD_RELPATH})",
@@ -424,8 +368,6 @@ def _deny_message(offenders: list[dict], sink: str) -> str:
         "  sed -i / patch        in-place edit (always allowed)",
         "  a path that does not exist yet    creation is never denied",
         "  /allow Write <absolute-path>      single-use, audited, human-issued",
-        "",
-        f"Recorded as decision=refused in {sink}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -434,21 +376,8 @@ def _deny_message(offenders: list[dict], sink: str) -> str:
 # Entrypoints
 # ---------------------------------------------------------------------------
 
-def _fail_open(payload: dict, command: str) -> int:
-    """Bootstrap failed: warn loudly, record, and ALLOW."""
-    session_id, task_id = _identifiers(payload)
-    persist_audit_row({
-        "timestamp": _now(),
-        "decision": "bootstrap_failed_fail_open",
-        "resolved_target": None,
-        "mechanism": "bootstrap",
-        "grant_identity": None,
-        "session_id": session_id,
-        "task_id": task_id,
-        "guard": GUARD_RELPATH,
-        "error": _BOOTSTRAP_ERROR,
-        "command_head": command[:200],
-    })
+def _fail_open() -> int:
+    """Bootstrap failed: warn loudly and ALLOW."""
     sys.stderr.write(
         f"WARNING: {GUARD_RELPATH} could not load and is FAILING OPEN — "
         "replacement protection is OFF for this call.\n"
@@ -494,25 +423,17 @@ def main() -> int:
         return 0
 
     if _BOOTSTRAP_ERROR:
-        return _fail_open(payload, command)
+        return _fail_open()
 
     cwd = _payload_cwd(payload)
     try:
         offenders = offending_targets(command, cwd)
     except Exception as exc:
-        # An internal fault is a bootstrap-class failure: warn, record, allow.
+        # An internal fault is a bootstrap-class failure: warn, allow.
         sys.stderr.write(
             f"WARNING: {GUARD_RELPATH} failed while classifying and is FAILING "
             f"OPEN: {type(exc).__name__}: {exc}\n"
         )
-        session_id, task_id = _identifiers(payload)
-        persist_audit_row({
-            "timestamp": _now(), "decision": "bootstrap_failed_fail_open",
-            "resolved_target": None, "mechanism": "classify",
-            "grant_identity": None, "session_id": session_id, "task_id": task_id,
-            "guard": GUARD_RELPATH, "error": f"{type(exc).__name__}: {exc}",
-            "command_head": command[:200],
-        })
         return 0
 
     if not offenders:
@@ -533,35 +454,12 @@ def main() -> int:
     consumed = _consume_grants(grants, session_id) if decision == "permitted_by_grant" else []
     if decision == "permitted_by_grant" and not consumed:
         decision = "refused_grant_not_consumed"
-    sink = str(audit_log_path())
-    audit_ok = persist_audit_row({
-        "timestamp": _now(),
-        "decision": decision,
-        "resolved_target": [off["resolved_target"] for off in offenders],
-        "mechanism": [off["mechanism"] for off in offenders],
-        "write_mode": [off["write_mode"] for off in offenders],
-        "grant_identity": [off.get("grant_identity") for off in offenders],
-        "grant_consumed": consumed,
-        "session_id": session_id,
-        "task_id": task_id,
-        "guard": GUARD_RELPATH,
-        "cwd": cwd,
-        "command_head": command[:200],
-    })
-    if not audit_ok:
-        sys.stderr.write(
-            f"BLOCKED: {GUARD_RELPATH} could not record this replacement to "
-            f"{sink}, so it cannot be attributed afterwards and is DENIED.\n"
-            "  An unattributable replacement is the defect this guard exists to "
-            "prevent; both the refusal and the granted paths deny on audit failure.\n"
-        )
-        return 2
 
     if decision == "permitted_by_grant":
         sys.stderr.write(
             f"[overwrite-guard] permitted_by_grant: "
             f"{', '.join(off['resolved_target'] for off in grants)} — grant CONSUMED "
-            f"({', '.join(consumed)}), recorded in {sink}\n"
+            f"({', '.join(consumed)})\n"
         )
         return 0
 
@@ -574,7 +472,7 @@ def main() -> int:
         )
         return 2
 
-    sys.stderr.write(_deny_message(ungranted, sink))
+    sys.stderr.write(_deny_message(ungranted))
     return 2
 
 

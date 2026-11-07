@@ -5,8 +5,7 @@
 #
 # Thin wrapper: the body now lives in write-enforce-flag.sh, which writes any
 # number of enforcement sentinels per invocation. This entry point is kept
-# because commands/dev.md, commands/dev-command.md and
-# hooks/prompt-workflow.py:_init_dev_registry call it by name.
+# because command text a running session may still follow calls it by name.
 set -euo pipefail
 # This entry point writes exactly the codex sentinel, as it always did. A
 # caller-supplied --flag would silently widen that to other enforcement gates,

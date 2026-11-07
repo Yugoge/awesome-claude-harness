@@ -59,7 +59,7 @@ def _run(args, cwd):
 
 
 def _diff_sha256(repo, path, staged=False):
-    """Mirrors hooks/doc_sync/hook_ledger.py::_diff_sha256's exact flags, as
+    """The declaration digest's exact flags, as
     agents/changelog-analyst.md:891-894 specifies: declaration and
     verification must never drift into different diff formats."""
     cmd = ["git", "diff"]
@@ -182,8 +182,8 @@ def test_digest_match_keeps_file_staged(git_repo):
     excludes)."""
     (git_repo / "tracked.txt").write_text("original content\nreviewed change\n")
     # Declared digest is computed from the WORKING-TREE diff before
-    # staging, exactly as hooks/doc_sync/hook_ledger.py::_diff_sha256 does
-    # at report-write time; with no peer interference the post-staging
+    # staging, as a declaration is computed at report-write time; with no
+    # peer interference the post-staging
     # INDEX diff is byte-identical.
     correct_sha256 = _diff_sha256(git_repo, "tracked.txt", staged=False)
 
