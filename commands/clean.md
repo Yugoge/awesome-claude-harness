@@ -44,7 +44,9 @@ This command dispatches five subagent types:
 4. **prompt-inspector** (Step 10A): audits `agents/*.md` and `commands/*.md` verbosity
 5. **cleaner** (Step 16): executes approved cleanup actions
 
-Every dispatch is an Agent call with `run_in_background: false`. The request's JSON files live in `docs/clean/` (`scripts/orchestrator.sh`'s default `clean_output_dir`). A subagent may write there only a path its dispatch declares (`hooks/pretool-tool-policy.py`); the obligation blocks of Steps 5, 8, 10A and 16 declare the reports their subagents write.
+Every dispatch is an Agent call with `run_in_background: false`. The request's JSON files live in `docs/clean/` (`scripts/orchestrator.sh`'s default `clean_output_dir`). `hooks/pretool-tool-policy.py` lets a subagent write the paths its dispatch declares (the obligation blocks of Steps 5, 8, 10A and 16 declare the reports their subagents write) and, beside them, only its policy row's directories: its own scratch directories, `docs/dev/overnight/`, and `docs/codex/` for the cleanliness-, style- and prompt-inspector. It refuses (exit 2) every other subagent write, under docs/ or anywhere else in the project, and reads no `/allow` grant; the cleaner's moves and `fix_style` edits are such writes (Step 16).
+
+**Hook rejection (a process step, never a terminal):** a subagent whose operation a hook rejects never retries, disguises or circumvents it (no other tool, wrapper or script for the same write); it goes on with the rest of its work and reports the operation exactly as it ran and the hook's output. The orchestrator then asks the owner one AskUserQuestion inside the turn that names each refused action and its exact operation: that is the pause, and it releases no gate. The owner's answer decides each action. An operation `hooks/pretool-tool-policy.py` refused is not run again in this session (that hook reads no `/allow` grant): the owner runs it himself outside the session or withdraws the action. One refused by a hook that reads `/allow` grants (`hooks/pretool-git-privilege-guard.py`: the cleaner's `git commit`) runs again only after the owner's `/allow` of that exact command, when the orchestrator re-dispatches the same role with the same template and a fresh dispatched_at; or the owner leaves it undone. Neither the orchestrator nor a subagent retries an operation without that grant, each answer is that action's outcome in Steps 17 and 18, and the command continues to completion.
 
 ---
 
@@ -133,7 +135,7 @@ Run rule-inspector to update folder documentation with recent changes:
 3. Build rule-inspector context JSON at `docs/clean/rule-context-${REQUEST_ID}.json` including request_id, timestamp, project_root, folders, freshness data, and parameters `freshness_check: true`, `update_stale_readmes: true`
 4. Invoke: `~/.claude/scripts/orchestrator.sh rule-inspect "$RULE_CONTEXT"`, then dispatch the rule-inspector subagent with that context (Agent tool, `run_in_background: false`)
 5. Verify `docs/clean/rule-context-${REQUEST_ID}.json` exists; abort with error if not
-6. For each stale folder, verify the README was actually modified after the script start time; warn if not
+6. For each stale folder, verify the README was actually modified after the script start time; warn if not. The rule-inspector's `refused_operations` (its Step 6 edits of README.md and ARCHITECTURE.md, which `hooks/pretool-tool-policy.py` refuses) go to the owner by the hook-rejection rule (Workflow Overview)
 
 **What this step does**:
 - Analyzes Git history for ALL folders (including root directory)
@@ -214,7 +216,7 @@ Expected output structure:
 The style-inspector uses a **budget protocol** to avoid context overflow. Instead of looping sequentially, the orchestrator plans the inspection upfront and launches ALL inspector agents in one message, one per file group.
 
 **Plan file**: `docs/clean/style-plan-{REQUEST_ID}.json`
-**Partial reports**: `docs/clean/style-partial-{REQUEST_ID}-group{N}.json`
+**Partial reports**: `docs/clean/style-partial-{REQUEST_ID}-group{GROUP_ID}.json`
 **Final report**: `docs/clean/style-report-{REQUEST_ID}.json`
 
 #### Step 7: Plan Style Inspection
@@ -235,11 +237,11 @@ Each agent's prompt MUST contain:
 You are a style-inspector. Audit ONLY the files listed below against all 11 development standards.
 
 Request ID: {REQUEST_ID}
-Group ID: {N}
+Group ID: {GROUP_ID}
 Project root: {PROJECT_ROOT}
 Context file: docs/clean/context-{REQUEST_ID}.json
 <obligation v="1">
-{"task_id": null, "lane": null, "lane_set": null, "role": "style-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/style-partial-{REQUEST_ID}-group{N}.json", "schema": "style-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}
+{"task_id": null, "lane": null, "lane_set": null, "role": "style-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/style-partial-{REQUEST_ID}-group{GROUP_ID}.json", "schema": "style-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}
 </obligation>
 <If codex_required = true, include the literal next line; otherwise omit it>
 codex_required: true
@@ -251,7 +253,7 @@ Files to audit (audit EVERY file in this list, no others):
 4. {file_path_4}
 5. {file_path_5}
 
-Write your partial report to: docs/clean/style-partial-{REQUEST_ID}-group{N}.json
+Write your partial report to: docs/clean/style-partial-{REQUEST_ID}-group{GROUP_ID}.json
 It is also your progress file and your final report: write neither anywhere else (Step 9 merges the partials into the style report).
 
 The partial report MUST use this schema:
@@ -259,7 +261,7 @@ The partial report MUST use this schema:
   "request_id": "{REQUEST_ID}",
   "timestamp": "ISO-8601",
   "inspector": "style-inspector",
-  "group_id": {N},
+  "group_id": {GROUP_ID},
   "files_audited": ["list of files you actually audited"],
   "violations": [
     {
@@ -283,13 +285,10 @@ After all calls have returned, log: "Launched {AGENT_COUNT} style-inspector agen
 
 #### Step 9: Collect and Merge Results
 
-After ALL agents complete, read each partial report file:
+After ALL agents complete, read each partial report file, the path each Step 8 obligation declares (one per plan group, `{GROUP_ID}` its `group_id`):
 
 ```
-docs/clean/style-partial-{REQUEST_ID}-group1.json
-docs/clean/style-partial-{REQUEST_ID}-group2.json
-...
-docs/clean/style-partial-{REQUEST_ID}-group{N}.json
+docs/clean/style-partial-{REQUEST_ID}-group{GROUP_ID}.json
 ```
 
 Merge all violations from every partial report into a single combined list. Merge all files_audited lists into a single deduplicated list. Write the final merged report to `docs/clean/style-report-{REQUEST_ID}.json`.
@@ -546,9 +545,9 @@ The merged context with approvals is at: docs/clean/context-with-approvals-{REQU
 Execute ALL approved_actions. Write results to docs/clean/cleanup-execution-{REQUEST_ID}.json."
 ```
 
-The obligation declares the execution report (kind `markdown`: no registered schema covers it, so the cleaner's stop checks that it exists, names this request's id and ends with a line holding only its closing `}`, and returns a missing or cut-off report to the cleaner). It declares none of the project files the approved actions move or edit: a declaration would hold each of them for this cleaner for the rest of the session. `hooks/pretool-tool-policy.py` refuses the cleaner's write of an undeclared path (its policy row allows only its scratch and overnight directories), so such an action fails and the cleaner records it in `actions_failed`.
+The obligation declares the execution report (kind `markdown`: no registered schema covers it, so the cleaner's stop checks that it exists, names this request's id and ends with a line holding only its closing `}`, and returns a missing or cut-off report to the cleaner). It declares none of the project files the approved actions move or edit: a declaration would hold each of them for this cleaner for the rest of the session, and a path no command template's shape covers (a script's `fix_style` edit) is not held by a declaration at all. So `hooks/pretool-tool-policy.py` refuses (exit 2) the destination of every move, archive and rename (`mv`) and every `fix_style` edit (Edit) the cleaner makes; it judges no write target in the cleaner's `rm`, `git add` and helper-script calls (delete, `update_gitignore`, `generate_index`, `merge_test_folders`, `cleanup_tests`). `hooks/pretool-git-privilege-guard.py` refuses (exit 2) the cleaner's `git commit` unless the owner's `/allow` grants that command.
 
-The orchestrator MUST NOT supplement, assist, or "help" the cleaner by making additional edits. If the cleaner fails on specific actions, those failures are recorded in the execution report -- the orchestrator does not retry them directly.
+The orchestrator MUST NOT supplement, assist, or "help" the cleaner by making additional edits. A refusal is a hook rejection, not a failure: the cleaner lists each refused operation in `actions_refused` and runs the rest. After the cleaner returns, the orchestrator reads the execution report; when `actions_refused` is not empty it follows the hook-rejection rule (Workflow Overview): one AskUserQuestion inside the turn naming each refused action and its exact operation, its options the owner's decisions that rule names. For the refused `git commit`, the re-dispatched cleaner commits and writes the push-gate token; left undone, the changes stay staged and uncommitted. An action that fails for another reason (its source is gone) stays in `actions_failed` with that reason; the orchestrator does not retry it directly.
 
 Cleaner reads approvals, executes actions, writes:
 - `docs/clean/cleanup-execution-{REQUEST_ID}.json`
@@ -560,15 +559,17 @@ Expected output structure:
   "request_id": "clean-YYYYMMDD-HHMMSS",
   "timestamp": "ISO-8601",
   "cleaner": {
-    "status": "completed|partial|blocked",
+    "status": "completed|partial",
     "actions_completed": [],
     "actions_failed": [],
     "actions_skipped": [],
+    "actions_refused": [],
     "summary": {
       "total_actions": 10,
       "successful": 8,
       "failed": 0,
       "skipped": 2,
+      "refused": 0,
       "files_moved": 3,
       "files_archived": 2,
       "files_deleted": 3,
@@ -586,15 +587,15 @@ Expected output structure:
 
 ### Step 17: Verify Cleanup Results
 
-Review git changes: check `git status` and `git diff --stat HEAD~1` to confirm expected files were staged and committed.
+Review git changes: check `git status`; when the execution report names a `cleanup_commit`, also `git diff --stat HEAD~1`. The summary states what happened, from the execution report, the owner's answers (Step 16) and these calls: a cleanup commit only when the report names one, else none.
 
 Present verification summary:
 
 ```markdown
 # Cleanup Execution Results
 
-**Status**: <completed|partial|blocked>
-**Actions**: X successful, Y failed, Z skipped
+**Status**: <completed|partial>
+**Actions**: X successful, Y failed, Z skipped, R refused by a hook (each with the owner's answer)
 
 ## Changes Made
 
@@ -607,14 +608,14 @@ Present verification summary:
 ## Git Status
 
 - Checkpoint commit: <hash>
-- Cleanup commit: <hash>
+- Cleanup commit: <hash, or none: no change staged, or the commit refused (Step 16)>
 - Files changed: X
-- Ready for review: Yes
+- Ready for review: <yes with a cleanup commit, else no>
 
 ## Next Steps
 
-1. Review changes: `git diff HEAD~1`
-2. If satisfied: Changes already committed — to publish to remote: run `/push`
+1. Review changes: `git diff HEAD~1` with a cleanup commit, else `git status`
+2. If satisfied: with a cleanup commit, the changes are committed (to publish to remote: run `/push`); without one, nothing was committed, and `git status` shows what the cleaner staged
 3. If not satisfied: `git reset --hard <checkpoint_commit>`
 4. See detailed report: docs/clean/completion-{REQUEST_ID}.md
 ```
@@ -632,7 +633,7 @@ Save to: `docs/clean/completion-{REQUEST_ID}.md`
 **Project**: <project_path>
 **Type**: <project_type>
 **Executed**: <timestamp>
-**Status**: <completed|partial|blocked>
+**Status**: <completed|partial>
 
 ---
 
@@ -678,6 +679,9 @@ Save to: `docs/clean/completion-{REQUEST_ID}.md`
 ### Skipped (Z actions)
 <list of skipped actions with reasons>
 
+### Refused by a hook (R actions)
+<list of refused actions: exact operation, the hook's output, the owner's answer>
+
 ---
 
 ## Summary Statistics
@@ -687,7 +691,7 @@ Save to: `docs/clean/completion-{REQUEST_ID}.md`
 - Files archived: Z
 - Files deleted: W
 - Style fixes: V
-- Git commits: 2 (checkpoint + cleanup)
+- Git commits: <the checkpoint, plus the cleanup commit when the execution report names one>
 
 ---
 
@@ -738,8 +742,8 @@ Save to: `docs/clean/completion-{REQUEST_ID}.md`
 - Archives instead of deleting when uncertain
 
 ### Incremental Execution
-- Commits after each category
-- Continues on failure
+- Stages after each category, then one cleanup commit (Step 16: refused unless the owner's `/allow` grants it)
+- Continues past a failed or refused action; a refused one goes to the owner (hook-rejection rule)
 - Reports all results
 
 ---

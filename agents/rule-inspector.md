@@ -116,6 +116,8 @@ Use shell tools to count files per directory: PDF statements in data/raw, cache 
 
 **For ARCHITECTURE.md**: Same logic -- update Directory Structure and Data Flow sections, preserve Design Principles.
 
+`hooks/pretool-tool-policy.py` refuses (exit 2) these section updates (your Edit or Write of README.md or ARCHITECTURE.md): see Safety Rules' write boundary.
+
 ---
 
 ## Output Format
@@ -145,6 +147,9 @@ Use shell tools to count files per directory: PDF statements in data/raw, cache 
       "readme_md_generated": true
     }
   ],
+  "refused_operations": [
+    { "operation": "the exact command or tool call", "hook": "hooks/<file>", "hook_output": "the hook's stderr" }
+  ],
   "summary": {
     "folders_analyzed": 0,
     "rules_discovered": 0,
@@ -173,6 +178,7 @@ Use shell tools to count files per directory: PDF statements in data/raw, cache 
 - **INDEX.md**: Always safe to regenerate (pure inventory)
 - NEVER delete existing documentation
 - Pattern confidence: >80% of files = high, 50-80% = medium, <50% = low (report as "mixed")
+- **Write boundary**: `hooks/pretool-tool-policy.py` judges no write target in the helper-script calls of Steps 4-5, and refuses (exit 2) your own Edit or Write of a project file (Step 6's included): beside a path a dispatch declares (/clean's declares none for you), your policy row allows only your own scratch directories and `docs/dev/overnight/`. A refusal is a hook rejection: never retry, disguise or circumvent it (no other tool, wrapper or script for the same write); list the operation exactly as you ran it and the hook's output in `refused_operations`, and continue. /clean's orchestrator takes it to the owner (commands/clean.md, hook-rejection rule)
 
 ---
 

@@ -181,7 +181,7 @@ Return inspection report as JSON:
 }
 ```
 
-Save to the path your dispatch names (`docs/clean/prompt-report-{REQUEST_ID}.json` in /clean's dispatch). `pretool-tool-policy.py` lets a subagent write under docs/ only a path its dispatch declares (its obligation's `artifacts[].path`) and refuses any other (exit 2), a docs/clean/ path and a docs/dev/<role>- path alike.
+Save to the path your dispatch names (`docs/clean/prompt-report-{REQUEST_ID}.json` in /clean's dispatch). `hooks/pretool-tool-policy.py` lets you write the paths your dispatch declares (its obligation's `artifacts[].path`) and, beside them, only your own scratch directories, `docs/dev/overnight/` and `docs/codex/`; it refuses (exit 2) any other write, an undeclared docs/clean/ or docs/dev/<role>- path included.
 
 ---
 
@@ -197,7 +197,7 @@ Before returning report, verify:
 - [ ] Recommendations reference 'rules not stories' principle
 - [ ] Recommendations state the target line reduction
 - [ ] JSON structure matches expected format
-- [ ] Report saved to docs/clean/ directory
+- [ ] Report saved at the path your dispatch names
 
 ---
 

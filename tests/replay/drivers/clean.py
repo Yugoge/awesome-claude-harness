@@ -64,9 +64,16 @@ What each step does is taken from the tree's commands/clean.md:
   `fix_style` replacement with the Edit tool; an action the table has no row for is skipped with its
   reason), `git add` of the affected files, one commit with the text's message, the push-gate token as
   the tree's text writes it (the writer's block, or, on the base, the Python script its prose
-  describes), and its execution report Written where the prompt says.
-* Step 17: the two git calls the step names; Step 18: the completion report from the step's template,
-  Written at its `Save to:` path; the last TodoWrite; Stop.
+  describes), and its execution report Written where the prompt says. A call a hook refuses (no
+  deviation passes it) is listed in `actions_refused` with the operation as run and the hook's first
+  line, its files not staged, and never run again. Where the text's Step 16 names `actions_refused`
+  (the hook-rejection rule; the base records a refusal as a failure), the orchestrator then Reads the
+  execution report and, when it lists refusals, asks one AskUserQuestion with a question per refused
+  operation naming the action and the exact operation, its options the owner decisions the Workflow
+  Overview's rule names (the owner picks the first); the answers go into Steps 17 and 18.
+* Step 17: the git calls the step names (one it names after "when the execution report names a
+  `cleanup_commit`" only with one); Step 18: the completion report from the step's template, Written at
+  its `Save to:` path; the last TodoWrite; Stop.
 
 Text points the driver resolves (each also reported as a text defect):
 * Step 4's checklist item has no subagent call, but the step says "Run rule-inspector" and
@@ -134,7 +141,7 @@ import re
 import shlex
 import time
 
-from .. import agents, cmdtext
+from .. import agents, cmdtext, hookrun
 from ..pipeline import Deviations, Orchestrator, utc_now
 from ..replay import Deviation
 from ..sandbox import FIXED_DATE
@@ -671,7 +678,7 @@ class CleanRun:
             n = g["group_id"]
             lines = []
             for line in self.prompt_block("Step 8", "You are a style-inspector"):
-                line = line.replace("{N}", str(n))
+                line = line.replace("{GROUP_ID}", str(n)).replace("{N}", str(n))   # the base text spells it {N}
                 if re.match(r"\s*\d+\.\s+\{file_path_\d+\}", line):
                     if line.lstrip().startswith("1."):
                         lines += [f"{k}. {os.path.relpath(p, self.project) if os.path.isabs(p) else p}"
@@ -929,6 +936,34 @@ class CleanRun:
         out_rel = re.search(r"Write results to\s+(\S+?\.json)", prompt).group(1)
         self.dispatch(role, prompt, self.cleaner_work(role, prompt), f"Step 16 Agent({role})",
                       description="Execute approved cleanup actions", report=out_rel)
+        self.refused_answers = []
+        if "actions_refused" not in o.section("Step 16"):
+            return   # the base text: a refused action is a failure the report records
+        # the hook-rejection rule (Workflow Overview): the execution report read, then one AskUserQuestion naming
+        # each refused action and its exact operation; the owner's answer decides it, nothing is run again
+        self.read(out_rel, "Step 16 Read execution report")
+        refused = (getattr(self, "cleaner_result", {}) or {}).get("actions_refused") or []
+        if not refused:
+            return
+        rule = cmdtext.section(o.text, "Workflow Overview")
+        own = re.search(r"the owner (runs it himself outside the session) or (withdraws the action)", rule)
+        grant = re.search(r"after the owner's `/allow` of that exact command[^;]*; or the owner (leaves it undone)", rule)
+        questions = []
+        for r in refused:
+            if r.get("hook", "").endswith("pretool-tool-policy.py") and own:
+                opts = [own.group(1), own.group(2)]
+            elif grant:
+                opts = ["grants it with /allow of that exact command", grant.group(1)]
+            else:
+                raise cmdtext.TextNotFound("Workflow Overview: no owner decision for a refused operation")
+            questions.append({"question": f"{r['action_id']} ({r.get('action')}): {r['operation']} was refused by "
+                                          f"{r.get('hook')}: {r.get('hook_output')}. How do you decide it?",
+                              "header": r["action_id"][:12], "multiSelect": False,
+                              "options": [{"label": t[:60], "description": t} for t in opts]})
+        call = o.s.tool("AskUserQuestion", {"questions": questions}, label="Step 16 AskUserQuestion refused operations",
+                        deviation=self.devs.at("Step 16 AskUserQuestion refused operations"))
+        answers = call.response.get("answers") or {}
+        self.refused_answers = [(r, answers.get(q["question"], "")) for r, q in zip(refused, questions)]
 
     def cleaner_work(self, role: str, prompt: str):
         o = self.o
@@ -956,7 +991,14 @@ class CleanRun:
                     "generate_index": 6}
             if len(order) != len(rank):
                 raise agents.PlayError(f"agents/{role}.md's execution order has {len(order)} items")
-            done, skipped, failed, staged = [], [], [], []
+            done, skipped, failed, staged, refused = [], [], [], [], []
+
+            def refusal(c, a, operation):
+                """A hook's refusal: listed with the operation as run and the hook's output, never retried."""
+                b = c.pre.blocks[0] if c.pre and c.pre.blocks else {}
+                return dict(a, result="refused", operation=operation, hook=b.get("hook", ""),
+                            hook_output=hookrun.refusal_first(b) if b else (c.error or "")[:200])
+
             for a in sorted(actions, key=lambda a: rank.get(a.get("action"), 99)):
                 kind = a.get("action")
                 if kind not in table:
@@ -967,8 +1009,8 @@ class CleanRun:
                     if not dst or not os.path.exists(self.abs(src)):
                         skipped.append(dict(a, result="skipped", reason="source or destination missing"))
                         continue
-                    c = sub.bash(f"mkdir -p {q(os.path.dirname(dst) or '.')} && mv {q(src)} {q(dst)}",
-                                 f"{kind} {src}", label=f"{sub.role} Bash {kind} {a['action_id']}")
+                    operation = f"mkdir -p {q(os.path.dirname(dst) or '.')} && mv {q(src)} {q(dst)}"
+                    c = sub.bash(operation, f"{kind} {src}", label=f"{sub.role} Bash {kind} {a['action_id']}")
                     affected = [src, dst]
                 elif kind == "fix_style":
                     rel = (a.get("location") or "").rsplit(":", 1)[0]
@@ -976,6 +1018,7 @@ class CleanRun:
                         skipped.append(dict(a, result="skipped", reason="no replacement line"))
                         continue
                     sub.read(self.abs(rel), label=f"{sub.role} Read {a['action_id']}")
+                    operation = f"Edit {rel}: {a['old_line']!r} -> {a['new_line']!r}"
                     c = sub.edit(self.abs(rel), a["old_line"], a["new_line"], label=f"{sub.role} Edit {a['action_id']}")
                     affected = [rel]
                 else:
@@ -983,14 +1026,17 @@ class CleanRun:
                     if not cmd:
                         skipped.append(dict(a, result="skipped", reason="no command"))
                         continue
-                    c = sub.bash(cmd.group(1).replace('"$PROJECT_ROOT', '"' + self.project), kind,
-                                 label=f"{sub.role} Bash {a['action_id']}")
+                    operation = cmd.group(1).replace('"$PROJECT_ROOT', '"' + self.project)
+                    c = sub.bash(operation, kind, label=f"{sub.role} Bash {a['action_id']}")
                     affected = []
                 if c.ok:
                     done.append(dict(a, result="success", git_staged=bool(affected)))
                     staged += [p for p in affected if p not in staged]
+                elif c.blocked:
+                    refused.append(refusal(c, a, operation))
+                    continue
                 else:
-                    failed.append(dict(a, result="failed", error=(c.error or "refused")[:200]))
+                    failed.append(dict(a, result="failed", error=(c.error or "failed")[:200]))
                 if affected:
                     sub.bash("git add -A -- " + " ".join(q(p) for p in affected), "Stage the affected files",
                              label=f"{sub.role} Bash git add {a['action_id']}")
@@ -1001,8 +1047,10 @@ class CleanRun:
                 moved = sum(1 for a in done if a.get("action") == "move")
                 body = body.strip().replace("X files", f"{moved} files").replace("Y files", "0 files").replace(
                     "Z files", "0 files").replace("W violations", f"{sum(1 for a in done if a.get('action') == 'fix_style')} violations")
-                c = sub.bash(f"git commit -q -m {q(subject)} -m {q(body)}", "Commit the cleanup",
-                             label=f"{sub.role} Bash commit")
+                commit = f"git commit -q -m {q(subject)} -m {q(body)}"
+                c = sub.bash(commit, "Commit the cleanup", label=f"{sub.role} Bash commit")
+                if c.blocked:
+                    refused.append(refusal(c, {"action_id": "commit", "action": "commit"}, commit))
                 if c.ok:
                     r = sub.bash("git rev-parse --show-toplevel\ngit branch --show-current\ngit rev-parse HEAD",
                                  "The commit's repository, branch and sha", label=f"{sub.role} Bash commit descriptor")
@@ -1010,11 +1058,14 @@ class CleanRun:
                     if len(vals) >= 3 and vals[2].strip():
                         commit_sha = vals[2].strip()
                         self.token(sub, text, vals[0].strip(), vals[1].strip(), commit_sha)
-            status = "completed" if not failed else "partial"
+            # agents/cleaner.md: completed when every approved action ran, else partial
+            status = "completed" if len(done) == len(actions) and not refused else "partial"
             doc = {"request_id": self.rid, "timestamp": utc_now(), "cleaner": {
                 "status": status, "actions_completed": done, "actions_failed": failed, "actions_skipped": skipped,
+                "actions_refused": refused,
                 "summary": {"total_actions": len(actions), "successful": len(done), "failed": len(failed),
-                            "skipped": len(skipped), "files_moved": sum(1 for a in done if a.get("action") == "move"),
+                            "skipped": len(skipped), "refused": len([r for r in refused if r["action_id"] != "commit"]),
+                            "files_moved": sum(1 for a in done if a.get("action") == "move"),
                             "files_archived": 0, "files_deleted": 0, "files_renamed": 0,
                             "style_fixes": sum(1 for a in done if a.get("action") == "fix_style"), "index_generated": False},
                 "git_status": {"checkpoint_commit": (ctx.get("orchestrator") or {}).get("analysis", {}).get(
@@ -1059,14 +1110,22 @@ class CleanRun:
 
     # ------------------------------------------------------------ Steps 17-18
     def step17(self) -> None:
-        for k, c in enumerate([cmd for cmd in self.codes("Step 17", "Review git changes") if cmd.startswith("git ")], 1):
-            self.bash(c, f"Step 17 Bash git {k}", "Review the cleanup's git changes")
         r = getattr(self, "cleaner_result", {}) or {}
+        commit = (r.get("git_status") or {}).get("cleanup_commit", "")
+        # "when the execution report names a `cleanup_commit`, also ...": those calls only with one
+        item = next(it for it in re.split(r"\n(?=\s*(?:[-*]|\d+\.)\s)|\n\s*\n", self.o.section("Step 17"))
+                    if "Review git changes" in it)
+        always, _, if_commit = item.partition("when the execution report names a `cleanup_commit`")
+        calls = re.findall(r"`(git [^`]+)`", always) + (re.findall(r"`(git [^`]+)`", if_commit) if commit else [])
+        for k, c in enumerate(calls, 1):
+            self.bash(c, f"Step 17 Bash git {k}", "Review the cleanup's git changes")
         s = r.get("summary") or {}
-        self.say(f"# Cleanup Execution Results\n\n**Status**: {r.get('status', 'blocked')}\n**Actions**: "
-                 f"{s.get('successful', 0)} successful, {s.get('failed', 0)} failed, {s.get('skipped', 0)} skipped\n\n"
-                 f"- Checkpoint commit: {self.checkpoint}\n- Cleanup commit: "
-                 f"{(r.get('git_status') or {}).get('cleanup_commit', '')}")
+        decided = "".join(f"\n- {a['action_id']}: {a['operation']} (refused by {a.get('hook')}): {ans}"
+                          for a, ans in getattr(self, "refused_answers", []))
+        self.say(f"# Cleanup Execution Results\n\n**Status**: {r.get('status', 'partial')}\n**Actions**: "
+                 f"{s.get('successful', 0)} successful, {s.get('failed', 0)} failed, {s.get('skipped', 0)} skipped, "
+                 f"{s.get('refused', 0)} refused by a hook{decided}\n\n"
+                 f"- Checkpoint commit: {self.checkpoint}\n- Cleanup commit: {commit or 'none'}")
 
     def step18(self) -> None:
         tpl = cmdtext.block(self.o.text, "Step 18", lang="markdown")
@@ -1074,11 +1133,17 @@ class CleanRun:
         g = r.get("git_status") or {}
         text = self.fill(tpl).replace("clean-YYYYMMDD-HHMMSS", self.rid)
         for k, v in (("<project_path>", self.project), ("<project_type>", (self.facts.get("scan") or {}).get(
-                "project_type", "Generic")), ("<timestamp>", utc_now()), ("<completed|partial|blocked>", r.get("status", "blocked")),
+                "project_type", "Generic")), ("<timestamp>", utc_now()), ("<completed|partial|blocked>", r.get("status", "partial")),
+                ("<completed|partial>", r.get("status", "partial")),
                 ("<checkpoint_commit>", self.checkpoint), ("<branch>", self.facts.get("branch", ""))):
             text = text.replace(k, v)
         text = text.replace("Checkpoint commit: <hash>", f"Checkpoint commit: {self.checkpoint}").replace(
             "Cleanup commit: <hash>", f"Cleanup commit: {g.get('cleanup_commit', '')}")
+        decided = "\n".join(f"- {a['action_id']}: {a['operation']} ({a.get('hook')}: {a.get('hook_output')}); "
+                            f"the owner: {ans}" for a, ans in getattr(self, "refused_answers", []))
+        text = re.sub(r"<list of refused actions[^>]*>", lambda _m: decided or "none", text)
+        text = re.sub(r"<the checkpoint, plus [^>]+>", "the checkpoint" + (" and the cleanup commit" if g.get(
+            "cleanup_commit") else ""), text)
         text = re.sub(r"<list of [^>]+>", "(see the execution report)", text)
         self.write(self.save_path("Step 18"), text, "Step 18 Write completion report")
 
@@ -1088,9 +1153,11 @@ class CleanRun:
         if self.ended:
             text = f"/clean {self.rid}: stopped. {self.ended}."
         else:
+            commit = (r.get("git_status") or {}).get("cleanup_commit", "")
             text = (f"/clean {self.rid} complete: {r.get('summary', {}).get('successful', 0)} actions executed, "
-                    f"cleanup commit {(r.get('git_status') or {}).get('cleanup_commit', '')}. "
-                    "To publish to the remote: /push")
+                    f"{r.get('summary', {}).get('refused', 0)} refused by a hook and decided by the owner; "
+                    + (f"cleanup commit {commit}. To publish to the remote: /push" if commit
+                       else "no cleanup commit: nothing was committed"))
         self.o.s.stop(text, label="Stop", deviation=self.devs.at("Stop"))
 
     def run(self) -> None:

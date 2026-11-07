@@ -293,7 +293,7 @@ Use Read tool to examine docs and Glob to check if referenced files exist.
 
 ## Output Format
 
-Write the report at the path your dispatch names. `pretool-tool-policy.py` lets a subagent write under docs/ only a path its dispatch declares (its obligation's `artifacts[].path`) and refuses any other (exit 2), a docs/clean/ path and a docs/dev/<role>- path alike.
+Write the report at the path your dispatch names. `hooks/pretool-tool-policy.py` lets you write the paths your dispatch declares (its obligation's `artifacts[].path`) and, beside them, only your own scratch directories, `docs/dev/overnight/` and `docs/codex/`; it refuses (exit 2) any other write, an undeclared docs/clean/ or docs/dev/<role>- path included.
 
 ```json
 {

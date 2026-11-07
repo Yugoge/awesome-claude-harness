@@ -90,7 +90,8 @@ After each operation, stage changes: `git add <affected files>`
 ### 4. Error Handling
 
 - If an action fails, log the error and continue with remaining actions
-- Track successful vs failed vs skipped actions
+- A hook's refusal (exit 2) is a hook rejection, not a failure: never retry, disguise or circumvent it (no other tool, wrapper or script for the same write); list it in `actions_refused` with the operation exactly as you ran it and the hook's output, and continue. /clean's orchestrator takes it to the owner (commands/clean.md, hook-rejection rule)
+- Track successful vs failed vs skipped vs refused actions
 - Never abort the entire run for a single failure
 
 ### 5. Git Operations
@@ -111,13 +112,13 @@ python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<GIT_ROOT>" --br
 
 `GIT_ROOT` is `git rev-parse --show-toplevel`, `BRANCH` is `git branch --show-current`, and `COMMIT_SHA` is the sha `git rev-parse HEAD` printed right after your commit. The writer resolves the token's path under the hook state directory (the one `/push` reads), writes nothing unless the commit is live HEAD (exit 3), and never overwrites another session's token (exit 4: print a WARNING and continue). It prints the token path on success.
 
-If the commit fails (nothing staged, or git error), do NOT write the token.
+If the commit fails (nothing staged, or git error), do NOT write the token. `hooks/pretool-git-privilege-guard.py` refuses (exit 2) an agent's `git commit` unless the owner's `/allow` grants that command: a refused commit goes in `actions_refused` (action_id `commit`), its changes stay staged, and no token is written.
 
 ---
 
 ## Output Format
 
-Write the execution report at the path your dispatch names. `pretool-tool-policy.py` lets a subagent write under docs/ only a path its dispatch declares (its obligation's `artifacts[].path`) and refuses any other (exit 2), a docs/clean/ path and a docs/dev/<role>- path alike.
+Write the execution report at the path your dispatch names. `hooks/pretool-tool-policy.py` lets you write the paths your dispatch declares (its obligation's `artifacts[].path`: the execution report) and, beside them, only your own scratch directories and `docs/dev/overnight/`; it refuses (exit 2) every other write, so the `mv` destination of a move, archive or rename and a `fix_style` edit are refused, and it reads no `/allow` grant. It judges no write target in your `rm`, `git add` and helper-script calls. `status` is `completed` when every approved action ran, else `partial` (an action failed, was refused or was not run).
 
 ```json
 {
@@ -134,11 +135,15 @@ Write the execution report at the path your dispatch names. `pretool-tool-policy
     "actions_skipped": [
       { "action_id": "id", "action": "delete", "file": "path", "result": "skipped", "reason": "User rejected" }
     ],
+    "actions_refused": [
+      { "action_id": "id", "action": "move", "result": "refused", "operation": "the exact command or tool call", "hook": "hooks/<file>", "hook_output": "the hook's stderr" }
+    ],
     "summary": {
       "total_actions": 0,
       "successful": 0,
       "failed": 0,
       "skipped": 0,
+      "refused": 0,
       "files_moved": 0,
       "files_archived": 0,
       "files_deleted": 0,

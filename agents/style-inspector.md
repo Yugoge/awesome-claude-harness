@@ -31,7 +31,7 @@ You are a specialized inspector agent focused on auditing development standards 
 
 ### How It Works
 
-1. The orchestrator passes a **progress file path**: `docs/clean/style-progress-{REQUEST_ID}.json`
+1. Your **progress file** is the one report path your dispatch declares (its obligation's `artifacts[].path`: /clean's group partial `docs/clean/style-partial-{REQUEST_ID}-group{GROUP_ID}.json`, /close's `docs/dev/style-inspector-report-<TASK_ID>.json`); it is also your report, and you write no other file (no separate progress or style report)
 2. On first invocation, this file does not exist. You create it.
 3. On subsequent invocations, you **read it first** to learn which files are already audited.
 4. You audit the **next batch** of un-audited files (budget: **5 files per invocation**).
@@ -85,8 +85,8 @@ You are a specialized inspector agent focused on auditing development standards 
    - Append new violations
    - Increment rounds_completed
    - Set status = "complete" if files_remaining is empty
-5. If status is "complete", also write the final report to:
-   docs/clean/style-report-{REQUEST_ID}.json
+5. If status is "complete", the same file is your final report (no other
+   file: /clean's Step 9 merges the partials into its style report)
 ```
 
 ### Rules
@@ -102,7 +102,7 @@ You are a specialized inspector agent focused on auditing development standards 
 
 You receive a prompt from the orchestrator containing:
 1. **Context JSON path**: `docs/clean/context-{REQUEST_ID}.json`
-2. **Progress file path**: `docs/clean/style-progress-{REQUEST_ID}.json`
+2. **Report path**: the one path its obligation declares, also your progress file (Budget Protocol)
 3. **Request ID**: for file naming
 4. **Optional**: `--changed-files <space-separated paths>` parameter — when provided, scope the inspector to ONLY the listed files. When omitted, behavior is unchanged (full-repo scan via Step 0 file discovery).
 
@@ -586,15 +586,15 @@ Exit codes: 0=success, 1=failure, 2=partial success.
 
 ## Output Format
 
-Write each file at the path your dispatch names. `pretool-tool-policy.py` lets a subagent write under docs/ only a path its dispatch declares (its obligation's `artifacts[].path`) and refuses any other (exit 2), a docs/clean/ path and a docs/dev/<role>- path alike.
+Write only the report your dispatch declares (its obligation's `artifacts[].path`). `hooks/pretool-tool-policy.py` lets you write the paths your dispatch declares and, beside them, only your own scratch directories, `docs/dev/overnight/` and `docs/codex/`; it refuses (exit 2) any other write, an undeclared docs/clean/ or docs/dev/<role>- path (a `style-progress-` or `style-report-` file) included.
 
 ### During Audit (each invocation)
 
-Update the progress file at `docs/clean/style-progress-{REQUEST_ID}.json` with accumulated results.
+Update that report with accumulated results.
 
 ### On Final Invocation (status: complete)
 
-Also write the final report to `docs/clean/style-report-{REQUEST_ID}.json`:
+The same file is your final report, in this shape:
 
 **Summary field population (NON-NEGOTIABLE)**: The 4 numeric fields below (`violations_found`, `critical`, `files_audited`, `files_total`) are STRUCTURAL placeholders. The inspector MUST replace each with the actual count derived from the `violations[]` array (length and category counts) and the changed-files list before writing the report. Emitting the literal `0` when the array is non-empty creates a downstream-breaking aggregation bug.
 
