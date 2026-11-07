@@ -253,6 +253,38 @@ def test_the_completion_report_is_dev_step_17_the_main_agent_s_own(tmp_path):
     assert answer["subagent_call"] is None and answer["template"] is None
 
 
+def _overnight_session(store, sid="s-night", pipelines=(0, 1)):
+    """One /dev-overnight cycle: each pipeline `<ts>-<i>` its BA, dev and QA dispatches (pipeline
+    dev-overnight, Steps 8, 12 and 15)."""
+    records = [_typed("/dev-overnight 8h harden the toy package")]
+    for i in pipelines:
+        tid = f"{TASK}-{i}"
+        records.append(_dispatch(f"toolu_ba_{i}", "ba", _obligation(tid, "ba", [
+            _json(f"docs/dev/context-{tid}.json", "context.v1"),
+            {"kind": "markdown", "path": f"docs/dev/ticket-{tid}.md", "identity_anchor": tid}],
+            pipeline="dev-overnight", profile="overnight")))
+        records.append(_dispatch(f"toolu_dev_{i}", "dev", _obligation(tid, "dev", [
+            _json(f"docs/dev/dev-report-{tid}.json", "dev-report.v2")],
+            pipeline="dev-overnight", profile="overnight")))
+        records.append(_dispatch(f"toolu_qa_{i}", "qa", _obligation(tid, "qa", [
+            _json(f"docs/dev/qa-report-{tid}.json", "qa-report.v2")],
+            pipeline="dev-overnight", profile="final_verification")))
+    return store.session(sid, records)
+
+
+def test_an_overnight_pipeline_s_completion_report_is_its_step_16_the_main_agent_s_own(tmp_path):
+    """A /dev-overnight pipeline whose QA passed is a /dev chain under its own task id; the
+    overnight's Step 16 declares the completion report that chain ends in (P2 acceptance 12): a
+    gap on it is a step the asking main agent runs itself, never a gap with no owner."""
+    store = Store(tmp_path)
+    _overnight_session(store)
+    for i in (0, 1):
+        answer = store.ask(f"docs/dev/completion-{TASK}-{i}.md", task=f"{TASK}-{i}")
+        assert answer is not None and answer["source"] == "todo_step", answer
+        assert answer["command"] == "dev-overnight" and answer["step"].startswith("Step 16:")
+        assert answer["subagent_call"] is None and answer["template"] is None
+
+
 def test_a_write_outranks_a_later_dispatch_that_only_names_the_file(tmp_path):
     """QA's `git diff -- src/app.py` names the file after dev wrote it: the
     owner is the dev dispatch that wrote it."""
