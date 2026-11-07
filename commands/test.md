@@ -357,13 +357,13 @@ Read `executor.status`, `executor.summary.total_tests`, `.passed`, `.failed`, an
 IF executor.status == "completed" AND failed == 0 AND errors == 0:
   → All tests passed → Skip to Step 16 (Generate Success Report)
 
-ELIF executor.status == "completed" AND failed > 0:
-  → Tests failed → Proceed to Step 14 (Present Failures)
+ELIF executor.status == "completed" AND (failed > 0 OR errors > 0):
+  → Tests failed or errored → Proceed to Step 14 (Present Failures)
 
 ELIF executor.status == "partial":
   → Some tests couldn't run → Proceed to Step 14 (Present Failures)
 
-ELIF executor.status == "blocked":
+ELSE (no readable report, or a status other than completed|partial):
   → Present the executor's error, fix its cause, re-run Step 12
 ```
 
@@ -428,10 +428,9 @@ Manual fix: edit each affected file and update venv usage to match the project's
 
 ## 🎯 Next Steps
 
-1. Review failed tests above
-2. Apply recommended fixes
-3. Re-run tests: `/test`
-4. When all pass, proceed with confidence
+1. Fix each failure above (Step 15)
+2. Re-run the tests (Steps 10-13)
+3. Completion report once every test passes (Step 16)
 
 ## 📁 Detailed Reports
 
@@ -440,51 +439,15 @@ Manual fix: edit each affected file and update venv usage to match the project's
 - Registry: tests/reports/validator-registry-{REQUEST_ID}.json
 ```
 
-### Step 15: Collect User Decision
+### Step 15: Fix Failures and Re-run
 
-Based on failures, offer options:
+Fix every failure Step 14 presented, from its recommendation or the failed validator's fix script where one exists, then re-run from Step 10 (from Step 8 when a fix changed a validator). Step 13 routes the new report; repeat Steps 14-15 until it routes to Step 16.
 
-```markdown
-## Test Execution Options
-
-**Current Status**: {failed} tests failed
-
-1. **Fix failures manually** - Review recommendations and update files
-2. **Apply automated fixes** (if available) - Run fix scripts
-3. **View detailed report** - Inspect JSON reports for full context
-4. **Ignore failures** - Generate report and exit (NOT recommended)
-5. **Cancel** - Exit without report
-
-Select option [1-5]:
-```
-
-**Option 1: Fix manually**
-- User makes changes
-- Offer to re-run tests
-- If re-run → Return to Step 10 (Execution)
-
-**Option 2: Apply automated fixes**
-- Check if fix scripts exist for failed validators
-- Run fix scripts with user approval
-- Re-run tests automatically
-- If still fail → Show remaining failures
-
-**Option 3: View detailed report**
-- Display JSON report paths
-- User inspects manually
-- Return to option selection
-
-**Option 4: Ignore failures**
-- Proceed to Step 16 with failures noted
-- NOT recommended for critical failures
-
-**Option 5: Cancel**
-- Exit workflow
-- Preserve reports for manual review
+Ask the owner only when a fix needs a decision the recommendation, the code or a sensible default cannot make (for example, two fixes that change the project's behaviour differently): one AskUserQuestion inside the turn that names that decision and offers the candidate fixes as its options. Every option is a fix that is applied and re-run; no option ends /test, skips a validator or accepts a failure. The answer only pauses: apply the chosen fix and continue.
 
 ### Step 16: Generate Completion Report
 
-Create `tests/reports/completion-{REQUEST_ID}.md` summarizing: request ID, project path, timestamp, overall status; validation phase results (validators checked, syntax/dependency/quality issues); execution phase results (total/passed/failed/errors, pass rate, execution time); edge case prevention summary; per-failed-test details with recommendations; git checkpoint hash and rollback command; and paths to all related report files.
+Create `tests/reports/completion-{REQUEST_ID}.md` summarizing: request ID, project path, timestamp, overall status; validation phase results (validators checked, syntax/dependency/quality issues); execution phase results (total/passed/failed/errors, pass rate, execution time); edge case prevention summary; each failure fixed in an earlier round, with its fix; git checkpoint hash and rollback command; and paths to all related report files.
 
 ---
 
