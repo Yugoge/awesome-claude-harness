@@ -78,7 +78,10 @@ Acceptance 7's late-repair cases, run by name (`--arg variant=<name>`); the arti
   late-repair-qa          the same to CLOSE: YES, then the task's QA report removed and /commit typed
                           in a later session; each Step 5 loop stops after three rounds (a round: one
                           routed finding and the re-run of its check)
-  session=same|later      /close and /commit typed in the cycle's session or a later one
+  kit=base                the replay of the base kit's text: commit-route, full, late-repair and
+                          late-repair-qa may stop short of `committed` there; on the branch's text
+                          each one that does fails the replay (acceptance 7)
+  session=same|later     /close and /commit typed in the cycle's session or a later one
                           (default same for plain, later for every routing variant and auto, as
                           acceptance 7 types them)
 
@@ -821,4 +824,9 @@ def run(rp) -> None:
         session = rp.later_session(session)
     elif variant == "late-repair":
         session = rp.later_session(session)
-    CommitRun(rp, session, tid, producer=producer).run()
+    out = CommitRun(rp, session, tid, producer=producer).run()
+    # Acceptance 7: on the branch's text each routing case reaches /commit's terminal. A replay that stops
+    # short fails here instead of exiting 0; the base kit's text (kit=base) is expected to stop short of it.
+    if variant in ("commit-route", "full", "late-repair", "late-repair-qa") and rp.args.get("kit") != "base" \
+            and out != "committed":
+        raise RuntimeError(f"/commit {variant} ended {out!r}, not at its terminal (committed)")
