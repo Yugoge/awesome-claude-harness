@@ -19,6 +19,7 @@ Public API:
     run_utility_check(monolith_text, views_dir) -> CheckResult
     run_ambiguous_check(monolith_text, views_dir) -> CheckResult
     run_meta_rule_check(monolith_text, views_dir) -> CheckResult
+    run_split_check(args) -> CheckResult   (the resolver's split predicates, with --project-dir)
 
 Annotation-only by design (R3.3 round-3 Option 1 lineage):
 Heuristic-A (agent-name token search inside basis ranges) is
@@ -27,6 +28,7 @@ heading-based heuristics ONLY at the view level, never at the
 monolith basis-range level.
 """
 
+import importlib.util
 import os
 import re
 
@@ -502,3 +504,25 @@ def run_meta_rule_check(monolith_text, views_dir):
     records = _parse_meta_rules(monolith_text)
     _print_meta_rule(records)
     return _meta_rule_status(records)
+
+
+def run_split_check(args):
+    """P1b E4: the split's own predicates (its manifest of this monolith, the monolith hash it records,
+    the views it references) by the rule every /dev* consumer's resolver applies,
+    scripts/resolve-spec-artifacts.py split_problem, before /spec writes the marker. Only with
+    --project-dir (G2 at the spec subagent's stop), the root the manifest's paths are relative to."""
+    if not args.project_dir:
+        return CheckResult("split", "N/A", "no --project-dir", 0)
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resolve-spec-artifacts.py")
+    spec = importlib.util.spec_from_file_location("resolve_spec_artifacts", path)
+    resolver = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(resolver)
+    except (OSError, ImportError, SyntaxError):  # a resolver that will not load checks nothing
+        return CheckResult("split", "N/A", "resolver unavailable", 0)
+    spec_dir = os.path.dirname(os.path.abspath(args.views_dir))
+    problem = resolver.split_problem(spec_dir, os.path.realpath(args.monolith), args.project_dir)
+    if problem:
+        manifest = os.path.relpath(os.path.join(spec_dir, "views", "manifest.json"), args.project_dir)
+        return CheckResult("split", "FAIL", f"{manifest}: {problem}", 1)
+    return CheckResult("split", "PASS", "", 0)
