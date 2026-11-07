@@ -54,6 +54,18 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   variant=auto            `/close --auto` (the cycle's task discovered as close_pending; parents=2 runs a
                           second /dev first: acceptance 9)
   variant=auto-task       `/close --auto <task>`: the Close mode question first (acceptance 5)
+  variant=late-repair     BA's stage (ticket, context, acceptance criteria) is removed after the cycle's
+                          terminal and `/close --late-repair <task-id>` is typed: the R4 section's
+                          controller calls as it spells them (init; BA, dev and QA from the cycle's
+                          templates, record-stage after each; finalize; verify-disclosure), then what its
+                          `admitted` item says, Steps 1-4 (acceptance 14's route)
+  variant=late-repair-drift   late-repair, its dev making the documentation change and reporting the ledger's
+                          final_source_hashes, then a peer's line landing on that file before finalize:
+                          the reconcilable drift (tests/test_late_repair_route.py's shape) for which
+                          finalize writes the effective report
+  variant=late-repair-declined   the qa-report is removed after the cycle's terminal and
+                          `/close --late-repair <task-id>` is typed: init declines (a QA-only gap), the
+                          reason is recorded and Step 0's disposition call runs (the ordinary route)
   parents=1|2             --auto: the number of /dev cycles closed
   cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
                           fan-out cycle with `lanes` lanes)
@@ -111,6 +123,7 @@ DEVIATIONS = Deviations([
 CLOSE_YES_PLAIN = "CLOSE: YES — codex disabled by user"
 FINDING = {"path": "toy/__init__.py", "detail": "add() states no contract: its docstring does not say it raises "
                                                 "TypeError naming a non-number argument (AC-01's behaviour is undocumented)"}
+PEER_LINE = "\n\nPEER = 1  # another task's line\n"
 TOY_DOC = ('    """Return a + b; raise TypeError naming the argument that is not a number."""\n')
 
 
@@ -380,6 +393,22 @@ def own_work(run, path: str, detail: str, label: str):
     return None, "orchestrator"
 
 
+def with_final_hashes(work):
+    """roles.dev's work, its report also carrying final_source_hashes: the sha256 of each file it owns."""
+    import hashlib
+
+    def wrapped(sub, brief, player):
+        out = work(sub, brief, player) or {}
+        doc = out.get("*") or {}
+        hashes = {}
+        for rel in doc.get("owned_edits") or {}:
+            text = agents.peek(sub.rp, sub.role, os.path.join(brief.project, rel))
+            hashes[rel] = hashlib.sha256(text.encode()).hexdigest()
+        doc["final_source_hashes"] = hashes
+        return out
+    return wrapped
+
+
 # ---------------------------------------------------------------- producers (routing targets)
 
 class DevProducer:
@@ -428,7 +457,9 @@ class DevProducer:
             return found[0]
         raise cmdtext.TextNotFound(f"Step {n} has no template dispatching {role!r}")
 
-    def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None):
+    def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None, hashes: bool = False):
+        """`hashes`: dev's report also carries the ledger's final_source_hashes (owned-edits-ledger.v1) of
+        each file it owns, as they stand when it reports."""
         from . import dev as devdrv
         cyc = self.cyc
         with self.on(session, devs) as o:
@@ -451,7 +482,8 @@ class DevProducer:
             if role == "dev":
                 baseline = {"baseline_head_sha": o.values.get("baseline_head_sha", ""),
                             "baseline_dirty_snapshot": o.values.get("baseline_dirty_snapshot", "")}
-                act = agents.Act(work=roles.dev(list(edits or [])), content={"*": baseline},
+                act = agents.Act(work=with_final_hashes(roles.dev(list(edits or []))) if hashes else
+                                 roles.dev(list(edits or [])), content={"*": baseline},
                                  summary="the close finding is fixed" if edits else "no change: the work is in place")
                 return o.dispatch(fields, act, label, self.tid, subagent_type="dev")
         raise NotImplementedError(f"no cycle template for role {role!r}")
@@ -512,6 +544,7 @@ class CloseRun:
                  auto: bool = False, extra_devs=(), producers=None):
         self.rp, self.tid, self.do_report = rp, tid, do_report
         self.producer, self.variant, self.auto = producer, variant, auto
+        self.late = variant.startswith("late-repair")  # `/close --late-repair <task-id>` (the R4 section)
         self.producers = dict(producers or {})   # --auto: each parent's producer, by task id
         pairs = list(DEVIATIONS.pairs) + list(extra_devs) + list(getattr(getattr(producer, "devs", None), "pairs", []))
         self.devs = kept_only(rp, Deviations(pairs))
@@ -662,6 +695,114 @@ class CloseRun:
         g = o.s.tool("Glob", {"pattern": "cp-state-qa.json", "path": os.path.join(o.project, ".claude/specs", self.tid)},
                      label=self.label("Step 0 Glob cp-state"), deviation=self.devs.at(self.label("Step 0 Glob cp-state")))
         self.spec_id = self.tid if g.ok and g.response.get("filenames") else ""
+
+    # ------------------------------------------------------------ the late-repair route (R4)
+    def lr_section(self) -> str:
+        return self.o.section("Late-repair route")
+
+    def lr_code(self, verb: str) -> str:
+        """The R4 section's own spelling of one controller call (its first inline code naming the verb)."""
+        for code in re.findall(r"`([^`]+)`", self.lr_section()):
+            if re.search(r'late-repair-controller\.py"? %s(?![\w-])' % re.escape(verb), code):
+                return code
+        raise cmdtext.TextNotFound(f"the late-repair route names no {verb} call")
+
+    def lr_run(self, verb: str, label: str, desc: str, binds=()) -> dict:
+        """One controller call as the section spells it, its placeholders bound; its JSON line ({} if none).
+        A refusal exits non-zero: its line is in the failed call's output."""
+        c = self.run_text(self.lr_code(verb), self.label(label), desc, rules=binds)
+        got = last_json((c.response.get("stdout") or "") if c.ok else (c.error or "")) or {}
+        shown = {k: ("<id>" if k == "repair_run_id" else v) for k, v in got.items() if k != "sha256"}
+        fact(self.rp, f"late-repair {verb}", {"label": label, "ok": c.ok, "blocked": c.blocked, "result": shown})
+        return got
+
+    def lr_stage(self, stage: str) -> str:
+        """One stage of the route: its role dispatched again under the same task id from the cycle's own
+        template (no template of /close declares BA, or dev outside the /do route), against the work as it
+        stands; returns the chain report its obligation declares (record-stage's --report-path)."""
+        tid = self.tid
+        lab = self.label(f"Step 0 late-repair Agent({stage})")
+        kw = {}
+        if stage == "dev" and self.variant == "late-repair-drift":
+            kw = {"edits": [(FINDING["path"], self.current(FINDING["path"]), self.fixed(FINDING["path"]))],
+                  "hashes": True}
+        d = self.producer.dispatch(stage, self.o.s, self.devs, lab,
+                                   note=f"late repair: {stage} again against the current state of the work", **kw)
+        ob = d.player.b.obligation if getattr(d, "player", None) else None
+        chain = {f"docs/dev/ticket-{tid}.md", f"docs/dev/context-{tid}.json", f"docs/dev/dev-report-{tid}.json",
+                 f"docs/dev/qa-report-{tid}.json"}
+        rel = next((a["path"] for a in (ob or {}).get("artifacts") or [] if a.get("path") in chain), "")
+        fact(self.rp, "late-repair stage", {"stage": stage, "pipeline": (ob or {}).get("pipeline"),
+                                             "task_id": (ob or {}).get("task_id") == tid, "blocked": d.blocked,
+                                             "stop_blocked": bool(d.stop and d.stop.still_blocked),
+                                             "report": rel.replace(tid, "<task>")})
+        return rel
+
+    def late_repair(self) -> bool:
+        """`--late-repair`, as the R4 section spells it: init once; a decline is recorded and Step 0's
+        disposition call runs (the ordinary route). Otherwise BA, then dev, then QA dispatched again with
+        record-stage after each, finalize (Step 0, the main agent's own step), verify-disclosure (a refusal
+        routed on the path it names, then verify-disclosure again); admitted goes on as the section's
+        `admitted` item says. False when Step 0 stalls."""
+        o, tid = self.o, self.tid
+        o.values["LATE_REPAIR"] = "true"
+        init = self.lr_run("init", "Step 0 late-repair Bash init", "Late repair: eligibility and the run record")
+        with self.rp.acting("driver"):
+            recorded = os.path.exists(os.path.join(o.project, f"docs/dev/late-repair-run-{tid}.json"))
+        fact(self.rp, "late-repair run record", recorded)
+        if init.get("outcome") == "refuse":
+            o.s.say(f"Late repair declined for {tid}: {init.get('reason')}. Step 0's disposition call runs "
+                    "(the ordinary route).")
+            o.values["LATE_REPAIR"] = "false"
+            return self.step0()
+        if init.get("outcome") not in ("initialized", "already_initialized"):
+            raise agents.PlayError(f"late-repair init printed {init}")
+        run_id = init.get("repair_run_id") or ""
+        for stage in ("ba", "dev", "qa"):
+            rel = self.lr_stage(stage)
+            got = self.lr_run("record-stage", f"Step 0 late-repair Bash record-stage {stage}",
+                              f"Late repair: record the {stage} stage",
+                              [(r"^ba\|dev\|qa$", stage), (r"^path$", rel), (r"^id$", run_id)])
+            if got.get("outcome") != "recorded":
+                raise agents.PlayError(f"record-stage {stage} printed {got}")
+        if self.variant == "late-repair-drift":
+            # Driver setup: a peer's line lands on the dev's file after the stages (the unit fixture's PEER).
+            with self.rp.acting("driver"):
+                with open(os.path.join(o.project, FINDING["path"]), "a") as fh:
+                    fh.write(PEER_LINE)
+        fin = self.lr_run("finalize", "Step 0 late-repair Bash finalize", "Late repair: drift detection",
+                          [(r"^id$", run_id)])
+        if fin.get("outcome") != "finalized_pending_verification":
+            raise agents.PlayError(f"finalize printed {fin}")
+        for k in range(4):
+            ver = self.lr_run("verify-disclosure", f"Step 0 late-repair Bash verify-disclosure {k}",
+                              "Late repair: verify the disclosure")
+            if ver.get("outcome") == "admitted":
+                break
+            if not ver.get("path") or k == 3:
+                raise agents.PlayError(f"verify-disclosure printed {ver}")
+            self.route_path(ver["path"], ver.get("reason", ""), f"Step 0 late-repair verify round {k + 1}")
+        item = next((it for it in re.split(r"\n(?=- )", self.lr_section()) if it.startswith("- `admitted`")), "")
+        chain_call = "disposition call" in item
+        fact(self.rp, "late-repair admitted", {"admitted item runs Step 0's disposition call": chain_call})
+        if chain_call:
+            return self.step0("Step 0 late-repair admitted")
+        return True
+
+    def late_inputs(self, where: str, **extra) -> None:
+        """What Steps 1-3 hold of the chain on the late-repair route (a fact): whether ARTIFACT_CHAIN is
+        bound, the canonical report it names, and the report's own files_modified beside what was passed."""
+        tid = self.tid
+        with self.rp.acting("driver"):
+            try:
+                with open(os.path.join(self.o.project, f"docs/dev/dev-report-{tid}.json")) as fh:
+                    declared = (json.load(fh).get("dev") or {}).get("files_modified") or []
+            except (OSError, ValueError):
+                declared = None
+        fact(self.rp, f"late-repair {where}", dict({
+            "ARTIFACT_CHAIN bound": bool(self.chain.get("mode")),
+            "canonical_dev_report": (self.chain.get("canonical_dev_report") or "").replace(tid, "<task>"),
+            "dev-report files_modified": declared}, **extra))
 
     # ------------------------------------------------------------ Routes
     def reader(self, path: str, label: str):
@@ -822,6 +963,8 @@ class CloseRun:
     def step1(self) -> None:
         o = self.o
         self.files = self.cycle_files()
+        if self.late:
+            self.late_inputs("Step 1 inputs", **{"--changed-files": list(self.files)})
         self.registry_name()
         self.inspector_reports = []
         for role, first, ob, report in self.inspector_bullets():
@@ -887,6 +1030,10 @@ class CloseRun:
         lines = [line for line in tpl.split("\n")
                  if self.spec_id or not line.strip().startswith("SECOND ACTION (only if SPEC_ID is non-empty")]
         prompt = self.input_lines("\n".join(lines))
+        if self.late:
+            self.late_inputs("Step 2 inputs", **{"Input artifacts": [
+                l.replace(self.tid, "<task>")[:160] for l in prompt.split("\n")
+                if l.startswith(("- Artifact-chain result:", "- Mode:", "- Report paths:", "- QA inputs:"))]})
         prompt = o.instantiate(prompt, self.tid)
         return o.bind(prompt)  # QA's own instruction placeholders (<n>, <error detail>, ...) stay as written
 
@@ -1071,7 +1218,7 @@ class CloseRun:
     def body(self) -> str:
         o = self.o
         self.resolve_task()
-        if not self.step0():
+        if not (self.late_repair() if self.late else self.step0()):
             return ""
         self.cp_state()
         o.advance(label=self.label("TodoWrite Step 0 done, Step 1 in_progress"))
@@ -1095,7 +1242,7 @@ class CloseRun:
         return self.step2()
 
     def run(self) -> str:
-        self.start(self.tid)
+        self.start(f"--late-repair {self.tid}" if self.late else self.tid)
         last = self.body()
         self.outcome = last or ("stalled at Step 0 (the line above)" if self.stalled else "")
         self.o.s.stop(f"/close {self.tid}: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
@@ -1249,9 +1396,20 @@ def break_resolver(rp) -> None:
 # The variants the artifact check replays (tests/artifact_graph/runtime.drivers reads VARIANTS); the
 # acceptance variants of P4 run on demand only (`--arg variant=...`).
 VARIANTS = ("plain", "route", "append", "auto")
-ACCEPTANCE_VARIANTS = ("auto-task", "lane-qa", "stray", "noart", "stalled")
+ACCEPTANCE_VARIANTS = ("auto-task", "lane-qa", "stray", "noart", "stalled", "late-repair", "late-repair-drift",
+                       "late-repair-declined")
 # P1b's acceptance 7 names of three of those cases.
 ALIASES = {"qa-never": "lane-qa", "noartifact": "noart", "unwritten": "stray"}
+
+
+def removed_after_cycle(variant: str, tid: str) -> list:
+    """The artifacts a variant removes after the cycle reached its terminal: the qa-report (route; and the
+    QA-only gap late-repair init declines); BA's whole stage, its ticket, context and acceptance criteria (the
+    stage gaps late-repair init admits; BA, dispatched again, writes each of its declared artifacts afresh)."""
+    return {"route": [f"docs/dev/qa-report-{tid}.json"],
+            "late-repair-declined": [f"docs/dev/qa-report-{tid}.json"],
+            "late-repair": [f"docs/dev/ticket-{tid}.md", f"docs/dev/context-{tid}.json",
+                            f"docs/dev/acceptance-criteria-{tid}.json"]}.get(variant.replace("-drift", ""), [])
 
 
 def pipeline_name(after: str, rp) -> str:
@@ -1275,8 +1433,7 @@ def run(rp) -> None:
         from . import dev as devdrv
         p2, tid2, s, _cyc2 = dev_cycle(rp, after, scenario=devdrv.SCENARIO_SUB)
         producers[tid2] = p2
-    if variant == "route":
-        remove(rp, [p for p in (f"docs/dev/qa-report-{tid}.json",) if os.path.exists(os.path.join(rp.layout.project, p))])
+    remove(rp, [p for p in removed_after_cycle(variant, tid) if os.path.exists(os.path.join(rp.layout.project, p))])
     if variant == "stalled":
         break_resolver(rp)
     session = rp.later_session(s) if session_kind == "later" else s
