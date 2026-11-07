@@ -39,8 +39,8 @@ import pytest
 
 from tests.replay import sites, suite
 
-DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
-            "todo-first")
+DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
+            "checklist-lock")
 PLAIN_CASES = ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending")
 CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
@@ -333,7 +333,7 @@ def test_the_wakes_gates_are_cleared_by_the_actors_next_action(replays, catalog,
     r = replays.get(key)
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     bl = blocks(r, catalog)
-    assert sorted(s.func for b in bl for s in b["sites"]) == ["_block_open_wake", "check_wake_step"], r.explain()
+    assert sorted(s.func for b in bl for s in b["sites"]) == ["check_wake_step", "wake_lock"], r.explain()
     assert all(catalog.of(s) == "G" for b in bl for s in b["sites"]), r.explain()
     bad = check_replay(r, catalog, compliant=False)
     assert not bad, "\n".join(bad)

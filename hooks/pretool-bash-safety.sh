@@ -310,14 +310,18 @@ def words(t):  # shell words; separators, comments and newlines kept as the shel
         x = shlex.shlex(t.replace('\n', '\n;') + tail, posix=True, punctuation_chars=';&|()`'); x.whitespace_split = True
         with contextlib.suppress(ValueError): return list(x)
     return t.split()
-UQ, DQ = (re.compile(p) for p in (r"""(?P<e>\\[\s\S])|(?P<s>'[^']*')|(?P<b>`(?:\\[\s\S]|[^\\`])*`)|\$\{\w*\}|(?P<o>\$?\()|(?P<c>\))|(?P<d>")|(?P<x>\$[{']|<<|(?<![^\s;&|()<>])#|\bcase\b|['`])|[^\\$'`"()<#c]+|[\s\S]""", r"""(?P<e>\\[\s\S])|(?P<b>`(?:\\[\s\S]|[^\\`])*`)|\$\{\w*\}|(?P<o>\$\()|(?P<d>")|(?P<x>\$\{|`)|[^\\`$"]+|[\s\S]"""))  # bash tokens outside / inside ".."
-def defuse(t, i=0, st='', o=''):  # t with each $( and ` the shell leaves unrun ('..', \-escaped) made inert ($ to _, ` to a ")" that shlex splits alike); t if unsure
-    while i < len(t) and st[-1:] != '!':  # st: open $(/( and " contexts as bash nests them; '!' = unsure: a stray ) or x token ($'..', <<, #, case, unclosed '/`, ${ not at top)
+UQ, DQ = (re.compile(p) for p in (r"""(?P<e>\\[\s\S])|(?P<s>'[^']*'|\$'(?:\\[\s\S]|[^\\'])*')|(?P<b>`(?:\\[\s\S]|[^\\`])*`)|\$\{\w*\}|(?P<o>\$?\()|(?P<c>\))|(?P<d>")|(?P<m>(?<![^\s;&|()`])#[^\n]*)|(?P<x>\$\{|<<|\bcase\b|['`])|[^\\$'`"()<#c]+|[\s\S]""", r"""(?P<e>\\[\s\S])|(?P<b>`(?:\\[\s\S]|[^\\`])*`)|\$\{\w*\}|(?P<o>\$\()|(?P<d>")|(?P<x>\$\{|`)|[^\\`$"]+|[\s\S]"""))  # bash tokens outside / inside ".."
+def gitish(s): s = re.sub(r'[\'"\\]', '', s); return re.search(r'(^|\W)git', s) and re.search('commit|config', s)  # the bash gate's test
+def unread(what): why.append(what); commits.append(('-C', cur[0]))  # text the guard cannot split like the shell: fail closed
+def defuse(t, i=0, st='', o=''):  # t with each $( and ` the shell leaves unrun ('..', $'..', \-escaped, # comment) made inert ($ to _, ` to a ")" that shlex splits alike); t if unsure
+    while i < len(t) and st[-1:] != '!':  # st: open $(/( and " contexts as bash nests them; '!' = unsure: a stray ) or x token (<<, case, unclosed '/`, ${ not at top)
         m = (DQ if st[-1:] == '"' else UQ).match(t, i); k, s, i = m.lastgroup, m.group(), m.end(); o += s.translate({36: '_', 96: ')'}) if k in ('e', 's') else s
+        if k == 'd' and st[-1:] == ')' and '"' in st and re.search(r'(^|[\s;&|(])(-\w*c|eval)\s+"$', o) and gitish(t[i:]): unread('a double-quoted bash -c/eval string inside a double-quoted $(...)')
         st = st + '!' if k == 'x' and (s != '${' or st) or k == 'c' and st[-1:] != ')' else st[:-1] if k == 'c' or k == 'd' and st[-1:] == '"' else st + {'o': ')', 'd': '"'}.get(k, '')
     return t if st else o
 def scan(text, depth=0, lg=False, gc=()):  # lg: quotes gone, so every $( and ` counts; gc: -c globals a `!`-shell alias's child git inherits
-    for sep, grp in itertools.groupby(zip(w := words(t := _process_heredocs(text)), w if lg else words(defuse(t))) if depth < 5 else [], lambda p: p[0] != '' and set(p[0]) <= set(';&|()`')):
+    if depth >= 5: return unread('nesting past the expansion limit') if gitish(text) else None  # unexamined: fails closed
+    for sep, grp in itertools.groupby(zip(w := words(t := _process_heredocs(text)), w if lg else words(defuse(t))), lambda p: p[0] != '' and set(p[0]) <= set(';&|()`')):
         if not sep: one(*map(list, zip(*grp)), depth, lg, gc)
 def one(t, u, depth, lg, gc):  # u: t's words with unrun $( and ` made inert; recurse only into a word whose $( or ` the shell runs
     for w, v in zip(t, u):
@@ -337,10 +341,12 @@ def one(t, u, depth, lg, gc):  # u: t's words with unrun $( and ` made inert; re
     if sub == 'config':  # keystone WRITE: denied if nested, wrapper-flagged, --global/--system, -f/--file, GIT_CONFIG or GIT_COMMON_DIR (any abbreviation); else (local) after the scan if its repo or a dir seen before it (cwd/cd/-C) has the harness home's git common dir or none
         ix = [j for j, a in enumerate(rest) if a[:1] != '-' and not (j and re.fullmatch(r'-[^-f]*f|--file?', rest[j - 1]))]; vb, wf = rest[ix[0]] if ix else '', any(o in WRF for o in rest); n = (ix[(vb in CFGW and not wf):] or [len(rest)])[0]  # ix: words that can be the verb or key (no -, not a separate -f/--file value); n: the key
         rn = any(len(o) > 4 and '--rename-section'.startswith(o) for o in rest[:n]) or vb == 'rename-section' and not wf; wr = wf or not (any(o in RDF for o in rest[:n]) or vb in CFGR) and (vb in CFGW or len(rest) > n + 1); tgt = next((a for j, a in enumerate(rest[n:n + 1 + rn]) for e in ('', '.path')[:1 + j] if prot(a + e)), '')  # git's options end at the key: each later word is an operand (a value may start with -); a rename (option abbreviated too) checks its new name as a section too (includeIf.<condition> holds .path)
-        return (cfg.append(tgt) if depth or {'GIT_CONFIG', 'GIT_COMMON_DIR'} & {*ev, *os.environ} or any(a[:1] == '-' for a in t[:i]) or any(re.match(r'-[^-]*f|--(fil|gl|sy)', a) for a in rest) else loc.append((tgt, [*dirs], ('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))))) if wr and tgt else None
+        gl = g[:len(g) - len(rest) - 1]; pin = not {'GIT_DIR', 'GIT_WORK_TREE'} & {*ex} and any(p[:1] == '/' and not re.search('[$`]', p) for p in [*(gl[j + 1] for j, w in enumerate(gl[:-1]) if w in ('-C', '--git-dir')), *(w[10:] for w in gl if w.startswith('--git-dir=')), *(a[8:] for a in t[:i] if a.startswith('GIT_DIR='))])  # a literal absolute -C/--git-dir/GIT_DIR prefix names the repository whatever the cwd (an export may not reach it)
+        return (cfg.append(tgt) if depth or {'GIT_CONFIG', 'GIT_COMMON_DIR'} & {*ev, *os.environ} or any(a[:1] == '-' for a in t[:i]) or any(re.match(r'-[^-]*f|--(fil|gl|sy)', a) for a in rest) else loc.append((tgt, [] if pin else [*dirs], ('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))))) if wr and tgt else None
     gr = [*gc, *(g[:len(g) - len(rest) - 1] if sub else [])]  # `-c alias.X=` overrides: inherited (a `!`-alias's outer -c) then this invocation's own
-    al = {kv.strip('\'"').lower().split('=', 1)[0][6:]: (kv.split('=', 1)[1] if '=' in kv else '') for k2, w in enumerate(gr) if (kv := (w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (w[13:] if w.startswith('--config-env=') else None)))) and kv.strip('\'"').lower().startswith('alias.')}
-    if sub and sub.lower() in al: v = al[sub.lower()].strip(); (why.append('an alias chain past the expansion limit'), commits.append(('-C', base))) if depth >= 4 else scan((v[1:] if v[:1] == '!' else shlex.join(t[:len(t) - len(rest) - 1]) + ' ' + v) + ' ' + shlex.join(rest), depth + 1, gc=gr if v[:1] == '!' else gc)  # git: name case-insensitive; alias word -> value; a `!`-alias's child git inherits -c (gr); a chain past the depth limit fails closed
+    al = {kv.strip('\'"').lower().split('=', 1)[0][6:]: (kv.split('=', 1)[1] if '=' in kv else '') if w[:2] == '-c' else None for k2, w in enumerate(gr) if (kv := (w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (w[13:] if w.startswith('--config-env=') else None)))) and kv.strip('\'"').lower().startswith('alias.')}  # None: --config-env takes the value from the environment
+    if sub and sub.lower() in al and al[sub.lower()] is None: why.append('an alias whose value --config-env reads from the environment'); commits.append(('-C', base))  # unseen value: fails closed
+    elif sub and sub.lower() in al: v = al[sub.lower()].strip(); (why.append('an alias chain past the expansion limit'), commits.append(('-C', base))) if depth >= 4 else scan((v[1:] if v[:1] == '!' else shlex.join(t[:len(t) - len(rest) - 1]) + ' ' + v) + ' ' + shlex.join(rest), depth + 1, gc=gr if v[:1] == '!' else gc)  # git: name case-insensitive; alias word -> value; a `!`-alias's child git inherits -c (gr); a chain past the depth limit fails closed
     if sub != 'commit': return
     commits.append(('-C', base, *(o + '=' + at(base, ev[k]) for o, k in GV.items() if ev.get(k)))); skip = False
     for a in rest:
@@ -1604,11 +1610,38 @@ fi
 # Scripts that manage session state or restart daemons. A set CLAUDE_HARD_BANNED_SCRIPTS is '|'-separated EREs, each
 # matched anywhere (empty entries skipped: they would match every command). Unset or empty, the generic default names
 # match only a run: NAME or NAME.sh as the command word (after a path, options, '<', or a wrapper or shell, any pathed).
+# A ; & | ( ! { inside quoted data ('..', $'..', ".." outside its $( and `) is text, not a command start, unless a word
+# outside quotes may run text (a shell, eval, ssh, watch, trap, xargs, an interpreter, a -c/-e option): _HB_DATA masks it.
 _HB_CMD='(^|[;&|(`{!]|\$\()[[:space:]]*(([^[:space:];&|]*/)?(sudo|env|nohup|exec|command|time|nice|timeout|setsid|xargs|source|\.|(ba|z|da|k)?sh|if|then|do|else|while|until|[-<][^[:space:]]*|[0-9][^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*["'"'"']?([^[:space:];&|]*/)?'
+_HB_MASK='import re,sys
+t=sys.stdin.read();n=len(t);i=0;o=[];u=[]
+def code(j):  # end of the $( or ` code at j inside "..", or -1 when a quote inside makes it unsure
+    k=j+1 if t[j]=="`" else j+2;d=1
+    while k<n and d:
+        if t[k] in "\x27\"\\": return -1
+        d+=(t[k]=="(")-(t[k]==")") if t[j]=="$" else -(t[k]=="`");k+=1
+    return k if not d else -1
+while i<n and o is not None:
+    c=t[i];q="\"" if c=="\"" else "\x27"
+    if c=="\\": u.append(t[i:i+2]);o.append(t[i:i+2]);i+=2;continue
+    if c not in "\x27\"" and not t.startswith("$\x27",i): u.append(c);o.append(c);i+=1;continue
+    j=i+1+(c=="$");b=[t[i:j]]
+    while j<n and t[j]!=q:
+        if t[j]=="\\" and c!="\x27": b.append(t[j:j+2]);j+=2;continue
+        k=code(j) if c=="\"" and (t.startswith("$(",j) or t[j]=="`") else j
+        if k<0: o=None;break
+        if k>j: b.append(t[j:k]);j=k;continue
+        b.append("_" if t[j] in ";&|(!{" else t[j]);j+=1
+    if o is None or j>=n: o=None;break
+    o.append("".join(b)+q);u.append(" ");i=j+1
+r=r"(^|[\s;&|()`])((\S*/)?((ba|z|da|k|c|tc|fi|r)?sh|eval|ssh|watch|trap|su|parallel|tmux|screen|alias|flock|script|xargs|source|exec|[gmn]?awk|perl|ruby|python[\d.]*|node|php|lua|tclsh|expect|sed|n?vim?|make)|-\w*[ce]\w*|--(command|eval)\S*)(?=$|[\s;&|()`])|(^|[;&|()`])\s*\.\s"
+print(t if o is None or re.search(r,"".join(u)) else "".join(o),end="")'
 IFS='|' read -r -a _HARD_BANNED <<< "${CLAUDE_HARD_BANNED_SCRIPTS:-session-recovery|restart-all-sessions}"
 for _ban in "${_HARD_BANNED[@]}"; do
   _re="$_ban"; [ -n "$CLAUDE_HARD_BANNED_SCRIPTS" ] || _re="$_HB_CMD$_ban(\\.sh)?([\"'[:space:];&|)<>\`]|\$)"
-  if [ -n "$_ban" ] && echo "$COMMAND" | grep -qE -- "$_re"; then
+  [ -n "$CLAUDE_HARD_BANNED_SCRIPTS" ] || [ -n "${_HB_DATA:-}" ] || ! printf '%s\n' "$COMMAND" | grep -qE -- "$_re" \
+    || { _HB_DATA=$(printf '%s' "$COMMAND" | "$PYTHON_BIN" -c "$_HB_MASK" 2>/dev/null) && [ -n "$_HB_DATA" ]; } || _HB_DATA="$COMMAND"
+  if [ -n "$_ban" ] && printf '%s\n' "${_HB_DATA:-$COMMAND}" | grep -qE -- "$_re"; then
     printf "BLOCKED: hard-banned script '%s' is PERMANENTLY FORBIDDEN\nCommand: %s\nREASON: It manages session state or restarts daemons and can kill all sessions. Only the user may run it manually.\n" "$_ban" "$COMMAND" >&2; exit 2
   fi
 done

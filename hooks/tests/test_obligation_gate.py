@@ -765,6 +765,7 @@ def test_G1_declared_roles_follow_the_command_files(tmp_path, monkeypatch):
     (commands / "reship.md").write_text("---\n---\nRun the /ship workflow.\n")
     (todo / "reship.py").write_text("from ship import get_todos\n")
     monkeypatch.setattr(gate.stop_contract, "COMMANDS_DIR", commands)
+    monkeypatch.setattr(sys.modules[gate.stop_contract.harness_commands.__module__], "COMMANDS_DIR", commands)
     monkeypatch.setattr(gate, "TODO_DIR", todo)
     assert gate._declared_roles("ship") == {"qa"}
     assert gate._declared_roles("reship") == {"qa"}

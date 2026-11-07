@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Break every active overnight time-lock.
 
-Backdates end_time on every active overnight-state-*.json so
-stop-overnight-timelock.py releases. The CLI's todo list is its own record:
-nothing here writes it (P1b E7).
+Backdates end_time on every active overnight-state-*.json (the human-typed
+/stop itself releases the Stop gate's time-lock, hooks/stop-command-gate.py).
+The CLI's todo list is its own record: nothing here writes it (P1b E7).
 
 Used by /stop slash command (commands/stop.md → hooks/stop.sh → here).
 

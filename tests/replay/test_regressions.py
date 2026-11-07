@@ -5,7 +5,7 @@ landed harness home is a clone of a local bare origin built from the tree under 
 files and made landed by init (scripts/bootstrap); the CLI's writes are plain file writes; /pull is
 hooks/pull.sh and fswatch's periodic pull is git-fswatch.sh's safe_pull, each in the session's
 environment (the rendered settings' env); a Stop is the registered Stop hook
-(hooks/stop-workflow-coordinator.py), whose auto_commit phase runs the landing
+(hooks/stop-launch.py, running the coordinator), whose auto_commit phase runs the landing
 (scripts/install/land) and relays its notice. HOME, CLAUDE_CONFIG_DIR, CLAUDE_STATE_DIR and
 TMPDIR lie in the test's temporary directory (tests/test_landing.py's env); no network.
 
@@ -83,7 +83,7 @@ def _landed_harness_home(tmp_path, env):
     assert git(env, home, "status", "--porcelain").stdout == ""
     settings = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     stop = [h["command"] for group in settings["hooks"]["Stop"] for h in group["hooks"]
-            if "stop-workflow-coordinator.py" in h.get("command", "")]
+            if "stop-launch.py" in h.get("command", "")]
     assert len(stop) == 1, stop
     session = dict(env, **{k: v for k, v in settings["env"].items() if isinstance(v, str)})
     session.update(CLAUDE_PROJECT_DIR=str(home))

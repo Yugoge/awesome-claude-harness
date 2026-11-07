@@ -346,8 +346,13 @@ like a file or scope option is denied as one (`git config alias.ff '-c pull.ff=o
 The commit checks themselves do not see a commit that `git merge`, `cherry-pick`, `revert` or
 `rebase` makes (git runs no pre-commit hook for them), the commit message, or a literal stored
 in another encoding. They run their engines from the working tree, so an edit to
-`scripts/check-public-core.sh` or `scripts/install/render-settings` changes what they refuse;
-an agent can make such an edit today (denying it is planned, P5-a). Deleting both the overlay
+`scripts/check-public-core.sh` or `scripts/install/render-settings` changes what they refuse.
+These edits are denied: `hooks/pretool-tool-policy.py` refuses the main agent and every subagent,
+with `/do` or without, a write, delete or rename of the harness home's two engines,
+`hooks/git-hooks/pre-commit`, `.git/config`, `.git/hooks/`, `.gitattributes`,
+`settings.machine.json` and `private-literals.txt`, as a Write or Edit or as a Bash redirect,
+`tee`, `cp`, `mv`, `rm` or `sed -i` it reads (not what a script or interpreter writes); the same
+names in another repository stay writable. Deleting both the overlay
 and `<git dir>/claude-settings.applied` leaves the clean filter and `check --staged` no record of
 the machine values, so `git commit -a` can land them; doctor still fails on that state. Git
 copies neither hooks nor local config into a clone, so in a clone that never ran init no local
@@ -553,7 +558,7 @@ Note: `pretool-bulk-commit-detector.py` is warn-only — it exits 0 and never bl
 | `pretool-bulk-commit-detector.py` | PreToolUse Bash | 93-file 'sync all uncommitted' shape (3+ subsystems + sync subject) | WARN only (exits 0) | N/A — warn-only per current policy |
 | `pretool-git-privilege-guard.py` | PreToolUse Bash | commit, push (any form), merge, reset --hard, direct ref mutation | BLOCK (exit 2) | /commit or /push grant, or /allow (subagents too); /do (main agent only). An agent's own `git merge` has no grant: `/merge` merges inside `hooks/merge.sh` |
 | `pretool-orchestrator-gate.py` | PreToolUse (all tools) | Non-whitelisted tools in main-agent context; streak rate-limit | BLOCK (rate-limited) | /do |
-| `pretool-tool-policy.py` | PreToolUse (all tools) | A write (Write/Edit/MultiEdit/NotebookEdit or a Bash write target) to a path another dispatch's obligation declares, for every caller including the main agent; then a subagent's role-scoped deny rules from policies/tool-policy.v1.json | BLOCK (exit 2); for the role rules FAIL CLOSED (non-dev roles), fail-safe ALLOW (dev role when policy missing) | N/A |
+| `pretool-tool-policy.py` | PreToolUse (all tools) | For every caller including the main agent: a write, delete or rename of a protected file (the harness home's commit engines, git hooks and config, `.gitattributes`, overlay and private-literal list; session transcripts; /do task sidecars), a ScheduleWakeup prompt typing a harness command outside CONTROL, and a write (Write/Edit/MultiEdit/NotebookEdit or a Bash write target) to a path another dispatch's obligation declares; then a subagent's role-scoped deny rules from policies/tool-policy.v1.json | BLOCK (exit 2); for the role rules FAIL CLOSED (non-dev roles), fail-safe ALLOW (dev role when policy missing) | N/A |
 | `stop-overnight-timelock.py` | Stop | Early session termination before declared end-time | BLOCK (exit 2) | /stop at or after end-time; defaults to 8h if no end-time set |
 | `posttool-doc-sync.py` | PostToolUse | INDEX.md / README / CLAUDE stat block regeneration | UPDATE (idempotent) | N/A |
 

@@ -226,8 +226,8 @@ hooks/
 ├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
 ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark
-├── `posttool-todo-count.py` - It blocked a TodoWrite whose list held fewer steps than the active command's
-├── `posttool-todo-sequence.py` - PostToolUse Hook: the first-call rule of a workflow checklist
+├── `posttool-todo-count.py` - PostToolUse hook (TodoWrite step count), retired to a no-op.
+├── `posttool-todo-sequence.py` - PostToolUse hook (TodoWrite step sequence), retired to a no-op.
 ├── `posttool-todo-tracker.py` - PostToolUse Hook: Output checklist progress after every TodoWrite call
 ├── `pre-commit-check.sh` - pre-commit-check.sh - Detect untracked files before commit
 ├── `pre_slashcommand_validate.sh` - pre_slashcommand_validate.sh
@@ -290,11 +290,12 @@ hooks/
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
 ├── `stop-completion-gate.py` - blocked compliant /dev Stops with GATE_ERROR and its only release was a
-├── `stop-do-report-gate.py` - A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) at
-├── `stop-obligation-gate.py` - It re-validated, at the orchestrating session's Stop, the json artifacts its
-├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
+├── `stop-do-report-gate.py` - Stop hook (the /do do-report's shape at session stop), retired to a no-op.
+├── `stop-launch.py` - The registered Stop hook (P5 R10): run the Stop coordinator, relay its exit 0 or 2, stdout and
+├── `stop-obligation-gate.py` - Stop hook (G4, session-terminal obligation gate), retired to a no-op.
+├── `stop-overnight-timelock.py` - Stop hook (the /dev-overnight time-lock), retired to a no-op.
 ├── `stop-spec-coverage-enforce.py` - It ran spec-verify.py on the views of the spec the /spec session last wrote, at
-├── `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7: the registered Stop hook, running the four former Stop
+├── `stop-workflow-coordinator.py` - Serialize Stop phases and call the sole receipt-gated resource finalizer.
 ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh

@@ -11,8 +11,9 @@ CLAUDE_CONFIG_DIR, CLAUDE_STATE_DIR and CLAUDE_PROJECT_DIR are tmp_path's own.
   /dev-overnight span, never after the owner's /stop, and to every prompt starting with /restart as before
   (X8: the hook cannot tell a scheduled prompt from a typed one);
 * prompt-workflow.py hands over commands/restart.md's recovery for the wake inside that span only;
-* stop-overnight-timelock.py refuses a Stop after end_time, its closeout met, while the transcript's wake
-  has no later CronDelete, naming the id, whatever span is active; a transcript with no wake meets nothing;
+* the Stop gate's time-lock (stop-command-gate.py's step 4, P5) refuses a Stop after end_time, its closeout
+  met, while the transcript's wake has no later CronDelete, naming the id, whatever span is active; a
+  transcript with no wake meets nothing (P2's locator and window, faked from this base's own readers);
 * past a command's first list and with the length unchanged, the hooks pair todos by content, never by
   index: a session that started with the list before Step 0 (one step shorter) keeps running.
 """
@@ -214,40 +215,67 @@ def _ended(night, summary=True):
         (night.project / "docs" / "dev" / "overnight-summary-2099-01-01.md").write_text("# Summary\n")
 
 
-def _stop(night):
-    return night.hook("stop-overnight-timelock.py", "Stop", stop_hook_active=False)
+def _gate():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("stop_command_gate_wake", HOOKS / "stop-command-gate.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def test_stop_after_end_time_refused_while_the_wake_is_live(night):
+GATE = _gate()
+
+
+@pytest.fixture
+def lock(night, monkeypatch):
+    """The gate's time-lock on the night's payload. P2's overnight.window_open and
+    closeout_gaps(state, working_root) are not on this base: a fake with their signatures over
+    this base's readers (re-run once P2 merges); session_state_file and open_wakes are real."""
+    import types
+    fake = types.ModuleType("lib.overnight")
+    fake.session_state_file = overnight.session_state_file
+    fake.window_open = lambda payload: False  # every case here is past end_time
+    fake.closeout_gaps = lambda state, root: overnight.closeout_gaps(state)
+    fake.working_root = overnight.working_root
+    fake.open_wakes = overnight.open_wakes
+    monkeypatch.setitem(sys.modules, "lib.overnight", fake)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(night.project))
+    monkeypatch.delenv("CLAUDE_COMPAT_RUNTIME", raising=False)
+    payload = {"session_id": night.sid, "transcript_path": str(night.path), "cwd": str(night.project)}
+    return lambda: GATE.time_lock(payload)
+
+
+def test_stop_after_end_time_refused_while_the_wake_is_live(night, lock):
     _ended(night)
     night.wake()
-    p = _stop(night)
-    assert p.returncode == 2 and JOB in p.stderr and "CronDelete" in p.stderr
+    code, text, _terminal = lock()
+    assert code == 2 and JOB in text and "CronDelete" in text
     night.use("CronDelete", {"id": JOB})
-    assert _stop(night).returncode == 0
+    assert lock() == (0, "", "completed_by_deadline")
 
 
-def test_closeout_comes_first(night):
+def test_closeout_comes_first(night, lock):
+    """The closeout incomplete, the time-lock names no wake: the closeout is the gate's
+    /dev-overnight predicate gap (test_stop_command_gate.py)."""
     _ended(night, summary=False)
     night.wake()
-    p = _stop(night)
-    assert p.returncode == 2 and "CLOSEOUT GATE" in p.stderr and JOB not in p.stderr
+    assert lock() == (0, "", None)
 
 
-def test_after_the_owners_stop_the_wake_check_still_holds(night):
+def test_after_the_owners_stop_the_wake_check_still_holds(night, lock):
     _ended(night)
     night.wake()
     night.typed("/stop")
-    assert _stop(night).returncode == 2
+    assert lock()[0] == 2
     night.use("CronDelete", {"id": JOB}, result="No scheduled job", error=True)  # deleted is deleted
-    assert _stop(night).returncode == 0
+    assert lock() == (0, "", "cancelled_by_user")
 
 
-def test_a_transcript_without_the_wake_meets_nothing_new(night):
+def test_a_transcript_without_the_wake_meets_nothing_new(night, lock):
     _ended(night)
     night.use("CronCreate", {"cron": "7 * * * *", "recurring": True, "prompt": "check the deploy"},
               tool_use_result={"id": "other"})
-    assert _stop(night).returncode == 0
+    assert lock()[0] == 0
 
 
 def test_a_cron_delete_before_the_wake_does_not_end_it(night):
@@ -275,9 +303,7 @@ def test_a_list_started_before_step_0_keeps_running(night):
     refused = s.todo(_frontier(old, 2))  # Step 2, PM Plan, a subagent step: Gate 4 by content
     assert refused.returncode == 2 and "pm" in refused.stderr
     s.use("Agent", {"subagent_type": "pm", "prompt": "PLAN", "description": "pm plan"})
-    assert s.todo(_frontier(old, 2)).returncode == 0
-    count = s.todo(_frontier(old, 3), hook="posttool-todo-count.py", event="PostToolUse")
-    assert count.returncode == 0, count.stderr
+    assert s.todo(_frontier(old, 2)).returncode == 0  # its length, shorter than the canonical list, holds
     assert todo_canonical.checklist(str(s.path)).lock == ""
 
 

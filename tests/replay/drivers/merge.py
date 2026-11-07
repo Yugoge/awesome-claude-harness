@@ -11,8 +11,9 @@ time:
   first entry of `git worktree list` against `git rev-parse --show-toplevel`), one Bash call; the
   source from the first tier that resolves: the typed argument, an overnight-state record in the
   conversation (none in this session), or, in place, the tier's own `git branch --show-current`.
-* Step 1: the step's block, `<the-resolved-merge-source>` bound, its variables kept; the aborts the
-  step lists (an empty SESSION_ID, a MISSING tip, a self-merge) end the turn with the text's message.
+* Step 1: the step's block, `<the-resolved-merge-source>` bound, its variables kept; the refusals the
+  step lists (an empty SESSION_ID, a MISSING tip, a self-merge) asked as the text's Refusals rule says
+  (ask_refusal: ONE AskUserQuestion, the action the refusal names recommended; the owner picks it).
 * Step 2: the dispatch the step names (`Dispatch the `<role>` subagent`) with the step's context block
   as its prompt, placeholders bound to Step 1's values and the obligation, where the block has one,
   instantiated (dispatched_at the current UTC time).
@@ -30,17 +31,20 @@ time:
   validates the grant itself (the base), its field list checked and the grant consumed with the step's
   `rm -f` block, and an expired grant sent back to Step 2 with a fresh REQUEST_ID (Step 1's own line);
   then the verdict acted on.
-* Step 4: the tip re-read block; tips that moved since the grant end the turn with the text's message.
+* Step 4: the tip re-read block; tips that moved since the grant are a refusal; answered with its
+  action, a fresh REQUEST_ID and Step 2 again.
 * Step 5: the wrapper call the step gives, `<resolved-ref>` bound; its outcome recorded (the merge
-  commit and its parents, the toy's branch and tips) in facts.json; Stop.
+  commit and its parents, the toy's branch and tips) in facts.json; a conflict is a refusal, and its
+  action answered (the owner resolves and commits in their terminal), the turn goes on from Step 1 with
+  the same ref; Stop. Any refusal met again after its answer is reported, not asked again.
 
 Driver arguments (cli.py --arg K=V):
   variant=plain      the feature branch merges cleanly (default)
   variant=conflict   the feature branch and the main line change the same line: the wrapper's merge
-                     stops on the conflict and exits non-zero ("the user resolves manually"); the
-                     owner resolves and commits in their terminal, and the second `/merge` of the same
-                     ref (the wrapper's "re-run via slash command to finish cleanup") goes through
-                     Steps 0-5 again on the merged history (git's "Already up to date" path)
+                     stops on the conflict and exits non-zero; the refusal's question is answered "I
+                     resolve the conflicts myself, then you continue", the owner resolves and commits
+                     in their terminal, and the turn goes through Steps 1-5 again on the merged history
+                     (git's "Already up to date" path)
   ref=<ref>          type `/merge <ref>` (tier 1) instead of a bare `/merge` (tier 3)
   kept=<JSON>        [[hook, step, normalised text], ...]: the blocks the base kit's replay of the same
                      variant and settings recorded; given, a declared deviation passes only a block in
@@ -103,6 +107,27 @@ def refusal(rp, label: str) -> str:
     return f"{b['hook']} refused {label!r}: {b['text'][:300]}" if b else f"a hook refused {label!r}"
 
 
+def ask_refusal(o, devs, label: str, sec: str, anchor: str, facts: str = "") -> str:
+    """A refusal as the text's Refusals rule words it: ONE AskUserQuestion, the refusal's quoted message
+    (and its facts) the question, the action it names (Recommended) and the rule's other option the
+    options. Returns (action, answer); the owner picks the recommended option (replay.py)."""
+    i = sec.find(anchor)
+    act = re.search(r'action "([^"]+)"', sec[i:]) if i >= 0 else None
+    other = re.search(r'\(Recommended\), and "([^"]+)"', o.text)
+    if not (act and other):
+        raise cmdtext.TextNotFound(f"no refusal action after {anchor!r}, or no Refusals rule")
+    said = re.findall(r'"([^"]+)"', sec[i:i + act.start()])
+    action = " ".join(act.group(1).split())
+    question = " ".join((said[-1] if said else anchor).split()) + (f"\n{facts}" if facts else "")
+    tin = {"questions": [{"question": question, "header": "Refused", "multiSelect": False, "options": [
+        {"label": action + " (Recommended)", "description": ""},
+        {"label": " ".join(other.group(1).split()), "description": ""}]}]}
+    call = o.s.tool("AskUserQuestion", tin, label=label, deviation=devs.at(label))
+    if call.blocked:
+        raise Paused(f"a hook refused {label!r}")
+    return action, (call.response.get("answers") or {}).get(question, "").replace(" (Recommended)", "")
+
+
 def _owner_git(project: str, *args, date: str = "") -> str:
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
     if date:
@@ -148,8 +173,10 @@ def _phases(text: str) -> list:
 class MergeRun:
     """One /merge turn of the main agent (Steps 0-5) with the merge-analyst it dispatches."""
 
-    def __init__(self, rp, session=None, devs: Deviations | None = None, typed_ref: str = "", tag: str = "/merge"):
-        self.rp, self.typed_ref, self.tag = rp, typed_ref, tag
+    def __init__(self, rp, session=None, devs: Deviations | None = None, typed_ref: str = "", tag: str = "/merge",
+                 on_conflict=None):
+        self.rp, self.typed_ref, self.tag, self.on_conflict = rp, typed_ref, tag, on_conflict
+        self.asked: set = set()
         self.devs = closedrv.kept_only(rp, devs or DEVIATIONS)
         rp.deviation_at = self.devs.at  # the analyst's own calls take the same deviations by label
         self.o = Orchestrator(rp, "merge", session=session, deviations=self.devs,
@@ -188,6 +215,18 @@ class MergeRun:
     def say_stop(self, text: str) -> None:
         self.outcome = text
         self.stop_ev = self.o.s.stop(text, label=self.label("Stop"), deviation=self.devs.at(self.label("Stop")))
+
+    def refuse(self, heading: str, anchor: str, facts: str = "") -> bool:
+        """The refusal asked once (its answer acted on: True when the owner picked the action the
+        refusal names); met again after its answer, reported and the turn ends (False)."""
+        if anchor in self.asked:
+            self.say_stop(f"/merge refused again ({anchor}) after your answer; nothing merged.\n{facts}".rstrip())
+            return False
+        self.asked.add(anchor)
+        lab = self.label(f"{heading} AskUserQuestion") + (f" {len(self.asked)}" if len(self.asked) > 1 else "")
+        action, answer = ask_refusal(self.o, self.devs, lab, cmdtext.section(self.o.text, heading), anchor, facts)
+        closedrv.fact(self.rp, "merge refusal", {"step": heading, "action": action, "answer": answer})
+        return answer == action
 
     def captured(self, text: str, label: str, desc: str, names=(), actor=None):
         """One Bash call of a block; the listed variables it sets kept in the orchestrator's values."""
@@ -243,18 +282,22 @@ class MergeRun:
         self.rp.rand(o.values.get("REQUEST_ID"))
         v = o.values
         if not v.get("SESSION_ID"):
-            self.say_stop(self.quoted_after("Step 1", "abort immediately with"))
-            return False
+            return self.refuse("Step 1", "If `SESSION_ID` is empty") and self.step1(ref)
         missing = [k for k in ("SOURCE_TIP", "DEFAULT_TIP") if v.get(k, "MISSING") == "MISSING"]
         if missing:
-            self.say_stop(f"/merge aborted: {', '.join(missing)} not found "
-                          f"({v.get('RESOLVED_REF')} / {v.get('DEFAULT_BRANCH')} does not resolve to a commit)")
-            return False
+            self.refuse("Step 1", "If either tip is", f"{', '.join(missing)} not found "
+                        f"({v.get('RESOLVED_REF')} / {v.get('DEFAULT_BRANCH')} does not resolve to a commit)")
+            return self.stop_unanswered()
         if v["SOURCE_TIP"] == v["DEFAULT_TIP"]:
-            msg = self.quoted_after("Step 1", "abort with \"refusing self-merge")
-            self.say_stop(msg)
-            return False
+            self.refuse("Step 1", "If `SOURCE_TIP` equals")
+            return self.stop_unanswered()
         return True
+
+    def stop_unanswered(self) -> bool:
+        """A refusal whose action is the owner's (a ref to name, risks to resolve): the turn ends."""
+        if not self.outcome:
+            self.say_stop("/merge: waiting on your answer's action; nothing merged.")
+        return False
 
     def fresh_request_id(self, k: int) -> None:
         """Step 1's REQUEST_ID line again (the base text's "return to Step 2 with a fresh REQUEST_ID")."""
@@ -319,8 +362,7 @@ class MergeRun:
         c = self.check(o.s.read(path, label=self.label("Step 3 Read grant"),
                                 deviation=self.devs.at(self.label("Step 3 Read grant"))))
         if not c.ok:
-            self.say_stop(self.quoted_after("Step 3", "abort with"))
-            return "missing"
+            return "again" if self.refuse("Step 3", "No grant at that path") else "missing"
         try:
             self.grant = json.loads(agents.peek(self.rp, "main", path))
         except ValueError:
@@ -338,8 +380,8 @@ class MergeRun:
                 self.captured(consume, self.label("Step 3 Bash consume grant"), "Consume (unlink) the grant")
         verdict = (self.grant or {}).get("verdict")
         if verdict == "blocked":
-            risks = "\n".join(f"- {r}" for r in self.grant.get("risks") or [])
-            self.say_stop(f"merge-analyst blocked the merge; nothing merged.\n{risks}")
+            self.refuse("Step 3", "`verdict` = `blocked`", "\n".join(f"- {r}" for r in self.grant.get("risks") or []))
+            self.stop_unanswered()
         return verdict or "invalid"
 
     def validate(self, sec: str) -> str:
@@ -372,8 +414,7 @@ class MergeRun:
                       "Step 4: re-read the branch tips", ("CURRENT_SOURCE_TIP", "CURRENT_DEFAULT_TIP"))
         v, g = o.values, self.grant or {}
         if v.get("CURRENT_SOURCE_TIP") != g.get("source_tip") or v.get("CURRENT_DEFAULT_TIP") != g.get("default_tip"):
-            self.say_stop(self.quoted_after("Step 4", "abort with"))
-            return False
+            return None if self.refuse("Step 4", "If either tip differs") else False
         return True
 
     def step5(self):
@@ -402,33 +443,43 @@ class MergeRun:
         o.slash(args, label=self.label("typed"))
         ref = self.step0()
         if not ref:
-            self.say_stop("/merge: no tier resolved a merge source; pass an explicit ref: /merge <ref>")
+            self.refuse("Step 0", "If no tier resolves a source")
+            self.stop_unanswered()
             return self.outcome
-        if not self.step1(ref):
-            return self.outcome
-        for k in range(3):
-            self.step2()
-            verdict = self.step3()
-            if verdict != "expired":
-                break
-            o.s.say("The merge-analyst grant expired before it was read; a fresh analysis is running.")
-            self.fresh_request_id(k + 1)
-        else:
-            self.say_stop("/merge aborted: the merge-analyst grant expired on every round")
-            return self.outcome
-        if verdict != "approved":
-            return self.outcome
-        if not self.step4():
-            return self.outcome
-        c = self.step5()
-        if c.ok:
-            text = f"Merged {o.values['RESOLVED_REF']} into {o.values['DEFAULT_BRANCH']}.\n" + \
-                   "\n".join(l for l in (c.response.get("stdout") or "").split("\n") if l.startswith("merge.sh:"))
-        else:
-            text = ("merge.sh exited non-zero; the merge did not complete. Resolve it manually as the wrapper "
-                    "says, then re-run /merge " + o.values["RESOLVED_REF"] + ".\n" + (c.error or "")[-800:])
-        self.say_stop(text)
-        return self.outcome
+        from_step1 = True
+        while True:
+            if from_step1 and not self.step1(ref):
+                return self.outcome
+            for k in range(3):
+                self.step2()
+                verdict = self.step3()
+                if verdict not in ("expired", "again"):
+                    break
+                if verdict == "expired":
+                    o.s.say("The merge-analyst grant expired before it was read; a fresh analysis is running.")
+                self.fresh_request_id(k + 1)
+            else:
+                self.say_stop("/merge: the merge-analyst grant expired on every round; nothing merged")
+                return self.outcome
+            if verdict != "approved":
+                return self.outcome
+            ok = self.step4()
+            if ok is None:  # "re-run the analysis now": Step 1's REQUEST_ID line, then Step 2
+                self.fresh_request_id(self.round)
+                from_step1 = False
+                continue
+            if not ok:
+                return self.outcome
+            c = self.step5()
+            if c.ok:
+                self.say_stop(f"Merged {o.values['RESOLVED_REF']} into {o.values['DEFAULT_BRANCH']}.\n" + "\n".join(
+                    l for l in (c.response.get("stdout") or "").split("\n") if l.startswith("merge.sh:")))
+                return self.outcome
+            if not self.refuse("Step 5", "If the merge has conflicts", (c.error or "")[-800:]):
+                return self.outcome
+            if self.on_conflict:
+                self.on_conflict()
+            self.tag, from_step1 = self.tag + " (2)", True
 
 
 class Analyst:
@@ -689,16 +740,11 @@ def run(rp) -> None:
     rp.pipeline = "merge" + (f"/{variant}" if variant != "plain" else "")
     owner_setup(rp, variant)
     closedrv.fact(rp, "owner setup", toy_state(rp))
-    mr = MergeRun(rp, typed_ref=ref)
-    mr.run(ref)
-    last = mr
-    if variant == "conflict" and mr.o.values.get("RESOLVED_REF"):
-        st = toy_state(rp)
-        if any(s[:2] in ("UU", "AA") for s in st["status"]):
+    def resolve():
+        if any(s[:2] in ("UU", "AA") for s in toy_state(rp)["status"]):
             owner_resolve(rp)
-            again = MergeRun(rp, session=mr.o.s, typed_ref=ref or mr.o.values["RESOLVED_REF"], tag="/merge (2)")
-            again.run(ref or mr.o.values["RESOLVED_REF"])
-            last = again
+    last = mr = MergeRun(rp, typed_ref=ref, on_conflict=resolve if variant == "conflict" else None)
+    mr.run(ref)
     p = rp.layout.project
     with rp.acting("driver"):
         tip = subprocess.run(["git", "-C", p, "rev-parse", "-q", "--verify", FEATURE], capture_output=True,

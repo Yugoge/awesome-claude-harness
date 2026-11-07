@@ -49,6 +49,9 @@ Driver arguments (cli.py --arg K=V):
   variant=fanout       a fan-out cycle of `lanes` lanes (default 2, at most 3), every lane passing
   variant=fanout-qa-fail  a fan-out cycle whose first lane's first QA fails; Step 16 re-dispatches
                        that lane's dev only and its QA passes; the other lanes are untouched
+  stop_before=N        (singular cycle) the orchestrator ends its turn before Step N, claiming the
+                       cycle done (P5 A20: stop_before=13, QA never dispatched); each such Stop is
+                       recorded in the terminal's `early_stops`; the cycle then goes on with Step N
   lanes=N              fan-out lane count (2 or 3)
   lane_id=text|task    fan-out lane id base: `text` (default) the placeholder the adapter line
                        names (`<DEV_SESSION_ID>-<lane-suffix>` at 2acc29b, `<TASK_ID>-<lane-suffix>` on
@@ -382,7 +385,13 @@ class DevCycle:
         return re.sub(r"^(Step \d+)", lambda m: m.group(1) + self.tag, label, count=1) if self.tag else label
 
     def to(self, n: int) -> None:
-        """Advance the checklist until Step n is in_progress (one completion per TodoWrite)."""
+        """Advance the checklist until Step n is in_progress (one completion per TodoWrite); with
+        stop_before=n (A20), first a Stop claiming the cycle done, recorded in early_stops."""
+        if not self.tag and str(n) == self.rp.args.get("stop_before"):
+            ev = self.o.s.stop(f"/{self.o.typed} {self.tid} complete.", label=f"Stop before Step {n}")
+            self.early_stops = getattr(self, "early_stops", []) + [
+                {"step": n, "blocked": [h["hook"] for h in ev.blocks],
+                 "text": [h.get("refusal_head") or h.get("stderr", "") for h in ev.blocks]}]
         while not self.o.at_step(n):
             self.o.advance()
 
@@ -784,7 +793,8 @@ class DevCycle:
         text = (f"/{o.typed} {self.tid} complete: {self.sc.dev_summary}; QA passed. Next: /close {self.tid}"
                 if getattr(self, "chain_ok", True) else self.not_complete())
         ev = o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
-        self.rp.terminal(o.typed, getattr(self, "chain_ok", False), ev, task=self.tid)
+        self.rp.terminal(o.typed, getattr(self, "chain_ok", False), ev, task=self.tid,
+                         early_stops=getattr(self, "early_stops", []))
 
     # ------------------------------------------------------------ the whole cycle
     def run(self) -> None:

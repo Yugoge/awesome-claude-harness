@@ -2249,6 +2249,86 @@ def late_repair_eligible(result: dict[str, Any]) -> bool:
     return result.get("late_repair_eligible") is True
 
 
+def do_report_gaps(
+    project_root: Path | str, task_id: str, path: Path, transcript: str | None = None
+) -> list[tuple[str, str, str]]:
+    """The do branch's checks beyond do.status (P5 R8), as (code, artifact,
+    detail): the report fails its versioned schema; and, with the session
+    ``transcript``, its files_modified and files_created (a created file may
+    sit in either) differ from the write set of every /do span of the task in
+    it: the main agent's own Write/Edit/MultiEdit/NotebookEdit targets with an
+    ok result, its Bash commands' paths counting as named
+    (command_span.Span.write_set). Each listed file is written or named and
+    each written file is listed, else one gap names the exact expected paths.
+    Without a transcript (a /close or /commit stage) the lists stand as the
+    report states them. Read-only."""
+    harness = str(Path(__file__).resolve().parent.parent)
+    if harness not in sys.path:
+        sys.path.insert(0, harness)
+    from hooks.lib import command_span, contract_runtime, do_report
+
+    root = Path(project_root).resolve()
+    path = Path(path)
+    relative = path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path)
+    schema = contract_runtime.validate_report_artifact(path)
+    gaps = [("SCHEMA_VIOLATION", relative, str(error))
+            for error in (schema.get("errors") or []) if schema.get("status") == "fail"]
+    record, _problem = do_report.load(path)
+    do = record.get("do") if isinstance(record, dict) else None
+    if not transcript or not isinstance(do, dict):
+        return gaps
+    declared = set()
+    lists = [do.get(key) for key in ("files_modified", "files_created")]
+    for entry in [entry for listed in lists if isinstance(listed, list) for entry in listed]:
+        rel = command_span._project_relative(entry, str(root), str(root)) if isinstance(entry, str) else None
+        declared |= {rel} if rel else set()
+    written, named, found = set(), set(), False
+    openers = command_span.openers(transcript)
+    for k, (line, command, args) in enumerate(openers):
+        span = command_span.Span(command, args, line, transcript)
+        if command != "do" or span.minted_id() != task_id:
+            continue
+        result = span.write_set(root, actor="main", stop_line=openers[k + 1][0] if k + 1 < len(openers) else None)
+        if result is not None:
+            found = True
+            written |= result.written
+            named |= result.named
+    if found and (written - declared or declared - written - named):
+        gaps.append((
+            "FILES_NOT_WRITE_SET",
+            relative,
+            "do.files_modified + do.files_created must list exactly the files this /do wrote "
+            f"(and may list files its Bash commands named): {json.dumps(sorted(written | (declared & named)))}",
+        ))
+    return gaps
+
+
+def disposition_lines(
+    project_root: Path | str, task_id: str, stage: str, transcript: str | None = None
+) -> list[str]:
+    """The task's disposition at ``stage`` as the Stop gate prints it (P5
+    R7): no line for chain_pass (D2: nothing else passes), else one gap_line
+    per gap, where an artifact no dispatch declared yet also names the
+    canonical todo step the DDR says owes it. ``transcript`` reaches the do
+    branch (do_report_gaps). Raises on an instrument failure, as disposition
+    does; disposition and gap_line are P3's."""
+    outcome = disposition(project_root, task_id, stage, transcript=transcript)
+    if outcome["disposition"] == "chain_pass":
+        return []
+    harness = str(Path(__file__).resolve().parent.parent)
+    if harness not in sys.path:
+        sys.path.insert(0, harness)
+    from hooks.lib import obligation
+
+    lines = []
+    for gap in outcome["gaps"]:
+        owner = obligation.declaring_dispatch(task_id, gap["artifact"], project_root) \
+            if gap["lane"] is None and gap["artifact"] else None
+        step = owner.get("step") if isinstance(owner, dict) and owner.get("source") == "todo_step" else None
+        lines.append(gap_line(gap) + (f" step={json.dumps(step, ensure_ascii=False)}" if step else ""))
+    return lines or [f"{stage} {task_id}: disposition {outcome['disposition']!r}, needs 'chain_pass'"]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = StableArgumentParser(prog="resolve-dev-artifact-chain.py")
     parser.add_argument("--task-id", required=True)

@@ -45,6 +45,14 @@ refused at its PreToolUse (G1 armed) goes back to the orchestrator, whose next r
 dispatch again: the prompt the tree's text renders, with a fresh dispatched_at; that agent writes
 what the tree's template asks for.
 
+    foreign@<label glob>=<path>
+
+Before the first main-agent tool step whose label matches, the main agent itself writes `path`
+(project-relative; `{task}` as for plant; a glob names the newest file it matches), an artifact a
+producer's obligation declares: an Edit when the file exists, else a Write (P5 A20: a main-agent
+producer write, which the D8 deny refuses). Its record keeps whether the call was refused and by
+which hooks; nothing repairs it, and the pipeline goes on with its own step.
+
     plant@<label glob>=<path>:<content kind>
 
 Before the step whose label matches, the fault (actor "fault") writes `path` (project-relative;
@@ -71,6 +79,7 @@ agent, and whether that agent repaired it (the number of returned stops it took)
 from __future__ import annotations
 
 import fnmatch
+import glob as glob_mod
 import json
 import os
 import re
@@ -251,6 +260,31 @@ def _dispatch_fault(rp, kind: str, glob: str, what: str) -> callable:
             rec["repaired"] = not again.blocked
         rec["agent"] = getattr(d, "agent_id", None)
         _record(rp, rec)
+    return fn
+
+
+def _foreign(rp, glob: str, what: str) -> callable:
+    done: list = []
+
+    def fn(rp_, phase, step):
+        actor = step.get("actor")
+        if phase != "before" or done or getattr(actor, "agent", True) is not None:
+            return
+        done.append(1)
+        task = min((v for v, k in rp.ids.values.items() if k == "task"), key=len, default="")
+        rel = what.replace("{task}", str(task))
+        if "*" in rel:  # the newest file the glob names: the one its producer wrote
+            found = sorted(glob_mod.glob(os.path.join(rp.layout.project, rel)), key=os.path.getmtime)
+            rel = os.path.relpath(found[-1], rp.layout.project) if found else rel
+        full = os.path.join(rp.layout.project, rel)
+        if os.path.isfile(full):  # an Edit of the producer's file (a Write over it meets the write guard too)
+            with open(full) as fh:
+                first = fh.readline().rstrip("\n")
+            call = actor.edit(full, first, first + " ", label=f"foreign Edit {rel}")
+        else:
+            call = actor.write(full, "{}\n", label=f"foreign Write {rel}")
+        _record(rp, {"kind": "foreign", "label": step["label"], "path": rel, "denied": call.blocked,
+                     "hooks": [h["hook"] for h in (call.pre.blocks if call.pre else [])]})
     return fn
 
 
@@ -508,6 +542,8 @@ def install(rp, spec: str) -> None:
         glob, _, what = rest.partition("=")
         if kind == "plant":
             rp.faults.append((glob, _plant(rp, glob, what)))
+        elif kind == "foreign":
+            rp.faults.append((glob, _foreign(rp, glob, what)))
         elif kind in ("cut", "limit"):  # F5, F5f, F6: tests/replay/recovery.py
             from . import recovery
             recovery.install(rp, kind, rest)

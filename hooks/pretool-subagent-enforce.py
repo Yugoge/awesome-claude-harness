@@ -11,8 +11,8 @@ For a /dev-overnight session (the session owns an overnight state record):
      ``lib.overnight.cycle_index``'s, the one the dispatch runs in (the files
      its obligation declares read as not yet written).
   2. Derive the current step from the checklist the transcript records
-     (lib.todo_canonical.checklist): the in-progress step of the last list the
-     step rules accepted, in every cycle.
+     (lib.command_span: the in-progress step of the span's last ok
+     TodoWrite, which pretool-todo-validate.py accepted), in every cycle.
   3. Validate the about-to-fire Agent's role / pipeline_id / mode against
      the entries for that step. On mismatch, exit 2 with a structured stderr
      message.
@@ -35,7 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib import contract_runtime  # noqa: E402
 from lib import overnight  # noqa: E402
-from lib.todo_canonical import checklist  # noqa: E402
+from lib import command_span  # noqa: E402
 from lib.subagent import is_subagent_context  # noqa: E402
 from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
 
@@ -56,12 +56,14 @@ def _content_to_step(content: str) -> str:
 
 
 def _current_step_label(stdin_data: dict) -> str | None:
-    """The in-progress step label of the session's checklist, read from the
-    transcript."""
-    state = checklist(stdin_data.get('transcript_path'))
-    for item in (state.accepted if state else None) or []:
-        if item.get('status') == 'in_progress':
-            return _content_to_step(item.get('content', ''))
+    """The in-progress step label of the span's last ok TodoWrite (command_span's
+    last_todos, read from the end of the span: no line before it is counted)."""
+    span = command_span.active_span(stdin_data.get('transcript_path') or '')
+    for use in span.uses('TodoWrite', newest_first=True) if span else ():
+        todos = use.input.get('todos')
+        if use.ok and isinstance(todos, list):
+            return next((_content_to_step(t.get('content', '')) for t in todos
+                         if isinstance(t, dict) and t.get('status') == 'in_progress'), None)
     return None
 
 

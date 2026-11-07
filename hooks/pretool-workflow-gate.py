@@ -3,10 +3,11 @@
 PreToolUse Hook: Require TodoWrite/TodoRead acknowledgment before other tools.
 
 If an active workflow exists (the transcript's active span was opened by a
-command with a canonical checklist) and the agent has NOT yet called TodoWrite,
-or its last TodoWrite broke the count or the first-call step rule, block any
-other tool. The checklist state is read from the transcript
-(lib.todo_canonical.checklist, P1b E7): nothing is written.
+command with a canonical checklist) and the agent has NOT yet made an ok
+TodoWrite in it, block any other tool. The checklist state is read from the
+transcript (lib.todo_canonical.checklist, P1b E7): nothing is written. Every
+other TodoWrite rule is decided by pretool-todo-validate.py before the call
+runs, so an ok TodoWrite already passed them.
 
 This prevents agents from ignoring the workflow checklist while still using
 other tools freely.
@@ -14,7 +15,7 @@ other tools freely.
 Logic:
   1. If tool is TodoWrite or TodoRead → allow
   2. No checklist command in the active span → allow (no active workflow)
-  3. An ok TodoWrite that broke no rule is the last one → allow
+  3. An ok TodoWrite in the span → allow
   4. Otherwise → block
 
 The Codex compatibility runtime (CLAUDE_COMPAT_RUNTIME=codex) keeps its own
@@ -1101,7 +1102,7 @@ def main():
         if acknowledge_codex_plan(data, session_id, bookmark_path, project_dir):
             sys.exit(0)
 
-    # TodoWrite → allow: the TodoWrite validators decide on it, and the
+    # TodoWrite → allow: pretool-todo-validate.py decides on it, and the
     # checklist state below is read back from the record it leaves.
     # Note: type errors (todos as string instead of array) are caught by Claude Code's schema
     # validation BEFORE PreToolUse hooks run — no need to duplicate that check here.
@@ -1118,12 +1119,7 @@ def main():
         if not lock_reason:
             sys.exit(0)
         cmd_name = state.command
-        if lock_reason == 'sequence_violation':
-            # Hint from the list the step rules accepted last (none yet, when
-            # the first one broke them), not from the violating one.
-            next_json = build_sequence_fix_call(state.accepted) if state.accepted else ''
-        else:
-            next_json = next_todowrite_call(state.canonical)
+        next_json = next_todowrite_call(state.canonical)
 
     codex_runtime = is_codex_runtime(data)
     if codex_runtime:
@@ -1141,7 +1137,7 @@ def main():
         )
         action = 'Call TodoWrite'
 
-    if lock_reason == 'sequence_violation':
+    if lock_reason == 'sequence_violation':  # the Codex plan's lock (_codex_lock) only
         sys.stderr.write(
             f'\n🚫 STEP SKIPPING DETECTED: /{cmd_name} workflow is locked.\n'
             f'You attempted to skip or reorder steps.\n'

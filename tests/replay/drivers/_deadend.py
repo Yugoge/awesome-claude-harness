@@ -10,7 +10,7 @@ terminals.json, whether its pipeline reached its terminal (the Stop ending it pa
 The leading underscore keeps it out of the artifact check's driver set (tests/artifact_graph/
 runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs it, not the check.
 
-  do-report       Step 5's Write of the do-report is not made before the Stop: the do-report gate
+  do-report       Step 5's Write of the do-report is not made before the Stop: the Stop gate (P5)
                   refuses the Stop; the main agent's next action is that Write, then it stops again.
   do-report-ask   as do-report, and between the refused Stop and the Write the main agent asks one
                   AskUserQuestion and stops twice after the answer (D23: neither the answer nor
@@ -19,11 +19,11 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   dispatch is refused; the main agent's next action does Step 2 itself.
   todo-canonical  the first TodoWrite carries the canonical list with one step's text changed: refused;
                   the next TodoWrite carries the list the hook printed.
+  todo-first      the first TodoWrite carries the canonical list with its first step already completed:
+                  refused before it runs (pretool-todo-validate.py's first-list rule, P5 R18); the next
+                  TodoWrite carries the first call the refusal prints.
   todo-sequence   the first advance completes Step 1 and Step 2 in one TodoWrite: refused; the next
                   TodoWrite completes Step 1 only.
-  todo-first      the first TodoWrite carries the canonical steps with Step 0 already completed and
-                  Step 1 in progress: it runs, and its PostToolUse refuses it (the first-call rule);
-                  the next TodoWrite carries the same steps with Step 0 in progress, the rest pending.
   checklist-lock  the main agent reads a file before its first TodoWrite: refused; it makes the
                   TodoWrite the refusal names, then reads the file.
   dev-early       /dev (drivers/dev.py, plain) whose main agent marks BA's step completed before
@@ -39,8 +39,8 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   question) and the collection check refuses its return, naming the report; the
                   orchestrator's next round is Hard Rule 5's, dev dispatched again (a fresh
                   dispatched_at), which writes the report. After end_time the main agent stops before
-                  Step 21's summary: the CLOSEOUT gate refuses the Stop; its next action is Step 21's
-                  summary, then the Stop passes.
+                  Step 21's summary: the Stop gate's time-lock (hooks/stop-command-gate.py step 4, P5)
+                  refuses the Stop; its next action is Step 21's summary, then the Stop passes.
   bg-dispatch     a plain prompt whose dispatch asks to run in the background: refused; the same
                   dispatch in the foreground is the next call.
   obligation      (armed settings) a plain prompt whose dev dispatch carries an obligation block
@@ -99,7 +99,7 @@ class Turn(DoTurn):
 
     def start(self) -> None:
         o = self.o
-        if self.case not in ("todo-canonical", "checklist-lock", "todo-first"):
+        if self.case not in ("todo-canonical", "todo-first", "checklist-lock"):
             return super().start()
         lead = self.label("Read before the first TodoWrite") if self.case == "checklist-lock" else None
         import re
@@ -117,11 +117,9 @@ class Turn(DoTurn):
             bad[-1]["content"] = bad[-1]["content"] + " (and tidy up)"
             self.note(o.s.todo(bad, label=self.label("TodoWrite altered list")))
         if self.case == "todo-first":
-            bad = [dict(t, status="pending") for t in o.todos]
+            bad = [dict(t) for t in o.todos]
             bad[0]["status"], bad[1]["status"] = "completed", "in_progress"
-            call = o.s.todo(bad, label=self.label("TodoWrite first list with Step 0 completed"))
-            self.rounds.append({"label": call.label, "blocked": bool(call.post and call.post.blocks),
-                                "hooks": [h["hook"] for h in (call.post.blocks if call.post else [])]})
+            self.note(o.s.todo(bad, label=self.label("TodoWrite first list with Step 1 completed")))
         o._todo(self.label("TodoWrite canonical list"))
         if lead:
             self.note(o.s.read(path, label=self.label("Read after the TodoWrite")))
@@ -380,7 +378,7 @@ def run(rp) -> None:
         return _spec_foreground(rp)
     if case in ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending"):
         return _plain(rp, case)
-    if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
-                    "todo-first"):
+    if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
+                    "checklist-lock"):
         raise ValueError(f"unknown case {case!r}")
     Turn(rp, case).run()

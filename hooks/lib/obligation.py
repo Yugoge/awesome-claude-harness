@@ -1080,23 +1080,9 @@ def _session_transcripts(project_dir: str | Path, roots: Iterable[str | Path] | 
 
 
 def _span_openers(transcript: Path, commands: frozenset) -> list[tuple[int, str, str]]:
-    """(line, command, arguments) of each human-typed harness command."""
-    stop_contract = _lib_module("stop_contract")
-    openers = []
-    try:
-        with transcript.open(encoding="utf-8", errors="replace") as handle:
-            for number, line in enumerate(handle, 1):
-                if '"user"' not in line:
-                    continue
-                try:
-                    found = stop_contract.span_opener(json.loads(line), commands)
-                except ValueError:
-                    continue
-                if found:
-                    openers.append((number, found[0], found[1]))
-    except OSError:
-        return []
-    return openers
+    """(line, command, arguments) of each human-typed harness command: the
+    transcript reader's own list (command_span.openers)."""
+    return _lib_module("command_span").openers(transcript, commands)
 
 
 def _task_records(task_id: str, project_dir: str | Path,

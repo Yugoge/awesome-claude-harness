@@ -17,10 +17,8 @@ No arguments. Operates on every `overnight-state-*.json` under `.claude/`.
 
 ## What it does
 
-1. Backdates `end_time` on every active overnight-state file so `stop-overnight-timelock.py` releases.
-2. Sets `current_phase: completed` on each state file.
-
-After this, the next stop attempt succeeds.
+1. The human-typed `/stop` opens a span no Stop gate holds: it ends any gated command (`/dev`, `/do`, `/close`, `/commit`, ..., even one whose gate is broken), and after `/dev-overnight` it releases the time-lock.
+2. The wrapper backdates `end_time` and sets `current_phase: completed` on every active overnight-state file. After this, and the wake's `CronDelete` below, the next stop attempt succeeds.
 
 ## What it does NOT do
 
