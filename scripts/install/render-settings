@@ -17,8 +17,9 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
   render [--force]   write the machine form of <H>/settings.json; refuses (without --force) to
                      drop working-file entries that neither the clean form, the overlay nor the
                      record explains.
-  check [--staged]   doctor checks (hook paths, filter wiring and round trip, entries nothing
-                     explains, protected-runtime file); with --staged: refuse a staged settings.json
+  check [--staged]   doctor checks (hook paths: a missing file, or a `# STUB:` file the clean form
+                     does not register; filter wiring and round trip, entries nothing explains,
+                     protected-runtime file); with --staged: refuse a staged settings.json
                      that is in machine form, and an index that holds the overlay or the
                      private-literal list <H>/private-literals.txt: both are personal and never
                      tracked, so after a forced add or an earlier commit of either, every commit
@@ -838,16 +839,30 @@ def _ok(label, ok):
     return ok
 
 
+def is_stub(path):
+    """A line starting `# STUB:` marks a retired hook kept as an exit-0 file: it runs nothing."""
+    try:
+        with open(path, "rb") as fh:
+            return any(line.startswith(b"# STUB:") for line in fh)
+    except OSError:
+        return False
+
+
 def check_hook_paths(home, working, overlay):
     env = dict(os.environ)
     env.update({k: v for k, v in _d(working.get("env")).items() if isinstance(v, str)})
     # Only a command of the clean form or of a module is echoed; any other may be personal.
     docs = [parse(clean_source(home)) or {}] + list(MODULES.values())
-    public = _hook_keys([g for d in docs for gs in _d(d.get("hooks")).values() for g in _list(gs)])
-    public -= _hook_keys([g for gs in _d(_layer_of(overlay or {}).get("hooks")).values()
-                          for g in gs])
+    kit = {(event, key) for d in docs for event, gs in _d(d.get("hooks")).items()
+           for key in _hook_keys(gs)}
+    mine = {(event, key) for event, gs in _d(_layer_of(overlay or {}).get("hooks")).items()
+            for key in _hook_keys(gs)}
+    public = {key for _, key in kit} - {key for _, key in mine}
+    checkout = is_checkout(home)
+    if not checkout:  # the clean form read is the working file, which holds the overlay's too
+        kit -= mine
     root = os.path.realpath(home)
-    total, missing = 0, []
+    total, missing, stubs, kept = 0, [], 0, set()
     for event, groups in _d(working.get("hooks")).items():
         for g in groups if isinstance(groups, list) else []:
             for h in g.get("hooks", []) if isinstance(g, dict) else []:
@@ -860,19 +875,35 @@ def check_hook_paths(home, working, overlay):
                     words = []
                 real = os.path.realpath(expand(words[1], env)) if len(words) > 1 else ""
                 inside = bool(real) and real.startswith(root + os.sep)
-                if inside and os.path.isfile(real):
+                if inside and os.path.isfile(real) and not is_stub(real):
                     continue
+                rel = os.path.relpath(real, root) if inside else ""
+                if inside and os.path.isfile(real):
+                    if (event, hook_key(h)) in kit:  # the clean form's own stub (D15): passes
+                        kept.add(rel)
+                        continue
+                    stubs += 1
+                    # A path HEAD tracks is a public harness path; any other may be personal.
+                    if hook_key(h) in public or checkout and _git_out(
+                            home, "cat-file", "-t", "HEAD:" + rel) == "blob":
+                        missing.append("%s: %s is a stub the clean form does not register"
+                                       % (event, rel))
+                        continue
                 if hook_key(h) not in public:
                     missing.append("%s: a hook outside the clean form (see %s)" % (event, OVERLAY))
                 elif not real:
                     missing.append("%s: no script path in the command" % event)
                 elif inside:
-                    missing.append(os.path.relpath(real, root))
+                    missing.append(rel)
                 else:
                     missing.append("outside the harness home: %s" % words[1])
-    ok = _ok("hook paths: %d commands, missing=%d" % (total, len(missing)), not missing)
+    ok = _ok("hook paths: %d commands, missing=%d%s" % (
+        total, len(missing) - stubs, ", stubs=%d" % stubs if stubs else ""), not missing)
     for item in missing:
         print("       %s" % item)
+    if kept:
+        print("[info] hook paths: the clean form registers %s, which pass: %s"
+              % (_count(len(kept), "exit-0 stub", "exit-0 stubs"), ", ".join(sorted(kept))))
     return ok
 
 
