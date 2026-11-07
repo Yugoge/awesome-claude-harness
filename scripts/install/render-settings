@@ -27,7 +27,8 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
   migrate --from REV [--settings-file PATH] [--base REV]
                      seed a NEW overlay from previous personal settings: run by init
                      (scripts/bootstrap --migrate-from), or once by the landing on an upgraded
-                     home. A previous GIT_AUTO_PUSH "1" is named, never migrated (push is opt-in).
+                     home. A previous GIT_AUTO_PUSH "1" is named, never migrated (push is opt-in),
+                     as is a hook command HEAD retired or already runs (by event and count).
   seed --claude-home PATH [MODULE=on|off ...]
                      write a NEW overlay holding the modules and env.CLAUDE_HOME: init's
                      (scripts/bootstrap) overlay when it migrates nothing.
@@ -1162,10 +1163,59 @@ def module_enabled(fragment, prev, base):
     return False
 
 
-def _tracked_hook(home, rev, hook):
+def _script(hook):
     m = re.search(r"@H/((?:hooks|scripts)/\S+)", norm_command(str(hook.get("command", ""))))
-    proc = _git(home, "cat-file", "-e", "%s:%s" % (rev, m.group(1))) if m else None
-    return proc is not None and proc.returncode == 0
+    return m.group(1) if m else None
+
+
+def _named(data, rel):
+    """The .py and .sh file names a script's code holds: a Python file's string constants
+    without whitespace (no docstring or message), a shell script's lines off comments."""
+    try:
+        lines = [n.value for n in ast.walk(ast.parse(data)) if isinstance(n, ast.Constant)
+                 and isinstance(n.value, str) and not re.search(r"\s", n.value)] \
+            if rel.endswith(".py") else [ln for ln in data.decode("utf-8", "replace").splitlines()
+                                         if ln.strip()[:1] != "#"]
+    except (SyntaxError, ValueError):
+        lines = []
+    return set(re.findall(r"[\w.+-]+\.(?:py|sh)(?![\w.-])", "\n".join(lines)))
+
+
+def superseded(home, hooks, ref, past=()):
+    """R2, the one rule of the migration and of the overlay repair: removes from hooks (event ->
+    groups) each command whose script is a harness hook (HEAD's history or `past` tracked it) that
+    HEAD lacks or marks `# STUB:`, or that a command ref registers at that event already runs: its
+    script, or a .py or .sh file a script so run names (the Stop coordinator's phases, P5's
+    launcher's coordinator). Others stay; empty groups and events go. Returns {event: count}."""
+    names, runs, out = {}, {}, {}
+    for rel in (_git_out(home, "ls-tree", "-r", "--name-only", "HEAD", "hooks", "scripts")
+                or "").split():
+        names.setdefault(os.path.basename(rel), []).append(rel)
+
+    def gone(event, rel):
+        data = blob(home, "HEAD:" + rel)
+        if data is None:
+            return bool(_git_out(home, "log", "-1", "--format=%h", "HEAD", *past, "--", rel))
+        if event not in runs:
+            todo, runs[event] = [_script(h) for g in _list(_d(ref.get("hooks")).get(event))
+                                 for h in _list(_d(g).get("hooks")) if isinstance(h, dict)], set()
+            while todo:
+                run = todo.pop()
+                if run and run not in runs[event]:
+                    runs[event].add(run)
+                    todo += [p for n in _named(blob(home, "HEAD:" + run) or b"", run)
+                             for p in names.get(n, [])]
+        return any(ln.startswith(b"# STUB:") for ln in data.splitlines()) or rel in runs[event]
+
+    for event, groups in list(hooks.items()):
+        for g in groups:
+            keep = [h for h in g["hooks"] if not (_script(h) and gone(event, _script(h)))]
+            out[event] = out.get(event, 0) + len(g["hooks"]) - len(keep)
+            g["hooks"] = keep
+        groups[:] = [g for g in groups if g["hooks"]]
+        if not groups:
+            del hooks[event]
+    return {event: n for event, n in out.items() if n}
 
 
 def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
@@ -1213,14 +1263,7 @@ def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
         _err("migrate refused: the clean settings.json has an unexpected structure at %s" % exc)
         return 1
     extra = diff(prev, reference)
-    # A hook running a harness script that rev tracks was public there: missing from the clean form
-    # now means upstream unregistered it (P1's retired Stop gate, an exit-0 stub until P10 deletes
-    # it), so it is not personal and is not migrated.
-    for groups in extra.get("hooks", {}).values():
-        for g in groups:
-            g["hooks"] = [h for h in g["hooks"] if not _tracked_hook(home, rev, h)]
-        groups[:] = [g for g in groups if g["hooks"]]
-    extra["hooks"] = {event: groups for event, groups in extra.get("hooks", {}).items() if groups}
+    skipped = superseded(home, extra.setdefault("hooks", {}), reference, [rev])
     if not extra["hooks"]:
         del extra["hooks"]
     env = extra.pop("env", {})
@@ -1251,6 +1294,9 @@ def cmd_migrate(home, rev, settings_file, base_rev, previous=None):
     for name, val in overlay.get("permissions", {}).items():
         print("  permissions.%s: %s" % (name, len(val) if isinstance(val, list) else "set"))
     print("  hooks: %d groups" % sum(len(g) for g in overlay.get("hooks", {}).values()))
+    for event, n in skipped.items():
+        print("  not migrated: hooks.%s: %s HEAD retired or already runs"
+              % (event, _count(n, "hook command", "hook commands")))
     others = [k for k in overlay if k not in STRUCTURED and k != "modules"]
     print("  other top-level keys: %d" % len(others))
     print("next: run scripts/bootstrap (or render-settings render) to render settings.json")

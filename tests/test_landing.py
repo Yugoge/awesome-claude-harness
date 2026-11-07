@@ -190,9 +190,9 @@ def test_check_names_git_auto_push_one_without_failing(tmp_path, env):
 
 
 def test_migrate_skips_hooks_upstream_unregistered(tmp_path, env):
-    """A hook of a harness script the previous revision tracks is public there; missing from
-    the clean form, upstream unregistered it (P1's retired Stop gate): it is not migrated. A
-    personal hook (outside the harness, or an untracked script) still is."""
+    """A hook of a harness script the previous revision tracks and HEAD no longer has (P1's
+    retired Stop gate, once deleted) is not migrated. A personal hook (outside the harness, or an
+    untracked script) still is."""
     prev = previous_settings()
     retired = {"hooks": [hook("python3", "hooks/retired-gate.py", prefix="/opt/demo/.claude")]}
     personal = {"hooks": [hook("bash", "hooks/personal-acct-test-123.sh", prefix="/opt/demo/.claude")]}
@@ -208,6 +208,51 @@ def test_migrate_skips_hooks_upstream_unregistered(tmp_path, env):
         env, cwd=str(home))
     stop = [h["command"] for g in overlay(home)["hooks"]["Stop"] for h in g["hooks"]]
     assert stop == [personal["hooks"][0]["command"]]
+
+
+def test_migrate_skips_what_head_retired_or_runs_and_carries_other_personal_hooks(tmp_path, env):
+    """P10 R2: a hook command whose script is a harness hook HEAD lacks or marks `# STUB:`, or one
+    that a command HEAD's clean form registers at that event already runs (a script it names, as
+    P5's launcher names the coordinator and the coordinator its phases), is not migrated, and is
+    named by event and count only. Any other personal hook command still is: one of a live
+    harness hook nothing runs, the same script at an event where nothing runs it, and one of an
+    untracked script. A docstring or a comment naming a script does not run it."""
+    old = lambda rel: hook("python3" if rel.endswith(".py") else "bash", rel,  # noqa: E731
+                           prefix="/opt/demo/.claude")
+    stop = ["hooks/gone-gate.py", "hooks/stub-gate.py", "hooks/coordinator.py", "hooks/phase.sh",
+            "hooks/live-extra.py", "hooks/personal-acct-test-123.sh"]
+    prev = previous_settings()
+    prev["hooks"]["Stop"] += [{"hooks": [old(rel)]} for rel in stop]
+    prev["hooks"]["PreToolUse"].append({"matcher": "Edit", "hooks": [old("hooks/phase.sh")]})
+    home, rev = make_home(tmp_path, env, prev)
+    git(env, home, "checkout", "-q", rev)
+    for rel in stop[:5]:
+        write(home / rel, "exit 0\n")
+    git(env, home, "add", "-A")
+    git(env, home, "commit", "-q", "-m", "pre-P7: the harness hooks tracked")
+    rev2 = git(env, home, "rev-parse", "HEAD").stdout.strip()
+    git(env, home, "checkout", "-q", "master")
+    write(home / "hooks/stub-gate.py", "#!/usr/bin/env python3\n# STUB: retired; exits 0.\n")
+    write(home / "hooks/launch.py", '"""Runs coordinator.py, never live-extra.py."""\nimport sys\n'
+          'COORDINATOR = "coordinator.py"\n')
+    write(home / "hooks/coordinator.py", 'PHASES = [("bash", "hooks/phase.sh")]\n')
+    write(home / "hooks/phase.sh", "# live-extra.py is not run here\nexit 0\n")
+    write(home / "hooks/live-extra.py", "import sys\n")
+    clean = clean_settings(tmp_path)
+    clean["hooks"]["Stop"].append({"hooks": [hook("python3", "hooks/launch.py")]})
+    write(home / "settings.json", canon(clean).decode())
+    git(env, home, "add", "-A")
+    git(env, home, "commit", "-q", "-m", "HEAD: a launcher runs the coordinator, which runs a phase")
+    proc = run([sys.executable, str(home / "scripts/install/render-settings"), "migrate", "--from",
+                rev2], env, cwd=str(home))
+    carried = {event: [h["command"] for g in groups for h in g["hooks"]]
+               for event, groups in overlay(home)["hooks"].items()}
+    assert carried["Stop"] == [old(rel)["command"] for rel in stop[4:]]
+    assert carried["PreToolUse"] == [old("hooks/phase.sh")["command"]]
+    assert "  not migrated: hooks.Stop: 4 hook commands HEAD retired or already runs\n" in proc.stdout
+    assert "not migrated: hooks.PreToolUse" not in proc.stdout
+    for word in ("gate", "coordinator", "phase", "/opt/demo"):
+        assert word not in proc.stdout + proc.stderr
 
 
 # ------------------------------------------------------------------ R1, R3: the pre-pull revision
