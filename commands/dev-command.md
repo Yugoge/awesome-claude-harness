@@ -171,7 +171,7 @@ write-policy, while cp-state handles required atomic actions for Stop enforcemen
 
 ### Step 2: Graphify pre-BA Bash hydrator (mirrors commands/dev.md)
 
-Run `scripts/graphify-query.py` as a direct Bash call to inject structural context before BA analysis. Advisory — skips silently when binary absent. Output: `.claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json`. When `status=ok` or `status=degraded`, include the pre_query.json reference in the BA dispatch prompt. See `commands/dev.md` graphify hydrator block for the canonical Bash invocation.
+Run the harness's `"${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-query.py"` as a direct Bash call, spelled as `commands/dev.md`'s graphify hydrator block spells it (venv activation included), to inject structural context before BA analysis. Advisory — skips silently when binary absent. Output: `.claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json`. When `status=ok` or `status=degraded`, include the pre_query.json reference in the BA dispatch prompt. See `commands/dev.md` graphify hydrator block for the canonical Bash invocation.
 
 ### Step 3: Specialist Consultation (always evaluate, never silently skip)
 
