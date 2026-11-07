@@ -1,5 +1,5 @@
 ---
-description: Aggressive project cleanup - normalize docs structure, archive everything, delete one-time scripts/tests. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
+description: Aggressive project cleanup - normalize docs structure, discard tracked byproducts (old docs, one-time scripts and tests) with a recoverable git rm. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
 argument-hint: "[--codex]"
 disable-model-invocation: true
 ---
@@ -67,7 +67,7 @@ docs/ subdirectory structure:
 - `docs/reference/` - Technical docs, API reference, registries
 - `docs/planning/` - Planning docs, roadmaps, design proposals
 - `docs/reports/` - Completion reports, summaries, QA reports
-- `docs/archive/YYYY-MM/` - Historical docs (by last modified month)
+- Historical docs: discarded with git rm; git history is the archive
 - `docs/dev/` - Development workflow JSONs only (no .md files)
 - `docs/clean/` - Clean workflow JSONs only (no .md files)
 - `docs/INDEX.md` - Auto-generated index (created by cleaner agent)
@@ -92,7 +92,7 @@ Create comprehensive JSON context for inspectors:
       "constraints": [
         "preserve functional files",
         "safety first - never delete without confirmation",
-        "archive docs rather than delete"
+        "discard tracked byproducts with git rm (no -f); git history is the archive"
       ]
     }
   },
@@ -382,8 +382,7 @@ Format and display findings:
 - Total issues: X
 - Estimated space to free: XX MB
 - Files to move: Y
-- Files to archive: Z
-- Files to delete: W
+- Files to discard (archive, delete): Z
 - Style fixes: V
 
 ## Cleanup Options
@@ -487,8 +486,6 @@ Run `bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/checkpoint.sh" "Before /clean agg
 **Rollback**: The checkpoint lives on a detached ref, not as a HEAD
 ancestor. To recover individual files:
 `git checkout refs/checkpoints/$(git branch --show-current) -- <path>`
-For a full-tree reset (destructive, prefer file-level):
-`git reset --hard refs/checkpoints/$(git branch --show-current)`
 
 ### Step 16: Invoke Cleaner with Approvals (DELEGATION ONLY)
 
@@ -531,6 +528,8 @@ The merged context with approvals is at: docs/clean/context-with-approvals-{REQU
 
 Execute ALL approved_actions. Write results to docs/clean/cleanup-execution-{REQUEST_ID}.json."
 ```
+
+The cleaner discards an approved archive or delete of a tracked path with a non-forced `git rm` and prints `DISCARDED <path> - recover: git checkout <sha> -- <path>` per path (`<sha>`: HEAD at the removal); agents/cleaner.md says what bash-safety passes and what the cleaner skips.
 
 The orchestrator MUST NOT supplement, assist, or "help" the cleaner by making additional edits. If the cleaner fails on specific actions, those failures are recorded in the execution report -- the orchestrator does not retry them directly.
 
@@ -583,8 +582,7 @@ Present verification summary:
 ## Changes Made
 
 - Moved X files to correct locations
-- Archived Y old documents
-- Deleted Z temp files
+- Discarded Y files (the cleaner's DISCARDED lines, each with its recover command)
 - Fixed W style violations
 - Updated .gitignore
 
@@ -599,7 +597,7 @@ Present verification summary:
 
 1. Review changes: `git diff HEAD~1`
 2. If satisfied: Changes already committed — to publish to remote: run `/push`
-3. If not satisfied: `git reset --hard <checkpoint_commit>`
+3. To restore a discarded file: run its DISCARDED line's recover command
 4. See detailed report: docs/clean/completion-{REQUEST_ID}.md
 ```
 
@@ -640,8 +638,7 @@ Save to: `docs/clean/completion-{REQUEST_ID}.md`
 
 ### File Organization (X actions)
 - Moved Y misplaced docs to docs/
-- Archived Z old documents to docs/archive/
-- Deleted W temp files
+- Discarded Z files with git rm (their DISCARDED lines)
 - Renamed V files to kebab-case
 
 ### Style Fixes (X actions)
@@ -681,7 +678,7 @@ Save to: `docs/clean/completion-{REQUEST_ID}.md`
 - Cleanup commit: <hash>
 - Branch: <branch>
 - Files changed: X
-- Rollback command: `git reset --hard <checkpoint_commit>`
+- Recovery: each DISCARDED line's recover command
 
 ---
 
@@ -708,8 +705,8 @@ Save to: `docs/clean/completion-{REQUEST_ID}.md`
 ## Safety Features
 
 ### Git Checkpoint
-- Automatic commit before cleanup
-- Easy rollback with `git reset --hard <checkpoint>`
+- Step 15's checkpoint on `refs/checkpoints/<branch>` before cleanup
+- A discarded file comes back with its DISCARDED line's recover command
 
 ### User Approval
 - No automatic deletion without confirmation
@@ -719,7 +716,7 @@ Save to: `docs/clean/completion-{REQUEST_ID}.md`
 ### Reference Detection
 - Uses `check-file-references.sh` for safety
 - Preserves files with functional references
-- Archives instead of deleting when uncertain
+- Keeps a file whose references it cannot rule out
 
 ### Incremental Execution
 - Commits after each category

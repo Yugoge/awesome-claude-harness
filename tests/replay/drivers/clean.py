@@ -3,14 +3,15 @@ test, read at run time, up to the cleaner's commit and the completion report.
 
 Scenario: the toy as the owner left it before typing /clean (SETUP, committed by `prepare`, which
 cli.py runs on the reset sandbox before the replay starts, so its files are tracked at replay start): a
-root-level `*-guide.md` the text's documentation rules move under docs/, and one script under scripts/
+root-level `*-guide.md` the text's documentation rules move under docs/, one script under scripts/
 with a bare `python3` call, so the style planner has a file to give an inspector and the style
 standards a violation (without one, Step 7's planner finds no file and the text skips to Step 11, whose
-merge then has no style or prompt report: see "Text points"). The owner types `/clean` (no `--codex`:
-every `codex_required` line is left out), passes the checklist the hook hands it (scripts/todo/clean.py)
-to its first TodoWrite and completes one checklist step per TodoWrite call; at Step 13 the owner picks
-the first cleanup option (execute all) in one AskUserQuestion, so the approvals are generated
-mechanically from every finding.
+merge then has no style or prompt report: see "Text points"), and a tracked backup copy of that script
+(`.bak`), a byproduct the cleanliness-inspector's duplicate-scripts rule deletes. The owner types
+`/clean` (no `--codex`: every `codex_required` line is left out), passes the checklist the hook hands it
+(scripts/todo/clean.py) to its first TodoWrite and completes one checklist step per TodoWrite call; at
+Step 13 the owner picks the first cleanup option (execute all) in one AskUserQuestion, so the approvals
+are generated mechanically from every finding.
 
 What each step does is taken from the tree's commands/clean.md:
 
@@ -34,7 +35,8 @@ What each step does is taken from the tree's commands/clean.md:
   current UTC time) and the report path the step says it writes. The inspector reads its context,
   runs the Inspection Checklist calls its text makes over the whole project (`Run`/`MUST execute`
   lines of a section that is not `--changed-files`-only), reads each folder README it finds and Writes
-  its Output Format with the scenario's finding.
+  its Output Format with the scenario's findings (the root guide; the backup copy, under the findings key
+  of the section whose suffix list names its suffix, safe to delete).
 * Steps 6-10: Step 6 has no call of its own (its text is the heading of Steps 7-10); Step 7's planner,
   saved where the step says, then Read; Step 8 one style-inspector dispatch per plan group from the
   step's prompt block, `run_in_background: true` as the text says; Step 9 each partial Read and the
@@ -57,10 +59,14 @@ What each step does is taken from the tree's commands/clean.md:
   the cleaner dispatch from the step's `Agent tool invocation:` prompt. The cleaner is played from its
   agent file: the report files the prompt names Read, the checkpoint check (Safety First), each
   approved action by the operation its Action Types table gives (move with `mkdir -p` and `mv`, the
-  `fix_style` replacement with the Edit tool; an action the table has no row for is skipped with its
-  reason), `git add` of the affected files, one commit with the text's message, the push-gate token as
-  the tree's text writes it (the writer's block, or, on the base, the Python script its prose
-  describes), and its execution report Written where the prompt says.
+  `fix_style` replacement with the Edit tool; a discard, where the row, or the delete row it points to,
+  names a `git rm`: a path inside the harness home skipped, `git ls-files` telling a tracked path from an
+  untracked one (skipped), then the row's `git rev-parse HEAD`, its `git rm` and its DISCARDED line, kept
+  in the action's `discarded` field and printed in the cleaner's final message; a row with no command but
+  a `Bash (<tool>)` cell, the base's delete, runs `<tool> -- <path>`; an action the table has no row for
+  is skipped with its reason), `git add` of the affected files, one commit with the text's message, the
+  push-gate token as the tree's text writes it (the writer's block, or, on the base, the Python script
+  its prose describes), and its execution report Written where the prompt says.
 * Step 17: the two git calls the step names; Step 18: the completion report from the step's template,
   Written at its `Save to:` path; the last TodoWrite; Stop.
 
@@ -178,12 +184,14 @@ DEVIATIONS = Deviations([
         "the cleaner's commit as its agent text makes it")),
 ])
 
-# The owner's toy before /clean: a root-level guide the documentation rules move under docs/, and a
-# script with a bare python3 call (style standard 3) the planner hands an inspector.
+# The owner's toy before /clean: a root-level guide the documentation rules move under docs/, a script
+# with a bare python3 call (style standard 3) the planner hands an inspector, and a tracked backup copy of
+# that script's older version (a byproduct the duplicate-scripts rule deletes).
 SETUP = {
     "usage-guide.md": "# Usage guide\n\nCall `toy.add(a, b)` to add two numbers.\n",
     "scripts/run-tests.sh": "#!/usr/bin/env bash\n# Run the toy's test suite.\nset -euo pipefail\n"
                             "python3 -m pytest -q tests\n",
+    "scripts/run-tests.sh.bak": "#!/usr/bin/env bash\npython3 -m pytest tests\n",
 }
 
 
@@ -626,6 +634,17 @@ class CleanRun:
                     findings["misplaced_docs"].append({
                         "file": rel, "reason": "markdown file in the project root outside the allowed set",
                         "severity": "major", "recommendation": "move", "destination": dest})
+            # a copy of another SETUP file under a suffix a section's "suffixes alongside their originals"
+            # list names (Duplicate Scripts): not identical, so "keep newest, delete backup versions"
+            for part in re.split(r"\n(?=### )", sec):
+                key = _finding_key(part.split("\n", 1)[0], findings)
+                sufs = re.findall(r"`([-.][\w-]+)`", part) if "suffixes alongside their originals" in part else []
+                for rel in SETUP if key and sufs else ():
+                    orig = next((o for o in SETUP if o != rel and any(
+                        rel in (o + x, os.path.splitext(o)[0] + x + os.path.splitext(o)[1]) for x in sufs)), None)
+                    if orig:
+                        findings[key].append({"file": rel, "reason": f"backup copy of {orig}", "severity": "minor",
+                                              "recommendation": "delete", "safe_to_delete": True})
             items = [f for v in findings.values() if isinstance(v, list) for f in v]
             doc = {"request_id": self.rid, "timestamp": utc_now(), "inspector": role, "baseline_check": "not_provided",
                    "findings": findings, "codex_consult": {"invoked": False, "status": "not_requested", "findings": [],
@@ -936,11 +955,49 @@ class CleanRun:
                     "generate_index": 6}
             if len(order) != len(rank):
                 raise agents.PlayError(f"agents/{role}.md's execution order has {len(order)} items")
-            done, skipped, failed, staged = [], [], [], []
+            def discard_codes(kind):
+                """A discard row's `git rev-parse`, `git rm` and DISCARDED codes (an "as **delete** does" row
+                takes the delete row's), or None where the row names no git rm."""
+                op = table[kind][0]
+                if "git rm" not in op and "**delete**" in op and "delete" in table:
+                    op = table["delete"][0]
+                codes = re.findall(r"`([^`]+)`", op)
+                rm = next((c for c in codes if c.startswith("git rm")), None)
+                return rm and (next((c for c in codes if c.startswith("git rev-parse")), "git rev-parse HEAD"), rm,
+                               next((c for c in codes if c.startswith("DISCARDED")), ""))
+
+            harness = os.path.realpath(o.harness)
+            done, skipped, failed, staged, discarded = [], [], [], [], []
             for a in sorted(actions, key=lambda a: rank.get(a.get("action"), 99)):
                 kind = a.get("action")
                 if kind not in table:
                     skipped.append(dict(a, result="skipped", reason=f"no operation for action {kind!r}"))
+                    continue
+                disc = discard_codes(kind)
+                if disc:
+                    path = a.get("file") or a.get("location") or ""
+                    full = os.path.realpath(self.abs(path))
+                    if full == harness or full.startswith(harness + "/"):
+                        skipped.append(dict(a, result="skipped", reason="harness home"))
+                        continue
+                    c = sub.bash(f"git ls-files -- {q(path)}", f"Is {path} tracked",
+                                 label=f"{sub.role} Bash ls-files {a['action_id']}")
+                    if not (c.ok and c.response.get("stdout", "").strip()):
+                        skipped.append(dict(a, result="skipped", reason="untracked"))
+                        continue
+                    r = sub.bash(disc[0], "HEAD at the removal", label=f"{sub.role} Bash sha {a['action_id']}")
+                    sha = r.response.get("stdout", "").strip() if r.ok else ""
+                    cmd = disc[1].replace("<path>", q(path))
+                    if os.path.isdir(self.abs(path)):
+                        cmd = cmd.replace("git rm", "git rm -r", 1)
+                    c = sub.bash(cmd, f"Discard {path}", label=f"{sub.role} Bash {kind} {a['action_id']}")
+                    if c.ok:
+                        line = disc[2].replace("<path>", path).replace("<sha>", sha)
+                        discarded.append(line)
+                        done.append(dict(a, result="success", git_staged=True, discarded=line))
+                        staged.append(path)
+                    else:
+                        failed.append(dict(a, result="failed", error=(c.error or "refused")[:200]))
                     continue
                 if kind in ("move", "archive", "rename"):
                     src, dst = a.get("file") or a.get("location"), a.get("destination")
@@ -960,12 +1017,20 @@ class CleanRun:
                     affected = [rel]
                 else:
                     cmd = re.search(r"`([^`]+)`", table[kind][0])
-                    if not cmd:
+                    tool = re.fullmatch(r"Bash \((\w+)\)", table[kind][1])
+                    path = a.get("file") or a.get("location") or ""
+                    if not cmd and kind == "delete" and tool and path:
+                        # the base's delete row: no command in its Operation, the tool in its Tools cell
+                        c = sub.bash(f"{tool.group(1)} -- {q(path)}", f"{kind} {path}",
+                                     label=f"{sub.role} Bash {kind} {a['action_id']}")
+                        affected = [path]
+                    elif not cmd:
                         skipped.append(dict(a, result="skipped", reason="no command"))
                         continue
-                    c = sub.bash(cmd.group(1).replace('"$PROJECT_ROOT', '"' + self.project), kind,
-                                 label=f"{sub.role} Bash {a['action_id']}")
-                    affected = []
+                    else:
+                        c = sub.bash(cmd.group(1).replace('"$PROJECT_ROOT', '"' + self.project), kind,
+                                     label=f"{sub.role} Bash {a['action_id']}")
+                        affected = []
                 if c.ok:
                     done.append(dict(a, result="success", git_staged=bool(affected)))
                     staged += [p for p in affected if p not in staged]
@@ -978,9 +1043,11 @@ class CleanRun:
             if staged:
                 tpl = next(b.text for b in cmdtext.blocks(text, "5. Git Operations") if "cleanup:" in b.text)
                 subject, _, body = tpl.strip("\n").partition("\n")
-                moved = sum(1 for a in done if a.get("action") == "move")
-                body = body.strip().replace("X files", f"{moved} files").replace("Y files", "0 files").replace(
-                    "Z files", "0 files").replace("W violations", f"{sum(1 for a in done if a.get('action') == 'fix_style')} violations")
+                n = {k: sum(1 for a in done if a.get("action") == k)
+                     for k in ("move", "archive", "delete", "fix_style")}
+                for word, k in (("X files", "move"), ("Y files", "archive"), ("Z files", "delete"),
+                                ("W violations", "fix_style")):
+                    body = body.strip().replace(word, f"{n[k]} {word.split()[1]}")
                 c = sub.bash(f"git commit -q -m {q(subject)} -m {q(body)}", "Commit the cleanup",
                              label=f"{sub.role} Bash commit")
                 if c.ok:
@@ -995,7 +1062,8 @@ class CleanRun:
                 "status": status, "actions_completed": done, "actions_failed": failed, "actions_skipped": skipped,
                 "summary": {"total_actions": len(actions), "successful": len(done), "failed": len(failed),
                             "skipped": len(skipped), "files_moved": sum(1 for a in done if a.get("action") == "move"),
-                            "files_archived": 0, "files_deleted": 0, "files_renamed": 0,
+                            "files_archived": sum(1 for a in done if a.get("action") == "archive"),
+                            "files_deleted": sum(1 for a in done if a.get("action") == "delete"), "files_renamed": 0,
                             "style_fixes": sum(1 for a in done if a.get("action") == "fix_style"), "index_generated": False},
                 "git_status": {"checkpoint_commit": (ctx.get("orchestrator") or {}).get("analysis", {}).get(
                     "checkpoint_commit", self.checkpoint), "cleanup_commit": commit_sha,
@@ -1003,7 +1071,8 @@ class CleanRun:
             agents.put(sub, self.abs(out_rel), json.dumps(doc, indent=2) + "\n", f"{sub.role} Write execution report")
             self.execution_rel = out_rel
             self.cleaner_result = doc["cleaner"]
-            return doc
+            # the final message: each DISCARDED line, then the report
+            return dict(doc, _final="\n".join(discarded + [json.dumps(doc, indent=2)]))
         return work
 
     def token(self, sub, text: str, root: str, branch: str, sha: str) -> None:
