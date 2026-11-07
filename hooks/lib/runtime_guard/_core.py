@@ -33,7 +33,7 @@ from typing import Optional, Tuple
 
 # Shell-command lexing primitives (_split_pipeline / _strip_quotes / _safe_shlex
 # / redirect scanners) → shell_lex.py (phase-1). Re-imported here to keep _core's
-# public surface unchanged. See docs/reference/monolith-split-plan.md.
+# public surface unchanged.
 #
 # Dual-context import (INV-3) — REPRESENTATIVE CAUTION for every re-import block
 # below: _core runs BOTH as the `lib.runtime_guard._core` submodule (relative
@@ -81,8 +81,7 @@ def _block(primitive: str, reason: str) -> Verdict:
 # The ~19 pure frozenset/dict vocabularies (PKG_MANAGERS, ENV_WRAPPERS,
 # RUNTIMES, MUTATION_VERBS, KILL_VERBS, EXEC_FRONTEND_PROFILES, …) re-imported
 # here (phase-2). The `_block`/`Verdict`/`ALLOW` decision anchors stay in _core
-# by design. Dual-context import (INV-3, see phase-1 block above) --
-# docs/reference/monolith-split-plan.md.
+# by design. Dual-context import (INV-3, see phase-1 block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .constants import (
         BUILD_TOOL_BASENAMES,
@@ -134,7 +133,7 @@ except ImportError:  # executed as a top-level script (no package context)
 # (_normalize_path, _glob_to_segment_regex, _glob_parent, _path_matches_any,
 # _path_under_any, the _any_token_* scanners, ...) re-imported here (phase-3);
 # `_mutation_cand_hits` stays in _core (see its def below). Dual-context import
-# (INV-3, see phase-1 block above) -- docs/reference/monolith-split-plan.md.
+# (INV-3, see phase-1 block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .pathmatch import (
         _SHELL_GLOB_METACHARS,
@@ -174,14 +173,14 @@ except ImportError:  # executed as a top-level script (no package context)
 # REQUIRED_KEYS, _load_config, _home_tilde_variant, _config_path_variants,
 # _ANCESTOR_STOP_ROOTS, _config_ancestor_dirs, _config_or_ancestor_variants,
 # _targets_config_file) re-imported here (phase-4). Dual-context import
-# (INV-3, see phase-1 block above) -- docs/reference/monolith-split-plan.md.
+# (INV-3, see phase-1 block above).
 #
 # DATA_FILE_PATH reload caution (CANONICAL code-site): DATA_FILE_PATH is read
 # from the env at config's MODULE-IMPORT time. The package __init__ reloads _core
 # (NOT its siblings), so a plain `from .config import DATA_FILE_PATH` on an _core
 # reload would re-bind the STALE cached value. The `_importlib.reload(_config)`
 # below re-runs config's module-level env read on every _core (re)load, keeping
-# it an import-time (NOT lazy) read. See docs/reference/monolith-split-plan.md.
+# it an import-time (NOT lazy) read.
 import importlib as _importlib
 try:
     from . import config as _config
@@ -220,8 +219,7 @@ except ImportError:  # executed as a top-level script (no package context)
 # `_name_value_matches_protected`) plus their generic option/predicate tables
 # re-imported here (phase-5); the forward-referencing orchestrators
 # (`_find_destructive_target_hits` / `_find_filter_exonerates_reverse`) stay in
-# _core. Dual-context import (INV-3, see phase-1 block above) --
-# docs/reference/monolith-split-plan.md.
+# _core. Dual-context import (INV-3, see phase-1 block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .find_cmds import (
         _FD_OPTS_WITH_ARG,
@@ -259,8 +257,7 @@ except ImportError:  # executed as a top-level script (no package context)
 # magic stripping, destructive-pathspec collection, destructive-mode predicate)
 # plus their generic verb/option tables re-imported here (phase-5); the STAYING
 # `_git_inspection_head` and the forward-referencing `_git_destructive_pathspec_hits`
-# remain in _core. Dual-context import (INV-3, see phase-1 block above) --
-# docs/reference/monolith-split-plan.md.
+# remain in _core. Dual-context import (INV-3, see phase-1 block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .git_cmds import (
         _GIT_DESTRUCTIVE_SUBCMDS,
@@ -289,7 +286,7 @@ except ImportError:  # executed as a top-level script (no package context)
 # service-control hit-detector, and the non-protected-workspace-selector
 # exemption -- re-imported here (phase-6). The P0 decision ENGINE `_p0_anchor`
 # and every forward-referencing anchor helper stay in _core. Dual-context import
-# (INV-3, see phase-1 block above) -- docs/reference/monolith-split-plan.md.
+# (INV-3, see phase-1 block above).
 try:  # noqa: F401  — names re-exported for backward compatibility
     from .anchor import (
         _ANCHOR_LAUNCH_FOLLOW,

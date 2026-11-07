@@ -2481,10 +2481,8 @@ def _completeness_check_file(
     if not require_full_coverage:
         # Same-cycle-only mode (OWNERSHIP_COMPLETENESS_BLOCKING_KEY) is the
         # ONE blocking call of this function (require_full_coverage=True's
-        # global diagnostic below is advisory-only and untouched). Attribution-
-        # journal consumer cutover (docs/reference/attribution-journal-
-        # cutover-flip-plan-20261003.md, superseded by the zero-blocking
-        # constraint of the follow-up consumer-cutover task): the self-
+        # global diagnostic below is advisory-only and untouched). Since the
+        # attribution-journal consumer cutover, the self-
         # reported-ledger replay combinatorics below this branch (still used
         # by the advisory call) are no longer this gate's authority. A file
         # with no write-time journal evidence, or evidence that does not

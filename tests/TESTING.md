@@ -1,11 +1,8 @@
 # Test Topology & Runner Map (authoritative)
 
 > The map a new contributor needs to answer **"how do I run the tests / which are
-> authoritative?"** in one place. Companion to
-> [../docs/reference/test-suite-overhaul-plan.md](../docs/reference/test-suite-overhaul-plan.md)
-> (this doc realizes that plan's §1 inventory + §3 target as Phase 1) and
-> [../docs/reference/generated-tests-policy.md](../docs/reference/generated-tests-policy.md)
-> (policy for the `tests/generated/` skeletons).
+> authoritative?"** in one place. Policy for the `tests/generated/` skeletons:
+> [../docs/reference/generated-tests-policy.md](../docs/reference/generated-tests-policy.md).
 > Counts **measured** on 2026-07-16 under the repo `venv`.
 
 ---

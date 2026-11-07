@@ -1845,9 +1845,7 @@ def test_l2_ac2_terminal_state_right_passes(tmp_path):
 
 
 def test_l2_ac3_ledger_without_journal_evidence_passes_wrong_or_right(tmp_path):
-    """Attribution-journal consumer cutover (docs/reference/attribution-
-    journal-cutover-flip-plan-20261003.md, superseded by the zero-blocking
-    constraint of the follow-up consumer-cutover task): this hook no longer
+    """Attribution-journal consumer cutover: this hook no longer
     calls check-owned-edits-ledger.py at all (see _wire_ledger_judgment).
     A malformed self-reported ledger (empty `old` needle) no longer blocks
     the producer's stop -- it has no write-time journal evidence either (a

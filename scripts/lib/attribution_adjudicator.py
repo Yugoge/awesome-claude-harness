@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Three-way staging adjudicator over write-time attribution journal chains.
 
-Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
-docs/reference/attribution-journal-consumer-cutover-20261004.md): the lane-agnostic
+Phase D cutover: the lane-agnostic
 `ledger_structural_verdict()` / `ledger_blocks()` at the bottom of this file are the
 real, executed-path callers for scripts/resolve-commit-repos.py's ownership gate,
 hooks/subagentstop-artifact-contract-enforce.py's artifact-contract section, and
@@ -745,8 +744,7 @@ def abs_event_path(root, rel):
 def ledger_structural_verdict(path, *, root=None, journal_dir=None, gitdir=None, task_id=None):
     """Lane-agnostic ledger verdict for ONE path, for a consumer that is
     switching off the self-reported ("replay owned_edits hunks, compare to
-    disk") judgment per docs/reference/attribution-journal-cutover-flip-plan-
-    20261003.md, without per-task lane metadata (no dispatcher records any
+    disk") judgment, without per-task lane metadata (no dispatcher records any
     yet, so no `agent_id -> task_id` map or dispatch-time baseline exists for
     any real task today).
 

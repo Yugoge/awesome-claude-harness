@@ -203,9 +203,7 @@ def _load_lib_module(name: str):
 
 
 def _wire_ledger_judgment(report: dict, project_dir: str, task_id: str, deadline: float) -> list:
-    """Attribution-journal consumer cutover (docs/reference/attribution-
-    journal-cutover-flip-plan-20261003.md, superseded by the zero-blocking
-    constraint of the follow-up consumer-cutover task): replaces this hook's
+    """Attribution-journal consumer cutover: replaces this hook's
     two self-reported-ledger replay checks -- check-owned-edits-ledger.py's
     structural+replay validation and stage-owned-hunks.py --dry-run's hunk-
     replay exclusion. check-owned-edits-ledger.py has since been deleted;

@@ -62,7 +62,6 @@ COMMIT_GRANT_RE="$(printf '%s' "${USERINTENT_SENTINEL_DIR%/}/claude-commit-grant
 # awk on most Linux), `node(js)?`. NEVER remove a token to narrow a layer: an
 # interpreter writes with no redirection at all, so dropping one opens a hole
 # the redirection branch cannot see.
-# Full record: docs/reference/bash-safety-verb-anchoring-20261008.md
 ARTIFACT_WRITE_VERB_RE='(\btee([^A-Za-z_]|$)|\bcp(io)?([^A-Za-z_]|$)|\bmv([^A-Za-z_]|$)|\bln([^A-Za-z_]|$)|\btouch([^A-Za-z_]|$)|\bsed\s+-i|\bi?python([^A-Za-z_]|$)|\binstall([^A-Za-z_]|$)|\bdd\s|\btruncate([^A-Za-z_]|$)|\bshred([^A-Za-z_]|$)|\brsync([^A-Za-z_]|$)|\b[gmn]?awk([^A-Za-z_]|$)|\bperl([^A-Za-z_]|$)|\bnode(js)?([^A-Za-z_]|$)|\bruby([^A-Za-z_]|$))'
 # A shell NAME=VALUE capture, used as a PREFIX to a namespace regex: it matches
 # the point where a command binds the protected namespace into a variable.
@@ -1004,7 +1003,7 @@ fi
 #      listed verb through its environment.
 # The verb alternation itself is ARTIFACT_WRITE_VERB_RE, defined ONCE near the
 # top of this file and shared with Layer 1.E4 -- add verbs there, anchored, not
-# here. Full record: docs/reference/bash-safety-verb-anchoring-20261008.md
+# here.
 # Stable label: commit-dispatch-attestation-write.
 if echo "$COMMAND" | grep -qE "${COMMIT_DISPATCH_ATTEST_RE}" \
    && { echo "$COMMAND" | grep -qE ">>?[&|]?[[:space:]]*['\"]?${COMMIT_DISPATCH_ATTEST_RE}" \
@@ -1084,7 +1083,7 @@ fi
 # textually IDENTICAL to Layer 1.E3's modulo the namespace variable, and
 # hooks/tests/test_commit_artifact_rw_boundary.py fails if the two diverge.
 # See Layer 1.E3's comment for the four branches, the relaxation they bind, and
-# the residual; and docs/reference/bash-safety-verb-anchoring-20261008.md.
+# the residual.
 # Stable label: commit-grant-raw-write.
 if echo "$COMMAND" | grep -qE "${COMMIT_GRANT_RE}" \
    && { echo "$COMMAND" | grep -qE ">>?[&|]?[[:space:]]*['\"]?${COMMIT_GRANT_RE}" \

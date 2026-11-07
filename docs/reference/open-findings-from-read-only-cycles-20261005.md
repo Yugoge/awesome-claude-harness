@@ -48,7 +48,8 @@ earlier claims as refuted by later measurement** rather than quietly dropping th
 
 ## B. Workspace disposition verdicts
 
-Recorded separately in `workspace-disposition-criteria-20261005.md`: an A/B/C criterion
+Recorded separately in a 2026-10-05 record (workspace-disposition-criteria-20261005.md,
+now in git history only): an A/B/C criterion
 for stale-workspace disposition plus five evidence-backed verdicts, likewise never acted
 on. The B category — *superseded path, name the commit that replaced it* — is absent from
 the two-way "residue + requirement satisfied" test used during the cleanup, and is the

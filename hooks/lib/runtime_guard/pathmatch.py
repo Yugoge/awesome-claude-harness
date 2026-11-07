@@ -2,9 +2,8 @@
 """Path-normalization and segment-boundary glob matching for the guard.
 
 Depends only on shell_lex (`_strip_quotes`) + stdlib; references nothing from
-_core. See docs/reference/monolith-split-plan.md for the decomposition rationale
-(incl. why `_mutation_cand_hits` stays in _core) and the INV-3 dual-context
-import contract.
+_core. `_mutation_cand_hits` stays in _core: it forward-references the decision
+engine.
 
 Scope: `$HOME`/`~` expansion, logical path normalization, glob->segment-boundary
 regex translation, shell-glob detection / parent extraction, and the
@@ -20,8 +19,8 @@ import os
 import re
 from typing import Optional
 
-# Only the phase-1 quote stripper is needed here. Dual-context import (INV-3) --
-# see docs/reference/monolith-split-plan.md.
+# Only the phase-1 quote stripper is needed here. Dual-context import (INV-3; the contract
+# is stated at _core's first re-import block).
 try:
     from .shell_lex import _strip_quotes
 except ImportError:  # executed under the top-level-script shim (no package)

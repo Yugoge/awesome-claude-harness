@@ -484,13 +484,11 @@ def _ledger_entangled(identities: list[tuple[Path, str]]) -> list[tuple[Path, st
     """Of `identities` the self-reported ledger does not back, keep only the
     ones the write-time hash-chain journal itself measures as structurally
     ENTANGLED (scripts/lib/attribution_adjudicator.py ledger_blocks()) --
-    the cutover's ownership gate (docs/reference/attribution-journal-cutover-
-    flip-plan-20261003.md C1, superseded by the zero-blocking constraint in
-    the consumer-cutover task): an identity with no journal evidence at all,
-    or evidence that does not reach back to the current HEAD blob, is
-    deferred to the commit analyst's own judgment, never blocked here. A
-    journal read failure is an infrastructure fault, not a verdict, and is
-    never treated as a conflict.
+    the consumer cutover's ownership gate: an identity with no journal
+    evidence at all, or evidence that does not reach back to the current
+    HEAD blob, is deferred to the commit analyst's own judgment, never
+    blocked here. A journal read failure is an infrastructure fault, not a
+    verdict, and is never treated as a conflict.
     """
     if not identities:
         return []
@@ -541,10 +539,8 @@ def build_plan(
     ``files_modified`` and ``files_created`` is not.
 
     Identities the self-report does NOT exempt are no longer blocked on that
-    basis alone (attribution-journal consumer cutover,
-    docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
-    superseded by the zero-blocking constraint of the follow-up consumer-
-    cutover task): ``_ledger_entangled()`` asks the write-time hash-chain
+    basis alone (attribution-journal consumer cutover):
+    ``_ledger_entangled()`` asks the write-time hash-chain
     journal (``scripts/lib/attribution_adjudicator.py``) and this raises
     ONLY for an identity the journal itself measures as structurally
     ENTANGLED. No journal evidence, or evidence that does not reach back to
