@@ -280,8 +280,8 @@ def _emit_block(violations, dev_dir):
         if via is not None:
             via_lane, via_path = via
             line += (f" | reached by: dispatching again the dev dispatch that declared "
-                     f"{_project_relative(via_path, dev_dir)} (lane {via_lane}), whose write of that "
-                     "report runs it")
+                     f"{_project_relative(via_path, dev_dir)} (lane {via_lane}), which writes that "
+                     "report again in that dispatch; the write runs it")
         lines.append(line)
     lines.append("")
     sys.stderr.write("\n".join(lines) + "\n")

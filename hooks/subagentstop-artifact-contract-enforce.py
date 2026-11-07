@@ -399,8 +399,14 @@ def _stale_failures(project_dir: str, ob: dict, art: dict) -> list:
     (obligation.first_declared_at), since a re-dispatch of a template leaves a
     file it has nothing to change in as its earlier round wrote it. A
     freshness that cannot be decided (no dispatched_at a template bound, as
-    a base-text /spec dispatch's) blocks nothing; a missing file is the
+    a base-text /spec dispatch's, or one ahead of the stop's clock) blocks
+    nothing; a missing file is the
     validators' finding, not this one."""
+    dispatched = obligation.parse_iso8601(ob.get("dispatched_at"))
+    if dispatched is None or dispatched.timestamp() > time.time():
+        # A dispatched_at ahead of this stop's clock is G1's clock bound to judge; here no write
+        # could ever satisfy it, so it decides nothing.
+        return []
     stale = []
     for rel in _declared_files(project_dir, art):
         try:

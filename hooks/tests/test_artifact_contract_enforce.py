@@ -2693,6 +2693,22 @@ def test_g2_freshness_slack_admits_a_file_written_just_before_dispatched_at(tmp_
     assert proc.returncode == 0, proc.stderr
 
 
+def test_g2_dispatched_at_ahead_of_the_clock_decides_no_freshness(tmp_path):
+    """A dispatched_at ahead of the stop's clock (a local time written with a Z) is G1's clock
+    bound to judge; no write could satisfy it here, so a just-written report passes."""
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    ahead = datetime.fromtimestamp(s.dispatched_at.timestamp() + 3600, tz=timezone.utc).isoformat()
+    s.obligation["dispatched_at"] = ahead
+    _write_obligation_transcript(
+        s.home, s.project, s.harness, s.agent_id,
+        f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>',
+    )
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_g2_stale_artifact_names_only_the_stale_one(tmp_path):
     s = _g2_setup(tmp_path, "ba", _g2_ba_artifacts())
     _write(s.project / f"docs/dev/context-{G2_TASK}.json",

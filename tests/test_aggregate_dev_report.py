@@ -2821,8 +2821,8 @@ class TestFanoutCollectionCheck:
         # A hook has no dispatch: the finding names the one that reaches it, the
         # declaring dispatch of this QA dispatch's own lane report (E5 (a)).
         assert (f"| reached by: dispatching again the dev dispatch that declared "
-                f"docs/dev/dev-report-{BARE_TID}-l2.json (lane l2), whose write of that report "
-                "runs it") in result.stderr
+                f"docs/dev/dev-report-{BARE_TID}-l2.json (lane l2), which writes that report "
+                "again in that dispatch; the write runs it") in result.stderr
 
     def test_canonical_that_misses_a_lane_is_stale(self, project_dir, tmp_path):
         dev_dir = project_dir / "docs" / "dev"
