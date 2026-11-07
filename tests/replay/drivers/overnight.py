@@ -265,7 +265,8 @@ DEVIATIONS = Deviations([
     # DEVIATION: "[Orchestrator Gate] BLOCKED: Write used consecutively beyond limit (n/1)." and the
     # same for Edit: the gate allows the main agent one Write and one Edit per turn, and the whole
     # overnight session is one turn while the text has the orchestrator write a spec copy per
-    # pipeline, the cycle log each cycle (and, on the base text, the cycle contract).
+    # pipeline, a completion report per pipeline whose QA passed (Step 16), the cycle log each cycle
+    # and the summary (and, on the base text, the cycle contract).
     ("*Write*", Deviation(
         "hooks/pretool-orchestrator-gate.py", "Write used consecutively beyond limit",
         "an orchestrator write the text asks for after the turn's first Write")),
