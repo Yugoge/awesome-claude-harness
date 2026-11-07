@@ -2106,7 +2106,7 @@ class TestObligationBarrierRepairProfileBypass:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l7",
             artifacts=[{
-                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID},
             }],
         )
@@ -2152,7 +2152,7 @@ class TestObligationBarrierBlockMissingPriorArtifact:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l7",
             artifacts=[{
-                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID, "request_id": BARE_TID},
             }],
         )
@@ -2203,7 +2203,7 @@ class TestObligationBarrierAdvisoryPasses:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l9",
             artifacts=[{
-                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID},
             }],
         )
@@ -2238,7 +2238,7 @@ class TestObligationBarrierOffSwitchFullBypass:
             BARE_TID,
             artifacts=[{
                 "kind": "json", "path": "docs/dev/dev-report-missing-ac5.json",
-                "schema": "dev-report.v1", "identity": {"task_id": BARE_TID},
+                "schema": "dev-report.v2", "identity": {"task_id": BARE_TID},
             }],
         )
         current_prompt = _obligation_block(BARE_TID, profile="final_verification")
@@ -2364,7 +2364,7 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l2",
             artifacts=[{
-                "kind": "json", "path": missing_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": missing_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID},
             }],
         )
@@ -2524,7 +2524,7 @@ class TestObligationBarrierBlockIdentityMismatch:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l3",
             artifacts=[{
-                "kind": "json", "path": artifact_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": artifact_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID, "request_id": BARE_TID},
             }],
         )
@@ -2599,7 +2599,7 @@ class TestObligationBarrierBlockSchemaInvalidPriorArtifact:
         prior_prompt = _obligation_block(
             BARE_TID, role="dev", lane="l4",
             artifacts=[{
-                "kind": "json", "path": artifact_rel, "schema": "dev-report.v1",
+                "kind": "json", "path": artifact_rel, "schema": "dev-report.v2",
                 "identity": {"task_id": BARE_TID},
             }],
         )

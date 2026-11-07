@@ -603,7 +603,6 @@ def test_terminal_status_of_a_do_report(record, expected):
 def test_terminal_status_reads_each_declared_field():
     assert obligation.terminal_status("dev-report.v2", {"dev": {"status": "completed"}}) == "completed"
     assert obligation.terminal_status("dev-report.v2", {"dev": {"status": "blocked"}}) is None
-    assert obligation.terminal_status("dev-report.v1", {"status": "completed"}) == "completed"
     assert obligation.terminal_status("qa-report.v2", {"qa": {"status": "warning"}}) == "warning"
     assert obligation.terminal_status("ba-qa-report.v1", {"verdict": "fail"}) == "fail"
     assert obligation.terminal_status("no-such-report.v1", {"status": "completed"}) is None
@@ -616,14 +615,14 @@ def test_do_report_vocabulary_has_no_pending():
 
 
 def test_terminal_vocabulary_dev_report_single_completed_status():
-    v2 = obligation.TERMINAL_VOCABULARY["dev-report.v2"]["dev.status"]
-    v1 = obligation.TERMINAL_VOCABULARY["dev-report.v1"]["status"]
-    assert v2 == v1 == {"completed"}
-    assert (
-        set(_enum_at(_schema("dev-report.v2"), "dev.status"))
-        == set(_enum_at(_schema("dev-report.v1"), "status"))
-        == {"completed"}
-    )
+    assert obligation.TERMINAL_VOCABULARY["dev-report.v2"]["dev.status"] == {"completed"}
+    assert set(_enum_at(_schema("dev-report.v2"), "dev.status")) == {"completed"}
+    # dev-report.v2 is the dev report's one schema (P10 R7), and every row is
+    # its schema's enum at the field the row names.
+    assert [s for s in obligation.TERMINAL_VOCABULARY if s.startswith("dev-report.")] == ["dev-report.v2"]
+    for schema_id, fields in obligation.TERMINAL_VOCABULARY.items():
+        for dotted, legal in fields.items():
+            assert legal and legal == set(_enum_at(_schema(schema_id), dotted)), schema_id
 
 
 def test_task_id_pattern_parity_with_schema():

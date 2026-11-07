@@ -180,7 +180,6 @@ TERMINAL_VOCABULARY: dict[str, dict[str, frozenset[str]]] = {
     schema_id: {dotted: _schema_enum(schema_id, dotted)}
     for schema_id, dotted in (
         ("dev-report.v2", "dev.status"),
-        ("dev-report.v1", "status"),
         ("ba-qa-report.v1", "verdict"),
         ("qa-report.v2", "qa.status"),
         ("qa-report.v1", "verdict"),

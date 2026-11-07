@@ -233,22 +233,13 @@ def _obligation_block_multi(
     return f'<obligation v="1">\n{body}\n</obligation>'
 
 
-def _valid_dev_report_v1(task_id: str) -> dict:
+def _valid_dev_report_v2(task_id: str) -> dict:
+    """A dev-report.v2 that claims no file: the dev report's one schema."""
     return {
-        "report_version": 1,
-        "task_id": task_id,
-        "status": "completed",
-        "files_modified": [],
-        "files_created": [],
-        "root_cause_addressed": "x",
-        "ac_status": {},
-        "dev": {
-            "status": "completed",
-            "files_modified": [],
-            "files_created": [],
-            "git_rationale": {"how_fix_addresses_root": "x"},
-            "ac_status": {},
-        },
+        "report_version": 2, "request_id": task_id, "task_id": task_id,
+        "timestamp": "2026-10-02T00:00:00Z", "baseline_head_sha": "",
+        "baseline_dirty_snapshot": "", "owned_edits": {}, "pre_edit_snapshots": {},
+        "dev": {"status": "completed", "files_modified": [], "files_created": []},
     }
 
 
@@ -468,7 +459,7 @@ def test_dev_schema_invalid_blocks(tmp_path):
     proc = _run_hook(project, home, "agent-dev-1", session_id=session)
     assert proc.returncode == 2, proc.stderr
     assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr
-    assert "dev-report.v1" in proc.stderr
+    assert "dev-report.v2" in proc.stderr
 
 
 def test_qa_schema_valid_allows(tmp_path):
@@ -537,22 +528,7 @@ def test_fanout_invalid_lane_not_shadowed_by_later_valid_sibling(tmp_path):
     )
     _write(
         project / "docs" / "dev" / f"dev-report-{SESSION_TS}-lane-b.json",
-        {
-            "report_version": 1,
-            "task_id": SESSION_TS,
-            "status": "completed",
-            "files_modified": [],
-            "files_created": [],
-            "root_cause_addressed": "x",
-            "ac_status": {},
-            "dev": {
-                "status": "completed",
-                "files_modified": [],
-                "files_created": [],
-                "git_rationale": {"how_fix_addresses_root": "x"},
-                "ac_status": {},
-            },
-        },
+        _valid_dev_report_v2(SESSION_TS),
     )
     proc = _run_hook(project, home, "agent-dev-1", session_id=session)
     assert proc.returncode == 2, proc.stderr
@@ -566,22 +542,7 @@ def test_fanout_all_valid_lane_reports_allow(tmp_path):
     for lane in ("lane-a", "lane-b"):
         _write(
             project / "docs" / "dev" / f"dev-report-{SESSION_TS}-{lane}.json",
-            {
-                "report_version": 1,
-                "task_id": SESSION_TS,
-                "status": "completed",
-                "files_modified": [],
-                "files_created": [],
-                "root_cause_addressed": "x",
-                "ac_status": {},
-                "dev": {
-                    "status": "completed",
-                    "files_modified": [],
-                    "files_created": [],
-                    "git_rationale": {"how_fix_addresses_root": "x"},
-                    "ac_status": {},
-                },
-            },
+            _valid_dev_report_v2(SESSION_TS),
         )
     proc = _run_hook(project, home, "agent-dev-1", session_id=session)
     assert proc.returncode == 0, proc.stderr
@@ -734,7 +695,7 @@ def test_ac2_resolved_obligation_missing_artifact_blocks(tmp_path):
         project,
         harness_session,
         agent_id,
-        _obligation_block(task_id, artifact_path, "dev-report.v1"),
+        _obligation_block(task_id, artifact_path, "dev-report.v2"),
     )
     proc = _run_hook(
         project, home, agent_id, session_id=harness_session, stopgate_mode="block"
@@ -767,7 +728,7 @@ def test_stopgate_switch_is_read_at_run_time_from_the_harness_home(
     project, home = _standard_setup(tmp_path, "dev", agent_id)
     _write_obligation_transcript(
         home, project, harness_session, agent_id,
-        _obligation_block(task_id, artifact_path, "dev-report.v1"),
+        _obligation_block(task_id, artifact_path, "dev-report.v2"),
     )
     hook = _l2_hook_tree(tmp_path)
     harness = hook.parent.parent
@@ -797,14 +758,15 @@ def test_ac3_resolved_obligation_all_valid_bypasses_legacy_path(tmp_path):
     task_id = "20260101-000003"
     artifact_path = "docs/dev/dev-report-20260101-000003.json"
     project, home = _standard_setup(tmp_path, "dev", agent_id)
+    _git_init_project(project)  # the v2 report's /commit trial plan reads it
     _write_obligation_transcript(
         home,
         project,
         harness_session,
         agent_id,
-        _obligation_block(task_id, artifact_path, "dev-report.v1"),
+        _obligation_block(task_id, artifact_path, "dev-report.v2"),
     )
-    _write(project / artifact_path, _valid_dev_report_v1(task_id))
+    _write(project / artifact_path, _valid_dev_report_v2(task_id))
     _write(
         project / "docs" / "dev" / f"dev-report-{task_id}-stale.json",
         _invalid_dev_report(task_id),
@@ -830,7 +792,7 @@ def test_ac4_advisory_mode_never_blocks(tmp_path):
         project,
         harness_session,
         agent_id,
-        _obligation_block(task_id, artifact_path, "dev-report.v1"),
+        _obligation_block(task_id, artifact_path, "dev-report.v2"),
     )
     proc = _run_hook(project, home, agent_id, session_id=harness_session)
     assert proc.returncode == 0, proc.stderr
@@ -869,7 +831,7 @@ def test_ac5_off_switch_never_calls_resolve_own_obligation(monkeypatch, tmp_path
     assert calls == []
 
 
-@pytest.mark.parametrize("report,expected", [(_invalid_dev_report, 2), (_valid_dev_report_v1, 0)],
+@pytest.mark.parametrize("report,expected", [(_invalid_dev_report, 2), (_valid_dev_report_v2, 0)],
                          ids=["declared_report_invalid", "declared_report_valid"])
 def test_ac6_m4_exception_names_itself_and_the_declared_report_check_decides(
     monkeypatch, tmp_path, capsys, report, expected
@@ -889,7 +851,7 @@ def test_ac6_m4_exception_names_itself_and_the_declared_report_check_decides(
         project,
         harness_session,
         agent_id,
-        _obligation_block(task_id, artifact_path, "dev-report.v1"),
+        _obligation_block(task_id, artifact_path, "dev-report.v2"),
     )
     # The report the dispatch declares, at its declared path: the check
     # judges only the stopping producer's own reports.
@@ -942,6 +904,7 @@ def test_markdown_ac2_mixed_kinds_all_valid_bypasses_legacy_path(tmp_path):
     md_path = "docs/dev/ticket-20260101-000102.md"
     anchor = f"Request ID: {task_id}"
     project, home = _standard_setup(tmp_path, "dev", agent_id)
+    _git_init_project(project)  # the v2 report's /commit trial plan reads it
     _write_obligation_transcript(
         home,
         project,
@@ -953,7 +916,7 @@ def test_markdown_ac2_mixed_kinds_all_valid_bypasses_legacy_path(tmp_path):
                 {
                     "kind": "json",
                     "path": json_path,
-                    "schema": "dev-report.v1",
+                    "schema": "dev-report.v2",
                     "identity": {"task_id": task_id},
                 },
                 {
@@ -965,7 +928,7 @@ def test_markdown_ac2_mixed_kinds_all_valid_bypasses_legacy_path(tmp_path):
             ],
         ),
     )
-    _write(project / json_path, _valid_dev_report_v1(task_id))
+    _write(project / json_path, _valid_dev_report_v2(task_id))
     _write(project / md_path, f"# Ticket\n{anchor}\nSTATUS: ready\n")
     _write(
         project / "docs" / "dev" / f"dev-report-{task_id}-stale.json",
@@ -2068,27 +2031,6 @@ def test_l2_ac12_shard_skips_the_trial_plan_without_a_record(tmp_path):
 G2_TASK = "20261018-120000"
 
 
-def _g2_dev_report_v1(task_id: str, status: str = "completed") -> dict:
-    """A dev-report.v1 that passes the projection pre-pass: the flat fields
-    together with the nested dev sources they project."""
-    return {
-        "report_version": 1,
-        "task_id": task_id,
-        "status": status,
-        "files_modified": [],
-        "files_created": [],
-        "root_cause_addressed": "x",
-        "ac_status": {},
-        "dev": {
-            "status": status,
-            "files_modified": [],
-            "files_created": [],
-            "git_rationale": {"how_fix_addresses_root": "x"},
-            "ac_status": {},
-        },
-    }
-
-
 def _g2_ba_qa_report(task_id: str, verdict: str) -> dict:
     return {
         "task_id": task_id,
@@ -2125,7 +2067,7 @@ def _g2_json(path: str, schema: str, task_id: str = G2_TASK) -> dict:
     return {"kind": "json", "path": path, "schema": schema, "identity": {"task_id": task_id}}
 
 
-def _g2_dev_artifacts(schema: str = "dev-report.v1", task_id: str = G2_TASK) -> list:
+def _g2_dev_artifacts(schema: str = "dev-report.v2", task_id: str = G2_TASK) -> list:
     return [_g2_json(f"docs/dev/dev-report-{task_id}.json", schema, task_id)]
 
 
@@ -2233,14 +2175,10 @@ def test_g2_ba_qa_verdict_fail_passes(tmp_path):
 # (b) dev has one terminal: blocked fails the enum ------------------------
 
 
-@pytest.mark.parametrize("schema", ["dev-report.v2", "dev-report.v1"])
-def test_g2_dev_status_blocked_fails_the_enum(tmp_path, schema):
+def test_g2_dev_status_blocked_fails_the_enum(tmp_path):
     report = f"docs/dev/dev-report-{G2_TASK}.json"
-    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts(schema))
-    if schema == "dev-report.v2":
-        _write(s.project / report, _l2_dev_report(G2_TASK, status="blocked"))
-    else:
-        _write(s.project / report, _g2_dev_report_v1(G2_TASK, status="blocked"))
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _write(s.project / report, _l2_dev_report(G2_TASK, status="blocked"))
     proc = _g2_stop(s)
     _g2_assert_blocked_on(proc, report, "schema-invalid under obligation-supplied schema")
     assert "'blocked'" in proc.stderr
@@ -2283,7 +2221,7 @@ def test_g2_fresh_invalid_producer_question_blocks_naming_why(tmp_path, question
     report = f"docs/dev/dev-report-{G2_TASK}.json"
     s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
     # The declared report is valid, so the question alone blocks the stop.
-    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _write(s.project / report, _valid_dev_report_v2(G2_TASK))
     question_path = _g2_question_path(G2_TASK, "dev")
     _write(s.project / question_path, question)
     proc = _g2_stop(s)
@@ -2298,6 +2236,7 @@ def test_g2_fresh_invalid_producer_question_blocks_naming_why(tmp_path, question
 def test_g2_stale_producer_question_is_ignored(tmp_path):
     report = f"docs/dev/dev-report-{G2_TASK}.json"
     s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _git_init_project(s.project)  # the v2 report's /commit trial plan reads it
     question = s.project / _g2_question_path(G2_TASK, "dev")
     _write(question, _g2_question(G2_TASK, "dev"))
     earlier = s.dispatched_at.timestamp() - 3600
@@ -2307,7 +2246,7 @@ def test_g2_stale_producer_question_is_ignored(tmp_path):
     assert "producer_question" not in proc.stderr
     # A re-dispatched producer that writes its report passes; the stale
     # question from the earlier round neither helps nor hurts.
-    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _write(s.project / report, _valid_dev_report_v2(G2_TASK))
     proc = _g2_stop(s)
     assert proc.returncode == 0, proc.stderr
     _g2_assert_decided_by_obligation(s)
@@ -2639,7 +2578,7 @@ def test_r14_in_flight_lane_dispatched_before_the_change_passes(tmp_path, echoed
 
 def test_r14_lane_echo_only_where_the_schema_declares_both():
     assert HOOK._declares_lane_echo("dev-report.v2") and HOOK._declares_lane_echo("qa-report.v2")
-    for schema in ("dev-report.v1", "qa-report.v1", "context.v1", "ba-qa-report.v1", "no-such.v9"):
+    for schema in ("qa-report.v1", "context.v1", "ba-qa-report.v1", "no-such.v9"):
         assert not HOOK._declares_lane_echo(schema), schema
 
 

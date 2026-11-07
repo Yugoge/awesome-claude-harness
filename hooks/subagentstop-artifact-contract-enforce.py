@@ -264,9 +264,8 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> l
     shard = isinstance(lane_set, list) and len(lane_set) > 1
     for art in json_artifacts:
         # Only the v2 report carries the nested dev section, owned_edits
-        # ledger and pre_edit_snapshots the downstream consumers read; the
-        # flat v1 shape is unplannable by /commit itself and is shape-gated
-        # only (schema + identity + terminal state).
+        # ledger and pre_edit_snapshots the downstream consumers read; any
+        # other json artifact is shape-gated only (schema + identity).
         if not str(art.get("schema", "")).startswith("dev-report.v2"):
             continue
         report_rel = art["path"]
