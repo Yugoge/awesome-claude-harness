@@ -7,9 +7,9 @@ reboot. This copies:
   * every session journal  -> <dest>/journals/<session>.jsonl   (atomic replace)
   * every blob referenced by any event's pre_sha/post_sha
                            -> <dest>/objects.git  (bare repo, same blob ids)
-Default dest: $CLAUDE_CONFIG_DIR/attribution-seals (the account's persistent
-harness-state dir, <accounts-root>/<acct>/claude on the root ext4
-disk) -- override with $ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
+Default dest: attribution-seals/ beside the journal's own state dir
+(<harness>/state/attribution-seals, ignored like the rest of state/)
+-- override with $ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
 destination unless --allow-volatile. See
 docs/reference/attribution-journal-phase0-facility.md #1 for the measured
 persistence tier of each resolution path.
@@ -63,12 +63,7 @@ def mount_class(path: Path) -> dict:
 
 def default_dest() -> Path:
     env = os.environ.get("ATTRIBUTION_SEAL_DEST")
-    if env:
-        return Path(env)
-    base = os.environ.get("CLAUDE_CONFIG_DIR")
-    if not base:
-        base = os.path.realpath(str(Path.home() / ".claude"))
-    return Path(base) / "attribution-seals"
+    return Path(env) if env else aj.state_dir().parent / "attribution-seals"
 
 
 def _git(gd, *args, inp=None):
