@@ -469,6 +469,46 @@ def test_failclosed_no_block_vs_multiple_blocks_distinct():
     assert many.reason == "multiple_blocks"
 
 
+def _extracted_searching_from_the_start(prompt):
+    """extract_obligation_block as it searched for the opening tag from the prompt's start (the oracle)."""
+    if not isinstance(prompt, str):
+        return obligation.Rejection(reason="bad_prompt")
+    count = prompt.count(obligation.OBLIGATION_OPEN_TOKEN)
+    if count == 0:
+        return obligation.NoBlock()
+    if count > 1:
+        return obligation.Rejection(reason="multiple_blocks")
+    match = obligation._OPEN_TAG_RE.search(prompt)
+    if match is None:
+        return obligation.Rejection(reason="unsupported_version", detail="malformed opening tag")
+    attrs = obligation._VERSION_ONLY_ATTRS_RE.fullmatch(match.group(1))
+    if attrs is None or attrs.group(1) != obligation.OBLIGATION_VERSION:
+        return obligation.Rejection(reason="unsupported_version", detail=match.group(1).strip())
+    close = prompt.find(obligation.OBLIGATION_CLOSE_TAG, match.end())
+    if close < 0:
+        return obligation.Rejection(reason="unterminated_block")
+    return obligation.ExtractedBlock(body=prompt[match.end():close])
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_the_opening_tag_is_searched_from_the_one_opener(seed):
+    # extract_obligation_block searches for the opening tag from the one opener token, where alone the
+    # tag can start: every outcome equals the search from the prompt's start.
+    import random
+
+    rng = random.Random(seed)
+    pieces = ['<obligation v="1">', '<obligation v="2">', "<obligation>", '<obligation v="1"', "<obligation",
+              '<obligationx v="1">', '<obligation\nv="1">', '<obligation  v="1" >', "</obligation>", "<", ">",
+              "x", '{"a": 1}', "\n", "obligation", "é", "<<obligation v=\"1\">"]
+    seen = set()
+    for _ in range(6000):
+        prompt = "".join(rng.choice(pieces) for _ in range(rng.randrange(0, 7)))
+        got = obligation.extract_obligation_block(prompt)
+        assert got == _extracted_searching_from_the_start(prompt), prompt
+        seen.add(getattr(got, "reason", type(got).__name__))
+    assert seen >= {"NoBlock", "multiple_blocks", "unsupported_version", "unterminated_block", "ExtractedBlock"}
+
+
 # --------------------------------------------------------------------------
 # Pure helper coverage (S1)
 # --------------------------------------------------------------------------

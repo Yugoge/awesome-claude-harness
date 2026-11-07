@@ -61,6 +61,10 @@ Driver arguments (cli.py --arg K=V):
                        one id on the base text; where they differ the default follows the adapter line
   tier=STANDARD        BA's complexity_tier (STANDARD or COMPLEX: test-writer expected; SMALL or
                        MICRO: not)
+  variant=qa-never     (acceptance 7's second case, not in VARIANTS, the artifact check's job list) the
+                       turn is interrupted after Step 12, before Step 13's QA dispatch: the lane QA is
+                       never dispatched, Step 17 never runs, and no Stop event fires (an interrupted
+                       turn runs no Stop hook); drivers/close.py's qa-never case closes it
   kept=<JSON>          [[hook, step, normalised text], ...]: the blocks the base kit's replay of the
                        same variant and settings recorded. Given, a declared deviation passes only a
                        block in that list (a kept base block); without it every declared deviation
@@ -741,23 +745,26 @@ class DevCycle:
             out.append(l)
         return out
 
-    def step17(self) -> None:
+    def step17(self, prefix: str = "") -> None:
+        """Step 17; `prefix` labels its calls when another command's main agent runs it (a /close routing
+        round that the reader sends to this step, the main agent's own)."""
         o = self.o
+        lab = (prefix + " ") if prefix else ""
         tpl = o.block("Step 17", anchor="Development Completion Report")
         report = o.bind("\n".join(self.files_generated(tpl.split("\n"))),
                         [(r"^ISO-8601$", utc_now()), (r"^N$", str(self.iterations()))])
         rel = self.text_paths(17, "Save report to")[0]
-        o.s.write(os.path.join(o.project, rel), report, label="Step 17 Write completion report",
-                  deviation=o.devs.at("Step 17 Write completion report"))
+        o.s.write(os.path.join(o.project, rel), report, label=f"{lab}Step 17 Write completion report",
+                  deviation=o.devs.at(f"{lab}Step 17 Write completion report"))
         # The resolver postcondition: completion needs its exit 0 (a refused or failed call is not one).
-        calls = o.run_step_blocks(17, capture=("ARTIFACT_CHAIN",))
+        calls = o.run_step_blocks(17, capture=("ARTIFACT_CHAIN",), label=f"{lab}Step 17")
         self.chain_ok = all(c.ok for c in calls)
         if "/spec-update --temp" not in o.section("Step 17"):
             return
         # Workflow update: all requested work is complete -> /spec-update --temp, as that command's text says.
         su = Orchestrator(self.rp, "spec-update", session=o.s, deviations=o.devs)
         mk = su.inline("Temp-note mode", "mktemp", startswith="mktemp")
-        c = o.run(mk, "Create the temp update note", "Step 17 Bash mktemp update note")
+        c = o.run(mk, "Create the temp update note", f"{lab}Step 17 Bash mktemp update note")
         path = c.response.get("stdout", "").strip() if c.ok else ""
         if path:
             m = re.search(r"update-([A-Za-z0-9]+)(?:\.md)?$", path)
@@ -766,12 +773,14 @@ class DevCycle:
             if " -d " in f" {mk} ":  # the text's private directory: the note is the new file update.md in it
                 path = os.path.join(path, "update.md")
             else:  # the earlier text: the empty file mktemp made, Read before it is written
-                o.s.read(path, label="Step 17 Read update note", deviation=o.devs.at("Step 17 Read update note"))
+                o.s.read(path, label=f"{lab}Step 17 Read update note",
+                         deviation=o.devs.at(f"{lab}Step 17 Read update note"))
             note = su.block("Temp-note mode", anchor="# Update")
             note = su.bind(note, [(r"^ISO-8601$", utc_now()), (r'id or "unknown"', self.tid),
                                   (r"^spec\|dev\|close", "dev"), (r"exact next command", f"/close {self.tid}"),
                                   (r".", "see the completion report")])
-            o.s.write(path, note, label="Step 17 Write update note", deviation=o.devs.at("Step 17 Write update note"))
+            o.s.write(path, note, label=f"{lab}Step 17 Write update note",
+                      deviation=o.devs.at(f"{lab}Step 17 Write update note"))
 
     def not_complete(self) -> str:
         """The Stop text when Step 17's resolver postcondition did not pass ("exit 2 or any other status
@@ -808,6 +817,11 @@ class DevCycle:
         self.to(11)
         o.s.say("Step 11 waived: single-dev cycle (N == 1); the dev writes the canonical report itself.")
         self.to(12); self.step12()
+        if self.variant == "qa-never":
+            # The turn is interrupted here (acceptance 7's second case): Step 13's QA is never dispatched and
+            # no Stop event fires, as an interrupted turn runs no Stop hook.
+            self.interrupted = True
+            return
         self.to(13); self.step13(verdict="fail" if self.variant == "qa-fail" else "pass")
         self.to(14)
         status = self.step14()
@@ -1044,7 +1058,7 @@ VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-f
 
 def run(rp) -> None:
     variant = rp.args.get("variant", "plain")
-    if variant not in VARIANTS:
+    if variant not in VARIANTS + ("qa-never",):
         raise ValueError(f"unknown variant {variant!r}")
     tier = rp.args.get("tier", "STANDARD")
     if variant.startswith("fanout"):

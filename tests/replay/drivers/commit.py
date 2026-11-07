@@ -65,6 +65,9 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
                           names the report, its owner is dispatched again, the same call re-run
                           (acceptance 7's fourth case; F8c)
   cycle_variant=V         drivers/dev.py's variant of the cycle (default plain; fanout, lanes=N)
+  removed=lane|aggregate  with variant=commit-route and a fan-out cycle, the report removed after
+                          /close: the first lane's dev report (lane, the default; F8c) or the canonical
+                          aggregate (aggregate; acceptance 7's fan-out commit-route case)
   variant=full            route, append and commit-route in one cycle: the lane QA report removed
                           after /dev, /close in a later session (Step 0's routing round, then a
                           close-QA finding on the product file, dev again, the appended round), the
@@ -72,6 +75,16 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
   session=same|later      /close and /commit typed in the cycle's session or a later one
                           (default same for plain, later for every routing variant and auto, as
                           acceptance 7 types them)
+
+Acceptance 7's late-repair cases, run by name (`--arg variant=<name>`); the artifact check's job list
+(tests/artifact_graph/runtime.py drivers(): the `variant=` lines above) leaves them out:
+  late-repair             the ticket and context removed after /dev, `/close --late-repair` in a later
+                          session (drivers/close.py's late-repair case), then /commit in a later
+                          session: Step 5's resolve-effective-report and chain call as the text has
+                          them
+  late-repair-qa          the same to CLOSE: YES, then the task's QA report removed and /commit typed
+                          in a later session; each Step 5 loop stops after three rounds (a round: one
+                          routed finding and the re-run of its check)
 
 Respellings: RESPELLINGS below (base-text paths, row 7). Deviations: none (DEVIATIONS stays empty).
 """
@@ -113,7 +126,9 @@ RESPELLINGS = [
 # Blocks the replays meet: none (a compliant run needs no deviation).
 DEVIATIONS = Deviations([])
 
-STAND_IN = ('route_finding() { printf "ROUTE_FINDING\\t%s\\t%s\\t%s\\n" "$1" "$2" "$3" >&2; exit 3; }\n')
+# (the stand-in also prints the late-repair answer the block holds when it is called, for the report)
+STAND_IN = ('route_finding() { printf "ROUTE_FINDING\\t%s\\t%s\\t%s\\t%s\\n" "$1" "$2" "$3" "${LATE_REPAIR_JSON:-}" >&2; '
+            'exit 3; }\n')
 STATUS_BEGIN, STATUS_END = "--- CHANGELOG-ANALYST-STATUS-BEGIN ---", "--- CHANGELOG-ANALYST-STATUS-END ---"
 
 
@@ -211,11 +226,16 @@ class CommitRun:
                               "Step 5: late-repair state, artifact chain and repository plan", capture=caps)
             err = (c.error or "") if not c.ok else (c.response.get("stderr") or "")
             found = [l.split("\t") for l in err.split("\n") if l.startswith("ROUTE_FINDING\t")]
+            closedrv.fact(self.rp, "commit Step 5", {
+                "label": f"Step 5 Bash plan {k}", "ok": c.ok,
+                "late_repair_state": o.values.get("LATE_REPAIR_STATE") if c.ok else None,
+                "route_finding": (found[0] + ["", "", "", ""])[1:4] if found else None,
+                "late_repair_json": (found[0] + ["", "", "", ""])[4] if found else o.values.get("LATE_REPAIR_JSON")})
             if c.ok and not found:
                 break
             if not found or k == rounds:
                 return False
-            _, path, detail, check = (found[0] + ["", "", ""])[:4]
+            _, path, detail, check = (found[0] + ["", "", "", ""])[:4]
             closedrv.fact(self.rp, "routing entry", {"label": f"Step 5 round {k + 1}",
                                                      "entry": {"path": path, "detail": detail, "source_check": check}})
             if self.route_step5(path, detail, k + 1, check) == "awaiting":
@@ -241,7 +261,7 @@ class CommitRun:
             c = self.run_text(cmd, self.label(f"{lab} Bash {fn}"), "Who owes the artifact")
             ans = closedrv.last_json(c.response.get("stdout") or "") if c.ok else None
             closedrv.fact(self.rp, "owing dispatch", {"label": lab, "path": path, "blocked": c.blocked,
-                                                       "answer": closedrv.summarize_answer(ans)})
+                                                       "answer": closedrv.summarize_answer(ans, o.s)})
             if c.blocked:
                 # The cause set's "a hook rejection (pause and report per the Subagent Hook Discipline; the
                 # rejected operation is never retried, wrapped or bypassed)": the loop waits.
@@ -776,18 +796,17 @@ class CommitRun:
 def run(rp) -> None:
     after = rp.args.get("after", "dev")
     variant = rp.args.get("variant", "plain")
-    if variant not in ("plain", "route", "append", "auto", "commit-route", "full"):
+    if variant not in ("plain", "route", "append", "auto", "commit-route", "full", "late-repair", "late-repair-qa"):
         raise ValueError(f"unknown variant {variant!r}")
     # Acceptance 7 types the /close or /commit of its routing cases in a later session than the /dev.
     session_kind = rp.args.get("session", "same" if variant == "plain" else "later")
-    rp.pipeline = (f"{after}+close+commit" + (f"/{variant}" if variant != "plain" else "")
+    rp.pipeline = (closedrv.pipeline_name(after, rp) + "+close+commit" + (f"/{variant}" if variant != "plain" else "")
                    + ("/later" if session_kind == "later" else ""))
     producer, tid, s, cyc = closedrv.dev_cycle(rp, after)
-    if variant in ("route", "full"):
-        closedrv.remove(rp, [p for p in (closedrv.lane_report(cyc, "qa"),)
-                             if os.path.exists(os.path.join(rp.layout.project, p))])
+    close_variant = {"commit-route": "plain", "full": "append", "late-repair-qa": "late-repair"}.get(variant, variant)
+    closedrv.remove(rp, [p for p in closedrv.removed_after_cycle("route" if variant == "full" else close_variant, cyc)
+                         if os.path.exists(os.path.join(rp.layout.project, p))])
     session = rp.later_session(s) if session_kind == "later" else s
-    close_variant = {"commit-route": "plain", "full": "append"}.get(variant, variant)
     cr = closedrv.CloseRun(rp, session, tid, producer=producer, variant=close_variant, auto=variant == "auto")
     if variant == "auto":
         cr.run_auto()
@@ -795,7 +814,15 @@ def run(rp) -> None:
         return
     cr.run()
     if variant in ("commit-route", "full"):
-        # The lane dev report removed after /close landed (acceptance 7): Step 5's chain call names it.
-        closedrv.remove(rp, [closedrv.lane_report(cyc, "dev")])
+        # The lane dev report (a fan-out cycle's first lane's; with removed=aggregate its canonical aggregate)
+        # removed after /close landed (acceptance 7, F8c): Step 5's chain call names it.
+        closedrv.remove(rp, [f"docs/dev/dev-report-{tid}.json" if rp.args.get("removed") == "aggregate"
+                             else closedrv.lane_report(cyc, "dev")])
+        session = rp.later_session(session)
+    elif variant == "late-repair-qa":
+        # The task's QA report removed after /close --late-repair landed (acceptance 7).
+        closedrv.remove(rp, [f"docs/dev/qa-report-{tid}.json"])
+        session = rp.later_session(session)
+    elif variant == "late-repair":
         session = rp.later_session(session)
     CommitRun(rp, session, tid, producer=producer).run()

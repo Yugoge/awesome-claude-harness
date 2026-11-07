@@ -1347,3 +1347,142 @@ def test_what_no_dispatch_declares_stays_the_main_agents(tmp_path):
     do = Session(tmp_path / "do")
     do.command("do")
     assert do.run(tmp_path, "Write", _write(f"docs/dev/do-report-{TASK}.json"), None).returncode == 0
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_a_paths_last_part_is_the_one_normpath_leaves(seed):
+    # _obligation_may_declare reads a path's last part without normpath where the path names no ".."
+    # and holds no NUL (_last_part): there it is _parts' last part (None where _parts has none).
+    import random
+
+    _policy("tool_policy_last_part")
+    from lib import declared_paths
+
+    rng = random.Random(seed)
+    words = ["", ".", "..", "...", "a", "docs", "dev", "note.md", ".md", "x\x00y", "é", " ", "a.", "/", "\\"]
+    kinds = set()
+    for _ in range(20000):
+        path = "/".join(rng.choice(words) for _ in range(rng.randrange(0, 6)))
+        last = declared_paths._last_part(path)
+        if last is declared_paths._LAST_UNKNOWN:
+            assert ".." in path.split("/") or "\x00" in path, path
+            kinds.add("unknown")
+            continue
+        parts = declared_paths._parts(path)
+        assert last == (parts[-1] if parts else None), path
+        kinds.add(last is None)
+    assert kinds == {"unknown", True, False}
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_the_last_part_screen_decides_as_the_whole_path(seed, monkeypatch):
+    # A path whose last part is no part of any target form covers none of them: _obligation_may_declare
+    # skips it without normpath. Over obligation blocks of any paths (directories, "..", ".", empty and
+    # doubled segments, absolute, NUL) and producer questions of any task id, its answer equals the one
+    # it gives reading every path whole.
+    import random
+
+    policy = _policy("tool_policy_screen")
+    from lib import declared_paths
+
+    rng = random.Random(seed)
+    segments = ["docs", "dev", "note.md", "proj", "nonexistent-p1b-derived-permission", "a", "b.json", "..", ".",
+                "", "x\x00", "producer-question-20261028-101010-ba.json"]
+    pool = ["docs/dev/note.md", "docs/dev", "a/b.json", "note.md", "../x/note.md", "docs/./dev//a", "/abs/note.md",
+            f"docs/dev/producer-question-{TASK}-ba.json"]
+    real = declared_paths._last_part
+    read = []
+    monkeypatch.setattr(declared_paths, "_last_part", lambda path: read.append(real(path)) or read[-1])
+    seen = set()
+    for _ in range(4000):
+        def path():
+            return "/".join(rng.choice(segments) for _ in range(rng.randrange(0, 5)))
+        doc = {"role": rng.choice(["ba", "qa", "a/..", "x"]), "task_id": rng.choice([TASK, "a/../../note.md", "", None]),
+               "artifacts": [rng.choice([{"path": path()}, {"kind": "json", "path": path()}, {"path": 3}, "x", {}])
+                             for _ in range(rng.randrange(0, 4))]}
+        prompt = "You are it.\n" + _block(doc)
+        targets = [policy._target_forms(t, {"cwd": str(PROJECT)}) for t in rng.sample(pool, rng.randrange(1, 3))]
+        got = declared_paths._obligation_may_declare(prompt, targets)
+        with monkeypatch.context() as m:
+            m.setattr(declared_paths, "_last_part", lambda path: declared_paths._LAST_UNKNOWN)
+            assert got == declared_paths._obligation_may_declare(prompt, targets), (doc, targets)
+        seen.add(got)
+    assert seen == {True, False}
+    ends = {part for t in pool for form in policy._target_forms(t, {"cwd": str(PROJECT)}) for part in form}
+    assert any(isinstance(r, str) and r not in ends for r in read), "the screen skipped no path"
+    assert declared_paths._LAST_UNKNOWN in read
+
+
+@pytest.mark.parametrize("seed", range(2))
+def test_the_back_gate_keeps_every_value_that_takes_a_part_back(tmp_path, monkeypatch, seed):
+    # A template path whose last segment binds one value covers a target part p it does not start like
+    # only through a value that takes that segment back and ends in "/" + p without the tail: one line of
+    # the prompt holds "/.." and that end after it (_takes_back_to). Over prompts mixing such values, a
+    # "/.." and the end in other lines, in the other order, or across a line end str.splitlines makes,
+    # every decision equals the full reading's, and the gate leaves out prompts that merely hold the end.
+    import random
+
+    policy = _policy("tool_policy_back_gate")
+    from lib import declared_paths, stop_contract
+
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+    (commands / "x.md").write_text(
+        "---\nname: x\n---\n```\nsubagent_type: worker\nPart C: <c>\n<obligation v=\"1\">\n"
+        '{"role": "worker", "profile": "singular", "artifacts": [{"kind": "markdown", "path": "docs/dev/s-<c>.md", '
+        '"identity_anchor": "<c>"}]}\n</obligation>\n```\n', encoding="utf-8")
+    rng = random.Random(seed)
+    values = ["y", "/..", "/note", "/other", "../", "/../note", "z/../note", "/../../dev/note", "q/..", "/x"]
+    breaks = ["\n", "\r\n", "\r", "\x85", " ", "\x0b"]
+    targets = ["docs/dev/note.md", "docs/dev/other.md", "docs/note.md", "docs/dev/s-y.md", "note.md"]
+    real = declared_paths._bounds_may_cover_back
+    gated, merely = [], 0
+    for n in range(120):
+        lines = ["Part C: " + "".join(rng.choice(values) for _ in range(rng.randrange(1, 4)))]
+        for _ in range(rng.randrange(0, 3)):
+            lines.append("see " + "".join(rng.choice(values) for _ in range(rng.randrange(1, 3))))
+        rng.shuffle(lines)
+        prompt = "".join(line + rng.choice(breaks) for line in lines)
+        s = Session(tmp_path / f"projects{n}")
+        s.command("x")
+        s.dispatch(prompt, "worker")
+        for target in targets:
+            case = ("Write", _write(target), None)
+            with monkeypatch.context() as m:
+                m.setattr(declared_paths, "_bounds_may_cover_back", lambda *a: gated.append(real(*a)) or gated[-1])
+                shortcut = _decided(policy, s, *case)
+            with monkeypatch.context() as m:
+                m.setattr(declared_paths, "_template_bounds", lambda: declared_paths._ANY)
+                m.setattr(declared_paths, "_obligation_may_declare", lambda prompt, targets: True)
+                full = _decided(policy, s, *case)
+            assert shortcut == full, (prompt, target)
+            name = Path(target).name
+            if "/.." in prompt and "/" + name[:-len(".md")] in prompt and gated and gated[-1] is False:
+                merely += 1  # the prompt holds the end, but no line holds it after a "/.."
+    assert set(gated) == {True, False} and merely, (set(gated), merely)
+
+
+def test_the_first_record_is_read_whole_across_the_read_sizes(tmp_path):
+    # The first read of a subagent transcript is _FIRST_READ_HEAD bytes, each further one _FIRST_READ:
+    # a first line ending at, before or after either boundary, with a carriage return there or not and
+    # another record after it, gives the text reader's prompt.
+    _policy("tool_policy_first_sizes")
+    from lib import obligation
+
+    head, more = obligation._FIRST_READ_HEAD, obligation._FIRST_READ
+    assert head < more
+    user = {"type": "user", "message": {"role": "user", "content": ""}}
+    n = 0
+    for edge in (head, head + more, head + 2 * more):
+        for delta in (-2, -1, 0, 1, 2):
+            for first in ("user", "queue-operation"):
+                empty = len(json.dumps(dict(user, type=first)).encode())
+                record = {"type": first, "message": {"role": "user", "content": "x" * (edge + delta - empty)}}
+                line = json.dumps(record).encode()
+                assert len(line) == edge + delta
+                for tail in (b"\n", b"\r\n", b"\n" + json.dumps(dict(user, message={"content": "next"})).encode(), b""):
+                    path = tmp_path / f"b{n}.jsonl"
+                    n += 1
+                    path.write_bytes(line + tail)
+                    assert obligation.read_first_record_prompt(str(path)) == _line_reader_prompt(path), (edge, delta)
