@@ -376,6 +376,56 @@ def _spec_views_failure(project_dir: str, art: dict):
     return {"path": art["path"], "reason": "spec_verify_strict_failed", "errors": (failed or lines)[-10:]}
 
 
+def _declared_files(project_dir: str, art: dict) -> list:
+    """The files a declared file-kind artifact consists of, relative to the
+    project: its path, or for a spec_views directory each regular file
+    directly in it (the split its producer writes there)."""
+    if art.get("kind") != "spec_views":
+        return [art["path"]]
+    try:
+        entries = sorted((Path(project_dir) / art["path"]).iterdir())
+    except OSError:
+        return []
+    return [f"{art['path']}/{p.name}" for p in entries if p.is_file()]
+
+
+def _stale_failures(project_dir: str, ob: dict, art: dict) -> list:
+    """E4's stale fault at the producer's stop: each file of a declared
+    artifact on disk must have been written by this producer for this task,
+    by the freshness rule obligation.artifact_freshness_satisfied (mtime >=
+    dispatched_at - 2s). This dispatch's dispatched_at bounds it first; a
+    file older than that stays admitted when it is no older than the first
+    dispatch of the same role that declared the same path for the task
+    (obligation.first_declared_at), since a re-dispatch of a template leaves a
+    file it has nothing to change in as its earlier round wrote it. A
+    freshness that cannot be decided (no dispatched_at a template bound, as
+    a base-text /spec dispatch's) blocks nothing; a missing file is the
+    validators' finding, not this one."""
+    stale = []
+    for rel in _declared_files(project_dir, art):
+        try:
+            mtime = (Path(project_dir) / rel).stat().st_mtime
+        except OSError:
+            continue
+        if obligation.artifact_freshness_satisfied(art["kind"], mtime, ob.get("dispatched_at")) is False:
+            stale.append((rel, mtime))
+    if not stale:
+        return []
+    first = obligation.first_declared_at(ob.get("task_id"), ob.get("role"), art["path"], project_dir)
+    failures = []
+    for rel, mtime in stale:
+        if first is not None and obligation.artifact_freshness_satisfied(art["kind"], mtime, first) is not False:
+            continue
+        written = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime))
+        failures.append({"path": rel, "reason": "artifact_stale", "errors": [
+            f"freshness: last written {written}, before this dispatch's dispatched_at "
+            f"{ob.get('dispatched_at')} (mtime >= dispatched_at - {obligation.FILE_FRESHNESS_SLACK_SECONDS}s) "
+            f"and before the first dispatch of role {ob.get('role')!r} declaring it for this task: "
+            f"write it in this dispatch: Edit it in place to this dispatch's content, or, when after "
+            f"checking it the file already holds exactly that content, touch it"]})
+    return failures
+
+
 def _producer_question(project_dir: str, ob: dict):
     """TC-33: docs/dev/producer-question-<task_id>-<role>.json named by the
     obligation's own task_id and role. Which producers may ask is the
@@ -481,6 +531,7 @@ def main() -> None:
                 if question is not None:
                     failures.append(question)
                 for art in json_artifacts:
+                    failures.extend(_stale_failures(project_dir, resolution.obligation, art))
                     full_path = Path(project_dir) / art["path"]
                     result = contract_runtime.validate_artifact_for_obligation(
                         str(full_path), art["schema"]
@@ -538,6 +589,7 @@ def main() -> None:
                     ):
                         markdown_waived_paths.add(art["path"])
                         continue
+                    failures.extend(_stale_failures(project_dir, resolution.obligation, art))
                     full_path = Path(project_dir) / art["path"]
                     result = contract_runtime.validate_markdown_artifact_for_obligation(
                         str(full_path), art.get("identity_anchor"), art.get("terminal_line_regex")
@@ -571,6 +623,7 @@ def main() -> None:
                     failure = _spec_views_failure(project_dir, art)
                     if failure is not None:
                         failures.append(failure)
+                    failures.extend(_stale_failures(project_dir, resolution.obligation, art))
                 for art in response_block_artifacts:
                     # response_block-kind entries (ticket 20261001-161041-r21,
                     # M2): validated against this agent's OWN final response

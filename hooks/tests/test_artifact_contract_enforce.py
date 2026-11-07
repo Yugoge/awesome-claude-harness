@@ -2629,5 +2629,170 @@ def test_fanout_legacy_check_judges_only_the_stopping_lanes_own_report(
     assert l1_report in proc_l1.stderr and l2_report not in proc_l1.stderr
 
 
+
+# (i) a stale declared artifact is stopped at its producer's stop (P1b E4) ---
+
+
+_G2_STALE = "artifact_stale"
+
+
+def _g2_age(path: Path, seconds_before: float, s) -> None:
+    """Set a file's mtime ``seconds_before`` the dispatch's dispatched_at."""
+    then = s.dispatched_at.timestamp() - seconds_before
+    os.utime(path, (then, then))
+
+
+def _g2_parent_dispatches(s, earlier: list) -> None:
+    """The parent session transcript holding the task's dispatch records:
+    each ``(role, obligation)`` of ``earlier`` as an Agent call, then this
+    stop's own dispatch (the meta file's toolUseId), as obligation.first_declared_at
+    reads them."""
+    slug = _project_slug(s.project)
+    parent = s.home / ".claude" / "projects" / slug / f"{s.harness}.jsonl"
+    records = []
+    calls = [(f"toolu-earlier-{n}", role, doc) for n, (role, doc) in enumerate(earlier)]
+    calls.append(("tooluse-test-1", s.obligation["role"], s.obligation))
+    for tool_id, role, doc in calls:
+        prompt = f'<obligation v="1">\n{json.dumps(doc, indent=2)}\n</obligation>'
+        records.append({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": tool_id, "name": "Agent",
+             "input": {"subagent_type": role, "description": "x", "prompt": prompt}}]}})
+    parent.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+
+def _g2_earlier(s, seconds_before: float, role: str | None = None, artifacts: list | None = None) -> tuple:
+    """An earlier dispatch of the task: this stop's obligation with an earlier dispatched_at."""
+    when = datetime.fromtimestamp(s.dispatched_at.timestamp() - seconds_before, tz=timezone.utc)
+    doc = dict(s.obligation, dispatched_at=when.isoformat(), role=role or s.obligation["role"])
+    if artifacts is not None:
+        doc["artifacts"] = artifacts
+    return (doc["role"], doc)
+
+
+def test_g2_stale_json_artifact_blocks_then_passes_when_written(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _g2_age(s.project / report, 3600, s)
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_STALE)
+    assert "freshness:" in proc.stderr and "dispatched_at" in proc.stderr, proc.stderr
+    # The producer's next round writes the report as drafted: the stop passes.
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    _g2_assert_decided_by_obligation(s)
+
+
+def test_g2_freshness_slack_admits_a_file_written_just_before_dispatched_at(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _g2_age(s.project / report, 1, s)
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_g2_stale_artifact_names_only_the_stale_one(tmp_path):
+    s = _g2_setup(tmp_path, "ba", _g2_ba_artifacts())
+    _write(s.project / f"docs/dev/context-{G2_TASK}.json",
+           {"task_id": G2_TASK, "request_id": G2_TASK, "requirement": "x"})
+    ticket = f"docs/dev/ticket-{G2_TASK}.md"
+    _write(s.project / ticket, f"# Ticket\n{G2_TASK}\n")
+    _g2_age(s.project / ticket, 3600, s)
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, ticket, _G2_STALE)
+    assert f"docs/dev/context-{G2_TASK}.json: {_G2_STALE}" not in proc.stderr
+
+
+def test_g2_stale_markdown_artifact_blocks(tmp_path):
+    s, report = _g2_close_qa_setup(tmp_path)
+    _write(s.project / report, f"# Close Debate Report\n{G2_TASK}\nCLOSE: YES\n")
+    _g2_age(s.project / report, 3600, s)
+    proc = _g2_stop(s, msg="Done.\n\nCLOSE: YES\n")
+    _g2_assert_blocked_on(proc, report, _G2_STALE)
+
+
+def test_g2_waived_markdown_artifact_is_not_held_to_freshness(tmp_path):
+    # close-report-append.py refused to touch the report: its on-disk bytes
+    # are a prior attempt's, which the obligation's waived_by_response declares.
+    s, report = _g2_close_qa_setup(tmp_path)
+    _g2_age(s.project / report, 3600, s)
+    proc = _g2_stop(s, msg="The append helper refused.\n\nCLOSE_REPORT_APPEND_ERROR: append: disk full\n")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_g2_redispatch_keeps_a_file_its_earlier_round_wrote(tmp_path):
+    # A re-dispatch of the same template (Step 8's BA retry, Step 16's dev
+    # retry, a lane re-dispatch) declares the path again; a file it had
+    # nothing to change in keeps the mtime of the earlier round.
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _g2_parent_dispatches(s, [_g2_earlier(s, 600)])
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _g2_age(s.project / report, 300, s)
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    _g2_assert_decided_by_obligation(s)
+
+
+def test_g2_redispatch_still_blocks_a_file_older_than_the_first_round(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _g2_parent_dispatches(s, [_g2_earlier(s, 600)])
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _g2_age(s.project / report, 3600, s)
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_STALE)
+
+
+@pytest.mark.parametrize("other", ["role", "path"])
+def test_g2_an_earlier_dispatch_of_another_role_or_path_admits_nothing(tmp_path, other):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    earlier = (_g2_earlier(s, 600, role="qa") if other == "role"
+               else _g2_earlier(s, 600, artifacts=_g2_dev_artifacts(task_id=G2_TASK + "-l1")))
+    _g2_parent_dispatches(s, [earlier])
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _g2_age(s.project / report, 300, s)
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_STALE)
+
+
+def test_g2_stale_file_no_dispatch_declares_blocks_nothing(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    undeclared = s.project / "docs/dev/dev-report-20250101-000000.json"
+    _write(undeclared, {"stale": True})
+    _g2_age(undeclared, 86400, s)
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_g2_freshness_is_decided_per_kind_by_the_obligation_library():
+    lib = HOOK.obligation
+    at = "2026-10-18T12:00:00+00:00"
+    then = datetime.fromisoformat(at).timestamp()
+    for kind in ("json", "markdown", "spec_views"):
+        assert lib.artifact_freshness_satisfied(kind, then - 3600, at) is False
+        assert lib.artifact_freshness_satisfied(kind, then - 1, at) is True
+    for kind in ("response_line", "response_block"):
+        assert lib.artifact_freshness_satisfied(kind, then - 3600, at) is True
+    assert lib.artifact_freshness_satisfied("json", then, "<ISO-8601 UTC>") is None
+
+
+def test_first_declared_at_reads_the_earliest_declaring_dispatch_of_the_role(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _g2_parent_dispatches(s, [_g2_earlier(s, 900, role="qa"), _g2_earlier(s, 600), _g2_earlier(s, 300)])
+    roots = [s.home / ".claude" / "projects"]
+    first = HOOK.obligation.first_declared_at(G2_TASK, "dev", report, s.project, roots)
+    assert first is not None
+    assert abs(first.timestamp() - (s.dispatched_at.timestamp() - 600)) < 1e-3
+    assert HOOK.obligation.first_declared_at(G2_TASK, "dev", "docs/dev/other.json", s.project, roots) is None
+    assert HOOK.obligation.first_declared_at(None, "dev", report, s.project, roots) is None
+
+
 if __name__ == "__main__":
     sys.exit(subprocess.run([sys.executable, "-m", "pytest", __file__, "-v"]).returncode)
