@@ -328,9 +328,16 @@ def main() -> int:
             t_marker = parse_ts(marker_line)
             pre = [s for s in watcher.samples if s["t"] < t_marker]
             post = [s for s in watcher.samples if s["t"] > t_marker]
-            if not pre or not pre[-1]["present"]:
+            # The marker is stamped when its line is read from the demo's pipe, after
+            # the consumer has unlinked the grant and printed the line, so a sample
+            # taken between that unlink and that read is absent and still precedes the
+            # marker. The grant's last observed presence is what must precede the
+            # marker, with the installed content; the samples after it are absent (up
+            # to the marker by definition, after it by the check below).
+            present_pre = [s for s in pre if s["present"]]
+            if not present_pre:
                 failures.append("grant was NOT present immediately before consumption")
-            elif pre[-1]["sha256"] != watcher.grant_hash_at_install:
+            elif present_pre[-1]["sha256"] != watcher.grant_hash_at_install:
                 failures.append("grant content changed before consumption")
             if not post or any(s["present"] for s in post):
                 failures.append("grant was NOT absent immediately after consumption")
@@ -383,7 +390,7 @@ def main() -> int:
             ],
             "grant_sha256_at_install": watcher.grant_hash_at_install,
             "grant_present_before_consumption": bool(
-                marker_line and pre and pre[-1]["present"]
+                marker_line and present_pre
             ),
             "grant_absent_after_consumption": bool(
                 marker_line and post and not any(s["present"] for s in post)
