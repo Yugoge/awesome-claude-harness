@@ -4,6 +4,8 @@ product repo are listed in the clone's own exclude file, one line each, and noth
 A product repo's tracked .gitignore stays byte-identical, a docs/dev artifact /commit stages and a
 user's own new docs file stay visible, a linked worktree resolves its exclude file through
 `git rev-parse --git-path`, and a project that is not a git repository is left alone.
+The harness home keeps its own tracked .gitignore instead: what is written into the home at run
+time is ignored there, and a source path of the same name is not.
 """
 import hashlib
 import os
@@ -98,6 +100,37 @@ def test_linked_worktree_resolves_its_own_exclude_file(tmp_path):
     paths = _runtime_files(wt)
     assert _git(env, wt, "status", "--porcelain", "--untracked-files=all") == ""
     assert _git(env, wt, "check-ignore", paths[0]).strip() == paths[0]
+
+
+# The harness home's own tracked .gitignore (row 9). A project-level path <project>/.claude/<name>
+# lands at both depths here: this home as the project (.claude/<name>) and $HOME as the project.
+HOME_RUNTIME = [
+    "logs/checkpoint.log", "logs/lifecycle.jsonl", "state/attribution-journal/journals/s1.jsonl",
+    "state/attribution-seals/seal-log.jsonl", "attribution-seals/seal-log.jsonl", "venv/bin/python",
+    "venv.bak-20260101-000000/bin/python", "settings.json.bak-20260101-000000",
+    "hooks/lib/__pycache__/m.cpython-312.pyc", "projects/-p/s1.jsonl", "todos/s1.json", "cache/c.md",
+    "archive/commands/x.md", ".doc-sync-cache.json", ".env", "settings.machine.json", "page-1.png",
+    "specs/t1/cp-state-qa.json", ".claude/specs/t1/cp-state-qa.json", ".claude/state/y.jsonl",
+    ".claude/dev-registry/dev-t1/dev.json", ".claude/session-resources/s1/r.json",
+    ".claude/overnight-fresh-clones/n1/README.md", ".claude/workflow-s1.json", ".claude/paseo-daemon/l.json",
+    "docs/dev/dev-report-t1.json", "docs/codex/t1/dev.txt", "docs/clean/context-c1.json",
+    "docs/test/edge-case-analysis.json", "docs/INDEX.md", "tests/generated/t1/test_x.py",
+    "tests/reports/execution-report-t1.json",
+]
+HOME_SOURCE = ["hooks/lib/cache/x.py", "scripts/state/x.py", "docs/x.png", "docs/reference/new.md",
+               "schemas/specs/x.json", "tests/projects/x.py", ".github/workflows/README.md"]
+
+
+def test_harness_home_ignores_its_runtime_paths_and_no_source_path(tmp_path):
+    env, home = _env(tmp_path / "h"), tmp_path / "harness"
+    home.mkdir()
+    (home / ".gitignore").write_bytes((HOOK.parent.parent / ".gitignore").read_bytes())
+    _git(env, home, "init", "-q")
+    p = subprocess.run(["git", "check-ignore", "--no-index", "-v", "-n", "--stdin"], cwd=home, env=env,
+                       input="\n".join(HOME_RUNTIME + HOME_SOURCE) + "\n", capture_output=True, text=True)
+    rule = {ln.split("\t")[1]: ln.split("\t")[0] for ln in p.stdout.splitlines()}
+    assert [r for r in HOME_RUNTIME if not rule[r].startswith(".gitignore:")] == []
+    assert {r: rule[r] for r in HOME_SOURCE if rule[r] != "::"} == {}
 
 
 def test_not_a_git_repository_is_left_alone(tmp_path):
