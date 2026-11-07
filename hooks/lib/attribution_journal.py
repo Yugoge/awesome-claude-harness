@@ -44,17 +44,20 @@ Shell commands are MEASURED, never parsed (see record_pre / record_post):
 
 Known Phase-0 limits: seq is best-effort monotone per session (parallel tool
 calls may tie; invocation_id disambiguates); a cp/mv whose destination is a
-directory is skipped (the written basename is not resolved). A file written by
-a DIFFERENT PostToolUse hook as a side effect of this call (e.g. doc-sync
-regenerating INDEX.md for a sibling edit) is outside this capture window and
-is a known, documented boundary -- see
-docs/reference/attribution-journal-phase0-facility.md #3 for the ruling and
-its detection signature (ordinary chain BREAK on the hook-managed path).
+directory is skipped (the written basename is not resolved). Ruled boundary, not
+closable without changing capture semantics or other hooks' order: a file another
+PostToolUse hook writes as a side effect of this call (doc-sync regenerating a
+sibling INDEX.md/README.md) is outside the capture window and surfaces as an
+ordinary chain BREAK on that path -- check doc-sync's notice before reading it as
+an unattributed write.
 
-Never raises into the tool pipeline: callers wrap in try/except and exit 0.
-`autoseal_hook_trigger()` (below) follows the same contract for the periodic
-seal-to-persistent-storage step; see scripts/seal-attribution-journal.py and
-docs/reference/attribution-journal-phase0-facility.md #1.
+Never raises into the tool pipeline: callers wrap in try/except and exit 0, and
+`autoseal_hook_trigger()` (run by posttool-attribution-post.py after record_post)
+too. It seals via scripts/seal-attribution-journal.py at most once per interval
+(600 s), each attempt logged to <dest>/seal-log.jsonl; <dest> is
+$ATTRIBUTION_SEAL_DEST, else $CLAUDE_CONFIG_DIR/attribution-seals for a config dir
+outside the harness tree, else <harness>/state/attribution-seals; a volatile
+(tmpfs) <dest> is refused and the refusal logged.
 """
 
 from __future__ import annotations

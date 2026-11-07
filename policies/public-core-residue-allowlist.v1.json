@@ -106,13 +106,6 @@
       "rationale": "Scope of this rule — prose/comment text; never read as a path at runtime."
     },
     {
-      "path": "docs/reference/core-context-refactor-plan.md",
-      "fingerprint": "040351515157df67",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"| INV-5 | No project identifiers | new module `grep -Ei 'happy\\|<author-path>\\|slopus'` → clean |\""
-    },
-    {
       "path": "docs/reference/monolith-split-plan.md",
       "fingerprint": "367e182696ac526b",
       "ordinal": 1,

@@ -321,7 +321,7 @@ except ImportError:  # executed as a top-level script (no package context)
 # / groups / cfg) the decision layers thread positionally. Re-imported here
 # (dual-context, INV-3, see phase-1 block above) so _core's public surface is a
 # superset — no existing name removed. Internal engine plumbing: `evaluate` /
-# `main` signatures are unchanged. See docs/reference/core-context-refactor-plan.md.
+# `main` signatures are unchanged.
 try:  # noqa: F401  — Context re-exported for engine plumbing
     from .context import Context
 except ImportError:  # executed as a top-level script (no package context)

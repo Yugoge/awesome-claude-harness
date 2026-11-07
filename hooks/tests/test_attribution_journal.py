@@ -544,8 +544,8 @@ def test_posttool_hook_autoseals_end_to_end_via_real_subprocess(tmp_path, monkey
 # ----------------------------------- known boundary: hook-written side effects
 
 def test_doc_sync_regen_outside_capture_window_surfaces_as_break(tmp_path, monkeypatch):
-    """Known, ruled boundary (docs/reference/attribution-journal-phase0-facility.md
-    #3): a file written by a DIFFERENT PostToolUse hook as a side effect of
+    """Known, ruled boundary (hooks/lib/attribution_journal.py's module
+    docstring): a file written by a DIFFERENT PostToolUse hook as a side effect of
     editing a sibling file (doc-sync regenerating INDEX.md) is captured by
     NEITHER this call's single-target measurement NOR a Bash dirty-worktree
     scan -- it is simply never the declared target. This uses the REAL

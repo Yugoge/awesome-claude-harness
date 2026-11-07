@@ -196,9 +196,17 @@ _runtime_guard_fail_closed() {
   # guaranteed. Over-denial is the intended direction: this path runs ONLY when the
   # engine already failed to decide. This helper is DEFENSE-IN-DEPTH over specific
   # tested forms, NOT a guarantee for any family. The families it covers are listed
-  # per-line below; what is NOT covered is named in the residual-gap note in
-  # docs/reference/core-context-refactor-plan.md (the authoritative, detailed record;
-  # lib/runtime_guard/context.py carries a short summary of it plus a pointer here).
+  # per-line below. Residual gaps (measured 2026-07-17; stated, not fixed):
+  #   1. no filesystem-mutation family: with the engine crashed, cp/tee/truncate/
+  #      `sed -i`/`>` onto a protected statefile, hotfile or global bin is ALLOWed,
+  #      so STEP0 (config self-protection), P3, P4 and P7 stay fail-OPEN on a crash;
+  #   2. the path-qualified/quoted tolerance is P5/P6-only: the service-control,
+  #      package-manager, build and runtime lines stay bare-token (a path-qualified
+  #      `systemctl` is not matched);
+  #   3. no family is fail-CLOSED family-wide, P5/P6 included: the quote-split and
+  #      backslash forms above stay engine=BLOCK, fallback=ALLOW; do not chase them;
+  #   4. `_core.main()` catches only around evaluate(): parseable non-object JSON
+  #      (`"hello"`, `[1,2]`, `42`, `null`) exits with empty stdout and a traceback.
   #
   # Coverage of the P5/P6 front-end TOKEN SETS is asserted mechanically against the
   # engine's own definitions by hooks/tests/test_fail_closed_drift.py — adding a token

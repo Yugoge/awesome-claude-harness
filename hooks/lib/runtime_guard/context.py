@@ -7,7 +7,7 @@ pipeline-split simple commands, the pipeline groups, the base cwd seed, and
 `_step*` / `_p0..p9` decision layers. This module bundles those inputs into ONE
 explicit, frozen `Context` so a layer can read its inputs from a shared object
 and `_core` reads as a thin ordering engine rather than a hand-threaded
-parameter chain. See docs/reference/core-context-refactor-plan.md.
+parameter chain.
 
 Context carries ONLY the per-EVALUATION inputs. The per-COMMAND cwd/cwd_det
 values are DERIVED inside each layer (via `_effective_cwd_after` +
@@ -71,10 +71,9 @@ class Context:
     indirection, encoded execution) the regex fallback does NOT match, and why it is
     best-effort defense-in-depth: only full semantic equivalence with the engine's
     shlex lexer is impossible, not coverage of any given form — lives
-    in `hooks/pretool-bash-safety.sh::_runtime_guard_fail_closed` (header comment),
-    mechanically asserted by `hooks/tests/test_fail_closed_drift.py`. The residual-
-    gap record lives in `docs/reference/core-context-refactor-plan.md`. Do not
-    restate either here.
+    in `hooks/pretool-bash-safety.sh::_runtime_guard_fail_closed` (header comment,
+    with the residual gaps), mechanically asserted by
+    `hooks/tests/test_fail_closed_drift.py`. Do not restate either here.
     """
 
     cwd_base: Optional[str]

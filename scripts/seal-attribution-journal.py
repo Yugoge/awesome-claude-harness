@@ -10,9 +10,7 @@ reboot. This copies:
 Default dest: attribution-seals/ beside the journal's own state dir
 (<harness>/state/attribution-seals, ignored like the rest of state/)
 -- override with $ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
-destination unless --allow-volatile. See
-docs/reference/attribution-journal-phase0-facility.md #1 for the measured
-persistence tier of each resolution path.
+destination unless --allow-volatile.
 
 Idempotent; safe to re-run (journals are append-only, blobs content-addressed).
 Recover a byte-state: git --git-dir <dest>/objects.git cat-file blob <sha>.

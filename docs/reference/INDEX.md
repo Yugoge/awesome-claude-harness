@@ -10,7 +10,6 @@
 reference/
 ├── `attribution-journal-consumer-cutover-20261004.md` - Attribution-journal consumer cutover: APPLIED (task 20261004-001927)
 ├── `attribution-journal-cutover-flip-plan-20261003.md` - Attribution-journal cutover: FLIP PLAN (Phase D, plan only)
-├── `attribution-journal-phase0-facility.md` - Write-time attribution journal — Phase 0 facility notes
 ├── `bash-write-targets-capability-gap-20261005.md` - bash_write_targets.py capability gap: a fail-open/fail-shut pair from one resolution gap
 ├── `checkpoint-mechanism.md` - Auto-Commit / Checkpoint Mechanism
 ├── `claim-verification-methodology-20260925.md` - backlog claim 有效性核实方法论（2026-09-25 夜）
@@ -20,7 +19,6 @@ reference/
 ├── `commit-dryrun-close-gate-ruling.md` - /commit dry-run close-gate relaxation: ruling record
 ├── `commit-gate-bypass-via-background-exec-20261005.md` - Commit gate bypassed by background execution — 2026-10-05
 ├── `controller-error-taxonomy-20260924.md` - 控制器错误归纳（2026-09-24 夜 spec 台席会话）
-├── `core-context-refactor-plan.md` - Core Context Refactor Plan (Plan-of-Record)
 ├── `fswatch-quickref.md` - FSWatch Quick Reference Card
 ├── `generated-tests-policy.md` - `tests/generated/` policy — tracked but ignored, on purpose
 ├── `git-fswatch.md` - Git File Watcher (fswatch) Documentation
@@ -46,7 +44,6 @@ reference/
 ├── `paseo-daemon-concurrent-staging-triple-repro-20260904-181435-20260914.md` - Triple, independent reproduction of the shared-file concurrent-staging defect
 ├── `paseo-daemon-shared-file-attribution-20260913.md` - Attribution of unattributed content in the three paseo-daemon shared files
 ├── `positioning.md` - Positioning
-├── `push-gate-reconciliation-decision.md` - Push-gate reconciliation — decision to keep
 ├── `qa-status-gate-gap-orchestrator-side-20261005.md` - The QA-verdict gate does not cover the orchestrator — still open 2026-10-05
 ├── `recoverable-discard-register-20261005.md` - Recoverable-discard register — 2026-10-05 tree-to-zero campaign
 ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
