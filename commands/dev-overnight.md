@@ -1522,8 +1522,8 @@ If that check refuses the report (its message names the path and the failing rul
 Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook (`posttool-overnight-loop.py`) will:
 1. Detect all todo steps are completed (every todo's status, including Step 11g)
 2. Check overnight-state.json for future end_time
-3. Reset all todos to pending
-4. Print loop continuation instructions
+3. Tell you to reset all todos to pending (the hook writes no todos itself)
+4. Hand you the loop continuation instructions as PostToolUse additionalContext
 5. You then resume from Step 2 (the working root is already established)
 
 **If time expired** (session ending):
@@ -1696,7 +1696,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 ## Integration with Hooks
 
 - **prompt-workflow.py** (UserPromptSubmit): Creates overnight-state-<session_id>.json (complete with worktree_path, worktree_branch, view_paths, spec detection) on /dev-overnight detection; injects continuation context with the mode-neutral working-root guard
-- **posttool-overnight-loop.py** (PostToolUse:TodoWrite): Detects all-completed state, resets todos for new cycle if end_time is future
+- **posttool-overnight-loop.py** (PostToolUse:TodoWrite): Detects all-completed state; if end_time is future, its additionalContext tells you to reset your todos for the new cycle
 - **pretool-overnight-hook-guard.py** (PreToolUse): Blocks Write/Edit/Bash targeting .claude/hooks/ during overnight sessions; denies AskUserQuestion to every caller in the session until the next human-typed prompt
 - **pretool-workflow-gate.py** (PreToolUse): Gates tools until TodoWrite is called
 - **posttool-todo-count.py** (PostToolUse:TodoWrite): Enforces step count
@@ -1707,7 +1707,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 
 ### Loop Mechanism (v3)
 - When all todo steps are marked completed via TodoWrite (every todo, including the letter-suffix Step 11g), the posttool-overnight-loop.py hook fires
-- It checks overnight-state.json: if end_time is in the future, it resets all todos to pending and injects loop continuation instructions
+- It checks overnight-state.json: if end_time is in the future, it injects loop continuation instructions (PostToolUse additionalContext) telling you to reset all todos to pending
 - The agent then resumes from Step 2 (exploration) since the working root is already established
 - This provides natural context boundaries at each cycle without requiring external cron triggers
 
