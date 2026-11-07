@@ -590,7 +590,7 @@ source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py ch
     --artifact docs/dev/<agent>-report-<ts>.json
 ```
 
-Then set the slot's checklist with the same script: one `--action` per Gawande-style verb-first checkpoint, in order (they become `cp-01`, `cp-02`, ... in state `pending`). The script finds the slot by `--agent-id` (pass `--instance-id N` from the `cp-state-path:` line when the id holds more than one slot) and refuses with exit 1 when that id holds none:
+Then set the slot's checklist with the same script: one `--action` per Gawande-style verb-first checkpoint, in order (they become `cp-01`, `cp-02`, ... in state `pending`). The script finds the slot by `--agent-id` (pass `--instance-id N` from the `cp-state-path:` line when the id holds more than one slot) and refuses with exit 1 when that id holds none. It leaves the slot idle for the agent it is for: that agent's Read of the file makes the slot its own, so the id you pass only labels this registration:
 
 ```bash
 source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py checkpoints \

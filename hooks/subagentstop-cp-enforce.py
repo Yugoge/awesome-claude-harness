@@ -5,22 +5,23 @@
 # other value, or none, is advisory: the hook exits 0 and never blocks.
 #
 # WHY SCOPED: a blocking SubagentStop hook that judged every running slot would
-# block bystanders (a parallel agent, the /spec subagent whose Phase 2 registers
-# slots for agents not yet dispatched). It judges only the stopping subagent's
-# own slots, so the only stop it blocks is an agent leaving its own checkpoints
-# pending; marking or waiving them (spec-check.py) always clears it.
+# block bystanders (a parallel agent, the /spec subagent whose Phase 2 sets
+# checklists for agents not yet dispatched). It judges only the stopping
+# subagent's own slots, so the only stop it blocks is an agent leaving its own
+# checkpoints pending; marking or waiving them (spec-check.py) always clears it.
 #
 # FAIL-SAFE: ANY error -> exit 0 (allow). Bounded filesystem scan, no network,
 # no subprocess. The outer try/except guarantees a hook bug can never trap a
 # subagent.
 #
 # Detection: scans $CLAUDE_PROJECT_DIR/.claude/specs/*/cp-state-*.json for the
-# stopping subagent's own slots (agent_id = the stdin payload's agent_id, the id
-# pretool-cp-checkin.py registered when it Read its cp-state file) that are
-# running (hooks/lib/agent_resolver.py cp_state_running, the one rule role
-# resolution also takes) AND have >=1 checkpoint still in state "pending". A
-# slot another agent holds, or one the spec subagent registered for an agent
-# not yet dispatched, never blocks this stop.
+# stopping subagent's own running slots (agent_id = the payload's CLI agent_id,
+# which pretool-cp-checkin.py binds to the slot file that agent Read; running per
+# hooks/lib/agent_resolver.py cp_state_running) with >=1 checkpoint "pending".
+# Replayed with CLI ids (P9 F-E4): an agent leaving one pending is blocked until it
+# marks it; /spec's own stop never is, whatever id its Phase 2 passed (the slots it
+# sets wait idle; another role's Read binds nothing); a compliant /spec + /dev run,
+# fan-out lanes included, meets no block.
 from __future__ import annotations
 
 import glob

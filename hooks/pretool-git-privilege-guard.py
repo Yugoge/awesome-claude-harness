@@ -42,10 +42,12 @@ and git stash list/show/pop (non-destructive forms). Hard reset and direct
 ref mutation are not agent-accessible.
 
 /do consent (hooks/lib/allowlist.py has_do_consent: main agent, one turn)
-releases every rule here except those on git commit, git push and a git merge
-into the protected branch (E2): these, and a git command the guard cannot
-classify, are judged as without it, and each block then names the commands
-that land them (/close then /commit, /push, /merge).
+releases every rule here except those on git commit and git push, which are
+judged as without it, and a git command the guard cannot classify (E2). Under
+it a git operation that can move the protected branch's ref, or one whose
+landing branch the guard cannot tell, is refused (_moves_protected_branch).
+Each block then names the commands that land them (/close then /commit,
+/push, /merge).
 
 Spec: spec-20260424-233926 section 5.2.4 (R4.3) line 233-249.
 
@@ -163,6 +165,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -178,8 +181,8 @@ from lib.git_command_classifier import (  # noqa: E402
 # can enumerate EVERY git-commit invocation in a chained command string and
 # inspect each invocation's leading env-assignments + global-option flags
 # token-aware (precise, no false match on the word "commit" inside a message).
-# These are consumed, NOT modified — the shared classifier stays untouched
-# (scope: this fix is the COMMIT grant path only).
+# The /do protected-branch rule (_moves_protected_branch) reads segments with
+# them too. They are the classifier's own; this file does not redefine them.
 from lib.git_command_classifier import (  # noqa: E402
     _unquote_token,
     _segments as _shell_segments,
@@ -1263,40 +1266,151 @@ def _evaluate_merge(command, data):
 
 # E2: added to every block the guard emits while the main agent holds /do consent.
 DO_NOT_COVERED = (
-    '/do consent does not cover git commit, git push or a git merge into the '
-    'protected branch: a commit lands through /close, then /commit; a push '
-    'through /push; a merge through /merge.\n'
+    '/do consent does not cover git commit, git push, a git operation that can move '
+    'the protected branch, or a git command this guard cannot classify, which may be '
+    'any of them: a commit lands through /close, then /commit; a push through /push; '
+    'a merge into the protected branch through /merge.\n'
 )
 
+# E2: after these words the hook's own cwd may not be where git runs, and after
+# _BRANCH_CHANGE_RE's its HEAD may not be the branch an operation on HEAD lands
+# on. Read anywhere in the command: `&`, `|`, loops, functions and traps run its
+# parts in an order the text does not give. `\.` is the dot builtin (source).
+_DIR_CHANGE_RE = re.compile(
+    r'(?<![\w./-])(?:cd|pushd|popd|source|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)(?![\w./-])'
+    r'|(?:^|[;&|(){]|\b(?:then|do|else))\s*\.\s')
+_BRANCH_CHANGE_RE = re.compile(r'(?<![\w./-])(?:checkout|switch|symbolic-ref)(?![\w./-])')
+_EXPANSION = re.compile(r'[$`*?\[{]')  # a name the shell or git may expand
 
-def _merge_into_protected_branch(command):
-    """E2: True unless every `git merge` in `command` provably merges into a
-    branch other than the protected one, the branch refs/remotes/origin/HEAD
-    names (local refs, as the overnight launcher resolves it). Fail closed: a
-    merge the guard cannot place in its own cwd (a cd before it, anything
-    between `git` and `merge`, a prefix before `git`, an ambient GIT_DIR-style
-    redirect), a detached HEAD or an unset origin/HEAD counts as protected."""
-    if _ambient_git_redirect_present():
+
+# E2: the git subcommands that can move a branch ref: on HEAD's branch, or by name.
+_MOVES_HEAD = frozenset({'merge', 'pull', 'rebase', 'cherry-pick', 'revert', 'am', 'reset'})
+_MOVES_NAMED = frozenset({'pull', 'fetch', 'rebase', 'update-ref', 'symbolic-ref', 'branch',
+                          'checkout', 'switch', 'worktree', 'filter-branch', 'filter-repo',
+                          'fast-import'})
+
+
+def _operands(words, takes_value=()):
+    """The words that are not options, nor the value of an option in `takes_value`."""
+    return [w for i, w in enumerate(words) if (not w.startswith('-') or w == '-')
+            and not (i and words[i - 1] in takes_value)]
+
+
+def _reset_moves(args):
+    """`git reset <args>` moves HEAD's branch: one commit operand other than
+    HEAD and no pathspec; an operand that names no commit is a path."""
+    if '--' in args:
+        if args[args.index('--') + 1:]:
+            return False
+        args = args[:args.index('--')]
+    ops = _operands(args)
+    if len(ops) != 1 or {'-p', '--patch'} & set(args) or any(
+            a.startswith('--pathspec-from-file') for a in args):
+        return False
+    return ops[0] not in ('HEAD', '@') and bool(_EXPANSION.search(ops[0]) or _git_output(
+        ['rev-parse', '-q', '--verify', ops[0] + '^{commit}']))
+
+
+def _branch_writes(inv):
+    """E2: (moves the branch HEAD is on, [branch names it writes]) for one git
+    invocation; the name `*` stands for refs the guard cannot list."""
+    sub = inv.subcommand
+    if sub not in _MOVES_HEAD | _MOVES_NAMED:
+        return False, []
+    try:  # the words as the shell passes them (ref names hold no space)
+        args = shlex.split(' '.join(inv.args))
+    except ValueError:  # the segment splitter cut a quoted word: its operands are unknown
+        return sub in _MOVES_HEAD, ['*'] if sub in _MOVES_NAMED else []
+    ops = _operands(args)
+    if sub in ('cherry-pick', 'revert') and {'-n', '--no-commit'} & set(args):
+        return False, []
+    if sub in ('merge', 'cherry-pick', 'revert', 'am', 'reset'):
+        return sub != 'reset' or _reset_moves(args), []
+    if sub in ('pull', 'fetch'):  # a refspec's destination is a local ref
+        return sub == 'pull', [o.rpartition(':')[2] for o in ops if ':' in o]
+    if sub == 'rebase':
+        ops = _operands(args, ('--onto', '-x', '--exec', '-s', '--strategy', '-X',
+                               '--strategy-option'))
+        branch = ops[:1] if '--root' in args else ops[1:2]
+        return not branch, branch + (['*'] if '--update-refs' in args else [])
+    if sub in ('update-ref', 'symbolic-ref'):
+        ops = _operands(args, ('-m',))
+        if '--stdin' in args:
+            return False, ['*']
+        if sub == 'symbolic-ref' and len(ops) < 2 and not {'-d', '--delete'} & set(args):
+            return False, []
+        if ops[:1] == ['HEAD']:  # update-ref HEAD writes HEAD's branch; symbolic-ref switches
+            return sub == 'update-ref' and '--no-deref' not in args, []
+        return False, ops[:1]
+    if sub == 'branch':
+        flags = {f for a in args if a.startswith('-') for f in (
+            [a.partition('=')[0]] if a.startswith('--') else ['-' + c for c in a[1:]])}
+        if flags & {'-d', '-D', '--delete'}:
+            return False, ops
+        if flags & {'-m', '-M', '--move'}:  # one operand renames HEAD's branch
+            return len(ops) == 1, ops
+        if flags & {'-c', '-C', '--copy'}:
+            return False, ops[-1:]
+        return False, ops[:1] if flags & {'-f', '--force'} else []
+    if sub in ('checkout', 'switch', 'worktree'):  # -B/-C reset the branch they name
+        return False, [args[i + 1] for i, a in enumerate(args[:-1])
+                       if a in ('-B', '-C', '--force-create')] + [
+                           a.partition('=')[2] for a in args if a.startswith('--force-create=')]
+    return False, ['*'] if sub in ('filter-branch', 'filter-repo', 'fast-import') else []
+
+
+def _names_protected(name, protected):
+    """The branch `name` (a ref, a refspec destination) is or may be `protected`."""
+    name = name.lstrip('+')
+    if re.match(r'refs/(?!heads/)[\w.-]+/', name):
+        return False
+    name = re.sub(r'^(?:refs/)?heads/', '', name)
+    return name == protected or bool(_EXPANSION.search(name))
+
+
+def _protected_branch():
+    """The branch refs/remotes/origin/HEAD names (local refs, as the overnight
+    launcher resolves it), or ''."""
+    return _git_output(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).split('/', 1)[-1]
+
+
+def _moves_protected_branch(command, invocations):
+    """E2: True when a git operation in `command` can move the protected
+    branch's ref (_branch_writes: one on HEAD's branch while HEAD is on it, or
+    one that writes it by name), or the guard cannot tell where it lands: a
+    directory change or GIT_DIR-style redirect in the command, a branch change
+    in it for an operation on HEAD, a prefix or an option before the operation's
+    subcommand, a detached HEAD, or an unset origin/HEAD."""
+    writes = [_branch_writes(inv) for inv in invocations]
+    on_head = any(head for head, _names in writes)
+    names = [name for _head, named in writes for name in named]
+    if not (on_head or names):
+        return False
+    if (_ambient_git_redirect_present() or _DIR_CHANGE_RE.search(command)
+            or (on_head and _BRANCH_CHANGE_RE.search(command))):
         return True
-    cwd_moved = seen = False
     for seg in _shell_segments(command):
         toks = seg.split()
-        idx = _cmd_token_index(toks) if toks else None
-        if idx is None:
-            continue
-        if os.path.basename(_unquote_token(toks[idx])) in _CWD_CHANGE_CMDS:
-            cwd_moved = True
-            continue
-        if not any(inv.subcommand == 'merge' for inv in iter_git_invocations(seg)):
-            continue
-        seen = True
-        if cwd_moved or idx or toks[1:2] != ['merge']:
+        if any(any(_branch_writes(inv)) and (_cmd_token_index(toks) or toks[1:2] != [inv.subcommand])
+               for inv in iter_git_invocations(seg)):
             return True
-        branch = _git_output(['symbolic-ref', '--quiet', '--short', 'HEAD'])
-        default = _git_output(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
-        if not branch or not default or branch == default.split('/', 1)[-1]:
-            return True
-    return not seen  # called for a classified merge: one not found here is not placed
+    protected = _protected_branch()
+    if not protected or any(_names_protected(name, protected) for name in names):
+        return True
+    return on_head and _git_output(['symbolic-ref', '--quiet', '--short', 'HEAD']) in ('', protected)
+
+
+def _evaluate_protected_move(command, data):
+    if _check_git_allowlist(command, data):
+        return
+    _block(
+        '\nBLOCKED: agent git ref move - this command can move the protected branch '
+        '(%s), or the guard cannot tell the branch it lands on: a cd, pushd, popd, '
+        'source or GIT_DIR-style redirect in it, a checkout, switch or symbolic-ref '
+        'with an operation on HEAD, a prefix or an option before the subcommand, a '
+        'detached HEAD or an unset origin/HEAD.\n'
+        'Command excerpt: %s\n' % (_protected_branch() or 'unresolved', command[:200])
+    )
 
 
 def _block_inline_env_push(command):
@@ -1654,8 +1768,9 @@ def _audit_residual_override(path, ovr, kinds, segments, digest):
 
 def _evaluate_command(command, data, do_consent=False):
     # do_consent: the main agent holds /do consent, which covers every rule
-    # here except git commit, git push, a merge into the protected branch (E2)
-    # and a git command the guard cannot classify, which may be one of them.
+    # here except git commit, git push and a git command the guard cannot
+    # classify, which may be one of them (E2); under it an operation that can
+    # move the protected branch is refused (_moves_protected_branch).
     # Classify once: build invocations list for all _looks_like_* and _evaluate_* calls.
     # iter_git_invocations uses token-aware parsing so path-qualified forms like
     # /usr/bin/git are detected alongside bare 'git' (closes RISK-3 bypass).
@@ -1733,6 +1848,8 @@ def _evaluate_command(command, data, do_consent=False):
     # (force-push must stay blocked even with a broad /allow grant).
     if not _looks_like_git_push(invocations) and _check_git_allowlist(command, data):
         return
+    if do_consent and _moves_protected_branch(command, invocations):
+        _evaluate_protected_move(command, data)
     if not do_consent and _looks_like_git_forbidden_plumbing(invocations):
         _evaluate_forbidden_plumbing(command, data)
     if not do_consent and _looks_like_git_reset_hard(invocations):
@@ -1741,8 +1858,7 @@ def _evaluate_command(command, data, do_consent=False):
         _evaluate_direct_ref_mutation(command, data)
     if _looks_like_git_push(invocations):
         _evaluate_push(command, invocations, data)
-    if _looks_like_git_merge(invocations) and (
-            not do_consent or _merge_into_protected_branch(command)):
+    if not do_consent and _looks_like_git_merge(invocations):
         _evaluate_merge(command, data)
     if _looks_like_git_commit(invocations):
         _evaluate_commit(command, data)
@@ -1762,8 +1878,8 @@ def main():
         command = (data.get('tool_input', {}) or {}).get('command', '') or ''
         if not command:
             sys.exit(0)
-        # /do consent (main agent only) releases every rule but commit, push
-        # and a merge into the protected branch (E2).
+        # /do consent (main agent only) releases every rule but commit and push,
+        # and refuses a move of the protected branch (E2).
         do_consent = has_do_consent(data)
         try:
             _evaluate_command(command, data, do_consent)

@@ -658,4 +658,4 @@ Every violation wastes context tokens, breaks portability, or degrades quality:
 
 ---
 
-**Codex:** when your dispatch carries the line `codex_required: true`, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/codex-consultation.md` and follow it. Without that line (the default) skip codex; your output carries `codex_consult: { invoked: false, status: "not_requested", findings: [], feedback_summary: null, feedback_incorporated: null }`.
+**Codex:** when your dispatch carries the line `codex_required: true`, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/codex-consultation.md` and follow it on your `STATUS: complete` invocation only (a `STATUS: incomplete` invocation does not consult codex). Without that line (the default) skip codex; your output carries `codex_consult: { invoked: false, status: "not_requested", findings: [], feedback_summary: null, feedback_incorporated: null }`.

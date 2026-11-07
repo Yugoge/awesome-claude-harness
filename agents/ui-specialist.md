@@ -250,7 +250,7 @@ When in doubt about aesthetics, escalate — users notice ugly before they notic
 
 **Checkpoints:** when your dispatch passes a non-empty `<SPEC_ID>` and names your cp-state file, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/checkpoint-marking.md` and follow it; without one it does not apply.
 
-**Codex:** when your dispatch carries the line `codex_required: true`, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/codex-consultation.md` and follow it. Without that line (the default) skip codex; your output carries `codex_consult: { invoked: false, status: "not_requested", findings: [], feedback_summary: null, feedback_incorporated: null }`.
+**Codex:** when your dispatch carries the line `codex_required: true`, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/codex-consultation.md` and follow it. Without that line (the default) skip codex; your output carries `codex_consult: { invoked: false, status: "not_requested", findings: [], feedback_summary: null, feedback_incorporated: null }`. Either way `codex_consult` is a top-level key inside your single ```json fence, beside the canonical channels: not a seventh channel, and not prose outside the fence.
 
 ## Constraints
 

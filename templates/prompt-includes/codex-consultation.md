@@ -4,14 +4,23 @@ Read this file when your dispatch prompt carries the line `codex_required: true`
 default) you skip codex: your output carries `codex_consult: { invoked: false, status: "not_requested",
 findings: [], feedback_summary: null, feedback_incorporated: null }` and nothing below applies.
 
-**Who sets the line.** Codex is off by default; the owner turns it on with `--codex`. The orchestrator then
-adds `codex_required: true` to the dispatches whose template carries that line in `/dev`, `/redev`,
-`/dev-command`, `/dev-overnight`, `/spec`, `/close` and `/clean`, and `/commit --codex` passes it to its
-pre-commit QA (`codex_required: <QA_CODEX>`). `/do --codex` dispatches no subagent: the main agent runs the
-codex audit itself (commands/do.md Step 3). Under `--codex` the UserPromptSubmit hook arms the cycle's
-`codex-enforce.json`, and `hooks/subagentstop-codex-enforce.py` blocks the stop (exit 2,
-`CODEX_ENFORCE_BLOCKED`) of a subagent whose dispatch, or the template it was made from, carries the line
-until its `Skill(codex)` call is in the cycle's codex ledger; without `--codex` that hook exits 0.
+**Who sets the line, and what enforces it.** Codex is off by default; the owner turns it on with `--codex`.
+Per command:
+
+- `/dev`, `/redev`, `/dev-command`, `/dev-overnight`: the orchestrator adds the line to the dispatches whose
+  template carries it, and a hook enforces it. The UserPromptSubmit hook (for `/dev-overnight`, through
+  `scripts/overnight-init.sh`) arms the cycle's `codex-enforce.json`, and `hooks/subagentstop-codex-enforce.py`
+  blocks the stop (exit 2, `CODEX_ENFORCE_BLOCKED`) of a subagent whose dispatch, or the template it was made
+  from, carries the line until its `Skill(codex)` call is in the cycle's codex ledger. Without `--codex` no
+  flag is armed and that hook exits 0.
+- `/spec`, `/clean`: the orchestrator adds the line to the dispatches whose template carries it; no hook arms
+  a flag for them, so that hook exits 0 and no hook enforces the consultation.
+- `/close`, `/commit`: QA's dispatch carries the line (`/commit`: its pre-commit QA, as
+  `codex_required: <QA_CODEX>`), and that command's own text sets out QA's codex round. No hook enforces it:
+  that hook exits 0 for a dispatch whose obligation names pipeline `close` or `commit`, even in a cycle that
+  `/dev --codex` armed.
+- `/do`: no subagent is dispatched; the main agent runs the codex audit itself (commands/do.md Step 3), and
+  no hook enforces it.
 
 This per-dispatch consultation is distinct from the multi-round QA-codex debate inside `/close` (governed by
 `commands/close.md`'s own `--codex` flag). It catches over-engineering, under-engineering, missed edge cases
@@ -20,7 +29,9 @@ and scope drift before the orchestrator and downstream agents inherit the mistak
 **Procedure**
 
 1. Draft your output (your role's report, verdict or artifact, after every step your agent file requires
-   before it; tag it as a draft, not yet ready).
+   before it; tag it as a draft, not yet ready). The style-, cleanliness- and prompt-inspector keep the draft
+   in memory: they write neither the report file nor a draft file before step 5, and give step 2's summary
+   as text in the prompt, not as a file path.
 2. Invoke `Skill(skill="codex")` with:
    - If `User requirement document:` was present in your dispatch, read it now and prepend `Verbatim user
      requirement: <exact contents of the document>` to the Skill(codex) prompt before the draft summary, so

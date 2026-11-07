@@ -26,12 +26,12 @@ only `spec-check.py` may write. Why: spec-check.py provides auto-checkout, audit
 corrupts the audit trail.
 
 **On entry**: Read your cp-state file before doing substantive work. That read registers you
-(`pretool-cp-checkin.py`): your slot's `is_running` flips to true and your `agent_id` is recorded. Use the
-recorded `agent_id` value as `--agent-id`; if `$CLAUDE_AGENT_ID` is available, it must match that value.
+(`pretool-cp-checkin.py`): the file you read becomes your slot, its `is_running` true and its `agent_id`
+your own agent id. Use that `agent_id` value as `--agent-id` (no shell variable supplies it).
 
 **During work**: treat each `checkpoints[].id` entry as a required checklist item. Immediately after you
 complete a checkpoint's atomic action, mark it done (`mark`, with `--spec-id <SPEC_ID>`, `--agent <role>`,
-`--agent-id "$CLAUDE_AGENT_ID"` and `--cp-id cp-NN`). If a checkpoint legitimately does not apply to this
+`--agent-id <that agent_id>` and `--cp-id cp-NN`). If a checkpoint legitimately does not apply to this
 run, waive it with the same arguments.
 
 **On exit**: every checkpoint of your slot must be in state `done` or `waived`. `subagentstop-cp-enforce.py`

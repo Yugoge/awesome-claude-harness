@@ -573,6 +573,8 @@ def test_checkpoints_sets_the_checklist_of_the_callers_slot(tmp_path):
     cps = _read_cp(path)["checkpoints"]
     assert [(c["id"], c["action"], c["state"]) for c in cps] == [
         ("cp-01", "Write the ticket", "pending"), ("cp-02", "Write the context", "pending")]
+    # The checklist waits idle for the agent it is for (P9 F-E4): the setter's id only labels it.
+    assert _read_cp(path)["is_running"] is False and _read_cp(path)["agent_id"] == "spec-lead-ba"
     before = path.read_bytes()
     rc = _run_spec_check(tmp_path, ["checkpoints", "--spec-id", spec_id, "--agent", agent,
                                     "--agent-id", "someone-else", "--action", "x"])
@@ -580,19 +582,41 @@ def test_checkpoints_sets_the_checklist_of_the_callers_slot(tmp_path):
     assert path.read_bytes() == before
 
 
-def test_register_of_a_second_agent_clones_the_primary_checklist(tmp_path):
+def test_a_reader_takes_the_slot_it_read_and_a_running_holder_moves(tmp_path):
+    """P9 F-E4: the file a subagent Read names its own CLI id; a parallel same-role agent
+    still running on it moves, id and states kept, to a new numbered slot."""
     spec_id, agent = "spec-test-clone", "qa"
     primary = _make_cp_state(tmp_path, spec_id, agent, _baseline_payload(
-        spec_id, agent, generation=1, agent_id="spec-lead-qa", is_running=True,
+        spec_id, agent, generation=1, agent_id="a-qa-lane-1", is_running=True,
         checkpoints=[_cp("cp-01"), _cp("cp-02", state="done")]))
-    before = primary.read_bytes()
+    before = _read_cp(primary)
     rc = _run_hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": str(primary)},
-                              "agent_id": "real-qa-1"})
+                              "agent_id": "a-qa-lane-2", "agent_type": agent})
     _assert_no_traceback(rc, "register")
-    clone = _read_cp(primary.with_name(f"cp-state-{agent}-2.json"))
-    assert clone["agent_id"] == "real-qa-1" and clone["is_running"] is True and clone["instance_id"] == 2
-    assert [c["state"] for c in clone["checkpoints"]] == ["pending", "done"]
-    assert primary.read_bytes() == before
+    moved, now = _read_cp(primary.with_name(f"cp-state-{agent}-2.json")), _read_cp(primary)
+    assert moved == dict(before, instance_id=2)
+    assert now["agent_id"] == "a-qa-lane-2" and now["is_running"] is True and now["instance_id"] is None
+    assert [c["state"] for c in now["checkpoints"]] == ["pending", "done"]
+    _run_hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": str(primary)},
+                         "agent_id": "a-qa-lane-1", "agent_type": agent})  # a holder's re-read keeps its slot
+    assert _read_cp(primary) == now and _read_cp(primary.with_name(f"cp-state-{agent}-2.json")) == moved
+
+
+def test_a_read_by_another_role_registers_nobody(tmp_path):
+    """The payload's role decides (P9 F-E4): the /spec subagent reading a slot it set, or a
+    dev reading qa's, binds nothing; the path's role counts only without a payload role."""
+    spec_id = "spec-test-other-role"
+    path = _make_cp_state(tmp_path, spec_id, "dev", _baseline_payload(
+        spec_id, "dev", generation=1, agent_id="dev-label", checkpoints=[_cp("cp-01")]))
+    before = path.read_bytes()
+    for role in ("spec", "qa"):
+        rc = _run_hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": str(path)},
+                                  "agent_id": f"a-{role}", "agent_type": role})
+        _assert_no_traceback(rc, role)
+    assert path.read_bytes() == before
+    _run_hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": str(path)},
+                         "agent_id": "a-dev", "agent_type": "dev"})
+    assert _read_cp(path)["agent_id"] == "a-dev" and _read_cp(path)["is_running"] is True
 
 
 def test_a_read_without_an_agent_id_registers_nobody(tmp_path):

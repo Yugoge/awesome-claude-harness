@@ -64,7 +64,7 @@ DEV_SENTINEL_PATTERN = re.compile(
 # (cp-state-<agent>-<N>.json, N>=2). Mirrors _CP_STATE_FILENAME_RE in
 # /root/.claude/scripts/spec-check.py (which is the writer).
 CP_STATE_PATH_PATTERN = re.compile(
-    r".*/\.claude/specs/(?P<spec_id>[^/]+)/cp-state-(?P<agent>[A-Za-z0-9_-]+?)(?:-\d+)?\.json$"
+    r".*/\.claude/specs/(?P<spec_id>[^/]+)/cp-state-(?P<agent>[A-Za-z0-9_-]+?)(?:-(?P<instance>\d+))?\.json$"
 )
 
 
@@ -167,10 +167,11 @@ def _handle_cp_state_direct_read(data, project_dir):
     Treats a direct Read of .claude/specs/<spec-id>/cp-state-<agent>(-N).json
     as the SECOND ACTION registration trigger. The write itself is
     scripts/spec-check.py's (`register`), the one writer of cp-state files:
-    it picks the slot (the one this agent_id holds, else the first idle one,
-    else a new numbered slot carrying the primary's checklist), restamps
-    ownership and keeps every checkpoint state, under the spec directory's
-    lock. A Read with no agent_id (the main agent's) registers nobody.
+    it picks the slot (the one this agent_id holds, else the file Read, its
+    running holder moved aside), restamps ownership and keeps every checkpoint
+    state, under the spec directory's lock. A Read with no agent_id (the main
+    agent's) or a payload naming another role (/spec reading a slot it set; the
+    path's role counts only without agent_type) registers nobody.
     Returns True when the Read targets a cp-state file.
 
     BUG-CPSTATE-1: the SECOND ACTION blocks in commands/dev.md instruct
@@ -181,10 +182,11 @@ def _handle_cp_state_direct_read(data, project_dir):
     if spec_id is None:
         return False
     agent_id = data.get("agent_id")
-    if agent_id:
+    if agent_id and data.get("agent_type") in (None, "", agent):
+        instance = CP_STATE_PATH_PATTERN.match(data["tool_input"]["file_path"]).group("instance")
         subprocess.run(
-            [sys.executable, str(SPEC_CHECK), "register", "--spec-id", spec_id,
-             "--agent", agent, "--agent-id", agent_id],
+            [sys.executable, str(SPEC_CHECK), "register", "--spec-id", spec_id, "--agent", agent,
+             "--agent-id", agent_id] + (["--instance-id", instance] if instance else []),
             env={**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir)},
             capture_output=True, timeout=REGISTER_TIMEOUT_S,
         )

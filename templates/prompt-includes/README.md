@@ -8,7 +8,7 @@ them.
 
 | Include | Read when | Enforcing hook |
 |---|---|---|
-| `codex-consultation.md` | the dispatch carries `codex_required: true` (an owner `--codex`) | `subagentstop-codex-enforce.py` |
+| `codex-consultation.md` | the dispatch carries `codex_required: true` (an owner `--codex`) | `subagentstop-codex-enforce.py` under `--codex` on `/dev`, `/redev`, `/dev-command`, `/dev-overnight`; none for `/spec`, `/clean`, `/close`, `/commit`, `/do` |
 | `checkpoint-marking.md` | the dispatch passes a non-empty `<SPEC_ID>` and names the agent's cp-state file | `subagentstop-cp-enforce.py` (armed: `CP_ENFORCE_MODE=block`) |
 | `anti-give-up.md` | an obstacle blocks a check the agent was asked to make | none |
 | `overnight-spec-integration.md` | the prompt names an `Overnight spec file:` | none |
