@@ -16,6 +16,7 @@
 - `test_artifact_contract_enforce.py` - The hook is the producer-side port of /close's Artifact schema gate
 - `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
 - `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
+- `test_ba_qa_routing_record.py` - A BA or QA handed several issues stops before any analysis and replies `multi_issue_fanout_reques...
 - `test_baseline_snapshot_preflight.py` - agents/dev.md:535 declares that the orchestrator captures baseline_dirty_snapshot
 - `test_bash_execution_boundary.py` - These cover the properties the 436-case matrix cannot express on its own:
 - `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
@@ -42,6 +43,7 @@
 - `test_declaring_dispatch.py` - of who owes an artifact of a task, from the task's dispatch records in every
 - `test_dispatch_template.py` - A dispatch's template is the fence of its command's file that names its
 - `test_do_block_subagents.py` - During an active /do cycle the main agent could still dispatch dev-type
+- `test_do_consent_landing.py` - hooks/prompt-workflow.py, the flag's one writer, writes it on a `/do ...` UserPromptSubmit into
 - `test_do_taskid_mint.py` - Covers the root-cause fix for the do-report task-id collision (memory
 - `test_doc_sync_folder_doc.py` - doc-sync's regeneration, /clean's generate-folder-index.sh and generate-folder-readme.sh,
 - `test_doc_sync_hook_notices.py` - Backlog #83: a README that regen_readme() skips (no opening marker, or no closing marker)
@@ -49,6 +51,7 @@
 - `test_doc_sync_index_status.py` - Backlog #85: regen_index() returned None on every path, so nobody could tell a skipped INDEX
 - `test_doc_sync_regen_readme_status.py` - Backlog #83: regen_readme() returned None on every path, so nobody could tell a skipped
 - `test_doc_sync_regions.py` - Backlog #85: four unrelated marker predicates (README first occurrence, INDEX substring
+- `test_doc_sync_update_only.py` - A Write in a product repository leaves no CLAUDE.md, INDEX.md or README.md behind that was
 - `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
 - `test_e2e_enforce.py` - obligation fallback (ticket 20261001-161041-r06, M1)
 - `test_env_configured_defaults.py` - or derived; such values come back only through the environment (normally the
@@ -98,6 +101,7 @@
 - `test_stop_do_report_gate.py` - Covers the contract from commands/do.md Step 5: a /do session may stop only
 - `test_stop_obligation_gate.py` - exit-0 stub (P1b row 3, Correction 6, D15)
 - `test_subagentstop_codex_enforce.py` - The codex ledger's one deciding read blocks a stopping subagent whose session
+- `test_subagentstop_cp_enforce.py` - Armed as shipped (settings.json's env sets CP_ENFORCE_MODE=block), the hook blocks
 - `test_todo_script_fork.py` - lib.todo_canonical.run_todo_script runs a harness todo script in a fork of the
 - `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
 - `test_tool_policy_derived_permission.py` - hooks/pretool-tool-policy.py runs it before the role rows, for every caller, the main agent

@@ -330,7 +330,7 @@ Bind these from its `KEY=VALUE` output — they are the only initialization valu
 **SECOND ACTION line (when `SPEC_ID` is non-empty).** For every agent that has a cp-state file under that `SPEC_ID`, add immediately after the FIRST ACTION line:
 
 ```text
-SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with ~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with ~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
+SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work; that read makes the file your slot and writes your agent id into its `agent_id`, the value you pass as `--agent-id` (no shell variable supplies it). Mark each completed checkpoint with ~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id <agent_id> --cp-id <cp-NN>. Waive only with ~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id <agent_id> --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop: `subagentstop-cp-enforce.py` blocks your stop while a checkpoint of your own slot is still pending (`CP_ENFORCE_MODE=block`, as settings.json ships it).
 ```
 
 Omit that line for any agent with no cp-state file. This gives overnight specialists the same checklist semantics as BA/Dev/QA.
@@ -421,8 +421,7 @@ layers; default: BA's recommendation) instead of its report, and ends.
 The orchestrator handles it like every producer question (Hard Rule 5):
 
 - Answer it under Clause A when the choice is routine (for example BA's
-  default is a deeper layer, which the Step 17 layer-escalation gate
-  already requires): re-dispatch BA with
+  default is a deeper layer): re-dispatch BA with
   the chosen layer and record the assumption in the re-dispatch and the
   cycle log
 - Otherwise park the pipeline: the question goes to the overnight

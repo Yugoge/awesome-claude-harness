@@ -47,7 +47,7 @@ dot-claude/
 │   ├── `paseo-daemon.md` - paseo multi-session monitoring and three-account dynamic scheduling control plane — bootstrap of a persistent disk-backed state machine (blueprint F1–F15, amended 22-entry runtime baseline). Human-only.
 │   ├── `pull.md` - Pull Command
 │   ├── `push.md` - Push Command
-│   ├── `redev.md` - dev workflow harness re-attach — for conversations where the /dev workflow context has already appeared; may be invoked with no new requirement text to purely re-attach the harness (canonical TodoList, gates, dev-registry, artifact conventions) to that context. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
+│   ├── `redev.md` - /redev is /dev when saving context — the /dev workflow (same arguments, steps, gates and artifacts) without re-emitting its text, under a fresh task id on every invocation. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
 │   ├── `restart.md` - Resume every quota-interrupted subagent in the current Claude Code parent session from its original transcript and agent ID; when none is recoverable, continue the invoking session's own main agent.
 │   ├── `spec-update.md` - Update an existing spec, continue unfinished development, or write a temp session note.
 │   ├── `spec.md` - Create spec files for any dev workflow (/dev, /dev-overnight, or standalone reference). Pass --codex to enable adversarial codex consultation on each spec-subagent / QA dispatch; default is self-review only.
@@ -118,7 +118,6 @@ dot-claude/
 │       └── `run-hero-demo.sh` - Description: Five-beat guard demo — a real agent git push is refused pre-execution, a
 ├── hooks/
 │   ├── doc_sync/
-│   │   ├── `claude.py` - CLAUDE.md auto-creation and patching.
 │   │   ├── `config.py` - The git-tracked helpers (WS5, AC-WS5-1) let the INDEX/README generators list
 │   │   ├── `docker.py` - Parse docker-compose.yml and generate markdown table.
 │   │   ├── `extract.py` - Extract description from various file types.
@@ -609,7 +608,7 @@ dot-claude/
 │   │   └── `SKILL.md` - Five LLM-driven contextual accessibility insights that axe cannot detect (heading hierarchy, link text, focus order, color reliance, decorative-as-interactive). MUST receive axe findings as input and dedup against them. Use during ui-specialist Phase 6 (Accessibility) AFTER ui-axe-injector.
 │   ├── ui-shared/
 │   │   ├── `anti-pattern-catalog.yml` - YAML config: rules
-│   │   ├── `report-schema.json` - Schema for the ui-specialist subagent's final JSON report. Implements spec-20260426-080555 section 5.5 (6 channels) + 5.11 (hard_defect vs taste_heuristic) + 5.15 (skill outputs) + double-defense severity hard-cap on aesthetic_findings.
+│   │   ├── `report-schema.json` - Schema for the ui-specialist subagent's final JSON report: 6 channels, hard_defect vs taste_heuristic findings, skill outputs, and a double-defense severity hard-cap on aesthetic_findings.
 │   │   ├── `review-phases.yml` - YAML config: phase_order, phases
 │   │   └── `rule-map.json` - JSON config: $schema_version, meta, rules
 │   ├── ui-state-matrix/

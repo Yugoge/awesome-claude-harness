@@ -135,6 +135,7 @@ tests/
 ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
 ├── `test_subagentstop_e2e_enforce.py` - A QA dispatch that carries an obligation is judged on exactly the qa-report
+├── `test_test_command_routes.py` - /test's failure routes: no typed menu or exit option, and only executor statuses the executor emits (D23, D25).
 ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
 ├── `test_tool_policy_note_fail_closed.py` - hooks/pretool-tool-policy.py refuses a Bash write target with exit 2 and then
 ├── `test_verify_claims_tracked_form.py` - On an initialised home the claude-settings filter leaves the machine form in the
