@@ -22,6 +22,10 @@ User rulings (in order):
    case); the mechanism must not depend on spec presence and must cover every entry variation;
    no new bugs are acceptable.
 
+Owner quote kept from a record deleted in P10 (docs/reference/mat-doc10-writer-order.v2.json,
+whose multi-actor authorization ceremony it abolished; verbatim):
+- 2026-08-19 — "仪式是codex发明的话就不要管了，我们按照claude正式harness走"
+
 Hard acceptance criteria (all five hold in this design; proofs in §3):
 C1 zero new mutable state files (repo-versioned schemas/hooks and the harness-owned transcript
    are not mutable state; existing hook-authored files may be extended, not multiplied);
