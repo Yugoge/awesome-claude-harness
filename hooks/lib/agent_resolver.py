@@ -43,7 +43,8 @@ by a companion pretool-cp-checkin.py fix (2026-07-15) that stops
 refreshing checked_in_at on repeat reads by an already-registered owner --
 so a bogus entry can no longer be kept perpetually "fresh" by the same
 bystander re-reading it, and will itself go stale within
-_MAX_ACTIVE_AGE_SECONDS of its single registration. A freshly-created
+_MAX_ACTIVE_AGE_SECONDS of its single registration. (That registration is
+now scripts/spec-check.py `register`, which the hook runs.) A freshly-created
 bogus entry can still cause misattribution for that same bounded window;
 fully closing that gap would require an explicit, ownership-validated
 dispatch-claim protocol (out of scope for this fix -- flagged as a
@@ -109,6 +110,14 @@ def _is_stale(payload: dict, max_age_seconds: float = _MAX_ACTIVE_AGE_SECONDS) -
     if age < -_CLOCK_SKEW_TOLERANCE_SECONDS:
         return True
     return age > max_age_seconds
+
+
+def cp_state_running(payload: dict) -> bool:
+    """The one rule on whether a cp-state slot is running: is_running=true AND
+    a fresh check-in (STALE-1). Role resolution below and
+    subagentstop-cp-enforce.py (a stopping agent's pending checkpoints) both
+    take it, so a slot left running by a crashed session counts for neither."""
+    return bool(payload.get("is_running")) and not _is_stale(payload)
 
 
 def _read_json(path: str) -> Optional[dict]:
@@ -225,7 +234,7 @@ def _scan_cp_state_files(agent_id: str, project_dir: str):
     # STALE-1: is_running=true alone is not enough -- a dangling entry that
     # was never checked out also has is_running=true forever. Require the
     # match to also be fresh (recently checked in) before trusting it.
-    active = [m for m in matches if m.get("is_running") and not _is_stale(m)]
+    active = [m for m in matches if cp_state_running(m)]
     if not active:
         return None
     picked = _pick_active(active)

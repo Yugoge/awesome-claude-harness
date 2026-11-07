@@ -724,25 +724,32 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
     assert "posttool-restart-sendmessage.py" in posttool_commands
 
 
+def _unstarted_dev_transcript(tmp_path: Path) -> str:
+    """A session that typed /dev and was interrupted before its first
+    TodoWrite: the transcript the workflow gate reads its checklist from."""
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(json.dumps({"type": "user", "message": {
+        "role": "user", "content": "/dev fix the bug"}}) + "\n")
+    return str(transcript)
+
+
 def test_restart_helper_bash_command_bypasses_workflow_gate_deadlock(tmp_path: Path) -> None:
     """/restart's own helper must run even when the invoking session holds an
-    unrelated, never-acknowledged bookmark (e.g. /dev was invoked and
+    unrelated, never-started checklist (e.g. /dev was invoked and
     interrupted before its first TodoWrite) — without the gate being disabled
     for anything else."""
     gate = HOOKS / "pretool-workflow-gate.py"
     project_dir = tmp_path / "project"
     (project_dir / ".claude").mkdir(parents=True)
     sid = str(uuid.uuid4())
-    bookmark = project_dir / ".claude" / f"workflow-{sid}.json"
-    bookmark.write_text(json.dumps({
-        "command": "dev", "arguments": "", "todo_acknowledged": False,
-    }))
+    transcript = _unstarted_dev_transcript(tmp_path)
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir)}
     home = Path(os.environ.get("HOME", str(Path.home())))
 
     restart_call = {
         "tool_name": "Bash",
         "session_id": sid,
+        "transcript_path": transcript,
         "tool_input": {
             "command": f"{home}/.claude/venv/bin/python "
             f"{home}/.claude/scripts/restart-subagents.py prepare",
@@ -754,6 +761,7 @@ def test_restart_helper_bash_command_bypasses_workflow_gate_deadlock(tmp_path: P
     cross_account_call = {
         "tool_name": "Bash",
         "session_id": sid,
+        "transcript_path": transcript,
         "tool_input": {
             "command": f"{home}/.claude/venv/bin/python "
             f"{home}/.claude/scripts/restart-subagents.py prepare --cross-account",
@@ -768,6 +776,7 @@ def test_restart_helper_bash_command_bypasses_workflow_gate_deadlock(tmp_path: P
     ordinary_call = {
         "tool_name": "Bash",
         "session_id": sid,
+        "transcript_path": transcript,
         "tool_input": {"command": "echo hello"},
     }
     blocked = _run_hook(gate, ordinary_call, env)
@@ -777,6 +786,7 @@ def test_restart_helper_bash_command_bypasses_workflow_gate_deadlock(tmp_path: P
     chained_call = {
         "tool_name": "Bash",
         "session_id": sid,
+        "transcript_path": transcript,
         "tool_input": {
             "command": f"{home}/.claude/venv/bin/python "
             f"{home}/.claude/scripts/restart-subagents.py prepare"
@@ -796,10 +806,7 @@ def test_restart_helper_bypass_fails_closed_on_unsafe_home(tmp_path: Path) -> No
     project_dir = tmp_path / "project"
     (project_dir / ".claude").mkdir(parents=True)
     sid = str(uuid.uuid4())
-    bookmark = project_dir / ".claude" / f"workflow-{sid}.json"
-    bookmark.write_text(json.dumps({
-        "command": "dev", "arguments": "", "todo_acknowledged": False,
-    }))
+    transcript = _unstarted_dev_transcript(tmp_path)
     unsafe_home = tmp_path / "evil home; rm -rf"
     unsafe_home.mkdir(parents=True)
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir), "HOME": str(unsafe_home)}
@@ -807,6 +814,7 @@ def test_restart_helper_bypass_fails_closed_on_unsafe_home(tmp_path: Path) -> No
     restart_call = {
         "tool_name": "Bash",
         "session_id": sid,
+        "transcript_path": transcript,
         "tool_input": {
             "command": "$HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py prepare",
         },

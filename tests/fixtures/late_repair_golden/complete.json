@@ -27,7 +27,6 @@
   "errors": [],
   "lanes": [],
   "mode": "singular",
-  "optional_parent_artifacts": {},
   "parallel_workers": [],
   "parallel_workers_declaration": "absent",
   "qa_inputs": [

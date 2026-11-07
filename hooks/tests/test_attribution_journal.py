@@ -535,6 +535,8 @@ def test_doc_sync_regen_outside_capture_window_surfaces_as_break(tmp_path, monke
     sibling = watched_dir / "sibling.py"
     sibling.write_text("# v1\n")
     index_path = watched_dir / "INDEX.md"
+    # doc-sync updates only an INDEX that exists with its markers (the owner's opt-in)
+    index_path.write_text("# hooks\n\n<!-- AUTO:index-stats -->\n<!-- /AUTO:index-stats -->\n")
     assert regen_index(watched_dir, repo) is RegenStatus.WRITTEN   # pre-history: uncaptured, by design
     # session s1 directly (and correctly) captures a hand-note edit to INDEX.md
     _run("Edit", {"file_path": str(index_path)}, "s1", "1",

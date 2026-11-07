@@ -6,22 +6,30 @@ posttool-overnight-file-check) plus check-overnight-reports.py and
 lib/closeout.py.
 
 Public surface:
-    load_contract(session_id, cycle_id) -> dict | None
+    contract_path(state, cycle_id) -> Path   # the contract's one path
+    load_contract(session_id, cycle_id, state=None) -> dict | None
+    overnight_steps() -> [(label, subagent_call)]   # scripts/todo/dev-overnight.py _STEPS
+    exploration_calls(steps) -> [entry]       # steps 2-4, allowed before the contract
+    post_triage_steps(steps) -> [(label, subagent_call)]   # what the contract renders
+    triage_call(steps) -> dict                # the PM TRIAGE step's subagent_call
+    call_entry(label, subagent_call) -> dict  # a required_calls entry for one step
+    detect_mode(prompt) -> str
     type_strict_json_equal(left, right) -> bool
     validate(record, schema_name) -> Result
     validate_required_call(contract, role, pipeline_id, mode, step) -> Result
     iter_matching_required_calls(contract, step, role, pipeline_id, mode)
         -> Iterator[dict]   # T2.3: multi-dimension contract matching
-    validate_artifact(record, schema_name) -> Result   # T2.3: alias of validate
     lookup_required_call(contract, step) -> dict | None  # legacy (T2.3 kept for back-compat)
 
 A Result is a plain dict ``{ok, errors, severity}``. Severity is one of
 ``'pass'``, ``'warn'``, ``'fail'``. Hooks should treat ``severity == 'fail'``
 as exit-2 worthy; ``'warn'`` is informational; ``'pass'`` means clean.
 
-HARD CUTOVER convention: when no cycle-contract.json exists for the given
-session/cycle, ``load_contract`` returns ``None`` so callers can short-circuit
-with ``sys.exit(0)`` (legacy /spec, /dev single-cycle sessions are unaffected).
+The cycle contract has one writer, the PM TRIAGE handler in
+hooks/posttool-subagent-track.py, and one path,
+``<working root>/docs/dev/overnight/<sid>/cycle-<N>/cycle-contract.json``; no
+hook rewrites it after it is written. ``load_contract`` returns ``None`` when the
+session has no overnight state or the cycle has no contract yet.
 
 Custom keyword ``required_when_ui``: if the validated record has
 ``ui_pipeline == True``, every key listed in
@@ -44,10 +52,10 @@ a direct evidence_summary property).
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
-import fcntl
 from pathlib import Path
 from typing import Optional
 
@@ -59,12 +67,12 @@ except ImportError:  # pragma: no cover - architect confirmed availability
 # Importable from sibling lib module (already on the same hooks/lib/ path).
 try:
     from . import schema_registry
-    from . import claude_home
+    from . import overnight
 except ImportError:  # pragma: no cover - direct spec import in focused tests
     import sys as _sys
     _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from lib import schema_registry  # type: ignore
-    import claude_home  # type: ignore
+    import overnight  # type: ignore
 
 
 def _result(ok: bool, errors: list, severity: str) -> dict:
@@ -72,58 +80,103 @@ def _result(ok: bool, errors: list, severity: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Contract loading
+# Contract location and the canonical steps it is rendered from
 # ---------------------------------------------------------------------------
 
+_DEV_OVERNIGHT_TODO = Path(__file__).resolve().parents[2] / 'scripts' / 'todo' / 'dev-overnight.py'
 
-def _candidate_contract_paths(session_id: str, cycle_id: int) -> list[Path]:
-    """Return ordered candidate paths for the cycle contract.
-
-    WS1: the third (home-level docs) candidate is derived from the resolved
-    harness home's PARENT (``<home>/../docs/dev/overnight``) — matching the
-    author's ``/root/docs`` sibling-of-``/root/.claude`` layout portably —
-    rather than the hardcoded author literal ``/root/docs``.
-    """
-    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    cycle_dirname = f'cycle-{cycle_id}'
-    candidates = [
-        project_dir / 'docs' / 'dev' / 'overnight' / session_id / cycle_dirname / 'cycle-contract.json',
-        project_dir / '.claude' / f'overnight-contract-{session_id}-cycle{cycle_id}.json',
-    ]
-    home = claude_home.resolve()
-    if home is not None:
-        candidates.append(
-            home.parent / 'docs' / 'dev' / 'overnight' / session_id / cycle_dirname / 'cycle-contract.json'
-        )
-    return candidates
+# Mode keywords a dispatch prompt may carry, in the order they are tested.
+_MODE_KEYWORDS = ('PLAN', 'TRIAGE', 'RETRO', 'DESIGN_MODE', 'AUDIT_MODE', 'UI_MODE')
+# The modes of the PM dispatches that open and close a cycle's exploration.
+PLAN_MODE = 'PLAN'
+TRIAGE_MODE = 'TRIAGE'
 
 
-def _try_read_contract(path: Path) -> Optional[dict]:
-    try:
-        if not path.exists():
-            return None
-        return json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError):
-        return None
+def contract_path(state: dict, cycle_id: int) -> Path:
+    """The cycle contract's one path, under the session's working root."""
+    return overnight.session_dir(state) / f'cycle-{cycle_id}' / 'cycle-contract.json'
 
 
-def load_contract_path(session_id: str, cycle_id: int) -> Optional[Path]:
-    """Return the active cycle-contract path for ``session_id``/``cycle_id``."""
-    for path in _candidate_contract_paths(session_id, cycle_id):
-        if path.exists():
-            return path
-    return None
-
-
-def load_contract(session_id: str, cycle_id: int) -> Optional[dict]:
+def load_contract(session_id: str, cycle_id: int, state: Optional[dict] = None) -> Optional[dict]:
     """Return the parsed cycle contract for ``session_id``/``cycle_id``."""
     if not session_id or cycle_id is None:
         return None
-    for path in _candidate_contract_paths(session_id, cycle_id):
-        data = _try_read_contract(path)
-        if data is not None:
-            return data
-    return None
+    if state is None:
+        state = overnight.session_state(session_id)
+    if state is None:
+        return None
+    try:
+        return json.loads(contract_path(state, int(cycle_id)).read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def overnight_steps() -> list[tuple[str, dict]]:
+    """``(label, subagent_call)`` per canonical /dev-overnight step, from ``_STEPS``.
+
+    ``subagent_call`` is ``{}`` for a step whose dispatches the todo script does
+    not name (Step 3's specialists are chosen by PM PLAN). Empty when the todo
+    script cannot be loaded.
+    """
+    try:
+        spec = importlib.util.spec_from_file_location('_dev_overnight_todo', _DEV_OVERNIGHT_TODO)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return [(str(label), dict((meta or {}).get('subagent_call') or {}))
+                for label, _content, _active, meta in module._STEPS]
+    except Exception:
+        return []
+
+
+def _mode_index(steps: list[tuple[str, dict]], mode: str) -> Optional[int]:
+    return next((i for i, (_label, call) in enumerate(steps) if call.get('mode') == mode), None)
+
+
+def exploration_calls(steps: list[tuple[str, dict]]) -> list[dict]:
+    """The calls of a cycle's exploration, PM PLAN through PM TRIAGE (steps 2-4).
+
+    Every cycle allows them before its contract exists, since the contract is
+    written when PM TRIAGE returns.
+    """
+    first, last = _mode_index(steps, PLAN_MODE), _mode_index(steps, TRIAGE_MODE)
+    if first is None or last is None:
+        return []
+    return [call_entry(label, call) for label, call in steps[first:last + 1]]
+
+
+def post_triage_steps(steps: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+    """The dispatching steps after PM TRIAGE, which its contract renders."""
+    last = _mode_index(steps, TRIAGE_MODE)
+    if last is None:
+        return []
+    return [(label, call) for label, call in steps[last + 1:] if call]
+
+
+def triage_call(steps: list[tuple[str, dict]]) -> dict:
+    """The PM TRIAGE step's subagent_call ({} when the steps name none)."""
+    index = _mode_index(steps, TRIAGE_MODE)
+    return steps[index][1] if index is not None else {}
+
+
+def call_entry(label: str, subagent_call: dict) -> dict:
+    """A required_calls entry for one canonical step: the dispatch's step, role and mode.
+
+    The artifact a dispatch must produce is declared once, in its own
+    obligation, so an entry names neither a path nor a schema.
+    """
+    return {
+        'step': label,
+        'role': subagent_call.get('subagent_type') or None,
+        'mode': subagent_call.get('mode') or None,
+        'pipeline_id': None,
+    }
+
+
+def detect_mode(prompt: str) -> str:
+    """The mode keyword a dispatch prompt carries ('' when none)."""
+    if not isinstance(prompt, str):
+        return ''
+    return next((keyword for keyword in _MODE_KEYWORDS if keyword in prompt), '')
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +341,7 @@ def _check_dev_report_projection(record: dict) -> list[str]:
     return errors
 
 
-def _check_qa_report_projection(record: dict) -> list[str]:
+def _check_qa_report_projection(record: dict, schema: dict) -> list[str]:
     """Validate the deterministic qa-report.v1 compatibility projection."""
     schema_name = 'qa-report.v1'
     errors = _check_projection_header(record, schema_name)
@@ -299,13 +352,16 @@ def _check_qa_report_projection(record: dict) -> list[str]:
         )
 
     source_status = _nested_value(record, ('qa', 'status'))
-    accepted_statuses = {'pass', 'warning', 'fail'}
+    # The values the flat field it projects onto may take, as the schema declares them.
+    accepted_statuses = set(
+        ((schema or {}).get('properties', {}).get('verdict') or {}).get('enum') or ()
+    )
     if source_status is _MISSING:
         errors.append(
             f"{_projection_prefix(schema_name)}: canonical source 'qa.status' "
             "missing for flat field 'verdict'"
         )
-    elif type(source_status) is not str or source_status not in accepted_statuses:
+    elif type(source_status) is not str or (accepted_statuses and source_status not in accepted_statuses):
         errors.append(
             f"{_projection_prefix(schema_name)}: canonical source 'qa.status' "
             f"has unsupported value {source_status!r} for flat field 'verdict'"
@@ -344,14 +400,14 @@ def _check_qa_report_projection(record: dict) -> list[str]:
     return errors
 
 
-def _check_report_projection(record: dict, schema_name: str) -> list[str]:
+def _check_report_projection(record: dict, schema_name: str, schema: dict) -> list[str]:
     """Dispatch the v1 report projection pre-pass in a stable field order."""
     if not isinstance(record, dict):
         return [f'{_projection_prefix(schema_name)}: report must be a JSON object']
     if schema_name == 'dev-report.v1':
         return _check_dev_report_projection(record)
     if schema_name == 'qa-report.v1':
-        return _check_qa_report_projection(record)
+        return _check_qa_report_projection(record, schema)
     return []
 
 
@@ -379,12 +435,15 @@ def _check_required_when_ui(record: dict, required_keys: list[str]) -> list[str]
     ]
 
 
-_EVIDENCE_LEVELS = {
-    'rendered_cached',
-    'fresh_scan_triggered',
-    'fresh_scan_completed',
-    'extraction_verified',
-}
+def _evidence_levels() -> tuple[frozenset, frozenset]:
+    """The evidence_level and required_evidence_level enums qa-report.v1
+    declares for focus_criteria_results.results[]; empty when unreadable."""
+    try:
+        item = schema_registry.get_schema('qa-report.v1')['properties']['focus_criteria_results'][
+            'properties']['results']['items']['properties']
+        return frozenset(item['evidence_level']['enum']), frozenset(item['required_evidence_level']['enum'])
+    except Exception:
+        return frozenset(), frozenset()
 
 
 def _iter_focus_results(record: dict) -> list[dict]:
@@ -403,15 +462,20 @@ def _criterion_requires_extraction_verified(item: dict) -> bool:
 def _check_evidence_taxonomy(record: dict) -> list[str]:
     """Enforce fresh-extraction evidence levels for focus criteria results."""
     errors: list[str] = []
-    for idx, item in enumerate(_iter_focus_results(record)):
+    results = _iter_focus_results(record)
+    levels, required_levels = _evidence_levels() if results else (frozenset(), frozenset())
+    if not levels:
+        # No declaration to check against: the schema validation reports it.
+        return errors
+    for idx, item in enumerate(results):
         level = item.get('evidence_level')
-        if level not in _EVIDENCE_LEVELS:
+        if level not in levels:
             errors.append(
-                f"focus_criteria_results.results[{idx}].evidence_level must be one of {sorted(_EVIDENCE_LEVELS)}"
+                f"focus_criteria_results.results[{idx}].evidence_level must be one of {sorted(levels)}"
             )
             continue
         required = item.get('required_evidence_level')
-        if required and required not in _EVIDENCE_LEVELS:
+        if required and required not in required_levels:
             errors.append(
                 f"focus_criteria_results.results[{idx}].required_evidence_level is not recognized: {required}"
             )
@@ -451,7 +515,7 @@ def validate(record: dict, schema_name: str) -> dict:
     # A projection contradiction is a self-contained report-contract failure,
     # not validator infrastructure.  Return it before the optional Draft7
     # engine so jsonschema unavailability can never turn known drift into SKIP.
-    errors = _check_report_projection(record, schema_name)
+    errors = _check_report_projection(record, schema_name, schema)
     if errors:
         return _result(False, errors, 'fail')
 
@@ -638,22 +702,6 @@ def validate_required_call(
         return mode_fail
 
     return _attach_entry(_result(True, [], 'pass'), entry)
-
-
-# ---------------------------------------------------------------------------
-# Artifact validation (T2.3)
-# ---------------------------------------------------------------------------
-
-
-def validate_artifact(record: dict, schema_name: str) -> dict:
-    """T2.3: validate a produced artifact against ``schema_name``.
-
-    Thin alias of :func:`validate` — gives posttool-subagent-track and
-    the file-check sidecar a clearly-named entry point matching the
-    BA-specified contract surface ("validate_artifact"). Returns the
-    same Result shape so the existing severity contract is preserved.
-    """
-    return validate(record, schema_name)
 
 
 # ---------------------------------------------------------------------------
@@ -1084,168 +1132,3 @@ def validate_response_block_for_obligation(
         'schema-invalid under obligation-supplied response_block schema',
     )
 
-
-# ---------------------------------------------------------------------------
-# Atomic accepted-artifact reconciliation
-# ---------------------------------------------------------------------------
-
-
-def _project_dir() -> Path:
-    return Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-
-
-def _lock_path(session_id: str, cycle_id: int) -> Path:
-    lock_dir = _project_dir() / '.claude' / 'locks'
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    return lock_dir / f'contract-reconcile-{session_id}-cycle{cycle_id}.lock'
-
-
-def _json_text(payload: dict) -> str:
-    return json.dumps(payload, ensure_ascii=False, indent=2) + '\n'
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + '.tmp')
-    tmp.write_text(text, encoding='utf-8')
-    json.loads(tmp.read_text(encoding='utf-8'))
-    tmp.replace(path)
-
-
-def _restore_text(path: Path, text: str | None) -> None:
-    if text is None:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        return
-    _atomic_write_text(path, text)
-
-
-def _expected_path_value(entry: dict):
-    raw = entry.get('expected_output_path')
-    if isinstance(raw, list):
-        return raw[0] if raw else None
-    return raw if isinstance(raw, str) else None
-
-
-def _expected_paths(entry: dict) -> list[str]:
-    raw = entry.get('expected_output_path')
-    if isinstance(raw, str):
-        return [raw]
-    if isinstance(raw, list):
-        return [item for item in raw if isinstance(item, str)]
-    return []
-
-
-def _resolve_artifact_path(path_str: str) -> Path:
-    path = Path(path_str)
-    return path if path.is_absolute() else _project_dir() / path
-
-
-def _artifact_valid_for_entry(entry: dict) -> tuple[bool, str]:
-    paths = _expected_paths(entry)
-    if not paths:
-        return True, ''
-    schema_name = entry.get('schema_name') or entry.get('expected_schema') or ''
-    for raw in paths:
-        path = _resolve_artifact_path(raw)
-        if not path.exists():
-            return False, f'expected artifact missing: {raw}'
-        if not schema_name:
-            continue
-        try:
-            record = json.loads(path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError):
-            return False, f'expected artifact is not valid JSON: {raw}'
-        result = validate_artifact(record, schema_name)
-        if not result.get('ok'):
-            return False, '; '.join(str(e) for e in result.get('errors', []))
-    return True, ''
-
-
-def _same_required_call(left: dict, right: dict) -> bool:
-    for key in ('step', 'role', 'pipeline_id', 'mode'):
-        if (left.get(key) or None) != (right.get(key) or None):
-            return False
-    return True
-
-
-def _mark_required_call(contract: dict, matched_entry: dict) -> None:
-    for entry in contract.get('required_calls', []) or []:
-        if isinstance(entry, dict) and _same_required_call(entry, matched_entry):
-            entry['schema_status'] = 'validated'
-            entry['artifact_path'] = _expected_path_value(matched_entry)
-            return
-
-
-def _mark_pipeline(contract: dict, matched_entry: dict) -> None:
-    role = matched_entry.get('role')
-    pipeline_id = matched_entry.get('pipeline_id')
-    if role not in {'ba', 'dev', 'qa'} or not pipeline_id:
-        return
-    pipelines = contract.get('pipelines')
-    if not isinstance(pipelines, dict):
-        return
-    pipeline = pipelines.setdefault(str(pipeline_id), {})
-    pipeline[f'{role}_status'] = 'done'
-    artifact_paths = pipeline.setdefault('artifact_paths', {})
-    if isinstance(artifact_paths, dict):
-        artifact_paths[str(role)] = _expected_path_value(matched_entry)
-
-
-def _mark_workflow(workflow: dict, step_index: int) -> None:
-    calls = workflow.get('subagent_calls')
-    if not isinstance(calls, dict):
-        calls = {}
-    calls[str(step_index)] = True
-    workflow['subagent_calls'] = calls
-    workflow.setdefault('contract_reconciliation', []).append(
-        {'step_index': step_index, 'status': 'validated'}
-    )
-
-
-def reconcile_accepted_artifact(
-    session_id: str,
-    cycle_id: int,
-    workflow_path: Path,
-    step_index: int,
-    matched_entry: dict,
-    *,
-    fail_after: str | None = None,
-) -> dict:
-    """Atomically reconcile accepted artifact status across contract + workflow state.
-
-    The function holds one file lock, computes every target mutation in memory,
-    writes by temp-file replacement, and rolls back earlier replacements if a
-    later write fails. ``fail_after`` exists only for regression tests that
-    prove partial-write rollback; production callers leave it unset.
-    """
-    contract_path = load_contract_path(session_id, cycle_id)
-    if contract_path is None:
-        return {'ok': False, 'reason': 'contract missing'}
-    artifact_ok, artifact_reason = _artifact_valid_for_entry(matched_entry)
-    if not artifact_ok:
-        return {'ok': False, 'reason': artifact_reason}
-    lock_file = _lock_path(session_id, cycle_id).open('w', encoding='utf-8')
-    with lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        original_contract = contract_path.read_text(encoding='utf-8')
-        original_workflow = workflow_path.read_text(encoding='utf-8') if workflow_path.exists() else None
-        contract = json.loads(original_contract)
-        workflow = json.loads(original_workflow) if original_workflow is not None else {}
-        _mark_required_call(contract, matched_entry)
-        _mark_pipeline(contract, matched_entry)
-        _mark_workflow(workflow, step_index)
-        try:
-            _atomic_write_text(contract_path, _json_text(contract))
-            if fail_after == 'contract':
-                raise RuntimeError('injected failure after contract write')
-            _atomic_write_text(workflow_path, _json_text(workflow))
-        except Exception:
-            _restore_text(contract_path, original_contract)
-            _restore_text(workflow_path, original_workflow)
-            raise
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-    return {'ok': True, 'contract_path': str(contract_path), 'workflow_path': str(workflow_path)}

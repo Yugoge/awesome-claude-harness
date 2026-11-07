@@ -1,42 +1,43 @@
-"""PreToolUse allowlist grant reader for Claude Code hooks.
+"""/allow grant and /do consent reader for Claude Code hooks.
 
-Single source of truth for grant-read, grant-match, and grant-consume
-logic used by PreToolUse and PostToolUse hooks.
+Single source of truth for the one /allow grant file and the one /do consent
+decision used by PreToolUse, PostToolUse and Stop hooks.
 
 Contract:
   - PreToolUse hooks ONLY read the grant; they never delete it.
   - Deletion is deferred to posttool-allowlist-consume.py (PostToolUse).
-  - Subagent firewall check stays in each caller; this library has no
-    subagent awareness.
-
-Extracted from pretool-orchestrator-gate.py lines 155-183 (initial
-extraction, task aaf3c44). Extended with consolidation functions for
-allow-6 (task 20260518-155948) to eliminate 4 independent open/flock/
-JSON-load/match implementations across hook files.
+  - Whether a grant reaches subagents is each caller's choice; the /do
+    consent decision carries its own subagent check (has_do_consent).
 
 Sentinel-file grant lifecycle (task 20260519-211515 R2 / AC2):
-  - In addition to the legacy pattern-string grant file
-    (/tmp/claude-bash-allowlist-<sid>.json), the orchestrator may write a
-    structured sentinel grant at /tmp/claude-grants/<task_id>-<nonce>.json
+  - /allow (hooks/userprompt-consent-allowlist.sh) and the README demo's
+    capture (scripts/capture-hero-run.py) write the grant through
+    write_sentinel_grant() at <state dir>/claude-grants/<task_id>.json,
     containing {task_id, session_id, allowed_operations[], created_at,
     expires_at}. allowed_operations[] is a structured list of {op, target,
-    args_contain?, ...} dicts, NOT a free-text regex.
+    args_contain?, ...} dicts, NOT a free-text regex. It is the only /allow
+    grant file.
   - load_sentinel_grant_for_task() reads and validates the sentinel.
   - match_sentinel_grant_for_bash_command() returns True iff the bash
     command structurally satisfies at least one entry in allowed_operations[].
     The predicate NEVER substring-matches against the raw command line;
     the only allowed predicate is structured-equality on op/target/args.
+    match_sentinel_grant_for_write() and match_sentinel_grant_for_tool()
+    match a Write target and a tool name the same way.
   - consume_sentinel_grant_on_terminal_result() unlinks the sentinel on
     ANY terminal result (success, non-zero exit, malformed grant, or
     comment-only attack). This is the consume-on-any-terminal-result
     semantic (item 2 of qa-output-retrospective-classification-20260519-175339).
   - reap_expired_sentinel_grants() is called by stop-cleanup hook to remove
-    unconsumed grants at session end.
+    every grant the reader rejects at session end.
+
+Shell hooks reach has_do_consent() through this file's one entry point:
+`python3 <hooks>/lib/allowlist.py consent` with the hook payload on stdin
+exits 0 when it holds /do consent and 1 when it does not.
 
 Stdlib-only; Python 3.12+ required.
 """
 
-import fcntl
 import json
 import os
 import re
@@ -44,12 +45,13 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import NamedTuple
 
 try:
     from lib.harness_state_dir import harness_state_dir
+    from lib.subagent import is_subagent_context
 except ImportError:  # hooks/lib itself is on sys.path
     from harness_state_dir import harness_state_dir
+    from subagent import is_subagent_context
 
 
 # Sentinel-grant filesystem layout (task 20260519-211515 R2 / AC2)
@@ -73,281 +75,52 @@ def _regex_safe(pattern: str, text: str, timeout: int = 1) -> bool:
         signal.signal(signal.SIGALRM, old)
 
 
-class MatchResult(NamedTuple):
-    """Result of a grant-pattern match."""
-    pattern: str
-    is_regex: bool
-    matched_sub: str
+def has_do_consent(payload) -> bool:
+    """The one decision on /do consent, for every hook that honours it.
 
-
-def _match_loaded_grant(
-    grant: dict,
-    candidates: list[str],
-    literal_policy: str,
-    regex_timeout: int = 1,
-) -> MatchResult | None:
-    """Pure match step: takes an already-loaded grant dict, no file I/O.
-
-    Args:
-        grant: decoded JSON grant dict (keys: pattern, is_regex)
-        candidates: list of strings to match against (e.g. subcommands,
-                    tool_name, full command)
-        literal_policy: "exact_or_substr" (pattern==cand or pattern in cand),
-                        "substr_only" (pattern in cand only), or
-                        "exact_only" (pattern==cand only — used by PreTool
-                        read_grant to mirror PostTool consume_grant_for_posttool
-                        Branch 3 exact-only semantics)
-        regex_timeout: SIGALRM timeout in seconds for regex match (default 1).
-
-    Returns:
-        MatchResult on first match, None if no candidate matches or grant
-        is invalid.
+    True iff the payload comes from the main agent (lib.subagent: a subagent
+    never holds /do consent) and the flag hooks/prompt-workflow.py writes for
+    the payload's session_id, <state dir>/claude-orchestrator-consent-<sid>.flag,
+    holds `true`. The session_id is the writer's own key, so a payload without
+    one has no consent. Never raises.
     """
-    pattern = grant.get("pattern", "")
-    if not isinstance(pattern, str) or not pattern:
-        return None
-    is_regex = bool(grant.get("is_regex", False))
-
-    for cand in candidates:
-        matched = False
-        if is_regex:
-            matched = _regex_safe(pattern, cand, regex_timeout)
-        else:
-            if literal_policy == "exact_or_substr":
-                matched = pattern == cand or pattern in cand
-            elif literal_policy == "exact_only":
-                matched = pattern == cand
-            else:  # substr_only
-                matched = pattern in cand
-
-        if matched:
-            return MatchResult(pattern=pattern, is_regex=is_regex, matched_sub=cand)
-
-    return None
-
-
-def _load_and_match(
-    sid: str,
-    candidates: list[str],
-    literal_policy: str,
-    regex_timeout: int = 1,
-) -> MatchResult | None:
-    """Blocking-lock wrapper: acquire LOCK_EX on grant file, json.load,
-    then delegate to _match_loaded_grant.
-
-    Args:
-        sid: session id (used to locate /tmp/claude-bash-allowlist-<sid>.json)
-        candidates: list of strings to match against
-        literal_policy: passed through to _match_loaded_grant
-        regex_timeout: passed through to _match_loaded_grant
-
-    Returns:
-        MatchResult on match, None otherwise. Never unlinks the grant file.
-    """
-    flag_path = Path(f"{harness_state_dir()}/claude-bash-allowlist-{sid}.json")
     try:
-        with open(flag_path, "r+") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-            try:
-                grant = json.load(fh)
-            except Exception:
-                return None
-            return _match_loaded_grant(grant, candidates, literal_policy, regex_timeout)
-    except (FileNotFoundError, OSError):
-        return None
-    except Exception:
-        return None
-
-
-def read_grant(tool_name: str, sid: str) -> bool:
-    """Check /allow grant for tool_name. Read-only — does NOT delete the grant.
-
-    Literal match: pattern == tool_name ONLY (exact_only). Mirrors PostToolUse
-    consume_grant_for_posttool Branch 3 to close the PreTool/PostTool
-    asymmetry that allowed substring grants (e.g. '/allow Re') to bypass
-    PreTool gates while never being consumed at PostTool — causing grant
-    leakage past single-use. See cycle 20260519-211515 Item D.
-    Regex match: re.search(pattern, tool_name) (unchanged, see is_regex
-    branch of _match_loaded_grant).
-
-    Deletion is deferred to posttool-allowlist-consume.py (PostToolUse).
-    Returns True if grant matches, False otherwise (missing file = False).
-    """
-    result = _load_and_match(sid, [tool_name], "exact_only", 1)
-    if result is not None:
-        sys.stderr.write(f"[ALLOW] grant matched for {tool_name}, consume deferred to PostToolUse\n")
-        return True
-    return False
-
-
-def read_grant_for_git_command(command: str, sid: str) -> bool:
-    """Check /allow grant for a git command. Read-only — does NOT delete the grant.
-
-    Literal match: pattern in command (substr_only — no exact match branch).
-    Regex match: re.search(pattern, command).
-
-    Subagent firewall check stays in the caller (_check_git_allowlist).
-    Returns True if grant matches, False otherwise.
-    """
-    result = _load_and_match(sid, [command], "substr_only", 1)
-    if result is not None:
-        sys.stderr.write("[ALLOW] grant matched, consume deferred to PostToolUse\n")
-        return True
-    return False
-
-
-def match_grant_for_bash_command(
-    command: str,
-    sid: str,
-    regex_timeout: int = 1,
-) -> MatchResult | None:
-    """Match /allow grant for a compound bash command. Read-only — does NOT delete.
-
-    Acquires LOCK_EX | LOCK_NB on sidecar .lock file with 3x100ms retry
-    (matches existing bash heredoc NB-flock behavior — distinct from the
-    blocking LOCK_EX used by _load_and_match).
-
-    Splits command on &&, ||, ;, | (order: || before | so || becomes single
-    newline, not |\\n).
-
-    Returns MatchResult on first subcommand match, None if no match / no grant.
-    Subagent firewall check stays in the bash wrapper caller.
-    """
-    flag_file = f"{harness_state_dir()}/claude-bash-allowlist-{sid}.json"
-    lock_file = f"{flag_file}.lock"
-
-    # NB flock with 3x100ms retry (preserves existing bash heredoc behavior)
-    lock_fd = None
-    try:
-        lock_fd = os.open(lock_file, os.O_CREAT | os.O_RDWR, 0o600)
-        attempts = 0
-        while True:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                attempts += 1
-                if attempts >= 3:
-                    return None
-                time.sleep(0.1)
-
-        # Lock held — read grant file
-        if not os.path.exists(flag_file):
-            return None
-        try:
-            with open(flag_file) as f:
-                grant = json.load(f)
-        except Exception:
-            return None
-
-        # Build subcommand candidates (split on && || ; |)
-        # Order matters: || before | so '||' becomes a single newline
-        s = command.replace("||", "\n").replace("&&", "\n").replace(";", "\n").replace("|", "\n")
-        subcmds = [t.strip() for t in s.split("\n") if t.strip()]
-        if not subcmds:
-            subcmds = [command]
-
-        return _match_loaded_grant(grant, subcmds, "substr_only", regex_timeout)
-
-    except Exception:
-        return None
-    finally:
-        if lock_fd is not None:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            except Exception:
-                pass
-            try:
-                os.close(lock_fd)
-            except Exception:
-                pass
-
-
-def consume_grant_for_posttool(sid: str, tool_name: str, command: str) -> bool:
-    """Atomically match and unlink the /allow grant for a PostToolUse event.
-
-    This is the SOLE tool-execution consumption unlink site for /allow grant files.
-    PreToolUse hooks must NEVER unlink; only this function does.
-
-    Replicates posttool-allowlist-consume.py lines 68-91 branch logic:
-      Branch 1 (Bash tool): compound-split + exact-or-substr match against
-                            subcommands and full command
-      Branch 2 (Bash fallback): exact pattern == tool_name if no subcommand matched
-      Branch 3 (non-Bash, literal): exact-only (pattern == tool_name) —
-                                    prevents /allow Write consuming TodoWrite
-      Branch 4 (non-Bash, regex): re.search(pattern, tool_name)
-
-    Performs match + os.unlink under a single fcntl.flock(LOCK_EX) (atomicity).
-
-    Args:
-        sid: session id
-        tool_name: the tool that was called (e.g. "Bash", "Write", "TodoWrite")
-        command: the Bash command string (empty string for non-Bash tools)
-
-    Returns:
-        True if grant matched and was consumed (unlinked), False otherwise.
-    """
-    grant_path = Path(f"{harness_state_dir()}/claude-bash-allowlist-{sid}.json")
-    try:
-        with open(grant_path, "r+") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-            try:
-                grant = json.load(fh)
-            except Exception:
-                return False
-
-            pattern = grant.get("pattern", "")
-            if not isinstance(pattern, str) or not pattern:
-                return False
-            is_regex = bool(grant.get("is_regex", False))
-
-            matched = False
-            if tool_name == "Bash":
-                # Branch 1: split compound command, check each subcommand and full command
-                # Mirrors posttool-allowlist-consume.py:34 — || before | (double-newline for ||)
-                s = command.replace("||", "\n\n").replace("&&", "\n").replace(";", "\n").replace("|", "\n")
-                subcommands = [t.strip() for t in s.split("\n") if t.strip()]
-                candidates = subcommands + [command]
-                for part in candidates:
-                    if is_regex:
-                        if _regex_safe(pattern, part):
-                            matched = True
-                            break
-                    else:
-                        if pattern == part or pattern in part:
-                            matched = True
-                            break
-                # Branch 2 (Bash fallback): exact tool-name match for grants like `/allow Bash`
-                if not matched and not is_regex and pattern == tool_name:
-                    matched = True
-            else:
-                if is_regex:
-                    # Branch 4
-                    matched = _regex_safe(pattern, tool_name)
-                else:
-                    # Branch 3: exact-only — prevents /allow Write consuming TodoWrite
-                    matched = (pattern == tool_name)
-
-            if matched:
-                try:
-                    os.unlink(grant_path)
-                except FileNotFoundError:
-                    pass
-                sys.stderr.write(f"[ALLOW] grant CONSUMED for {tool_name}\n")
-                return True
+        if not isinstance(payload, dict) or is_subagent_context(payload):
             return False
-
-    except FileNotFoundError:
-        return False
+        sid = payload.get("session_id")
+        if not isinstance(sid, str) or not sid:
+            return False
+        flag = Path(harness_state_dir(), f"claude-orchestrator-consent-{sid}.flag")
+        return flag.read_text().strip() == "true"
     except Exception:
         return False
+
+
+def tool_streak_path(session_id: str) -> Path:
+    """The orchestrator gate's per-session tool streak record."""
+    return Path(harness_state_dir(), f"claude-tool-streak-{session_id}.json")
+
+
+def write_tool_streak(session_id: str, state: dict | None) -> None:
+    """The one writer of the tool streak: `state` replaces the record, None
+    removes it. hooks/pretool-orchestrator-gate.py calls it for its update and
+    its Agent reset, hooks/prompt-workflow.py for the reset at each prompt; it
+    lives here, the one library both import. Best-effort, never raises."""
+    path = tool_streak_path(session_id)
+    try:
+        if state is None:
+            path.unlink()
+        else:
+            path.write_text(json.dumps(state))
+    except OSError:
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Sentinel-grant lifecycle (task 20260519-211515 R2 / AC2)
 #
-# The sentinel grant is a STRUCTURED replacement for the legacy
-# pattern-string grant. The hook reads /tmp/claude-grants/<task_id>.json
+# The sentinel grant is the one /allow grant file, STRUCTURED rather than a
+# pattern string. The hook reads <state dir>/claude-grants/<task_id>.json
 # at PreToolUse time instead of grepping the command text. The predicate
 # never substring-matches against the command line; allowed_operations[]
 # is a structured list of {op, target?, args_contain?} dicts that must
@@ -364,41 +137,65 @@ def consume_grant_for_posttool(sid: str, tool_name: str, command: str) -> bool:
 def _enumerate_sentinel_grant_files(task_id: str | None = None) -> list[Path]:
     """List existing sentinel grant files under SENTINEL_GRANT_DIR.
 
-    If task_id is provided, restrict to files whose basename starts with
-    "<task_id>-" or equals "<task_id>.json".
+    If task_id is provided, restrict to "<task_id>.json", the one name
+    write_sentinel_grant() writes.
     """
     try:
         d = Path(SENTINEL_GRANT_DIR)
         if not d.is_dir():
             return []
         if task_id:
-            return [p for p in d.glob("*.json")
-                    if p.name == f"{task_id}.json" or p.name.startswith(f"{task_id}-")]
+            return [p for p in d.glob("*.json") if p.name == f"{task_id}.json"]
         return list(d.glob("*.json"))
     except Exception:
         return []
 
 
-def load_sentinel_grant_for_task(task_id: str) -> dict | None:
-    """Read and validate a sentinel grant JSON for a given task_id.
+def sentinel_grant_path(task_id: str) -> Path:
+    """Where write_sentinel_grant() files the grant for task_id."""
+    return Path(SENTINEL_GRANT_DIR) / f"{task_id}.json"
 
-    Returns the decoded grant dict on success, None if missing/malformed/expired.
-    Required schema keys: task_id, session_id, allowed_operations (list),
-    created_at, expires_at. expires_at is an ISO-8601 string OR unix-epoch
-    integer/float; if it has elapsed, the grant is treated as missing.
 
-    NOTE: this function does NOT unlink the grant. Consumption goes through
-    consume_sentinel_grant_on_terminal_result().
+def write_sentinel_grant(
+    task_id: str,
+    session_id: str,
+    allowed_operations: list,
+    *,
+    exclusive: bool = False,
+) -> Path:
+    """The one writer of a sentinel grant; returns its path, raises OSError.
+
+    The grant lives 300 s, one bash-safety grant window. By default it
+    replaces the task's grant atomically (temp file + rename), so a reader
+    never sees a partial file. exclusive=True creates it with O_EXCL
+    instead and raises FileExistsError when the task already holds a grant:
+    scripts/capture-hero-run.py's preflight is only a snapshot taken seconds
+    earlier, so the create itself must be its exclusivity check.
     """
-    matches = _enumerate_sentinel_grant_files(task_id)
-    if not matches:
-        return None
-    # Most-recent-mtime wins on the unlikely event of duplicates.
-    try:
-        matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    except Exception:
-        pass
-    grant_path = matches[0]
+    path = sentinel_grant_path(task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    body = json.dumps({
+        "task_id": task_id,
+        "session_id": session_id,
+        "allowed_operations": allowed_operations,
+        "created_at": now,
+        "expires_at": now + 300,
+    }, indent=2, sort_keys=True) + "\n"
+    target = path if exclusive else path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
+    # 0o600: another user's session cannot read the grant.
+    fd = os.open(target, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    if not exclusive:
+        os.replace(target, path)
+    return path
+
+
+def _read_sentinel_grant_file(grant_path: Path) -> dict | None:
+    """The reader's verdict on one grant file: the grant, or None when it is
+    missing, malformed or expired. Never raises, never unlinks."""
     try:
         with open(grant_path) as f:
             grant = json.load(f)
@@ -430,6 +227,51 @@ def load_sentinel_grant_for_task(task_id: str) -> dict | None:
     except Exception:
         return None
     return grant
+
+
+def load_sentinel_grant_for_task(task_id: str) -> dict | None:
+    """Read and validate a sentinel grant JSON for a given task_id.
+
+    Returns the decoded grant dict on success, None if missing/malformed/expired.
+    Required schema keys: task_id, session_id, allowed_operations (list),
+    created_at, expires_at. expires_at is an ISO-8601 string OR unix-epoch
+    integer/float; if it has elapsed, the grant is treated as missing.
+
+    NOTE: this function does NOT unlink the grant. Consumption goes through
+    consume_sentinel_grant_on_terminal_result().
+    """
+    matches = _enumerate_sentinel_grant_files(task_id)
+    if not matches:
+        return None
+    # Most-recent-mtime wins on the unlikely event of duplicates.
+    try:
+        matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        pass
+    return _read_sentinel_grant_file(matches[0])
+
+
+def match_sentinel_grant_for_tool(session_id: str, tool_name: str) -> dict | None:
+    """The grant entry that authorizes one call of a tool by name, or None.
+
+    Reads the session's grant under /allow's own key (CLAUDE_TASK_ID, else the
+    session id) and requires the grant to be this session's, as the per-session
+    file it replaces was. Only an entry naming the tool exactly with no target
+    or arguments (`/allow Agent`) matches: a regex entry selects commands, which
+    match_sentinel_grant_for_bash_command() tests, so the argument-less match-all
+    grant still waits for the command it was given for. posttool-allowlist-
+    consume.py spends the entry after the call.
+    """
+    if not session_id or not tool_name:
+        return None
+    grant = load_sentinel_grant_for_task(os.environ.get("CLAUDE_TASK_ID") or session_id)
+    if grant is None or grant.get("session_id") != session_id:
+        return None
+    for entry in grant["allowed_operations"]:
+        if (isinstance(entry, dict) and entry.get("op") == tool_name
+                and not entry.get("target") and not entry.get("args_contain")):
+            return entry
+    return None
 
 
 def _bash_subcommands(command: str) -> list[str]:
@@ -535,8 +377,7 @@ def match_sentinel_grant_for_bash_command(task_id: str, command: str) -> dict | 
 
     2. Regex entries (op="*" with "regex" field): the "regex" value is tested
        with re.search() against the full subcommand string (before env-var
-       stripping). This allows regex /allow grants to reach subagents, which
-       cannot use the legacy grant path.
+       stripping). This lets regex /allow grants reach subagents too.
 
     The function NEVER substring-matches the entry["op"] against the raw
     command line — that was the legacy bash-safety bypass closed by R2.
@@ -710,38 +551,28 @@ def consume_sentinel_grant_on_terminal_result(task_id: str, terminal_result: str
 
 
 def reap_expired_sentinel_grants() -> int:
-    """Stop-cleanup helper: unlink every sentinel grant whose expires_at has
-    elapsed. Returns the count of reaped files. Best-effort; never raises."""
+    """Stop-cleanup helper: unlink every sentinel grant the reader rejects
+    (expired, malformed, or missing a required key), so no grant file outlives
+    the reader's verdict on it. Returns the count of reaped files. Best-effort;
+    never raises."""
     count = 0
     for p in _enumerate_sentinel_grant_files(None):
-        try:
-            with open(p) as f:
-                grant = json.load(f)
-        except Exception:
-            # Malformed grant — also reap.
-            try:
-                os.unlink(p)
-                count += 1
-            except Exception:
-                pass
+        if _read_sentinel_grant_file(p) is not None:
             continue
-        exp = grant.get("expires_at")
-        elapsed = False
         try:
-            now = time.time()
-            if isinstance(exp, (int, float)) and exp < now:
-                elapsed = True
-            elif isinstance(exp, str):
-                from datetime import datetime
-                s = exp.replace("Z", "+00:00")
-                if datetime.fromisoformat(s).timestamp() < now:
-                    elapsed = True
+            os.unlink(p)
+            count += 1
         except Exception:
-            elapsed = True
-        if elapsed:
-            try:
-                os.unlink(p)
-                count += 1
-            except Exception:
-                pass
+            pass
     return count
+
+
+if __name__ == "__main__":
+    # The shell hooks' one entry point to has_do_consent (see the module docstring).
+    if sys.argv[1:] != ["consent"]:
+        sys.exit(2)
+    try:
+        _payload = json.load(sys.stdin)
+    except Exception:
+        _payload = None
+    sys.exit(0 if has_do_consent(_payload) else 1)

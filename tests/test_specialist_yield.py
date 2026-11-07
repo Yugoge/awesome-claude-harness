@@ -120,6 +120,30 @@ class SpecialistYieldTest(unittest.TestCase):
         self.assertIn("empty", result["reason"].lower())
         self.assertEqual(result["source_records"], [])
 
+    def test_without_a_project_policy_the_harness_policy_applies(self) -> None:
+        """No project policy: the harness's policies/specialist-degradation.v1.json
+        decides (its ui-specialist override needs 4 low_yield runs, not 3)."""
+        os.environ["SPECIALIST_YIELD_POLICY_PATH"] = str(Path(self._tmpdir.name) / "absent.json")
+        declared = json.loads(Path(PROD_POLICY_PATH).read_text(encoding="utf-8"))
+        threshold = declared["per_specialist_overrides"]["ui-specialist"]["low_yield_threshold"]
+        records = [_make_record("ui-specialist", "low_yield", i) for i in range(1, threshold)]
+        _seed_log(self._log_path, records)
+        self.assertEqual(specialist_yield.get_degradation_state("ui-specialist")["state"], "active")
+        _seed_log(self._log_path, records + [_make_record("ui-specialist", "low_yield", threshold)])
+        self.assertEqual(specialist_yield.get_degradation_state("ui-specialist")["state"], "degraded")
+
+    def test_no_readable_policy_is_the_fail_safe_default(self) -> None:
+        os.environ["SPECIALIST_YIELD_POLICY_PATH"] = str(Path(self._tmpdir.name) / "absent.json")
+        _seed_log(self._log_path, [_make_record("architect", "low_yield", i) for i in range(1, 6)])
+        resolve_optional = specialist_yield.claude_home.resolve_optional
+        specialist_yield.claude_home.resolve_optional = lambda relpath: None
+        try:
+            result = specialist_yield.get_degradation_state("architect")
+        finally:
+            specialist_yield.claude_home.resolve_optional = resolve_optional
+        self.assertEqual(result["state"], "active")
+        self.assertIn("policy unreadable", result["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

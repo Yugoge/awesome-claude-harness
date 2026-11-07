@@ -18,7 +18,7 @@ All counts below were established by enumerating the actual repository, not copi
 | **Subagents** (`agents/*.md`, excluding `INDEX.md`/`README.md`) | **23** | `ls agents/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Slash commands** (`commands/*.md`, excluding `INDEX.md`/`README.md`) | **20** | `ls commands/*.md \| grep -vE '/(INDEX\|README)\.md$'` |
 | **Skills** (`skills/*/` directories) | **8** | `ls -d skills/*/` |
-| `permissions.allow` / `deny` / `ask` entries | 152 / 96 / 0 | keys of `settings.json.permissions` (clean form) |
+| `permissions.allow` / `deny` / `ask` entries | 151 / 96 / 0 | keys of `settings.json.permissions` (clean form) |
 
 > Note on hook files: more hook *files* exist on disk than are *wired*. The unwired files are install scripts, libraries, legacy/`.bak` variants, hooks run as phases of `stop-workflow-coordinator.py`, the paseo module's hook, and intentionally-staged hooks. What matters for behavior is **what `settings.json` wires**: `hooks/` files plus `scripts/canary-verify.sh` under `SessionStart`, with `hooks/posttool-allowlist-consume.py` wired twice (under `PostToolUse` and `PostToolUseFailure`). The lifecycle events are `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `Stop`, `SessionEnd`, `SubagentStop`. This is the clean form's wiring with the paseo module off; turning the module on adds one `UserPromptSubmit` entry (`hooks/userprompt-usage-snapshot.py`) and a `mcp__paseo__browser_run_code` matcher alternative on the two runcode-watchdog groups.
 
@@ -111,7 +111,7 @@ flowchart TD
 ```
 
 - **Orchestrator (main agent).** Owns the conversation, the todo list, and dispatch. Allowed tools are a small whitelist (`Agent`, `TodoWrite`, `AskUserQuestion`, `Skill`, `Read`, `Glob`, `Grep`, `Bash`, cron/title tools); everything else is rate-limited or blocked by the orchestrator gate. (`CLAUDE.md` §Orchestrator-Only Rule.)
-- **Command surface (`commands/*.md`).** 20 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
+- **Command surface (`commands/*.md`).** 21 slash commands. Each is a prompt that scripts a workflow (parse → dispatch → validate → ship). Release/control commands carry `disable-model-invocation: true`, which blocks **SlashCommand self-dispatch only**; the `Skill`-tool path is closed separately by an explicit `Skill(<name>:*)` deny in `permissions.deny` (see *Why `disable-model-invocation`?* below).
 - **Subagent fleet (`agents/*.md`).** 23 specialists, each a system prompt with `name`/`description`/`tools` frontmatter. Subagents bypass the orchestrator gate (they are *supposed* to do work) but are still subject to the safety, git, and worktree hooks.
 - **Hook enforcement (`settings.json` + `hooks/`).** The kernel. Every tool call the agent makes is intercepted; hooks return exit 2 to block. Shared logic lives in `hooks/lib/` (allowlist/sentinel grants, checkpoint core, contract runtime, agent resolver).
 - **Support.** `scripts/` (helpers: grant writers, graphify code-graph, spec/dev-report resolvers), `skills/` (8: Playwright UI-audit suite), `schemas/` (JSON contracts like `context.v1.json`, `cycle-contract.v1.json`, `dev-report.v1.json`, `qa-report.v1.json`), `templates/` (`spec-template.md`, `overnight-spec.md`).
@@ -150,8 +150,8 @@ Hooks are configured in `settings.json` under `hooks.<Event>[].{matcher, hooks[]
 - **Matchers** are tool-name globs: `*` (all tools), a single name (`Bash`, `Read`, `TodoWrite`, `Agent`, `EnterWorktree`, `Skill`), an alternation (`Write|Edit|MultiEdit`), or a Bash-command regex (`Bash\(git commit.*\)`).
 - **Exit code contract**: exit `0` = allow; exit `2` = **block** the tool call and surface stderr to the agent. Hooks read the pending tool call as JSON on stdin.
 - **Ordering**: within one event, matcher blocks run in `settings.json` order, and within a block the listed hooks run in order. A `PreToolUse` chain stops at the first hook that exits 2.
-- **State**: ephemeral state lives under `/tmp` (streak files `/tmp/claude-tool-streak-<sid>.json`, git grants `/tmp/claude-{commit,push}-grant-<sid>-<nonce>.json`, sentinel grants `/tmp/claude-grants/<task_id>.json`). Durable workflow state lives under `.claude/` (`overnight-state-*.json`, `dev-registry/`, `docs/dev/`).
-- **Shared libs** (`hooks/lib/`): `allowlist.py` (sentinel-grant structural matching), `checkpoint-core.sh` (git-plumbing snapshots), `contract_runtime.py` / `schema_registry.py` (cycle contracts), `closeout.py` (overnight cycle closeout), `agent_resolver.py`, `subagent.py`, `overnight.py`.
+- **State**: ephemeral state lives under the harness state directory, `<state dir>` (`hooks/lib/harness_state_dir.py`: `CLAUDE_STATE_DIR` when it is an absolute path, else `/tmp`), resolved the same way by every writer and reader (streak files `<state dir>/claude-tool-streak-<sid>.json`, git grants `<state dir>/claude-{commit,push}-grant-<sid>-<nonce>.json`, sentinel grants `<state dir>/claude-grants/<task_id>.json`). Durable workflow state lives under `.claude/` (`overnight-state-*.json`, `dev-registry/`, `docs/dev/`).
+- **Shared libs** (`hooks/lib/`): `allowlist.py` (sentinel-grant structural matching), `checkpoint-core.sh` (git-plumbing snapshots), `contract_runtime.py` / `schema_registry.py` (cycle contracts, schema validation), `closeout.py` (replay of one overnight cycle's Agent trace), `agent_resolver.py`, `subagent.py`, `overnight.py` (the overnight state record's one reader and its verdicts), `obligation.py` (dispatch obligations: grammar, terminal vocabulary, the declaring-dispatch reader), `roster.py` (the role set: `agents/*.md` with front matter).
 
 ### Representative wiring
 
@@ -159,7 +159,7 @@ Hooks are configured in `settings.json` under `hooks.<Event>[].{matcher, hooks[]
 - **`UserPromptSubmit`** — `prompt-workflow.py` (workflow detection + dev-registry pre-creation), `userprompt-doc-sync-check.py`, `userprompt-restart-authorize.py` (`/restart` capability, plus verbatim capture of the operator's guidance text), `userprompt-consent-allowlist.sh` (`/do`/`/allow` consent capture), tmpfs-pressure and bulk-commit-capability advisories.
 - **`PreToolUse`** — the safety + git + worktree + subagent-discipline gates (detailed in §6 and §7). Note: although `pretool-layer-match-gate.sh` is named with a `pretool-` prefix, it is actually wired under `SubagentStop`.
 - **`PostToolUse`** — `posttool-allowlist-consume.py` (single-use grant consumption), the todo trackers, `posttool-git-checkpoint.sh` + `posttool-doc-sync.py` + `posttool-command-frontmatter-validate.py` (on `Write|Edit|…`), the overnight loop/trace hooks (on `Agent`), and the validated restart-dispatch journal (on `SendMessage`).
-- **`Stop`** — `stop-overnight-timelock.py` (refuses to end an overnight session before its deadline), `stop-spec-coverage-enforce.py`, `auto-commit.sh`. (`hooks/stop-cleanup-allowlist.sh` exists on disk but is **not** currently registered under `Stop` in `settings.json`; it does not run at session end. Sentinel grants are instead reclaimed via a 300s TTL and `posttool-allowlist-consume.py`'s consumption on any terminal result — see §6.3.)
+- **`Stop`** — `stop-workflow-coordinator.py` runs four phases in fixed order: `stop-overnight-timelock.py` (refuses to end an overnight session before its deadline), `stop-spec-coverage-enforce.py`, `auto-commit.sh`, and last `stop-cleanup-allowlist.sh` (reaps the `/allow` sentinels, bulk-commit sentinels and commit-event pointers their readers reject). `stop-do-report-gate.py` (the `/do` report) and `stop-obligation-gate.py` (an exit-0 stub) are registered beside it.
 - **`SubagentStop`** — diff-check, guard-integrity, layer-match-gate, restart response evidence, and the codex / e2e / cp enforcement hooks. (`subagentstop-cp-enforce.py` *is* wired here.)
 
 ### 5.1 Lossless quota recovery (`/restart`)
@@ -190,10 +190,10 @@ flowchart TD
     H4 --> C{which verb?}
     C -->|commit| G1{single-use commit grant<br/>present + unexpired?}
     C -->|push| G2{env=1 + push grant<br/>branch + expected_head + remote?}
-    C -->|merge| G3{env=1 + merge-analyst grant<br/>repo_root+branch+tips bound?}
+    C -->|merge| G3{matching /allow grant?<br/>/merge merges inside hooks/merge.sh}
     C -->|reset --hard| G4{matching /allow grant?}
 
-    G1 & G2 & G3 & G4 -->|yes| OK[(allow, then unlink grant)]
+    G1 & G2 & G3 & G4 -->|yes| OK[(allow; the grant is single-use)]
     G1 & G2 & G3 & G4 -->|no grant/env, no break-glass / forged / inline-env| NO[BLOCKED exit 2]
 
     classDef block fill:#ffebee,stroke:#c62828
@@ -213,45 +213,45 @@ Four hooks form a defense-in-depth chain (top to bottom). Crucially, the **bulk-
 
 ### 6.2 The grant-token lifecycle (write → validate → single-use consume)
 
-A `commit` or `push` is **default-denied unless a single-use grant manifest authorizes it** — the guard validates the grant's expiry + single-use for commit, plus branch/head/remote for push (commit exactness is recorded wrapper-side, not re-checked at the guard); a main-agent `/do` or a matching `/allow` grant is the audited human break-glass:
+A `commit` or `push` is **default-denied unless a single-use grant manifest authorizes it** — for commit the guard validates the grant's expiry, its binding to the commit's repo/branch/HEAD and its provenance (a pipeline-minted grant spent by the changelog-analyst dispatch whose live dispatch attestation carries the digest of the prompt that dispatched it); for push, branch/head/remote; a main-agent `/do` or a matching `/allow` grant is the audited human break-glass:
 
 ```
-/tmp/claude-{commit,push}-grant-<sid>-<nonce>.json
+<state dir>/claude-{commit,push}-grant-<sid>-<nonce>.json
 ```
 
 ```mermaid
 sequenceDiagram
-    participant W as commit.sh / push.sh (wrapper)
-    participant FS as /tmp grant file
+    participant W as grant writer (write-commit-grant.py / push.sh)
+    participant FS as state-dir grant file
     participant G as git-privilege-guard (PreToolUse)
     participant Git as git subprocess
 
-    W->>FS: write grant — commit: {task_id, sid, nonce, created_at, expires_at} · push: {branch, expected_head, remote, nonce, sid, ppid, created_at}
+    W->>FS: write grant — commit: {task_id, sid, nonce, repo_root, branch, expected_head, created_at, expires_at, minted_by, expected_consumer} · push: {branch, expected_head, remote, nonce, sid, ppid, created_at}
     W->>W: push only: export CLAUDE_PUSH_COMMAND_ACTIVE=1 (commit uses the grant file alone)
-    W->>Git: run git commit/push
-    Note over G: guard fires on the Bash call
-    G->>FS: glob <sid>-*.json · mtime-newest tiebreak
-    G->>G: commit: grant present + single-use + unexpired (expiry); push: env=1 + branch+head+remote + single-use (no expiry)
+    Note over G: guard fires on the Bash call (the changelog-analyst's git commit; push.sh's own git push runs in its subprocess)
+    G->>FS: commit: every commit grant, the one bound to this repo/branch/HEAD · push: <sid>-*.json, mtime-newest
+    G->>G: commit: unexpired + bound + provenance; push: env=1 + branch+head+remote (no expiry)
     alt valid
+        G->>FS: commit: unlink grant (the spend; one event wins) + per-event pointer for the PostToolUse journal entry
         G-->>Git: allow (exit 0)
-        W->>FS: unlink grant (single-use)
+        W->>FS: push only: push.sh unlinks the grant after a successful push
     else forged / inline-env / missing
         G-->>W: BLOCK exit 2 (grant left for forensics)
     end
 ```
 
-- **Per-nonce filename** gives race protection; the guard glob-finds via `<sid>-*.json` with an mtime-newest tiebreak.
+- **Per-nonce filename** gives race protection; for push the guard glob-finds via `<sid>-*.json` with an mtime-newest tiebreak, for commit it takes the grant bound to the commit's own repository (`/commit` writes one per repository of its plan).
 - **`/commit` has two modes**: *closed-task mode* (`/commit <task-id>`) requires a `close-report-<id>.md` ending `CLOSE: YES` (PRIMARY) or a three-binding fallback over `completion`/`qa-report`/`dev-report` (SECONDARY); *bridge mode* (`/commit --auto-bulk-bridge <branch>`) is used by `/dev-overnight` per-cycle and stages the pre-staged set, emitting an `auto-bulk: end-of-cycle commit for <branch>` message that matches `BLESSED_BRIDGE_RE`.
 - **`/push`** consults no closure evidence — it only requires a clean tree, an ahead-of-upstream branch, and a push grant (`branch` + `expected_head` + `remote`).
-- **`/merge`** requires BOTH `CLAUDE_MERGE_COMMAND_ACTIVE=1` AND a live, unexpired, `verdict=approved` merge-analyst grant bound to `repo_root`/`branch`/`source_tip`/`default_branch`/`default_tip` (2026-10-02 parity fix — mirrors commit's repo/branch/HEAD binding; previously the env var alone was sufficient, so a grant that was never written, stale, or bound to the wrong repo/branch/HEAD had zero effect).
-- **Single-use**: the wrapper unlinks the grant on success (the canonical unlink, because `PreToolUse` does not fire on the wrapper's own subprocess); failures leave the grant for forensics and nonce-bound retry.
+- **`/merge`** merges through `hooks/merge.sh`, whose own subprocess runs `git merge`; the guard refuses every agent-issued `git merge` unless `/allow` grants it (or, for the main agent, `/do`). The merge-analyst grant that decides `/merge` is checked where it is made: `hooks/posttool-allowlist-consume.py` runs `hooks/lib/merge_grant.py` on the merge-analyst's Write of it (nonce/session, repo, toplevel, live source/default tips, verdict, risks, expiry) and removes a faulty grant with exit 2 `MERGE_GRANT_INVALID`; `/merge` Step 3 then reads its verdict and risks verbatim.
+- **Single-use**: a commit grant is spent by the guard, which deletes it when it authorizes the commit (only one event can win the unlink; a failed commit does not get it back, and its retry takes a fresh grant from `/commit`); a push grant is unlinked by `push.sh` after a successful push (`PreToolUse` does not fire on the wrapper's own subprocess). Validation failures leave the grant for forensics and nonce-bound retry.
 
 ### 6.3 The break-glass model (`/do` and `/allow`)
 
 Two narrow, human-authorized escape hatches:
 
 - **`/do`** sets a session consent flag that makes the orchestrator gate, `bash-safety`, **and the git-privilege guard** exit 0 **for the main agent**; subagents never benefit; it does not bypass the bulk-commit detector (invariant #6).
-- **`/allow`** writes a **structured sentinel grant** at `/tmp/claude-grants/<task_id>.json` = `{task_id, session_id, allowed_operations[], created_at, expires_at}`, where `allowed_operations[]` is a list of `{op, target?, args_contain?}` dicts. The hook matches *structurally* on the bash sub-command's first word (`op`), optional second word (`target`), and `args_contain[]` — a **positional prefix** of the argument tokens, not a substring search — via `hooks/lib/allowlist.py::match_sentinel_grant_for_bash_command()`. For a git `op` the arguments are matched both verbatim and with repo-retargeting global options (`-C`, `--git-dir`, `--work-tree`, `--namespace`) skipped, so `/allow git <verb>` reaches the canonical `git -C <dir> <verb>` shape; `-c` / `--config-env` / `--exec-path` are never skipped and fail closed. `/allow` now **primarily** writes this structured sentinel grant; the sentinel matcher never substring-matches the raw command line. A legacy pattern-string grant path remains as a backward-compatibility fallback **when no sentinel exists**, so this is not yet the only declaration channel. The sentinel has a 300s TTL and is consumed (`hooks/posttool-allowlist-consume.py`) on *any* terminal result; `hooks/stop-cleanup-allowlist.sh` exists on disk but is **not** currently registered under settings.json's `Stop` hooks, so it does not reap expired sentinels at session end despite the script's name.
+- **`/allow`** writes a **structured sentinel grant** at `<state dir>/claude-grants/<task_id>.json` = `{task_id, session_id, allowed_operations[], created_at, expires_at}` through its one writer, `hooks/lib/allowlist.py::write_sentinel_grant()`, where `allowed_operations[]` is a list of `{op, target?, args_contain?}` dicts. The hook matches *structurally* on the bash sub-command's first word (`op`), optional second word (`target`), and `args_contain[]` — a **positional prefix** of the argument tokens, not a substring search — via `hooks/lib/allowlist.py::match_sentinel_grant_for_bash_command()`. For a git `op` the arguments are matched both verbatim and with repo-retargeting global options (`-C`, `--git-dir`, `--work-tree`, `--namespace`) skipped, so `/allow git <verb>` reaches the canonical `git -C <dir> <verb>` shape; `-c` / `--config-env` / `--exec-path` are never skipped and fail closed. A tool-name grant (`/allow --tool <name>`) is read through `match_sentinel_grant_for_tool()` by the gates that decide on a tool name. The structured sentinel is `/allow`'s only declaration channel: no pattern-string grant is written or read, and the sentinel matcher never substring-matches the raw command line. The sentinel has a 300s TTL and is consumed (`hooks/posttool-allowlist-consume.py`) on *any* terminal result; at session stop `hooks/stop-cleanup-allowlist.sh`, the last phase `hooks/stop-workflow-coordinator.py` runs, reaps every sentinel the reader rejects (expired, malformed, or missing a required key).
 
 ### 6.4 Branch / PR / worktree firewall
 
@@ -276,11 +276,11 @@ flowchart TD
     P([/dev requirement]) --> R[UserPromptSubmit hook<br/>pre-creates dev-registry/&lt;sid&gt;/<br/>writes verbatim requirement to disk]
     R --> S1[Step 1-3: parse · graphify hydrate · specialist relevance]
     S1 --> BA[BA subagent<br/>git root-cause → ticket.md + context.json]
-    BA --> V6[Step 6: validate BA output · patch spec_path]
+    BA --> V6[Step 6: validate BA output]
     V6 --> QV[Step 7: QA validates BA<br/>challenge every claim w/ evidence]
     QV -->|reject| ITER[Step 8: BA-QA iteration loop]
     ITER --> V6
-    QV -->|accept| GFX[Step 9: graphify enrichment<br/>inject focused subgraph]
+    QV -->|accept| GFX[Step 9: graphify enrichment<br/>focused subgraph for Dev/QA]
     GFX --> TW{complexity/risk gate}
     TW -->|high| TWA[test-writer<br/>pytest skeletons w/ TEST_INCOMPLETE]
     TW -->|skip sentinel| DEV
@@ -293,9 +293,9 @@ flowchart TD
 - **Verbatim-requirement contract.** The launch hook writes the literal requirement to `docs/dev/user-requirement-<DEV_SESSION_ID>.md` (`commands/dev.md` Step 1). Every downstream dispatch prompt must quote the user's *literal* words — paraphrase is drift. When a spec exists, Section 5 (User's Acceptance Criterion) is quoted verbatim into every prompt.
 - **dev-registry.** `dev-registry/<session>/` holds per-agent sentinel files, the graphify pre-query, and per-task artifacts; it is the coordination filesystem for one `/dev` run.
 - **Evidence gate (QA-of-BA).** Before any code is written, QA challenges the BA's conclusions — git-blame evidence, file existence, scope-narrowing. A failed BA loops back (Step 8), catching a wasted Dev+QA cycle early.
-- **Generated acceptance tests.** When `complexity_tier >= STANDARD` or `risk_level = high` (and BA did not set `_test_writer_skip_reason`), `agents/test-writer.md` emits pytest skeletons under `tests/generated/<task_id>/` with `pytest.fail("TEST_INCOMPLETE:…")` hard-stops that Dev must satisfy; the active manifest is `tests/generated/manifest.json`.
+- **Generated acceptance tests.** When `complexity_tier >= STANDARD` or `risk_level = high` (and BA did not set `_test_writer_skip_reason`), `agents/test-writer.md` emits pytest skeletons with `pytest.fail("TEST_INCOMPLETE:…")` hard-stops into each task's active manifest `tests/generated/<task_id>/manifest.json` (no cross-task index is kept); Dev, the one writer of the test files, writes each under `tests/generated/<task_id>/` from its skeleton and must satisfy it.
 - **Dev exclusivity.** `hooks/pretool-subagent-code-block.py` and the production-file blocks ensure the `dev` subagent is effectively the only writer of code files.
-- **Four Contracts.** The BA enforces four domain-agnostic cycle contracts (see `agents/ba.md` and `schemas/cycle-contract.v1.json`); the orchestrator surfaces pre-BA retry signals and verifies post-BA contract compliance.
+- **Four Contracts.** The BA enforces four domain-agnostic cycle contracts (`agents/ba.md`, Four Contracts); the orchestrator surfaces pre-BA retry signals and verifies post-BA contract compliance.
 - **Artifacts** land in `docs/dev/`: `ticket-<id>.md`, `context-<id>.json`, `ba-qa-report-<id>.json`, `acceptance-criteria-<id>.json`, `dev-report-<id>.json`, `qa-report-<id>.json`, `completion-<id>.md`, then `close-report-<id>.md`.
 
 ---
@@ -320,8 +320,8 @@ flowchart LR
 ```
 
 - **Launch** (the `/dev-overnight` command): fails closed if it cannot produce a *validated isolated worktree*; on success it writes `.claude/overnight-state-<session_id>.json` with `worktree_path`, `worktree_branch`, `view_paths`, `spec_mode`, `actor_git_env`, etc. A missing/invalid state is a **HARD ABORT** for the actor.
-- **Loop continuation** (`hooks/posttool-overnight-loop.py`, `PostToolUse` matcher `TodoWrite`): when all todos are completed, the session matches, and `end_time` is still in the future, it increments `cycle_count` and *prints* continuation instructions (it never edits the todos file directly, avoiding races).
-- **Time-lock** (`hooks/stop-overnight-timelock.py`, `Stop`): scans for `overnight-state-*.json`; if `now < end_time` it exits 2 to **block termination**, so the loop cannot be short-circuited. Cancel explicitly with `/stop`.
+- **Loop continuation** (`hooks/posttool-overnight-loop.py`, `PostToolUse` matcher `TodoWrite`): when all todos are completed, the session owns an overnight state record, and its window is live (`hooks/lib/overnight.py` `state_verdicts`), it *prints* continuation instructions; it writes no state. The cycle number is `overnight.cycle_index`: the first cycle with no retrospective report yet.
+- **Time-lock** (`hooks/stop-overnight-timelock.py`, a phase of the `Stop` coordinator): reads only the stopping session's own `overnight-state-<session_id>.json`; while its window is live it exits 2 to **block termination**, so the loop cannot be short-circuited. Cancel explicitly with `/stop`.
 - **Per-cycle commits** are real merge-ready HEAD commits via `commit.sh` bridge mode; mid-cycle `refs/checkpoints/*` snapshots are recovery-only and never advance HEAD (the two are explicitly distinct semantic layers).
 - **Actor isolation**: the actor sources `actor_git_env`, which prepends a policy-shim git wrapper to `PATH` and sets `CLAUDE_OVERNIGHT_ACTOR=1`; defense-in-depth on top of the PreTool hook-guard and the git-native keystone.
 
@@ -333,11 +333,11 @@ flowchart LR
 
 `hooks/posttool-doc-sync.py` (wired `PostToolUse` matcher `Write|Edit|NotebookEdit|MultiEdit`) drives the `hooks/doc_sync/` package. After any save inside a watched directory it:
 
-- **Regenerates `INDEX.md` and `README.md`** in `commands/`, `agents/`, `hooks/`, `skills/`, `scripts/` (`WATCHED_DIRS` in `hooks/doc_sync/main.py`), and the matching global dir.
+- **Regenerates the marked region of `INDEX.md` and `README.md`** in the saved file's directory, and the matching global dir, for a save under `commands/`, `agents/`, `hooks/`, `skills/`, `scripts/` (`WATCHED_DIRS` in `hooks/doc_sync/main.py`) or of a watched file type. Only a file that exists and carries a well-formed `AUTO:index-stats` / `AUTO:readme-stats` region is rewritten, and only inside that region; an absent file is never created and an unmarked one is left untouched (the hook reports the skip). Every write goes through `hooks/doc_sync/folder_doc.py`, the one writer of those files.
 - **Patches `CLAUDE.md`** dynamic sections between `<!-- AUTO:name -->` / `<!-- /AUTO:name -->` markers (e.g. `AUTO:last-updated`, the component inventory) — manual prose outside the markers is preserved (`hooks/doc_sync/patch.py`).
-- **Skips** `INDEX.md`/`README.md`/`__init__.py`/`.DS_Store` and excludes `commands/scripts/`, `worktrees/`, `specs/`, `dev-registry/` (`EXCLUDED_PATTERNS`).
+- **Skips** `INDEX.md`/`README.md`/`__init__.py`/`.DS_Store` and excludes `commands/scripts/`, `worktrees/`, `specs/`, `dev-registry/`, `tests/generated/` and `docs/dev/` (`EXCLUDED_PATTERNS`).
 
-> **Scope note for this file.** `ARCHITECTURE.md` is **not** in doc-sync's watch/patch set — doc-sync only patches `CLAUDE.md` via `<!-- AUTO: -->` markers and regenerates per-directory `INDEX/README`. This `ARCHITECTURE.md` is therefore a fully hand-authored document; the `<!-- AUTO-GENERATED by rule-inspector -->` blocks present in the pre-2026-06-13 version were a *legacy, no-longer-wired* mechanism and have been removed. The root `README.md` is hand-maintained (it carries **no** `AUTO:readme-stats` marker — only the prose mention at `README.md:57`); doc-sync's `SKIP_FILES` excludes it. Only the per-directory `README.md` files that carry an `AUTO:readme-stats` block are regenerated, and none of that is mirrored here.
+> **Scope note for this file.** `ARCHITECTURE.md` is **not** in doc-sync's watch/patch set — doc-sync only patches `CLAUDE.md` via `<!-- AUTO: -->` markers and regenerates per-directory `INDEX/README`. This `ARCHITECTURE.md` is therefore a fully hand-authored document; the `<!-- AUTO-GENERATED by rule-inspector -->` blocks present in the pre-2026-06-13 version were a *legacy, no-longer-wired* mechanism and have been removed. The root `README.md` is hand-maintained (it carries **no** `AUTO:readme-stats` marker — only a prose mention in its feature table); doc-sync's `SKIP_FILES` excludes it. Only the per-directory `README.md` files that carry an `AUTO:readme-stats` block are regenerated, and none of that is mirrored here.
 
 ---
 
@@ -353,7 +353,7 @@ flowchart LR
 ├── settings.machine.example.json  # documented example of the untracked machine overlay settings.machine.json
 ├── .gitattributes           # declares the claude-settings clean/smudge filter for settings.json
 ├── agents/                  # 23 subagent definitions  (+ INDEX.md, README.md)
-├── commands/                # 20 slash-command workflows (+ INDEX.md, README.md)
+├── commands/                # 21 slash-command workflows (+ INDEX.md, README.md)
 ├── hooks/                   # enforcement layer (not every file on disk is wired)
 │   ├── lib/                 #   allowlist (sentinel grants), checkpoint-core, contract runtime, resolvers
 │   ├── doc_sync/            #   self-updating INDEX/README/CLAUDE regeneration package
@@ -363,7 +363,7 @@ flowchart LR
 ├── skills/                  # 8 skills: Playwright UI-audit suite (ui-*)
 ├── schemas/                 # JSON contracts: context.v1, cycle-contract.v1, dev-report.v1, qa-report.v1, ...
 ├── templates/               # spec-template.md, overnight-spec.md
-├── tests/                   # test infra; tests/generated/ holds AC-driven pytest skeletons + manifest.json
+├── tests/                   # test infra; tests/generated/ (gitignored) holds AC-driven pytest skeletons + per-task manifests
 └── docs/                    # architecture, incidents, references, design philosophy
     └── reference/           #   checkpoint-mechanism.md, incidents-*.md, graphify-integration.md, ...
 ```
@@ -380,7 +380,7 @@ The git-protection kernel and the ramdisk/nested-repo architecture are described
 
 **Why enforce in code (fail-closed)?** The threat model is the agent itself: a capable model *will* find the shortcut (inline env injection, forged grant, history rewrite). Each such path is a documented attack scenario with a hook that returns exit 2 on the decision paths that reach it — guards additionally honor the documented human break-glass grants and intentionally fail open on unexpected hook exceptions rather than brick the pipeline. Where judgement is required (a grant that doesn't parse, a QA verdict that's ambiguous), the system rejects rather than guesses, and leaves the evidence on disk.
 
-**Why grant tokens instead of allow-lists?** A static "git commit is allowed" permission cannot distinguish a sanctioned `/commit <task-id>` from a 93-file `chore(claude): sync` sweep. A single-use, nonce-bound grant authorizes *one privileged git action* — the **commit** grant is time-boxed (the guard re-checks its expiry + single-use); the **push** grant is bound to branch/head/remote (single-use, no expiry); **merge** is gated by an env var, not a grant. The grants carry only their identity/expiry/binding fields — there is no sha256 or allowed-files check at the guard — and the bulk-commit detector independently catches the sweep shape even if a grant existed.
+**Why grant tokens instead of allow-lists?** A static "git commit is allowed" permission cannot distinguish a sanctioned `/commit <task-id>` from a 93-file `chore(claude): sync` sweep. A single-use, nonce-bound grant authorizes *one privileged git action* — the **commit** grant is time-boxed (the guard re-checks its expiry + single-use); the **push** grant is bound to branch/head/remote (single-use, no expiry); an agent's own **merge** is refused outright (`/merge` merges inside `hooks/merge.sh` once the merge-analyst grant passed its check at the analyst's Write). The grants carry their identity/expiry/binding fields and, for commit, the minting pipeline's provenance — there is no message-digest or allowed-files check at the guard — and the bulk-commit detector independently catches the sweep shape even if a grant existed.
 
 **Why one-task-per-subagent?** Multitasking inside a subagent is how a "fix the button" task quietly also "refactors the router." N issues become N parallel subagents, each provably scoped to one thing (`CLAUDE.md` lesson #13).
 
@@ -410,19 +410,18 @@ The config is plain Markdown + small scripts; doc-sync re-inventories the roster
 
 ## 13. Enforcement asymmetry (overnight-only vs. interactive)
 
-Contract-aware artifact validation — the checks that verify dev/QA reports against `schemas/dev-report.v1.json` and `schemas/qa-report.v1.json` (keyed by `required_calls[].schema_name` in the per-cycle contract) — fires **only during `/dev-overnight` sessions**, not on every interactive `/dev` invocation.
+Artifact validation is no longer overnight-only: it hangs on each dispatch's own **obligation** (the `<obligation v="1">` block a dispatch template declares), in interactive and overnight runs alike. What stays overnight-only is the **cycle contract**: which dispatches a `/dev-overnight` cycle allows, and the collection check it switches on.
 
-**Why the asymmetry exists.** The contract-aware hooks (`pretool-subagent-enforce.py`, `posttool-subagent-track.py`, `posttool-overnight-file-check.py`) all call `contract_runtime.load_contract()` as their first act. That function resolves the per-cycle `cycle-contract.json` from a small candidate list; when no matching file exists the function returns `None` and every caller short-circuits with exit 0 (the HARD CUTOVER convention). Interactive `/dev` sessions never write a `cycle-contract.json`, so the contract runtime always returns `None` for them. The overnight-only state these hooks require:
+**Artifacts: decided at the producer's stop, in every mode.** `hooks/subagentstop-artifact-contract-enforce.py` (G2, `SubagentStop`) checks every artifact the stopping subagent's own dispatch obligation declares — existence, schema (`hooks/lib/contract_runtime.py::validate_artifact_for_obligation()`, a `Draft7Validator`), identity and, for a markdown or response artifact, its terminal line — while that producer still has its context to repair them. It is advisory by default and blocks (exit 2, `OBLIGATION_STOPGATE_BLOCKED`, naming each failing path and check) under `CLAUDE_OBLIGATION_STOPGATE=block`. Its legacy path, blocking by default under `ARTIFACT_CONTRACT_ENFORCE_MODE`, rejects a versioned dev, qa or do report the dispatch declares that fails its schema while the cycle's `artifact-contract-enforce.json` is enabled. `hooks/pretool-aggregate-check.py` (G3, `PreToolUse` matcher `Agent`) checks a fan-out's lane reports and canonical aggregate before QA is dispatched. No consumer re-validates afterwards: `/close` runs no schema gate of its own and takes the chain resolver's result as it stands.
 
-- `docs/dev/overnight/<session_id>/cycle-<N>/cycle-contract.json` — the per-cycle contract that switches all contract-aware hooks from pass-through into enforce mode. Its mere presence is the switch; until it exists, hooks behave identically to an interactive session.
-- `.claude/overnight-state-<session_id>.json` — live session context used by `posttool-overnight-file-check.py` to confirm the session is still running before validating artifacts.
-- `.claude/workflow-<session_id>.json` and `/tmp/contract-bookmark-<sid>-<cycle>.json` — step-progression bookmark files that `pretool-subagent-enforce.py` reads to decide which `required_calls` entry to enforce for the current step.
+**Overnight only: the cycle contract.** `docs/dev/overnight/<session_id>/cycle-<N>/cycle-contract.json` (`hooks/lib/contract_runtime.py::contract_path()`, one path under the session's working root; `<N>` is `hooks/lib/overnight.py` `cycle_index`) is written once, by the PM TRIAGE handler in `hooks/posttool-subagent-track.py` when the PM TRIAGE dispatch returns, and never edited. It lists the dispatches the cycle allows after triage (role, mode, pipeline) and names no artifact. Its readers:
 
-**Implication for interactive users.** Running `/dev` interactively goes through the same BA → QA-of-BA → Dev → QA orchestration pipeline and the same PreToolUse/PostToolUse hook chain, but the contract-aware artifact validators silently pass through because `cycle-contract.json` is absent. The README's pipeline description applies to both modes; this section is the honest technical caveat that schema artifact gating only activates in overnight runs.
+- `pretool-subagent-enforce.py` (G1, `PreToolUse`): for a session that owns an overnight state record, derives the calls the cycle allows (its exploration steps from `scripts/todo/dev-overnight.py`, plus the contract once it exists) and the current step from the checklist the transcript records (`hooks/lib/todo_canonical.py` `checklist`), and refuses an Agent call whose role, pipeline or mode no entry of that step allows.
+- `posttool-overnight-file-check.py` (`PostToolUse` matcher `Agent`): at the collection of a dispatch the contract governs, re-checks the artifacts that dispatch's own obligation declares where its producer wrote them, and exits 2 on a missing or invalid one.
 
-**Concrete example — artifact schema enforcement.** In an overnight cycle, `posttool-overnight-file-check.py` fires after each subagent exits and validates the subagent's output artifact against the schema declared in `cycle-contract.json`'s `required_calls` list (e.g. `dev-report.v1` for the dev subagent). If the artifact is missing or schema-invalid, the hook exits 2 and blocks the pipeline. In an interactive `/dev` session, `contract_runtime.load_contract()` returns `None`, so the hook exits 0 immediately — no artifact gating occurs regardless of whether a dev-report was written or whether it is schema-valid.
+A session with no overnight state record (every interactive `/dev`) passes both untouched; before PM TRIAGE returns, G1 allows only the cycle's exploration steps and the file check, finding no contract, checks nothing (the HARD CUTOVER convention). The live overnight state they read is `.claude/overnight-state-<session_id>.json`, through `hooks/lib/overnight.py` (`session_state`, `state_verdicts`); no bookmark file is read.
 
-**Asymmetry narrowed — interactive schema gate at `/close`.** The artifact-schema half of this asymmetry is now closed on the interactive path. `/close`'s Normal-path preflight (`commands/close.md`) runs an **interactive schema gate** over the resolved `dev-report-<task-id>.json` / `qa-report-<task-id>.json` (and, uniformly, `do-report-<task-id>.json`) using the SAME engine the overnight path uses — `hooks/lib/contract_runtime.py::validate_report_artifact()`, which routes through `validate()` → `Draft7Validator`. It does NOT depend on a `cycle-contract.json` and does NOT touch the overnight hooks. The gate is **version-gated**: the v1 report schemas make `report_version` a required const, so the gate validates only records that opt in via `report_version` (a schema-invalid versioned artifact → exit 2, naming the offending field, exactly as overnight would). It is a no-op (never fail-closed) for an absent/optional artifact, an artifact kind with no registered schema (`do-report` — always `SKIP`), unparseable JSON (already handled by the structural preflight), or an unversioned legacy record. Because today's interactive dev/qa reports are nested (`dev.*` / `qa.*`) and carry no `report_version`, they `SKIP` and remain covered by close.md's hand-rolled structural preflight (`dev.status`/`qa.status`); the schema gate fires the instant an artifact declares `report_version`. Net effect: interactive artifacts are no longer *categorically* exempt from JSON-Schema validation — the mechanism gap in this section is closed, though the request-half asymmetry (interactive still writes no `cycle-contract.json`, so the `required_calls`/role-enforcement hooks stay dormant) is unchanged.
+**Implication for interactive users.** Running `/dev` interactively goes through the same BA → QA-of-BA → Dev → QA pipeline, the same dispatch obligations and the same producer-stop and collection gates; only the role/step enforcement of the cycle contract is overnight-only, because an interactive session never has a cycle contract.
 
 ---
 
