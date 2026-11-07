@@ -77,3 +77,16 @@ def test_a_do_task_is_completed_by_dev_whose_own_report_concludes_it() -> None:
     assert "do-report" not in block
     assert "concludes a `/do` task whose do-report is not `completed`" in item
     assert "the `/close` orchestrator writes no report" in item
+
+
+def test_commit_routes_a_do_task_with_the_close_template_and_rule() -> None:
+    """Q7 in /commit: Routes' /do bullet spells /close's template verbatim and the same conclusion rule."""
+    commit = (Path(__file__).resolve().parent.parent / "commands" / "commit.md").read_text(encoding="utf-8")
+    routes = commit[commit.index("### Routes"):commit.index("### Step 3:")]
+    [item] = [it for it in re.split(r"\n(?=- )", routes) if it.startswith("- A `/do` task")]
+    template = re.compile(r'`(<obligation v="1">\{.*?\}</obligation>)`')
+    [close_item] = [line for line in _section("### Routes").splitlines() if line.startswith("- A `/do` task")]
+    assert template.search(item).group(1) == template.search(close_item).group(1)
+    flat = " ".join(item.split())
+    assert "concludes a `/do` task whose do-report is not `completed` (Step 3's call takes it)" in flat
+    assert "the `/commit` orchestrator writes no report" in flat

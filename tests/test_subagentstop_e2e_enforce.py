@@ -283,6 +283,33 @@ def test_traversal_declared_path_is_not_read(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
+def test_a_block_the_grammar_refuses_is_not_judged(tmp_path):
+    """The hook takes the obligation reader's verdict alone, as G2's
+    obligation branch does: the same QA dispatch whose declared qa-report is
+    missing exits 2 while its block resolves, and 0 once the block carries a
+    field the grammar refuses (a pre-P1 template's required_values), which
+    is G1's to decide; the block as written is not read for a report."""
+    dev_session_id = "dev-20260404-000000"
+    task_id = "20260404-121212"
+    agent_id = "agent-refused-block"
+    _register_agent(tmp_path, agent_id, dev_session_id)
+    _enable_e2e_enforcement(tmp_path, dev_session_id)
+    transcript = _dispatch_qa(tmp_path, agent_id, task_id)
+
+    assert _run_hook(tmp_path, agent_id).returncode == 2
+
+    record = json.loads(transcript.read_text(encoding="utf-8"))
+    prompt = record["message"]["content"].replace('"role": "qa"', '"required_values": {}, "role": "qa"', 1)
+    assert isinstance(HOOK.obligation.parse_obligation(prompt), HOOK.obligation.Rejection)
+    record["message"]["content"] = prompt
+    _write(transcript, json.dumps(record) + "\n")
+
+    proc = _run_hook(tmp_path, agent_id)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "E2E_ENFORCE_BLOCKED" not in proc.stderr
+
+
 def _write_do_report_skeleton(
     project_dir: Path, task_id: str, expected_absent: list[str]
 ) -> None:
