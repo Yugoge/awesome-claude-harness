@@ -989,7 +989,7 @@ def validate_artifact_for_obligation(path, schema_id: str) -> dict:
         return _gate_result('pass', schema_id, [], 'valid against obligation-supplied schema')
     return _gate_result(
         'fail', schema_id, result.get('errors', []),
-        'schema-invalid under obligation-supplied schema',
+        f'schema-invalid under obligation-supplied schema {schema_id!r}',
     )
 
 

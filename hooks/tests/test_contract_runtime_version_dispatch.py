@@ -441,6 +441,8 @@ def test_obligation_override_still_fails_genuine_violations(tmp_path):
     )
     assert result["status"] == "fail"
     assert "baseline_head_sha" in _joined_errors(result)
+    # The producer is told which schema to rewrite it to (P10 Exp 8).
+    assert result["reason"] == "schema-invalid under obligation-supplied schema 'dev-report.v2'"
 
 
 def test_obligation_absent_file_is_blocking(tmp_path):
