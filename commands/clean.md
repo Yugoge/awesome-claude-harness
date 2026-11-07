@@ -252,7 +252,7 @@ Files to audit (audit EVERY file in this list, no others):
 5. {file_path_5}
 
 Write your partial report to: docs/clean/style-partial-{REQUEST_ID}-group{N}.json
-It is also your progress file and your final report: write no other file (Step 9 merges the partials into the style report).
+It is also your progress file and your final report: write neither anywhere else (Step 9 merges the partials into the style report).
 
 The partial report MUST use this schema:
 {
@@ -540,13 +540,13 @@ Read these report files directly from the filesystem:
 
 The merged context with approvals is at: docs/clean/context-with-approvals-{REQUEST_ID}.json
 <obligation v="1">
-{"task_id": null, "lane": null, "lane_set": null, "role": "cleaner", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "markdown", "path": "docs/clean/cleanup-execution-{REQUEST_ID}.json", "identity_anchor": "{REQUEST_ID}"}]}
+{"task_id": null, "lane": null, "lane_set": null, "role": "cleaner", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "markdown", "path": "docs/clean/cleanup-execution-{REQUEST_ID}.json", "identity_anchor": "{REQUEST_ID}", "terminal_line_regex": "^}$"}]}
 </obligation>
 
 Execute ALL approved_actions. Write results to docs/clean/cleanup-execution-{REQUEST_ID}.json."
 ```
 
-The obligation declares the execution report (kind `markdown`: no registered schema covers it, so the cleaner's stop checks that it exists and names this request's id, and returns a missing one to the cleaner). It declares none of the project files the approved actions move or edit: a declaration would hold each of them for this cleaner for the rest of the session. `hooks/pretool-tool-policy.py` refuses the cleaner's write of an undeclared path (its policy row allows only its scratch and overnight directories), so such an action fails and the cleaner records it in `actions_failed`.
+The obligation declares the execution report (kind `markdown`: no registered schema covers it, so the cleaner's stop checks that it exists, names this request's id and ends with a line holding only its closing `}`, and returns a missing or cut-off report to the cleaner). It declares none of the project files the approved actions move or edit: a declaration would hold each of them for this cleaner for the rest of the session. `hooks/pretool-tool-policy.py` refuses the cleaner's write of an undeclared path (its policy row allows only its scratch and overnight directories), so such an action fails and the cleaner records it in `actions_failed`.
 
 The orchestrator MUST NOT supplement, assist, or "help" the cleaner by making additional edits. If the cleaner fails on specific actions, those failures are recorded in the execution report -- the orchestrator does not retry them directly.
 
