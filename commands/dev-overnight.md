@@ -808,7 +808,7 @@ Read specialist reports. For each pipeline whose spec is your copy of the templa
 python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/build-pipelines-from-triage.py" <triage-report> <addressed-issues> <timestamp> <session_id> | tee docs/dev/overnight/<session_id>/pipelines.json
 ```
 
-The script consumes the PM triage schema (`issues[]` keyed by `triage_index` + `pipeline_order[]` + `pipeline_recommendation` + `failed_attempts`). It iterates `pipeline_order`, keeps only `pipeline_recommendation == "fix"`, drops issues whose `<location>|<description>` key appears in addressed-issues, drops issues whose `failed_attempts[triage_index] >= 3`, and emits one pipeline object per remaining issue with: `index, triage_index, description, location, severity, category, agents_flagged, phase=pending, iteration=0, status=active, timestamp_suffix=<ts>-<index>, tier, pm_recommended=true, spec_path=docs/dev/overnight/<session_id>/spec-pipeline-<index>.md`.
+The script consumes the PM triage schema (`issues[]` keyed by `triage_index` + `pipeline_order[]` + `pipeline_recommendation`). It iterates `pipeline_order`, keeps only `pipeline_recommendation == "fix"`, drops issues whose `<location>|<description>` key appears in addressed-issues, and emits one pipeline object per remaining issue with: `index, triage_index, description, location, severity, category, agents_flagged, phase=pending, iteration=0, status=active, timestamp_suffix=<ts>-<index>, tier, pm_recommended=true, spec_path=docs/dev/overnight/<session_id>/spec-pipeline-<index>.md`.
 
 **Announce pipeline creation**:
 ```

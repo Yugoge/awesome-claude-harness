@@ -744,7 +744,6 @@ jq -n \
         issues_skipped: 0,
         current_phase: "exploring",
         current_issues: [],
-        failed_attempts: {},
         addressed_issues: [],
         cycle_log: [],
         consecutive_clean_sweeps: 0,
