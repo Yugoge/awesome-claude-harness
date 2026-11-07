@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -315,33 +318,80 @@ def test_subagent_tracker_records_the_step_of_the_todos_content(night):
 # ---------------------------------------------------------------- the write boundary and /restart's helper
 
 HELPER = "~/.claude/venv/bin/python ~/.claude/scripts/restart-subagents.py"
+SID = "sid-overnight"
 
 
-@pytest.mark.parametrize("sub", ["prepare", "status --wait-seconds 540", "finalize"])
-def test_overnight_write_boundary_leaves_the_restart_helper_alone(tmp_path, sub):
-    """X4 (b): the boundary keeps the main working tree from being written in place; /restart's helper
-    writes only its own journal under the harness home, so the wake's recovery runs it outside the
-    boundary (no bwrap re-exec, no fail-closed refusal). Anything chained to it is still bounded."""
-    main = tmp_path / "main"
+def _in_place(main: Path) -> None:
     (main / ".git").mkdir(parents=True)
     (main / ".claude").mkdir()
-    sid = "sid-overnight"
-    (main / ".claude" / f"overnight-state-{sid}.json").write_text(json.dumps({
-        "schema_version": 9, "session_id": sid, "isolation_kind": "in_place", "main_root": str(main),
+    (main / ".claude" / f"overnight-state-{SID}.json").write_text(json.dumps({
+        "schema_version": 9, "session_id": SID, "isolation_kind": "in_place", "main_root": str(main),
         "main_git_dir": str(main / ".git"), "worktree_path": str(main), "worktree_branch": "work-branch",
         "protected_branch": "master", "end_time": "2099-01-01T00:00:00Z",
         "isolation_active_until": "2099-01-01T00:00:00Z", "current_cycle": 1}))
 
-    def guard(command):
-        env = dict(os.environ, CLAUDE_PROJECT_DIR=str(main), PWD=str(main))
-        return subprocess.run([sys.executable, str(HOOKS / "pretool-overnight-hook-guard.py")], input=json.dumps(
-            {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": sid, "cwd": str(main)}),
-            capture_output=True, text=True, env=env, cwd=main, timeout=120)
 
-    plain = guard(f"{HELPER} {sub}")
-    assert plain.returncode == 0 and "updatedInput" not in plain.stdout, (plain.stdout, plain.stderr)
-    chained = guard(f"{HELPER} {sub} && touch {tmp_path / 'outside'}")
-    assert chained.returncode == 2 or "updatedInput" in chained.stdout, (chained.stdout, chained.stderr)
+def _guard(main: Path, command: str, **env):
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=str(main), PWD=str(main), **env)
+    return subprocess.run([sys.executable, str(HOOKS / "pretool-overnight-hook-guard.py")], input=json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": SID, "cwd": str(main)}),
+        capture_output=True, text=True, env=env, cwd=main, timeout=120)
+
+
+def _rw_binds(proc) -> set:
+    """The guard's verdict on a command it lets run: the --bind sources of its bwrap re-exec. A command it
+    lets run unchanged (outside the boundary) fails here; a refusal is the fail-closed one (no bwrap)."""
+    if proc.returncode == 2:
+        assert "OVERNIGHT WRITE-BOUNDARY FAIL-CLOSED" in proc.stderr, proc.stderr
+        return set()
+    assert proc.returncode == 0 and "updatedInput" in proc.stdout, ("ran outside the boundary", proc.stdout)
+    argv = shlex.split(json.loads(proc.stdout)["hookSpecificOutput"]["updatedInput"]["command"])
+    assert argv[1:4] == ["--ro-bind", "/", "/"], argv
+    return {argv[i + 1] for i, a in enumerate(argv) if a in ("--bind", "--bind-try")}
+
+
+@pytest.mark.parametrize("sub", ["prepare", "status --wait-seconds 540", "finalize"])
+def test_overnight_write_boundary_runs_the_restart_helper_with_only_its_journal_writable(tmp_path, sub):
+    """P1c review 1 (D18, option (b)): /restart's helper, which the overnight wake runs with no human
+    present, runs inside the boundary like any overnight command, with only its journal (state_dir and
+    grant_dir) bound writable beyond the worktree. Anything chained to it gets no journal."""
+    main = tmp_path / "main"
+    _in_place(main)
+    state = os.path.realpath(Path(os.environ["CLAUDE_CONFIG_DIR"]) / "restart-state")
+    binds = _rw_binds(_guard(main, f"{HELPER} {sub}"))
+    assert binds in (set(), {str(main), state, state + "/grants"}), binds
+    assert _rw_binds(_guard(main, f"{HELPER} {sub} && touch {tmp_path / 'outside'}")) <= {str(main)}
+
+
+def test_a_modified_restart_helper_runs_inside_the_boundary():
+    """P1c review 1: a write path that changed the helper (its script here; its hooks/lib modules, their
+    bytecode and the venv alike) no longer escapes the boundary when the wake runs it: its write outside
+    the journal fails, its journal write lands. Lab under /var/tmp: the boundary's own --tmpfs /tmp would
+    shadow a lab there. Where bubblewrap is missing the guard refuses the helper (fail-closed)."""
+    base = Path(tempfile.mkdtemp(prefix="restart-helper-boundary-", dir="/var/tmp"))
+    try:
+        home, main = base / "home", base / "main"
+        _in_place(main)
+        (home / ".claude" / "venv" / "bin").mkdir(parents=True)
+        (home / ".claude" / "scripts").mkdir()
+        (home / ".claude" / "restart-state" / "grants").mkdir(parents=True)  # where /restart's grant is
+        os.symlink(os.path.realpath(sys.executable), home / ".claude" / "venv" / "bin" / "python")
+        (home / ".claude" / "scripts" / "restart-subagents.py").write_text(
+            "import os, sys\n"
+            "for path in (os.environ['CLAUDE_CONFIG_DIR'] + '/restart-state/journal', sys.argv[0] + '.changed'):\n"
+            "    try:\n        open(path, 'w').write('written')\n"
+            "    except OSError as e:\n        print(e)\n")
+        env = {"HOME": str(home), "CLAUDE_CONFIG_DIR": str(home / ".claude")}
+        proc = _guard(main, f"{HELPER} prepare", **env)
+        if _rw_binds(proc):
+            ran = subprocess.run(["bash", "-c", json.loads(proc.stdout)["hookSpecificOutput"]["updatedInput"][
+                "command"]], capture_output=True, text=True, env=dict(os.environ, **env), cwd=main, timeout=60)
+            assert "Read-only file system" in ran.stdout, (ran.stdout, ran.stderr)
+            assert (home / ".claude" / "restart-state" / "journal").read_text() == "written"
+        assert not (home / ".claude" / "scripts" / "restart-subagents.py.changed").exists()
+    finally:
+        assert base.name.startswith("restart-helper-boundary-")
+        shutil.rmtree(base)
 
 
 def test_the_command_texts_carry_the_wake_and_its_deletions():

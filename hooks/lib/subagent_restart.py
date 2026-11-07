@@ -109,10 +109,10 @@ TASK_NOTIFICATION_RE = re.compile(
 RECOVERY_STATUS_RE = re.compile(r"RECOVERY_STATUS:\s*(completed|quota_interrupted)\b")
 
 
-# The helper invocations commands/restart.md runs, which neither another
-# command's checklist (pretool-workflow-gate.py) nor the overnight write
-# boundary (pretool-overnight-hook-guard.py: they write only this module's
-# journal, never a working tree) may hold back. Matched structurally against
+# The helper invocations commands/restart.md runs, which another command's
+# checklist (pretool-workflow-gate.py) may not hold back and the overnight write
+# boundary (pretool-overnight-hook-guard.py) runs with this module's journal
+# (state_dir, grant_dir) bound writable. Matched structurally against
 # the documented invocations only (no --session-id: commands/restart.md never passes it, so admitting it would
 # only widen attack surface for zero functional benefit), with shell
 # metacharacters rejected so this can never become a chaining bypass.
