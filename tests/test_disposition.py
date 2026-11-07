@@ -484,27 +484,98 @@ def test_a_failing_ba_qa_verdict_clears_only_on_a_newer_pass(tmp_path):
     assert outcome(tree.root) == ("chain_pass", [])
 
 
-def producer_question(role: str) -> dict:
-    return {"task_id": TASK, "role": role, "need": "which file format",
+def producer_question(role: str, tid: str = TASK) -> dict:
+    return {"task_id": tid, "role": role, "need": "which file format",
             "options": [{"label": "json", "description": "j"}, {"label": "yaml", "description": "y"}],
             "default": "json", "why": "the request names neither"}
 
 
-@pytest.mark.parametrize("role,answers", [
-    ("ba", (f"ticket-{TASK}.md", f"context-{TASK}.json")),
-    ("dev", (f"dev-report-{TASK}.json",)),
-], ids=["ba", "dev"])
-def test_a_producer_question_is_unanswered_until_its_next_artifacts(tmp_path, role, answers):
+def json_artifact(path: str, schema: str, tid: str = TASK) -> dict:
+    return {"kind": "json", "path": path, "schema": schema, "identity": {"task_id": tid}}
+
+
+def step4_declares(tid: str) -> list[dict]:
+    """The artifacts /dev Step 4's dispatch template declares."""
+    return [json_artifact(f"docs/dev/context-{tid}.json", "context.v1", tid),
+            {"kind": "markdown", "path": f"docs/dev/ticket-{tid}.md", "identity_anchor": tid},
+            json_artifact(f"docs/dev/acceptance-criteria-{tid}.json", "acceptance-criteria.v1", tid)]
+
+
+def ask(tree: Tree, role: str, owes: list[dict], tid: str = TASK, lane=None) -> str:
+    """A /dev session's dispatch of ``role`` for ``tid`` declaring ``owes``, and
+    the question that dispatch writes after every artifact so far."""
+    session(tree.root, "s-dev", [typed("dev", "build the thing"), dispatch(f"toolu_{role}", role, ob(
+        tid, role, "dev", "fanout-lane" if lane else "singular", owes, lane=lane,
+        lane_set=list(LANES) if lane else None))])
+    name = f"producer-question-{tid}-{role}.json"
+    tree.write(name, producer_question(role, tid))
+    return name
+
+
+def rewrite(tree: Tree, path: str) -> None:
+    """The producer writes ``path`` (under docs/dev) after everything so far."""
+    old = tree.dev / Path(path).name
+    tree.write(old.name, old.read_text(encoding="utf-8") if old.is_file() else "{}")
+
+
+@pytest.mark.parametrize("role,tid,lane,owes", [
+    ("ba", TASK, None, step4_declares(TASK)),
+    ("dev", TASK, None, [json_artifact(f"docs/dev/dev-report-{TASK}.json", "dev-report.v2")]),
+    ("ba", f"{TASK}-l1", "l1", step4_declares(f"{TASK}-l1")),
+], ids=["ba", "dev", "fanout-lane-ba"])
+def test_a_producer_question_is_unanswered_until_its_dispatch_s_artifacts_follow_it(tmp_path, role, tid, lane, owes):
+    tree = fanout(tmp_path) if lane else singular(tmp_path)
+    name = ask(tree, role, owes, tid, lane)
+    late = sorted(artifact["path"] for artifact in owes)
+    for artifact in owes[:-1] + [None]:
+        _, gaps = outcome(tree.root)
+        assert gaps == [{"artifact": tree.rel(name), "problem": "unanswered",
+                         "message": f"{', '.join(late)} not written after the question", "lane": lane}]
+        if artifact:
+            rewrite(tree, artifact["path"])
+            late.remove(artifact["path"])
+    rewrite(tree, owes[-1]["path"])
+    assert outcome(tree.root) == ("chain_pass", [])
+
+
+def test_a_question_role_the_schema_adds_is_answered_by_its_own_dispatch_s_artifacts(tmp_path, monkeypatch):
+    """A role producer-question.v1 lists later is judged by what its own
+    dispatch declares, never by another role's artifacts."""
+    real = obligation._schema_enum
+    added = frozenset({"test-writer"})
+    monkeypatch.setattr(obligation, "_schema_enum", lambda schema_id, dotted: real(schema_id, dotted) | (
+        added if (schema_id, dotted) == ("producer-question.v1", "role") else frozenset()))
     tree = singular(tmp_path)
-    name = f"producer-question-{TASK}-{role}.json"
-    tree.write(name, producer_question(role))
+    report = f"docs/dev/test-writer-report-{TASK}.json"
+    name = ask(tree, "test-writer", [json_artifact(report, "test-writer-report.v1")])
+    unanswered = [(tree.rel(name), "unanswered")]
+    assert pairs(RESOLVER.disposition(tree.root, TASK, "dev")["gaps"]) == unanswered
+    for path in (f"docs/dev/ticket-{TASK}.md", f"docs/dev/context-{TASK}.json", f"docs/dev/dev-report-{TASK}.json"):
+        rewrite(tree, path)
+    assert pairs(RESOLVER.disposition(tree.root, TASK, "dev")["gaps"]) == unanswered
+    rewrite(tree, report)
+    assert RESOLVER.disposition(tree.root, TASK, "dev")["gaps"] == []
+
+
+def test_a_question_no_dispatch_names_is_a_gap_until_its_producer_is_dispatched_again(tmp_path):
+    """No transcript names the asking dispatch: a gap, never a pass and never
+    another role's artifacts; the producer's next dispatch (as /close's
+    re-dispatch of the cycle's subagent, D7) names what answers it."""
+    tree = singular(tmp_path)
+    name = f"producer-question-{TASK}-ba.json"
+    tree.write(name, producer_question("ba"))
+    nobody = [{"artifact": tree.rel(name), "problem": "unanswered",
+               "message": "no dispatch of the task declares the artifacts that answer it", "lane": None}]
+    assert outcome(tree.root)[1] == nobody
+    for answer in (f"ticket-{TASK}.md", f"context-{TASK}.json"):
+        rewrite(tree, answer)
+    assert outcome(tree.root)[1] == nobody
+
+    owes = step4_declares(TASK)
+    session(tree.root, "s-close", [typed("close", TASK), dispatch("toolu_ba_again", "ba", ob(
+        TASK, "ba", "dev", "singular", owes) | {"dispatched_at": "2026-07-25T09:00:00Z"})])
     assert pairs(outcome(tree.root)[1]) == [(tree.rel(name), "unanswered")]
-    builders = {f"ticket-{TASK}.md": ticket(TASK), f"context-{TASK}.json": context(TASK),
-                f"dev-report-{TASK}.json": dev_report(TASK)}
-    for answer in answers[:-1]:
-        tree.write(answer, builders[answer])
-        assert pairs(outcome(tree.root)[1]) == [(tree.rel(name), "unanswered")]
-    tree.write(answers[-1], builders[answers[-1]])
+    rewrite(tree, owes[-1]["path"])
     assert outcome(tree.root) == ("chain_pass", [])
 
 

@@ -1515,14 +1515,20 @@ def _check_dev_chain(validator: ChainValidator, task_id: str, obligation: Module
                 f"verdict is {report.get('verdict')!r}; expected 'pass'",
             )
         for role, question in questions:
-            # Answered once its producer's next artifacts are written after it.
-            answers = [paths["dev_report"]] if role == "dev" else [paths["ticket"], paths["context"]]
-            if question.is_file() and not all(_newer(answer, question) for answer in answers):
-                validator.error(
-                    "unanswered",
-                    _rel(question, root),
-                    f"no {' and '.join(answer.name for answer in answers)} written after the question",
-                )
+            if not question.is_file():
+                continue
+            # Asked by the dispatch whose own task_id and role name it, as G2 reads it (no obligation
+            # declares it, so declaring_dispatch finds none); all else it declares answers it (D21).
+            asking = obligation._latest([
+                r for r in obligation._task_records(task_id, root, None)
+                if (r["obligation"].get("task_id"), r["obligation"].get("role")) == (unit, role)])
+            rel = _rel(question, root)
+            owed = {Path(a["path"]).as_posix() for a in (asking["obligation"].get("artifacts", []) if asking else [])
+                    if "path" in a} - {rel}
+            late = sorted(path for path in owed if not _newer(root / path, question))
+            if not owed or late:
+                validator.error("unanswered", rel, f"{', '.join(late)} not written after the question" if late
+                                else "no dispatch of the task declares the artifacts that answer it")
     return lanes
 
 
