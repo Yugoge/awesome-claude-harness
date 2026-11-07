@@ -193,6 +193,14 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   Local checkpoints stay. /push is the only normal route to a remote. Deleting the 255 refs already on
   the public origin (252 refs/backups/claude/*, 3 refs/checkpoints/*) is low priority and happens at the
   very end, with D16's single confirmation at that time.
+- **D1 amended by the owner (2026-11-07).** "我记得我自己的仓库就是全都是自动的哇", with the owner's answer of
+  2026-10-19, "默认我都会打开，关闭的情况是特例", which the planner had set aside. On the owner's machine every
+  repository syncs automatically by default (push and pull); off is the exception, set per repository. The
+  harness home is that exception by default: its origin is the public repository, and its checkpoints once
+  pushed the 255 refs P11 deletes. A per-repository override (git config `harness.autoPush`) decides before
+  the global GIT_AUTO_PUSH, for every automatic push path; the tracked clean form keeps "0" for other users.
+  Automatic pull of the harness home (its watcher) is allowed, superseding D19's "no automatic pull is added".
+  Built by prompts/autopush-per-repo.md.
 - **D11 settings.json stays tracked, sanitized.** The tracked settings.json is the clean, public form.
   A git clean/smudge filter (declared in .gitattributes, registered locally by init) strips machine
   values on commit and restores them on checkout. Machine values live in an untracked
