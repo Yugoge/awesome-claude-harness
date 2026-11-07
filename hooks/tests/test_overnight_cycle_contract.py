@@ -233,6 +233,45 @@ def test_a_contract_already_there_is_kept_and_a_seed_is_replaced(main_root):
     assert len(json.loads(path.read_text())["required_calls"]) == 21
 
 
+def _old_triage_prompt(n: int) -> str:
+    """origin/master's Step 4 PM TRIAGE dispatch as a session started before the pull
+    instantiates it in its second cycle: no obligation, its cycle numbered by the
+    record's cycle_count (Cycle number: <cycle_count + 1>), which no hook advances."""
+    return ("PM_MODE: TRIAGE\n\nYou are the PM subagent in TRIAGE mode.\n"
+            f"  Cycle number: {n}\n"
+            f"  Write triage report to: docs/dev/overnight/{SID}/triage-report-cycle{n}.json\n")
+
+
+@pytest.mark.parametrize("prose", ["old", "new"])
+def test_cycle_two_of_a_session_on_the_old_prose_has_its_contract(main_root, prose):
+    """Cycle 1 ended (its retrospective on disk); PM TRIAGE returns in cycle 2 with
+    its report written under the number its prompt gives it, 1. The old prose's
+    dispatch (no obligation) gets cycle 2's contract and the Step 8 BA passes; a
+    dispatch that embeds an obligation (the new prose) still gets none, Case A."""
+    working = _session(main_root, main_root)
+    base = working / "docs" / "dev" / "overnight" / SID
+    base.mkdir(parents=True)
+    (base / "retro-report-cycle1.json").write_text("{}")
+    issues = [{"triage_index": i, "pipeline_recommendation": "fix", "description": f"d{i}",
+               "location": f"l{i}"} for i in range(2)]
+    (base / "triage-report-cycle1.json").write_text(json.dumps({"issues": issues, "pipeline_order": [0, 1]}))
+    prompt = _old_triage_prompt(1)
+    if prose == "new":
+        prompt += f'<obligation v="1">{json.dumps({"role": "pm", "artifacts": []})}</obligation>\n'
+    _checklist(working, "4", cycles=2)
+    rendered = _run("posttool-subagent-track.py", working, _agent("pm", prompt))
+    assert rendered.returncode == 0
+    contract = _cycle_dir(working, 2) / "cycle-contract.json"
+    ba = _enforce(working, "8", "ba", cycles=2)
+    if prose == "old":
+        assert len(json.loads(contract.read_text())["required_calls"]) == 21, rendered.stderr
+        assert ba.returncode == 0, ba.stderr
+        assert _enforce(working, "8", "qa", cycles=2).returncode == 2
+    else:
+        assert not contract.exists() and "CYCLE CONTRACT NOT WRITTEN: cycle 2" in rendered.stderr
+        assert ba.returncode == 2 and "Case A" in ba.stderr
+
+
 # --------------------------------------------------------------------------
 # Worktree-rooted and fresh-clone sessions
 # --------------------------------------------------------------------------
