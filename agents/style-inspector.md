@@ -31,7 +31,7 @@ You are a specialized inspector agent focused on auditing development standards 
 
 ### How It Works
 
-1. Your **progress file** is the one report path your dispatch declares (its obligation's `artifacts[].path`: /clean's group partial `docs/clean/style-partial-{REQUEST_ID}-group{GROUP_ID}.json`, /close's `docs/dev/style-inspector-report-<TASK_ID>.json`); it is also your report, and you write no other file (no separate progress or style report)
+1. Your **progress file** is the one report path your dispatch declares (its obligation's `artifacts[].path`: /clean's group partial `docs/clean/style-partial-{REQUEST_ID}-group-{GROUP_ID}.json`, /close's `docs/dev/style-inspector-report-<TASK_ID>.json`); it is also your report, and you write no other file (no separate progress or style report)
 2. On first invocation, this file does not exist. You create it.
 3. On subsequent invocations, you **read it first** to learn which files are already audited.
 4. You audit the **next batch** of un-audited files (budget: **5 files per invocation**).

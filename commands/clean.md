@@ -44,7 +44,7 @@ This command dispatches five subagent types:
 4. **prompt-inspector** (Step 10A): audits `agents/*.md` and `commands/*.md` verbosity
 5. **cleaner** (Step 16): executes approved cleanup actions
 
-Every dispatch is an Agent call with `run_in_background: false`. The request's JSON files live in `docs/clean/` (`scripts/orchestrator.sh`'s default `clean_output_dir`). `hooks/pretool-tool-policy.py` lets a subagent write the paths its dispatch declares (the obligation blocks of Steps 5, 8, 10A and 16 declare the reports their subagents write) and, beside them, only its policy row's directories: its own scratch directories, `docs/dev/overnight/`, and `docs/codex/` for the cleanliness-, style- and prompt-inspector. It refuses (exit 2) every other subagent write, under docs/ or anywhere else in the project, and reads no `/allow` grant; the cleaner's moves and `fix_style` edits are such writes (Step 16).
+Every dispatch is an Agent call with `run_in_background: false`. The request's JSON files live in `docs/clean/` (`scripts/orchestrator.sh`'s default `clean_output_dir`). `hooks/pretool-tool-policy.py` lets a subagent write the paths its dispatch declares (the obligation blocks of Steps 5, 8, 10A and 16 declare the reports their subagents write) and, beside them, only its policy row's directories: its own scratch directories, `docs/dev/overnight/`, and `docs/codex/` for the cleanliness-, style- and prompt-inspector. It refuses (exit 2) every other write of these five roles, under docs/ or anywhere else in the project, and reads no `/allow` grant; the cleaner's moves and `fix_style` edits are such writes (Step 16).
 
 **Hook rejection (a process step, never a terminal):** a subagent whose operation a hook rejects never retries, disguises or circumvents it (no other tool, wrapper or script for the same write); it goes on with the rest of its work and reports the operation exactly as it ran and the hook's output. The orchestrator then asks the owner one AskUserQuestion inside the turn that names each refused action and its exact operation: that is the pause, and it releases no gate. The owner's answer decides each action. An operation `hooks/pretool-tool-policy.py` refused is not run again in this session (that hook reads no `/allow` grant): the owner runs it himself outside the session or withdraws the action. One refused by a hook that reads `/allow` grants (`hooks/pretool-git-privilege-guard.py`: the cleaner's `git commit`) runs again only after the owner's `/allow` of that exact command, when the orchestrator re-dispatches the same role with the same template and a fresh dispatched_at; or the owner leaves it undone. Neither the orchestrator nor a subagent retries an operation without that grant, each answer is that action's outcome in Steps 17 and 18, and the command continues to completion.
 
@@ -216,7 +216,7 @@ Expected output structure:
 The style-inspector uses a **budget protocol** to avoid context overflow. Instead of looping sequentially, the orchestrator plans the inspection upfront and launches ALL inspector agents in one message, one per file group.
 
 **Plan file**: `docs/clean/style-plan-{REQUEST_ID}.json`
-**Partial reports**: `docs/clean/style-partial-{REQUEST_ID}-group{GROUP_ID}.json`
+**Partial reports**: `docs/clean/style-partial-{REQUEST_ID}-group-{GROUP_ID}.json`
 **Final report**: `docs/clean/style-report-{REQUEST_ID}.json`
 
 #### Step 7: Plan Style Inspection
@@ -241,7 +241,7 @@ Group ID: {GROUP_ID}
 Project root: {PROJECT_ROOT}
 Context file: docs/clean/context-{REQUEST_ID}.json
 <obligation v="1">
-{"task_id": null, "lane": null, "lane_set": null, "role": "style-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/style-partial-{REQUEST_ID}-group{GROUP_ID}.json", "schema": "style-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}
+{"task_id": null, "lane": null, "lane_set": null, "role": "style-inspector", "pipeline": "clean", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "json", "path": "docs/clean/style-partial-{REQUEST_ID}-group-{GROUP_ID}.json", "schema": "style-inspector-report.v1", "identity": {"request_id": "{REQUEST_ID}"}}]}
 </obligation>
 <If codex_required = true, include the literal next line; otherwise omit it>
 codex_required: true
@@ -253,7 +253,7 @@ Files to audit (audit EVERY file in this list, no others):
 4. {file_path_4}
 5. {file_path_5}
 
-Write your partial report to: docs/clean/style-partial-{REQUEST_ID}-group{GROUP_ID}.json
+Write your partial report to: docs/clean/style-partial-{REQUEST_ID}-group-{GROUP_ID}.json
 It is also your progress file and your final report: write neither anywhere else (Step 9 merges the partials into the style report).
 
 The partial report MUST use this schema:
@@ -288,7 +288,7 @@ After all calls have returned, log: "Launched {AGENT_COUNT} style-inspector agen
 After ALL agents complete, read each partial report file, the path each Step 8 obligation declares (one per plan group, `{GROUP_ID}` its `group_id`):
 
 ```
-docs/clean/style-partial-{REQUEST_ID}-group{GROUP_ID}.json
+docs/clean/style-partial-{REQUEST_ID}-group-{GROUP_ID}.json
 ```
 
 Merge all violations from every partial report into a single combined list. Merge all files_audited lists into a single deduplicated list. Write the final merged report to `docs/clean/style-report-{REQUEST_ID}.json`.

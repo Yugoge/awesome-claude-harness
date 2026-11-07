@@ -75,7 +75,7 @@ Before executing any action:
 | **merge_test_folders** | Run `~/.claude/scripts/migrate-test-to-tests.sh "$PROJECT_ROOT"` | Bash |
 | **cleanup_tests** | Run `~/.claude/scripts/cleanup-tests-folder.sh "$PROJECT_ROOT"` | Bash |
 
-After each operation, stage changes: `git add <affected files>`
+After each operation that ran, stage changes: `git add <affected files>` (a refused operation changed nothing to stage)
 
 ### 3. Execution Order
 
