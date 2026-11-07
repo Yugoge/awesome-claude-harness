@@ -691,8 +691,8 @@ ROWS = "├── `a.py` - A\n├── `b.py` - B, %s\n└── `c.py` - C\n"
 
 
 def test_doc_sync_regenerated_lines_take_upstreams_side(tmp_path, env):
-    """P10 R5 (Exp 10): on a live home doc-sync rewrites a stale index's count, rows and title and
-    a README's AUTO region, not only the date line. Upstream deletes an index and its README and
+    """P10 R5 (Exp 10): on a live home doc-sync rewrites a stale index's count, rows and title (the
+    old one kept below the region) and a README's AUTO region, not only the date line. Upstream deletes an index and its README and
     removes the row next to one doc-sync rewrote in another index (DU, DU, UU at the pop): the
     next Stop takes upstream's side for all three, the stash entry kept, and the next pull runs.
     A README whose stash change includes the owner's line outside the region stays unmerged."""
@@ -716,7 +716,9 @@ def test_doc_sync_regenerated_lines_take_upstreams_side(tmp_path, env):
     git(env, origin, "commit", "-q", "-m", "upstream")
     write(home / "commands/INDEX.md", GEN_INDEX % ("commands", "2026-02-02T00:00:00Z", 4, ROWS % "new"))
     write(home / "commands/README.md", GEN_README % ("commands", 4))
-    write(home / "scripts/INDEX.md", GEN_INDEX % ("scripts", "2026-02-02T00:00:00Z", 4, ROWS % "new"))
+    # doc-sync keeps a stale title it does not recognise below the region and writes its own
+    write(home / "scripts/INDEX.md", (GEN_INDEX % ("scripts", "2026-02-02T00:00:00Z", 4, ROWS % "new"))
+          .replace("\n\n---\n", "\n\n# dot-claude\n\n---\n"))
     write(home / "agents/README.md", GEN_README % ("agents", 4) + "the owner's line\n")
     git(env, home, "stash", "push", "-q", "-m", "Auto-stash before pull")
     git(env, home, "pull", "-q", "--rebase", "origin", "master")
