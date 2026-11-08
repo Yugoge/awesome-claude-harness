@@ -10,7 +10,9 @@ The owner's ruling D27 (2026-11-01, DECISIONS.md): "5天必须完成". The owner
 | B | P2, then P4, then P10 | `origin/master` |
 | C | P3, then P6, then P9; then P11 once every other phase is merged | `origin/master` |
 
-**Merge order across the streams:** P1b → P1c → P2 → P3 → P4 → P5 → P6 → P9 → P10 → P11.
+**Merge order across the streams:** P1b → P1c → P2 → P3 → P4 → P5 → P6 → P9 → P10 → P12 → P13 → P11.
+- P12 is `P12-SLIM.md`. P13 (D28) is `research/scoring-and-asking/phase-prompt.md`: P13-1 and P13-2 in parallel, then P13-3. Its four owner choices (`design.md` §7) take the recommended option of each; the owner was not asked again (2026-11-08).
+- D28 withdraws P9's scoring retirement: before #16 merges, it restores the scoring code block by block, as `design.md` §6.1 lists.
 - Build in parallel now. Each phase is one PR, titled `<phase>: ...`.
 - Before a PR merges, merge `origin/master` into it with a merge commit. Resolve conflicts by keeping both sides' behaviour.
 - A stream starts its next phase on a new branch from `origin/master` as soon as its current PR is open. It does not wait for the merge.
