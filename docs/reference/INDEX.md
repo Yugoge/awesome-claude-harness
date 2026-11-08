@@ -25,7 +25,6 @@ reference/
 ├── `merge-pipeline-blocked-steps-20261007.md` - /merge: two documented steps are unexecutable from agent context
 ├── `open-findings-from-read-only-cycles-20261005.md` - Open findings from read-only cycles — extracted 2026-10-05
 ├── `overnight-reference.md` - Overnight reference (maintainer-facing)
-├── `overwrite-prohibition.md` - Prohibition on wholesale replacement of an existing file
 ├── `positioning.md` - Positioning
 ├── `qa-status-gate-gap-orchestrator-side-20261005.md` - The QA-verdict gate does not cover the orchestrator — still open 2026-10-05
 ├── `recoverable-discard-register-20261005.md` - Recoverable-discard register — 2026-10-05 tree-to-zero campaign
