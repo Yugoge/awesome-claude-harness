@@ -6,16 +6,17 @@
 # The commit (the source's tree; parent: the public main tip, none while main is absent; git's identity
 # here, at the current time; message "Publish <source id>") is made in a scratch repository that borrows
 # this one's objects and alone receives the fetched tip: nothing is written here, and the scratch goes
-# on every exit. It is pushed (plain, to main only) once P8's engine (default mode, on a checkout of
-# that tree with a link to this repository's private-literals.txt at its top) and P11's guard (on that
-# very push), the copies beside this script, both pass. The list is theirs alone to decide on (D24, one
-# rule per artifact): with no literal listed the literal scans pass, and the engine's report, shown on
-# every run, says so. Refused (exit 1, nothing pushed, the step named): an unreadable source or public
-# repository, a public main that this repository's refs reach (a named remote's own tracking refs
-# aside) or whose history holds a commit this script did not make (a merge, or a message other than
-# "Publish <full commit id>"; the commit named), a failed scan (its report forwarded with every listed
-# literal masked, the longest first), or a step that cannot run. The public main already holding the
-# tree: nothing to publish. Usage errors exit 2.
+# on every exit. It is pushed (plain, to main only) once P11's guard beside this script passes in its
+# strict mode on that very push: the guard alone reads and decides on this repository's
+# private-literals.txt (D24, one rule per artifact), which the scratch holds a link to. It fails
+# closed on a missing or empty list, runs P8's engine (default mode) on the tree, files named, then
+# scans what the push sends, masking every listed literal in what it shows. Refused (exit 1,
+# nothing pushed, the step named): the guard's refusal (its report above), an unreadable source
+# or public repository, a public main that this repository's refs reach (a named remote's own
+# tracking refs aside) or whose history holds a commit this script did not make (a merge, or a
+# message other than "Publish <full commit id>"; the commit named), or a step that cannot run.
+# The public main already holding the tree, once the guard has passed: nothing to publish. Usage
+# errors exit 2.
 set -uo pipefail
 refuse() { echo "publish-public: REFUSED: $*" >&2; exit 1; }
 usage() { echo "usage: publish-public [--dry-run] [--source <commit>] <public repository>" >&2; exit 2; }
@@ -26,23 +27,11 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$pub" ] || usage
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-engine="$here/check-public-core.sh" guard="$here/install/push-guard"
-lits() {  # "<list line> <literal>", read as the engine reads the list
-  LC_ALL=C awk '{ sub(/\r$/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") } $0 != "" && !/^#/ { print FNR " " $0 }' "$list" 2>/dev/null
-}
-mask() {  # stdin to stderr, each listed literal replaced by its list line, the longest first (sorted in as
-  # read): a literal holding another goes whole, never leaving the rest of it beside the other's mask
-  LC_ALL=C awk 'FILENAME == ARGV[1] { c = index($0, " "); v = substr($0, c + 1)
-      for (j = ++n; j > 1 && length(L[j - 1]) < length(v); j--) { L[j] = L[j - 1]; K[j] = K[j - 1] }
-      L[j] = v; K[j] = substr($0, 1, c - 1); next }
-    { s = $0; for (j = 1; j <= n; j++) { o = ""; while (i = index(s, L[j])) {
-        o = o substr(s, 1, i - 1) "<private-literals.txt line " K[j] ">"; s = substr(s, i + length(L[j])) }; s = o s }
-      print s }' <(lits) - >&2
-}
+guard="$here/install/push-guard"
 common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
   && objects="$(git rev-parse --path-format=absolute --git-path objects)" || refuse "not inside a git repository"
 list="${common%/*}/private-literals.txt"
-[ -f "$engine" ] && [ -f "$guard" ] || refuse "scripts/check-public-core.sh or scripts/install/push-guard is missing"
+[ -f "$guard" ] || refuse "scripts/install/push-guard is missing"
 src="$(git rev-parse -q --verify "$src^{commit}")" && tree="$(git rev-parse "$src^{tree}")" \
   || refuse "cannot read the source commit"
 ai="$(git var GIT_AUTHOR_IDENT 2>/dev/null)" && ci="$(git var GIT_COMMITTER_IDENT 2>/dev/null)" \
@@ -69,7 +58,7 @@ trap 'rm -rf "$t"' EXIT
 # the fetched pack: unpacked, an object this repository holds would be freshened (its file touched).
 git init -q "$t" && printf '%s\n' "$objects" > "$t/.git/objects/info/alternates" && printf '%s\n' '[core]' \
   'hooksPath = /dev/null' 'alternateRefsCommand = true' '[fetch]' 'unpackLimit = 1' >> "$t/.git/config" \
-  || refuse "cannot create the scratch repository"
+  && ln -s "$list" "$t/private-literals.txt" || refuse "cannot create the scratch repository"
 if [ -n "$tip" ]; then
   git -C "$t" fetch -q --no-tags "$url" refs/heads/main 2>/dev/null && old="$(git -C "$t" rev-parse FETCH_HEAD)" \
     || refuse "cannot fetch the public main"
@@ -82,22 +71,17 @@ if [ -n "$tip" ]; then
   [ -z "$odd" ] || refuse "the public main holds commit $odd, which this script did not make (a merge, or a" \
     "message other than \"Publish <full commit id>\"): the public repository is publish-only"
 fi
-! git -C "$t" cat-file -e "$tree:private-literals.txt" 2>/dev/null || refuse "the source tree tracks private-literals.txt"
-git -C "$t" read-tree --reset -u "$tree" && ln -s "$list" "$t/private-literals.txt" \
-  || refuse "cannot check out the source tree"
-report="$(cd "$t" && bash "$engine" 2>&1)"; rc=$?; mask <<< "$report"
-[ "$rc" = 0 ] || refuse "scripts/check-public-core.sh failed on the source tree (files named above)"
-[ -z "$old" ] || [ "$(git -C "$t" rev-parse "$old^{tree}")" != "$tree" ] \
-  || { echo "publish-public: nothing to publish: the public main $old already holds tree $tree"; exit 0; }
 ae="${ai#*<}" ce="${ci#*<}"
 new="$(GIT_AUTHOR_NAME="${ai%% <*}" GIT_AUTHOR_EMAIL="${ae%%>*}" GIT_COMMITTER_NAME="${ci%% <*}" \
   GIT_COMMITTER_EMAIL="${ce%%>*}" git -C "$t" commit-tree "$tree" ${old:+-p "$old"} -m "Publish $src")" \
   || refuse "cannot create the publish commit"
-report="$(printf 'refs/heads/main %s refs/heads/main %s\n' "$new" "${old:-${new//?/0}}" \
-  | (cd "$t" && bash "$guard" "${rname:-$url}" "$url") 2>&1)" \
-  || { mask <<< "$report"; refuse "scripts/install/push-guard refused the push (objects named above)"; }
+printf 'refs/heads/main %s refs/heads/main %s\n' "$new" "${old:-${new//?/0}}" \
+  | (cd "$t" && bash "$guard" --strict "${rname:-$url}" "$url") \
+  || refuse "scripts/install/push-guard --strict refused the publish (its report above)"
+[ -z "$old" ] || [ "$(git -C "$t" rev-parse "$old^{tree}")" != "$tree" ] \
+  || { echo "publish-public: nothing to publish: the public main $old already holds tree $tree"; exit 0; }
 what="$new (tree $tree, parent ${old:-none}) to the public main"
 [ -z "$dry" ] || { echo "publish-public: dry run: would push $what; nothing pushed"; exit 0; }
 report="$(git -C "$t" push -q "$url" "$new:refs/heads/main" 2>&1)" \
-  || { mask <<< "$report"; refuse "the push to the public main failed"; }
+  || { printf '%s\n' "${report//"$url"/<public repository>}" >&2; refuse "the push to the public main failed"; }
 echo "publish-public: published $what"

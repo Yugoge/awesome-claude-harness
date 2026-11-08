@@ -128,3 +128,31 @@ def test_a_displaced_pre_push_runs_after_the_guard_with_the_same_input(home, tmp
     head = home.commit()
     assert home("push", "origin", "master", check=False).returncode == 0
     assert log.read_text() == f"origin ../origin.git\nrefs/heads/master {head} refs/heads/master {'0' * 40}\n"
+
+
+@pytest.mark.parametrize("listing", ["no list", "empty list"])
+def test_strict_fails_closed_on_a_missing_or_empty_list_naming_the_step(home, listing):
+    """--strict, the publish's mode (scripts/publish-public, D30): the guard, the list's one reader and
+    decider, refuses where an ordinary push would scan nothing."""
+    if listing == "empty list":
+        write(home.path / "private-literals.txt", "# none yet\n \t\n")
+    line = f"refs/heads/main {home.commit()} refs/heads/main {'0' * 40}\n"
+    plain = run(["bash", "scripts/install/push-guard", "origin", "../origin.git"], home.env, home.path, False, input=line)
+    assert plain.returncode == 0
+    r = run(["bash", "scripts/install/push-guard", "--strict", "origin", "../origin.git"], home.env, home.path, False,
+            input=line)
+    assert (r.returncode, r.stderr) == (1, "pre-push: push REFUSED by the private-literal guard: "
+                                           "strict: private-literals.txt is missing or lists no literal\n")
+
+
+def test_strict_runs_the_engine_on_the_pushed_tree_naming_the_step_and_masking_the_report(home):
+    home.listing(*LISTED)
+    head = home.commit(f"{LIT}-dir/a.txt")  # a tree the engine's default mode refuses (no ledger), its path listed
+    line = f"refs/heads/main {head} refs/heads/main {'0' * 40}\n"
+    r = run(["bash", "scripts/install/push-guard", "--strict", "origin", "../origin.git"], home.env, home.path, False,
+            input=line)
+    tree = home("rev-parse", "HEAD^{tree}")
+    assert r.returncode == 1 and r.stderr.splitlines()[-1] == (
+        "pre-push: push REFUSED by the private-literal guard: strict: scripts/check-public-core.sh failed on tree "
+        f"{tree} (files named above)")
+    assert LIT not in r.stderr and not home.remote("main")
