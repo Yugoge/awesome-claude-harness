@@ -6,6 +6,8 @@
 
 **When.** P12 starts from the second merge train's head, the commit where P1b to P10 are all merged, which the reviewer names. It never starts from an older base, because P1b to P10 rewrite the same files.
 
+**Early start for L6.** L6 adds only new files and one CI step, so it starts now from `origin/master` and merges the second train's head once that head is posted. Its CI step is switched on when L1 to L5 land.
+
 **Order against P11.** P11 rewrites history, so it runs last, after P12 (L7 included) and P13 merge. No branch may be open while it runs.
 
 ## Rules for every lane
