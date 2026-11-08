@@ -1021,4 +1021,4 @@ This configuration grew out of, and remains grateful to:
 
 ## License
 
-Released under the **MIT License** — free to use, copy, modify, and adapt for your own `~/.claude`. Source: [`Yugoge/awesome-claude-harness`](https://github.com/Yugoge/awesome-claude-harness).
+Released under the **MIT License** — free to use, copy, modify, and adapt for your own `~/.claude`. Source: [this repository](./).
