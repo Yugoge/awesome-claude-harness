@@ -106,6 +106,10 @@ def test_decide_spec_path_explicit_first_then_the_session(tmp_path):
 
 SID = "spec-path-a3"
 SPECS = Path("docs/dev/specs")
+# An in-place /dev-overnight launch refuses where `bwrap --ro-bind / / -- true` cannot run
+# (P2 R13), and CI's unit job has no bubblewrap: the replays' stand-in (it skips bwrap's
+# options up to `--` and runs the rest) comes first on the launch's PATH, as there.
+BWRAP_STAND_IN = REPO / "tests" / "replay" / "bin"
 
 
 def _git_project(proj: Path, env: dict) -> None:
@@ -135,6 +139,8 @@ def _submit(tmp_path: Path, prompt: str, written=(), present=(), git=False):
            "PYTHONDONTWRITEBYTECODE": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
     env.pop("CLAUDE_COMPAT_RUNTIME", None)
     if git:
+        env.pop("CLAUDE_OVERNIGHT_FORCE_NO_BWRAP", None)
+        env["PATH"] = f"{BWRAP_STAND_IN}:{env.get('PATH', '/usr/bin:/bin')}"
         _git_project(proj, env)
     for rel in present:
         (proj / rel).parent.mkdir(parents=True, exist_ok=True)
