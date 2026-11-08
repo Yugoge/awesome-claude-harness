@@ -67,6 +67,11 @@ Grant binding (D8), beside it and for every caller alike: only <name> writes
 under <state dir>/agentic-commit/<name>/, <name> a listed role (the push- and
 merge-analyst grants); a removal is no write (_check_grant_writes).
 
+In-flight compatibility (train 2, A17; D15), kept until no session predates
+train 2's landing: the commit message file 2acc29b's changelog-analyst text
+writes, /tmp/commit-msg-<name>.txt, is that analyst's own by the Write tool
+(its role's denials only) and no other caller's (_check_inflight_msg_writes).
+
 Behavior:
   - Every caller, first: a protected file's write, delete or rename, and a
     ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
@@ -649,6 +654,62 @@ def _check_grant_writes(role, tool_name: str, targets: list, data: dict) -> None
             sys.exit(2)
 
 
+# -- in-flight compatibility: the changelog-analyst's message file (train 2, A17) --
+# COMPATIBILITY CODE, kept only until no running session predates train 2's
+# landing (D15); then this block, its call in main() and its tests
+# (hooks/tests/test_grant_binding.py, "in-flight compatibility") go.
+# A session that loaded origin/master's text before train 1 landed (2acc29b)
+# keeps that changelog-analyst text: its Phase 8 has the Write tool write the
+# file of its `git commit -F` at /tmp/commit-msg-<TASK_ID-or-bulk>-<short-rand>.txt
+# (2acc29b agents/changelog-analyst.md:1099; :71 and :557 name the same file),
+# where the text since names one under the role's scratch directory. That
+# analyst's role used to go unresolved, so no role row applied; resolved from
+# the CLI's agent_type (P6), its row refuses the write and the in-flight
+# /commit ends failed. So that one name, directly in /tmp and resolving to
+# itself, written by the Write tool, is the changelog-analyst's own: its role's
+# denials apply to it, not its allow prefixes or the raw-temp rule, as to a
+# path its dispatch declares. No other caller, the main agent included, writes
+# a file of that name, by any write tool or Bash write target (D8). A subagent
+# whose role does not resolve is left as before (agent_resolver LOW-10).
+_INFLIGHT_MSG_ROLE = "changelog-analyst"
+_INFLIGHT_MSG_NAME = re.compile(r"commit-msg-[A-Za-z0-9][A-Za-z0-9._-]*\.txt")
+
+
+def _inflight_msg_named(path: str) -> bool:
+    return (_INFLIGHT_MSG_NAME.fullmatch(os.path.basename(path)) is not None
+            and os.path.dirname(path) in ("/tmp", os.path.realpath("/tmp")))
+
+
+def _inflight_msg_file(target: str, own: bool) -> bool:
+    """Whether ``target`` names the in-flight analyst's message file: as
+    written or as it resolves, or (``own``, the analyst's Write) written
+    /tmp/commit-msg-<name>.txt and resolving to that same file."""
+    written = os.path.normpath(target)
+    try:
+        real = str(_resolved(target))
+    except Exception:
+        real = None
+    if own:
+        return (target.startswith("/tmp/") and _inflight_msg_named(written)
+                and real == os.path.join(os.path.realpath("/tmp"), os.path.basename(written)))
+    return _inflight_msg_named(written) or (real is not None and _inflight_msg_named(real))
+
+
+def _check_inflight_msg_writes(role, tool_name: str, targets: list, data: dict) -> set:
+    """Exit 2 when a caller other than the changelog-analyst writes the
+    in-flight message file; returns the analyst's own Write of it."""
+    writes = [t for t in _write_targets(tool_name, targets) if _inflight_msg_file(t, own=False)]
+    if not writes or (role is None and data.get("agent_id")):
+        return set()
+    if role == _INFLIGHT_MSG_ROLE:
+        return {t for t in writes if tool_name == "Write" and _inflight_msg_file(t, own=True)}
+    target = writes[0]
+    _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
+                f"write target {target} is the message file of an in-flight changelog-analyst's "
+                f"git commit -F; only the {_INFLIGHT_MSG_ROLE} writes it (D8)")
+    sys.exit(2)
+
+
 def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> set:
     """Apply the derived write permission; exit 2 on another caller's write of
     a declared path. Returns the targets the caller itself declared."""
@@ -810,7 +871,8 @@ def _declared_write_allowed(role: str, tool: str, target):
     return (True, "ok")
 
 
-def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: set = frozenset()) -> None:
+def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: set = frozenset(),
+                   message_file: set = frozenset()) -> None:
     """Iterate targets, exit 2 on first deny. For Bash, treat each
     extracted write target (idx > 0) as a Write authorization request.
 
@@ -818,13 +880,15 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     actor-exact scratch gate, because a JSON prefix cannot distinguish an
     owner's scratch directory from a sibling's and cannot deny a role holding
     a bare '*' grant. A target in ``own`` is a path the caller's own dispatch
-    declared: the prefix layer applies only its denials to it.
+    declared: the prefix layer applies only its denials to it. A target in
+    ``message_file`` is the in-flight analyst's message file (compatibility,
+    _check_inflight_msg_writes): only its role's denials apply to it.
     """
     for idx, target in enumerate(targets):
         check_tool = tool_name
         if tool_name == "Bash" and idx > 0:
             check_tool = "Write"
-        if check_tool in WRITE_TOOLS and target in own:
+        if check_tool in WRITE_TOOLS and (target in own or target in message_file):
             allowed, reason = _declared_write_allowed(role, check_tool, target)
         else:
             allowed, reason = is_allowed(role, check_tool, target)
@@ -833,7 +897,7 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             if tool_name == "Bash" and idx > 0:
                 _note_bash_write_target(data, target)
             sys.exit(2)
-        if check_tool in WRITE_TOOLS:
+        if check_tool in WRITE_TOOLS and target not in message_file:
             allowed, reason = _check_scratch_actor_exactness(role, target, data)
             if not allowed:
                 _emit_block(role, check_tool, target, reason)
@@ -1020,6 +1084,7 @@ def main() -> None:
     _check_scheduled_prompt(role, tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
     _check_grant_writes(role, tool_name, targets, data)
+    message_file = _check_inflight_msg_writes(role, tool_name, targets, data)  # compatibility (A17)
     from lib import policy_registry
 
     if not role or policy_registry.get_role_policy(role).get("_unknown_role"):
@@ -1027,7 +1092,7 @@ def main() -> None:
         # the main agent and an unlisted (built-in or plugin) role have no role
         # rows: the checks above are all that applies to them.
         sys.exit(0)
-    _check_targets(role, tool_name, targets, data, own)
+    _check_targets(role, tool_name, targets, data, own, message_file)
     sys.exit(0)
 
 

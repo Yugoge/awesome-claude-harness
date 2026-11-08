@@ -263,6 +263,64 @@ def test_a_never_registered_analyst_keeps_every_documented_step(tmp_path, state,
     assert not refused
 
 
+# -- in-flight compatibility: the message file of 2acc29b's changelog-analyst (train 2, A17) ------
+# COMPATIBILITY: these cases go with pretool-tool-policy.py's _check_inflight_msg_writes, once no
+# session predates train 2's landing. A session started on origin/master's text before train 1
+# landed keeps 2acc29b's agents/changelog-analyst.md (D15), whose Write tool writes its `git commit
+# -F` message file at these names (:1099 Phase 8, :557 bulk groups, :71 CP-1), placeholders bound.
+INFLIGHT_MSGFILES = [
+    "/tmp/commit-msg-<TASK_ID-or-bulk>-<short-rand>.txt".replace("<TASK_ID-or-bulk>", "20260101-000000")
+    .replace("<short-rand>", "r0001x"),
+    "/tmp/commit-msg-<TASK_ID-or-bulk>-<short-rand>.txt".replace("<TASK_ID-or-bulk>", "bulk")
+    .replace("<short-rand>", "a1b2"),
+    "/tmp/commit-msg-<unique>-<group index>.txt".replace("<unique>", "dev-20260101-000000").replace("<group index>", "2"),
+    "/tmp/commit-msg-<unique>.txt".replace("<unique>", "1767225600.x9"),
+]
+INFLIGHT_REFUSED = "only the changelog-analyst writes it (D8)"
+
+
+def test_an_in_flight_changelog_analyst_writes_its_commit_message_file(tmp_path, state):
+    home = tmp_path / "home"
+    for path in INFLIGHT_MSGFILES:
+        assert run("Write", {"file_path": path, "content": "fix(toy): x\n\nTask-id: 1\n"}, "changelog-analyst",
+                   home, state) == (0, ""), path
+
+
+@pytest.mark.parametrize("caller", [MAIN, DEV, "qa", "push-analyst", PLUGIN, "general-purpose"])
+def test_no_other_caller_writes_the_in_flight_message_file(tmp_path, caller):
+    home = tmp_path / "home"
+    for path in INFLIGHT_MSGFILES:
+        for tool, tool_input in [*_writes(path), ("Edit", {"file_path": path, "old_string": "a", "new_string": "b"})]:
+            denial = _denial(*run(tool, tool_input, caller, home))
+            assert denial["role"] == (caller or "main") and denial["target"] == path, (tool, path)
+            assert denial["deny_reason"].endswith(INFLIGHT_REFUSED), denial
+
+
+def test_the_in_flight_message_file_widens_nothing_else(tmp_path):
+    """The analyst gains that one name, by the Write tool, directly in /tmp and resolving to itself;
+    every other write keeps its role row (its scratch directory and the rest refused as before)."""
+    home, path = tmp_path / "home", INFLIGHT_MSGFILES[0]
+    near = ["/tmp/commit-msg-1-r.txt.sh", "/tmp/commit-msg-1-r.json", "/tmp/sub/commit-msg-1-r.txt",
+            "/var/tmp/commit-msg-1-r.txt", "/tmp/commit-msgx.txt", "/tmp/commit-msg-.txt", "/tmp/commit-msg-1/../x.txt",
+            "/tmp/x-commit-msg-1-r.txt", f"{PROJECT}/commit-msg-1-r.txt"]
+    for target in near:
+        denial = _denial(*run("Write", {"file_path": target, "content": "x"}, "changelog-analyst", home))
+        assert INFLIGHT_REFUSED not in denial["deny_reason"], target
+    for tool, tool_input, reason in [("Bash", {"command": f"cat > {path} <<EOF\nx\nEOF"},
+                                      "not in allowed_write_path_prefixes"),
+                                     ("Edit", {"file_path": path, "old_string": "a", "new_string": "b"},
+                                      "tool Edit not in allowed_tools")]:
+        assert reason in _denial(*run(tool, tool_input, "changelog-analyst", home))["deny_reason"], tool
+    # A link of that name leads the Write elsewhere: no message file, the role row refuses it.
+    link = Path(f"/tmp/commit-msg-{uuid.uuid4().hex}.txt")
+    link.symlink_to(tmp_path / "elsewhere.txt")
+    try:
+        denial = _denial(*run("Write", {"file_path": str(link), "content": "x"}, "changelog-analyst", home))
+        assert "not in allowed_write_path_prefixes" in denial["deny_reason"]
+    finally:
+        link.unlink()
+
+
 @pytest.mark.parametrize("command", ["push", "merge"])
 def test_the_main_agents_push_and_merge_steps_pass(tmp_path, command):
     """The main agent's own Bash steps of /push and /merge (execute-push.py, merge.sh) write no grant."""
