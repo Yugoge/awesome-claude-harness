@@ -75,6 +75,15 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   check (the dispatch declares nothing, so the reports its transcript shows it
                   wrote) refuses the stop; at its next round it edits the report into the one its
                   schema asks for and stops: passes.
+  qa-report       /dev (drivers/dev.py, plain), G1 advisory in its environment
+                  (CLAUDE_OBLIGATION_GATE=advisory), whose Step 13 QA dispatch carries no obligation
+                  block (faults.py noblock); its FIRST ACTION read of the qa sentinel binds it to the
+                  cycle (pretool-cp-checkin.py's agent-index entry), and it stops without its QA
+                  report (faults.py missing): the E2E gate (subagentstop-e2e-enforce.py) refuses the
+                  stop, naming docs/dev/qa-report-*.json; at its next round it writes the report and
+                  stops: passes; the cycle reaches its terminal. Not a plain prompt: outside a
+                  command's span no template declares the report for a QA without an obligation,
+                  so the tool policy refuses its Write of it (pretool-tool-policy.py).
 """
 from __future__ import annotations
 
@@ -369,6 +378,17 @@ def _dev_early(rp) -> None:
     Early(rp, "plain", "STANDARD").run()
 
 
+def _qa_report(rp) -> None:
+    from .. import faults
+    from .dev import DevCycle
+
+    # G1 advisory (its own switch), so Step 13's QA dispatch without its obligation block runs; the
+    # QA it starts writes no report (tests/replay/faults.py noblock and missing).
+    rp.env["CLAUDE_OBLIGATION_GATE"] = "advisory"
+    faults.install(rp, "noblock@Step 13 Agent(qa);missing@agent:qa Write docs/dev/qa-report-*")
+    DevCycle(rp, "plain", "STANDARD").run()
+
+
 def _spec_foreground(rp) -> None:
     from .spec import SpecRun
 
@@ -440,6 +460,8 @@ def run(rp) -> None:
         return _dev_early(rp)
     if case == "spec-foreground":
         return _spec_foreground(rp)
+    if case == "qa-report":
+        return _qa_report(rp)
     if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",

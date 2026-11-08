@@ -45,6 +45,7 @@ PLAIN_CASES = ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "code
 CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
 CASES["dev-early"] = suite.Scenario("dead end: dev-early", "_deadend", (("case", "dev-early"),), ("dev",), 100)
+CASES["qa-report"] = suite.Scenario("dead end: qa-report", "_deadend", (("case", "qa-report"),), ("dev",), 100)
 CASES["spec-foreground"] = suite.Scenario("dead end: spec-foreground", "_deadend", (("case", "spec-foreground"),),
                                           ("spec",), 110)
 CASES["overnight"] = suite.Scenario("dead end: overnight", "_deadend", (("case", "overnight"),), ("dev-overnight",), 600)
