@@ -27,7 +27,8 @@ tree's text spells each one, read at run time:
 * Step 6: the planning dispatch (changelog-analyst with Step 7's prompt, DRYRUN=true), the
   pre-commit QA dispatch from the step's prompt block, the decision read of the
   commit-qa-report's last line (the base text's file cross-check reads the same file).
-* Step 7: changelog-analyst from the step's prompt block, the real commit in the toy project and
+* Step 7: changelog-analyst from the step's prompt block (its obligation's plan roots, where the text
+  declares them, filled with the plan's repo_root values in order), the real commit in the toy project and
   the push-gate token as the tree's agent text writes it; the status block read and handled per
   its commit_status.
 * Step 8: the selection algorithm as the text orders it (context spec_path, the close-report's
@@ -83,10 +84,13 @@ Acceptance 7's late-repair cases, run by name (`--arg variant=<name>`); the arti
                           session: Step 5's resolve-effective-report and chain call as the text has
                           them
   late-repair-qa          the same to CLOSE: YES, then the task's QA report removed and /commit typed
-                          in a later session (F8r): the late-repair state names the report, its QA
+                          in a later session (F8r): Step 5's chain call names the report, its QA
                           dispatch runs again and, where the routing loop has the step, its report is
                           recorded (record-stage); each Step 5 loop stops after three rounds (a round:
                           one routed finding and the re-run of its check)
+  kit=base                the replay of the base kit's text: commit-route, full, late-repair and
+                          late-repair-qa may stop short of `committed` there; on the branch's text
+                          each one that does fails the replay (acceptance 7)
 
 Respellings: RESPELLINGS below (base-text paths, row 7). Deviations: none (DEVIATIONS stays empty).
 """
@@ -380,6 +384,10 @@ class CommitRun:
         o = self.o
         tpl = next(b.text for b in cmdtext.blocks(o.section("Step 7")) if "CONTROL_ROOT=<" in b.text)
         tpl = re.sub(r'<"([^"]*)" when BULK=false, else [^>]*>', lambda m: json.dumps(m.group(1).replace("$TASK_ID", self.tid)), tpl)
+        # The obligation's plan roots, where the text declares them: the plan's repo_root values in order.
+        roots = [e["repo_root"] for e in self.plan.get("repositories") or []]
+        tpl = re.sub(r"<the JSON array of REPOSITORY_PLAN\.repositories\[\]\.repo_root\b[^>]*>",
+                     lambda m: json.dumps(roots), tpl)
         values = {"CONTROL_ROOT": o.values.get("CONTROL_ROOT", ""), "NESTED_REPO": o.values.get("NESTED_REPO", ""),
                   "REPOSITORY_PLAN": json.dumps(self.plan), "ARTIFACT_CHAIN": json.dumps(self.chain) if self.chain else "",
                   "ATTRIBUTION_LOG": o.values.get("ATTRIBUTION_LOG", ""), "TASK_ID": self.tid, "BULK": "false",
@@ -846,4 +854,9 @@ def run(rp) -> None:
         session = rp.later_session(session)
     elif variant == "late-repair":
         session = rp.later_session(session)
-    CommitRun(rp, session, tid, producer=producer).run()
+    out = CommitRun(rp, session, tid, producer=producer).run()
+    # Acceptance 7: on the branch's text each routing case reaches /commit's terminal. A replay that stops
+    # short fails here instead of exiting 0; the base kit's text (kit=base) is expected to stop short of it.
+    if variant in ("commit-route", "full", "late-repair", "late-repair-qa") and rp.args.get("kit") != "base" \
+            and out != "committed":
+        raise RuntimeError(f"/commit {variant} ended {out!r}, not at its terminal (committed)")

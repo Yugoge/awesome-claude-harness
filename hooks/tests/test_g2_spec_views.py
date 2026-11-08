@@ -7,6 +7,7 @@ subagent_type (hooks/lib/dispatch_template.py).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -194,13 +195,38 @@ def test_the_spec_views_grammar_in_the_library_and_the_schema():
 ], ids=["missing", "other_monolith", "view_missing"])
 def test_the_splits_manifest_is_checked_at_the_spec_subagents_stop(tmp_path, manifest, failed):
     """P1b E4: the split's own manifest predicates (resolve-spec-artifacts.py split_problem, the rule
-    /spec's finalize guard ran in the orchestrator's call) go back to the spec subagent at its stop,
-    naming the manifest and the failed predicate; the marker the orchestrator writes later is not
-    among them."""
+    /spec's finalize guard ran in the orchestrator's call, which spec-verify.py --project-dir applies)
+    go back to the spec subagent at its stop, naming the manifest and the failed predicate; the
+    marker the orchestrator writes later is not among them."""
     run = _stop(tmp_path, _obligation_prompt, manifest=manifest)
     assert run.returncode == 2, run.stderr
-    assert f"{VIEWS}/manifest.json: spec_manifest_invalid" in run.stderr
+    assert f"{VIEWS}: spec_verify_strict_failed" in run.stderr
+    assert re.search(rf"split:\s+FAIL \({re.escape(VIEWS)}/manifest\.json: ", run.stderr), run.stderr
     assert failed in run.stderr
+
+
+def _hashed(mono: str = MONO_TEXT) -> dict:
+    """The manifest agents/spec.md Step 5 writes: the views and the monolith's sha256."""
+    return {"schema_version": 1, "spec_id": SPEC_ID, "monolith_path": MONOLITH,
+            "sha256": hashlib.sha256(mono.encode("utf-8")).hexdigest(),
+            "views": {n[:-3]: f"views/{n}" for n in VIEW_TEXT if n != "orchestrator.md"}}
+
+
+def test_a_stale_split_goes_back_to_the_spec_subagent(tmp_path):
+    """P1b E4: the split's freshness, a rule /spec's finalize guard ran with the resolver after the
+    marker: a manifest whose recorded monolith hash is not the monolith's goes back to the spec
+    subagent naming the manifest and the failed predicate. The same split with its hash stops with
+    no marker yet (/spec writes it after this stop), and with a marker under the monolith's prefixed
+    id, a file the spec subagent neither wrote nor may remove (the consumers' resolver rejects it)."""
+    assert _stop(tmp_path / "ok", _obligation_prompt, manifest=_hashed()).returncode == 0
+    stray = tmp_path / "misplaced" / "project" / f"docs/dev/specs/spec-{SPEC_ID}" / ".split-complete"
+    stray.parent.mkdir(parents=True)
+    stray.write_text("split-complete: 2026-10-28T10:10:10+00:00\n", encoding="utf-8")
+    assert _stop(tmp_path / "misplaced", _obligation_prompt, manifest=_hashed()).returncode == 0
+    run = _stop(tmp_path, _obligation_prompt, manifest=_hashed(MONO_TEXT + "Section 7 changed.\n"))
+    assert run.returncode == 2, run.stderr
+    assert re.search(rf"split:\s+FAIL \({re.escape(VIEWS)}/manifest\.json: ", run.stderr), run.stderr
+    assert "split is stale (monolith content changed since split: manifest sha256 != monolith hash)" in run.stderr
 
 
 def test_the_stop_coverage_hook_is_an_exit_zero_stub(tmp_path):

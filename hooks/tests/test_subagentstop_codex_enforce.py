@@ -70,6 +70,7 @@ def test_a_dispatch_asked_to_consult_codex_blocks_without_its_ledger_entry(tmp_p
     proc = _stop(tmp_path, project, agent_id, transcript)
     assert proc.returncode == 2, proc.stderr
     assert f"CODEX_ENFORCE_BLOCKED: agent {agent_id} (type={agent_type})" in proc.stderr
+    assert f"codex-ledger/{agent_id}.json (failing check: absent" in proc.stderr
 
 
 @pytest.mark.parametrize("agent_type", ["ba", "dev", "qa", "pm"])

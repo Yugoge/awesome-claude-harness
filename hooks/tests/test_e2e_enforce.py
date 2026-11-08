@@ -469,6 +469,9 @@ def test_r10_registered_qa_judged_on_the_report_it_wrote_not_a_siblings(tmp_path
     assert proc.returncode == 2
     assert str(project / own) in proc.stderr and sibling not in proc.stderr
     assert "e2e_enforcement.status='skipped_without_justification'" in proc.stderr
+    # the block names its artifact and the failing check (P1b, acceptance 15)
+    assert (f"artifact: {project / own} (failing check: e2e_enforcement.status not a passing status)\n"
+            in proc.stderr)
 
 
 def test_r10_declared_path_beside_a_stale_unsuffixed_report(tmp_path):

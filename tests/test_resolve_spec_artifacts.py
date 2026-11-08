@@ -634,6 +634,71 @@ def test_fqa1_lint_allow_marker_honored_on_comment_only_line():
 
 
 # --------------------------------------------------------------------------- #
+# split_problem (P1b E4): the split's own predicates, which classify() applies with the marker due
+# and the spec subagent's stop (G2) before /spec writes the marker (Step 6 sub-step 4, after the
+# split QA loop): /spec's finalize guard ran them with this resolver after the marker.
+# --------------------------------------------------------------------------- #
+def _split_problem(root, candidate, spec_rel):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("resolve_spec_artifacts", RESOLVER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.split_problem(os.path.join(root, "docs", "dev", "specs", candidate),
+                             os.path.realpath(os.path.join(root, spec_rel)), root)
+
+
+def test_split_problem_a_compliant_split_passes_before_its_marker():
+    # The missing marker is the consumers' (/spec writes it after the spec subagent's stop).
+    with tempfile.TemporaryDirectory() as root:
+        rel = _make_monolith(root, "spec-20261107-000001")
+        _make_split(root, "20261107-000001", rel, write_marker=False, record_hash=True)
+        assert _split_problem(root, "20261107-000001", rel) is None
+        code, out, _ = _run(rel, root)
+        assert code == EXIT_INVALID, out
+        assert out["failed_predicate"] == ".split-complete missing or not a regular file while manifest present", out
+
+
+def test_split_problem_a_stale_split_fails_before_its_marker():
+    with tempfile.TemporaryDirectory() as root:
+        rel = _make_monolith(root, "spec-20261107-000002")
+        _, views_dir = _make_split(root, "20261107-000002", rel, write_marker=False, record_hash=True)
+        with open(os.path.join(root, rel), "a", encoding="utf-8") as fh:
+            fh.write("\n### 5.2: a line the recorded hash does not cover\n")
+        assert _split_problem(root, "20261107-000002", rel) == (
+            "split is stale (monolith content changed since split: manifest sha256 != monolith hash)")
+        with open(os.path.join(views_dir, "manifest.json"), encoding="utf-8") as fh:
+            data = json.load(fh)
+        _write(os.path.join(views_dir, "manifest.json"), json.dumps(dict(data, sha256=None)))
+        assert _split_problem(root, "20261107-000002", rel).startswith(
+            "manifest.sha256 is present but not a 64-hex sha256 (got None)")
+
+
+def test_split_problem_a_misplaced_marker_is_no_predicate_of_the_split():
+    # A marker under the prefixed id is no file of the split the spec subagent wrote (nor one it can
+    # remove); the consumers' resolver rejects that candidate.
+    with tempfile.TemporaryDirectory() as root:
+        rel = _make_monolith(root, "spec-20261107-000003")
+        _make_split(root, "20261107-000003", rel, write_marker=False, record_hash=True)
+        _write(os.path.join(root, "docs", "dev", "specs", "spec-20261107-000003", ".split-complete"), "split done\n")
+        assert _split_problem(root, "20261107-000003", rel) is None
+        code, out, _ = _run(rel, root)
+        assert code == EXIT_INVALID and out["candidate"] == "20261107-000003", out
+
+
+def test_split_problem_an_earlier_marker_is_no_staleness_before_the_new_one():
+    # No hash recorded and the marker of an earlier split older than the monolith: the mtime rule
+    # waits for the marker /spec writes after the spec subagent's stop; the consumers apply it.
+    with tempfile.TemporaryDirectory() as root:
+        rel = _make_monolith(root, "spec-20261107-000004")
+        spec_dir, _ = _make_split(root, "20261107-000004", rel)
+        t = os.path.getmtime(os.path.join(spec_dir, ".split-complete"))
+        os.utime(os.path.join(root, rel), (t + 100, t + 100))
+        assert _split_problem(root, "20261107-000004", rel) is None
+        code, out, _ = _run(rel, root)
+        assert code == EXIT_INVALID and out["failed_predicate"] == "split is stale (monolith newer than .split-complete)", out
+
+
+# --------------------------------------------------------------------------- #
 # self-contained runner
 # --------------------------------------------------------------------------- #
 def _run_all():

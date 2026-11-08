@@ -146,6 +146,7 @@ def _enforce_e2e_status(
         f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={agent_type}) QA report at "
         f"{qa_report_path} ({session_context}) has e2e_enforcement.status={status!r}.\n"
         f"blocking_reason: {blocking_reason}\n"
+        f"artifact: {qa_report_path} (failing check: e2e_enforcement.status not a passing status)\n"
         f"E2E verification is required. Perform E2E testing and update "
         f"e2e_enforcement.status to 'performed', 'legitimately_skipped', "
         f"'blocked_app_unavailable', or 'ran' before stopping.\n"

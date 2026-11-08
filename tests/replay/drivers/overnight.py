@@ -436,6 +436,22 @@ def report_work(content, reads=(), globs=()):
 
 # ---------------------------------------------------------------- deviations on another tree
 
+# The orchestrator gate's refusal counts the turn's calls of the tool so far ("Write used consecutively
+# beyond limit (3/1)."). The whole overnight session is one turn, so the count at a step is the number
+# of the session's earlier orchestrator Writes (Edits), on any step: a row that removes an earlier
+# Write (the base's Step 14 verification plans, its Write before Step 5) shifts every later count
+# without changing the refusal at the step. The kept comparison reads that count as a run counter, like the run's ids:
+# the tool, the limit and the rest of the line still have to match the base block's.
+_GATE = "hooks/pretool-orchestrator-gate.py"
+_GATE_COUNT = re.compile(r"(\b\w+ used consecutively beyond limit \()\d+(/\d+\))")
+
+
+def kept_text(hook: str, text: str) -> str:
+    """A block's first line as the kept comparison reads it: the orchestrator gate's count of the
+    turn's calls so far replaced by <n>; every other hook's line as recorded."""
+    return _GATE_COUNT.sub(r"\1<n>\2", text) if hook == _GATE else text
+
+
 class _NormKept:
     """A declared deviation bound to its step that passes only a kept base block, the step compared
     with the run's own ids normalised (blocks.json "step_norm")."""
@@ -445,17 +461,19 @@ class _NormKept:
         self.hook, self.quote, self.why = dev.hook, dev.quote, dev.why
 
     def covers(self, block_hook: str, raw: str, text: str) -> bool:
+        key = kept_text(block_hook, text)
         return self.dev.covers(block_hook, raw, text) and any(
-            (block_hook, step, text) in self.kept for step in (self.step_norm, self.step_norm + " stop"))
+            (block_hook, step, key) in self.kept for step in (self.step_norm, self.step_norm + " stop"))
 
 
 class NormKeptOnly(Deviations):
     """drivers/dev.py KeptOnly, with steps compared normalised: a label naming an artifact path holds
-    the session id or a task id, which differ from run to run (kept=[[hook, step_norm, text], ...])."""
+    the session id or a task id, which differ from run to run (kept=[[hook, step_norm, text], ...]),
+    and the orchestrator gate's count read as a run counter (kept_text)."""
 
     def __init__(self, inner: Deviations, kept, rp):
         super().__init__(inner.pairs)
-        self.kept, self.rp = {tuple(k) for k in kept}, rp
+        self.kept, self.rp = {(h, st, kept_text(h, t)) for h, st, t in kept}, rp
 
     def at(self, label: str) -> list:
         return [_NormKept(d, self.rp.norm_text(label), self.kept) for d in super().at(label)]

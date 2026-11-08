@@ -153,10 +153,10 @@ routing, Step 7 failure routing). Per failed check:
      names an artifact; outside a QA round, print the awaiting-input line
      naming the check (re-running `/close`, for example).
    - On the late-repair site, a dispatch of one of the route's stages (a role
-     `record-stage` takes): the run record holds each stage's report by hash,
-     so when the dispatch returns, record the report it wrote as
-     `/close --late-repair` records each stage (`<role>` its role, `<path>`
-     the entry's path):
+     `record-stage` takes): the run record holds each stage's report and the
+     dispatch that declared it, so when the dispatch returns, record the
+     report it wrote as `/close --late-repair` records each stage (`<role>`
+     its role, `<path>` the entry's path):
      `python3 ~/.claude/scripts/late-repair-controller.py record-stage --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT" --stage <role> --report-path <path> --repair-run-id "$(jq -r .repair_run_id "$TASK_PROJECT_ROOT/docs/dev/late-repair-run-$TASK_ID.json")"`
 3. Rerun ONLY the entry's `source_check` (e.g. `resolve-dev-artifact-chain.py`,
    `resolve-commit-repos.py`, `late-repair-controller.py
@@ -633,7 +633,8 @@ QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo — 
       "begin": "--- CHANGELOG-ANALYST-STATUS-BEGIN ---",
       "end": "--- CHANGELOG-ANALYST-STATUS-END ---",
       "format": "json",
-      "schema": "changelog-status.v1"
+      "schema": "changelog-status.v1",
+      "repo_roots": <the JSON array of REPOSITORY_PLAN.repositories[].repo_root, in order, when BULK=false, else null>
     }
   ]
 }
@@ -684,14 +685,11 @@ Wait for changelog-analyst to complete. Echo its final status to the user.
 #### Changelog-analyst result handling and retry protocol
 
 Read changelog-analyst's structured status block verbatim (see `agents/changelog-analyst.md`
-§Structured Final Status Output): the producer-stop gate (G2) validated it against
-`changelog-status.v1` at the analyst's own stop. It carries `commit_status`,
+§Structured Final Status Output): the producer-stop gate (G2) validated it at the analyst's
+own stop, against `changelog-status.v1` and, in normal mode, its repository roots and
+order against the obligation's `repo_roots`. It carries `commit_status`,
 `repository_results[]`, and, when applicable, `failure_code`, `failure_reason`, and
-`auto_bulk_commits[]`. In normal mode a result whose repository roots/order do not
-exactly equal `REPOSITORY_PLAN` is not accepted as a landing (the schema does not
-hold the plan): it is a finding on the analyst's status block (it names no file: the
-changelog-analyst dispatch whose status block it is runs again), routed through the
-dispatch-and-recheck loop and re-read.
+`auto_bulk_commits[]`.
 
 **Handle each commit_status value:**
 
