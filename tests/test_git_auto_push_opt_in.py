@@ -128,7 +128,6 @@ def _scratch_env(base: Path, case: str) -> dict:
         "CHECKPOINT_LOG_DIR": str(checkpoint_logs),
         "CLAUDE_STATE_DIR": str(state),
         "CHECKPOINT_PUSH_MIN_INTERVAL": "0",
-        "CLAUDE_BACKUP_LOG": str(base / "post-commit-auto-push.log"),
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": str(global_config),
         "GIT_TERMINAL_PROMPT": "0",
@@ -288,8 +287,8 @@ def _trigger_fswatch(base: Path, env: dict, case: str) -> Run:
                  f"origin/{BRANCH}..HEAD")
     head = _git(env, "-C", repo, "rev-parse", "HEAD")
     origin_before = _origin_refs(env, origin)
-    # Sourcing installs an EXIT trap that exits 0 and writes a state file:
-    # clear it before calling safe_push so the exit status is safe_push's own.
+    # Sourcing installs an EXIT trap that exits 0: clear it before calling
+    # safe_push so the exit status is safe_push's own.
     script = ('source "$1" "$2"; loaded=$?; trap - EXIT INT TERM; '
               '[ "$loaded" -eq 0 ] || exit 90; safe_push')
     proc = _run(["bash", "-c", script, "bash", functions, repo], env,

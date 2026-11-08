@@ -34,27 +34,13 @@
     },
     "role": {
       "type": "string",
-      "enum": [
-        "ba",
-        "dev",
-        "qa",
-        "graphify",
-        "spec",
-        "test-writer",
-        "changelog-analyst"
-      ]
+      "minLength": 1,
+      "description": "An agent of the roster: the stem of an agents/*.md file with front matter (hooks/lib/roster.py), checked by the grammar library, never listed here."
     },
     "pipeline": {
       "type": "string",
-      "enum": [
-        "dev",
-        "redev",
-        "dev-command",
-        "dev-overnight",
-        "do",
-        "close",
-        "commit"
-      ]
+      "minLength": 1,
+      "description": "A command: the stem of a commands/*.md file with front matter, checked by the grammar library, never listed here."
     },
     "profile": {
       "type": "string",
@@ -83,7 +69,7 @@
         "properties": {
           "kind": {
             "type": "string",
-            "enum": ["json", "markdown", "response_block", "response_line"]
+            "enum": ["json", "markdown", "response_block", "response_line", "spec_views"]
           }
         },
         "allOf": [
@@ -169,6 +155,11 @@
                 "schema": {
                   "type": "string",
                   "minLength": 1
+                },
+                "repo_roots": {
+                  "type": ["array", "null"],
+                  "items": {"type": "string", "minLength": 1},
+                  "description": "The repository roots of the dispatch's plan, in order (/commit: REPOSITORY_PLAN.repositories[].repo_root). A list makes G2 require the block's repository_results[] to name exactly these roots, the result at index i with order i; null (bulk mode) or absent: no such requirement."
                 }
               }
             }
@@ -184,6 +175,29 @@
                 "terminal_line_regex": {
                   "type": "string",
                   "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {"kind": {"const": "spec_views"}},
+              "required": ["kind"]
+            },
+            "then": {
+              "required": ["path", "monolith"],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^/]",
+                  "not": {"pattern": "\\.\\."}
+                },
+                "monolith": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^/]",
+                  "not": {"pattern": "\\.\\."}
                 }
               }
             }

@@ -67,9 +67,8 @@ sandbox, mitigated by the /do consent and /allow grant escape hatches):
 
 Bypass order (any one → allow):
   1. live /dev-overnight session   (lib.overnight.is_overnight_active)
-  2. /do consent flag              (main agent only — subagents never qualify)
-  3. /allow grant                  (sentinel grant: main + subagent;
-                                    legacy pattern grant: main agent only)
+  2. /do consent flag              (lib.allowlist.has_do_consent: main agent only)
+  3. /allow grant                  (sentinel grant: main + subagent)
 
 Coexistence
   Purely additive. PreToolUse blocks if ANY hook exits 2, so this hook only ever
@@ -93,11 +92,10 @@ try:
 except Exception:  # pragma: no cover - lib always present in repo
     strip_non_executable_contexts = None
 from lib.allowlist import (  # noqa: E402
-    match_grant_for_bash_command,
+    has_do_consent,
     match_sentinel_grant_for_bash_command,
 )
 from lib.overnight import is_overnight_active  # noqa: E402
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
     _segments, _basename, _WRAPPERS, _ENV_ASSIGN_RE,
     _command_token_index, _GIT_GLOBAL_VALUE, _git_subcommand,
@@ -578,40 +576,16 @@ def _get_session_id(data):
         return ''
 
 
-def _has_do_consent(data):
-    """True iff the main agent holds /do consent for this session."""
-    if data.get('agent_id'):  # subagents never qualify for /do
-        return False
-    sid = _get_session_id(data)
-    if not sid:
-        return False
-    try:
-        flag = Path(f'{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag')
-        return flag.exists() and flag.read_text().strip() == 'true'
-    except Exception:
-        return False
-
-
 def _allow_grant_matches(command, data):
     """True iff a /allow grant authorizes this command.
 
     Sentinel grants reach subagents and the main agent (mirrors the M2 decision
-    in pretool-git-privilege-guard.py); the legacy pattern grant is
-    main-agent-only.
+    in pretool-git-privilege-guard.py).
     """
     sid = _get_session_id(data)
     task_id = os.environ.get('CLAUDE_TASK_ID') or sid
     try:
-        if task_id and match_sentinel_grant_for_bash_command(task_id, command) is not None:
-            return True
-    except Exception:
-        pass
-    if data.get('agent_id'):
-        return False
-    if not sid:
-        return False
-    try:
-        return match_grant_for_bash_command(command, sid) is not None
+        return bool(task_id) and match_sentinel_grant_for_bash_command(task_id, command) is not None
     except Exception:
         return False
 
@@ -661,7 +635,7 @@ def main():
         # Bypasses — any one allows the operation.
         if is_overnight_active(data.get('cwd')):
             sys.exit(0)
-        if _has_do_consent(data):
+        if has_do_consent(data):
             sys.exit(0)
         if _allow_grant_matches(command, data):
             sys.exit(0)

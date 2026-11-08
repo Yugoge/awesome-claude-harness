@@ -112,7 +112,7 @@
       "block": true,
       "text": "STEP SEQUENCE VIOLATION",
       "source_ref": "hooks/posttool-todo-sequence.py",
-      "source_locator": "hooks/posttool-todo-sequence.py:157",
+      "source_locator": "hooks/posttool-todo-sequence.py:52",
       "extract_hash": "648af0760543d3cef53f6229c3eb3fbc89bf87ad937c25571fa928283369cbe0"
     },
     {
@@ -121,8 +121,8 @@
       "stage": "provenance",
       "kind": "adaptation",
       "text": "One in_progress at a time",
-      "source_ref": "hooks/posttool-todo-sequence.py",
-      "source_locator": "hooks/posttool-todo-sequence.py:160",
+      "source_ref": "hooks/pretool-todo-validate.py",
+      "source_locator": "hooks/pretool-todo-validate.py:178",
       "extract_hash": "f453019d61d71b9a107f9add918754ca1d6e277820b0f13468e21f8f65fff894"
     },
     {

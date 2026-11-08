@@ -1,14 +1,14 @@
 # commands
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-07T22:19:52Z*
+*Last updated: 2026-10-29T07:57:38Z*
 **Total entries**: 21
 **Convention**: kebab
 
 ## Tree
 ```
 commands/
-├── `allow.md` - Single-use break-glass for a declared grant-aware safety hook; it never overrides a settings DENY. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is the owner-authorized match-all selector, still single-use and TTL-bounded; every explicit selector is refuse-by-default when no narrow command is derivable. A literal selector matches as a POSITIONAL PREFIX of the argument tokens, not a substring. When the head token is git, repo-retargeting global options (-C, --git-dir, --work-tree, --namespace) are skipped so a short selector reaches the canonical `git -C <dir> <verb>` shape; -c / --config-env / --exec-path are never skipped and fail closed. Trailing tokens become an audit-log comment. Sentinel TTL 300s, consumed on any terminal result.
+├── `allow.md` - Single-use break-glass for a declared grant-aware safety hook; it never overrides a settings DENY. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is the owner-authorized match-all selector, still single-use and TTL-bounded; every explicit selector is refuse-by-default when no narrow command is derivable. A literal selector matches as a POSITIONAL PREFIX of the argument tokens, not a substring. When the head token is git, repo-retargeting global options (-C, --git-dir, --work-tree, --namespace) are skipped so a short selector reaches the canonical `git -C <dir> <verb>` shape; -c / --config-env / --exec-path are never skipped and fail closed. Trailing tokens become a comment the grant notice echoes. Sentinel TTL 300s, consumed on any terminal result.
 ├── `checkpoint.md` - Checkpoint Command
 ├── `clean.md` - Aggressive project cleanup - normalize docs structure, archive everything, delete one-time scripts/tests. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
 ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/with-disclosures. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. --force is DEPRECATED -- a no-op alias of the normal path (audit-logged, skips nothing). Pass --auto to discover and sequentially close every close_pending parent (see `--auto mode` below).

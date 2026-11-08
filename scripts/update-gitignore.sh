@@ -2,9 +2,15 @@
 # update-gitignore.sh - Auto-update .gitignore with project-specific rules
 #
 # Usage: update-gitignore.sh [project_directory]
+#        update-gitignore.sh project_directory --init
+#        update-gitignore.sh project_directory [--comment TEXT] --rule RULE [--rule RULE ...]
 #
 # Detects existing cache/temp files and adds missing rules to .gitignore
 # Adds project-type-specific rules (Python, Node.js) if applicable
+# --init: create the default .gitignore when there is none (hooks/session-git-init.sh).
+# --rule: append each RULE the file does not hold yet, under a `# TEXT` line when
+#   --comment is given (hooks/session-gitignore-propagate.sh).
+# This script is the harness's one writer of a project's .gitignore.
 #
 # Exit codes:
 # 0 - Success (updated or already current)
@@ -14,11 +20,80 @@
 set -euo pipefail
 
 PROJECT_DIR="${1:-.}"
+INIT=0
+COMMENT=""
+RULES=()
+[[ $# -gt 0 ]] && shift
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --init) INIT=1; shift ;;
+        --comment) COMMENT="${2:?--comment needs a value}"; shift 2 ;;
+        --rule) RULES+=("${2:?--rule needs a value}"); shift 2 ;;
+        *) echo "update-gitignore.sh: unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
 cd "$PROJECT_DIR" || exit 2
+
+if [[ $INIT -eq 1 ]]; then
+    [[ -f .gitignore ]] && exit 0
+    cat > .gitignore << 'EOF'
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
+.Python
+env/
+build/
+dist/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Claude Code local settings
+.claude/settings.local.json
+EOF
+    echo "created"
+    exit 0
+fi
 
 if [[ ! -f .gitignore ]]; then
     echo "⚠️  .gitignore does not exist in $PROJECT_DIR"
     exit 1
+fi
+
+if [[ ${#RULES[@]} -gt 0 ]]; then
+    for rule in "${RULES[@]}"; do
+        if ! grep -qF "$rule" .gitignore; then
+            if [[ -n "$COMMENT" ]]; then
+                printf '# %s\n%s\n' "$COMMENT" "$rule" >> .gitignore
+            else
+                printf '%s\n' "$rule" >> .gitignore
+            fi
+        fi
+    done
+    exit 0
 fi
 
 NEEDS_UPDATE=0

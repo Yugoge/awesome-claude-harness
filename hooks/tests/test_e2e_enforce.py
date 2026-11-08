@@ -1,33 +1,22 @@
 #!/usr/bin/env python3
-"""Tests for hooks/subagentstop-e2e-enforce.py's registry-independent
-obligation fallback (ticket 20261001-161041-r06, M1).
+"""Tests for hooks/subagentstop-e2e-enforce.py: which QA report a stopping QA
+is judged on.
 
-Pre-fix, this hook called resolve_dev_registry_entry(agent_id, project_dir)
-and exited 0 unconditionally when it returned None (agent_id absent from
-.claude/dev-registry/agent-index.json -- e.g. a skipped/failed FIRST ACTION
-registration), with no fallback at all. That made QA's e2e_enforcement.status
-obligation silently unenforceable for exactly the unregistered-agent
-population it exists to catch.
-
-This file covers the new fallback: when resolve_dev_registry_entry() returns
-None, the hook now calls obligation.resolve_own_obligation() (registry-
-independent; reads the agent's own dispatch transcript) and, only when that
-resolves to a qa-role obligation declaring a qa-report.v2 artifact, applies
-the SAME e2e_enforcement.status check the registered path applies -- against
-that artifact's exact declared path. Every other outcome (no session_id, no
-obligation block, role mismatch, no qa-report.v2 artifact declared) still
-exits 0 (LOW-10 preserved, AC3).
-
-AC1 and AC6 (the shared hooks/subagentstop-artifact-contract-enforce.py
-L0/L1-before-L2 reorder) are sibling lanes r02/r04's deliverable, not this
-file's -- this lane's dispatch scopes it exclusively to
-subagentstop-e2e-enforce.py.
+- A QA whose dispatch carries an obligation (ticket 20261001-161041-r06, P1b
+  E7, P1c R10) is judged on exactly the qa-report.v2 it declares, at the path
+  declared, whatever the registry holds (no agent-index entry) and whatever
+  form the session id takes; a stale report beside it is never read (F3b).
+- A QA whose dispatch carries none, bound to a cycle's registry (its
+  agent-index entry), is judged on the qa-reports its own transcript shows it
+  wrote (command_span.write_set), never the newest file of the session or a
+  sibling's (R10); the gate has no flag to read.
+- Every other stop (no session_id, no obligation and no cycle registry entry,
+  a role other than qa, a qa obligation declaring no qa-report.v2) exits 0.
 
 Models hooks/tests/test_artifact_contract_enforce.py's fixture and
 invocation patterns (importlib for the hyphenated module under test,
 subprocess with CLAUDE_PROJECT_DIR/HOME, the obligation-transcript fixture
-helpers, and the "assert the fallback was actually invoked" spy pattern from
-that file's own AC5/AC6 tests).
+helpers).
 """
 
 from __future__ import annotations
@@ -76,13 +65,6 @@ def _register_agent(
         existing = json.loads(index_path.read_text(encoding="utf-8"))
     existing[agent_id] = {"agent_type": agent_type, "dev_session_id": dev_session_id}
     _write(index_path, existing)
-
-
-def _enable_e2e_enforcement(project_dir: Path, dev_session_id: str) -> None:
-    _write(
-        project_dir / ".claude" / "dev-registry" / dev_session_id / "e2e-enforce.json",
-        {"enabled": True},
-    )
 
 
 def _qa_report(task_id: str, status: str = "performed") -> dict:
@@ -346,16 +328,14 @@ def test_ac3_qa_obligation_without_qa_report_artifact_fails_open(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_ac4_fallback_invokes_resolve_own_obligation_with_expected_shape(
+def test_ac4_own_dispatch_invokes_resolve_own_obligation_with_expected_shape(
     monkeypatch,
 ):
-    """AC4 (code-review, exercised as a spy): the fallback calls
-    obligation.resolve_own_obligation exactly once, with the keyword-arg
-    shape (session_id, agent_id, project_dir, payload_agent_transcript_path,
-    expected_role) already used by subagentstop-artifact-contract-enforce.py
-    -- proving the fallback was actually invoked with the right shape, not
-    just asserting a final exit code (right-exit-code-wrong-reason guard,
-    per this ticket's Technical Hints)."""
+    """AC4 (exercised as a spy): the QA's own dispatch is read through
+    obligation.resolve_own_obligation, called exactly once with the
+    keyword-arg shape subagentstop-artifact-contract-enforce.py uses; no
+    expected_role (the stopping agent's type decides that, R10), and the
+    transcript the resolver found is the one handed back."""
     calls = []
 
     def _spy(**kwargs):
@@ -366,12 +346,13 @@ def test_ac4_fallback_invokes_resolve_own_obligation_with_expected_shape(
 
     monkeypatch.setattr(HOOK.obligation, "resolve_own_obligation", _spy)
 
-    HOOK._enforce_e2e_via_obligation(
+    declared, transcript = HOOK._own_dispatch(
         {"agent_id": "agent-qa-r06-ac4", "session_id": "harness-r06-ac4"},
         "agent-qa-r06-ac4",
         "/tmp/claude-test-r06-ac4-project",
     )
 
+    assert (declared, transcript) == ({}, "x")
     assert len(calls) == 1
     kwargs = calls[0]
     assert set(kwargs) == {
@@ -379,9 +360,7 @@ def test_ac4_fallback_invokes_resolve_own_obligation_with_expected_shape(
         "agent_id",
         "project_dir",
         "payload_agent_transcript_path",
-        "expected_role",
     }
-    assert kwargs["expected_role"] == "qa"
     assert kwargs["agent_id"] == "agent-qa-r06-ac4"
     assert kwargs["session_id"] == "harness-r06-ac4"
     assert kwargs["project_dir"] == "/tmp/claude-test-r06-ac4-project"
@@ -415,128 +394,145 @@ def test_ac4_agent_resolver_unmodified_by_this_fix():
         "_scan_cp_state_files",
         "_resolve_by_id",
         "resolve_agent_type",
+        # P1b row 8: the one cp-state running rule subagentstop-cp-enforce.py shares.
+        "cp_state_running",
     }
     assert top_level_funcs == baseline_funcs
 
 
 # ---------------------------------------------------------------------------
-# AC5: the pre-existing registered-agent path stays byte-identical -- the
-# fallback is additive only and never alters the registered path's exit
-# codes or stderr text.
+# R10 (P1c): a dispatch without an obligation, of a QA a cycle's registry
+# holds, is judged on the QA reports its own transcript shows it wrote, never on the
+# newest file of the session or a sibling's; every message names the report's
+# path and the field.
 # ---------------------------------------------------------------------------
 
 
-def test_ac5_registered_missing_report_message_unchanged(tmp_path):
-    """AC5: a REGISTERED qa agent with a missing qa-report still produces
-    the exact pre-fix E2E_ENFORCE_BLOCKED/no-report message and exit 2."""
-    dev_session_id = "dev-20260101-000000"
-    agent_id = "agent-qa-r06-ac5-missing"
+def _write_qa_transcript(home, project, session, agent_id, prompt, paths):
+    """The QA's transcript: its dispatch prompt, then one Write per path with
+    an ok tool_result (the record the CLI keeps of the agent's own calls)."""
+    _write_obligation_transcript(home, project, session, agent_id, prompt)
+    slug = _project_slug(project)
+    tpath = home / ".claude" / "projects" / slug / session / "subagents" / f"agent-{agent_id}.jsonl"
+    with tpath.open("a", encoding="utf-8") as fh:
+        for k, rel in enumerate(paths):
+            use = f"toolu_r10_{agent_id}_{k}"
+            fh.write(json.dumps({"type": "assistant", "cwd": str(project), "message": {"content": [
+                {"type": "tool_use", "id": use, "name": "Write",
+                 "input": {"file_path": str(project / rel), "content": "{}"}}]}}) + "\n")
+            fh.write(json.dumps({"type": "user", "cwd": str(project), "message": {"content": [
+                {"type": "tool_result", "tool_use_id": use, "content": "ok"}]}}) + "\n")
+
+
+def _registered_qa(tmp_path, dev_session_id, agent_id, session, writes=()):
     project, home = _project_home(tmp_path)
     _register_agent(project, agent_id, dev_session_id, "qa")
-    _enable_e2e_enforcement(project, dev_session_id)
-    _write(
-        project / ".claude" / "dev-registry" / dev_session_id / "qa.json",
-        {"agent_type": "qa", "session_id": dev_session_id},
-    )
+    _write_qa_transcript(home, project, session, agent_id, "Verify this cycle. No obligation block.", writes)
+    return project, home
 
-    proc = _run_hook(project, home, agent_id)
+
+def test_r10_registered_qa_that_wrote_no_report_blocks(tmp_path):
+    """A QA that wrote no qa-report is blocked, even with another agent's
+    report of the session on disk (the newest-filename correlation is gone)."""
+    dev_session_id = "dev-20260101-000000"
+    agent_id = "agent-qa-r10-none"
+    project, home = _registered_qa(tmp_path, dev_session_id, agent_id, "harness-r10-none")
+    _write(project / "docs" / "dev" / "qa-report-20260101-000000.json",
+           _qa_report("20260101-000000", status="performed"))
+
+    proc = _run_hook(project, home, agent_id, session_id="harness-r10-none")
 
     assert proc.returncode == 2
     assert proc.stderr == (
-        f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type=qa) has no "
-        f"qa-report-*.json in {project}/docs/dev/ under session {dev_session_id}.\n"
+        f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type=qa) wrote no "
+        f"docs/dev/qa-report-*.json (in session {dev_session_id}).\n"
         f"QA must produce a report with e2e_enforcement.status before stopping.\n"
     )
 
 
-def test_ac5_registered_unjustified_skip_message_unchanged(tmp_path):
-    """AC5: a REGISTERED qa agent with a report whose e2e_enforcement.status
-    is the unjustified-skip value still produces the exact pre-fix
-    'in session <sid>' message text and exit 2."""
+def test_r10_registered_qa_judged_on_the_report_it_wrote_not_a_siblings(tmp_path):
+    """Its own report passes: a sibling's unjustified skip beside it is not
+    this QA's; its own unjustified skip blocks, naming its path and field."""
     dev_session_id = "dev-20260202-000000"
-    agent_id = "agent-qa-r06-ac5-skip"
-    task_id = "20260202-000000"
-    project, home = _project_home(tmp_path)
-    _register_agent(project, agent_id, dev_session_id, "qa")
-    _enable_e2e_enforcement(project, dev_session_id)
-    _write(
-        project / ".claude" / "dev-registry" / dev_session_id / "qa.json",
-        {"agent_type": "qa", "session_id": dev_session_id},
-    )
-    _write(
-        project / "docs" / "dev" / f"qa-report-{task_id}.json",
-        _qa_report(task_id, status="skipped_without_justification"),
-    )
+    agent_id = "agent-qa-r10-own"
+    own = "docs/dev/qa-report-20260202-000000-l1.json"
+    sibling = "docs/dev/qa-report-20260202-000000-l2.json"
+    project, home = _registered_qa(tmp_path, dev_session_id, agent_id, "harness-r10-own", [own])
+    _write(project / own, _qa_report("20260202-000000-l1", status="performed"))
+    _write(project / sibling, _qa_report("20260202-000000-l2", status="skipped_without_justification"))
 
-    proc = _run_hook(project, home, agent_id)
+    proc = _run_hook(project, home, agent_id, session_id="harness-r10-own")
+    assert proc.returncode == 0, proc.stderr
+
+    _write(project / own, _qa_report("20260202-000000-l1", status="skipped_without_justification"))
+    proc = _run_hook(project, home, agent_id, session_id="harness-r10-own")
+    assert proc.returncode == 2
+    assert str(project / own) in proc.stderr and sibling not in proc.stderr
+    assert "e2e_enforcement.status='skipped_without_justification'" in proc.stderr
+    # the block names its artifact and the failing check (P1b, acceptance 15)
+    assert (f"artifact: {project / own} (failing check: e2e_enforcement.status not a passing status)\n"
+            in proc.stderr)
+
+
+def test_r10_declared_path_beside_a_stale_unsuffixed_report(tmp_path):
+    """F3b: a fan-out lane QA's obligation declares its lane report; a stale
+    v1 qa-report at the parent's unsuffixed path is nobody's here. The lane
+    passes on its own report; missing, it is blocked naming the declared path,
+    never the stale one; at any registry state (no agent-index entry)."""
+    session = "harness-r10-f3b"
+    agent_id = "agent-qa-r10-f3b"
+    task = "20260303-000000"
+    declared = f"docs/dev/qa-report-{task}-l1.json"
+    stale = f"docs/dev/qa-report-{task}.json"
+    project, home = _project_home(tmp_path)
+    _write_obligation_transcript(home, project, session, agent_id,
+                                 _obligation_block(f"{task}-l1", declared, "qa-report.v2"))
+    _write(project / stale, {"schema_version": "1.0", "task_id": task, "status": "fail"})
+
+    proc = _run_hook(project, home, agent_id, session_id=session)
+    assert proc.returncode == 2
+    assert declared in proc.stderr and stale not in proc.stderr
+    assert "no such file exists" in proc.stderr
+
+    _write(project / declared, _qa_report(f"{task}-l1", status="performed"))
+    proc = _run_hook(project, home, agent_id, session_id=session)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_r10_obligation_decides_alone_in_a_registered_session(tmp_path):
+    """An obligation-bearing QA registered under a session id of an overnight
+    id's form is still judged on its declared report."""
+    session = "harness-r10-noflag"
+    agent_id = "agent-qa-r10-noflag"
+    task = "20260404-000000"
+    declared = f"docs/dev/qa-report-{task}.json"
+    project, home = _project_home(tmp_path)
+    _register_agent(project, agent_id, "overnight-20260404-000000", "qa")
+    _write_obligation_transcript(home, project, session, agent_id,
+                                 _obligation_block(task, declared, "qa-report.v2"))
+    _write(project / declared, {"task_id": task, "qa": {"status": "pass"}})
+
+    proc = _run_hook(project, home, agent_id, session_id=session)
 
     assert proc.returncode == 2
-    report_path = project / "docs" / "dev" / f"qa-report-{task_id}.json"
-    assert proc.stderr == (
-        f"QA_REPORT_RESOLUTION: path={report_path} branch=session_ts_filename_match\n"
-        f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type=qa) in session "
-        f"{dev_session_id} has e2e_enforcement.status='skipped_without_justification'.\n"
-        f"blocking_reason: (none provided)\n"
-        f"E2E verification is required. Perform E2E testing and update "
-        f"e2e_enforcement.status to 'performed', 'legitimately_skipped', "
-        f"'blocked_app_unavailable', or 'ran' before stopping.\n"
-    )
+    assert str(project / declared) in proc.stderr
+    assert "has no e2e_enforcement field" in proc.stderr
 
 
-def test_ac5_registered_passing_status_exit0_unchanged(tmp_path):
-    """AC5: a REGISTERED qa agent with a passing status still exits 0."""
-    dev_session_id = "dev-20260303-000000"
-    agent_id = "agent-qa-r06-ac5-pass"
-    task_id = "20260303-000000"
+def test_r10_a_non_qa_stop_is_never_judged(tmp_path):
+    """The stopping agent's type decides: a dev whose transcript wrote a QA
+    report is not judged here."""
     project, home = _project_home(tmp_path)
-    _register_agent(project, agent_id, dev_session_id, "qa")
-    _enable_e2e_enforcement(project, dev_session_id)
-    _write(
-        project / ".claude" / "dev-registry" / dev_session_id / "qa.json",
-        {"agent_type": "qa", "session_id": dev_session_id},
-    )
-    _write(
-        project / "docs" / "dev" / f"qa-report-{task_id}.json",
-        _qa_report(task_id, status="performed"),
-    )
+    _register_agent(project, "agent-dev-r10", "dev-20260505-000000", "dev")
+    _write_qa_transcript(home, project, "harness-r10-dev", "agent-dev-r10", "dev work",
+                         ["docs/dev/qa-report-20260505-000000.json"])
+    _write(project / "docs" / "dev" / "qa-report-20260505-000000.json",
+           _qa_report("20260505-000000", status="skipped_without_justification"))
 
-    proc = _run_hook(project, home, agent_id)
+    proc = _run_hook(project, home, "agent-dev-r10", session_id="harness-r10-dev")
 
     assert proc.returncode == 0, proc.stderr
 
 
-def test_ac5_registered_path_never_consults_obligation_module(tmp_path, monkeypatch):
-    """AC5 (spy direction): _enforce_e2e_via_obligation (the fallback entry
-    point) is only ever reached from main() when resolve_dev_registry_entry()
-    returns None -- it is never called on the registered-agent path. Direct
-    unit check of that control-flow invariant, independent of subprocess
-    message assertions above."""
-    calls = []
-    monkeypatch.setattr(
-        HOOK, "_enforce_e2e_via_obligation", lambda *a, **k: calls.append((a, k))
-    )
-    monkeypatch.setattr(
-        HOOK,
-        "resolve_dev_registry_entry",
-        lambda *_a, **_k: {"agent_type": "qa", "dev_session_id": "dev-20260505-000000"},
-    )
-    dev_session_id = "dev-20260505-000000"
-    task_id = "20260505-000000"
-    project, home = _project_home(tmp_path)
-    _enable_e2e_enforcement(project, dev_session_id)
-    _write(
-        project / ".claude" / "dev-registry" / dev_session_id / "qa.json",
-        {"agent_type": "qa", "session_id": dev_session_id},
-    )
-    _write(
-        project / "docs" / "dev" / f"qa-report-{task_id}.json",
-        _qa_report(task_id, status="performed"),
-    )
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project))
-    monkeypatch.setattr(HOOK, "_load_stdin", lambda: {"agent_id": "agent-qa-r06-ac5-spy"})
-
-    with pytest.raises(SystemExit) as excinfo:
-        HOOK.main()
-
-    assert excinfo.value.code == 0
-    assert calls == []
+if __name__ == "__main__":
+    sys.exit(subprocess.run([sys.executable, "-m", "pytest", __file__, "-v"]).returncode)

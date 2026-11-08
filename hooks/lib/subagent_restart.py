@@ -16,11 +16,9 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import hashlib
 import json
 import os
 import re
-import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -111,6 +109,59 @@ TASK_NOTIFICATION_RE = re.compile(
 RECOVERY_STATUS_RE = re.compile(r"RECOVERY_STATUS:\s*(completed|quota_interrupted)\b")
 
 
+# The helper invocations commands/restart.md runs, which another command's
+# checklist (pretool-workflow-gate.py) may not hold back and the overnight write
+# boundary (pretool-overnight-hook-guard.py) runs with this module's journal
+# (state_dir, grant_dir) bound writable. Matched structurally against
+# the documented invocations only (no --session-id: commands/restart.md never passes it, so admitting it would
+# only widen attack surface for zero functional benefit), with shell
+# metacharacters rejected so this can never become a chaining bypass.
+# The two optional groups are positional, not bound to a subcommand: this
+# pattern admits either flag after any of the three subcommands, a
+# permissive superset of what the CLI accepts. argparse registers each flag
+# on its own subparser, so a combination this pattern admits but the CLI
+# does not (e.g. finalize --cross-account) exits non-zero there rather than
+# running. Enforcing the pairing here too would duplicate that authority in
+# a second place that could drift from it.
+_HARNESS_HOME = str(Path(os.path.abspath(__file__)).parents[2])  # install location
+_RESTART_HELPER_COMMAND_RE = re.compile(
+    r'^(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
+    r'/venv/bin/python3?\s+'
+    r'(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
+    r'/scripts/restart-subagents\.py\s+'
+    r'(?:prepare|status|finalize)'
+    r'(?:\s+--cross-account)?'
+    r'(?:\s+--wait-seconds\s+\d+)?'
+    r'\s*$'
+)
+_SHELL_METACHAR_RE = re.compile(r'[;&|`\n<>]|\$\(')
+_HOME_UNSAFE_RE = re.compile(r'[\s;&|`\n<>$]')
+
+
+def is_helper_invocation(data: dict) -> bool:
+    """True only for the exact, unchained /restart helper invocation.
+
+    The pattern's literal-$HOME alternative is only trustworthy if $HOME
+    itself expands to a single clean word when Bash actually runs the
+    command; a HOME value containing whitespace or shell metacharacters
+    would let that expansion smuggle in extra words or operators the regex
+    never saw. Fail closed (no bypass, ordinary gate enforcement applies)
+    whenever the resolved home directory looks unsafe.
+    """
+    if data.get('tool_name') != 'Bash':
+        return False
+    tool_input = data.get('tool_input') if isinstance(data.get('tool_input'), dict) else {}
+    command = tool_input.get('command')
+    if not isinstance(command, str):
+        return False
+    command = command.strip()
+    if not command or _SHELL_METACHAR_RE.search(command):
+        return False
+    if _HOME_UNSAFE_RE.search(str(Path.home())) or _HOME_UNSAFE_RE.search(_HARNESS_HOME):
+        return False
+    return bool(_RESTART_HELPER_COMMAND_RE.match(command))
+
+
 class RestartError(RuntimeError):
     """Expected fail-closed recovery error."""
 
@@ -184,6 +235,10 @@ def capability_token(session_id: str, grant: Any) -> str:
     if not isinstance(issued_at, str) or not issued_at:
         raise RestartError("restart grant carries no issue time to bind guidance to")
     material = "\n".join([str(SCHEMA_VERSION), GRANT_ISSUER, session_id, issued_at])
+    # Imported here, as tempfile is in _atomic_write_json: obligation imports
+    # this module in hooks that run at every tool call and use neither.
+    import hashlib
+
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
 
 
@@ -292,6 +347,8 @@ def _load_json(path: Path) -> dict[str, Any] | None:
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        import tempfile
+
         fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
         tmp = Path(tmp_name)
         try:
@@ -1009,7 +1066,7 @@ def prepare_state(
         for sibling in sibling_transcripts(project_dir, exclude=own_transcript):
             discovered.extend(discover_candidates(sibling))
     with _state_lock(sid):
-        old = _load_json(state_path(sid)) or {}
+        old = _read_state(sid) or {}
         old_items = {
             item.get("agent_id"): item
             for item in old.get("candidates", [])
@@ -1055,13 +1112,37 @@ def prepare_state(
     return status_view(state)
 
 
-def _load_state(session_id: str) -> dict[str, Any]:
-    sid = _safe_session_id(session_id)
+def _read_state(sid: str) -> dict[str, Any] | None:
+    """The one reader of the restart state: the record prepare wrote for this
+    session, or None when there is none (or it is another session's)."""
     state = _load_json(state_path(sid))
     if not state or state.get("schema_version") != SCHEMA_VERSION:
-        raise RestartError("restart state missing; run prepare first")
+        return None
     if state.get("parent_session_id") != sid:
-        raise RestartError("restart state session mismatch")
+        return None
+    return state
+
+
+def completed_resumes(session_id: str) -> dict[str, str]:
+    """{agent_id: tool_use_id of its original Agent call} of the agents this
+    session's recovery resumed and saw come back: the journal complete, every
+    response observed (what finalize requires). The capability is not read:
+    load_valid_grant is its one deciding rule; that the recovery was finalized
+    is its finalize call's own ok result in the transcript."""
+    try:
+        state = _read_state(session_id)
+    except RestartError:
+        return {}
+    if state is None or not status_view(state)["complete"]:
+        return {}
+    return {c["agent_id"]: str(c.get("tool_use_id")) for c in state.get("candidates", []) if isinstance(c, dict)}
+
+
+def _load_state(session_id: str) -> dict[str, Any]:
+    sid = _safe_session_id(session_id)
+    state = _read_state(sid)
+    if state is None:
+        raise RestartError("restart state missing; run prepare first")
     return state
 
 
@@ -1230,7 +1311,7 @@ def observe_subagent_stop(payload: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not isinstance(agent_id, str) or not AGENT_RE.fullmatch(agent_id):
         return None
-    if not state_path(sid).is_file():
+    if _read_state(sid) is None:
         return None
     last_message = payload.get("last_assistant_message")
     if not isinstance(last_message, str):

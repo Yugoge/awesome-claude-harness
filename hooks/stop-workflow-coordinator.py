@@ -18,6 +18,8 @@ are set nowhere by default (no SessionStart provisioning). Without both, only th
 run and session_resources.resolve_current_resource_session() must NOT be called: it
 raises when the trust authority is unconfigured, which would make that default state a
 permanent Stop block. Fail-closed finalization applies once a resource session exists.
+Then the timelock phase alone also gets both keys: it publishes the terminal receipt
+finalize reads, and that writer needs them (no other phase receives either key).
 """
 
 from __future__ import annotations
@@ -145,11 +147,7 @@ def _run_phase(
     phase_environment: Mapping[str, str],
 ) -> dict:
     child_env = {
-        **{
-            key: value
-            for key, value in phase_environment.items()
-            if key not in TRUST_ENVIRONMENT_KEYS
-        },
+        **phase_environment,
         "CLAUDE_PROJECT_DIR": str(project_dir),
         "LANEB_COORDINATED_STOP": "1",
     }
@@ -248,13 +246,6 @@ def run_coordinator(
             "phases": [],
             "finalizer_called": False,
         }, 2
-    if tuple(phase.name for phase in selected) != PHASE_ORDER:
-        return {
-            "status": "blocked",
-            "reason": "invalid_phase_order",
-            "phases": [],
-            "finalizer_called": False,
-        }, 2
     resource_broker_configured = bool(trust_environment.get(session_resources.TRUST_KEY_ENV)) and bool(
         trust_environment.get(session_resources.TRUST_ROOT_ENV)
     )
@@ -285,7 +276,11 @@ def run_coordinator(
             phase,
             raw_payload=raw_payload,
             project_dir=root,
-            phase_environment=phase_environment,
+            phase_environment=(
+                {**phase_environment, **trust_environment}
+                if phase.name == "timelock" and resource_session_id is not None
+                else phase_environment
+            ),
         )
         results.append(result)
         stderr = result.pop("_stderr", "")

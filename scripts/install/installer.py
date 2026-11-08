@@ -80,6 +80,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -945,6 +946,18 @@ def read_settings_document(target: Path) -> dict:
     return load_json_strict(target.read_text(encoding="utf-8"))
 
 
+def load_settings(ctx: Ctx, target: Path) -> tuple:
+    """The one load of a settings file, the source checkout's hooks/lib/claude_home.py
+    `settings` command: (object, None); (None, None) when absent; (None, reason) when unusable.
+    Run, not imported: the engine imports the stdlib only (R9), and plan and apply read the
+    source checkout already, for the payload."""
+    proc = subprocess.run([sys.executable, str(ctx.source / "hooks" / "lib" / "claude_home.py"),
+                           "settings", str(target)], capture_output=True, text=True)
+    if proc.returncode:
+        return None, proc.stderr.strip() or f"{target}: the settings load failed"
+    return (json.loads(proc.stdout) if proc.stdout else None), None
+
+
 def plan_settings(ctx: Ctx, target: Path, conflicts: list, state: dict) -> dict | None:
     groups = hook_groups(ctx.profile, ctx.bridge)
     rel = ctx.settings_rel
@@ -955,7 +968,13 @@ def plan_settings(ctx: Ctx, target: Path, conflicts: list, state: dict) -> dict 
                                     "modify a file outside the declared footprint. The "
                                     "user's version is retained and left untouched."})
         return None
-    if not target.exists():
+    settings, problem = load_settings(ctx, target)
+    if problem:
+        conflicts.append({"tree": "config_home", "path": rel,
+                          "change_kind": "conflict",
+                          "detail": f"{problem}; left untouched"})
+        return None
+    if settings is None:
         doc, contributions, observations, container_created = merge_settings(
             {}, groups, ctx.markers)
         content = settings_bytes(doc)
@@ -976,23 +995,8 @@ def plan_settings(ctx: Ctx, target: Path, conflicts: list, state: dict) -> dict 
         raise Refusal(
             f"{target}: {exc}\n"
             "  Resolve the duplicate key by hand, then re-run. Nothing was written.")
-    except (OSError, json.JSONDecodeError) as exc:
-        conflicts.append({"tree": "config_home", "path": rel,
-                          "change_kind": "conflict",
-                          "detail": f"unreadable/unparseable ({exc}); left untouched"})
-        return None
-    if not isinstance(existing, dict):
-        conflicts.append({"tree": "config_home", "path": rel,
-                          "change_kind": "conflict",
-                          "detail": "top level is not an object; left untouched"})
-        return None
-    try:
-        merged, contributions, observations, container_created = merge_settings(
-            existing, groups, ctx.markers)
-    except ValueError as exc:
-        conflicts.append({"tree": "config_home", "path": rel,
-                          "change_kind": "conflict", "detail": f"{exc}; left untouched"})
-        return None
+    merged, contributions, observations, container_created = merge_settings(
+        existing, groups, ctx.markers)
     observations = resolve_ownership(observations, state, ctx)
     pre_image = hashlib.sha256(raw).hexdigest()
     if not contributions:

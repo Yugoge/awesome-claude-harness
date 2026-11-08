@@ -151,6 +151,14 @@ def _phases(root: Path, outcome: str = "allow", target: str | None = None) -> li
     ]
 
 
+def _write_closeout(root: Path) -> None:
+    """The closeout the time-lock reads from disk after end_time (overnight.closeout_gaps):
+    Step 21's overnight summary."""
+    summary = root / "docs" / "dev" / "overnight-summary-2026-01-01.md"
+    summary.parent.mkdir(parents=True, exist_ok=True)
+    summary.write_text("done")
+
+
 def test_timelock_uses_exact_state_and_publishes_without_finalizing(
     tmp_path: Path,
 ) -> None:
@@ -162,18 +170,12 @@ def test_timelock_uses_exact_state_and_publishes_without_finalizing(
     scratch = Path(provisioned["scratch_path"])
     (scratch / "evidence").write_text("preserve")
     before = _tree_digest(scratch)
-    summary = root / "summary.md"
-    summary.write_text("done")
+    _write_closeout(root)
     state = {
         "session_id": sid,
         "dev_registry_session_id": binding["resource_session_id"],
         "cycle_count": 0,
         "end_time": (datetime.now() - timedelta(seconds=5)).isoformat(),
-        "final_summary_path": str(summary),
-        "pm_retro_reports": ["retro"],
-        "artifact_checkpoint_status": "checkpointed",
-        "current_issues": [],
-        "unresolved_issues": [],
     }
     state_path = root / ".claude" / f"overnight-state-{sid}.json"
     state_path.write_text(json.dumps(state))
@@ -193,6 +195,64 @@ def test_timelock_uses_exact_state_and_publishes_without_finalizing(
     )
     assert json.loads(receipt.read_text())["terminal_status"] == "completed_by_deadline"
     assert _tree_digest(scratch) == before
+
+
+def test_timelock_phase_receipt_meets_finalize_and_no_other_phase_gets_a_key(
+    tmp_path: Path,
+) -> None:
+    """Row 15 (acceptance 21): the registered time-lock, the one phase handed the
+    two trust keys, publishes the terminal receipt at a past end_time; finalize
+    reads it at that Stop and its own finalized.json at the next one, where the
+    receipt is not written again."""
+    root = tmp_path / "project"
+    root.mkdir()
+    sid = "claude-overnight"
+    binding = _binding("overnight", command="dev-overnight", session=sid)
+    provisioned = session_resources.provision(root, binding)
+    _write_closeout(root)
+    state = {
+        "session_id": sid,
+        "dev_registry_session_id": binding["resource_session_id"],
+        "cycle_count": 0,
+        "end_time": (datetime.now() - timedelta(seconds=5)).isoformat(),
+    }
+    (root / ".claude" / f"overnight-state-{sid}.json").write_text(json.dumps(state))
+    phase_list = [coordinator.Phase("timelock", (sys.executable, str(TIMELOCK)))]
+    for name in coordinator.PHASE_ORDER[1:]:
+        body = (
+            "import os\n"
+            f"pathlib.Path({str(root / f'{name}-keys.json')!r}).write_text(json.dumps(["
+            f"os.environ.get({session_resources.TRUST_KEY_ENV!r}),"
+            f"os.environ.get({session_resources.TRUST_ROOT_ENV!r})]))"
+        )
+        phase_list.append(
+            coordinator.Phase(name, (sys.executable, str(_phase_script(root, name, body))))
+        )
+    receipt = (
+        root / ".claude/session-resources" / binding["resource_session_id"] / "terminal.json"
+    )
+
+    def stop() -> tuple[dict, int]:
+        return coordinator.run_coordinator(
+            {"session_id": sid, "cwd": str(root)},
+            project_dir=root,
+            environment={**os.environ, "CLAUDE_PROJECT_DIR": str(root)},
+            phases=phase_list,
+        )
+
+    first, first_exit = stop()
+    assert first_exit == 0 and first["status"] == "pass", first
+    assert first["finalizer_called"] is True and first["finalizer"]["idempotent"] is False
+    assert json.loads(receipt.read_text())["terminal_status"] == "completed_by_deadline"
+    assert not Path(provisioned["scratch_path"]).exists()
+    written = receipt.read_bytes()
+
+    second, second_exit = stop()
+    assert second_exit == 0 and second["status"] == "pass", second
+    assert second["finalizer_called"] is True and second["finalizer"]["idempotent"] is True
+    assert receipt.read_bytes() == written
+    for name in coordinator.PHASE_ORDER[1:]:
+        assert json.loads((root / f"{name}-keys.json").read_text()) == [None, None]
 
 
 @pytest.mark.parametrize("outcome", ["block", "fail", "timeout", "invalid"])
@@ -426,12 +486,14 @@ def test_preflight_precedes_phases_and_finalizes_retained_exact_identity(
     assert trust_calls[0][1] is trust_calls[1][1]
     for name in coordinator.PHASE_ORDER:
         observed = json.loads((root / f"{name}-environment.json").read_text())
+        # Row 15: the timelock phase alone gets both keys, for the terminal receipt.
+        keys = trust_environment if name == "timelock" else {}
         assert observed == {
             "coordinated": "1",
-            "key": None,
+            "key": keys.get(session_resources.TRUST_KEY_ENV),
             "ordinary": "ordinary",
             "project": str(root),
-            "root": None,
+            "root": keys.get(session_resources.TRUST_ROOT_ENV),
             "visible": "retained",
         }
 
