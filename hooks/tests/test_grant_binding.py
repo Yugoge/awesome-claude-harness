@@ -321,6 +321,133 @@ def test_the_in_flight_message_file_widens_nothing_else(tmp_path):
         link.unlink()
 
 
+# -- in-flight compatibility: the registry entry 2acc29b's test-writer creates (train 2, A17) -----
+# COMPATIBILITY: these cases go with pretool-tool-policy.py's _check_inflight_entry_writes, once no
+# session predates train 2's landing. A session that took up origin/master's /dev text keeps its
+# test-writer dispatch (2acc29b commands/dev.md:799, D15), whose FIRST ACTION line is quoted below;
+# the train arms the registry with no sentinel in it (hooks/pretool-cp-checkin.py creates one at the
+# FIRST ACTION Read), so that test-writer may find its entry absent and create it. Here the project
+# and its armed registries exist; the session store is the CLI's (the dispatch record, the child's
+# first record and its meta).
+ENTRY_TASK, OTHER_TASK = "dev-20261108-150427", "dev-20261108-160000"
+MASTER_FIRST = ("FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/test-writer.json "
+                "(or create if absent with {agent_type:'test-writer', session_id:'<DEV_SESSION_ID>'}).")
+ENTRY_REFUSED = "only that test-writer writes it (D8, D24)"
+
+
+def _train_first() -> str:
+    """The FIRST ACTION line of this tree's test-writer dispatch (commands/dev.md Step 10)."""
+    text = (ROOT / "commands" / "dev.md").read_text(encoding="utf-8")
+    return next(l.strip() for l in text.splitlines() if "FIRST ACTION" in l and "/test-writer.json" in l)
+
+
+def _test_writer_prompt(first: str, task: str = ENTRY_TASK, named: str = ENTRY_TASK) -> str:
+    """A test-writer dispatch prompt as the orchestrator renders it: ``first`` with its registry
+    named for ``named``, and the obligation of cycle ``task`` (2acc29b commands/dev.md:799-819)."""
+    obligation = {"task_id": task, "lane": None, "lane_set": None, "role": "test-writer", "pipeline": "dev",
+                  "profile": "singular", "dispatched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "artifacts": [{"kind": "json", "path": f"docs/dev/test-writer-report-{task}.json",
+                                 "schema": "test-writer-report.v1", "identity": {"task_id": task}},
+                                {"kind": "json", "path": f"tests/generated/{task}/manifest.json",
+                                 "schema": "test-writer-manifest.v1", "identity": {"task_id": task}}]}
+    return (first.replace("<DEV_SESSION_ID>", named) + "\n\nYou are the test-writer subagent. Follow "
+            "agents/test-writer.md instructions precisely.\n\n<obligation v=\"1\">\n"
+            + json.dumps(obligation, indent=2) + "\n</obligation>\n\nInputs:\n  task_id: " + task + "\n")
+
+
+class _Cycle:
+    """A project whose cycles' registries are armed, and a session that dispatched subagents in it."""
+
+    def __init__(self, tmp_path: Path):
+        self.home, self.project = tmp_path / "home", tmp_path / "proj"
+        for task in (ENTRY_TASK, OTHER_TASK):
+            (self.project / ".claude" / "dev-registry" / task).mkdir(parents=True)
+        self.store = self.home / ".claude" / "projects" / "-inflight-entry"
+        (self.store / SID / "subagents").mkdir(parents=True)
+        self.session = self.store / f"{SID}.jsonl"
+        self.session.write_text(json.dumps({"type": "user", "message": {"role": "user", "content":
+                                "<command-name>/dev</command-name>\n<command-args>x</command-args>"}}) + "\n")
+
+    def entry(self, task: str = ENTRY_TASK, name: str = "test-writer") -> str:
+        return str(self.project / ".claude" / "dev-registry" / task / f"{name}.json")
+
+    def dispatch(self, prompt: str, subagent_type: str = "test-writer") -> str:
+        call, agent = "toolu_" + uuid.uuid4().hex[:20], "a" + uuid.uuid4().hex[:16]
+        with self.session.open("a") as fh:
+            fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": call, "name": "Agent", "input": {
+                    "description": "d", "prompt": prompt, "subagent_type": subagent_type}}]}}) + "\n")
+        sub = self.store / SID / "subagents"
+        (sub / f"agent-{agent}.jsonl").write_text(
+            json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n")
+        (sub / f"agent-{agent}.meta.json").write_text(json.dumps({"agentType": subagent_type, "toolUseId": call}))
+        return agent
+
+    def run(self, tool: str, tool_input: dict, role, agent: str | None = None):
+        payload = {"session_id": SID, "transcript_path": str(self.session), "cwd": str(self.project),
+                   "hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tool_input}
+        if role:
+            payload.update(agent_id=agent or "a" + uuid.uuid4().hex[:16], agent_type=role)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+        env.update(HOME=str(self.home), CLAUDE_CONFIG_DIR=str(self.home / ".claude"),
+                   CLAUDE_PROJECT_DIR=str(self.project), PYTHONDONTWRITEBYTECODE="1")
+        proc = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True,
+                              text=True, env=env, timeout=60)
+        return proc.returncode, proc.stderr
+
+
+def _entry_writes(path: str):
+    yield "Write", {"file_path": path, "content": "{}\n"}
+    yield "Bash", {"command": f"cat > {path} <<EOF\n{{}}\nEOF"}
+    yield "Edit", {"file_path": path, "old_string": "a", "new_string": "b"}
+
+
+def test_an_in_flight_test_writer_creates_its_own_cycles_registry_entry(tmp_path):
+    cycle = _Cycle(tmp_path)
+    agent = cycle.dispatch(_test_writer_prompt(MASTER_FIRST))
+    content = json.dumps({"agent_type": "test-writer", "session_id": ENTRY_TASK}) + "\n"
+    assert cycle.run("Write", {"file_path": cycle.entry(), "content": content}, "test-writer", agent) == (0, "")
+
+
+def test_the_in_flight_test_writer_writes_no_other_entry(tmp_path):
+    """Its own cycle's entry, by the Write tool, while absent, its dispatch naming that create: every
+    other write keeps its role row (another cycle's entry or another role's, the entry once the
+    hook created it, its Bash or Edit write, a dispatch from this tree's text, a prompt naming another
+    cycle's registry, an unarmed cycle)."""
+    cycle = _Cycle(tmp_path)
+    agent = cycle.dispatch(_test_writer_prompt(MASTER_FIRST))
+    write = {"content": "{}\n"}
+    for target in [cycle.entry(OTHER_TASK), cycle.entry(name="ba"), cycle.entry(name="dev"),
+                   cycle.entry(name="test-writer-2"), str(cycle.project / ".claude" / "dev-registry" / "test-writer.json")]:
+        denial = _denial(*cycle.run("Write", dict(write, file_path=target), "test-writer", agent))
+        assert denial["deny_reason"].endswith("not in allowed_write_path_prefixes"), target
+    for tool, tool_input in list(_entry_writes(cycle.entry()))[1:]:
+        assert ENTRY_REFUSED not in _denial(*cycle.run(tool, tool_input, "test-writer", agent))["deny_reason"], tool
+    for prompt, target in [(_test_writer_prompt(_train_first()), cycle.entry()),
+                           (_test_writer_prompt(MASTER_FIRST, named=OTHER_TASK), cycle.entry(OTHER_TASK)),
+                           (_test_writer_prompt(MASTER_FIRST, named=OTHER_TASK), cycle.entry()),
+                           (_test_writer_prompt(MASTER_FIRST, task="dev-20261108-170000",
+                                                named="dev-20261108-170000"), cycle.entry("dev-20261108-170000"))]:
+        denial = _denial(*cycle.run("Write", dict(write, file_path=target), "test-writer", cycle.dispatch(prompt)))
+        assert denial["deny_reason"].endswith("not in allowed_write_path_prefixes"), (prompt[:120], target)
+    Path(cycle.entry()).write_text("{}\n")  # the sentinel hooks/pretool-cp-checkin.py creates at a Read
+    denial = _denial(*cycle.run("Write", dict(write, file_path=cycle.entry()), "test-writer", agent))
+    assert denial["deny_reason"].endswith("not in allowed_write_path_prefixes")
+
+
+@pytest.mark.parametrize("caller", [MAIN, DEV, "qa", "ba", PLUGIN, "general-purpose"])
+def test_no_other_caller_writes_the_test_writer_entry(tmp_path, caller):
+    """Not the main agent, dev (whose row allows '*'), qa, BA, a plugin or built-in role; also when
+    it was dispatched with the in-flight test-writer's own prompt."""
+    cycle = _Cycle(tmp_path)
+    agent = cycle.dispatch(_test_writer_prompt(MASTER_FIRST), caller or "test-writer") if caller else None
+    for task in (ENTRY_TASK, OTHER_TASK):
+        for tool, tool_input in _entry_writes(cycle.entry(task)):
+            denial = _denial(*cycle.run(tool, tool_input, caller, agent))
+            assert denial["role"] == (caller or "main") and denial["target"] == cycle.entry(task), (tool, task)
+            assert denial["deny_reason"].endswith(ENTRY_REFUSED), denial
+
+
 @pytest.mark.parametrize("command", ["push", "merge"])
 def test_the_main_agents_push_and_merge_steps_pass(tmp_path, command):
     """The main agent's own Bash steps of /push and /merge (execute-push.py, merge.sh) write no grant."""

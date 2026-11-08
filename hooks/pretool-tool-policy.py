@@ -70,7 +70,10 @@ merge-analyst grants); a removal is no write (_check_grant_writes).
 In-flight compatibility (train 2, A17; D15), kept until no session predates
 train 2's landing: the commit message file 2acc29b's changelog-analyst text
 writes, /tmp/commit-msg-<name>.txt, is that analyst's own by the Write tool
-(its role's denials only) and no other caller's (_check_inflight_msg_writes).
+(its role's denials only) and no other caller's (_check_inflight_msg_writes);
+the test-writer entry 2acc29b's /dev text has its test-writer create in its
+own cycle's registry is that test-writer's own by the Write tool, its dispatch
+prompt naming the create, and no other caller's (_check_inflight_entry_writes).
 
 Behavior:
   - Every caller, first: a protected file's write, delete or rename, and a
@@ -710,6 +713,106 @@ def _check_inflight_msg_writes(role, tool_name: str, targets: list, data: dict) 
     sys.exit(2)
 
 
+# -- in-flight compatibility: the test-writer's registry entry (train 2, A17) --
+# COMPATIBILITY CODE, kept only until no running session predates train 2's
+# landing (D15); then this block, its call in main() and its tests
+# (hooks/tests/test_grant_binding.py, "in-flight compatibility") go.
+# 2acc29b's prompt-workflow.py wrote every role's sentinel into the registry
+# at the cycle's start, and its commands/dev.md:799 dispatches the test-writer
+# with "FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/
+# <DEV_SESSION_ID>/test-writer.json (or create if absent with {...})". Since
+# train 1 the registry is armed with no sentinel in it: hooks/pretool-cp-
+# checkin.py creates a role's sentinel right before its dispatch's FIRST
+# ACTION Read, its one producer (D24), and the text since names that Read
+# only. A session that took up master's /dev text before the landing still
+# dispatches that test-writer, which finds its entry absent and creates it.
+# Its role used to go unresolved at that first call, so no role row applied;
+# resolved from the CLI's agent_type (P6), its row refuses the Write. So the
+# test-writer's Write that creates <registry>/test-writer.json is its own when
+# the registry is that of the cycle its own dispatch belongs to (its
+# obligation's task id, obligation.registry_dir_for; armed: an existing
+# directory, not a link) and its dispatch prompt, as the session's dispatch
+# record holds it, tells it to create that very file:
+# its role's denials apply to it, not its allow prefixes or the scratch rule,
+# as to the message file above. No other caller, the main agent included,
+# writes a registry's test-writer.json, by any write tool or Bash write target
+# (D8). A subagent whose role does not resolve is left as before (LOW-10).
+_INFLIGHT_ENTRY_ROLE = "test-writer"
+_INFLIGHT_ENTRY_RE = re.compile(r"(?:^|/)\.claude/dev-registry/[^/]+/test-writer\.json\Z")
+_INFLIGHT_CREATE_RE = re.compile(r"^\s*FIRST ACTION:\s*Read\s+(\S+?)\s+\(or create if absent\b", re.M)
+_PROJECT_WORD_RE = re.compile(r"\$\{CLAUDE_PROJECT_DIR\}|\$CLAUDE_PROJECT_DIR\b|<PROJECT_ROOT>")
+
+
+def _inflight_entry(target: str) -> bool:
+    """Whether ``target`` names a registry's test-writer entry, as written or as it resolves."""
+    try:
+        real = str(_resolved(target))
+    except Exception:
+        real = ""
+    return any(p and _INFLIGHT_ENTRY_RE.search(p) for p in (os.path.normpath(target), real))
+
+
+def _own_inflight_entry(target: str, data: dict) -> bool:
+    """Whether the test-writer's Write of ``target`` creates the entry of its own
+    cycle's registry that its in-flight dispatch prompt tells it to create: its
+    dispatch is found as _grant_producer finds it (its first record and meta,
+    and the session's record of that call with that prompt), its cycle is its
+    obligation's task (obligation.registry_dir_for), whose registry exists."""
+    try:
+        from lib import command_span, declared_paths, obligation
+
+        if not os.path.isabs(target) or os.path.lexists(target):
+            return False
+        transcript = _session_transcript(data)
+        agent_transcript, meta = declared_paths._agent_files(transcript, data.get("agent_id"))
+        if agent_transcript is None:
+            return False
+        prompt = obligation.read_first_record_prompt(agent_transcript)
+        with open(meta) as fh:
+            named = json.load(fh).get("toolUseId")
+        if prompt is None or not isinstance(named, str) or not command_span._PLAIN_ID.match(named):
+            return False
+        record = _Record(transcript)
+        try:
+            call = record.find_call(named, prompt)
+        finally:
+            record.close()
+        parsed = obligation.parse_obligation(prompt)
+        own = parsed.obligation if isinstance(parsed, obligation.ParsedObligation) else {}
+        if (call is None or own.get("role") != _INFLIGHT_ENTRY_ROLE
+                or call.input.get("subagent_type") != _INFLIGHT_ENTRY_ROLE):
+            return False
+        project = str(_project_root())
+        registry = obligation.registry_dir_for(project, own.get("task_id"))
+        if registry is None or registry.is_symlink() or not registry.is_dir():
+            return False
+        entry = (registry / "test-writer.json").resolve(strict=False)
+        if _resolved(target) != entry:
+            return False
+        named_paths = (_PROJECT_WORD_RE.sub(lambda _m: project, m.group(1).strip("`'\""))
+                       for m in _INFLIGHT_CREATE_RE.finditer(prompt))
+        return any(_resolved(os.path.normpath(n)) == entry for n in named_paths)
+    except Exception:  # an unreadable dispatch record names no in-flight create: the role row decides
+        return False
+
+
+def _check_inflight_entry_writes(role, tool_name: str, targets: list, data: dict) -> set:
+    """Exit 2 when a caller other than the test-writer writes a registry's
+    test-writer entry; returns the in-flight test-writer's own create of it."""
+    writes = [t for t in _write_targets(tool_name, targets)
+              if isinstance(t, str) and t and "\x00" not in t and _inflight_entry(t)]
+    if not writes or (role is None and data.get("agent_id")):
+        return set()
+    if role == _INFLIGHT_ENTRY_ROLE:
+        return {t for t in writes if tool_name == "Write" and _own_inflight_entry(t, data)}
+    target = writes[0]
+    _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
+                f"write target {target} is a cycle's {_INFLIGHT_ENTRY_ROLE} registry entry, which "
+                "hooks/pretool-cp-checkin.py creates at its dispatch's FIRST ACTION Read; only that "
+                f"{_INFLIGHT_ENTRY_ROLE} writes it (D8, D24)")
+    sys.exit(2)
+
+
 def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> set:
     """Apply the derived write permission; exit 2 on another caller's write of
     a declared path. Returns the targets the caller itself declared."""
@@ -881,8 +984,9 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     owner's scratch directory from a sibling's and cannot deny a role holding
     a bare '*' grant. A target in ``own`` is a path the caller's own dispatch
     declared: the prefix layer applies only its denials to it. A target in
-    ``message_file`` is the in-flight analyst's message file (compatibility,
-    _check_inflight_msg_writes): only its role's denials apply to it.
+    ``message_file`` is the in-flight analyst's message file or the in-flight
+    test-writer's own registry entry (compatibility, _check_inflight_msg_writes,
+    _check_inflight_entry_writes): only its role's denials apply to it.
     """
     for idx, target in enumerate(targets):
         check_tool = tool_name
@@ -1085,6 +1189,7 @@ def main() -> None:
     own = _check_declared_writes(role, tool_name, targets, data)
     _check_grant_writes(role, tool_name, targets, data)
     message_file = _check_inflight_msg_writes(role, tool_name, targets, data)  # compatibility (A17)
+    message_file |= _check_inflight_entry_writes(role, tool_name, targets, data)  # compatibility (A17)
     from lib import policy_registry
 
     if not role or policy_registry.get_role_policy(role).get("_unknown_role"):
