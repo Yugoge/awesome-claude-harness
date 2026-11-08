@@ -45,8 +45,20 @@ Driver arguments (cli.py --arg K=V):
                              push-gate token exists: the base text's Step 1 aborts before the dispatch,
                              the working tree's push.sh refuses (exit 3) after execute-push.py spent the
                              grant. Not a variant: its relations are a subset of the plain push's.
+  token=owner                with after=none: the owner then runs the push-gate token's one writer for that
+                             commit in their terminal, as /commit's changelog-analyst runs it, so a usable
+                             token names HEAD, one commit ahead of the origin's branch
+  attack=detach|token|grant  P5 review H2: after Step 2 the main agent makes one of push.md's refusals true
+                             instead of going on, and ends its turn: `git checkout -q --detach`; an Edit of the
+                             push-gate token to `{}` (found and Read first; pretool-write-guard.sh refuses a
+                             Write over a file that exists); or a Write of a `blocked` grant for BRANCH at
+                             PRE_HEAD at Step 4's grant path. A hook's refusal of the call pauses it (the turn
+                             ends). A held Stop is answered by the next round the block names, the push
+                             itself: BRANCH checked out again where HEAD is no longer on it, then Steps 2-5
+                             (a fresh snapshot and REQUEST_ID), and the Stop again (next_round)
   session=same|later         /push typed in /commit's session (default) or a later one
-  detached=1                 the owner detaches HEAD in their terminal before typing /push
+  detached=1                 the owner detaches HEAD in their terminal (on the owner's clock, as their commit)
+                             before typing /push
   remote=<name>, auto=1      the typed arguments of /push
   statedir=respelled|strict  how Step 5 runs on a text whose sentinel path is a literal directory
                              (see "State dir" below; default respelled)
@@ -78,9 +90,9 @@ Deviations: none (DEVIATIONS stays empty). A block pauses the agent that met it 
 Discipline): the main agent ends its turn reporting the hook and its text; a paused push-analyst writes
 no grant, so Step 5's execute-push.py finds none.
 
-Not replayed: a push to a `fork` remote, a blocked verdict, an expired grant and a token whose commit
-left HEAD's history: each takes fewer relations than the plain push (no sentinel, no push, no token
-spent) and a refused grant or token is a fault P1c injects at the step it names.
+Not replayed: a push to a `fork` remote, the push-analyst's own blocked verdict, an expired grant and a
+token whose commit left HEAD's history: each takes fewer relations than the plain push (no sentinel, no
+push, no token spent) and a refused grant or token is a fault P1c injects at the step it names.
 """
 from __future__ import annotations
 
@@ -92,7 +104,7 @@ import shlex
 import subprocess
 from datetime import datetime, timezone
 
-from .. import agents, cmdtext
+from .. import agents, cmdtext, hookrun
 from ..pipeline import _ASSIGN_RE, Deviations, Orchestrator, Respelling
 from . import close as closedrv
 from . import merge as mergedrv
@@ -178,8 +190,8 @@ class PushRun:
     """One /push turn of the main agent (Steps 0-5) with the push-analyst it dispatches."""
 
     def __init__(self, rp, session=None, devs: Deviations | None = None, args: str = "",
-                 state_mode: str = "respelled", tag: str = "/push"):
-        self.rp, self.args, self.tag = rp, args, tag
+                 state_mode: str = "respelled", tag: str = "/push", attack: str = ""):
+        self.rp, self.args, self.tag, self.state_mode, self.attack = rp, args, tag, state_mode, attack
         self.devs = closedrv.kept_only(rp, devs or DEVIATIONS)
         rp.deviation_at = self.devs.at  # the analyst's own calls take the same deviations by label
         self.o = Orchestrator(rp, "push", session=session, deviations=self.devs, rules=self._rules())
@@ -227,9 +239,14 @@ class PushRun:
                            "commands/push.md Step 5 (:214, :222-236 at 2acc29b): the sentinel directory the text "
                            "names, which execute-push.py writes and push.sh reads only through CLAUDE_STATE_DIR")]
 
-    def say_stop(self, text: str) -> None:
+    def say_stop(self, text: str, on_block=None) -> None:
         self.outcome = text
-        self.stop_ev = self.o.s.stop(text, label=self.label("Stop"), deviation=self.devs.at(self.label("Stop")))
+        self.stop_ev = self.o.s.stop(text, label=self.label("Stop"), deviation=self.devs.at(self.label("Stop")),
+                                     on_block=on_block)
+
+    def end(self, text: str) -> None:
+        """The text the turn ends with: a step that refuses ends the steps, and the Stop follows."""
+        self.outcome = text
 
     def refuse(self, heading: str, anchor: str, facts: str = "") -> bool:
         """The refusal asked once (merge.ask_refusal); True when the owner picked its named action."""
@@ -299,8 +316,8 @@ class PushRun:
         closedrv.fact(self.rp, "push step 1", {"candidates": [self.rp.norm_text(p) for p in cands],
                                                "accepted": self.rp.norm_text(ok)})
         if not ok:
-            self.say_stop(f"/push aborted: no push-gate token under {tdir} names an ancestor of HEAD. "
-                          "Run /commit (in any session) first.")
+            self.end(f"/push aborted: no push-gate token under {tdir} names an ancestor of HEAD. "
+                     "Run /commit (in any session) first.")
         return bool(ok)
 
     # ------------------------------------------------------------ Step 2
@@ -311,13 +328,13 @@ class PushRun:
         self.rp.rand(self.o.values.get("REQUEST_ID"))
         if self.o.values.get("BRANCH") == "HEAD":
             self.refuse("Step 2", "If `BRANCH` is `HEAD`")
-            self.say_stop("/push: HEAD is detached; nothing pushed until the branch to push is checked out.")
+            self.end("/push: HEAD is detached; nothing pushed until the branch to push is checked out.")
             return False
         if not self.o.values.get("SESSION_ID"):
             if self.refuse("Step 2", "If `SESSION_ID` is"):
                 self.captured(block, self.label("Step 2 Bash snapshot again"), "Step 2: pre-push snapshot", names)
             if not self.o.values.get("SESSION_ID"):
-                self.say_stop("/push: still no session id after your answer; nothing pushed.")
+                self.end("/push: still no session id after your answer; nothing pushed.")
                 return False
         return True
 
@@ -370,40 +387,106 @@ class PushRun:
 
     # ------------------------------------------------------------ the turn
     def run(self) -> str:
+        held = self.next_round if self.attack else None
         try:
-            return self.turn()
+            text = self.turn()
         except mergedrv.Paused as p:
-            self.say_stop(f"PAUSE: {p}. Pausing per the Subagent Hook Discipline: the refused operation is not "
-                          "retried, wrapped or bypassed; it needs a human ruling.")
             closedrv.fact(self.rp, "push paused", str(p))
-            return self.outcome
+            text = (f"PAUSE: {p}. Pausing per the Subagent Hook Discipline: the refused operation is not "
+                    "retried, wrapped or bypassed; it needs a human ruling.")
+        self.say_stop(text, on_block=held)
+        return self.outcome
 
     def turn(self) -> str:
         self.before = origin_state(self.rp)
         self.o.slash(self.args, label=self.label("typed"))
+        return self.protocol()
+
+    def protocol(self) -> str:
+        """Steps 0-5 of the dispatch protocol: the text the turn ends with."""
         self.step0()
-        if not self.step1():
+        if not self.step1() or not self.step2():
             return self.outcome
-        if not self.step2():
-            return self.outcome
+        if self.attack:
+            return self.attack_now()
+        return self.dispatch_and_push()
+
+    def dispatch_and_push(self) -> str:
+        """Steps 3-5 on Step 2's snapshot: the text the turn ends with."""
         self.step3()
         # Step 4: execute-push.py is the grant's validator and consumer; the orchestrator reads nothing.
         c, rc, pushed, out = self.step5()
         v = self.o.values
         if pushed:
-            text = f"Pushed {v.get('BRANCH')} to {v.get('RESOLVED_REMOTE')}.\n" + "\n".join(
+            return f"Pushed {v.get('BRANCH')} to {v.get('RESOLVED_REMOTE')}.\n" + "\n".join(
                 l for l in out.split("\n") if l.strip().startswith(("•", "Remote URL")))
+        if rc == 3:
+            self.refuse("Step 5", "exit 3, no push-gate token", out[-800:])
+        elif "push BLOCKED by push-analyst" in out:
+            self.refuse("Step 5", "Its refusals:", out[-800:])
+        meaning = {1: "detached HEAD, missing remote, a refused grant or sentinel, or a failed push",
+                   2: "a blocked option or an infrastructure failure",
+                   3: "no push-gate token names an ancestor of HEAD: run /commit (in any session) first"}
+        return f"/push did not push (exit {rc}: {meaning.get(rc, 'see the output')}).\n{out[-800:]}"
+
+    # ------------------------------------------------------------ P5 review H2: a refusal made true
+    STATE_DIR = 'STATE_DIR=$(. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh" && harness_state_dir)'
+
+    def attack_now(self) -> str:
+        """After Step 2, the main agent makes one of push.md's refusals true itself and ends its turn:
+        HEAD detached, the push-gate token Edited to `{}`, or a `blocked` grant Written for BRANCH at
+        PRE_HEAD at Step 4's path. A hook's refusal of a call pauses the turn (check)."""
+        o, v, kind = self.o, self.o.values, self.attack
+        lab = self.label(f"attack {kind}")
+        if kind == "detach":
+            c = o.run("git checkout -q --detach", "detach HEAD", lab + " Bash")
+            closedrv.fact(self.rp, "push attack", {"attack": kind, "refused": c.blocked})
+            self.check(c)
+            return "/push: HEAD detached; nothing pushed."
+        if kind == "token":  # the state dir and the scan of push.md's READ side, in one call
+            name = v.get("BRANCH", "").replace("/", "__") + ".json"
+            c = self.check(o.run(f'{self.STATE_DIR}\nfind "$STATE_DIR/agentic-commit/push/{v.get("REPO_HASH")}" '
+                                 f"-maxdepth 2 -type f -name {shlex.quote(name)}", "the push-gate token", lab + " Bash find"))
+            path = next((l.strip() for l in (c.response.get("stdout") or "").split("\n") if l.strip()), "")
+            if not path:
+                raise agents.PlayError("attack token: no push-gate token found")
+            self.check(o.s.read(path, label=lab + " Read"))
+            w = o.s.edit(path, agents.peek(self.rp, "main", path), "{}", label=lab + " Edit")
         else:
-            if rc == 3:
-                self.refuse("Step 5", "exit 3, no push-gate token", out[-800:])
-            elif "push BLOCKED by push-analyst" in out:
-                self.refuse("Step 5", "Its refusals:", out[-800:])
-            meaning = {1: "detached HEAD, missing remote, a refused grant or sentinel, or a failed push",
-                       2: "a blocked option or an infrastructure failure",
-                       3: "no push-gate token names an ancestor of HEAD: run /commit (in any session) first"}
-            text = f"/push did not push (exit {rc}: {meaning.get(rc, 'see the output')}).\n{out[-800:]}"
-        self.say_stop(text)
-        return self.outcome
+            self.check(o.run(self.STATE_DIR, "the state dir", lab + " Bash state dir", capture=("STATE_DIR",)))
+            path = (f"{o.values.get('STATE_DIR', '')}/agentic-commit/push-analyst/{v.get('REPO_HASH')}/"
+                    f"{v.get('SESSION_ID')}/{v.get('REQUEST_ID')}.json")
+            w = o.s.write(path, json.dumps({"verdict": "blocked", "branch": v.get("BRANCH"), "head_sha": v.get("PRE_HEAD")}),
+                          label=lab + " Write")
+        closedrv.fact(self.rp, "push attack", {"attack": kind, "path": self.rp.norm_text(path), "refused": w.blocked,
+                                               "hooks": [b["hook"] for b in (w.pre.blocks if w.pre else [])]})
+        self.check(w)
+        return f"/push: {'the push-gate token emptied' if kind == 'token' else 'a blocked grant written'}; nothing pushed."
+
+    def next_round(self, s, ev) -> bool:
+        """A held Stop's next round (stop_hook_active): where the block is the /push gate's and names
+        BRANCH's commit as unpublished, the push itself: BRANCH checked out again where HEAD is no longer
+        on it (the action Step 2's refusal names), then Steps 2-5 (Step 0's remote kept: the orchestrator
+        gate refuses a sixth Bash call in a row, and only a dispatch clears the run), and the Stop again."""
+        text = "\n".join(hookrun.refusal(b) for b in ev.blocks)
+        v = self.o.values
+        branch = v.get("BRANCH", "")
+        closedrv.fact(self.rp, "push held", {"hooks": [b["hook"] for b in ev.blocks], "text": self.rp.norm_text(text)[:800]})
+        named = re.search(r"^- push: (\S+) at ([0-9a-f]{40,64}) is not published", text, re.M)
+        if "COMMAND_GATE /push" not in text or not named or named.group(1) != branch:
+            return False
+        nxt = PushRun(self.rp, s, args=self.args, state_mode=self.state_mode, tag="/push next round")
+        nxt.before, nxt.o.values = self.before, dict(v)
+        try:
+            b = shlex.quote(branch)
+            nxt.check(nxt.o.run(f'[ "$(git branch --show-current)" = {b} ] || git checkout -q {b}',
+                                "check out the branch to push", nxt.label("Bash checkout")))
+            out = nxt.dispatch_and_push() if nxt.step2() else nxt.outcome
+        except mergedrv.Paused as p:
+            closedrv.fact(self.rp, "push paused", str(p))
+            out = f"PAUSE: {p}."
+        s.say(out)
+        return True
 
 
 class Analyst(mergedrv.Analyst):
@@ -568,6 +651,20 @@ def owner_commit(rp) -> None:
         mergedrv._owner_git(p, "commit", "-qam", "docs: say what toy does", date="2026-01-01T00:02:00+0000")
 
 
+def owner_token(rp) -> None:
+    """After owner_commit, in the owner's terminal: the push-gate token's one writer for that commit, as
+    /commit's changelog-analyst runs it (no session id in the owner's shell: its `unknown` slot)."""
+    p = rp.layout.project
+    with rp.acting("owner"):
+        branch, head = mergedrv._owner_git(p, "branch", "--show-current"), mergedrv._owner_git(p, "rev-parse", "HEAD")
+        env = {k: v for k, v in rp.bash_env.items() if k not in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID")}
+        done = subprocess.run(["python3", os.path.join(rp.layout.harness, "scripts", "write-push-gate-token.py"),
+                               "--repo-root", p, "--branch", branch, "--commit", head],
+                              capture_output=True, text=True, env=env)
+        if done.returncode:
+            raise RuntimeError(f"owner write-push-gate-token.py: exit {done.returncode}: {done.stderr.strip()}")
+
+
 def _facts(rp) -> list:
     try:
         with open(os.path.join(rp.layout.out, "facts.json")) as fh:
@@ -584,12 +681,20 @@ def run(rp) -> None:
     state_mode = rp.args.get("statedir", "respelled")
     if state_mode not in ("respelled", "strict"):
         raise ValueError(f"statedir must be respelled or strict, not {state_mode!r}")
+    token, attack = rp.args.get("token", ""), rp.args.get("attack", "")
+    if token not in ("", "owner") or (token and after != "none"):
+        raise ValueError(f"token must be owner, with after=none, not {token!r}")
+    if attack not in ("", "detach", "token", "grant"):
+        raise ValueError(f"attack must be detach, token or grant, not {attack!r}")
     typed = " ".join(x for x in (rp.args.get("remote", ""), "--auto" if rp.args.get("auto") else "") if x)
-    rp.pipeline = (("push/no-token" if after == "none" else f"{after}+close+commit+push")
+    rp.pipeline = ((("push/owner-token" if token else "push/no-token") if after == "none"
+                    else f"{after}+close+commit+push")
                    + ("/later" if session_kind == "later" and after != "none" else "")
-                   + ("/statedir-strict" if state_mode == "strict" else ""))
+                   + ("/statedir-strict" if state_mode == "strict" else "") + (f"/attack-{attack}" if attack else ""))
     if after == "none":
         owner_commit(rp)
+        if token:
+            owner_token(rp)
         s = rp.session()
         closedrv.fact(rp, "before /push", {"owner commit": True, "toy": origin_state(rp), "left": leftovers(rp)})
     else:
@@ -597,11 +702,11 @@ def run(rp) -> None:
         closedrv.fact(rp, "before /push", {"commit_status": cm.status.get("commit_status"),
                                            "landed": [(rp.norm_text(r), sha) for r, sha in cm.landed],
                                            "toy": origin_state(rp), "left": leftovers(rp)})
-    if rp.args.get("detached"):
+    if rp.args.get("detached"):  # git's record dates it on the owner's clock, as owner_commit's commit
         with rp.acting("owner"):
-            mergedrv._owner_git(rp.layout.project, "checkout", "-q", "--detach")
+            mergedrv._owner_git(rp.layout.project, "checkout", "-q", "--detach", date="2026-01-01T00:03:00+0000")
     session = rp.later_session(s) if session_kind == "later" else s
-    pr = PushRun(rp, session, args=typed, state_mode=state_mode)
+    pr = PushRun(rp, session, args=typed, state_mode=state_mode, attack=attack)
     pr.run()
     pushed = [f["value"] for f in _facts(rp) if f.get("key") == "push"]
     rp.terminal("push", bool(pushed) and bool(pushed[-1].get("pushed")), getattr(pr, "stop_ev", None))

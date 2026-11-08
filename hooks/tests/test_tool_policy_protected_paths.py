@@ -5,9 +5,13 @@ subagent alike, a write, delete or rename of the harness home's settings.machine
 private-literals.txt, scripts/check-public-core.sh, scripts/install/render-settings,
 hooks/git-hooks/pre-commit, .git/config, .git/hooks/ and .gitattributes; of a session transcript
 (``${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/**/*.jsonl``) and the agent meta beside it; and of a
-/do task sidecar (``claude-do-task-*.json`` in the state dir). A product repository's files of the
-same names, the graphify sidecars and every other path stay writable. Deleting or renaming a
-directory that holds one counts: under the projects tree, a directory holding a transcript or meta.
+/do task sidecar (``claude-do-task-*.json`` in the state dir); and of what the /push Stop reads (P5
+review H2): the push-gate token tree (``<state dir>/agentic-commit/push/``, whose one writer is a
+script no tool call shows) and a push-analyst grant, which only the push-analyst subagent whose own
+dispatch, made from commands/push.md's Step 3 template, binds that grant's path writes. A product
+repository's files of the same names, the graphify sidecars and every other path stay writable.
+Deleting or renaming a directory that holds one counts: under the projects tree, a directory holding
+a transcript or meta; in the state dir, one holding a token or a grant.
 A ScheduleWakeup prompt that types a harness command outside CONTROL is refused; a CronCreate
 prompt's fired record is measured (P1's COV-7) and excluded from the human's prompts, so it is not.
 
@@ -34,7 +38,7 @@ CALLERS = {"main": None, "dev": ("a0dev", "dev"), "ba": ("a0ba", "ba")}
 PRODUCT = "/nonexistent-p5-protected-paths/product"
 
 
-def run(tmp_path, tool: str, tool_input: dict, caller=None, state: bool = True, cwd=None):
+def run(tmp_path, tool: str, tool_input: dict, caller=None, state: bool | str = True, cwd=None):
     home = tmp_path / "home"
     payload = {"session_id": SID, "transcript_path": str(home / ".claude" / "projects" / "-p" / f"{SID}.jsonl"),
                "cwd": str(cwd or PRODUCT), "hook_event_name": "PreToolUse", "tool_name": tool,
@@ -45,7 +49,7 @@ def run(tmp_path, tool: str, tool_input: dict, caller=None, state: bool = True, 
     env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), CLAUDE_PROJECT_DIR=PRODUCT,
                PYTHONDONTWRITEBYTECODE="1")
     if state:
-        env["CLAUDE_STATE_DIR"] = str(tmp_path / "state")
+        env["CLAUDE_STATE_DIR"] = state if isinstance(state, str) else str(tmp_path / "state")
     return subprocess.run([sys.executable, HOOK], input=json.dumps(payload), capture_output=True, text=True,
                           cwd=str(tmp_path), env=env, timeout=60)
 
@@ -223,3 +227,100 @@ def test_the_overnight_wake_prompt_is_never_denied(tmp_path):
     wake = _wake_prompt() or "carry on with the checklist"  # lib.overnight's own text once it holds one
     for tool in ("ScheduleWakeup", "CronCreate"):
         assert run(tmp_path, tool, {"cron": "3 * * * *", "prompt": wake, "recurring": True}).returncode == 0
+
+
+# ---------------------------------------------------------------- what the /push Stop reads (P5 review H2)
+REPO_HASH, REQUEST = "0123456789abcdef", "ab" * 16
+TOKEN = "a push-gate token, whose one writer is scripts/write-push-gate-token.py"
+GRANT = "a push-analyst grant, which only the push-analyst dispatched for its request writes"
+# A state dir outside /tmp and /var/tmp, where the push-analyst's role rows let it write its grant; never created.
+STATE = "/nonexistent-p5-protected-paths/state"
+
+
+def push_inputs(state: str) -> dict:
+    base = os.path.join(state, "agentic-commit")
+    return {"token": (os.path.join(base, "push", REPO_HASH, "fedcba9876543210", "topic.json"), TOKEN),
+            "legacy token": (os.path.join(base, "push", REPO_HASH, "topic.json"), TOKEN),
+            "grant": (os.path.join(base, "push-analyst", REPO_HASH, SID, REQUEST + ".json"), GRANT)}
+
+
+@pytest.mark.parametrize("caller", list(CALLERS) + ["push-analyst"])
+@pytest.mark.parametrize("form", ["Write", "Edit", "echo", "rm", "mv", "mv-in"])
+@pytest.mark.parametrize("name", ["token", "legacy token", "grant"])
+def test_h2_the_push_stops_inputs_are_denied_to_every_caller_without_their_dispatch(tmp_path, caller, form, name):
+    """The main agent, any subagent, and a push-analyst whose session records no dispatch of it."""
+    path, what = push_inputs(STATE)[name]
+    who = ("a0pa", "push-analyst") if caller == "push-analyst" else CALLERS[caller]
+    assert_denied(run(tmp_path, *forms(path)[form], who, state=STATE), what)
+
+
+def push_session(tmp_path, subagent_type: str = "push-analyst") -> str:
+    """commands/push.md Step 3's dispatch, its placeholders bound and its obligation instantiated, in the
+    session transcript, and the child the CLI starts for it (its first record and meta); its agent id."""
+    text = open(os.path.join(ROOT, "commands", "push.md"), encoding="utf-8").read()
+    fence = next(b for b in re.findall(r"^```[^\n]*\n(.*?)^```", text, re.M | re.S) if "REQUEST_ID=<REQUEST_ID>" in b)
+    fence = re.sub(r'"<ISO-8601 UTC ending in Z[^"]*>"', '"2026-11-08T07:00:00Z"', fence)
+    values = {"BRANCH": "topic", "PRE_HEAD": "1" * 40, "RESOLVED_REMOTE": "origin", "REMOTE_URL": "/elsewhere/o.git",
+              "REQUEST_ID": REQUEST, "SESSION_ID": SID, "REPO_HASH": REPO_HASH}
+    prompt = re.sub(r"<([A-Z_]+)>", lambda m: values[m[1]], fence).strip()
+    project = tmp_path / "home" / ".claude" / "projects" / "-p"
+    (project / SID / "subagents").mkdir(parents=True)
+    call, agent = "toolu_h2push0001", "a0pa"
+    with open(project / f"{SID}.jsonl", "w") as fh:
+        fh.write(json.dumps({"type": "user", "message": {"role": "user", "content":
+                 "<command-name>/push</command-name>\n<command-args></command-args>"}}) + "\n")
+        fh.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": call, "name": "Agent", "input": {
+                "description": "pre-push analysis", "prompt": prompt, "subagent_type": subagent_type}}]}}) + "\n")
+    (project / SID / "subagents" / f"agent-{agent}.jsonl").write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n")
+    (project / SID / "subagents" / f"agent-{agent}.meta.json").write_text(
+        json.dumps({"agentType": subagent_type, "toolUseId": call}))
+    return agent
+
+
+def test_h2_the_push_analyst_writes_the_grant_its_own_dispatch_binds_and_nothing_else(tmp_path):
+    """Its own dispatch binds the grant's repository hash, session and request id: that grant, and no
+    other path of the two trees. The chain-B sentinel and the merge-analyst's grant (no /push Stop
+    input), a state dir holding no token or grant, and the token's one writer, whose own write no tool
+    call shows, stay allowed."""
+    agent = push_session(tmp_path)
+    grant, _ = push_inputs(STATE)["grant"]
+    me = (agent, "push-analyst")
+    proc = run(tmp_path, "Write", {"file_path": grant, "content": "{}"}, me, state=STATE)
+    assert proc.returncode == 0 and "D11/D12" not in proc.stderr, proc.stderr
+    other = os.path.join(os.path.dirname(grant), "cd" * 16 + ".json")  # another request's grant
+    assert_denied(run(tmp_path, "Write", {"file_path": other, "content": "{}"}, me, state=STATE), GRANT)
+    assert_denied(run(tmp_path, "Bash", {"command": f"rm -f {grant}"}, me, state=STATE), GRANT)
+    assert_denied(run(tmp_path, *forms(push_inputs(STATE)["token"][0])["Write"], me, state=STATE), TOKEN)
+    assert_denied(run(tmp_path, "Write", {"file_path": grant, "content": "{}"}, None, state=STATE), GRANT)
+    base = tmp_path / "state" / "agentic-commit"
+    (base / "merge-analyst" / REPO_HASH / SID).mkdir(parents=True)
+    for path in (str(base / "push-analyst" / REPO_HASH / "topic-chainB.validated.sentinel.json"),
+                 str(base / "merge-analyst" / REPO_HASH / SID / (REQUEST + ".json"))):
+        assert "D11/D12" not in run(tmp_path, "Write", {"file_path": path, "content": "{}"}).stderr
+    assert "D11/D12" not in run(tmp_path, "Bash", {"command": f"rm -rf {base}/merge-analyst"}).stderr
+    writer = os.path.join(ROOT, "scripts", "write-push-gate-token.py")
+    proc = run(tmp_path, "Bash", {"command": f'python3 "{writer}" --repo-root "{PRODUCT}" --branch topic --commit '
+                                             f'{"1" * 40}'})
+    assert proc.returncode == 0 and "D11/D12" not in proc.stderr, proc.stderr
+
+
+def test_h2_a_subagent_of_another_type_given_the_same_prompt_is_no_producer(tmp_path):
+    agent = push_session(tmp_path, subagent_type="general-purpose")
+    grant, _ = push_inputs(STATE)["grant"]
+    assert_denied(run(tmp_path, "Write", {"file_path": grant, "content": "{}"}, (agent, "general-purpose"),
+                      state=STATE), GRANT)
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf {state}", "rm -rf {state}/agentic-commit", "rm -rf $CLAUDE_STATE_DIR/agentic-commit/push",
+    "mv {state}/agentic-commit/push-analyst/{repo} /elsewhere/x", "rm -r {state}/agentic-commit/push/{repo}/"])
+def test_h2_a_directory_holding_a_token_or_a_grant_is_denied(tmp_path, command):
+    state = tmp_path / "state"
+    for path, _ in push_inputs(str(state)).values():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").write("{}")
+    proc = run(tmp_path, "Bash", {"command": command.format(state=state, repo=REPO_HASH)}, CALLERS["dev"])
+    assert proc.returncode == 2 and "(D11/D12)" in proc.stderr, proc.stderr
+    assert all(os.path.isfile(p) for p, _ in push_inputs(str(state)).values())

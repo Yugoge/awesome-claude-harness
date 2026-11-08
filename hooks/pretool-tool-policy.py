@@ -812,8 +812,10 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
 # No caller, /do or not, writes, deletes or renames a file the settings filter,
 # the commit checks or a Stop decision reads. The harness home's are its own
 # (a product repository's of the same names stay writable); a transcript's
-# agent meta counts with it, since the derived permission above reads it.
-# What a script or interpreter writes is not seen.
+# agent meta counts with it, since the derived permission above reads it; the
+# /push Stop's push-gate token and push-analyst grant count too (review H2),
+# the grant's own producer's Write of it aside. What a script or interpreter
+# writes is not seen.
 _HOME_PROTECTED = ("settings.machine.json", "private-literals.txt", "scripts/check-public-core.sh",
                    "scripts/install/render-settings", "hooks/git-hooks/pre-commit", ".git/config",
                    ".git/hooks", ".gitattributes")
@@ -829,10 +831,28 @@ def _below(path: str, root) -> str | None:
     return None
 
 
+_GRANT = "a push-analyst grant, which only the push-analyst dispatched for its request writes"
+
+
+def _push_input(path: str, state: str) -> str | None:
+    """What the /push Stop reads at ``path``, else None: a file of the push-gate
+    token tree (the token's one writer, scripts/write-push-gate-token.py, writes
+    it from no tool call this hook sees), or a push-analyst grant
+    (<grant tree>/<repo hash>/<session>/<request>.json, merge_grant's path rule)."""
+    rel = _below(path, os.path.join(state, "agentic-commit"))
+    parts = rel.split(os.sep) if rel else []
+    if parts[:1] == ["push"] and len(parts) > 1:
+        return "a push-gate token, whose one writer is scripts/write-push-gate-token.py"
+    if parts[:1] == ["push-analyst"] and len(parts) == 4 and parts[3].endswith(".json"):
+        return _GRANT
+    return None
+
+
 def _protected(path: str, removed: bool, home, config: str, state: str) -> str | None:
     """What protected file absolute ``path`` is, else None; deleting or
     renaming (``removed``) a directory takes the protected files beneath it:
-    the harness home's by name, the projects tree's as the directory holds them."""
+    the harness home's by name, the projects tree's and the /push inputs' as
+    the directory holds them."""
     from fnmatch import fnmatchcase
 
     def kept(name: str) -> bool:  # a transcript or agent meta, below ``config``
@@ -845,11 +865,55 @@ def _protected(path: str, removed: bool, home, config: str, state: str) -> str |
         return "a session transcript or its subagent meta"
     if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
         return "a /do task sidecar"
+    push = _push_input(path, state)
+    if push:
+        return push
     held = [os.path.join(home, p) for p in _HOME_PROTECTED] if home else []
     if removed and (any(_below(p, path) for p in held + [config])
                     or (_below(path, config) and any(kept(n) for _, _, names in os.walk(path) for n in names))):
         return "a directory holding the harness home's protected files or the session transcripts"
+    inputs = os.path.join(state, "agentic-commit")  # walked from the deeper of it and the removed directory
+    walked = path if _below(path, inputs) else inputs if removed and _below(inputs, path) else None
+    if removed and walked and any(_push_input(os.path.join(d, n), state) for d, _, names in os.walk(walked)
+                                  for n in names):
+        return "a directory holding a push-gate token or a push-analyst grant"
     return None
+
+
+def _grant_producer(target: str, state: str, data: dict) -> bool:
+    """Whether the caller is the push-analyst grant's producer: a subagent
+    whose own dispatch (the declaring-dispatch reader's: its record found back
+    from the end of the session transcript by the call its meta names, as
+    _own_from_tail finds it) is a dispatch of the role the grant's folder names
+    (merge_grant's path rule), by a subagent of that type, whose command
+    template binds the grant's repository hash, session and request id."""
+    try:
+        from lib import command_span, declared_paths, dispatch_template, obligation
+
+        transcript = _session_transcript(data)
+        agent_transcript, meta = declared_paths._agent_files(transcript, data.get("agent_id"))
+        if agent_transcript is None:
+            return False
+        prompt = obligation.read_first_record_prompt(agent_transcript)
+        with open(meta) as fh:
+            named = json.load(fh).get("toolUseId")
+        if prompt is None or not isinstance(named, str) or not command_span._PLAIN_ID.match(named):
+            return False
+        record = _Record(transcript)
+        try:
+            call = record.find_call(named, prompt)
+        finally:
+            record.close()
+        parsed = obligation.parse_obligation(prompt)
+        own = parsed.obligation if isinstance(parsed, obligation.ParsedObligation) else {}
+        folder, *values = _below(target, os.path.join(state, "agentic-commit")).split(os.sep)
+        if call is None or not folder == own.get("role") == call.input.get("subagent_type"):
+            return False
+        found = dispatch_template._template(own.get("pipeline"), folder, prompt, None)
+        bound = set(dispatch_template._bindings(found[2]).values()) if found else set()
+        return {values[0], values[1], values[2][:-len(".json")]} <= bound
+    except Exception:  # an unreadable record names no producer: the write stays refused
+        return False
 
 
 def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data: dict) -> None:
@@ -870,7 +934,10 @@ def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data
                                                  "projects"), harness_state_dir())
     for target, removed in dict.fromkeys(found):  # a variable the hook's environment holds is the shell's
         word = os.path.expandvars(re.sub(r"\$\{(\w+):-([^}]*)\}", lambda m: os.environ.get(m[1]) or m[2], target))
-        what = not any(c in word for c in "$`\x00") and _protected(os.path.join(base, os.path.expanduser(word)), removed, *roots)
+        path = os.path.join(base, os.path.expanduser(word))
+        what = not any(c in word for c in "$`\x00") and _protected(path, removed, *roots)
+        if what == _GRANT and not removed and data.get("agent_id") and _grant_producer(path, roots[2], data):
+            continue  # the push-analyst's own Write of its grant (agents/push-analyst.md Phase 7)
         if what:
             _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
                         f"{target} is {what}: no agent writes, deletes or renames it (D11/D12)")

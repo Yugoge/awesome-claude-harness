@@ -340,29 +340,49 @@ def p_merge(span, root, payload) -> list[str]:
     return gaps
 
 
+def _opener_branch(root, since: float) -> str | None:
+    """The branch HEAD was on at the opener, from git's record: the source of
+    HEAD's first checkout at or after it (git names a detached HEAD there by its
+    full hash; a checkout in the opener's second counts as after it), else
+    HEAD's branch now; None: detached."""
+    for _sha, t, message in reversed(_reflog(root, "HEAD")):  # oldest first
+        if t >= since and message.startswith("checkout: moving from "):
+            source = message[len("checkout: moving from "):].partition(" to ")[0]
+            return None if len(source) in (40, 64) and not source.strip("0123456789abcdef") else source
+    return _git(root, "symbolic-ref", "--short", "-q", "HEAD")
+
+
 def p_push(span, root, payload) -> list[str]:
-    """/push [<remote>] [INFERRED; A6]: refs/remotes/<remote>/<BRANCH> (the
-    typed remote, else any) took HEAD, or the branch's value at that time,
-    after the opener; or HEAD is at or behind the typed remote's ref (none
-    typed: the upstream's); or push.md refuses the push: no current branch
-    (Step 2), no push-gate token names an ancestor of HEAD (push.sh's exit 3:
-    its READ side over the path of the token's one writer), or this session's
-    newest push-analyst grant here since the opener is blocked for BRANCH at
-    HEAD (Step 5: execute-push.py refuses it and leaves it unspent)."""
+    """/push [<remote>] [INFERRED; A6]. BRANCH: the branch HEAD was on at the
+    opener, else (detached there) HEAD's branch now; at its tip,
+    refs/remotes/<remote>/<BRANCH> (the typed remote, else any) took it, or the
+    branch's value at that time, after the opener; or it is at or behind the
+    typed remote's ref (none typed: BRANCH's upstream); or push.md refuses the
+    push: HEAD detached at the opener and now (Step 2), no push-gate token names
+    an ancestor of it (push.sh's exit 3: its READ side over the path of the
+    token's one writer), or this session's newest push-analyst grant here since
+    the opener is blocked for BRANCH at it (Step 5: execute-push.py refuses it
+    and leaves it unspent). The token and the grant are protected for every
+    caller but their producers (pretool-tool-policy.py), and a detach after the
+    opener is no refusal: no agent's write makes one true."""
     _repository(root)
     typed = next((a for a in span.args.split() if not a.startswith("-")), None)
-    branch = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
+    since, now = _since(span), _git(root, "symbolic-ref", "--short", "-q", "HEAD")
+    branch = _opener_branch(root, since) or now
     if not branch:
         return []  # Step 2: "HEAD is detached"; no push can be made from it
-    head, since = _git(root, "rev-parse", "HEAD"), _since(span)
+    head = _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}^{{commit}}")
+    if not head:
+        return [f"push: {branch}, the branch HEAD was on at the /push opener, names no commit; nothing of it "
+                "is published since the opener"]
     local = _reflog(root, f"refs/heads/{branch}")
     for remote in [typed] if typed else (_git(root, "remote") or "").split():
         for sha, t, _m in _reflog(root, f"refs/remotes/{remote}/{branch}"):
             if t >= since and sha in (head, _value_at(local, t)):
                 return []
     ref = (f"refs/remotes/{typed}/{branch}" if typed
-           else _git(root, "rev-parse", "--symbolic-full-name", "--verify", "-q", "@{upstream}"))
-    if ref and _git(root, "rev-parse", "--verify", "-q", ref) and _ancestor(root, "HEAD", ref):
+           else _git(root, "rev-parse", "--symbolic-full-name", "--verify", "-q", f"{branch}@{{upstream}}"))
+    if ref and _git(root, "rev-parse", "--verify", "-q", ref) and _ancestor(root, head, ref):
         return []
     top = _git(root, "rev-parse", "--show-toplevel") or str(root)
     token = _script("scripts/write-push-gate-token.py").token_path(top, branch, "")  # <repo dir>/<session>/<name>
@@ -371,14 +391,15 @@ def p_push(span, root, payload) -> list[str]:
             sha = json.loads(path.read_text()).get("commit_sha")
         except (OSError, ValueError, AttributeError):
             continue  # "Malformed/unparseable candidates are skipped"
-        if sha and _ancestor(root, str(sha), "HEAD"):
+        if sha and _ancestor(root, str(sha), head):
             break
     else:
         return []  # Step 5: push.sh's exit 3, "run /commit first"
     grant = _lib("merge_grant").newest(top, payload.get("session_id"), since, "push-analyst")
     if (grant.get("verdict"), grant.get("branch"), grant.get("head_sha")) == ("blocked", branch, head):
         return []  # Step 5: "push BLOCKED by push-analyst"
-    return [f"push: HEAD {head} of {branch} is not published on {ref or 'a remote'} since the /push opener"]
+    return [f"push: {branch} at {head} is not published on {ref or 'a remote'} since the /push opener"
+            + ("" if now == branch else f"; HEAD is not on it: check out {branch}, then push it")]
 
 
 PREDICATES = {

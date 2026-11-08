@@ -816,7 +816,7 @@ def test_a6_typed_push_counts_only_the_typed_remote(env, remotes):
 def test_a6_push_from_a_detached_head_holds_as_step_2s_refusal(env, remotes):
     """push.md Step 2 refuses a detached HEAD ("check out the branch to push"): no push can be made
     from it, so the run is complete. With the branch checked out, ahead and with a token, the push
-    is owed."""
+    is owed; detached again, it is not (H2 keeps this release for a HEAD detached at the opener)."""
     commit(remotes, "t2.txt")
     git(remotes, "checkout", "-q", "--detach")
     opener_now(env, "push")
@@ -824,6 +824,67 @@ def test_a6_push_from_a_detached_head_holds_as_step_2s_refusal(env, remotes):
     git(remotes, "checkout", "-q", "topic")
     code, text = run(env)
     assert code == 2 and "not published" in text
+    git(remotes, "checkout", "-q", "--detach", "HEAD~1")
+    assert run(env) == (0, "")
+
+
+@pytest.mark.parametrize("move", [("checkout", "-q", "--detach"), ("checkout", "-q", "master"),
+                                  ("checkout", "-q", "--detach", "topic")])
+def test_h2_head_moved_off_the_branch_after_the_opener_holds_that_branch_until_it_is_published(env, remotes, move):
+    """P5 review H2: a detach (or a checkout of another branch) after the /push opener is no Step 2
+    refusal: the branch HEAD was on at the opener (git's record: the source of HEAD's first checkout
+    after it) is held, at its tip, naming the branch to check out, until the push publishes it."""
+    tip = commit(remotes, "t2.txt")
+    opener_now(env, "push")
+    git(remotes, *move)
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {tip} is not published on refs/remotes/origin/topic" in text, text
+    assert "HEAD is not on it: check out topic, then push it" in text
+    git(remotes, "checkout", "-q", "topic")
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {tip} is not published" in text and "check out" not in text
+    git(remotes, *move)
+    git(remotes, "push", "-q", "origin", "topic")  # the branch published, wherever HEAD is
+    assert run(env) == (0, "")
+
+
+def tool_policy(env, tool_input: dict, agent=None):
+    """hooks/pretool-tool-policy.py on one Write, as the CLI runs it for the main agent (or `agent`)."""
+    payload = {"session_id": SID, "transcript_path": str(env.tx.path), "cwd": str(env.project),
+               "hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": tool_input,
+               "tool_use_id": "toolu_h2", **({"agent_id": agent[0], "agent_type": agent[1]} if agent else {})}
+    home = env.tmp / "home"
+    environment = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+    environment.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), CLAUDE_STATE_DIR=str(env.state),
+                       CLAUDE_PROJECT_DIR=str(env.project), PYTHONDONTWRITEBYTECODE="1")
+    return subprocess.run([sys.executable, str(HOOKS / "pretool-tool-policy.py")], input=json.dumps(payload),
+                          capture_output=True, text=True, env=environment, timeout=60)
+
+
+@pytest.mark.parametrize("caller", [None, ("a0dev", "dev"), ("a0pa", "push-analyst")])
+@pytest.mark.parametrize("attack", ["token", "grant"])
+def test_h2_no_caller_but_the_producer_writes_the_push_stops_inputs_so_the_stop_holds(env, remotes, attack, caller):
+    """P5 review H2: a Write of `{}` over the push-gate token, or of a `blocked` grant for the branch at
+    HEAD into the push-analyst's grant directory, by the main agent or a subagent whose own dispatch is
+    not that grant's (none here), is refused by the protected stage; the Stop holds on the token the
+    token's writer left and on no blocked grant, until the push."""
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    opener_now(env, "push")
+    top = os.path.realpath(remotes)
+    if attack == "token":
+        writer = gate._script("scripts/write-push-gate-token.py")
+        path, content = str(writer.token_path(top, "topic", SID)), "{}"
+    else:
+        path = str(Path(env.state, "agentic-commit", "push-analyst", hashlib.sha256(top.encode()).hexdigest()[:16],
+                        SID, "ab" * 16 + ".json"))
+        content = json.dumps({"verdict": "blocked", "branch": "topic", "head_sha": head})
+    done = tool_policy(env, {"file_path": path, "content": content}, caller)
+    assert done.returncode == 2 and "no agent writes, deletes or renames it (D11/D12)" in done.stderr, done.stderr
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {head} is not published" in text
+    git(remotes, "push", "-q", "origin", "topic")
+    assert run(env) == (0, "")
 
 
 @pytest.mark.parametrize("token", ["none for the branch", "not in HEAD's history"])
