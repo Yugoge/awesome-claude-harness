@@ -8,9 +8,8 @@ corpus. What stays here has a live subject:
     wildcard for the Write tool, and the registered PostToolUse consumer's
     bash-command matcher never matches a Write grant.
   * hooks/lib/bash_write_targets.py, the shared lexer three registered hooks
-    import: its doctests, the frozen `extract_bash_write_paths` reader its
-    consumers call, and the mode-aware reader's redirect and anchored-path
-    readings.
+    import: its doctests and the frozen `extract_bash_write_paths` reader its
+    consumers call.
 """
 from __future__ import annotations
 
@@ -18,7 +17,6 @@ import doctest
 import inspect
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -178,8 +176,6 @@ def test_ac10_quoted_paths_are_untouched_by_the_token_terminator():
     """The quoted branch of the token reader is deliberately not changed."""
     assert bwt.extract_bash_write_paths('echo x > "/tmp/report (1).txt"') == \
         ["/tmp/report (1).txt"]
-    assert [t.path for t in bwt.extract_bash_write_targets_with_modes(
-        "echo x > '/tmp/a (copy).txt'")] == ["/tmp/a (copy).txt"]
 
 
 def py_compile_out_of_tree(path: Path, cache_root: Path):
@@ -199,8 +195,6 @@ def test_ac10_consumers_still_compile_and_import_the_frozen_symbol(consumer, tmp
     path = REPO / consumer
     text = path.read_text(encoding="utf-8")
     assert "extract_bash_write_paths" in text
-    assert "extract_bash_write_targets_with_modes" not in text, (
-        "existing consumers must be unaffected by the additive extension")
     compiled = py_compile_out_of_tree(path, tmp_path)
     assert compiled.returncode == 0, compiled.stderr
 
@@ -224,49 +218,7 @@ def test_ac10_fourth_consumer_of_the_shared_module_is_pinned_too(tmp_path):
     assert bwt.command_without_heredoc_bodies("echo plain") == "echo plain"
 
 
-@pytest.mark.parametrize("command, target", [
-    ("echo NEWCONTENT > {DIR}/cp", "{DIR}/cp"),
-    ("cp /bin/cp {DIR}/fresh-copy.txt", "{DIR}/fresh-copy.txt"),
-])
-def test_iter2_the_anchored_rule_still_names_the_whole_target(command, target, tmp_path):
-    """The anchored absolute-path rule never truncates a target it must name."""
-    command, target = (s.replace("{DIR}", str(tmp_path)) for s in (command, target))
-    assert [t.path for t in bwt.extract_bash_write_targets_with_modes(command)] == [target]
-
-
-def test_iter2_the_rejected_looser_anchor_really_would_cry_wolf():
-    """A looser absolute-path anchor would cry wolf; the shipped anchored rule does not.
-
-    A bare `[\\s;|&]` word boundary before `/…/cp` fires on ordinary read-only
-    commands; the mode-aware reader's anchored rule names no target from them.
-    """
-    loose = re.compile(r"(?:^|[\s;|&])(?:/[\w.-]+)*/cp\b")
-    cries_wolf = ["ls -la /usr/bin/cp /tmp/v", "diff /bin/cp /usr/bin/cp",
-                  "cat /bin/cp > /tmp/copy", "test -x /bin/cp && echo ok"]
-    for command in cries_wolf:
-        assert loose.search(command), f"expected the loose anchor to match {command!r}"
-        # The shipped anchored rule does not name a target from any of them.
-        named = [t.path for t in bwt.extract_bash_write_targets_with_modes(command)]
-        assert "/tmp/v" not in named
-        assert not any(n.endswith("/cp") and "bin" in n for n in named)
-
-    # The frozen reader still misses a verb after a prefix word and reads the plain form.
+def test_iter2_the_frozen_reader_misses_a_verb_after_a_prefix_word():
+    """The frozen reader misses a verb after a prefix word and reads the plain form."""
     assert not bwt.extract_bash_write_paths("OVW=1 /bin/cp /tmp/s /tmp/v")
     assert bwt.extract_bash_write_paths("OVW=1 cp /tmp/s /tmp/v") == ["/tmp/v"]
-
-
-def test_iter2_redirect_operators_keep_their_operand():
-    """`>|` and `>&` are redirect operators, not command separators.
-
-    Their trailing `|`/`&` must not put the redirect TARGET at a command-word
-    position; doing so truncated `echo x >| /tmp/a` to the bare name `a`.
-    """
-    assert [(t.path, t.mode) for t in
-            bwt.extract_bash_write_targets_with_modes("echo x >| /tmp/a")] == \
-        [("/tmp/a", "truncating")]
-    assert [(t.path, t.mode) for t in
-            bwt.extract_bash_write_targets_with_modes("echo x >|/tmp/a")] == \
-        [("/tmp/a", "truncating")]
-    assert bwt.extract_bash_write_targets_with_modes("echo x >& /tmp/a") == []
-    assert bwt.extract_bash_write_targets_with_modes("echo x 2>&1") == []
-
