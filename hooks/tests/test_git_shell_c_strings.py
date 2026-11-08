@@ -190,6 +190,15 @@ RUNTIME_CODE_TWINS = [
     ('bash -c "docker exec c bash -c $X"', 'bash -c "docker push $IMAGE"'),
     ('echo $X | bash -c "cd $DIR; sh"', 'echo $X | bash -c "cd $DIR; cat"'),
 ]
+# `watch` runs its operand as a command, so `watch $X` runs run-time text as
+# code when run plainly too: (form, the hook that refuses it, the rule that hook
+# names). bash-safety's analyzer falls on a timeout to a degraded mode that
+# refuses any `$`, so the rule is read from runs that give the analyzer time.
+WATCH_RULES = [
+    ('watch $X', SAFETY, "UNRESOLVED dynamic_command_head:$X"),
+    ('bash -c "watch $X"', PRIVILEGE, "unresolved_shell_string"),
+]
+ANALYZER_TIME = {"CLAUDE_HOOK_BOUNDARY_TIMEOUT": "60s"}
 
 
 def _nest(command, levels):
@@ -216,16 +225,19 @@ def sandbox(tmp_path_factory):
     return {"env": env, "repo": str(repo)}
 
 
-def _run(sandbox, hook, command, subagent=False):
+def _hook(sandbox, hook, command, subagent=False, env=None):
     payload = {"tool_name": "Bash", "tool_input": {"command": command},
                "session_id": "shell-c-test", "cwd": sandbox["repo"],
                "hook_event_name": "PreToolUse"}
     if subagent:
         payload.update(agent_id="agent-shell-c-test", agent_type="dev")
     argv = ["bash" if hook.endswith(".sh") else sys.executable, str(HOOKS / hook)]
-    proc = subprocess.run(argv, input=json.dumps(payload), capture_output=True, text=True,
-                          env=sandbox["env"], cwd=sandbox["repo"], timeout=120)
-    return proc.returncode
+    return subprocess.run(argv, input=json.dumps(payload), capture_output=True, text=True,
+                          env=dict(sandbox["env"], **(env or {})), cwd=sandbox["repo"], timeout=120)
+
+
+def _run(sandbox, hook, command, subagent=False):
+    return _hook(sandbox, hook, command, subagent).returncode
 
 
 @pytest.fixture(scope="module")
@@ -241,10 +253,21 @@ def verdicts(sandbox):
                 for actor in (False, True))
     runs.update((hook, cmd, actor) for pair in RUNTIME_CODE for cmd in pair
                 for hook in LAYER_HOOKS for actor in (False, True))
+    runs.update((hook, cmd, actor) for cmd, _decider, _rule in WATCH_RULES
+                for hook in LAYER_HOOKS for actor in (False, True))
     runs = sorted(runs)
     with ThreadPoolExecutor(max_workers=8) as ex:
         codes = list(ex.map(lambda r: _run(sandbox, *r), runs))
     return dict(zip(runs, codes))
+
+
+@pytest.fixture(scope="module")
+def refusals(sandbox):
+    """(exit code, stderr) of the hook WATCH_RULES names for each form, the analyzer given time."""
+    runs = [(hook, cmd, actor) for cmd, hook, _rule in WATCH_RULES for actor in (False, True)]
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        procs = list(ex.map(lambda r: _hook(sandbox, *r, env=ANALYZER_TIME), runs))
+    return {run: (proc.returncode, proc.stderr) for run, proc in zip(runs, procs)}
 
 
 def _pairs(cases):
@@ -365,6 +388,18 @@ def test_a_layer_running_run_time_text_as_code_exits_2_and_never_below_its_plain
     plain_code = max(verdicts[(hook, plain, subagent)] for hook in LAYER_HOOKS)
     assert layer_code == 2, layer
     assert layer_code >= plain_code, (layer, plain)
+
+
+@pytest.mark.parametrize("command,hook,rule", WATCH_RULES, ids=[cmd for cmd, _h, _r in WATCH_RULES])
+@pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
+def test_watch_of_run_time_text_exits_2_plainly_and_in_a_layer_on_the_rule_that_decides_it(
+        verdicts, refusals, command, hook, rule, subagent):
+    assert max(verdicts[(h, command, subagent)] for h in LAYER_HOOKS) == 2, command
+    assert verdicts[(hook, command, subagent)] == 2, (command, hook)
+    # The deciding hook's own rule, never a degraded mode's blanket `$` refusal.
+    code, stderr = refusals[(hook, command, subagent)]
+    assert code == 2, (command, hook, stderr)
+    assert rule in stderr, (command, hook, stderr)
 
 
 @pytest.mark.parametrize("command", [layer for layer, _plain in RUNTIME_CODE] + RUNTIME_CODE_VARIANTS)
