@@ -164,6 +164,17 @@ jobs:
           python3 -m py_compile "${pyfiles[@]}"
           echo "All hooks/ and scripts/ Python compiled."
 
+      - name: Prompt and hook lint (tests/lint)
+        # The P12 principles as CI checks: hook strength as the enforcement ledger states it,
+        # no dead file references, no 10-line block in two prompts, at most 3 emphasis words a
+        # file, no registered hook whose output cannot reach the model, no state file with two
+        # writers. Off until P12's lanes L1-L5 clear today's findings: the integration lane
+        # deletes the `if:` line. `python3 -m tests.lint` prints the findings locally.
+        if: ${{ false }}
+        env:
+          HARNESS_LINT: "1"
+        run: python3 -m pytest tests/lint -q -p no:cacheprovider
+
       - name: Cleanup invariant assertions (zero-hit grep)
         run: |
           set -euo pipefail
