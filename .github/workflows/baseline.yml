@@ -17,15 +17,26 @@ on:
   # workflow_call a tag could publish without these gates ever running on that
   # commit. Purely additive: the push/pull_request triggers are unchanged.
   workflow_call:
-  # Weekly, so a dependency or runner change that breaks the suite shows up even
-  # in a quiet week, and on demand.
-  schedule:
-    - cron: "17 3 * * 1"
+  # On demand. Under D30 this is the only trigger that runs on the private
+  # repository (see the gate on the job below).
   workflow_dispatch:
 
 jobs:
   baseline:
     name: baseline checks
+    # D30 visibility gate. The private repository (full history) and the public one
+    # (one commit per publish) carry this same file, and a trigger cannot test
+    # visibility, so the job does: it runs on a manual dispatch anywhere, otherwise
+    # only where the event payload says the repository is public. A skipped job takes
+    # no runner, so the private repository spends Actions minutes only on dispatch.
+    # toJSON() renders a payload without a repository object as 'null', which never
+    # equals 'false', so such a payload counts as not public; comparing the flag with
+    # false directly would coerce null to 0 and count it as public. Called from
+    # release.yml (workflow_call), the payload is the caller's, so the gate holds
+    # there too. The weekly schedule trigger was removed for the same reason: its
+    # payload carries no repository object, so this gate would skip it on both
+    # repositories.
+    if: github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false'
     # Supported OS: ubuntu-latest (the declared, tested platform). macOS/Windows
     # are not part of the supported matrix.
     runs-on: ubuntu-latest
@@ -43,9 +54,11 @@ jobs:
         # repointed at arbitrary code by anyone who can push to the action repo.
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          # Full history so the provenance audit can resolve commit-source lines
-          # (e.g. 62957b3); a shallow clone would downgrade them to warnings and
-          # verify-claims.sh runs the audit in --strict (downgrades hard-fail).
+          # Full history, so a check that resolves a commit sees every one. Since
+          # D30 no hero manifest line cites a commit id: the public repository holds
+          # only its publish commits, so those lines cite
+          # .github/assets/pipeline-hero-sources.json, and the --strict audit in
+          # verify-claims.sh passes on either repository.
           fetch-depth: 0
 
       - name: Set up Python
