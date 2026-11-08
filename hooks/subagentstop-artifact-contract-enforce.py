@@ -92,6 +92,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_dev_registry_entry
 from lib.claude_home import settings_switch
+from lib import command_span
 from lib import contract_runtime
 from lib import dispatch_template
 from lib import obligation
@@ -692,16 +693,17 @@ def main() -> None:
 
     # The reports this producer owes are the json artifacts its own dispatch
     # declares, read as declared even when the block fails the grammar (a
-    # pre-P1 template): each producer is judged on its own reports at its own
-    # stop, never on a sibling lane's. validate_report_artifact decides the
-    # dev, qa and do report kinds and skips every other.
+    # pre-P1 template); a dispatch with no obligation block owes the reports
+    # its own transcript shows it wrote (R8). Each producer is judged on its
+    # own reports at its own stop, never on a sibling lane's.
+    # validate_report_artifact decides the dev, qa and do report kinds and
+    # skips every other.
     declared = _dispatch_obligation(getattr(resolution, "prompt", None))
-    report_paths = [
-        Path(project_dir) / a["path"]
-        for a in declared.get("artifacts") or []
-        if isinstance(a, dict) and a.get("kind") == "json"
-        and obligation._legal_repo_relative_path(a.get("path"))
-    ]
+    rels = [a.get("path") for a in declared.get("artifacts") or [] if isinstance(a, dict) and a.get("kind") == "json"]
+    if not declared and isinstance(resolution, obligation.NoObligationInPrompt):
+        written = command_span.write_set(resolution.transcript_path, project_dir, excluded=())
+        rels = sorted(written.written) if written else []
+    report_paths = [Path(project_dir) / r for r in rels if obligation._legal_repo_relative_path(r)]
     report_paths = [p for p in report_paths if p.is_file()]
     if not report_paths:
         # Existence enforcement belongs to subagentstop-e2e-enforce.py (qa)

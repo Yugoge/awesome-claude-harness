@@ -1056,6 +1056,45 @@ def test_fswatch_safe_pull_pops_only_an_entry_its_own_push_made(tmp_path, env, k
     assert git(env, work, "status", "--porcelain").stdout == "?? scratch-note.txt\n"
 
 
+@pytest.mark.parametrize("step", ["fetch", "stash-push", "pull", "tee"])
+def test_fswatch_safe_pull_judges_each_step_by_its_git_command(tmp_path, env, step):
+    """R20 (fact 1): safe_pull piped its fetch, stash push and pull into tee without pipefail, so
+    tee's status chose. A failed fetch (origin gone), stash push or pull (index.lock held; an
+    owner's edit to stash) was logged as success and safe_pull returned 0 behind upstream; a log
+    tee could not open (no logs/ directory) failed a fetch git had done. Each step is judged by
+    its git command's own exit status now."""
+    origin, work = tmp_path / "up", tmp_path / "watched"
+    git(env, tmp_path, "init", "-q", "-b", "master", str(origin))
+    write(origin / "a.txt", "one\n")
+    write(origin / "b.txt", "two\n")
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "a")
+    git(env, tmp_path, "clone", "-q", str(origin), str(work))
+    write(origin / "a.txt", "upstream\n")
+    git(env, origin, "commit", "-q", "-am", "upstream")
+    if step != "tee":
+        (Path(env["CLAUDE_CONFIG_DIR"]) / "logs").mkdir()
+    if step == "fetch":
+        git(env, work, "remote", "set-url", "origin", str(tmp_path / "gone"))
+    if step in ("stash-push", "pull"):
+        write(work / ".git/index.lock", "")
+    if step == "stash-push":
+        write(work / "b.txt", "an owner's edit\n")
+    head = git(env, work, "rev-parse", "HEAD").stdout
+    script = ('source <(sed "\\$d" "$1") "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
+              'echo "safe_pull rc=$?"')
+    proc = run(["bash", "-c", script, "x", str(REPO / "hooks/git-fswatch.sh"), str(work)], env,
+               cwd=str(work), check=False)
+    if step == "tee":
+        assert "safe_pull rc=0" in proc.stdout and "Pull successful" in proc.stdout, proc.stdout
+        assert (work / "a.txt").read_text() == "upstream\n"
+        return
+    said = {"fetch": "Failed to fetch", "stash-push": "Failed to stash", "pull": "Pull failed"}
+    assert "safe_pull rc=1" in proc.stdout and said[step] in proc.stdout, proc.stdout[-900:]
+    assert "Pull successful" not in proc.stdout
+    assert git(env, work, "rev-parse", "HEAD").stdout == head
+
+
 # ------------------------------------------- a landed home's settings.json stat (review N1)
 
 def cli_write(path, key, value):  # the way the CLI writes a key of its own
@@ -1073,11 +1112,11 @@ def landed_home_behind(tmp_path, env):
     return home
 
 
-def update_index_runs(env, home, trace):
+def update_index_runs(env, home, trace, *args):
     """The landing's stdout, and how many `git update-index` and `git diff` (through the filter)
     it ran (GIT_TRACE to a file)."""
     trace.write_text("")
-    notice = land(dict(env, GIT_TRACE=str(trace)), home)
+    notice = land(dict(env, GIT_TRACE=str(trace)), home, *args)
     runs = [line.split("trace: built-in: git ", 1)[1] for line in trace.read_text().splitlines()
             if "trace: built-in: git " in line]
     return notice, sum(r.startswith("update-index") for r in runs), \
@@ -1181,6 +1220,30 @@ def test_a_cli_write_is_re_recorded_whatever_wrote_the_index_since(tmp_path, env
     assert proc.returncode == 0, proc.stdout[-600:] + proc.stderr[-600:]
     assert git(env, home, "merge-base", "--is-ancestor", "origin/master", "HEAD").returncode == 0
     assert (home / "upstream-note.md").exists()
+
+
+def test_settings_stat_alone_re_records_a_cli_write_on_a_landed_home_only(tmp_path, env):
+    """X9, R20: `land --settings-stat`, which /pull and fswatch's has_changes run on the harness
+    home before their stash decision, is the landed fast path's re-record alone: after a CLI
+    `model` write it runs the one diff through the filter and refresh_index's two update-index,
+    with no notice and no log line, and /pull pulls before any Stop. On a home that is not landed
+    it does nothing: the landing itself waits for a Stop."""
+    home = landed_home_behind(tmp_path, env)
+    blob, log = git(env, home, "rev-parse", ":settings.json").stdout, landing_log(home)
+    cli_write(home / "settings.json", "model", "demo-live-model-2")
+    trace = tmp_path / "git-trace.txt"
+    assert update_index_runs(env, home, trace, "--settings-stat") == ("", 2, 1)
+    assert update_index_runs(env, home, trace, "--settings-stat") == ("", 0, 0)
+    assert landing_log(home) == log
+    assert git(env, home, "rev-parse", ":settings.json").stdout == blob
+    assert git(env, home, "diff-files", "--name-only").stdout == ""
+    proc = run(["bash", str(REPO / "hooks/pull.sh")], env, cwd=str(home), check=False)
+    assert proc.returncode == 0, proc.stdout[-600:] + proc.stderr[-600:]
+    assert (home / "upstream-note.md").exists()
+    upgraded, _rev = make_home(tmp_path, env, name="upgraded")
+    assert land(env, upgraded, "--settings-stat") == ""
+    assert land(env, upgraded, "--state").strip() == "upgraded"
+    assert not (upgraded / "settings.machine.json").exists() and landing_log(upgraded) == ""
 
 # ------------------------------------------------------------------------------ R5: seeding
 

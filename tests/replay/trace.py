@@ -69,6 +69,10 @@ from . import norm
 SYSCALLS = ("open,openat,openat2,creat,mkdir,mkdirat,rename,renameat,renameat2,unlink,unlinkat,"
             "link,linkat,symlink,symlinkat,execve,execveat,clone,clone3,fork,vfork,chdir")
 _LINE_RE = re.compile(r"^(\d+)\s+(\w+)\((.*)\)\s+=\s+(-?\d+)(.*)$")
+# --pidns-translation: a fork inside another PID namespace (bubblewrap's --unshare-pid, the overnight
+# guard's write boundary) returns the child's pid there, followed by its pid in strace's namespace,
+# the one every trace line is prefixed with: "= 2 /* 18471 in strace's PID NS */"
+_PIDNS_RE = re.compile(r"^\s*/\* (\d+) in strace's PID NS \*/")
 _RESUMED_RE = re.compile(r"^(\d+)\s+<\.\.\. \w+ resumed>(.*)$")
 _EXIT_RE = re.compile(r"^(\d+)\s+\+\+\+ (?:exited|killed) ")
 # "<leader> +++ superseded by execve in pid <tid> +++": thread <tid> ran execve, and the thread group
@@ -98,9 +102,10 @@ def strace_argv(raw_path: str) -> list[str]:
     # -q, not -qq: the "+++ exited" lines delimit each process's lifetime (pids are reused). The
     # signal set is every signal but SIGCHLD (one delivery line per child exit, and it kills no
     # process): strace prints "+++ killed by SIG..." only for a signal in the set, so with none a
-    # process a signal ends (`yes | head`'s writer) would never end in the trace
-    return ["strace", "-f", "--seccomp-bpf", "-z", "-q", "-e", "signal=!SIGCHLD", "-y", "-s", "65535",
-            "-e", "trace=" + SYSCALLS, "-o", raw_path, "--"]
+    # process a signal ends (`yes | head`'s writer) would never end in the trace. --pidns-translation:
+    # a fork inside another PID namespace also names its child by the pid the trace lines carry
+    return ["strace", "-f", "--seccomp-bpf", "--pidns-translation", "-z", "-q", "-e", "signal=!SIGCHLD", "-y",
+            "-s", "65535", "-e", "trace=" + SYSCALLS, "-o", raw_path, "--"]
 
 
 # ---------------------------------------------------------------- strace syntax
@@ -197,7 +202,11 @@ def _records(raw_path: str):
                 line = f"{r.group(1)} {head}{r.group(2)}"
             m = _LINE_RE.match(line)
             if m:
-                yield int(m.group(1)), m.group(2), m.group(3), int(m.group(4)), m.group(5).strip(), start
+                ret, tail = int(m.group(4)), m.group(5)
+                ns = _PIDNS_RE.match(tail)
+                if ns:
+                    ret, tail = int(ns.group(1)), tail[ns.end():]
+                yield int(m.group(1)), m.group(2), m.group(3), ret, tail.strip(), start
 
 
 def _git_dir(path: str) -> str | None:

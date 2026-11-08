@@ -355,6 +355,10 @@ def _bounds():
                         break
                     _example_shapes(text[body:end].strip(), shapes, multi)
                     start = text.find(_OBLIGATION_OPEN, body)
+                # a fence whose obligation is a sentence (dispatch_template._sentence) declares its paths too
+                for fence in dispatch_template._parsed_fences(text):
+                    if fence[4] is not None:
+                        _example_shapes(fence[4], shapes, multi)
         except Exception:
             shapes = _ANY
         memo["bounds"] = (shapes, multi)

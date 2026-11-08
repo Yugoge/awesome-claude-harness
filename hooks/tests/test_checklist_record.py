@@ -146,6 +146,25 @@ def test_a_first_list_that_breaks_the_first_call_rule_locks_until_a_valid_one(s)
     assert all(p.returncode == 0 for p in post) and s.gate().returncode == 0
 
 
+def test_a_list_the_step_rules_refuse_never_runs(s):
+    """P1c X6 (the proof of the class-U sites deleted from posttool-todo-count.py and
+    posttool-todo-sequence.py): a list shorter than the canonical one, one off the canonical
+    content, or one breaking a step rule against the accepted list is refused at PreToolUse,
+    as a first call and later, so no PostToolUse hook ever sees it."""
+    s.command("/dev fix the bug")
+    tampered = _frontier(0)
+    tampered[1]["content"] += " (mine)"
+    for todos in (_frontier(0)[:-1], tampered):
+        pre, post = s.todo(todos)
+        assert pre.returncode == 2 and post is None
+    s.todo(_frontier(0))
+    tampered = _frontier(1)
+    tampered[3]["activeForm"] += " (mine)"
+    for todos in (_frontier(1)[:-1], _frontier(2), tampered):
+        pre, post = s.todo(todos)
+        assert pre.returncode == 2 and post is None
+
+
 def test_sequence_check_compares_with_the_list_before_its_own_call(s):
     s.command("/dev fix the bug")
     s.todo(_frontier(0))

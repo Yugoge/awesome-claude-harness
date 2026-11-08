@@ -26,7 +26,8 @@ returns, or outside /dev-overnight), exit 0 silently.
 Exit codes:
   0 — Not an overnight session, window closed, no contract, no matching
       entry, no obligation, or every declared artifact valid.
-  2 — A declared artifact missing or invalid (hard gate).
+  2 — A declared artifact missing or invalid (hard gate): the message names each
+      artifact with the check it fails, and the declaring dispatch's next round.
 """
 
 from __future__ import annotations
@@ -69,19 +70,22 @@ def _artifact_errors(artifact: dict, root: Path) -> list[str]:
         return []  # response kinds have no file; the producer's own stop checks them
     if result.get('status') != 'fail':
         return []
-    return [f'{path}: {e}' for e in (result.get('errors') or [result.get('reason')])]
+    check = (f"schema {artifact.get('schema')}" if kind == 'json'
+             else str(result.get('reason') or '').split(':')[0])
+    return [f'{path} ({check}): {e}' for e in (result.get('errors') or [result.get('reason')])]
 
 
 def _emit_block(agent_type: str, session_id: str, cycle_id: int, errors: list[str]) -> None:
     sys.stderr.write(
         '\nOVERNIGHT FILE CHECK BLOCK (contract):\n'
         f'  agent={agent_type} session={session_id} cycle={cycle_id}\n'
-        '  errors:\n'
+        f'  Each artifact below is one this {agent_type} dispatch\'s obligation declares; '
+        'it fails the check named beside it:\n'
     )
     for item in errors:
         sys.stderr.write(f'    - {item}\n')
-    sys.stderr.write('  Required artifact missing or schema-invalid. '
-                     'Re-run the subagent or escalate.\n\n')
+    sys.stderr.write(f'  Dispatch {agent_type} again with the same obligation template and a fresh '
+                     'dispatched_at; it writes each artifact above as its obligation declares.\n\n')
 
 
 def _run_check(data: dict) -> int:
@@ -107,7 +111,7 @@ def _run_check(data: dict) -> int:
     if not isinstance(contract, dict):
         # Hard cutover: no contract for this cycle yet — silent passthrough.
         return 0
-    entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt))
+    entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt, agent_type))
     if entry is None:
         return 0
     errors = [error for artifact in artifacts for error in _artifact_errors(artifact, root)]

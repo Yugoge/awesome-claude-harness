@@ -384,16 +384,6 @@ def build_sequence_fix_call(last_todos: list) -> str:
         return ''
 
 
-def format_count_mismatch(canonical: list) -> str:
-    """Format locked message for count mismatch violations."""
-    return '\n'.join([
-        'WORKFLOW LOCKED (count_mismatch): TodoWrite called with wrong step count.',
-        f'You MUST re-call TodoWrite with ALL {len(canonical)} canonical steps.',
-        'Call TodoWrite with this exact todos array:', '',
-        build_next_todowrite_call(canonical, mark_first=False),
-    ])
-
-
 def _find_current_step(todos: list) -> str:
     """Find the content of the current in_progress step."""
     ip = next((t for t in todos if t.get('status') == 'in_progress'), None)
@@ -448,8 +438,6 @@ def format_progress(
     todo_acknowledged: bool = False, last_todos: list = None,
 ) -> str:
     """Phase B: show current progress. Dispatches to formatters."""
-    if lock_reason == 'count_mismatch' and canonical:
-        return format_count_mismatch(canonical)
     if lock_reason == 'sequence_violation':
         return format_sequence_violation(todos, last_todos or [])
     return format_active_progress(todos, todo_acknowledged)
@@ -1185,6 +1173,22 @@ def _checklist():
         return None
 
 
+def wake_recovery(user_input: str) -> str:
+    """What the /dev-overnight session's own wake starts when it fires inside the session's open
+    span: commands/restart.md's recovery, with no human (P1c X8, D20); '' for any other prompt."""
+    import overnight  # hooks/lib is on sys.path (see the WS1 block above)
+    if not overnight.wake_fired(user_input, CURRENT_TRANSCRIPT_PATH):
+        return ''
+    path = _resolve_command_spec('restart')[0] or 'commands/restart.md'
+    return '\n'.join([
+        "OVERNIGHT WAKE: this /dev-overnight session's scheduled wake fired inside its span, and the",
+        f'/restart capability is issued for it. Read {path} now and run its Mandatory procedure',
+        '(prepare; one SendMessage with its exact resume_message per pending candidate; status;',
+        'finalize). With 0 candidates nothing was cut: finalize. Then carry on with the /dev-overnight',
+        'checklist step in progress; never stop, ask or wait.',
+    ])
+
+
 def handle_phase_b(session_id: str) -> None:
     """Phase B: inject overnight continuation and/or workflow progress."""
     overnight_ctx = check_overnight_continuation(session_id)
@@ -1406,7 +1410,7 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
     ``write`` is _write_new_file for a registry reserved just now and
     _atomic_write_bytes for an overnight one, which a relaunch in the same
     session writes again. Returns the flag writer's error output, '' when it
-    succeeded."""
+    succeeded (or no flag was asked for)."""
     import roster  # hooks/lib is on sys.path (see the WS1 block above)
     if not roster.roles():
         # With no roster the sentinel hook registers no subagent, and every
@@ -1414,6 +1418,8 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
         # instead, naming the missing input.
         raise RuntimeError(f'no agent roster under {roster.AGENTS_DIR}')
     write(project_dir / 'docs' / 'dev' / f'user-requirement-{name}.md', requirement)
+    if not flags:
+        return ''
     command = [str(Path(__file__).resolve().parent.parent / 'scripts' / 'write-enforce-flag.sh'),
                '--source-command', cmd_name, '--session-id', name]
     for flag in flags:
@@ -1430,9 +1436,10 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
 
 def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, project_dir: Path) -> str:
     """Reserve a /dev, /dev-command or /redev task id and arm its registry
-    (_arm_registry) with the cleaned requirement and the E2E and
-    artifact-contract flags, plus codex under --codex. The artifact-contract
-    flag arms hooks/subagentstop-artifact-contract-enforce.py, the producer-side
+    (_arm_registry) with the cleaned requirement and the artifact-contract
+    flag, plus codex under --codex (the E2E gate needs no flag: it judges every
+    cycle's QA). The artifact-contract flag arms
+    hooks/subagentstop-artifact-contract-enforce.py, the producer-side
     port of /close's Artifact schema gate. A flag that cannot be written is
     reported and the start goes on (fail-open). Returns the task id."""
     # Reserving the directory with mkdir(exist_ok=False) is the allocation
@@ -1457,7 +1464,7 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     # Also strip inline --spec=<path> form
     clean_requirement = re.sub(r'(?:--|[–—])spec\s+\S+', '', ' '.join(clean_tokens)).strip()
 
-    flags = ['e2e', 'artifact-contract'] + (['codex'] if '--codex' in tokens else [])
+    flags = ['artifact-contract'] + (['codex'] if '--codex' in tokens else [])
     error = _arm_registry(cmd_name, dev_session_id, clean_requirement.encode('utf-8'),
                           claude_session_id, project_dir, flags, _write_new_file)
     if error:
@@ -1755,6 +1762,9 @@ def main():
         _clear_turn_state(session_id, cmd_name)
         if not cmd_name:
             handle_phase_b(session_id)
+            recovery = wake_recovery(user_input)
+            if recovery:
+                print(recovery)
         else:
             handle_phase_a(cmd_name, user_input, session_id, hashlib.sha256(raw).hexdigest())
     except SystemExit:

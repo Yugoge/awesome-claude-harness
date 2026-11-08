@@ -84,7 +84,7 @@ DEFAULT_TIP=$(git rev-parse --verify --quiet "refs/heads/${DEFAULT_BRANCH}^{comm
 REPO_ROOT=$(realpath "$(git rev-parse --show-toplevel)")
 REPO_HASH=$(printf '%s' "$REPO_ROOT" | sha256sum | cut -c1-16)
 REQUEST_ID=$(openssl rand -hex 16)
-SESSION_ID="${CLAUDE_SESSION_ID}"
+SESSION_ID="${CLAUDE_CODE_SESSION_ID}"
 ```
 
 `SOURCE_TIP` is resolved through `${RESOLVED_REF}^{commit}` rather than
@@ -93,7 +93,7 @@ commit hash all resolve. `--verify` makes an ambiguous or unknown name a hard MI
 a silent empty string.
 
 If `SESSION_ID` is empty or unset, abort immediately with:
-"Cannot dispatch merge-analyst: CLAUDE_SESSION_ID not set. Invoke /merge from within a Claude Code session."
+"Cannot dispatch merge-analyst: CLAUDE_CODE_SESSION_ID not set. Invoke /merge from within a Claude Code session."
 
 If either tip is "MISSING", abort with an error describing which ref was not found.
 
