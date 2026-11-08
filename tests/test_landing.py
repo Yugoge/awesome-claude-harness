@@ -28,6 +28,7 @@ HARNESS_FILES = ("scripts/install/land", "scripts/install/render-settings", "scr
                  "hooks/lib/claude_home.sh", "hooks/lib/claude_home.py",
                  "hooks/lib/runtime_guard/config.py", "hooks/lib/runtime_guard/shell_lex.py",
                  "hooks/lib/runtime_guard/pathmatch.py", "hooks/git-hooks/pre-commit",
+                 "hooks/git-hooks/pre-push", "scripts/install/push-guard",
                  "hooks/git-hooks/post-commit-auto-push", "hooks/git-hooks/README.md")
 LEGACY_HOOK = '#!/bin/bash\n# post-commit-auto-push (pre-P0)\nif [ "${GIT_AUTO_PUSH:-1}" = "0" ]; then exit 0; fi\n' \
               'git push origin HEAD:refs/backups/x >/dev/null 2>&1 &\n'
@@ -142,7 +143,8 @@ def assert_landed(env, home):
     record = git(env, home, "rev-parse", "--git-path", "claude-settings.applied").stdout.strip()
     assert (home / record).is_file()
     hooks = home / git(env, home, "rev-parse", "--git-path", "hooks").stdout.strip()
-    assert (hooks / "pre-commit").read_bytes() == (home / "hooks/git-hooks/pre-commit").read_bytes()
+    for name in ("pre-commit", "pre-push"):
+        assert (hooks / name).read_bytes() == (home / "hooks/git-hooks" / name).read_bytes()
     assert git(env, home, "status", "--porcelain").stdout == ""
     rendered = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     assert rendered["env"].get("CLAUDE_HOME") == str(home)
@@ -1426,10 +1428,44 @@ def test_global_hooks_path_gives_one_notice_then_counts_as_landed(tmp_path, env)
     shared.mkdir()
     git(env, home, "config", "--global", "core.hooksPath", str(shared))
     notice = land(env, home)
-    assert "pre-commit hook not installed: core.hooksPath comes from the global git config" in notice
-    assert "pre-commit hook installed" not in notice and not (shared / "pre-commit").exists()
+    assert "pre-commit and pre-push hooks not installed: core.hooksPath comes from the global git config" \
+        in notice and "hooks installed" not in notice and not list(shared.iterdir())
     assert land(env, home, "--state").strip() == "landed"
     assert land(env, home) == ""
+
+
+def test_the_pre_push_guard_reaches_a_landed_home_by_step_5_beside_its_own_hook(tmp_path, env):
+    """P11: a landed home whose hooks directory holds the owner's own pre-push (as before P11's
+    /pull) gets the guard by step 5 alone; the own hook is kept as pre-push.local."""
+    home, rev = make_home(tmp_path, env)
+    land(env, home)
+    hooks = home / git(env, home, "rev-parse", "--git-path", "hooks").stdout.strip()
+    write(hooks / "pre-push", "#!/bin/sh\n# the owner's own pre-push\n", 0o755)
+    assert land(env, home, "--state").strip() == "hooks"
+    assert "init step 5 reinstalled the git hooks" in land(env, home)
+    assert (hooks / "pre-push").read_bytes() == (home / "hooks/git-hooks/pre-push").read_bytes()
+    assert (hooks / "pre-push.local").read_text() == "#!/bin/sh\n# the owner's own pre-push\n"
+    assert land(env, home, "--state").strip() == "landed"
+
+
+@pytest.mark.parametrize("kind", ["hooks-dir-is-a-file", "cp", "mv"])
+def test_a_failed_guard_install_exits_0_with_a_notice_and_is_retried(tmp_path, env, kind):
+    home, rev = make_home(tmp_path, env)
+    land(env, home)
+    hooks = home / git(env, home, "rev-parse", "--git-path", "hooks").stdout.strip()
+    (hooks / "pre-push").unlink()
+    stubbed = dict(env, PATH="%s:%s" % (tmp_path / "stub", env["PATH"]))
+    if kind == "hooks-dir-is-a-file":
+        shutil.rmtree(hooks)
+        write(hooks, "a file where the hooks directory goes\n")
+    else:  # the copy or the rename of the install fails
+        write(tmp_path / "stub" / kind, "#!/bin/sh\nexit 1\n", 0o755)
+    for _ in range(2):  # land() asserts exit 0
+        assert land(stubbed, home).startswith("Harness landing failed at init steps 5 (see logs/landing.log)")
+    shutil.rmtree(tmp_path / "stub", ignore_errors=True)
+    if kind == "hooks-dir-is-a-file":
+        hooks.unlink()
+    assert "reinstalled the git hooks" in land(env, home) and land(env, home, "--state").strip() == "landed"
 
 
 @pytest.mark.parametrize("kind", ["directory", "dangling-symlink"])

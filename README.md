@@ -145,6 +145,15 @@ A rebase or merge stopped in the home is left alone: the landing says so and wai
 sessions, `scripts/bootstrap --migrate-from <rev>` and `scripts/install/render-settings migrate`
 remain.
 
+**When the upstream history is rewritten.** A harness home moves to the rewritten history with its
+next `/pull`, which rebases the home's own commits onto it; nothing has to be typed or stopped. The
+home keeps its local data, pre-rewrite objects included (stash entries, checkpoint and backup refs,
+reflogs), as recoverable local history, and its pre-push guard (installed by the landing beside
+the pre-commit hook) refuses any push that would send an object holding a literal listed in
+`private-literals.txt`, naming the object. If that rebase stops on a conflict, `/pull` stops too
+and keeps its stash entry: finish or abort the rebase, then `git stash pop`. Any other clone of the
+repository should be cloned again.
+
 ### Other install locations
 
 The harness can live in any directory. For a clone outside `~/.claude`:

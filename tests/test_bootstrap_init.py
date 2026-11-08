@@ -143,6 +143,7 @@ class Home:
         self.overlay = clone / "settings.machine.json"
         self.literals = clone / "private-literals.txt"
         self.pre_commit = clone / ".git" / "hooks" / "pre-commit"
+        self.pre_push = clone / ".git" / "hooks" / "pre-push"
         self.hook_src = clone / "hooks" / "git-hooks" / "pre-commit"
 
     def bootstrap(self, *args, stdin="", check=True):
@@ -164,7 +165,8 @@ class Home:
 
     def snapshot(self):
         paths = [self.overlay, self.literals, self.protected_runtime, self.clone / "settings.json",
-                 self.clone / ".git" / "config", self.pre_commit, self.clone / "venv" / "bin" / "python"]
+                 self.clone / ".git" / "config", self.pre_commit, self.pre_push,
+                 self.clone / "venv" / "bin" / "python"]
         return {str(p): (p.read_bytes(), stat.S_IMODE(p.stat().st_mode)) if p.exists() else None
                 for p in paths}
 
@@ -206,9 +208,9 @@ def test_fresh_clone_init_creates_the_home_and_reruns_identically(home):
                        ("required", "true")):
         got = home.git("config", "--local", "--get", f"filter.claude-settings.{key}").stdout.strip()
         assert got == value
-    assert home.pre_commit.read_bytes() == home.hook_src.read_bytes()
-    assert _mode(home.pre_commit) == 0o755
-    assert not home.pre_commit.with_name("pre-commit.local").exists()
+    for hook in (home.pre_commit, home.pre_push):
+        assert hook.read_bytes() == (home.clone / "hooks" / "git-hooks" / hook.name).read_bytes()
+        assert _mode(hook) == 0o755 and not hook.with_name(hook.name + ".local").exists()
 
     # The machine form carries the overlay; through the filter git still sees the
     # clean form (content comparison: a size change alone can leave the entry
@@ -310,20 +312,21 @@ def test_module_question_reads_one_line_and_defaults_to_no(home):
         assert ("mcp__paseo__*" in home.settings()["permissions"]["allow"]) is enabled, answers
 
 
-def test_foreign_pre_commit_is_kept_as_local_and_chained(home):
-    foreign = "#!/bin/sh\necho foreign hook\n"
-    home.pre_commit.write_text(foreign)
-    home.pre_commit.chmod(0o755)
+@pytest.mark.parametrize("name", ["pre-commit", "pre-push"])
+def test_foreign_hook_is_kept_as_local_and_chained(home, name):
+    foreign, hook = "#!/bin/sh\necho foreign hook\n", home.pre_commit.with_name(name)
+    hook.write_text(foreign)
+    hook.chmod(0o755)
     home.bootstrap("--yes", "--no-doctor")
-    local = home.pre_commit.with_name("pre-commit.local")
+    local = hook.with_name(name + ".local")
     assert local.read_text() == foreign
-    assert home.pre_commit.read_bytes() == home.hook_src.read_bytes()
-    assert HOOK_MARKER in home.pre_commit.read_text().splitlines()
+    assert hook.read_bytes() == (home.clone / "hooks" / "git-hooks" / name).read_bytes()
+    assert HOOK_MARKER.replace("pre-commit", name) in hook.read_text().splitlines()
 
     home.bootstrap("--yes", "--no-doctor")
     assert local.read_text() == foreign
-    assert sorted(p.name for p in home.pre_commit.parent.glob("pre-commit*")
-                  if not p.name.endswith(".sample")) == ["pre-commit", "pre-commit.local"]
+    assert sorted(p.name for p in hook.parent.glob(name + "*")
+                  if not p.name.endswith(".sample")) == [name, name + ".local"]
 
 
 def _own_hook(hooks_dir: Path, log: Path, name: str) -> str:
@@ -367,12 +370,12 @@ def test_global_hooks_path_is_left_untouched_and_init_fails_until_the_repo_has_i
     for run in runs:
         assert run.returncode == 1, run.stdout + run.stderr
         assert "SUCCESS" not in run.stdout
-        assert "pre-commit hook is NOT installed" in run.stderr
+        assert "pre-commit and pre-push hooks are NOT installed" in run.stderr
         assert "global git config (file:" in run.stderr
         assert fix in [line.strip() for line in run.stderr.splitlines()]
         assert _tree(shared) == pinned, "nothing is written to the global hooks dir"
     assert (runs[1].stdout, runs[1].stderr) == (runs[2].stdout, runs[2].stderr)
-    assert not home.pre_commit.exists()
+    assert not home.pre_commit.exists() and not home.pre_push.exists()
 
     # Every other step ran: overlay, filter, render, literal list, protected-runtime file.
     assert json.loads(home.overlay.read_text(encoding="utf-8"))["modules"] == {"paseo": False}
@@ -417,7 +420,7 @@ def test_system_or_command_line_hooks_path_is_refused(home, scope):
                         GIT_CONFIG_VALUE_0=str(shared))
     result = home.bootstrap("--yes", "--no-doctor", check=False)
     assert result.returncode == 1 and f"{scope} git config (" in result.stderr
-    assert list(shared.iterdir()) == [] and not home.pre_commit.exists()
+    assert list(shared.iterdir()) == [] and not home.pre_commit.exists() and not home.pre_push.exists()
 
 
 def test_local_hooks_path_is_used_and_a_foreign_hook_there_is_chained(home):
@@ -437,7 +440,7 @@ def test_local_hooks_path_is_used_and_a_foreign_hook_there_is_chained(home):
     assert f"pre-commit hook up to date ({repo_hooks}/pre-commit)" in runs[2].stdout
     assert (repo_hooks / "pre-commit").read_bytes() == home.hook_src.read_bytes()
     assert (repo_hooks / "pre-commit.local").read_text() == foreign
-    assert sorted(p.name for p in repo_hooks.iterdir()) == ["pre-commit", "pre-commit.local"]
+    assert sorted(p.name for p in repo_hooks.iterdir()) == ["pre-commit", "pre-commit.local", "pre-push"]
     assert not home.pre_commit.exists() and _tree(shared) == pinned
 
     committed = home.commit_readme()
