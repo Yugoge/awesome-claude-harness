@@ -344,15 +344,22 @@ def test_each_kept_old_spelling_covers_a_line_only_it_covers():
         assert needed, f"{entry} covers no old spelling a running session holds"
 
 
+# The start-function fallback runs exactly when the hook output, and with it the HARNESS_ROOT= line,
+# is gone (a compaction removed it or the hook printed none), so no printed root can fill it: it keeps
+# the channel and asks rather than fail (P1c's dev_command ctx=compact and ctx=noid replays).
+NO_PRINTED_ROOT = ('python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/prompt-workflow.py" start',)
+
+
 def test_no_line_the_cli_allowed_in_its_old_spelling_asks_now():
     """Each command text's harness line the CLI allowed in its old spelling under the old list, both as written and
     with the script run directly (whichever the old text ran), is allowed by the CLI now: a `${...}` channel on it
-    would ask. Agent texts are outside: their Bash keeps the channel, as no printed root reaches a subagent."""
+    would ask. Agent texts are outside: their Bash keeps the channel, as no printed root reaches a subagent; so is
+    the start-function fallback (NO_PRINTED_ROOT)."""
     rules = bash_rules(_allow())
     before = old_rules(rules)
     asks = []
     for where, line in dict.fromkeys((where, line) for where, line, _ in rewritten_commands()):
-        if not where.startswith("commands/"):
+        if not where.startswith("commands/") or line.startswith(NO_PRINTED_ROOT):
             continue
         if all(cli_allows(before, old) for old in old_spellings(line)) and not cli_allows(rules, line):
             asks.append(f"{where}: {line}")
