@@ -79,6 +79,9 @@ ENV = {"CLAUDE_OBLIGATION_STOPGATE": "block"}
 # P2 arms G1 and G3 beside P1b's STOPGATE, and the overnight guard's matcher gains AskUserQuestion (its
 # unattended deny); a landed replay loads the base's settings.json, which has neither.
 P2_ENV = {"CLAUDE_OBLIGATION_GATE": "block", "CLAUDE_OBLIGATION_BARRIER": "block"}
+# P10 (R9): the clean settings form sets PYTHONDONTWRITEBYTECODE, so a session's hooks write no
+# bytecode into the tree; the base's settings.json has no such entry.
+P10_ENV = {"PYTHONDONTWRITEBYTECODE": "1"}
 P2_MATCHER = ("Write|Edit|MultiEdit|Bash", "Write|Edit|MultiEdit|Bash|AskUserQuestion")
 G2 = "hooks/subagentstop-artifact-contract-enforce.py"
 FORGED = "forged@agent:dev Write docs/dev/dev-report-*=dev.status:done,-dev.files_modified"
@@ -536,14 +539,15 @@ def _yours_params():
 def test_your_settings_differs_only_where_a_replay_runs_it(name):
     """This tree's settings.json registers otherwise than the base's exactly at the registrations the
     scenarios below declare they run after the landing (EXERCISES), each checked in its replay, and at
-    P2's and P4's own (ELSEWHERE); its environment differs by STOPGATE=block and P2's arming of G1 and
-    G3 alone (P2_ENV)."""
+    P2's and P4's own (ELSEWHERE); its environment differs by STOPGATE=block, P2's arming of G1 and
+    G3 (P2_ENV) and P10's PYTHONDONTWRITEBYTECODE (P10_ENV) alone."""
     differing = _differing(name)
     assert differing, "this tree registers as the base does: the replays with your settings.json are the replays"
     assert {k: differing.get(k) for k in ELSEWHERE} == ELSEWHERE, differing
     assert set(differing) - set(ELSEWHERE) == set().union(*EXERCISES.values()), differing
     head = _head_settings()
-    assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV == hookrun.settings_env(head) | ENV
+    assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV | P10_ENV == \
+        hookrun.settings_env(head) | ENV
 
 
 @pytest.mark.parametrize("live,case,part", _yours_params(), indirect=["live"])
