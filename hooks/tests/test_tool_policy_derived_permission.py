@@ -158,7 +158,7 @@ def test_any_other_caller_is_denied_whatever_a_prefix_allows(tmp_path, cycle, ca
     assert denial == {"role": "main" if caller == "main" else caller,
                       "tool": "Write" if tool == "Bash" else tool, "target": target,
                       "deny_reason": f"write target {target} is declared by the obligation of the ba "
-                                     f"dispatch for task {TASK}; only that dispatch writes it"}
+                                     f"dispatch for task {TASK}; only ba writes this artifact (D8)"}
 
 
 def test_the_denial_offers_no_workaround(tmp_path, cycle):
@@ -335,11 +335,12 @@ def test_the_hook_never_opens_the_transcript_for_such_a_write(tmp_path):
 
 def test_the_declarable_shapes_are_read_from_the_command_files(tmp_path, monkeypatch):
     policy = _policy()
-    from lib import stop_contract
+    from lib import command_span, stop_contract
 
     commands = tmp_path / "commands"
     commands.mkdir()
     monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+    monkeypatch.setattr(command_span, "COMMANDS_DIR", commands)  # harness_commands' own (P5 R10)
     forms = lambda target: policy._target_forms(target, {"cwd": str(PROJECT)})  # noqa: E731
     # No command file: only the producer question's shape (G2's rule) remains.
     shapes = policy._declarable_shapes()
@@ -968,7 +969,7 @@ def test_a_value_that_takes_a_part_back_is_read_from_the_prompt(tmp_path, monkey
     # without the tail, which the prompt then holds; a segment binding two is read whatever the prompt
     # holds. Every decision equals the full reading's, and both kinds of template make a denial.
     policy = _policy("tool_policy_back")
-    from lib import declared_paths, stop_contract
+    from lib import command_span, declared_paths, stop_contract
 
     one = ("subagent_type: worker\nPart C: <c>\n", '{"role": "worker", "profile": "singular", "artifacts": '
            '[{"kind": "markdown", "path": "docs/dev/s-<c>.md", "identity_anchor": "<c>"}]}')
@@ -988,6 +989,7 @@ def test_a_value_that_takes_a_part_back_is_read_from_the_prompt(tmp_path, monkey
         commands = tmp_path / f"commands{n}"
         commands.mkdir()
         monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+        monkeypatch.setattr(command_span, "COMMANDS_DIR", commands)  # harness_commands' own (P5 R10)
         (commands / "x.md").write_text("---\nname: x\n---\n```\n" + fence + "<obligation v=\"1\">\n" + example
                                        + "\n</obligation>\n```\n", encoding="utf-8")
         s = Session(tmp_path / f"projects{n}")
@@ -1070,7 +1072,7 @@ def test_the_template_bounds_hold_every_commands_template_shapes(tmp_path, monke
     # an opener with no close, two openers before one close, blocks outside any fence, spaces around
     # the JSON that only a Unicode-aware strip removes, and a path of any shape (then both are _ANY).
     policy = _policy("tool_policy_bounds")
-    from lib import declared_paths, stop_contract
+    from lib import command_span, declared_paths, stop_contract
 
     def check():
         declared_paths._FENCE_SHAPES.clear()
@@ -1095,6 +1097,7 @@ def test_the_template_bounds_hold_every_commands_template_shapes(tmp_path, monke
     commands = tmp_path / "commands"
     commands.mkdir()
     monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+    monkeypatch.setattr(command_span, "COMMANDS_DIR", commands)  # harness_commands' own (P5 R10)
     example = '{"role": "ba", "profile": "singular", "artifacts": [{"kind": "markdown", "path": "docs/dev/%s-<t>.md"}]}'
     (commands / "a.md").write_text(
         "---\n---\n```\nsubagent_type: ba\n<obligation v=\"1\">  " + example % "one" + "　\n</obligation>\n```\n"
@@ -1228,7 +1231,7 @@ def test_the_declarable_shapes_decode_only_an_escaped_value(tmp_path, monkeypatc
     # A path value with no backslash is taken as written; json.loads gave the same (or refused a control
     # character, and the raw text was taken). The shapes equal the ones decoding every value gave.
     policy = _policy("tool_policy_shape_values")
-    from lib import declared_paths, stop_contract
+    from lib import command_span, declared_paths, stop_contract
 
     def decoded_every_value():
         shapes = {declared_paths._shape(declared_paths._QUESTION_PATH)}
@@ -1245,6 +1248,7 @@ def test_the_declarable_shapes_decode_only_an_escaped_value(tmp_path, monkeypatc
     commands = tmp_path / "commands"
     commands.mkdir()
     monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
+    monkeypatch.setattr(command_span, "COMMANDS_DIR", commands)  # harness_commands' own (P5 R10)
     (commands / "x.md").write_text('"path": "a/b\\u002ec"\n"path": "d/e\\/f.md"\n"path": "g/h\tij.json"\n'
                                    '"path": "k/<l>\\\\m"\n"path": "n/\\q"\n', encoding="utf-8")
     with declared_paths.decision():
@@ -1280,6 +1284,69 @@ def test_a_hook_process_ends_with_the_status_and_output_it_decided(tmp_path, cyc
     assert len(denied.stderr.splitlines()) == 1
     allowed = cycle.run(tmp_path, "Write", _write("docs/dev/notes.md"), None)
     assert (allowed.returncode, allowed.stderr, allowed.stdout) == (0, "", "")
+
+
+# P5 R1, A14: each pipeline's producer artifact, written by the main agent or by a subagent its
+# obligation does not name, is denied with the D8 text; the extractor reads the heredoc and jq forms.
+QA_REPORT = f"docs/dev/qa-report-{TASK}.json"
+
+
+def _producers(tmp_path) -> Session:
+    s = Session(tmp_path / "producers")
+    s.command("dev")
+    s.qa = s.dispatch("You are QA.\n" + _block(_obligation("qa", "final_verification", QA_REPORT)), "qa")
+    s.ba = s.dispatch("You are the BA subagent.\n" + _block(_obligation("ba", "singular", CONTEXT,
+                                                                          f"docs/dev/ba-spec-{TASK}.md")), "ba")
+    s.baqa = s.dispatch("You are QA.\n" + _block(_obligation("qa", "ba_validation", f"docs/dev/ba-qa-report-{TASK}.json")),
+                        "qa")
+    s.tw = s.dispatch("You write tests.\n" + _block(_obligation("test-writer", "singular",
+                                                                  f"tests/generated/{TASK}/manifest.json")), "test-writer")
+    s.pm = s.dispatch("You are the PM.\n" + _block(_obligation(
+        "pm", "overnight", "docs/dev/overnight/sess-x/retro-report-cycle1.json")), "pm")
+    s.dev = s.dispatch("You are the dev subagent.\n" + _block(_obligation("dev", "singular", REPORT)), "dev")
+    s.gp = s.dispatch("Describe the toy package. DO NOT modify files.", "general-purpose")
+    return s
+
+
+@pytest.mark.parametrize("path,role", [
+    (QA_REPORT, "qa"), (f"docs/dev/ba-spec-{TASK}.md", "ba"), (f"tests/generated/{TASK}/manifest.json", "test-writer"),
+    ("docs/dev/overnight/sess-x/retro-report-cycle1.json", "pm")])
+def test_the_main_agent_is_denied_each_producers_artifact(tmp_path, path, role):
+    denial = _denial(_producers(tmp_path).run(tmp_path, "Write", _write(path), None))
+    assert denial["role"] == "main" and denial["target"] == str(PROJECT / path)
+    assert denial["deny_reason"].endswith(f"; only {role} writes this artifact (D8)"), denial
+
+
+def test_a_subagent_its_obligation_does_not_name_is_denied(tmp_path):
+    s = _producers(tmp_path)
+    assert "only qa writes" in _denial(s.run(tmp_path, "Write", _write(QA_REPORT), (s.gp, "general-purpose")))[
+        "deny_reason"]
+    ba_qa = f"docs/dev/ba-qa-report-{TASK}.json"
+    assert "only qa writes" in _denial(s.run(tmp_path, "Write", _write(ba_qa), (s.ba, "ba")))["deny_reason"]
+    assert s.run(tmp_path, "Write", _write(ba_qa), (s.baqa, "qa")).returncode == 0
+    assert s.run(tmp_path, "Write", _write(REPORT), (s.dev, "dev")).returncode == 0
+
+
+@pytest.mark.parametrize("command", [
+    f"echo x > {CONTEXT}",
+    f"cat > {QA_REPORT} <<'EOF'\n{{\"a\": 1}}\nEOF",
+    f"cat <<EOF > {QA_REPORT}\n{{}}\nEOF",
+    f"jq '.a = 1' {QA_REPORT} > {QA_REPORT}.tmp && mv {QA_REPORT}.tmp {QA_REPORT}",
+    f"jq -n '{{}}' | tee {QA_REPORT} >/dev/null",
+    f"jq '.a = 1' docs/dev/x.json > {QA_REPORT}",
+])
+def test_the_extractor_reads_heredoc_and_jq_writes(tmp_path, command):
+    denial = _denial(_producers(tmp_path).run(tmp_path, "Bash", {"command": command}, None))
+    assert denial["deny_reason"].endswith("writes this artifact (D8)"), denial
+
+
+def test_what_no_dispatch_declares_stays_the_main_agents(tmp_path):
+    s = _producers(tmp_path)
+    for path in (f"docs/dev/do-report-{TASK}.json", "src/manifest.json"):
+        assert s.run(tmp_path, "Write", _write(path), None).returncode == 0, path
+    do = Session(tmp_path / "do")
+    do.command("do")
+    assert do.run(tmp_path, "Write", _write(f"docs/dev/do-report-{TASK}.json"), None).returncode == 0
 
 
 @pytest.mark.parametrize("seed", range(3))

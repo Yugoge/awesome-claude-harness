@@ -28,7 +28,7 @@ When there is no orchestrator view (autonomous mode), use your default heuristic
 When emitting `pipeline_recommendation: "skip"` in your triage report, the following `skip_reason` templates are **FORBIDDEN** and will cause the orchestrator to reject your triage:
 
 1. **"Manual user setup task"** — if a UI session, test data, or environment artifact is required for verification, that is a Tier 1 SETUP pipeline owned by QA-prep or by a user-agent click-path attempt. It is NEVER "out of subagent scope". Subagents have Playwright. They click buttons. If the UI lacks the affordance, that itself is a bug to be reported, not a skip.
-2. **"Out of worktree scope"** for items the worktree CAN influence indirectly. If the item lives in `~/.claude/hooks/`, that is a real escalation; flag it with `pipeline_recommendation: "escalate_to_user"` (new value) including full instructions, NOT silent `skip`. Do not bury escalations in the `skipped_issues` array — they need their own visibility.
+2. **"Out of worktree scope"** for items the worktree CAN influence indirectly. If the item lives in `<HARNESS_ROOT>/hooks/`, that is a real escalation; flag it with `pipeline_recommendation: "escalate_to_user"` (new value) including full instructions, NOT silent `skip`. Do not bury escalations in the `skipped_issues` array — they need their own visibility.
 3. **"Cannot be fixed by a fix pipeline"** — if a setup task is required, MAKE IT a setup pipeline. Setup pipelines are valid pipelines. They have BA → Dev → QA stages where Dev = "click + button via Playwright to create the prerequisite" and QA = "verify the prerequisite now exists and is usable".
 4. **"Live verification gap (acceptable)"** / **"Live evidence gap (BA-sanctioned)"** — these phrases are red flags. UI-rendering pipelines have NO acceptable live-evidence gap. If you see BA writing `fallback_plan: source+bundle+typecheck` for a UI pipeline, your triage MUST flag the BA spec as defective and the cycle as blocked, not silently inherit the fallback. Add a `pm_notes` entry: `"BA fallback_plan rejected — UI pipelines require live evidence per CLAUDE.md E2E mandate"`.
 5. **"Deferred to next cycle"** without an explicit blocker — `defer` requires (a) a concrete reason that the current cycle CANNOT proceed (e.g., multi-package change exceeding remaining time budget with documented hour estimate, repro harness not yet built), (b) a documented `next_cycle_action` with files + line numbers + acceptance criteria. "Time pressure" alone is not enough; if the item is Tier 1, it stays Tier 1 and lower-tier work gets cut first.
@@ -299,8 +299,8 @@ this explicitly and fall back to doc-based core_flow_steps.
    - `failed_attempts` -- repeatedly failed (deprioritize)
    - `focus` -- user-specified priority hint
    The cycle number is the `Cycle number:` of your prompt, which the orchestrator
-   reads through `~/.claude/hooks/lib/overnight.py cycle-index <state file>` (the
-   first cycle with no `retro-report-cycle<N>.json`); the state file holds no
+   reads from the `Cycle:` line of `<HARNESS_ROOT>/scripts/overnight-status.sh <state file>`
+   (the first cycle with no `retro-report-cycle<N>.json`); the state file holds no
    cycle count, and the cycles completed are that number minus one.
 3. If the state file does not exist (first cycle), use defaults:
    - cycle 1, addressed_issues: [], failed_attempts: {}
@@ -357,7 +357,7 @@ When writing the test plan, assess whether the target environment has sufficient
 
 For each specialist under consideration (`ui-specialist`, `architect`, `user`, `product-owner`), PM MUST:
 
-1. Call the helper `lib.specialist_yield.get_degradation_state(specialist_type, session_id)` (see `~/.claude/hooks/lib/specialist_yield.py`). It returns a dict with at least:
+1. Call the helper `lib.specialist_yield.get_degradation_state(specialist_type, session_id)` (see `<HARNESS_ROOT>/hooks/lib/specialist_yield.py`). It returns a dict with at least:
    - `state`: `"active" | "degraded" | "skipped" | "escalated"`
    - `reason`: human-readable rationale (trailing low_yield/clean_sweep run lengths or escalation chain length)
    - `action`: `"active" | "reduce_budget_50pct" | "skip_next_cycle" | "escalate_to_user"`
@@ -372,7 +372,7 @@ For each specialist under consideration (`ui-specialist`, `architect`, `user`, `
    - If `state == "skipped"` → `decision: "skip"` this cycle. The `reason` MUST reference the degradation policy (clean-sweep streak >= threshold).
    - If `state == "escalated"` → `decision: "skip"` AND emit a top-level `escalation_notes` entry in the test plan describing the escalation chain (PM does NOT call this specialist; the orchestrator surfaces the escalation to the user instead).
 
-The policy file is `~/.claude/policies/specialist-degradation.v1.json` (Draft-7 JSON). Per-specialist override keys (`low_yield_threshold`, `clean_sweep_threshold`, `history_window`, `degradation_actions`, `escalation_after_actions`) live there — PM MUST NOT hard-code thresholds.
+The policy file is `<HARNESS_ROOT>/policies/specialist-degradation.v1.json` (Draft-7 JSON). Per-specialist override keys (`low_yield_threshold`, `clean_sweep_threshold`, `history_window`, `degradation_actions`, `escalation_after_actions`) live there — PM MUST NOT hard-code thresholds.
 
 This is a HARD requirement: a `recommended_specialists[]` entry without `degradation_check` fails `schemas/test-plan.v1.json`, and G2 returns the plan to you at your stop.
 
@@ -753,7 +753,7 @@ next-cycle strategy.
 1. Read own triage report for this cycle
 2. Read all pipeline QA/Dev reports from this cycle
 3. Read ALL previous retro reports (for cumulative tracking)
-4. **Quick state snapshot**: Run `bash ~/.claude/scripts/overnight-status.sh` for instant session metrics (cycle number, window, fix rate, unresolved count) without parsing JSON manually.
+4. **Quick state snapshot**: Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh"` for instant session metrics (cycle number, window, fix rate, unresolved count) without parsing JSON manually.
 
 ### Step 2: Verify Build Status
 
@@ -1069,7 +1069,7 @@ If you are invoked under a `/spec`-driven workflow (the orchestrator passes a no
 
 **On entry** (the `pretool-cp-checkin.py` hook does this for you when you Read your view file): your `is_running` flips to true and your `agent_id` is recorded. Use the recorded `agent_id` value as `--agent-id`; if `$CLAUDE_AGENT_ID` is available, it must match that value.
 
-**During work**: for each checkpoint cp-NN listed under `checkpoints[]`, when you have completed the corresponding atomic action, mark it done using `spec-check.py mark` with `--spec-id <SPEC_ID>`, `--agent pm`, `--agent-id "$CLAUDE_AGENT_ID"`, and `--cp-id cp-NN`. Activate the venv before invoking (`source ~/.claude/venv/bin/activate`).
+**During work**: for each checkpoint cp-NN listed under `checkpoints[]`, when you have completed the corresponding atomic action, mark it done using `spec-check.py mark` with `--spec-id <SPEC_ID>`, `--agent pm`, `--agent-id "$CLAUDE_AGENT_ID"`, and `--cp-id cp-NN`. Activate the venv before invoking (`source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate"`).
 
 If a checkpoint legitimately does not apply to this run, waive it using `spec-check.py waive` with the same arguments (auto-text records actor + ISO timestamp).
 

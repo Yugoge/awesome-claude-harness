@@ -157,7 +157,7 @@ class DevCommandCycle:
     def _rules(self):
         return [
             (r"^DEV_SESSION_ID$", lambda m: self.reg),
-            (r"^(?:timestamp|task_id|task-id)$", lambda m: self.tid),
+            (r"^(?:timestamp|task_id|task-id|TASK_ID)$", lambda m: self.tid),
             (r"^(?:YYYYMMDD-HHMMSS|same timestamp)$", lambda m: self.digits),
             (r"^(?:requirement from Step 1|original requirement|requirement)$", REQUIREMENT),
             (r"^spec_path or null$", lambda m: self.spec_path or "null"),
@@ -279,8 +279,8 @@ class DevCommandCycle:
             return
         o = self.o
         doc = next(c for c in re.findall(r"`([^`\s]+\.md)`", o.section("Command Development Best Practices"))
-                   if c.startswith("~/"))
-        path = os.path.join(self.rp.layout.home, doc[2:])
+                   if c.startswith(("~/", "<HARNESS_ROOT>/")))
+        path = os.path.join(self.rp.layout.home, doc[2:]) if doc.startswith("~/") else o.bind(doc)
         self.gated(lambda label: o.s.read(path, label=label, deviation=o.devs.at(label)),
                    "Read command-development patterns")
         self.patterns_read = True
@@ -299,7 +299,9 @@ class DevCommandCycle:
                         fh.write(before)
         o.hook_out = ""  # no longer in the main agent's context
         sec = o.section("Step 1")
-        found = [(b, para) for _n, b, para in o.step_blocks("Step 1") if "prompt-workflow.py start" in b.text]
+        # The start function's call, by its path or through the CLAUDE_HOME channel (`prompt-workflow.py" start`).
+        found = [(b, para) for _n, b, para in o.step_blocks("Step 1")
+                 if re.search(r'prompt-workflow\.py"? start\b', b.text)]
         if not found:
             raise cmdtext.TextNotFound("Step 1 has no start-function fallback")
         blk = found[0][0]

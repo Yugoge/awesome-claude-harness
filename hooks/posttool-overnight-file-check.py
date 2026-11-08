@@ -12,7 +12,10 @@ against its identity anchor and terminal line
 (contract_runtime.validate_markdown_artifact_for_obligation). The contract
 names no artifact and no schema: the obligation is the one declaration, so a
 contract and a dispatch can never disagree on a schema version. A dispatch
-that carries no obligation declares nothing to check here.
+that carries no obligation declares nothing to check here. A fresh producer
+question its role wrote is decided by G2's one rule
+(contract_runtime.producer_question): valid, it stands in for every declared
+artifact; invalid, it is refused.
 
 The session is the one whose overnight state record the returned call's
 session owns; whether its window is live is lib.overnight.state_verdicts's
@@ -21,13 +24,19 @@ in: the PM retrospective (Step 20) returns with the report that ends its
 cycle, and that report is checked against that cycle's contract.
 
 HARD CUTOVER: when the cycle has no ``cycle-contract.json`` (before PM TRIAGE
-returns, or outside /dev-overnight), exit 0 silently.
+returns, or outside /dev-overnight), exit 0 silently. A contract file that
+holds no JSON object governs no dispatch here either: its one consumer is
+pretool-subagent-enforce.py (Case M), which refuses every dispatch but the
+exploration's (steps 2-4) before it runs; those name no contract entry, and
+PM TRIAGE's return is the one that replaces the file.
 
 Exit codes:
-  0 — Not an overnight session, window closed, no contract, no matching
-      entry, no obligation, or every declared artifact valid.
-  2 — A declared artifact missing or invalid (hard gate): the message names each
-      artifact with the check it fails, and the declaring dispatch's next round.
+  0 — Not an overnight session, window closed, no contract (or one that holds
+      no JSON object), no matching entry, no obligation, or every declared
+      artifact valid.
+  2 — A declared artifact missing or invalid (hard gate): the message names
+      each artifact with the check it fails, and the declaring dispatch's next
+      round.
 """
 
 from __future__ import annotations
@@ -95,7 +104,7 @@ def _run_check(data: dict) -> int:
     agent_type = ti.get('subagent_type', '')
     prompt = ti.get('prompt', '')
     session_id = data.get('session_id', '')
-    state = overnight.session_state(session_id)
+    state = contract_runtime.session_record(session_id, data)
     if state is None or not overnight.state_verdicts(state).window_live:
         return 0
     parsed = obligation.parse_obligation(prompt)
@@ -109,16 +118,22 @@ def _run_check(data: dict) -> int:
                                                      if isinstance(a.get('path'), str) and a['path']])
     contract = contract_runtime.load_contract(session_id, cycle_id, state)
     if not isinstance(contract, dict):
-        # Hard cutover: no contract for this cycle yet — silent passthrough.
+        # Hard cutover: no contract for this cycle yet — silent passthrough. One that
+        # holds no JSON object is Case M at dispatch (pretool-subagent-enforce.py).
         return 0
-    entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt, agent_type))
+    entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt))
     if entry is None:
         return 0
-    errors = [error for artifact in artifacts for error in _artifact_errors(artifact, root)]
+    # G2's one rule: a fresh producer question stands in for every declared artifact when valid.
+    question = contract_runtime.producer_question(root, parsed.obligation)
+    errors = [f"{question['path']}: {e}" for e in question['errors']] if isinstance(question, dict) else []
+    errors += [error for artifact in (artifacts if question != 'valid' else [])
+               for error in _artifact_errors(artifact, root)]
     if errors:
         _emit_block(agent_type, session_id, cycle_id, errors)
         return 2
-    print(f'OVERNIGHT FILE CHECK: {agent_type} obligation artifacts valid '
+    print(f'OVERNIGHT FILE CHECK: {agent_type} '
+          f'{"producer question" if question == "valid" else "obligation artifacts"} valid '
           f'(step={entry.get("step")}).')
     return 0
 

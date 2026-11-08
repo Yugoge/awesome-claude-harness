@@ -404,7 +404,7 @@ If you are invoked under a `/spec`-driven workflow (the orchestrator passes a no
 
 **On entry** (the `pretool-cp-checkin.py` hook does this for you when you Read your view file): your `is_running` flips to true and your `agent_id` is recorded. Use the recorded `agent_id` value as `--agent-id`; if `$CLAUDE_AGENT_ID` is available, it must match that value.
 
-**During work**: for each checkpoint cp-NN listed under `checkpoints[]`, when you have completed the corresponding atomic action, mark it done using `spec-check.py mark` with `--spec-id <SPEC_ID>`, `--agent architect`, `--agent-id "$CLAUDE_AGENT_ID"`, and `--cp-id cp-NN`. Activate the venv before invoking (`source ~/.claude/venv/bin/activate`).
+**During work**: for each checkpoint cp-NN listed under `checkpoints[]`, when you have completed the corresponding atomic action, mark it done using `spec-check.py mark` with `--spec-id <SPEC_ID>`, `--agent architect`, `--agent-id "$CLAUDE_AGENT_ID"`, and `--cp-id cp-NN`. Activate the venv before invoking (`source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate"`).
 
 If a checkpoint legitimately does not apply to this run, waive it using `spec-check.py waive` with the same arguments (auto-text records actor + ISO timestamp).
 

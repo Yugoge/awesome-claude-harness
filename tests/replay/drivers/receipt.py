@@ -5,16 +5,18 @@ The owner, in their own terminal, binds a resource session to an overnight sessi
 `scripts/session-resources.py --project-dir <project> provision --binding-json <binding>` (the
 `dev-overnight` binding of hooks/tests/test_laneb_stop_coordinator.py's `_binding`, its workflow
 generation the one the receipt carries: the cycle plus one), both keys in that call's environment too.
-The session's overnight state is the time-lock test's
+The session's overnight state and closeout are the time-lock test's
 (`test_timelock_uses_exact_state_and_publishes_without_finalizing`): the resource session as its dev
-registry session, cycle 0, and the closeout fields present. Then the main agent's Stop is replayed
-three times: with end_time in the future, then twice with it past.
+registry session, cycle 0, and the closeout on disk that lib/overnight `closeout_gaps` reads after
+end_time (Step 20's PM retrospective of cycle 1 and Step 21's summary), so one cycle ended and the
+receipt's generation is 2. Then the main agent's Stop is replayed three times: with end_time in the
+future, then twice with it past.
 
 Fixtures, not harness writes: the trust root (an absolute directory outside the project, mode 0700),
-the overnight state and the final summary. prepare() writes the state and the summary before the
-replay starts (cli.prepare: outside the trace, so they are inputs), the state's end_time LOCK_S seconds
-ahead; the first Stop comes before it and the driver waits it out before the other two, so no step of
-the replay writes either file. The trust root is a directory of the sandbox's own (the operator's store
+the overnight state, the retrospective and the summary. prepare() writes the state and the closeout
+before the replay starts (cli.prepare: outside the trace, so they are inputs), the state's end_time
+LOCK_S seconds ahead; the first Stop comes before it and the driver waits it out before the other two,
+so no step of the replay writes any of those files. The trust root is a directory of the sandbox's own (the operator's store
 of the keys' records, outside the user's home and project, as the test file's tmp directory is). So
 the artifact check's trace (row 19, E1) shows the receipt's writer and readers (terminal.json) and
 finalized.json's writer and its later-run reader from the provision call and the Stops alone.
@@ -58,7 +60,9 @@ SID = "5f0c2e7a-8b1d-4c3e-9a6f-2d4b8e1c7a90"
 RSID = "overnight-resource-3c9e1a7b5d20"
 DISPATCH = "dispatch-7d2b4f9e1c3a"
 TRUST_DIR = "laneb-trust"
-SUMMARY = "~/toyproj/summary.md"   # the time-lock expands it: the same file in either sandbox mode
+# The closeout the time-lock reads after end_time, under the working root (lib/overnight closeout_gaps)
+RETRO = f"docs/dev/overnight/{SID}/retro-report-cycle1.json"
+SUMMARY = "docs/dev/overnight-summary-2026-01-01.md"
 # How far ahead of prepare() the state's end_time lies: the first Stop must come before it (the
 # replay's start, a traced provision call), and the replay then waits it out.
 LOCK_S = 30
@@ -67,22 +71,16 @@ MARGIN_S = 2
 
 def state(end_time: datetime) -> dict:
     return {"session_id": SID, "dev_registry_session_id": RSID, "cycle_count": 0,
-            "end_time": end_time.isoformat(timespec="seconds"), "final_summary_path": SUMMARY,
-            "pm_retro_reports": ["retro"], "artifact_checkpoint_status": "checkpointed",
-            "current_issues": [], "unresolved_issues": []}
+            "end_time": end_time.isoformat(timespec="seconds")}
 
 
 def prepare(project: str, git) -> None:
-    """The owner's state before the replay: the overnight state record and its final summary."""
+    """The owner's state before the replay: the overnight state record and its closeout."""
     os.makedirs(os.path.join(project, ".claude"), exist_ok=True)
-    with open(os.path.join(project, "summary.md"), "w") as fh:
-        fh.write("done\n")
-    # Step 21's summary, where dev-overnight.md writes it (docs/dev/overnight-summary-<date>.md): the
-    # closeout the time-lock decides on after end_time reads that file (P1c X5, overnight.closeout_gaps).
-    os.makedirs(os.path.join(project, "docs", "dev"), exist_ok=True)
-    day = datetime.now(timezone.utc).strftime("%Y%m%d")
-    with open(os.path.join(project, "docs", "dev", f"overnight-summary-{day}.md"), "w") as fh:
-        fh.write("# Overnight summary\n\ndone\n")
+    for rel, body in ((RETRO, "{}\n"), (SUMMARY, "done\n")):
+        os.makedirs(os.path.dirname(os.path.join(project, rel)), exist_ok=True)
+        with open(os.path.join(project, rel), "w") as fh:
+            fh.write(body)
     end = datetime.now(timezone.utc) + timedelta(seconds=LOCK_S)
     with open(os.path.join(project, ".claude", f"overnight-state-{SID}.json"), "w") as fh:
         json.dump(state(end), fh)
@@ -118,7 +116,7 @@ class ReceiptRun:
         self.keys = {TRUST_KEY_ENV: TRUST_KEY, TRUST_ROOT_ENV: self.trust_root}
         self.binding = {"claude_session_id": SID, "resource_session_id": RSID, "role": "dev",
                         "dispatch_id": DISPATCH, "agent_id": DISPATCH, "command": "dev-overnight",
-                        "workflow_instance_id": f"overnight:{SID}", "workflow_generation": 1,
+                        "workflow_instance_id": f"overnight:{SID}", "workflow_generation": 2,
                         "spec_id": "20260808-035658"}
         res = os.path.join(self.project, ".claude", "session-resources", RSID)
         self.terminal = os.path.join(res, "terminal.json")
@@ -237,7 +235,7 @@ class ReceiptRun:
         got = tuple(receipt.get(k) for k in ("terminal_status", "workflow_generation", "resource_session_id",
                                             "claude_session_id", "command"))
         fact(self.rp, "receipt", dict(zip(("terminal_status", "workflow_generation"), got), source=source))
-        e("past1: receipt", got == ("completed_by_deadline", 1, RSID, SID, "dev-overnight"), got)
+        e("past1: receipt", got == ("completed_by_deadline", 2, RSID, SID, "dev-overnight"), got)
 
         p2 = self.stop(s, "past2")
         e("past2: coordinator exit", p2["rc"] == 0, p2["rc"])

@@ -43,7 +43,7 @@ You receive JSON context with this structure:
   "context": {
     "project_root": "/absolute/path/to/project",
     "test_directory": "/absolute/path/to/project/tests",
-    "venv_path": "~/.claude/venv",
+    "venv_path": "<HARNESS_ROOT>/venv",
     "validators": [
       {
         "type": "script",
@@ -70,7 +70,7 @@ You receive JSON context with this structure:
 
 For script-based validators (`validate-*.py`):
 
-**Python syntax check**: `source ~/.claude/venv/bin/activate && python3 -m py_compile tests/scripts/validate-venv-usage.py`
+**Python syntax check**: `source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 -m py_compile tests/scripts/validate-venv-usage.py`
 
 **Checks**:
 - [ ] File parses without syntax errors
@@ -337,9 +337,9 @@ This contract is mandatory in that mode:
    `$CLAUDE_AGENT_ID` is available, it must match that value.
 2. Treat each `checkpoints[].id` entry as a required checklist item.
 3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent test-validator --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark --spec-id <SPEC_ID> --agent test-validator --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent test-validator --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" waive --spec-id <SPEC_ID> --agent test-validator --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 5. Before stopping, confirm every checkpoint is either `done` or
    `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
    to block exit with code 2.

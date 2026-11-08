@@ -21,9 +21,9 @@ your job is to classify, stage, commit, and write the push-gate token.
 
 ```
 CONTROL_ROOT=$HOME          # resolved control root (parent-repo working-tree root), supplied by the /commit Step 7 dispatch — NOT an author-absolute literal; fallback for dev-report lookup when subproject search yields nothing; close-report and ticket I/O always use CONTROL_ROOT
-NESTED_REPO=$(realpath ~/.claude)   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
+NESTED_REPO=$(realpath "${CLAUDE_HOME:-$HOME/.claude}")   # resolved harness-home (nested repo) root, supplied by the /commit dispatch
 REPOSITORY_PLAN=<JSON>      # normal-mode authority emitted by resolve-commit-repos.py; empty only in bulk mode
-ARTIFACT_CHAIN=<JSON>       # normal /dev artifact authority emitted by resolve-dev-artifact-chain.py; empty for bulk/source=do
+ARTIFACT_CHAIN=<JSON>       # normal /dev chain data fields of /commit Step 3's disposition call; empty for bulk/source=do
 ATTRIBUTION_LOG=<JSON>      # write-time attribution journal slice emitted by verify-attribution-chain.py, scoped to REPOSITORY_PLAN's owned paths; main-path attribution authority for the staging decision (see "Attribution and staging decision" below); empty object in bulk mode
 ```
 
@@ -97,7 +97,7 @@ policy refuses an `rm` of it; `scripts/install/tmpfiles-claude-scratch.conf` age
 `/tmp/claude-scratch` out).
 
 **Rule CP-3 — the push-gate token reaches disk only through its one writer, in a SEPARATE step.**
-Run `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`
+Run `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`
 (see Phase 10) — never the Write tool, an inline `python3 -c`, a heredoc, `echo` or a redirect.
 The writer resolves the token's path itself, so its command line carries neither the token
 JSON nor its destination. The push-gate write is ALWAYS a distinct step from the `git commit`
@@ -124,9 +124,10 @@ handling are all unchanged).
 - `DRYRUN` — `true` | `false`
 - `FORCE` — `true` | `false`
 - `REPOSITORY_PLAN` — required in normal mode. Exact schema-1 JSON emitted by `resolve-commit-repos.py`, including task/report digest and ordered repository-specific repo/branch/HEAD/path bindings. Empty only in bulk mode, which preserves the legacy control+nested sweep.
-- `ARTIFACT_CHAIN` — required and non-empty for normal `/dev` mode. Exact
-  status in {"pass", "pass_with_exceptions"} JSON emitted by
-  `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`.
+- `ARTIFACT_CHAIN` — normal `/dev` mode: the chain data fields (`mode`, `lanes`,
+  `report_paths`, `canonical_dev_report`, `artifact_paths`,
+  `commit_whitelist_artifacts`, `qa_inputs`) of the disposition that admitted the task
+  (`/commit` Step 3), data this agent takes as given.
   Empty only in bulk mode or when the normal source is a source=`do` report.
 - `ATTRIBUTION_LOG` — write-time attribution journal slice, exact JSON emitted by
   `scripts/verify-attribution-chain.py --json` scoped to `REPOSITORY_PLAN`'s owned
@@ -158,43 +159,9 @@ resulting repo-relative partition to equal every entry's `owned_paths`.
 Any mismatch returns `failed/repository_plan_invalid` before index mutation. Do not
 silently rebuild or widen the plan inside this agent.
 
-When the plan's report is `dev-report-<TASK_ID>.json`, fail closed unless
-`ARTIFACT_CHAIN` is an object with `status in {"pass", "pass_with_exceptions"}`,
-`task_id == TASK_ID`, `mode` in `{singular, fanout}`, and `canonical_dev_report`
-resolving to the same file as `REPOSITORY_PLAN.report_path`. Require arrays for
-`lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
-`qa_inputs`. `pass_with_exceptions` (ticket 20260911-011232) admits here
-without this agent widening admission on its own judgment: by the time
-changelog-analyst runs, `/commit`'s own Step 3 close-gate has already required
-a passing `CLOSE: YES` verdict from `/close`, and `/close`'s own QA debate
-already independently corroborated every `disclosed_exceptions[]` entry
-before granting that verdict -- this check consumes a chain a prior gate
-already vouched for, it does not itself adjudicate the exceptions. A genuine
-`status == "fail"` is refused exactly as before. The passed chain result is
-the only authority for base cycle artifacts; do not re-scan lane suffixes or
-impose a singular parent shape. A source=`do` plan instead requires an empty
-`ARTIFACT_CHAIN` and follows the existing do-report path.
-
-**One named exception (R4 late-repair, codex round-2 finding #10)**: when
-`REPOSITORY_PLAN.report_path`'s basename is `dev-report-<TASK_ID>.effective.json`
-instead of the canonical name, the equality check above (`canonical_dev_report
-== REPOSITORY_PLAN.report_path`) would otherwise fail by construction --
-`ARTIFACT_CHAIN.canonical_dev_report` is deliberately unchanged, additive-only
-(AC-15), and still names the original file. This mismatch is accepted ONLY
-after changelog-analyst itself independently re-verifies it -- never trusted
-from `REPOSITORY_PLAN`'s shape alone: dynamically load
-`os.path.expanduser('~/.claude/scripts/late-repair-controller.py')` and call
-`resolve_effective_report_state(<TASK_PROJECT_ROOT>, TASK_ID)`; accept the
-mismatch ONLY when the returned state is `"verified"` AND the returned path
-resolves to the same file as `REPOSITORY_PLAN.report_path`. Any other
-outcome (state `"none"` or `"invalid"`, or a resolved path that disagrees)
-is `failed/repository_plan_invalid` exactly as an unexplained mismatch
-always has been -- this is the ONLY condition under which the equality
-check may be bypassed; every other report_path/canonical_dev_report
-mismatch remains an unconditional failure, completely unchanged from
-before this cycle. When `REPOSITORY_PLAN.report_path`'s basename is the
-canonical `dev-report-<TASK_ID>.json`, this exception never triggers and
-the original equality check runs exactly as it always has.
+`ARTIFACT_CHAIN` is not validated here: it is data of the disposition that admitted the
+task, and its `commit_whitelist_artifacts` is Phase 2's item 4. A source=`do` plan has an
+empty `ARTIFACT_CHAIN` and follows the existing do-report path.
 
 After validation, set `GIT_ROOT` to each plan entry in ascending `order` and run
 `git -C "${GIT_ROOT}" status --porcelain=v1`. Parse each output. Extract ALL files
@@ -263,14 +230,11 @@ The candidate set is restricted to a **staging whitelist** consisting of:
    `mode == "singular"`. When `mode == "fanout"` it instead admits every
    resolver-validated lane ticket/context/dev/QA artifact plus the parent
    canonical/completion. Do not glob lane suffixes or create pseudo-parent
-   artifacts. **R4 late-repair
-   addition (not a resolver change -- `commit_whitelist_artifacts` itself
-   stays additive/unchanged per AC-15):** when the named exception above
-   admitted `dev-report-<TASK_ID>.effective.json` as `REPOSITORY_PLAN.report_path`
-   (state `"verified"`), this agent's own guarded commit path additionally
-   admits that exact path into this list -- it does not otherwise appear in
-   `commit_whitelist_artifacts` and would otherwise be silently excluded from
-   staging.
+   artifacts. **R4 late-repair addition:** when `REPOSITORY_PLAN.report_path` is
+   `dev-report-<TASK_ID>.effective.json` (the late-repair effective report, which
+   `/commit` plans from only in the controller's `verified` state), that exact path is
+   admitted into this list too -- it does not appear in `commit_whitelist_artifacts`
+   and would otherwise be silently excluded from staging.
 5. Post-chain artifacts matching **anchored patterns** for THIS parent
    `TASK_ID` under `docs/dev/`:
    - `close-report-<TASK_ID>.md`
@@ -333,7 +297,7 @@ Exit with `failure_code: scope_violation`.
 
 **When BULK=false AND no dev-report exists**: check for a do-report before aborting.
 
-- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Preserve the pre-resolver do-path anchored set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-`, and `*-inspector-report-*`, each scoped to the same parent `TASK_ID` under `docs/dev/`) and the original `+30` staged-file-count overhead. `ARTIFACT_CHAIN` must be empty: the resolver contract applies to `/dev`, not `/do`. Skip the provenance filter (do-reports have no `baseline_head_sha`). Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
+- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Preserve the pre-resolver do-path anchored set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-`, and `*-inspector-report-*`, each scoped to the same parent `TASK_ID` under `docs/dev/`) and the original `+30` staged-file-count overhead. `ARTIFACT_CHAIN` is empty: the chain applies to `/dev`, not `/do`. Skip the provenance filter (do-reports have no `baseline_head_sha`). Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
 
 - If neither dev-report NOR do-report exists: **ABORT** — do NOT stage any files.
   Print and exit immediately:
@@ -380,7 +344,7 @@ would-be staged set):
   absolute path to a repo-relative path directly.
 - Note: `~/.claude` may be a symlink to the actual harness-home checkout (on the
   author machine, the nested repo). When operating on the nested repo,
-  `os.path.realpath(os.path.expanduser("~/.claude"))` is the canonical root;
+  `os.path.realpath(os.environ.get("CLAUDE_HOME") or os.path.expanduser("~/.claude"))` is the canonical root;
   dev-report paths like `~/.claude/agents/foo.md` must be realpath-resolved to
   check repo membership.
 
@@ -388,7 +352,7 @@ would-be staged set):
 If `TASK_ID` is non-empty, resolve the dev-report path using the subproject path-walk:
 
 Pipe the `git status --porcelain=v1` output for the repo being committed into
-`python3 ~/.claude/scripts/resolve-dev-report.py` with three required
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-report.py"` with three required
 flags: `--task-id ${TASK_ID}`, `--git-root ${GIT_ROOT}` (absolute path from
 `git rev-parse --show-toplevel`), and `--control-root ${CONTROL_ROOT}`. The
 script normalizes each changed path relative to `GIT_ROOT`, strips workflow
@@ -406,7 +370,7 @@ union instead, exactly as item 3 and its sourcing note specify — derived with
 `scripts/lib/candidate_tree.py` over the reports directory holding the resolved path,
 never read from the canonical, and aborting rather than defaulting to empty when the
 derivation is impossible. When BULK=false, these three arrays form the **primary staging
-whitelist** (along with the resolver-validated `commit_whitelist_artifacts` and anchored
+whitelist** (along with the chain's `commit_whitelist_artifacts` and anchored
 post-chain artifacts defined above). When BULK=true, they are used for commit message
 enrichment only (existing behavior).
 
@@ -571,7 +535,7 @@ real staged index measured AFTER Phase 5. The ordering is:
    commit] and `commits` [the full per-group list]) and exit the Bash process (releasing
    fd 9) — only now, after every group's commit.
 3. **After** the flock is released: write the push-gate token with its one writer (CP-3,
-   Phase 10): `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<repo_root>"
+   Phase 10): `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<repo_root>"
    --branch "<branch>" --commit "<commit_sha>"`, from the descriptor. The writer checks,
    before it writes, that the commit is live HEAD (exit 3: HEAD moved since the commit —
    return `commit_status: failed` with `failure_code: push_gate_race`) and that no other
@@ -623,7 +587,7 @@ flock -w 30 -x 9 || {
 # the commit of every group, and init must re-seed from the NEW head each time, or the
 # export/commit_gate call of the next group below would fail-closed on head_moved against
 # a HEAD this session itself just advanced.
-eval "$(python3 ~/.claude/scripts/session-index.py init --git-root "${GIT_ROOT}")" || {
+SESSION_INDEX_ENV="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/session-index.py" init --git-root "${GIT_ROOT}")" && eval "$SESSION_INDEX_ENV" || {
     echo "ERROR: session-index.py init failed for ${GIT_ROOT} — see SESSION-INDEX REFUSED line above"
     exit 1
 }
@@ -640,7 +604,8 @@ correct. Immediately before each group's `git commit`, re-run
 gate: it re-verifies the private index and that HEAD has not moved since the most recent
 `init` (the same HEAD-stability property Phase 3's own re-check already requires,
 enforced a second way). After EACH group's commit, run
-`python3 ~/.claude/scripts/session-index.py sync-shared --git-root "${GIT_ROOT}"` so the shared index's entries for that group's committed paths catch up to
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/session-index.py" sync-shared --git-root
+"${GIT_ROOT}"` so the shared index's entries for that group's committed paths catch up to
 the new HEAD (left alone, `git status` elsewhere would show the commit as reverted); a
 path it reports `left_foreign` was concurrently staged there by a peer using the shared
 index directly and is intentionally not overwritten. Then re-run `init` (above) before
@@ -699,7 +664,7 @@ uses for every other candidate (the file is untracked, and this route authentica
 report-digest-bound attestation grounds the journal-based decision does not need):
 
 ```bash
-python3 ~/.claude/scripts/stage-owned-hunks.py \
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/stage-owned-hunks.py" \
     --git-root "${GIT_ROOT}" \
     --file "<repo-rel-path>" \
     --untracked-modified-report "<resolved dev_report_path>" \
@@ -1170,7 +1135,7 @@ is released (Phase 3 reconciliation note), write the push-gate token with its on
 using the repository root, branch and FINAL commit sha from the Phase 3 descriptor:
 
 ```bash
-python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
 ```
 
 The writer resolves the token's path itself under the hook state directory (the one
@@ -1580,7 +1545,7 @@ attribution by hook-written record, not proof of identity.
 2. The candidate set is empty after exclusions (there is genuinely nothing to commit).
 3. `git rev-parse --verify HEAD` succeeds (not unborn, not detached).
 4. **No token exists at `token_path`**, the path
-   `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}" --print-path`
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}" --print-path`
    prints (it writes nothing). If a token is present, this path does NOT run —
    whether it belongs to `PUSH_GATE_SID` (already tokenized; nothing to reconcile) or to a
    peer session (rule 7 forbids touching it; report `push_gate_collision` as before). Rule 7
@@ -1589,7 +1554,7 @@ attribution by hook-written record, not proof of identity.
    This is the ONLY attribution test. Run:
 
    ```
-   python3 ~/.claude/hooks/lib/commit_journal.py query \
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/commit_journal.py" query \
      --repo-root "${GIT_ROOT}" --head "${HEAD_SHA}" \
      --task-id "${TASK_ID}" --session-id "${PUSH_GATE_SID}"
    ```
@@ -1689,7 +1654,7 @@ attribution by hook-written record, not proof of identity.
    configured the command errors; treat that as "not published" and continue.
 
 **Action.** Write the token for `HEAD_SHA` exactly as Phase 10 does, with its one writer:
-`python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}"`.
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${HEAD_SHA}"`.
 A HEAD move before or during the write yields `push_gate_race` (exit 3); a token that appeared
 at `token_path` in the meantime yields `push_gate_collision` (exit 4).
 
@@ -1799,7 +1764,7 @@ task cycle files. `baseline_head_sha` is the value of `git rev-parse HEAD` captu
 start before any write operations in this invocation (it comes from the dev-report top-level
 `baseline_head_sha` field; if absent, fall back to `HEAD~1`):
 
-Run: `scripts/precommitted-recovery.sh scan-shas "${GIT_ROOT}" "${baseline_head_sha}" ${task_cycle_files}`
+Run: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" scan-shas "${GIT_ROOT}" "${baseline_head_sha}" ${task_cycle_files}`
 
 Capture the output lines as `precommitted_shas`.
 
@@ -1842,20 +1807,20 @@ CP-2), nothing chained:
 git -C "<GIT_ROOT>" commit --allow-empty -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"
 ```
 
-(The `scripts/precommitted-recovery.sh execute-commit "${GIT_ROOT}" "${MSGFILE}"` helper, which
+(The `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" execute-commit "${GIT_ROOT}" "${MSGFILE}"` helper, which
 internally runs this same minimal `git commit --allow-empty -F`, remains an acceptable
 equivalent — it keeps the message content in the FILE and the command line minimal.)
 
 **Recovery step 4: Capture recovery commit SHA**
 
-Run: `scripts/precommitted-recovery.sh capture-sha "${GIT_ROOT}"`
+Run: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" capture-sha "${GIT_ROOT}"`
 
 Capture the first field as `COMMIT_SHA` and the second as `BRANCH`.
 
 **Recovery step 5: Write push-gate token**
 
 Execute the Phase 10 push-gate write unchanged: run the token's one writer,
-`python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`,
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`,
 in a SEPARATE step (rule CP-3). Track whether the write actually occurred in a local variable
 `PUSH_GATE_WRITTEN`:
 

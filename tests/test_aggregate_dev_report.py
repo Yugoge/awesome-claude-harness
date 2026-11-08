@@ -2182,7 +2182,8 @@ class TestObligationBarrierBlockMissingPriorArtifact:
 
 class TestObligationBarrierAdvisoryPasses:
     """AC4: advisory (unset default, or explicit "advisory") -> exit 0, no
-    block message and nothing written, though the prior artifact is missing."""
+    block message and nothing written, though the prior artifact is missing;
+    the finding the block would name is on stderr (P4 R9)."""
 
     @pytest.mark.parametrize("explicit_mode", [None, "advisory"])
     def test_obligation_barrier_advisory_passes(
@@ -2212,7 +2213,9 @@ class TestObligationBarrierAdvisoryPasses:
             current_prompt, subagent_type="dev", transcript_path=transcript
         )
         assert _run_barrier_hook(monkeypatch, data) == 0
-        assert missing_rel not in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert err.startswith("OBLIGATION BARRIER ADVISORY (pretool-aggregate-check): would block "), err
+        assert f"[artifact_missing] {missing_rel}" in err and "dev(l9)" in err, err
         assert not (fake_home / ".claude" / "logs").exists()
 
 

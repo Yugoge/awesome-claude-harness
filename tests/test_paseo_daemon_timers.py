@@ -294,8 +294,8 @@ def test_ac9_command_doc_names_ensure_in_bootstrap_and_drain_in_new_section():
     bootstrap_end = text.index("\n## ", bootstrap_start + 1)
     bootstrap_section = text[bootstrap_start:bootstrap_end]
 
-    assert "paseo-daemon-timers.py ensure" in bootstrap_section
-    assert "paseo-daemon-timers.py drain" in text
+    assert 'paseo-daemon-timers.py" ensure' in bootstrap_section
+    assert 'paseo-daemon-timers.py" drain' in text
 
 
 # ---------------- watchdog target: harness home + configured model ----------------

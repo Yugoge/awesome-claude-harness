@@ -77,9 +77,11 @@ def scratch_scripts(tmp_path: Path) -> Path:
     for name in ("score-update.sh", "score-inject.sh"):
         shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
     shutil.copy2(REPO_ROOT / "scripts" / "lib" / "score_log.py", root / "scripts" / "lib")
-    # score-update.sh's agents are the roster: hooks/lib/roster.py over agents/.
+    # score-update.sh's agents are the roster: hooks/lib/roster.py over agents/; its rows go
+    # through the log's one writer, hooks/lib/close_rating.py's append_row.
     (root / "hooks" / "lib").mkdir(parents=True)
-    shutil.copy2(REPO_ROOT / "hooks" / "lib" / "roster.py", root / "hooks" / "lib")
+    for name in ("roster.py", "close_rating.py"):
+        shutil.copy2(REPO_ROOT / "hooks" / "lib" / name, root / "hooks" / "lib")
     shutil.copytree(REPO_ROOT / "agents", root / "agents")
     return root
 

@@ -534,5 +534,25 @@ def test_r10_a_non_qa_stop_is_never_judged(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
+def test_p4_a12_force_sentinel_changes_nothing(tmp_path, monkeypatch):
+    """P4 A12: a /close --force sentinel (claude-close-force-<session>.flag,
+    where an earlier hook looked for it) skips nothing: the unjustified skip
+    the QA's obligation declares still blocks."""
+    session, agent_id, task = "harness-p4-force", "agent-qa-p4-force", "20260505-000000"
+    project, home = _project_home(tmp_path)
+    _register_agent(project, agent_id, "dev-20260505-000000", "qa")
+    _write_obligation_transcript(home, project, session, agent_id,
+                                 _obligation_block(task, f"docs/dev/qa-report-{task}.json", "qa-report.v2"))
+    _write(project / "docs" / "dev" / f"qa-report-{task}.json",
+           _qa_report(task, status="skipped_without_justification"))
+    for name in ("CLAUDE_STATE_DIR", "TMPDIR"):
+        root = tmp_path / name.lower()
+        monkeypatch.setenv(name, str(root))
+        for sid in (session, "dev-20260505-000000"):
+            _write(root / f"claude-close-force-{sid}.flag", "")
+    proc = _run_hook(project, home, agent_id, session_id=session)
+    assert proc.returncode == 2 and "E2E_ENFORCE_BLOCKED" in proc.stderr, proc.stderr
+
+
 if __name__ == "__main__":
     sys.exit(subprocess.run([sys.executable, "-m", "pytest", __file__, "-v"]).returncode)

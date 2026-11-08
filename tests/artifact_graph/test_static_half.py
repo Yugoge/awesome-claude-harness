@@ -2,22 +2,29 @@
 
 Each test builds a small harness-shaped tree under tmp_path and checks the
 records derive() returns; one test runs the static half twice on this
-repository, in two processes with different hash seeds, and compares bytes.
+repository, in two processes with different hash seeds, and compares bytes,
+and one checks that a module the python half registers again leaves none of
+its ids to a node parsed later.
 """
 
 from __future__ import annotations
 
+import ast
+import gc
 import json
 import os
 import subprocess
 import sys
 import textwrap
+import weakref
 from pathlib import Path
 
 import pytest
 
 from tests.artifact_graph import derive
+from tests.artifact_graph import model as M
 from tests.artifact_graph import patterns as P
+from tests.artifact_graph import pyscan
 from tests.artifact_graph import shparse as S
 
 REPO = Path(__file__).resolve().parents[2]
@@ -509,6 +516,50 @@ def test_cli_refuses_output_inside_the_tree(tmp_path):
 
 
 # ------------------------------------------------------------- determinism
+
+def test_a_snippet_registered_twice_leaves_no_id_to_a_later_node():
+    """The python half's caches key by id() of AST nodes, and an id names one object only while
+    it lives. The shell walk registers some embedded snippets twice under one key (the
+    `python3 -c` of `[ "$(... | python3 -c '...')" != ok ]`: once for the word's value, once for
+    its effects), so the module registered first must live to the end of the run: dropped, its
+    ids go to nodes parsed later, which the memo then answers with the dropped nodes' values.
+    Which nodes depends on the heap and on when the collector runs (CI's run-to-run
+    disagreement on hooks/pretool-bash-safety.sh:365). Here the collection is forced, and later
+    modules are parsed until one has a node at a cached id, or 500 are."""
+    first_src = "import sys\nsys.stdout.write(sys.stdin.read())\n"
+    later_src = 'import os\nopen(os.path.join("/tmp", "a.json")).read()\nos.unlink("/tmp/b.json")\n'
+
+    def analyzer():
+        return pyscan.Analyzer([], lambda rel: "", M.Findings(), "")
+
+    def values(an, mod):
+        w = pyscan.FunctionWalk(an, mod, None)
+        w.run()
+        return [(type(n).__name__, n.lineno, n.col_offset, repr(w.ev(n)))
+                for n in ast.walk(mod.tree) if isinstance(n, ast.expr)]
+
+    pyscan.clear_caches()
+    try:
+        an = analyzer()
+        first = an.add_embedded("hooks/h.sh", first_src, 1, {})
+        pyscan.FunctionWalk(an, first, None).run()
+        cached = [weakref.ref(n) for n in ast.walk(first.tree) if id(n) in an.memo]
+        cached_ids = {id(n()) for n in cached}
+        del first
+        an.add_embedded("hooks/h.sh", first_src, 1, {})   # the second visit: the same key
+        gc.collect()
+        for offset in range(20, 520):
+            later = an.add_embedded("hooks/h.sh", later_src, offset, {})
+            if any(id(n) in cached_ids for n in ast.walk(later.tree) if isinstance(n, ast.expr)):
+                break
+        got = values(an, later)
+        pyscan.clear_caches()
+        fresh = analyzer()
+        assert got == values(fresh, fresh.add_embedded("hooks/h.sh", later_src, offset, {}))
+        assert all(n() is not None for n in cached)
+    finally:
+        pyscan.clear_caches()
+
 
 def test_two_runs_on_this_repository_are_byte_identical(tmp_path):
     outs = []

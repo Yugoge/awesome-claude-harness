@@ -148,7 +148,7 @@ binary than push; ambiguous states should block and require human confirmation).
 Compute grant directory and path. `<state dir>` is `$CLAUDE_STATE_DIR` when that is an absolute
 path, else `/tmp`: the directory /merge reads the grant from.
 ```
-STATE_DIR=$(. ~/.claude/hooks/lib/harness_state_dir.sh && harness_state_dir)
+STATE_DIR=$(. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh" && harness_state_dir)
 GRANT_DIR=${STATE_DIR}/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>
 GRANT_PATH=${GRANT_DIR}/<REQUEST_ID>.json
 ```

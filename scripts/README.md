@@ -37,7 +37,7 @@ Organization and usage documentation for `scripts/`.
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 - `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
 - `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
-- `commit.sh` - Description: Discoverable canonical entrypoint for commands/dev-overnight.md's
+- `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
 - `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 - `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
 - `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).

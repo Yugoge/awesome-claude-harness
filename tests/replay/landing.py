@@ -16,6 +16,14 @@ Driver arguments this module reads (cli.py --arg K=V; inner.py installs it when 
     land=start
         The harness home lands before the driver starts (a session that loaded the base's settings.json
         and meets only this tree's files: every command it types reads this tree's text).
+    hooklist=landed
+        From the landing on, the session's hook list is the landed home's settings.json (A11's "again
+        with your settings.json"): the hooks each later event runs and the environment settings.json
+        gives hooks and Bash calls (the replay's own --env still overriding it). settings.json lands
+        with the files it registers, in the one fast-forward, so no session holds the landed list
+        over the base's files; the session that has it is the one (re)loaded on the landed home, its
+        transcript, state and project going on (a resumed session). Without it the session keeps the
+        list it loaded (D15).
     blocks=pass
         Every block passes, recorded in blocks.json as a deviation would record it, so the replay goes
         on past it as the base replay does. The test compares the two replays' blocks afterwards (same
@@ -23,11 +31,13 @@ Driver arguments this module reads (cli.py --arg K=V; inner.py installs it when 
         normalised first line). A stop block naming an artifact an injected fault (faults.py) left
         unrepaired is not passed: it goes back to that agent, as on the base (the fault's own rounds).
 
-facts.json "landing" records where the home landed, the commit before and after, and the stores of the
-base G2's no-progress round found on disk at that moment.
+facts.json "landing" records where the home landed, the commit before and after, the stores of the
+base G2's no-progress round found on disk at that moment and, with hooklist=landed, the settings file
+the session reloaded and the environment keys that changed with it.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -94,6 +104,26 @@ def _stores(project: str) -> list[str]:
     return sorted(found)
 
 
+def _reload(rp) -> dict:
+    """The session's hook list becomes the landed settings.json (hooklist=landed): rp.settings, and its
+    env in rp.env and rp.bash_env (a key the replay's --env sets keeps that value). Returns what changed."""
+    from . import hookrun
+    path = os.path.join(rp.layout.harness, "settings.json")
+    with open(path) as fh:
+        landed = json.load(fh)
+    old, new = hookrun.settings_env(rp.settings), hookrun.settings_env(landed)
+    changed = sorted(k for k in set(old) | set(new) if k not in rp.env_extra and old.get(k) != new.get(k))
+    rp.settings = landed
+    fresh = rp._env(rp.env_extra)  # the session's env as it starts with the landed list
+    for env in (rp.env, rp.bash_env):
+        for k in changed:
+            if k in fresh:
+                env[k] = fresh[k]
+            else:
+                env.pop(k, None)
+    return {"hooklist": "landed", "settings": path, "env_changed": changed}
+
+
 def _land(rp, label: str) -> None:
     from .drivers.close import fact
     lay = rp.layout
@@ -111,6 +141,9 @@ def _land(rp, label: str) -> None:
     rec = {"at": label, "event": rp.n_events, "before": before, "after": after, "rc": p.returncode,
            "output": (p.stdout + p.stderr).strip()[-1000:], "status": git("status", "--porcelain").stdout[-2000:],
            "no_progress_stores": _stores(lay.project)}
+    if not p.returncode and after != before and rp.args.get("hooklist") == "landed":
+        with rp.acting("landing"):
+            rec.update(_reload(rp))
     fact(rp, "landing", rec)
     if p.returncode or after == before:
         raise RuntimeError(f"the harness home did not land at {label!r}: {rec['output']}")
@@ -134,8 +167,12 @@ def _fault_round(rp, ev) -> bool:
 
 
 def install(rp) -> None:
-    """Register what the arguments `land` and `blocks` ask for on rp (see the module text)."""
+    """Register what the arguments `land`, `hooklist` and `blocks` ask for on rp (see the module text)."""
     spec = rp.args.get("land")
+    if rp.args.get("hooklist") not in (None, "", "landed"):
+        raise ValueError(f"hooklist wants landed, not {rp.args['hooklist']!r}")
+    if rp.args.get("hooklist") and not spec:
+        raise ValueError("hooklist=landed wants a landing (land=...)")
     if spec == "start":  # landed before the driver reads any text: every command typed reads this tree's
         _land(rp, "start")
     elif spec:

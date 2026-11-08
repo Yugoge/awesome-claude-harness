@@ -199,7 +199,7 @@ FOR each .md file in .claude/commands/ and .claude/agents/:
 
 > **CRITICAL: READ EACH SCRIPT FILE**
 >
-> You MUST read the actual source code of every script in `scripts/` (and `~/.claude/scripts/` if applicable) using the Read tool. Do NOT rely on grep patterns -- they miss most hardcode violations. Read each file and judge whether values should be parameters.
+> You MUST read the actual source code of every script in `scripts/` (and `<HARNESS_ROOT>/scripts/` if applicable) using the Read tool. Do NOT rely on grep patterns -- they miss most hardcode violations. Read each file and judge whether values should be parameters.
 
 **Detection method**: For each script file, read its full content and look for:
 
@@ -574,7 +574,7 @@ Exit codes: 0=success, 1=failure, 2=partial success.
 
 **Rule**: No file in the project may contain unresolved merge conflict markers.
 
-> **MANDATORY**: Run `~/.claude/scripts/detect-merge-conflicts.sh "$PROJECT_ROOT"` and include any findings. Do NOT substitute your own analysis.
+> **MANDATORY**: Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/detect-merge-conflicts.sh" "$PROJECT_ROOT"` and include any findings. Do NOT substitute your own analysis.
 
 **Report**:
 ```json
@@ -670,9 +670,9 @@ This contract is mandatory in that mode:
    `$CLAUDE_AGENT_ID` is available, it must match that value.
 2. Treat each `checkpoints[].id` entry as a required checklist item.
 3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent style-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark --spec-id <SPEC_ID> --agent style-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent style-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" waive --spec-id <SPEC_ID> --agent style-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 5. Before stopping, confirm every checkpoint is either `done` or
    `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
    to block exit with code 2.

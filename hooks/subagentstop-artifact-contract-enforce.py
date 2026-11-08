@@ -1,82 +1,38 @@
 #!/usr/bin/env python3
-"""SubagentStop Hook: producer-side artifact schema gate for dev/qa reports.
+"""SubagentStop Hook (G2): a producer's declared artifacts, checked at its own stop.
 
-Ports the /close "Artifact schema gate" (commands/close.md §"Artifact schema gate" — the
-contract_runtime.validate_report_artifact() Draft7 check that rejects a
-versioned-but-schema-invalid dev/qa report at close time) to the PRODUCER's
-stop boundary: the qa/dev subagent that just wrote the report is blocked
-from stopping while it still has full context to repair it, instead of the
-identical violation surfacing later as a /close schema-gate rejection after the
-producer's context is gone.
+The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
+declares what it owes; each declared artifact is checked while that producer
+still has the context to repair it: json (existence, schema, identity),
+markdown (identity anchor, terminal line), response_line and response_block
+(its own final reply), spec_views (spec-verify.py --strict), a dev report's
+downstream wires (attribution journal, /commit's trial plan) and P3 R14's
+dispatch echo (written for this dispatch; lane and lane_set echoed). A fresh,
+valid producer-question file stands in for every declared artifact (TC-33).
+Switch CLAUDE_OBLIGATION_STOPGATE (the process env, else the harness home's
+settings.json env at run time, P1b E4):
+  "block"    -- a failure exits 2 (OBLIGATION_STOPGATE_BLOCKED, each failing
+                path and check named to the producer);
+  "advisory" -- the default: the same reason on stderr
+                (OBLIGATION_STOPGATE_ADVISORY), exit 0;
+  "off"      -- no obligation is read, so nothing is judged.
 
-Scope discipline (deliberately the SAME blocking surface as /close):
-  - BLOCKS only validate_report_artifact() status == "fail": the report
-    DECLARES report_version but VIOLATES its versioned schema. Same engine,
-    same semantics ("this is the only blocking outcome" — close.md).
-  - Unversioned legacy reports, unparseable JSON, unregistered kinds, and
-    validator-infra problems all return 'skip' from the shared engine and
-    pass through. Measured baseline 2026-09-26: 674 real reports in
-    docs/dev/ -> 9 pass / 0 fail / 665 skip, so this gate rejects zero
-    existing compliant reports.
-  - A MISSING report is NOT blocked here: qa-report existence is already
-    enforced (exit 2) by subagentstop-e2e-enforce.py, and dev-report
-    existence by /close's Step-0 artifact-chain resolver. Duplicating
-    existence enforcement would create a drift-prone mirrored pair, so a
-    missing report passes here.
+A dispatch whose obligation does not resolve (its block fails the grammar or
+names another role, as an earlier template's does) is judged by the
+declared-report check: each json report its block declares, read as
+declared, that states report_version yet fails its schema
+(contract_runtime.validate_report_artifact: dev, qa and do reports; every
+other kind skips) exits 2 (ARTIFACT_CONTRACT_BLOCKED) under
+ARTIFACT_CONTRACT_ENFORCE_MODE "block" (the default), or prints the same
+reason (ARTIFACT_CONTRACT_ADVISORY) and exits 0 under "advisory". It judges
+a registered agent only (LOW-10: one the dev registry does not resolve is
+never blocked) and never a missing report.
 
-Activation chain (every step fails open to exit 0):
-  1. stdin carries agent_id (subagent stop, not a main-session stop).
-  2. resolve_dev_registry_entry() resolves the agent. LOW-10 contract
-     (hooks/lib/agent_resolver.py): callers MUST NOT hard-block on None —
-     a skipped FIRST ACTION registration fails open here, as in every
-     sibling SubagentStop hook.
-  3. The entry carries dev_session_id (legacy flat entries skip).
-  4. .claude/dev-registry/<sid>/artifact-contract-enforce.json exists with
-     enabled == true (written by scripts/write-enforce-flag.sh
-     --flag artifact-contract from /dev-family init and /close Step 2).
-  5. The producer's own dispatch declares the reports it owes (its json
-     artifacts, read as declared also when the block fails the grammar, as a
-     pre-P1 template's does; P1b E3): no name decides whose a report is.
+M4: an exception inside the obligation branch names itself on stderr
+(OBLIGATION_STOPGATE_FAULT) and the declared-report check decides the stop,
+so a fault the producer cannot repair never holds it.
 
-Every declared report on disk is validated, each one, rather than a single
-pick: picking one file would let an invalid report be shadowed by a valid
-sibling (codex audit finding, HIGH). Each producer is judged on its own
-reports at its own stop, never on a sibling lane's; a BA-validation QA
-declares the BA-QA report, which no report schema of the engine covers.
-
-Mode: ARTIFACT_CONTRACT_ENFORCE_MODE environment variable.
-  "block" (default) — schema-fail exits 2 with an
-                      ARTIFACT_CONTRACT_BLOCKED message.
-  "advisory"        — schema-fail allows the stop.
-  Default is block — unlike cp-enforce's advisory-first default — because
-  the validator is not new judgment: the identical engine already blocks
-  these exact reports at /close today; this hook only moves WHERE the
-  rejection lands (user ruling 2026-09-26). The env var is the kill-switch.
-
-Exit codes:
-  0: Allow stop (pass-through).
-  2: Block stop (ARTIFACT_CONTRACT_BLOCKED — repair the report first).
-
-Spec alignment (2026-09-26, do-20260926-073930): this hook is a PROPER SUBSET
-of docs/dev/specs/spec-20260914-052140.md §5.1 (contract-driven SubagentStop
-source-blocking of MISSING artifacts, still pending, never checked out) — it
-implements only the schema-wellformedness half of that spec's
-_artifact_valid_for_entry() end state, for the two roles whose reports already
-carry versioned schemas, via the existing enforce-flag channel instead of
-cycle-contract required_calls[]. It does NOT implement and does NOT supersede
-§5.1: missing-artifact blocking, contract-driven role coverage, the role-enum
-extension, prerequisite (f) (hooks reading the contract), and the advisory-log
-cleanup precondition (c) all remain that spec's scope. When §5.1 lands, its
-mechanism subsumes this hook's check (existence + schema in one entry lookup):
-retire this hook or fold it into the contract-driven gate at that point rather
-than running both. Rollout style follows spec-20260916-031427 §8.1
-(no over-engineering: reuse existing plumbing, no new mechanism); the
-default-block-instead-of-advisory-first deviation from that spec's §5.2 is
-deliberate and evidence-backed — the blocking predicate is not new judgment
-(the identical engine already blocks the identical reports at /close's
-Artifact schema gate;
-measured 674-report corpus: 0 fail) and the user ordered immediate blocking
-on 2026-09-26; ARTIFACT_CONTRACT_ENFORCE_MODE=advisory is the rollback lever.
+The hook writes nothing. Exit codes: 0 allow, 2 block.
 """
 
 import importlib.util
@@ -142,8 +98,8 @@ def _classify_verdict_line(line: str) -> str:
 def _dispatch_obligation(prompt) -> dict:
     """This producer's own dispatch obligation as declared, read even when the
     block fails the grammar (a pre-P1 template still carries required_values),
-    so the legacy check knows which reports are its own and which it owes; {}
-    when the prompt carries none."""
+    so the declared-report check knows which reports are its own; {} when the
+    prompt carries none."""
     block = obligation.extract_obligation_block(prompt) if isinstance(prompt, str) else None
     if not isinstance(block, obligation.ExtractedBlock):
         return {}
@@ -297,9 +253,45 @@ def _wire_ledger_judgment(report: dict, project_dir: str, task_id: str, deadline
     return findings
 
 
+AGGREGATE_CHECK = Path(__file__).resolve().parent / "pretool-aggregate-check.py"
+
+
+def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
+    """C5 for G3's canonical_missing: the canonical aggregate's one producer,
+    the lane-completeness watch, runs on a lane report's Write or Edit. While
+    G3's own rule (pretool-aggregate-check.py _find_violations) finds the
+    canonical missing, the lane whose report is its fan-out's newest is
+    returned at its own stop: that report reached disk another way (a shell
+    redirection), and its Edit runs the producer. A sibling's later report is
+    the sibling's own (its watch may still be running)."""
+    try:
+        spec = importlib.util.spec_from_file_location("pretool_aggregate_check", AGGREGATE_CHECK)
+        g3 = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(g3)
+        dev_dir = Path(project_dir) / "docs" / "dev"
+        lane_reports, canonicals = g3._scan_dev_dir(dev_dir)
+        own = (Path(project_dir) / report_rel).resolve()
+        findings = []
+        for family, reports in lane_reports.items():
+            stamps = {path.resolve(): path.stat().st_mtime_ns for path in reports.values()}
+            if stamps.get(own) != max(stamps.values()):
+                continue
+            for code, path, problem, *_ in g3._find_violations({family: reports}, canonicals, dev_dir, task_id):
+                if code == "canonical_missing":
+                    findings.append({"path": report_rel, "reason": code, "errors": [
+                        f"{os.path.relpath(path, project_dir)}: {problem}. Its producer, "
+                        "hooks/posttool-lane-completeness-watch.py, runs on a lane report's Write or Edit, "
+                        "and this report, the fan-out's newest, reached disk another way: Read it, save it "
+                        "again with Edit (its timestamp), then stop again."]})
+        return findings
+    except Exception:
+        return []  # a wire that cannot run judges nothing
+
+
 def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> list:
-    """The dev report's wires (ledger judgment and /commit's trial plan).
-    Returns findings. Another producer's artifact is never judged at this
+    """The dev report's wires (ledger judgment, /commit's trial plan and, for a
+    fan-out lane, the canonical aggregate its report completes). Returns
+    findings. Another producer's artifact is otherwise never judged at this
     stop: G3 decides on it at the next dispatch."""
     findings = []
     if ob.get("role") != "dev":
@@ -322,6 +314,8 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> l
         findings += _wire_ledger_judgment(_read_json(report_full), project_dir, task_id, deadline)
         if not shard:
             findings += _wire_trial_plan(report_full, report_rel, project_dir, task_id)
+        else:
+            findings += _wire_canonical(project_dir, report_rel, task_id)
     return findings
 
 
@@ -390,36 +384,6 @@ def _declared_files(project_dir: str, art: dict) -> list:
     except OSError:
         return []
     return [f"{art['path']}/{p.name}" for p in entries if p.is_file()]
-
-
-def _producer_question(project_dir: str, ob: dict):
-    """TC-33: docs/dev/producer-question-<task_id>-<role>.json named by the
-    obligation's own task_id and role. Which producers may ask is the
-    producer-question.v1 schema's role enum (ba and dev, D23), so a question
-    from any other role is schema-invalid. Returns None when absent or not
-    fresh against the obligation's dispatched_at (a file from an earlier
-    round; None freshness counts as stale), "valid" when it stands in for the
-    declared artifacts, else a failure naming why it is invalid."""
-    rel = f"docs/dev/producer-question-{ob.get('task_id')}-{ob.get('role')}.json"
-    full = Path(project_dir) / rel
-    try:
-        mtime = full.stat().st_mtime
-    except OSError:
-        return None
-    if obligation.artifact_freshness_satisfied("json", mtime, ob.get("dispatched_at")) is not True:
-        return None
-    result = contract_runtime.validate_artifact_for_obligation(str(full), "producer-question.v1")
-    errors = list(result.get("errors", []))[:10] or [str(result.get("reason"))]
-    if result.get("status") == "pass":
-        record = _read_json(full)
-        labels = [o.get("label") for o in record.get("options", []) if isinstance(o, dict)]
-        errors = [f"{key}: obligation declares {ob.get(key)!r}, file has {record.get(key)!r}"
-                  for key in ("task_id", "role") if record.get(key) != ob.get(key)]
-        if record.get("default") not in labels:
-            errors.append(f"default {record.get('default')!r} is not one of the option labels {labels}")
-        if not errors:
-            return "valid"
-    return {"path": rel, "reason": "producer_question_invalid", "errors": errors}
 
 
 # P3 R14: a stop's artifacts stand for it only by the one freshness rule
@@ -519,25 +483,19 @@ def main() -> None:
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
 
-    # Resolved unconditionally (no early-exit here): the obligation-mode
-    # block below does not depend on agent-index.json / resolve_dev_registry_entry
-    # at all (hooks/lib/obligation.py has zero references to either). The
-    # LOW-10 "never hard-block on an unresolved agent" early-exits are
-    # deferred to immediately before the LEGACY correlation path's first
-    # actual use of dev_session_id, below -- relocated so a skipped FIRST
-    # ACTION registry Read no longer silently discards obligation-mode
-    # enforcement of the agent's own dev-report/context.json obligation too.
+    # The registry entry gives the agent's type (the role its obligation must
+    # name) and, for the declared-report check only, the LOW-10 guard: a
+    # skipped FIRST ACTION read never discards the obligation branch.
     entry = resolve_dev_registry_entry(agent_id, project_dir)
     agent_type = entry.get("agent_type", "") if entry else ""
 
-    # Obligation mode (rollout S4): verify the artifacts THIS agent's own
-    # dispatch obligation names, ahead of the session-wide correlation guess
-    # below. CLAUDE_OBLIGATION_STOPGATE is a DIFFERENT switch from
-    # ARTIFACT_CONTRACT_ENFORCE_MODE, which continues to govern only the
-    # untouched legacy path. A process whose env lacks the key takes it from
-    # the harness home's settings.json env at run time (P1b E4): a session
-    # keeps the env it started with, so a session started before the switch
-    # was set, with or without CLAUDE_HOME, meets its current value.
+    # The obligation branch: the artifacts THIS agent's own dispatch
+    # obligation names. CLAUDE_OBLIGATION_STOPGATE governs it alone;
+    # ARTIFACT_CONTRACT_ENFORCE_MODE governs the declared-report check below.
+    # A process whose env lacks the key takes it from the harness home's
+    # settings.json env at run time (P1b E4): a session keeps the env it
+    # started with, so a session started before the switch was set, with or
+    # without CLAUDE_HOME, meets its current value.
     env_mode = os.environ.get("CLAUDE_OBLIGATION_STOPGATE")
     stopgate_mode = (env_mode.strip().lower() if env_mode is not None
                      else settings_switch("CLAUDE_OBLIGATION_STOPGATE", "advisory"))
@@ -576,7 +534,7 @@ def main() -> None:
                 )
                 failures = []
                 echo = []
-                question = _producer_question(project_dir, resolution.obligation)
+                question = contract_runtime.producer_question(project_dir, resolution.obligation)
                 if question == "valid":
                     # The question stands in for every declared artifact; nothing
                     # that reads those artifacts runs for this stop.
@@ -762,43 +720,31 @@ def main() -> None:
                         f"failed that do not block yet:\n{_finding_lines(echo)}"
                     )
                 if not failures:
-                    # M3: all pass -- bypass the legacy correlation path
-                    # entirely for this stop.
+                    # M3: all pass; the declared-report check does not run.
                     sys.exit(0)
+                reason = (f"{who} declared {len(verified_artifacts)} obligated artifact(s); "
+                          f"{len(failures)} failed verification:\n{_finding_lines(failures)}")
                 if stopgate_mode == "block":
                     sys.stderr.write(
-                        f"OBLIGATION_STOPGATE_BLOCKED: {who} declared "
-                        f"{len(verified_artifacts)} obligated artifact(s); "
-                        f"{len(failures)} failed verification:\n"
-                        f"{_finding_lines(failures)}"
+                        f"OBLIGATION_STOPGATE_BLOCKED: {reason}"
                         f"Fix your OWN artifact(s) listed above, then stop "
                         f"again. Do NOT edit any other agent's artifact.\n"
                     )
                     sys.exit(2)
-                # advisory mode: never blocks (AC4/AC5).
+                # advisory mode: the would-block reason, never a block (AC4/AC5).
+                sys.stderr.write(f"OBLIGATION_STOPGATE_ADVISORY: {reason}")
                 sys.exit(0)
-            # Unresolvable or NoObligationInPrompt: the legacy path below
-            # decides.
-        except Exception:
-            # M4: an obligation-mode-only failure must degrade to "run
-            # legacy path", never "allow" and never escape from inside
-            # this except block.
-            pass
+            # Unresolvable or NoObligationInPrompt: the declared-report check
+            # below decides.
+        except Exception as exc:
+            # M4: the fault names itself and the declared-report check below
+            # decides: a fault the producer cannot repair never holds its stop.
+            sys.stderr.write(f"OBLIGATION_STOPGATE_FAULT: agent {agent_id}: {exc!r}\n")
 
-    # LOW-10: never hard-block the legacy correlation path on an
-    # unresolved agent. Deferred here (was previously gating the
-    # obligation-mode block above too) because only this legacy path
-    # actually needs dev_session_id.
-    if entry is None:
-        sys.exit(0)
-    dev_session_id = entry.get("dev_session_id")
+    # The declared-report check. LOW-10: an agent the dev registry does not
+    # resolve is never blocked here.
+    dev_session_id = entry.get("dev_session_id") if entry else None
     if not dev_session_id:
-        sys.exit(0)
-
-    registry_dir = Path(project_dir) / ".claude" / "dev-registry" / dev_session_id
-
-    flag = _read_json(registry_dir / "artifact-contract-enforce.json")
-    if not flag.get("enabled"):
         sys.exit(0)
 
     # The reports this producer owes are the json artifacts its own dispatch
@@ -816,8 +762,8 @@ def main() -> None:
     report_paths = [Path(project_dir) / r for r in rels if obligation._legal_repo_relative_path(r)]
     report_paths = [p for p in report_paths if p.is_file()]
     if not report_paths:
-        # Existence enforcement belongs to subagentstop-e2e-enforce.py (qa)
-        # and /close's chain resolver (dev). Never block here.
+        # A missing report is not this check's finding (the obligation
+        # branch and the chain resolver own existence). Never block here.
         sys.exit(0)
 
     failures = []
@@ -828,24 +774,17 @@ def main() -> None:
     if not failures:
         sys.exit(0)
 
-    mode = os.environ.get("ARTIFACT_CONTRACT_ENFORCE_MODE", "block").strip().lower()
-    if mode == "advisory":
-        sys.exit(0)
-
-    detail_lines = ""
+    reason = (f"agent {agent_id} (type={agent_type}) in session {dev_session_id}: "
+              f"{len(failures)} declared report(s) declare report_version but violate their schema.\n")
     for p, r in failures[:5]:
-        detail_lines += f"  report {p} violates schema {r.get('schema')!r}:\n"
-        detail_lines += "".join(f"    - {e}\n" for e in r.get("errors", [])[:10])
+        reason += f"  report {p} violates schema {r.get('schema')!r}:\n"
+        reason += "".join(f"    - {e}\n" for e in r.get("errors", [])[:10])
+    if os.environ.get("ARTIFACT_CONTRACT_ENFORCE_MODE", "block").strip().lower() == "advisory":
+        sys.stderr.write(f"ARTIFACT_CONTRACT_ADVISORY: {reason}")
+        sys.exit(0)
     sys.stderr.write(
-        f"ARTIFACT_CONTRACT_BLOCKED: agent {agent_id} (type={agent_type}) in "
-        f"session {dev_session_id}: {len(failures)} correlated report(s) "
-        f"declare report_version but violate their schema.\n"
-        f"{detail_lines}"
-        f"This is the same check /close's Artifact schema gate applies — /close would "
-        f"reject these reports identically. Repair the named report(s) so they "
-        f"satisfy their declared schema before stopping. If a named report was "
-        f"written by a sibling lane agent, report the blockage instead of "
-        f"editing a peer's artifact.\n"
+        f"ARTIFACT_CONTRACT_BLOCKED: {reason}"
+        f"Repair the named report(s) so they satisfy their declared schema before stopping.\n"
     )
     sys.exit(2)
 

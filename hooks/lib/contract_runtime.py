@@ -6,14 +6,15 @@ posttool-overnight-file-check) plus check-overnight-reports.py and
 lib/closeout.py.
 
 Public surface:
+    session_record(session_id, payload=None) -> dict | None   # the session's state record
     contract_path(state, cycle_id) -> Path   # the contract's one path
     load_contract(session_id, cycle_id, state=None) -> dict | None
     overnight_steps() -> [(label, subagent_call)]   # scripts/todo/dev-overnight.py _STEPS
-    exploration_calls(steps) -> [entry]       # steps 2-4, allowed before the contract
+    exploration_calls(steps, text=None) -> [entry]   # steps 2-4, allowed before the contract
     post_triage_steps(steps) -> [(label, subagent_call)]   # what the contract renders
     triage_call(steps) -> dict                # the PM TRIAGE step's subagent_call
     call_entry(label, subagent_call) -> dict  # a required_calls entry for one step
-    detect_mode(prompt, role) -> str
+    detect_mode(prompt) -> str
     type_strict_json_equal(left, right) -> bool
     validate(record, schema_name) -> Result
     validate_required_call(contract, role, pipeline_id, mode, step) -> Result
@@ -29,7 +30,8 @@ The cycle contract has one writer, the PM TRIAGE handler in
 hooks/posttool-subagent-track.py, and one path,
 ``<working root>/docs/dev/overnight/<sid>/cycle-<N>/cycle-contract.json``; no
 hook rewrites it after it is written. ``load_contract`` returns ``None`` when the
-session has no overnight state or the cycle has no contract yet.
+session has no overnight state or the cycle has no contract yet, and a value
+that is no dict when the file holds no JSON object (Case M).
 
 Custom keyword ``required_when_ui``: if the validated record has
 ``ui_pipeline == True``, every key listed in
@@ -68,10 +70,11 @@ except ImportError:  # pragma: no cover - architect confirmed availability
 try:
     from . import schema_registry
     from . import overnight
+    from . import obligation
 except ImportError:  # pragma: no cover - direct spec import in focused tests
     import sys as _sys
     _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from lib import schema_registry  # type: ignore
+    from lib import schema_registry, obligation  # type: ignore
     import overnight  # type: ignore
 
 
@@ -90,6 +93,20 @@ _MODE_KEYWORDS = ('PLAN', 'TRIAGE', 'RETRO', 'DESIGN_MODE', 'AUDIT_MODE', 'UI_MO
 # The modes of the PM dispatches that open and close a cycle's exploration.
 PLAN_MODE = 'PLAN'
 TRIAGE_MODE = 'TRIAGE'
+# A dispatch template's line that sets a PM's mode (agents/pm.md "Mode
+# Routing": the orchestrator sets PM_MODE; a PM dispatched without it runs PLAN).
+_MODE_FLAG_RE = re.compile(r'^\s*PM_MODE:\s*([A-Z_]+)\s*$', re.M)
+
+
+def session_record(session_id: str, payload: Optional[dict] = None) -> Optional[dict]:
+    """The overnight state record of ``session_id``, the contract hooks' one lookup.
+
+    The record sits at ``<main root>/.claude/``; overnight's one locator
+    (``overnight.locate``) reaches it from the session's project dir or the hook
+    payload's ``cwd``, so a session rooted in a worktree or a fresh clone finds
+    the main root's record too. None when none reaches it.
+    """
+    return overnight.locate(session_id, payload)[1]
 
 
 def contract_path(state: dict, cycle_id: int) -> Path:
@@ -98,17 +115,30 @@ def contract_path(state: dict, cycle_id: int) -> Path:
 
 
 def load_contract(session_id: str, cycle_id: int, state: Optional[dict] = None) -> Optional[dict]:
-    """Return the parsed cycle contract for ``session_id``/``cycle_id``."""
+    """The cycle contract of ``session_id``/``cycle_id``: None when the session has
+    no overnight state or the cycle no contract file; else the file's JSON value,
+    or its text when it is no JSON, so a file that holds no JSON object reaches
+    the hooks as a value that is no dict (Case M), never as no contract."""
     if not session_id or cycle_id is None:
         return None
     if state is None:
-        state = overnight.session_state(session_id)
+        state = session_record(session_id)
     if state is None:
         return None
     try:
-        return json.loads(contract_path(state, int(cycle_id)).read_text(encoding='utf-8'))
-    except (OSError, ValueError, TypeError):
+        path = contract_path(state, int(cycle_id))
+    except (TypeError, ValueError):
         return None
+    try:
+        text = path.read_text(encoding='utf-8')
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except (OSError, ValueError):
+        return ''
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
 
 
 def overnight_steps() -> list[tuple[str, dict]]:
@@ -132,24 +162,44 @@ def _mode_index(steps: list[tuple[str, dict]], mode: str) -> Optional[int]:
     return next((i for i, (_label, call) in enumerate(steps) if call.get('mode') == mode), None)
 
 
-def exploration_calls(steps: list[tuple[str, dict]]) -> list[dict]:
+def exploration_calls(steps: list[tuple[str, dict]], text: Optional[str] = None) -> list[dict]:
     """The calls of a cycle's exploration, PM PLAN through PM TRIAGE (steps 2-4).
 
     Every cycle allows them before its contract exists, since the contract is
-    written when PM TRIAGE returns.
+    written when PM TRIAGE returns. ``text`` is /dev-overnight as the session
+    loaded it (command_span.Span.body): a step's mode binds only when one of
+    that text's templates sets it. A session that started before an update
+    dispatches from the prose it loaded, and origin/master's sets no mode at
+    Step 2; with no text, every step's mode binds.
     """
     first, last = _mode_index(steps, PLAN_MODE), _mode_index(steps, TRIAGE_MODE)
     if first is None or last is None:
         return []
-    return [call_entry(label, call) for label, call in steps[first:last + 1]]
+    entries = [call_entry(label, call) for label, call in steps[first:last + 1]]
+    if text is not None:
+        modes = set(_MODE_FLAG_RE.findall(text))
+        for entry in entries:
+            entry['mode'] = entry['mode'] if entry['mode'] in modes else None
+    return entries
+
+
+# The steps after PM TRIAGE that dispatch again what an earlier step dispatched
+# (commands/dev-overnight.md): a gap in BA's output (9) or a BA-QA fail (11)
+# re-dispatches the pipeline's BA, a gap in dev's (13) its dev, and a QA fail
+# (17) its dev, then its QA.
+_REDISPATCHES = {'9': ('8',), '11': ('8',), '13': ('12',), '17': ('12', '15')}
 
 
 def post_triage_steps(steps: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
-    """The dispatching steps after PM TRIAGE, which its contract renders."""
+    """The dispatches after PM TRIAGE, which its contract renders, in step order:
+    each dispatching step's, and each re-dispatch of an earlier step's call."""
     last = _mode_index(steps, TRIAGE_MODE)
     if last is None:
         return []
-    return [(label, call) for label, call in steps[last + 1:] if call]
+    call_of = dict(steps)
+    return [(label, each) for label, call in steps[last + 1:]
+            for each in ([call] if call else [call_of.get(s) for s in _REDISPATCHES.get(label, ())])
+            if each]
 
 
 def triage_call(steps: list[tuple[str, dict]]) -> dict:
@@ -172,13 +222,13 @@ def call_entry(label: str, subagent_call: dict) -> dict:
     }
 
 
-def detect_mode(prompt: str, role: str = '') -> str:
-    """The mode keyword a dispatch prompt carries; a PM prompt carrying none is PLAN, as agents/pm.md
-    reads it ("If `PM_MODE:` is missing, default to `PLAN`."); else ''."""
+def detect_mode(prompt: str) -> str:
+    """The mode keyword a dispatch prompt carries ('' when none). A PM prompt
+    without one is compared as it is: whether a step's mode binds is decided by
+    the text the session loaded (exploration_calls), not by a default here."""
     if not isinstance(prompt, str):
         return ''
-    found = next((keyword for keyword in _MODE_KEYWORDS if keyword in prompt), '')
-    return found or (PLAN_MODE if str(role or '').strip().lower() == 'pm' else '')
+    return next((keyword for keyword in _MODE_KEYWORDS if keyword in prompt), '')
 
 
 # ---------------------------------------------------------------------------
@@ -956,6 +1006,41 @@ def validate_artifact_for_obligation(path, schema_id: str) -> dict:
         'fail', schema_id, result.get('errors', []),
         'schema-invalid under obligation-supplied schema',
     )
+
+
+def producer_question(project_dir, ob: dict):
+    """TC-33: docs/dev/producer-question-<task_id>-<role>.json named by the
+    obligation's own task_id and role, the one rule G2 (the producer's stop) and
+    the overnight collection check both decide by. Which producers may ask is the
+    producer-question.v1 schema's role enum (ba and dev, D23), so a question
+    from any other role is schema-invalid. Returns None when absent or not
+    fresh against the obligation's dispatched_at (a file from an earlier
+    round; None freshness counts as stale), "valid" when it stands in for the
+    declared artifacts, else a failure naming why it is invalid."""
+    rel = f"docs/dev/producer-question-{ob.get('task_id')}-{ob.get('role')}.json"
+    full = Path(project_dir) / rel
+    try:
+        mtime = full.stat().st_mtime
+    except OSError:
+        return None
+    if obligation.artifact_freshness_satisfied("json", mtime, ob.get("dispatched_at")) is not True:
+        return None
+    result = validate_artifact_for_obligation(str(full), "producer-question.v1")
+    errors = list(result.get("errors", []))[:10] or [str(result.get("reason"))]
+    if result.get("status") == "pass":
+        try:
+            record = json.loads(full.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            record = None
+        record = record if isinstance(record, dict) else {}
+        labels = [o.get("label") for o in record.get("options", []) if isinstance(o, dict)]
+        errors = [f"{key}: obligation declares {ob.get(key)!r}, file has {record.get(key)!r}"
+                  for key in ("task_id", "role") if record.get(key) != ob.get(key)]
+        if record.get("default") not in labels:
+            errors.append(f"default {record.get('default')!r} is not one of the option labels {labels}")
+        if not errors:
+            return "valid"
+    return {"path": rel, "reason": "producer_question_invalid", "errors": errors}
 
 
 def validate_markdown_artifact_for_obligation(

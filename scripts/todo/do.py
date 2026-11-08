@@ -3,7 +3,7 @@
 
 Injects the 5-step /do workflow checklist via hook-todo-injection.
 Step 3 (Codex audit) is always listed; the agent skips it when --codex is absent.
-Step 5 (do-report) is enforced at session stop by hooks/stop-do-report-gate.py.
+Step 5 (do-report) is held at session stop by the Stop gate, hooks/stop-command-gate.py.
 """
 
 _STEPS = [

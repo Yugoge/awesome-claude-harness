@@ -1,6 +1,6 @@
 """A no-op snapshot with no checkpoint ref yet never blocks a Stop (PR 4 review R4, F3).
 
-Drives the registered Stop hook, hooks/stop-workflow-coordinator.py with its four default
+Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 phases, and hooks/auto-commit.sh itself, in a throwaway copy of the harness home with the
 claude-settings filter registered as init registers it. The only change is a CLI-only
 settings.json write: git status reports the file modified (its size changed), but the clean
@@ -26,7 +26,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SID = "sess-r4-test"
-PHASES = ["timelock", "coverage", "auto_commit", "cleanup"]
+PHASES = ["coverage", "auto_commit", "completion", "cleanup"]
 SETTINGS = {"permissions": {"allow": ["Bash(git status:*)"]}}
 
 
@@ -115,7 +115,7 @@ def _stop(home: Path, env: dict, *, active: bool) -> dict:
         "stop_hook_active": active,
     }
     proc = subprocess.run(
-        [sys.executable, str(home / "hooks" / "stop-workflow-coordinator.py")],
+        [sys.executable, str(home / "hooks" / "stop-launch.py")],
         input=json.dumps(payload),
         text=True,
         capture_output=True,

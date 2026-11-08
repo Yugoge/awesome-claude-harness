@@ -156,11 +156,6 @@ fi
 LIFECYCLE_DIR="$(dirname "${LIFECYCLE_FILE}")"
 mkdir -p "${LIFECYCLE_DIR}"
 
-# Touch the lifecycle file if it does not yet exist
-if [[ ! -f "${LIFECYCLE_FILE}" ]]; then
-  touch "${LIFECYCLE_FILE}"
-fi
-
 # -------- M3: close_success_* precondition gate (event mode only) --------
 # Runs BEFORE lock acquisition — failed precondition exits without touching file.
 if [[ "${EVENT}" == "close_success_qa_pass" || "${EVENT}" == "close_success_qa_fail_fixed" ]]; then
@@ -207,6 +202,7 @@ import datetime
 sys.path.insert(0, sys.argv[9])
 from score_log import ScoreLogError, read_lines
 sys.path.insert(0, sys.argv[10])
+from close_rating import append_row  # the log's one writer
 
 # Each role's score delta per event (spec 5.1; Path A rebalance, task
 # 20260524-205206 M1: cycle-total <= +5 across the scored roles, negatives
@@ -273,7 +269,7 @@ if mode == "event":
 
 # Read lifecycle.jsonl entries (under existing exclusive flock).
 try:
-    parsed_entries = read_lines(lifecycle_file)  # list of (line_number, entry_dict)
+    parsed_entries = read_lines(lifecycle_file) if os.path.exists(lifecycle_file) else []  # (line_number, entry_dict)
 except ScoreLogError as e:
     sys.stderr.write(f"score-update.sh: {e}\n")
     sys.exit(2)
@@ -366,14 +362,10 @@ entry_obj = {
     "actor": "orchestrator",
     "reason": final_reason,
 }
-line = json.dumps(entry_obj, ensure_ascii=False) + "\n"
 
 # Append to lifecycle.jsonl and fsync
 try:
-    with open(lifecycle_file, "a", encoding="utf-8") as f:
-        f.write(line)
-        f.flush()
-        os.fsync(f.fileno())
+    append_row(lifecycle_file, entry_obj)
 except OSError as e:
     sys.stderr.write(f"score-update.sh: failed to append to {lifecycle_file}: {e}\n")
     sys.exit(2)

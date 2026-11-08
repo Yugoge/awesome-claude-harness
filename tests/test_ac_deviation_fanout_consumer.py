@@ -6,7 +6,7 @@ A lane that stops short of it, whatever deviation record it carries, makes the
 aggregator exit 1 writing no canonical, and the resolver fails the chain with
 the lane's own codes.  A deviation-free fan-out aggregates and resolves as
 before, and the lifecycle row of a dev chain is the chain's one call, carried
-verbatim: close_pending only on ``pass``.
+verbatim: close_pending whether it passes or not (/close completes the cycle, D7).
 
 Self-contained: every fixture is built under pytest's ``tmp_path`` with inline
 builders.  The scripts are loaded from the directory named by the environment
@@ -487,11 +487,11 @@ def test_a_passing_chain_is_close_pending_with_the_chain_verbatim():
 
 
 @pytest.mark.parametrize("mutate", [with_deviation(), without_flag], ids=["recorded", "unrecorded"])
-def test_a_blocked_singular_report_is_not_close_pending(tmp_path, mutate):
+def test_a_blocked_singular_report_is_close_pending(tmp_path, mutate):
     root = build_singular(tmp_path, mutate)
     row = derive(root)
-    assert row["state"] != "close_pending"
-    assert row["artifact_chain"] == resolve(root)
+    assert shape(row) == ("close_pending", "close", True)
+    assert row["artifact_chain"] == resolve(root) and row["artifact_chain"]["status"] == "fail"
 
 
 def test_an_ordinary_fanout_chain_is_close_pending(tmp_path):
@@ -506,10 +506,10 @@ def test_an_ordinary_fanout_chain_is_close_pending(tmp_path):
     assert sorted(r["next_action"] for r in lane_rows) == ["none", "none"]
 
 
-def test_a_fanout_with_a_failing_lane_qa_is_not_close_pending(tmp_path):
+def test_a_fanout_with_a_failing_lane_qa_is_close_pending(tmp_path):
     root = build_fanout(tmp_path, qa={"lane-b": "fail"})
     assert run_aggregator(root)[0] == 0
     row = derive(root)
-    assert row["state"] != "close_pending"
+    assert shape(row) == ("close_pending", "close", True)
     assert row["artifact_chain"] == resolve(root)
     assert any("lane-b" in e["path"] for e in row["artifact_chain"]["errors"])

@@ -131,6 +131,32 @@ def test_consent_writes_no_do_report():
         _cleanup(sid)
 
 
+def test_minted_line_is_printed_when_the_sidecar_write_fails():
+    """P5 R15 (TC-26): the minted line comes before the sidecar write, so the id the
+    Stop gate reads from the hook's output is printed even when that write fails."""
+    sid = "test-sid-" + next(tempfile._get_candidate_names())
+    _cleanup(sid)
+    blocker = _state(f"claude-do-task-{sid}.json")
+    blocker.mkdir()  # a directory in the sidecar's place: its write fails
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            project.mkdir()
+            env = {**os.environ, "HOME": str(Path(tmp) / "home"), "CLAUDE_CONFIG_DIR": str(Path(tmp) / "home" / ".claude"),
+                   "CLAUDE_PROJECT_DIR": str(project), "PYTHONDONTWRITEBYTECODE": "1"}
+            proc = subprocess.run(
+                [sys.executable, str(HOOK)], capture_output=True, text=True, cwd=project, env=env,
+                input=json.dumps({"session_id": sid, "cwd": str(project), "prompt": "/do fix the widget",
+                                  "hook_event_name": "UserPromptSubmit"}), timeout=60)
+            assert proc.returncode == 0, proc.stderr
+            m = re.search(r"\[/do\] task-id minted: (\S+)", proc.stdout)
+            assert m and TS_RE.match(m.group(1)), proc.stdout
+            assert "Failed to write task sidecar" in proc.stderr, proc.stderr
+    finally:
+        blocker.rmdir()
+        _cleanup(sid)
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
