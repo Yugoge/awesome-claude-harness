@@ -47,8 +47,11 @@ REGISTER_TIMEOUT_S = 20
 # /dev sessions have no cp-state files, so the enforcement hook fails open.
 # Fix (ba-spec-20260424-110000.md): a subagent's Read of
 # .claude/dev-registry/<session_id>/<agent>.json writes <agent> under its Claude-stdin
-# agent_id into .claude/dev-registry/agent-index.json only when the payload carries
-# no agent_type (an older CLI; with one, the role is the CLI's, lib/agent_resolver.py).
+# agent_id into .claude/dev-registry/agent-index.json, with the cycle's session id,
+# when the payload carries no agent_type (an older CLI) or names <agent> itself (the
+# current CLI; a dispatch with no obligation gets its cycle from this entry). A
+# payload naming another role writes nothing: the role is the CLI's
+# (lib/agent_resolver.py).
 # The hook stays the sentinel's one producer: it creates the sentinel in the
 # cycle's armed registry right before that read (P1b goal 2).
 DEV_SENTINEL_PATTERN = re.compile(
@@ -223,8 +226,10 @@ def _ensure_dev_sentinel(file_path, agent, session_id):
 
 def _handle_dev_sentinel(data, project_dir):
     """Process a DEV_SENTINEL_PATTERN Read; create the sentinel, register UUID ->
-    agent_type only for a payload without agent_type (with one, the role is the CLI's
-    and a path the agent chose to read must not write a second, possibly different, one).
+    agent_type for a payload without agent_type or whose agent_type is the sentinel's
+    role (the CLI's role, and the cycle a dispatch without an obligation has). A
+    payload naming another role writes nothing: a path the agent chose to read must
+    not write a second, different role (a QA that reads dev.json stays a QA).
 
     Returns True when handled, False when the Read does not target a sentinel
     or the Claude-stdin agent_id is missing (main-agent Read is ignored).
@@ -236,7 +241,7 @@ def _handle_dev_sentinel(data, project_dir):
     if not agent_id:
         return False
     _ensure_dev_sentinel((data.get("tool_input") or {}).get("file_path") or "", agent, session_id)
-    if not data.get("agent_type"):
+    if data.get("agent_type") in (None, "", agent):
         _update_dev_registry_index(project_dir, agent_id, agent, session_id)
     return True
 
