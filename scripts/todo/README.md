@@ -15,7 +15,7 @@ Organization and usage documentation for `todo/`.
 - `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
 - `dev-overnight.py` - Preloaded TodoList for /dev-overnight workflow
 - `dev.py` - Preloaded TodoList for /dev workflow
-- `do.py` - Injects the 5-step /do workflow checklist via hook-todo-injection
+- `do.py` - Injects the 5-step /do workflow checklist via hooks/prompt-workflow.py
 - `redev.py` - Preloaded TodoList for /redev workflow. Delegates to dev.py (single source of truth).
 - `reflect-search.py` - Preloaded TodoList for /reflect-search workflow
 - `research-deep.py` - Python script

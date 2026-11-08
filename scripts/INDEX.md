@@ -24,7 +24,7 @@ scripts/
 │   ├── `tmpfiles-var-tmp-override.conf` - conf file
 │   └── `uninstall` - uninstall file
 ├── lib/
-│   ├── `attribution_adjudicator.py` - Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
+│   ├── `attribution_adjudicator.py` - Phase D cutover: the lane-agnostic
 │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
@@ -50,7 +50,7 @@ scripts/
 │   ├── `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
 │   ├── `dev-overnight.py` - Preloaded TodoList for /dev-overnight workflow
 │   ├── `dev.py` - Preloaded TodoList for /dev workflow
-│   ├── `do.py` - Injects the 5-step /do workflow checklist via hook-todo-injection
+│   ├── `do.py` - Injects the 5-step /do workflow checklist via hooks/prompt-workflow.py
 │   ├── `redev.py` - Preloaded TodoList for /redev workflow. Delegates to dev.py (single source of truth).
 │   ├── `reflect-search.py` - Preloaded TodoList for /reflect-search workflow
 │   ├── `research-deep.py` - Python script

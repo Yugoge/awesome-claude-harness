@@ -7,7 +7,7 @@
 - **Naming convention**: lower
 
 ## Files
-- `attribution_adjudicator.py` - Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
+- `attribution_adjudicator.py` - Phase D cutover: the lane-agnostic
 - `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 - `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 - `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
