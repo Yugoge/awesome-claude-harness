@@ -95,6 +95,14 @@ class TX:
             {"type": "tool_result", "tool_use_id": ident, "content": result, **({} if ok else {"is_error": True})}]}})
         return ident
 
+    def ask(self, answer: str):
+        """The main agent's AskUserQuestion in the turn and the owner's answer."""
+        question = "Which one did you mean?"
+        self.tool("AskUserQuestion", {"questions": [{"question": question, "header": "Argument", "multiSelect": False,
+                                                     "options": [{"label": answer, "description": ""},
+                                                                 {"label": "Something else", "description": ""}]}]},
+                  result=f'User has answered your questions: "{question}"="{answer}".')
+
     def say(self, text: str):
         self.add({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}})
 
@@ -813,6 +821,29 @@ def test_a6_typed_push_counts_only_the_typed_remote(env, remotes):
     assert run(env) == (0, "")
 
 
+@pytest.mark.parametrize("typed", ["upstrem", "fork"])
+def test_m_a_typed_push_remote_that_is_no_remote_yields_to_the_remote_the_push_took(env, remotes, typed):
+    """P5 review M: the owner mistypes the /push remote (`upstrem`, no remote of the repository, which
+    push.sh refuses); the agent asks, the owner's answer names origin, and the branch is pushed there.
+    The Stop holds naming the typed name and the unpublished commit until a remote's ref takes HEAD
+    after the opener (git's reflog; the owner's answer is no fact, D23), then passes with the push-gate
+    token still naming HEAD. A typed remote that is one (fork) stays the target: origin does not
+    clear it."""
+    head = commit(remotes, "t2.txt")
+    opener_now(env, "push", typed)
+    code, text = run(env)
+    named = ("a remote since the /push opener; the typed name upstrem is no remote of this repository"
+             if typed == "upstrem" else "refs/remotes/fork/topic since the /push opener")
+    assert code == 2 and f"- push: topic at {head} is not published on {named}\n" in text, text
+    env.tx.ask("origin")
+    assert run(env)[0] == 2
+    git(remotes, "push", "-q", "origin", "topic")
+    if typed == "fork":
+        assert run(env)[0] == 2
+        git(remotes, "push", "-q", "fork", "topic")
+    assert run(env) == (0, "")
+
+
 def test_a6_push_from_a_detached_head_holds_as_step_2s_refusal(env, remotes):
     """push.md Step 2 refuses a detached HEAD ("check out the branch to push"): no push can be made
     from it, so the run is complete. With the branch checked out, ahead and with a token, the push
@@ -967,10 +998,16 @@ def rating_fake(required=True, asked=False):
     return module
 
 
+def task_file(env, name=f"ticket-{FAMILY}.md"):
+    """A file of a task under docs/dev: a typed /close id names a task (P5 review M)."""
+    (env.project / "docs" / "dev" / name).write_text("{}\n" if name.endswith(".json") else "# Ticket\n")
+
+
 @pytest.mark.parametrize("required,asked,code", [(True, False, 2), (True, True, 0), (False, False, 0)])
 def test_a8_close_needs_the_rating_question_asked_where_required(env, monkeypatch, required, asked, code):
     """Fake close_rating (P4) and disposition (P3): re-run once they merge."""
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(required, asked))
+    task_file(env)
     env.tx.command("close", FAMILY)
     env.tx.todos(canonical("close", FAMILY), len(canonical("close", FAMILY)))
     got, text = run(env)
@@ -1078,6 +1115,8 @@ def test_a8_close_arguments_name_the_task_close_md_resolves(env, monkeypatch, ar
     """Self-check finding: the arguments were split on spaces and each word taken as a task id, so a
     path or a quoted --reason named no task; they are read as close.md's Task-id resolution reads them."""
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    task_file(env)
+    task_file(env, f"do-report-{FAMILY}.json")
     env.tx.command("close", args)
     env.tx.todos(canonical("close", args), len(canonical("close", args)))
     env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
@@ -1086,6 +1125,54 @@ def test_a8_close_arguments_name_the_task_close_md_resolves(env, monkeypatch, ar
     env.fake.answers.clear()
     assert run(env) == (0, "")
     assert {c[1:3] for c in env.fake.calls} == {(FAMILY, "close")}
+
+
+# P5 review M: the owner mistypes the /close argument and corrects it in the turn (close.md's
+# Task-id resolution asks for it). OTHER: a task the span dispatched that is not the typed one.
+TYPO, OTHER = "20261101-095959", "20261101-100000"
+
+
+@pytest.mark.parametrize("args", [f"docs/dev/ticket-{TYPO}.md", TYPO, FAMILY[:-1]])
+def test_m_a_typed_close_task_naming_no_task_yields_to_the_task_the_span_closed(env, monkeypatch, args):
+    """P5 review M: a typed path that does not exist, an id no docs/dev file holds, or one a held id
+    only begins with names no task. The Stop holds naming it until a dispatch of the span names a
+    task; the owner's answer is no fact (D23). Then the families the span dispatched are the targets,
+    and the typed id never is."""
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    task_file(env)
+    env.tx.command("close", args)
+    env.tx.todos(canonical("close", args), len(canonical("close", args)))
+    code, text = run(env)
+    assert code == 2 and f"- close: {args} names no task or chain file, and no dispatch of this /close names a task\n" \
+        in text, text
+    env.tx.ask(FAMILY)
+    assert run(env)[0] == 2 and env.fake.calls == []
+    env.tx.dispatch(FAMILY, role="style-inspector", pipeline="close")
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    code, text = run(env)
+    assert code == 2 and f"close-report-{FAMILY}.md" in text and "names no task" not in text, text
+    env.fake.answers.clear()
+    assert run(env) == (0, "")
+    assert {c[1:3] for c in env.fake.calls} == {(FAMILY, "close")}
+
+
+@pytest.mark.parametrize("args,held", [(f"docs/dev/ticket-{FAMILY}.md", f"ticket-{FAMILY}.md"),
+                                      (FAMILY, f"do-report-{FAMILY}.json"), (FAMILY, f"dev-report-{FAMILY}-l1.json"),
+                                      (f"{FAMILY} {TYPO}", f"ticket-{FAMILY}.md")])
+def test_m_a_typed_close_task_naming_a_task_stays_the_target(env, monkeypatch, args, held):
+    """P5 review M: a typed task that names a task or chain file (the path exists; a docs/dev file, the
+    task's own or a lane's, holds the id) stays the target, whatever the span dispatched; beside one
+    that names none, the families the span dispatched join it."""
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    task_file(env, held)
+    env.tx.command("close", args)
+    env.tx.todos(canonical("close", args), len(canonical("close", args)))
+    env.tx.ask(OTHER)
+    env.tx.dispatch(OTHER, role="style-inspector", pipeline="close")
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    code, text = run(env)
+    assert code == 2 and f"close-report-{FAMILY}.md" in text, text
+    assert {c[1] for c in env.fake.calls} == ({FAMILY, OTHER} if TYPO in args else {FAMILY})
 
 
 # ---------------------------------------------------------------- A11: modes
@@ -1147,6 +1234,7 @@ def test_an_absent_producer_function_is_an_instrument_failure_never_an_allow(env
 
 def test_an_unloadable_close_rating_is_an_instrument_failure(env, monkeypatch):
     monkeypatch.setitem(sys.modules, "lib.close_rating", None)  # P4 absent: the import fails
+    task_file(env)
     env.tx.command("close", FAMILY)
     code, text = run(env)
     assert code == 2 and "gate instrument failure: ModuleNotFoundError" in text

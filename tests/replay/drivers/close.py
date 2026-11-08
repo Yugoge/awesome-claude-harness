@@ -642,8 +642,8 @@ class DoProducer:
 
 class CloseRun:
     def __init__(self, rp, session, tid: str, do_report: str | None = None, producer=None, variant: str = "plain",
-                 auto: bool = False, extra_devs=()):
-        self.rp, self.tid, self.do_report = rp, tid, do_report
+                 auto: bool = False, extra_devs=(), typed: str = ""):
+        self.rp, self.tid, self.do_report, self.typed = rp, tid, do_report, typed
         self.producer, self.variant, self.auto = producer, variant, auto
         pairs = list(DEVIATIONS.pairs) + list(extra_devs) + list(getattr(getattr(producer, "devs", None), "pairs", []))
         self.devs = kept_only(rp, Deviations(pairs))
@@ -721,7 +721,30 @@ class CloseRun:
         o.values.update(TASK_ID=self.tid)
         o.values.setdefault("PROJECT_ROOT", o.project)
 
-    # ------------------------------------------------------------ task-id resolution (the /do path)
+    # ------------------------------------------------------------ task-id resolution
+    def resolve_typed(self) -> None:
+        """A typed path (P5 review M): "Verify it exists"; one that does not is awaiting-input cause (iii)
+        naming it, asked in the turn with ONE AskUserQuestion (D23), this conversation's task recommended.
+        The owner picks it, and the resolution resumes in place on that id (TASK_ID, as typed)."""
+        o = self.o
+        lab = self.label("Task-id resolution Glob typed path")
+        g = o.s.tool("Glob", {"pattern": os.path.basename(self.typed),
+                              "path": os.path.join(o.project, os.path.dirname(self.typed))},
+                     label=lab, deviation=self.devs.at(lab))
+        if not g.ok or g.response.get("filenames"):
+            raise agents.PlayError(f"Task-id resolution: the typed {self.typed} exists, or Glob failed")
+        question = f"{self.typed} does not exist, so no spec is identified. Which task do I close?"
+        lab = self.label("Task-id resolution AskUserQuestion")
+        options = [{"label": f"{self.tid} (Recommended)", "description": "the task this conversation ran"},
+                   {"label": "I name another task", "description": ""}]
+        call = o.s.tool("AskUserQuestion", {"questions": [{"question": question, "header": "Task id",
+                                                           "multiSelect": False, "options": options}]},
+                        label=lab, deviation=self.devs.at(lab))
+        answer = (call.response.get("answers") or {}).get(question, "").replace(" (Recommended)", "") if call.ok else ""
+        fact(self.rp, "close typed", {"typed": self.typed, "asked": question, "answer": answer})
+        if answer != self.tid:
+            raise agents.PlayError(f"Task-id resolution: the owner's answer {answer!r} is not {self.tid}")
+
     def resolve_task(self) -> None:
         o = self.o
         if not self.do_report:
@@ -1563,7 +1586,9 @@ class CloseRun:
         return last
 
     def run(self) -> str:
-        self.start(f"--late-repair {self.tid}" if self.variant == "late-repair" else self.tid)
+        self.start(f"--late-repair {self.tid}" if self.variant == "late-repair" else self.typed or self.tid)
+        if self.typed:
+            self.resolve_typed()
         last = self.body()
         self.outcome = last
         ev = self.o.s.stop(f"/close {self.tid}: {last}", label="/close Stop", deviation=self.devs.at("/close Stop"))

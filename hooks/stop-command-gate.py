@@ -130,26 +130,48 @@ def _canonical(task: str) -> str:
     return _lib("obligation").canonical_task_id(task) or task
 
 
-def _targets(span, root, action: str) -> list[str] | None:
-    """The typed tasks as close.md's Task-id resolution and commit.md's Step 1
-    read them (shell quoting; --reason's value is no task; a path names the id
-    its basename holds from the timestamp on), else the families the span's
-    dispatches named; None: no task. --auto: the parents dev-lifecycle's --auto
-    target function lists at the opener's cut-off (a fresh scan) and the
-    families the span walked, which it stops listing once done; [] had none."""
+def _path(arg: str) -> bool:
+    return arg.endswith((".md", ".json")) or "/" in arg
+
+
+def _task_of(path: str) -> str:
+    """The id a path names: its basename's, from the timestamp on."""
+    name = os.path.basename(path).removesuffix(".md").removesuffix(".json")
+    return _canonical(name[name.find(_lib("obligation").task_stamp(name) or name):])
+
+
+def _typed(span) -> list[tuple[str, str]]:
+    """(argument, task) of each typed task as close.md's Task-id resolution and
+    commit.md's Step 1 read them (shell quoting; --reason's value is no task; a
+    path names the id its basename holds from the timestamp on)."""
     args = shlex.split(span.args)
-    if "--auto" in args:
+    return [(arg, _task_of(arg) if _path(arg) else _canonical(arg))
+            for k, arg in enumerate(args) if not arg.startswith("-") and args[k - 1:k] != ["--reason"]]
+
+
+def _targets(span, root, action: str) -> list[str] | None:
+    """The typed tasks (_typed), else the families the span's dispatches named;
+    None: no task. --auto: the parents dev-lifecycle's --auto target function
+    lists at the opener's cut-off (a fresh scan) and the families the span
+    walked, which it stops listing once done; [] had none."""
+    if "--auto" in shlex.split(span.args):
         lifecycle = _script("scripts/dev-lifecycle.py")
         return sorted(set(lifecycle.auto_targets(Path(root), action, span.opened_at())) | span.session_families())
-    typed = []
-    for k, arg in enumerate(args):
-        if arg.startswith("-") or args[k - 1:k] == ["--reason"]:
-            continue
-        if arg.endswith((".md", ".json")) or "/" in arg:
-            name = os.path.basename(arg).removesuffix(".md").removesuffix(".json")
-            arg = name[name.find(_lib("obligation").task_stamp(name) or name):]
-        typed.append(_canonical(arg))
-    return typed or sorted(span.session_families()) or None
+    return [task for _arg, task in _typed(span)] or sorted(span.session_families()) or None
+
+
+def _resolves(root, arg: str, task: str) -> bool:
+    """A typed task names a task or chain file: a path that exists (close.md
+    verifies it), or an id a file under docs/dev holds as a path names it (its
+    own or a lane's)."""
+    if _path(arg):
+        return (Path(root) / arg).is_file()
+    try:
+        names = os.listdir(Path(root) / "docs" / "dev")
+    except OSError:
+        return False
+    family = _lib("obligation").task_family
+    return any(task in (held, family(held)) for held in map(_task_of, names))
 
 
 def p_dev(span, root, payload) -> list[str]:
@@ -197,8 +219,17 @@ def p_overnight(span, root, payload) -> list[str]:
 
 def p_close(span, root, payload) -> list[str]:
     """/close: --stage close per target, and the close-rating question asked
-    (D9b: asked, not answered) where it is required."""
-    targets = _targets(span, root, "close")
+    (D9b: asked, not answered) where it is required. A typed task that names no
+    task or chain file (_resolves; close.md asks for one) yields to the families
+    the span dispatched, the task the turn closed on the owner's answer, which
+    no predicate reads (D23); with none dispatched, its gap names it."""
+    typed = [] if "--auto" in shlex.split(span.args) else _typed(span)
+    held = [arg for arg, task in typed if not _resolves(root, arg, task)]
+    families = span.session_families() if held else set()
+    if held and not families:
+        return [f"close: {arg} names no task or chain file, and no dispatch of this /close names a task"
+                for arg in held]
+    targets = sorted({t for a, t in typed if a not in held} | families) if held else _targets(span, root, "close")
     if targets is None:
         return ["close: no target task resolved"]
     close_rating = _lib("close_rating")  # P4's
@@ -355,9 +386,11 @@ def _opener_branch(root, since: float) -> str | None:
 def p_push(span, root, payload) -> list[str]:
     """/push [<remote>] [INFERRED; A6]. BRANCH: the branch HEAD was on at the
     opener, else (detached there) HEAD's branch now; at its tip,
-    refs/remotes/<remote>/<BRANCH> (the typed remote, else any) took it, or the
-    branch's value at that time, after the opener; or it is at or behind the
-    typed remote's ref (none typed: BRANCH's upstream); or push.md refuses the
+    refs/remotes/<remote>/<BRANCH> (the typed remote, else any: a typed name
+    that is no remote of the repository, which push.sh refuses, yields to the
+    remote the push on the owner's answer took) took it, or the branch's value
+    at that time, after the opener; or it is at or behind the typed remote's
+    ref (none typed: BRANCH's upstream; none for such a name); or push.md refuses the
     push: HEAD detached at the opener and now (Step 2), no push-gate token names
     an ancestor of it (push.sh's exit 3: its READ side over the path of the
     token's one writer), or this session's newest push-analyst grant here since
@@ -375,13 +408,14 @@ def p_push(span, root, payload) -> list[str]:
     if not head:
         return [f"push: {branch}, the branch HEAD was on at the /push opener, names no commit; nothing of it "
                 "is published since the opener"]
-    local = _reflog(root, f"refs/heads/{branch}")
-    for remote in [typed] if typed else (_git(root, "remote") or "").split():
+    local, remotes = _reflog(root, f"refs/heads/{branch}"), (_git(root, "remote") or "").split()
+    unknown = typed if typed and typed not in remotes else None
+    for remote in [typed] if typed and not unknown else remotes:
         for sha, t, _m in _reflog(root, f"refs/remotes/{remote}/{branch}"):
             if t >= since and sha in (head, _value_at(local, t)):
                 return []
-    ref = (f"refs/remotes/{typed}/{branch}" if typed
-           else _git(root, "rev-parse", "--symbolic-full-name", "--verify", "-q", f"{branch}@{{upstream}}"))
+    ref = None if unknown else (f"refs/remotes/{typed}/{branch}" if typed else _git(
+        root, "rev-parse", "--symbolic-full-name", "--verify", "-q", f"{branch}@{{upstream}}"))
     if ref and _git(root, "rev-parse", "--verify", "-q", ref) and _ancestor(root, head, ref):
         return []
     top = _git(root, "rev-parse", "--show-toplevel") or str(root)
@@ -399,6 +433,7 @@ def p_push(span, root, payload) -> list[str]:
     if (grant.get("verdict"), grant.get("branch"), grant.get("head_sha")) == ("blocked", branch, head):
         return []  # Step 5: "push BLOCKED by push-analyst"
     return [f"push: {branch} at {head} is not published on {ref or 'a remote'} since the /push opener"
+            + (f"; the typed name {unknown} is no remote of this repository" if unknown else "")
             + ("" if now == branch else f"; HEAD is not on it: check out {branch}, then push it")]
 
 

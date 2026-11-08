@@ -20,6 +20,9 @@ Driver arguments (cli.py --arg K=V):
   then=close          /close only
   then=none           the /do turn only
   session=same|later  the session /close and /commit are typed in (default same)
+  mistype=1           P5 review M: the owner types /close with a ticket path of another id, which does not
+                      exist; Task-id resolution asks in the turn and the owner picks the /do task's id
+                      (drivers/close.py resolve_typed)
 
 Acceptance 7's /do case, run by name (`--arg variant=blocked`; the artifact check's job list,
 tests/artifact_graph/runtime.py drivers(), keeps this driver's one default replay):
@@ -207,14 +210,16 @@ def run(rp) -> None:
     if variant not in ("plain", "blocked"):
         raise ValueError(f"unknown variant {variant!r}")
     rp.pipeline = ("do" if then == "none" else f"do+{then}") + (f"/{variant}" if variant != "plain" else "") + (
-        "/later" if rp.args.get("session") == "later" else "")
+        "/later" if rp.args.get("session") == "later" else "") + ("/mistyped" if rp.args.get("mistype") else "")
     turn = DoTurn(rp, variant=variant)
     tid = turn.run()
     if then == "none":
         return
     from . import close as close_drv
     session = rp.later_session(turn.o.s) if rp.args.get("session") == "later" else turn.o.s
-    cr = close_drv.CloseRun(rp, session, tid, do_report=turn.report_rel, producer=close_drv.DoProducer(turn))
+    typo = tid[:-2] + ("58" if tid.endswith("59") else "59")  # another second: no task of this replay
+    cr = close_drv.CloseRun(rp, session, tid, do_report=turn.report_rel, producer=close_drv.DoProducer(turn),
+                            typed=f"docs/dev/ticket-{typo}.md" if rp.args.get("mistype") else "")
     cr.run()
     if then == "close":
         return
