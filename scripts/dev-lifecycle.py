@@ -13,9 +13,10 @@ Derives, per on-disk task-id, a state (docs/dev/ticket-20260808-035658-lanel.md)
                disposition takes an incomplete chain (D7); its instrument
                failure, which the disposition raises, blocked. A gap of that
                disposition the reader (obligation.declaring_dispatch) names no
-               owner for can never be produced unattended: list-actionable
-               --next-action close passes the task over, its reason on stderr
-               (`auto_skip`); /close <task> still takes it
+               owner for (the chain's own unowed_gap, used verbatim) can never
+               be produced unattended: list-actionable --next-action close
+               passes the task over, its reason on stderr (`auto_skip`);
+               /close <task> still takes it
   close     -- a close-report exists: the one classifier's class of its last
                line (hooks/lib/close-verdict.py), then commit detection; the
                chain is not called
@@ -41,7 +42,6 @@ from types import ModuleType
 from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from hooks.lib import obligation  # noqa: E402
 from hooks.lib.obligation import terminal_status  # noqa: E402  (the one terminal decision)
 
 # A docs/dev/ file names a task only when its id part passes the one task-id
@@ -346,10 +346,9 @@ def derive_state(project_root: Path, task_id: str) -> dict:
             resolver = _load_resolver_module()
             result = resolver.resolve_chain(project_root, task_id)
             row.update(chain_state(task_id, result))
-            # The disposition /close's Step 0 takes (its instrument failure raises: a blocked row, below).
-            gaps = resolver.disposition(project_root, task_id, "dev")["gaps"]
-            ownerless = next((gap["artifact"] for gap in gaps if obligation.declaring_dispatch(
-                task_id, gap["artifact"], project_root) is None), None)
+            # The chain's verdict on the disposition /close's Step 0 takes: a gap nobody owes (its
+            # instrument failure raises: a blocked row, below).
+            ownerless = resolver.unowed_gap(project_root, task_id, "dev")
             if ownerless:  # /close <task> still takes it; --auto passes it over, saying why
                 row["auto_skip"] = f"no dispatch record or todo step owes {ownerless}"
             return row

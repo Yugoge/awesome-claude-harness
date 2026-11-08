@@ -1802,6 +1802,19 @@ def disposition_lines(project_root: Path | str, task_id: str, stage: str) -> lis
     return lines or [f"{stage} {task_id}: disposition {outcome['disposition']!r}, needs 'chain_pass'"]
 
 
+def unowed_gap(project_root: Path | str, task_id: str, stage: str) -> str | None:
+    """The first gap artifact of the task's disposition at ``stage`` that the
+    reader of dispatches (obligation.declaring_dispatch) names no owner for, as
+    the gap's own artifact; None when every gap has one or there is no gap. No
+    dispatch record or canonical todo step owes such a gap, so an unattended
+    run can never produce it (dev-lifecycle's --auto passes the task over on
+    this verdict, used verbatim). Raises on an instrument failure, as
+    disposition does."""
+    obligation = _harness_lib("obligation")
+    return next((gap["artifact"] for gap in disposition(project_root, task_id, stage)["gaps"]
+                 if obligation.declaring_dispatch(task_id, gap["artifact"], project_root) is None), None)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     parser = StableArgumentParser(prog="resolve-dev-artifact-chain.py")
