@@ -65,7 +65,19 @@ Derivation rules, in the order row 19 states them:
     producer's own stop or tool call), G1 (PreToolUse on Agent), G3
     (PostToolUse on Agent), the main agent's own stop (Stop, deciding on what
     the main agent's side wrote), a completion read (Stop, deciding on a
-    subagent's artifact), the chain function's own call, elsewhere.
+    subagent's artifact), the chain function's own call, elsewhere. The chain
+    function's own call is also the one a process makes in its own code (the
+    static half's chain call of an in-process load, or of a function that
+    returns what one returns) whose output it uses verbatim (no field of it
+    tested, rule (2)): the trace sees the chain function's reads as the
+    process's, so a change of its decision on an artifact no code of its own
+    reads (no read of its code names it, of the file's content or name, or a
+    listing of a named family of files: the static half follows its imports
+    by name, not a module it loads by path, the chain's among them, and a
+    process that imports one by a computed name keeps its decisions), in an
+    event in which it loaded the chain's module (the trace's read of the
+    module's source), is the chain function's decision, at its own call, as a
+    Bash call's change is (deciding()).
 (6) A deciding read outside the allowed positions is a re-check when the
     producer side rejects the same mutation with the tree's switches; it is
     that fault's only stop (a copy for the arming commit to delete) when the
@@ -108,6 +120,8 @@ _TEXT_PATH = re.compile(r"[\w.$<>{}*-]*[\w>}*]\.[A-Za-z0-9]{1,6}\b")
 _TEXT_HOLE = re.compile(r"<[^<>\s]+>|\$\{[^}\s]+\}|\$\w+|\*")
 # a call that loads a module from a file path
 _LOAD_BY_PATH = re.compile(r"\b(spec_from_file_location|SourceFileLoader|run_path|load_sibling_module)\b")
+# an import whose module name is computed (no string literal of its own): code the static half cannot follow
+_COMPUTED_IMPORT = re.compile(r"\b(?:import_module|__import__)\(\s*(?![rRbBuU]?(['\"])[^'\"{}\\]*\1\s*[,)])")
 
 
 # ---------------------------------------------------------------- inputs
@@ -949,6 +963,7 @@ class _Ctx:
                     chain_calls.add((run.name, u["seq"]))
                     chain_decides |= {(runtime_pattern(r["pattern"], run.env), r["how"]) for r in u["runs"]
                                       if r["changed"]}
+        callers = self.in_process_chain_callers()
         for run in self.runs:
             for u in (run.differential or {}).get("units", []):
                 inv = run.invocations.get(u["seq"]) or {}
@@ -974,12 +989,17 @@ class _Ctx:
                                 and (key, r["how"]) in chain_decides:
                             continue    # the call's change is the chain function's (above)
                         rec["changed"].add((run.settings, r["how"]))
-                        pos = self._position(a, u["event"], u.get("tool"), u.get("agent_type"), u["origin"],
-                                             u["kind"])
+                        who = os.path.normpath(reader)
+                        where = f"{run.name}#{u['seq']}:{u['event']}:{u['label']}"
+                        if who in callers and self._ran_chain(run, who, u["seq"]) and not self._own_read(who, key):
+                            # rule (5): the chain function's own call, run in this process: its decision
+                            who, pos, where = self.chain_script, "chain call", f"{where} in {who}"
+                        else:
+                            pos = self._position(a, u["event"], u.get("tool"), u.get("agent_type"), u["origin"],
+                                                 u["kind"])
                         a.decisions.append(Decision(
-                            os.path.normpath(reader), pos, f"{run.name}#{u['seq']}:{u['event']}:{u['label']}",
-                            "differential", r["how"], run.settings, u["event"], u.get("tool") or u.get("agent_type") or "",
-                            rule=self._rule_id(os.path.normpath(reader), key)))
+                            who, pos, where, "differential", r["how"], run.settings, u["event"],
+                            u.get("tool") or u.get("agent_type") or "", rule=self._rule_id(who, key)))
         self._target_reads()
         # E1's fallback: a static branch to an exit or a block on a read, for readers not measured
         rt = sorted(self.rt_keys)
@@ -1017,6 +1037,48 @@ class _Ctx:
                 probes.get(((d.get("read_through") or [d["read_site"]])[-1], d["path"]))) else "any"
             for key in keys:
                 self._static_decision(d, key, how)
+
+    def in_process_chain_callers(self) -> set:
+        """Rule (5): components whose code runs the chain function in their own process and uses
+        what it returns verbatim: a chain call the static half finds as an in-process load of the
+        chain's module, or as a call of a function of theirs that returns what one returns, and no
+        chain call of theirs testing a field of the output. A component that imports a module by
+        a computed name is none: the static half cannot see what that code reads (_own_read)."""
+        key = ("chain callers",)
+        if key not in self.texts:
+            calls: dict = {}
+            for r in self.recs:
+                if r["kind"] == "chain_call":
+                    calls.setdefault(r["component"], []).append(r)
+            self.texts[key] = {comp_identity(c) for c, rs in calls.items()
+                               if any(r["how"] in ("load", "proxy") for r in rs)
+                               and not any("fields" in r["uses"] for r in rs)
+                               and not _COMPUTED_IMPORT.search(self._text(c))}
+        return self.texts[key]
+
+    def _ran_chain(self, run: Run, who: str, seq: int) -> bool:
+        """The trace shows `who`'s process reading the chain function's module in event `seq`: it
+        loaded the chain's code there (Python reads a module's source to load it)."""
+        key = ("chain ran", run.name)
+        if key not in self.texts:
+            self.texts[key] = {(e["comp"], e["event"]) for e in run.events if e["op"] == "read"
+                               and re.sub(r"^<[a-z]+>/", "", e["pattern"]) == self.chain_script}
+        return (who, seq) in self.texts[key]
+
+    def _own_read(self, who: str, key: str) -> bool:
+        """`who`'s own code reads `key`: a read the static half finds in it (its own functions and
+        the libraries it imports by name) names it, of its content or its name, or a listing of a
+        named family of files it belongs to (overnight-summary-<*>.md: a scan whose result turns
+        on that file being there); a listing of every file of a directory names none."""
+        ck = ("own reads",)
+        if ck not in self.texts:
+            idx: dict = {}
+            for r in self.recs:
+                if r["kind"] == "relation" and r["op"] == "read" and r.get("mode") != "source" and (
+                        _content_relation(r) or r.get("mode") == "list" and _named(r["path"])):
+                    idx.setdefault(comp_identity(r["component"]), set()).add(r["path"])
+            self.texts[ck] = idx
+        return any(p == key or matches(p, key) for p in self.texts[ck].get(who, ()))
 
     def _static_decision(self, d: dict, key: str, how: str = "any") -> None:
         a = self.m.artifacts[key]
