@@ -63,6 +63,15 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   dispatch with isolation:worktree leaves; the fault actor makes it): the guard
                   refuses calls and names its remedy, `git worktree remove <path> --force`; that is
                   the main agent's next call, then the call it meant to make.
+  report-schema   a plain prompt in a project holding a /dev cycle's registry, armed as /dev's start
+                  arms it (the artifact-contract flag; the fault actor runs scripts/write-enforce-flag.sh
+                  as the prompt hook does): outside a command's span no obligation is owed (G1), so
+                  the dev dispatch carries none; its FIRST ACTION read of the registry's dev sentinel
+                  binds it to the cycle, and it writes its dev report declaring report_version 2
+                  without the `dev` section dev-report.v2 requires: the legacy correlated-report
+                  check (the dispatch declares nothing, so the reports its transcript shows it
+                  wrote) refuses the stop; at its next round it edits the report into the one its
+                  schema asks for and stops: passes.
 """
 from __future__ import annotations
 
@@ -279,6 +288,8 @@ def _plain(rp, case: str) -> None:
         d = s.dispatch("dev", task, description="Describe toy.add", body=body, result="add(a, b) returns a + b.",
                        on_stop_block=again, stop_rounds=3, label=f"main Agent(dev) {case}")
         rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
+    elif case == "report-schema":
+        _registry_report(rp, s, path, rounds)
     elif case == "stale-worktree":
         wt = os.path.join(project, ".claude", "worktrees", "agent-0123456789abcdef")
         with rp.acting("fault"):
@@ -295,6 +306,44 @@ def _plain(rp, case: str) -> None:
     ev = s.stop("add(a, b) returns a + b.", label="Stop")
     ok = bool(rounds) and not rounds[-1]["blocked"]
     rp.terminal("plain", ok, ev, case=case, rounds=rounds)
+
+
+def _registry_report(rp, s, toy: str, rounds: list) -> None:
+    """report-schema: a dev dispatch with no obligation that its FIRST ACTION read binds to a /dev cycle's
+    registry, judged at its own stop on the report its transcript shows it wrote."""
+    from .. import agents, schemagen
+    project, sid = rp.layout.project, "20990101-000001"
+    cmd = (f"bash ~/.claude/scripts/write-enforce-flag.sh --source-command dev --session-id {sid} "
+           "--flag artifact-contract")
+    with rp.acting("fault"):  # the registry /dev's start arms (prompt-workflow.py _init_dev_registry)
+        p = subprocess.run(["bash", "-c", cmd], cwd=project, env=dict(rp.bash_env, CLAUDE_PROJECT_DIR=project),
+                           capture_output=True, text=True)
+    if p.returncode:
+        raise RuntimeError(f"arming the report-schema registry failed: {cmd}: {p.stdout}{p.stderr}")
+    rel = f"docs/dev/dev-report-{sid}.json"
+    doc = schemagen.instance(agents.Tree(rp).schema("dev-report.v2"), {
+        "request_id": sid, "task_id": sid, "dev": {"status": "completed", "files_modified": [], "files_created": []}})
+    report = os.path.join(project, rel)
+    rounds_left = iter([1])
+
+    def body(sub):
+        sub.read(f"{project}/.claude/dev-registry/{sid}/dev.json", label="agent:dev FIRST ACTION Read")
+        sub.read(toy, label="agent:dev Read")
+        # its report: report_version 2, and no `dev` section
+        sub.write(report, json.dumps({k: v for k, v in doc.items() if k != "dev"}, indent=2) + "\n",
+                  label=f"agent:dev Write {rel}")
+
+    def again(sub, ev):  # its next round: the report its schema asks for, then the same final message
+        if next(rounds_left, None) is None:
+            return None
+        agents.put(sub, report, json.dumps(doc, indent=2) + "\n", f"agent:dev Write {rel} (next round)")
+        return "add(a, b) returns a + b."
+    task = (f"FIRST ACTION: Read {project}/.claude/dev-registry/{sid}/dev.json.\n"
+            f"Problem: a reader needs to know what toy.add returns.\nAcceptance criteria: the answer names the "
+            f"value; your report is {rel}.\nDO NOT: modify any other file.\n")
+    d = s.dispatch("dev", task, description="Describe toy.add", body=body, result="add(a, b) returns a + b.",
+                   on_stop_block=again, stop_rounds=3, label="main Agent(dev) report-schema")
+    rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
 
 
 def _dev_early(rp) -> None:
@@ -378,7 +427,8 @@ def run(rp) -> None:
         return _dev_early(rp)
     if case == "spec-foreground":
         return _spec_foreground(rp)
-    if case in ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending"):
+    if case in ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending",
+                "report-schema"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
                     "todo-first"):

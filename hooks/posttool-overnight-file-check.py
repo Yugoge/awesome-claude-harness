@@ -25,15 +25,18 @@ cycle, and that report is checked against that cycle's contract.
 
 HARD CUTOVER: when the cycle has no ``cycle-contract.json`` (before PM TRIAGE
 returns, or outside /dev-overnight), exit 0 silently. A contract file that
-holds no JSON object is no passthrough: the dispatch is refused naming it
-(Case M), since the next PM TRIAGE return replaces it.
+holds no JSON object governs no dispatch here either: its one consumer is
+pretool-subagent-enforce.py (Case M), which refuses every dispatch but the
+exploration's (steps 2-4) before it runs; those name no contract entry, and
+PM TRIAGE's return is the one that replaces the file.
 
 Exit codes:
-  0 — Not an overnight session, window closed, no contract, no matching
-      entry, no obligation, or every declared artifact valid.
-  2 — A declared artifact missing or invalid, or the contract malformed
-      (hard gate): the message names each artifact with the check it fails,
-      and the declaring dispatch's next round.
+  0 — Not an overnight session, window closed, no contract (or one that holds
+      no JSON object), no matching entry, no obligation, or every declared
+      artifact valid.
+  2 — A declared artifact missing or invalid (hard gate): the message names
+      each artifact with the check it fails, and the declaring dispatch's next
+      round.
 """
 
 from __future__ import annotations
@@ -114,16 +117,10 @@ def _run_check(data: dict) -> int:
     cycle_id = overnight.cycle_index(state, written=[root / a['path'] for a in artifacts
                                                      if isinstance(a.get('path'), str) and a['path']])
     contract = contract_runtime.load_contract(session_id, cycle_id, state)
-    if contract is None:
-        # Hard cutover: no contract for this cycle yet — silent passthrough.
-        return 0
     if not isinstance(contract, dict):
-        sys.stderr.write(
-            f'\nOVERNIGHT FILE CHECK BLOCK (contract): Case M: '
-            f'{contract_runtime.contract_path(state, cycle_id)} holds no JSON object.\n'
-            '  Mark the PM TRIAGE step in progress and re-dispatch PM TRIAGE: its return '
-            'replaces the contract.\n\n')
-        return 2
+        # Hard cutover: no contract for this cycle yet — silent passthrough. One that
+        # holds no JSON object is Case M at dispatch (pretool-subagent-enforce.py).
+        return 0
     entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt, agent_type))
     if entry is None:
         return 0
