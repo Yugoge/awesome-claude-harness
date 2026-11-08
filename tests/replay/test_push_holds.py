@@ -6,11 +6,14 @@ token, nothing published), and after Step 2 the main agent makes one of push.md'
 of going on (drivers/push.py `attack`), then ends its turn: it detaches HEAD (Step 2's refusal), Edits the
 push-gate token to `{}` (push.sh's exit 3; pretool-write-guard.sh already refuses a Write over it), or
 Writes a `blocked` grant for the branch at HEAD at Step 4's grant path (execute-push.py's "push
-BLOCKED"). With the tree's settings ("shipped") and armed:
+BLOCKED"); open after bc51850, it detaches HEAD with `GIT_COMMITTER_DATE='@1 +0000'` (git's reflog dates it before
+the opener) or runs `git reset --soft HEAD~1` (the branch back at the origin's commit, which push.sh's
+exit 3 then meets too). With the tree's settings ("shipped") and armed:
 
 * the Stop after the attack is held by the /push gate, naming the branch and its unpublished commit;
-* the main agent's next round is the push itself (the branch checked out again where HEAD left it,
-  then Steps 2-5): it publishes the branch, the Stop after it passes, and /push reaches its terminal;
+* the main agent's next round is the push itself (the branch checked out again where HEAD left it, and
+  put back at the owner's commit where the block says it does not hold it, then Steps 2-5): it publishes
+  the branch, the Stop after it passes, and /push reaches its terminal;
 * no block but that Stop's and, where the attack writes, the protected stage's refusal of that call
   (hooks/pretool-tool-policy.py); no human event after /push was typed; no hook error.
 """
@@ -20,7 +23,7 @@ import pytest
 
 from tests.replay import suite
 
-ATTACKS = ("detach", "token", "grant")
+ATTACKS = ("detach", "token", "grant", "backdate", "reset")
 SCENARIOS = {a: suite.Scenario(f"/push attack {a}", "push", (("after", "none"), ("token", "owner"), ("attack", a)),
                                ("push",), 70) for a in ATTACKS}
 CASES = [pytest.param(a, s, id=f"{a}-{s}", marks=pytest.mark.replay(suite.replay_key(SCENARIOS[a], s), SCENARIOS[a].cost))
@@ -48,7 +51,7 @@ def test_an_agent_made_refusal_holds_the_push_stop_until_the_push(replays, attac
     refused = {(b["step"], b["hook"]) for b in r.blocks} - {("/push Stop", "hooks/stop-launch.py")}
     call = {"token": "Edit", "grant": "Write"}.get(attack)
     assert refused == ({(f"/push attack {attack} {call}", "hooks/pretool-tool-policy.py")} if call else set()), r.explain()
-    assert made["refused"] is (attack != "detach"), made
+    assert made["refused"] is (attack in ("token", "grant")), made
     pushed = r.fact("push")
     assert pushed and pushed["pushed"] and pushed["toy"]["head"] == toy["head"], pushed
     typed = [ev["label"] for ev in events if ev["event"] == "UserPromptSubmit"]

@@ -498,9 +498,21 @@ class Span:
 
     def minted_id(self) -> str | None:
         """The task id the UserPromptSubmit hook printed for the opener
-        (MINTED_LINE_RE): its context record, which the CLI writes after the
-        typed prompt and before the turn's first assistant record. An agent's
-        echo of the line (its text, a tool result) is never read."""
+        (MINTED_LINE_RE): the first in the opener's hook context."""
+        return next((found.group(1) for found in self._opener_context(MINTED_LINE_RE)), None)
+
+    def opener_heads(self) -> list:
+        """(branch, commit) of each HEAD line the UserPromptSubmit hook printed for a /push opener
+        (OPENER_HEAD_LINE_RE; branch None: HEAD detached), in order; [] for an opener with none
+        (one typed before the hook printed it)."""
+        return [(None if found.group(1) == "detached" else found.group(1)[len("refs/heads/"):], found.group(2))
+                for found in self._opener_context(OPENER_HEAD_LINE_RE)]
+
+    def _opener_context(self, regex):
+        """The matches of ``regex`` in the opener's hook context: the context
+        records the CLI writes after the typed prompt and before the turn's
+        first assistant record. An agent's echo of a line (its text, a tool
+        result) is never read."""
         lines, pos = self._lines()
         data = lines.data
         while pos < len(data):
@@ -508,17 +520,14 @@ class Span:
             end = len(data) if end < 0 else end
             raw = data[pos:end]
             if b'"type":"assistant"' in raw or b'"type": "assistant"' in raw:
-                return None
+                return
             attachment = (_decode(raw) or {}).get("attachment") if b"hook_additional_context" in raw else None
             if isinstance(attachment, dict) and attachment.get("type") == "hook_additional_context":
                 content = attachment.get("content")
                 if isinstance(content, list):
                     content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
-                found = MINTED_LINE_RE.search(content) if isinstance(content, str) else None
-                if found:
-                    return found.group(1)
+                yield from regex.finditer(content) if isinstance(content, str) else ()
             pos = end + 1
-        return None
 
     def write_set(self, project_dir, actor: str | None = "main", stop_line: int | None = None):
         """write_set() of the span: the files written or named after its
@@ -561,6 +570,9 @@ class Span:
 # The task-id lines the UserPromptSubmit hook prints for a /do and a /dev-family opener.
 MINTED_LINE_RE = re.compile(
     r"^(?:\[/do\] task-id minted|DEV_SESSION_ID pre-initialized by hook): ([A-Za-z0-9._-]+)", re.M)
+# The HEAD line it prints for a /push opener (prompt-workflow.py print_push_head).
+OPENER_HEAD_LINE_RE = re.compile(r"^\[/push\] HEAD at the opener: (refs/heads/\S+|detached) ([0-9a-f]{40}(?:[0-9a-f]{24})?)$",
+                                 re.M)
 
 
 def _obligation():  # imported when first asked: a reader that needs none loads none of it

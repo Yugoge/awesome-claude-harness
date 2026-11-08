@@ -85,6 +85,34 @@ def test_dev_start_runs_the_harness_todo_script_and_prints_both_roots_first(prod
     assert f"({len(canonical)} steps)" in proc.stdout
 
 
+def test_push_prints_heads_branch_and_commit_after_the_roots(product, tmp_path):
+    """P5 review H2: /push then prints HEAD's branch (or `detached`) and commit, the line the /push
+    Stop reads through hooks/lib/command_span.py's OPENER_HEAD_LINE_RE; none while HEAD names no
+    commit (no repository, no commit yet), and no other command prints one."""
+    span = _load(ROOT / "hooks" / "lib" / "command_span.py", "command_span_todo_root")
+    roots = f"PROJECT_ROOT={product}\nHARNESS_ROOT={ROOT}\n"
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "GIT_"))}
+    env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t",
+               GIT_COMMITTER_EMAIL="t@example.invalid", GIT_CEILING_DIRECTORIES=str(tmp_path))
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(product), *args], capture_output=True, text=True, env=env,
+                              check=True).stdout.strip()
+    assert _prompt(product, tmp_path, "/push").stdout == roots
+    git("init", "-q", "-b", "topic/x")
+    assert _prompt(product, tmp_path, "/push").stdout == roots
+    git("add", "-A")
+    git("commit", "-q", "-m", "c")
+    head = git("rev-parse", "HEAD")
+    for ref in ("refs/heads/topic/x", "detached"):
+        if ref == "detached":
+            git("checkout", "-q", "--detach")
+        out = _prompt(product, tmp_path, "/push origin").stdout
+        assert out == roots + f"[/push] HEAD at the opener: {ref} {head}\n", out
+        assert [m.groups() for m in span.OPENER_HEAD_LINE_RE.finditer(out)] == [(ref, head)]
+    assert _prompt(product, tmp_path, "/merge").stdout == roots
+
+
 @pytest.mark.parametrize("command, printed", [("commit", True), ("merge", True), ("status", False)])
 def test_roots_for_every_harness_command_only(product, tmp_path, command, printed):
     """/commit and /merge have no todo script; /status is no harness command."""

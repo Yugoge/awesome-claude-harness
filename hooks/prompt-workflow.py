@@ -12,7 +12,7 @@ Phase A (slash command detected):
   - Prints checklist-ready message + exact first TodoWrite call to use
   - For every harness command (stop_contract.harness_commands), first prints
     PROJECT_ROOT=<abs> and HARNESS_ROOT=<abs>, the roots its text's Read paths
-    start from
+    start from; at /push, then the branch and commit HEAD is at (print_push_head)
 
 Phase B (subsequent prompts, no slash command):
   - While the session's overnight window is open (lib/overnight.window_open):
@@ -1570,6 +1570,8 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
     """Phase A: slash command detected -- setup todos, state, emit checklist."""
     if cmd_name != 'dev-overnight':
         print_roots(cmd_name, sid)
+    if cmd_name == "push":
+        print_push_head()
     if cmd_name in ("commit", "stop"):
         _write_userintent_sentinel(cmd_name, sid)
     if cmd_name == "do":
@@ -1622,6 +1624,20 @@ def print_roots(cmd_name: str, sid: str) -> None:
         import overnight  # hooks/lib is on sys.path (see the WS1 block above)
         state = overnight.locate(sid, {'cwd': str(PROJECT_DIR)})[1] if cmd_name == 'dev-overnight' else None
         print(root_lines(state))
+
+
+def print_push_head() -> None:
+    """At a /push opener, HEAD as git has it then: `[/push] HEAD at the opener: <refs/heads/<branch>
+    or detached> <commit>` (P5 review H2); nothing while HEAD names no commit. The /push Stop judges
+    that branch and commit (command_span's Span.opener_heads): git's reflog, whose dates a command's
+    GIT_COMMITTER_DATE sets, and the branch, which a reset moves, are no record of them."""
+    def git(*args):
+        done = subprocess.run(['git', '-C', str(PROJECT_DIR), *args], capture_output=True, text=True, timeout=5)
+        return done.stdout.strip() if done.returncode == 0 else ''
+    commit = git('rev-parse', '--verify', '-q', 'HEAD^{commit}')
+    if commit:
+        ref = git('symbolic-ref', '-q', 'HEAD')
+        print(f"[/push] HEAD at the opener: {ref if ref.startswith('refs/heads/') else 'detached'} {commit}")
 
 
 def root_lines(state) -> str:

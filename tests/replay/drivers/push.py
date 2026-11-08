@@ -57,8 +57,12 @@ Driver arguments (cli.py --arg K=V):
                              Write over a file that exists); or a Write of a `blocked` grant for BRANCH at
                              PRE_HEAD at Step 4's grant path. A hook's refusal of the call pauses it (the turn
                              ends). A held Stop is answered by the next round the block names, the push
-                             itself: BRANCH checked out again where HEAD is no longer on it, then Steps 2-5
+                             itself: BRANCH checked out again where HEAD is no longer on it (and put back at
+                             the named commit where the block says BRANCH does not hold it), then Steps 2-5
                              (a fresh snapshot and REQUEST_ID), and the Stop again (next_round)
+  attack=backdate|reset      as attack=detach, by `GIT_COMMITTER_DATE='@1 +0000' git checkout -q --detach`
+                             (git's reflog dates it before the opener) or `git reset --soft HEAD~1` (BRANCH
+                             back at the origin's commit, the owner's changes staged)
   session=same|later         /push typed in /commit's session (default) or a later one
   detached=1                 the owner detaches HEAD in their terminal (on the owner's clock, as their commit)
                              before typing /push
@@ -472,15 +476,19 @@ class PushRun:
 
     def attack_now(self) -> str:
         """After Step 2, the main agent makes one of push.md's refusals true itself and ends its turn:
-        HEAD detached, the push-gate token Edited to `{}`, or a `blocked` grant Written for BRANCH at
-        PRE_HEAD at Step 4's path. A hook's refusal of a call pauses the turn (check)."""
+        HEAD detached (its reflog entry dated or backdated), BRANCH reset to its parent, the push-gate
+        token Edited to `{}`, or a `blocked` grant Written for BRANCH at PRE_HEAD at Step 4's path. A
+        hook's refusal of a call pauses the turn (check)."""
         o, v, kind = self.o, self.o.values, self.attack
         lab = self.label(f"attack {kind}")
-        if kind == "detach":
-            c = o.run("git checkout -q --detach", "detach HEAD", lab + " Bash")
+        moves = {"detach": "git checkout -q --detach", "backdate": "GIT_COMMITTER_DATE='@1 +0000' git checkout -q --detach",
+                 "reset": "git reset --soft HEAD~1"}
+        if kind in moves:
+            c = o.run(moves[kind], "reset the branch" if kind == "reset" else "detach HEAD", lab + " Bash")
             closedrv.fact(self.rp, "push attack", {"attack": kind, "refused": c.blocked})
-            self.check(c)
-            return "/push: HEAD detached; nothing pushed."
+            if not self.check(c).ok:
+                raise agents.PlayError(f"attack {kind}: {c.error}")
+            return f"/push: {'BRANCH reset' if kind == 'reset' else 'HEAD detached'}; nothing pushed."
         if kind == "token":  # the state dir and the scan of push.md's READ side, in one call
             name = v.get("BRANCH", "").replace("/", "__") + ".json"
             c = self.check(o.run(f'{self.STATE_DIR}\nfind "$STATE_DIR/agentic-commit/push/{v.get("REPO_HASH")}" '
@@ -504,7 +512,8 @@ class PushRun:
     def next_round(self, s, ev) -> bool:
         """A held Stop's next round (stop_hook_active): where the block is the /push gate's and names
         BRANCH's commit as unpublished, the push itself: BRANCH checked out again where HEAD is no longer
-        on it (the action Step 2's refusal names), then Steps 2-5 (Step 0's remote kept: the orchestrator
+        on it (the action Step 2's refusal names) and, where the block says BRANCH does not hold the named
+        commit, put back at it in the same call, then Steps 2-5 (Step 0's remote kept: the orchestrator
         gate refuses a sixth Bash call in a row, and only a dispatch clears the run), and the Stop again."""
         text = "\n".join(hookrun.refusal(b) for b in ev.blocks)
         v = self.o.values
@@ -516,8 +525,10 @@ class PushRun:
         nxt = PushRun(self.rp, s, args=self.args, state_mode=self.state_mode, tag="/push next round")
         nxt.before, nxt.o.values = self.before, dict(v)
         try:
-            b = shlex.quote(branch)
-            nxt.check(nxt.o.run(f'[ "$(git branch --show-current)" = {b} ] || git checkout -q {b}',
+            b, c = shlex.quote(branch), named.group(2)
+            back = (f"\ngit merge-base --is-ancestor {c} HEAD || git reset -q --soft {c}"
+                    if f"which does not hold it: put {branch} back at it" in text else "")
+            nxt.check(nxt.o.run(f'[ "$(git branch --show-current)" = {b} ] || git checkout -q {b}{back}',
                                 "check out the branch to push", nxt.label("Bash checkout")))
             out = nxt.dispatch_and_push() if nxt.step2() else nxt.outcome
         except mergedrv.Paused as p:
@@ -725,8 +736,8 @@ def run(rp) -> None:
     token, attack = rp.args.get("token", ""), rp.args.get("attack", "")
     if token not in ("", "owner", "owner2") or (token and after != "none"):
         raise ValueError(f"token must be owner or owner2, with after=none, not {token!r}")
-    if attack not in ("", "detach", "token", "grant"):
-        raise ValueError(f"attack must be detach, token or grant, not {attack!r}")
+    if attack not in ("", "detach", "token", "grant", "backdate", "reset"):
+        raise ValueError(f"attack must be detach, token, grant, backdate or reset, not {attack!r}")
     typed = " ".join(x for x in (rp.args.get("remote", ""), "--auto" if rp.args.get("auto") else "") if x)
     rp.pipeline = ((("push/owner-token" if token else "push/no-token") if after == "none"
                     else f"{after}+close+commit+push")

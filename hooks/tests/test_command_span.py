@@ -489,3 +489,37 @@ def test_body_is_the_text_the_cli_recorded_for_the_typed_command(tmp_path):
     for record in unlinked.records:
         record.pop("uuid", None)
     assert command_span.active_span(unlinked.write(tmp_path / "unlinked.jsonl")).body() is None
+
+
+def _context(tx, content):
+    """The context record the CLI writes for a UserPromptSubmit hook's output."""
+    return tx.add(tx._envelope("attachment", attachment={
+        "type": "hook_additional_context", "content": content, "hookName": "UserPromptSubmit"}))
+
+
+def test_opener_heads_and_minted_id_read_only_the_openers_hook_context(tmp_path):
+    """Span.opener_heads(): (branch, commit) of each HEAD line the UserPromptSubmit hook printed for
+    the /push opener (branch None: detached), in order, from the context records between the opener
+    and the turn's first assistant record, the ones Span.minted_id() reads. A line an agent echoes
+    (a tool result, a context record after it), one not at a line's start or with a short commit,
+    and an opener with no such line read as none."""
+    sha, other = "a" * 40, "b" * 64
+    tx = _Transcript()
+    tx.queue_operations()
+    tx.command("push", "origin")
+    _context(tx, f"PROJECT_ROOT=/p\nx [/push] HEAD at the opener: refs/heads/main {sha}\n"
+                 f"[/push] HEAD at the opener: refs/heads/main abc123\n"
+                 f"[/push] HEAD at the opener: refs/heads/topic/x {sha}\n")
+    _context(tx, [{"type": "text", "text": f"[/push] HEAD at the opener: detached {other}"}])
+    tx.tool("Bash", {"command": "true"}, result=f"[/push] HEAD at the opener: refs/heads/main {sha}")
+    _context(tx, f"[/push] HEAD at the opener: refs/heads/main {sha}\n")
+    span = command_span.active_span(tx.write(tmp_path / "push.jsonl"))
+    assert span.opener_heads() == [("topic/x", sha), (None, other)]
+    assert span.minted_id() is None
+
+    tx.command("do", "fix it")
+    _context(tx, "[/do] Consent granted.\n[/do] task-id minted: 20261019-120000 - resolve via ...\n")
+    span = command_span.active_span(tx.write(tmp_path / "do.jsonl"))
+    assert (span.minted_id(), span.opener_heads()) == ("20261019-120000", [])
+    tx.command("push")
+    assert command_span.active_span(tx.write(tmp_path / "bare.jsonl")).opener_heads() == []

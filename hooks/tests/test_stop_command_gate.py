@@ -568,11 +568,28 @@ def repo(env):
     return root
 
 
-def opener_now(env, command, args=""):
+def opener_now(env, command, args="", context=None):
     """The opener, stamped after every git step so far and before every later one."""
     env.tx.clock = datetime.fromtimestamp(GIT_CLOCK[0] + 8, timezone.utc)
-    env.tx.command(command, args)
+    env.tx.command(command, args, context)
     GIT_CLOCK[0] += 20
+
+
+def push_opener(env, args="", line=True):
+    """The /push opener; with ``line``, with the hook context hooks/prompt-workflow.py prints for it in the
+    project (its HEAD line), as the CLI records it. Without: an opener typed before the hook printed one."""
+    home = env.tmp / "hook-home"
+    environment = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "GIT_"))}
+    environment.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), CLAUDE_PROJECT_DIR=str(env.project),
+                       CLAUDE_STATE_DIR=str(env.tmp / "hook-state"), PYTHONDONTWRITEBYTECODE="1")
+    (env.tmp / "hook-state").mkdir(exist_ok=True)
+    payload = {"session_id": SID, "prompt": f"/push {args}".strip(), "cwd": str(env.project),
+               "transcript_path": str(env.tx.path), "hook_event_name": "UserPromptSubmit"}
+    done = subprocess.run([sys.executable, str(HOOKS / "prompt-workflow.py")], input=json.dumps(payload),
+                          capture_output=True, text=True, env=environment, timeout=60)
+    assert done.returncode == 0 and "[/push] HEAD at the opener: " in done.stdout, (done.stdout, done.stderr)
+    opener_now(env, "push", args, done.stdout if line else None)
+    return done.stdout
 
 
 @pytest.mark.parametrize("typed", [True, False])
@@ -844,13 +861,16 @@ def test_m_a_typed_push_remote_that_is_no_remote_yields_to_the_remote_the_push_t
     assert run(env) == (0, "")
 
 
-def test_a6_push_from_a_detached_head_holds_as_step_2s_refusal(env, remotes):
+@pytest.mark.parametrize("line", [True, False])
+def test_a6_push_from_a_detached_head_holds_as_step_2s_refusal(env, remotes, line):
     """push.md Step 2 refuses a detached HEAD ("check out the branch to push"): no push can be made
     from it, so the run is complete. With the branch checked out, ahead and with a token, the push
-    is owed; detached again, it is not (H2 keeps this release for a HEAD detached at the opener)."""
+    is owed; detached again, it is not (H2 keeps this release for a HEAD detached at the opener: so
+    its HEAD line says, else git's record)."""
     commit(remotes, "t2.txt")
     git(remotes, "checkout", "-q", "--detach")
-    opener_now(env, "push")
+    printed = push_opener(env, line=line)
+    assert f"[/push] HEAD at the opener: detached {git(remotes, 'rev-parse', 'HEAD')}\n" in printed, printed
     assert run(env) == (0, "")
     git(remotes, "checkout", "-q", "topic")
     code, text = run(env)
@@ -859,14 +879,17 @@ def test_a6_push_from_a_detached_head_holds_as_step_2s_refusal(env, remotes):
     assert run(env) == (0, "")
 
 
+@pytest.mark.parametrize("line", [True, False])
 @pytest.mark.parametrize("move", [("checkout", "-q", "--detach"), ("checkout", "-q", "master"),
                                   ("checkout", "-q", "--detach", "topic")])
-def test_h2_head_moved_off_the_branch_after_the_opener_holds_that_branch_until_it_is_published(env, remotes, move):
+def test_h2_head_moved_off_the_branch_after_the_opener_holds_that_branch_until_it_is_published(env, remotes, move,
+                                                                                              line):
     """P5 review H2: a detach (or a checkout of another branch) after the /push opener is no Step 2
-    refusal: the branch HEAD was on at the opener (git's record: the source of HEAD's first checkout
-    after it) is held, at its tip, naming the branch to check out, until the push publishes it."""
+    refusal: the branch HEAD was on at the opener (its HEAD line's; an opener with none, git's record:
+    the source of HEAD's first checkout after it) is held, at its tip, naming the branch to check out,
+    until the push publishes it."""
     tip = commit(remotes, "t2.txt")
-    opener_now(env, "push")
+    push_opener(env, line=line)
     git(remotes, *move)
     code, text = run(env)
     assert code == 2 and f"- push: topic at {tip} is not published on refs/remotes/origin/topic" in text, text
@@ -876,6 +899,64 @@ def test_h2_head_moved_off_the_branch_after_the_opener_holds_that_branch_until_i
     assert code == 2 and f"- push: topic at {tip} is not published" in text and "check out" not in text
     git(remotes, *move)
     git(remotes, "push", "-q", "origin", "topic")  # the branch published, wherever HEAD is
+    assert run(env) == (0, "")
+
+
+def backdated(root, *args):
+    """git in ``root`` with GIT_COMMITTER_DATE=@1, which any command may set: git's reflog dates the
+    entry before every opener."""
+    saved, GIT_CLOCK[0] = GIT_CLOCK[0], 0
+    try:
+        return git(root, *args)
+    finally:
+        GIT_CLOCK[0] = saved
+
+
+@pytest.mark.parametrize("move", [("checkout", "-q", "--detach"), ("checkout", "-q", "master")])
+def test_h2_a_backdated_move_off_the_branch_holds_the_branch_the_opener_line_names(env, remotes, move):
+    """P5 review H2, open after bc51850: `GIT_COMMITTER_DATE=@1 git checkout -q --detach` (or of master)
+    dates HEAD's reflog entry before the opener, so git's record had HEAD detached (or on master) at the
+    opener and the Stop released. The opener's HEAD line names topic at its commit: the Stop holds on
+    it, naming the branch to check out, until the push publishes it. An echo of the line in another
+    hook's context, detached, takes nothing away."""
+    tip = commit(remotes, "t2.txt")
+    assert f"[/push] HEAD at the opener: refs/heads/topic {tip}\n" in push_opener(env)
+    env.tx.add({"type": "attachment", "attachment": {"type": "hook_additional_context", "hookName": "UserPromptSubmit",
+                                                     "content": f"notice\n[/push] HEAD at the opener: detached {tip}\n"}})
+    backdated(remotes, *move)
+    code, text = run(env)
+    assert code == 2 and (f"- push: topic at {tip} is not published on refs/remotes/origin/topic since the /push "
+                          "opener; HEAD is not on it: check out topic, then push it\n") in text, text
+    git(remotes, "checkout", "-q", "topic")
+    git(remotes, "push", "-q", "origin", "topic")
+    assert run(env) == (0, "")
+
+
+@pytest.mark.parametrize("move", [("--soft", "HEAD~1"), ("HEAD~1",), "recommitted"])
+def test_h2_a_reset_after_the_opener_holds_the_opener_commit_until_it_is_published(env, remotes, move):
+    """P5 review H2, open after bc51850: `git reset --soft HEAD~1` (allowed) moves topic back to its
+    published commit, so topic was at its upstream and the Stop released with the owner's commit
+    unpublished, its changes staged. The opener's HEAD line names that commit: where topic does not
+    hold it (reset, mixed or soft, or reset and committed again) the Stop holds on it, naming where
+    topic is, and a push of topic as it is publishes nothing; put back at it and pushed, it passes."""
+    owner = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env)
+    git(remotes, "reset", "-q", *(("--soft", "HEAD~1") if move == "recommitted" else move))
+    if move == "recommitted":
+        git(remotes, "commit", "-q", "-m", "t2 again")
+    else:
+        git(remotes, "push", "-q", "origin", "topic")  # nothing to push: topic is at its upstream
+    tip = git(remotes, "rev-parse", "topic")
+    code, text = run(env)
+    assert code == 2 and (f"- push: topic at {owner} is not published on refs/remotes/origin/topic since the "
+                          f"/push opener; topic is at {tip}, which does not hold it: put topic back at it, then "
+                          "push it\n") in text, text
+    git(remotes, "reset", "-q", "--soft", owner)
+    code, text = run(env)
+    assert code == 2 and f"- push: topic at {owner} is not published on refs/remotes/origin/topic since the " \
+                         "/push opener\n" in text, text
+    git(remotes, "push", "-q", "origin", "topic")
     assert run(env) == (0, "")
 
 

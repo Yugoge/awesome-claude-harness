@@ -384,8 +384,13 @@ def _opener_branch(root, since: float) -> str | None:
 
 
 def p_push(span, root, payload) -> list[str]:
-    """/push [<remote>] [INFERRED; A6]. BRANCH: the branch HEAD was on at the
-    opener, else (detached there) HEAD's branch now; at its tip,
+    """/push [<remote>] [INFERRED; A6]. BRANCH and the opener's commit: those of
+    each HEAD line in the opener's hook context (prompt-workflow.py
+    print_push_head, through command_span: a line another hook echoes adds one
+    to judge and takes none away); detached there: HEAD's branch now, no commit.
+    An opener with none (typed before the hook printed it, D25) takes git's
+    record: the branch HEAD was on at the opener (HEAD's reflog), else HEAD's
+    branch now. At BRANCH's tip,
     refs/remotes/<remote>/<BRANCH> (the typed remote, else any: a typed name
     that is no remote of the repository, which push.sh refuses, yields to the
     remote the push on the owner's answer took) took it, or the branch's value
@@ -395,46 +400,61 @@ def p_push(span, root, payload) -> list[str]:
     an ancestor of it (push.sh's exit 3: its READ side over the path of the
     token's one writer), or this session's newest push-analyst grant here since
     the opener is blocked for BRANCH at it (Step 5: execute-push.py refuses it
-    and leaves it unspent). The token and the grant are protected for every
-    caller but their producers (pretool-tool-policy.py), and a detach after the
-    opener is no refusal: no agent's write makes one true."""
+    and leaves it unspent). The opener's commit, where the tip does not hold it,
+    is judged the same way, published where that ref holds it now or took a
+    value holding it after the opener. The token and the grant are protected
+    for every caller but their producers (pretool-tool-policy.py), and a detach,
+    reset or rewrite after the opener is no refusal: no agent's act makes one true."""
     _repository(root)
     typed = next((a for a in span.args.split() if not a.startswith("-")), None)
     since, now = _since(span), _git(root, "symbolic-ref", "--short", "-q", "HEAD")
-    branch = _opener_branch(root, since) or now
-    if not branch:
-        return []  # Step 2: "HEAD is detached"; no push can be made from it
+    heads = span.opener_heads()
+    opened = [(b, c) for b, c in heads if b] or [((None if heads else _opener_branch(root, since)) or now, None)]
+    return [gap for branch, commit in dict.fromkeys(opened) if branch  # none: Step 2, "HEAD is detached"
+            for gap in _push_gaps(root, payload, typed, since, now, branch, commit)]
+
+
+def _push_gaps(root, payload, typed, since, now, branch, opened) -> list[str]:
+    """p_push's gaps for BRANCH at its tip and at the opener's commit (``opened``, None: none recorded)."""
     head = _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}^{{commit}}")
     if not head:
         return [f"push: {branch}, the branch HEAD was on at the /push opener, names no commit; nothing of it "
                 "is published since the opener"]
     local, remotes = _reflog(root, f"refs/heads/{branch}"), (_git(root, "remote") or "").split()
     unknown = typed if typed and typed not in remotes else None
-    for remote in [typed] if typed and not unknown else remotes:
-        for sha, t, _m in _reflog(root, f"refs/remotes/{remote}/{branch}"):
-            if t >= since and sha in (head, _value_at(local, t)):
-                return []
+    took = [(sha, t) for remote in ([typed] if typed and not unknown else remotes)
+            for sha, t, _m in _reflog(root, f"refs/remotes/{remote}/{branch}") if t >= since]
     ref = None if unknown else (f"refs/remotes/{typed}/{branch}" if typed else _git(
         root, "rev-parse", "--symbolic-full-name", "--verify", "-q", f"{branch}@{{upstream}}"))
-    if ref and _git(root, "rev-parse", "--verify", "-q", ref) and _ancestor(root, head, ref):
-        return []
-    top = _git(root, "rev-parse", "--show-toplevel") or str(root)
-    token = _script("scripts/write-push-gate-token.py").token_path(top, branch, "")  # <repo dir>/<session>/<name>
-    for path in [token.parent.parent / token.name, *token.parent.parent.glob(f"*/{token.name}")]:
-        try:
-            sha = json.loads(path.read_text()).get("commit_sha")
-        except (OSError, ValueError, AttributeError):
-            continue  # "Malformed/unparseable candidates are skipped"
-        if sha and _ancestor(root, str(sha), head):
-            break
-    else:
-        return []  # Step 5: push.sh's exit 3, "run /commit first"
-    grant = _lib("merge_grant").newest(top, payload.get("session_id"), since, "push-analyst")
-    if (grant.get("verdict"), grant.get("branch"), grant.get("head_sha")) == ("blocked", branch, head):
-        return []  # Step 5: "push BLOCKED by push-analyst"
-    return [f"push: {branch} at {head} is not published on {ref or 'a remote'} since the /push opener"
-            + (f"; the typed name {unknown} is no remote of this repository" if unknown else "")
-            + ("" if now == branch else f"; HEAD is not on it: check out {branch}, then push it")]
+    holds = {sha for sha, _t in took} | {_git(root, "rev-parse", "--verify", "-q", ref) or "" if ref else ""}
+    top, gaps = _git(root, "rev-parse", "--show-toplevel") or str(root), []
+    for commit in [head] + ([opened] if opened and not _ancestor(root, opened, head) else []):
+        if commit == head:
+            published = any(sha in (head, _value_at(local, t)) for sha, t in took) or bool(ref) and _ancestor(
+                root, head, ref)
+        else:
+            published = any(sha and _ancestor(root, commit, sha) for sha in holds)
+        if published:
+            continue
+        token = _script("scripts/write-push-gate-token.py").token_path(top, branch, "")  # <repo dir>/<session>/<name>
+        for path in [token.parent.parent / token.name, *token.parent.parent.glob(f"*/{token.name}")]:
+            try:
+                sha = json.loads(path.read_text()).get("commit_sha")
+            except (OSError, ValueError, AttributeError):
+                continue  # "Malformed/unparseable candidates are skipped"
+            if sha and _ancestor(root, str(sha), commit):
+                break
+        else:
+            continue  # Step 5: push.sh's exit 3, "run /commit first"
+        grant = _lib("merge_grant").newest(top, payload.get("session_id"), since, "push-analyst")
+        if (grant.get("verdict"), grant.get("branch"), grant.get("head_sha")) == ("blocked", branch, commit):
+            continue  # Step 5: "push BLOCKED by push-analyst"
+        fix = ("" if now == branch else f"; HEAD is not on it: check out {branch}") + (
+            "" if commit == head else f"; {branch} is at {head}, which does not hold it: put {branch} back at it")
+        gaps.append(f"push: {branch} at {commit} is not published on {ref or 'a remote'} since the /push opener"
+                    + (f"; the typed name {unknown} is no remote of this repository" if unknown else "")
+                    + (fix and fix + ", then push it"))
+    return gaps
 
 
 PREDICATES = {
