@@ -55,7 +55,8 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
   role-mismatch   a plain prompt, G1 advisory in its environment (CLAUDE_OBLIGATION_GATE=advisory), whose
                   qa dispatch carries the obligation of role dev (a note to write): it runs, and the
                   QA's stop is refused (G2's role_mismatch: that obligation is not its own); at its
-                  next round it writes nothing of it, says so in its reply and stops: passes.
+                  next round it writes nothing of it (a Bash command names the note, read only:
+                  no write of it), says so in its reply and stops: passes.
   codex           a plain prompt in a project whose cycle registry runs with --codex (the fault actor
                   arms it with scripts/write-enforce-flag.sh, as /dev --codex's prompt hook does); the
                   dev dispatch carries `codex_required: true` and its dev stops without calling codex:
@@ -230,6 +231,7 @@ def _plain(rp, case: str) -> None:
                           "of it. add(a, b) returns a + b.")])
 
             def again(sub, ev):  # its next round: what the refusal asks, said in its reply, nothing written
+                sub.bash(f"test -e {note_rel} || echo '{note_rel}: none'", label="agent:qa Bash")
                 return next(said, None)
             d = s.dispatch("qa", block(True), description="Write a note", body=body, result="add(a, b) returns a + b.",
                            on_stop_block=again, stop_rounds=3, label="main Agent(qa) with dev's obligation")

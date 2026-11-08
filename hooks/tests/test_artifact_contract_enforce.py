@@ -27,7 +27,8 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -2483,6 +2484,121 @@ def test_g2_role_mismatch_next_round_passes_when_it_wrote_none_of_that_obligatio
         assert proc.returncode == 2, proc.stderr
         assert "  - <obligation>: role_mismatch" in proc.stderr, proc.stderr
         assert f"you wrote its file(s): {report}" in proc.stderr, proc.stderr
+
+
+def _g2_wrong_role(tmp_path, dispatched_at=None):
+    """A qa agent whose dispatch carries dev's obligation (G1 advisory lets it run): its declared
+    report, the prompt and a stop of round ``active`` (stop_hook_active)."""
+    s = _g2_setup(tmp_path, "qa", [])
+    s.report = f"docs/dev/dev-report-{G2_TASK}.json"
+    (s.project / "docs" / "dev").mkdir(parents=True, exist_ok=True)
+    s.doc = dict(s.obligation, role="dev", artifacts=_g2_dev_artifacts(),
+                 dispatched_at=(dispatched_at or s.dispatched_at).isoformat())
+    s.prompt = f'<obligation v="1">\n{json.dumps(s.doc)}\n</obligation>'
+    s.stop = lambda active: _run_hook(s.project, s.home, s.agent_id, session_id=s.harness, stopgate_mode="block",
+                                      extra_payload={"stop_hook_active": active})
+    return s
+
+
+def _g2_bash(s, command: str, extra_calls=()) -> None:
+    """The agent's Bash call, run in its project as Claude Code runs it, and its transcript."""
+    subprocess.run(["bash", "-c", command], cwd=s.project, check=True, capture_output=True, timeout=30)
+    calls = list(extra_calls) + [("Bash", {"command": command, "description": "the report"}, True)]
+    _write_obligation_transcript(s.home, s.project, s.harness, s.agent_id, s.prompt, calls=calls)
+
+
+def _g2_bash_writes(report: str, drafts: Path) -> dict:
+    # Each writes the declared report by a shell command, so its target is no Write or Edit's.
+    return {
+        "heredoc": f"cat > {report} <<'EOF'\n{{\"report_version\": \"2\"}}\nEOF",
+        "tee": f"printf '{{}}\\n' | tee {report} >/dev/null",
+        "cp": f"cp {drafts / 'draft.json'} {report}",
+        # cp -p keeps the draft's day-old mtime; the copy's ctime is its own.
+        "cp-p": f"cp -p {drafts / os.path.basename(report)} {os.path.dirname(report)}/",
+        "python3-c": f"{sys.executable} -c \"open('{report}', 'w').write('{{}}')\"",
+        "ln-s": f"ln -s {drafts / 'draft.json'} {report}",  # a link to the day-old draft
+    }
+
+
+@pytest.mark.parametrize("form", ["heredoc", "tee", "cp", "cp-p", "python3-c", "ln-s"])
+def test_g2_role_mismatch_a_bash_write_of_its_file_stays_refused(tmp_path, form):
+    """The release judges a write by the file as well as by the tool: a
+    declared file one of the agent's calls names (here a Bash command: a
+    heredoc, tee, cp, cp -p into the directory, python3 -c, ln -s) that is
+    there and changed since its dispatch is written, so every stop of the
+    agent stays refused and names the file. cp -p keeps the source's older
+    mtime and a link's target is older; the copy's ctime and the link's own
+    stamps are set by the call."""
+    s = _g2_wrong_role(tmp_path, dispatched_at=datetime.now(timezone.utc) - timedelta(seconds=2))
+    drafts = tmp_path / "drafts"
+    drafts.mkdir()
+    for name in ("draft.json", os.path.basename(s.report)):
+        (drafts / name).write_text("{}\n", encoding="utf-8")
+        day_ago = time.time() - 86400
+        os.utime(drafts / name, (day_ago, day_ago))
+    _g2_bash(s, _g2_bash_writes(s.report, drafts)[form])
+    assert (s.project / s.report).is_file()
+    for active in (False, True, True):
+        proc = s.stop(active)
+        assert proc.returncode == 2, (active, proc.stderr)
+        assert "  - <obligation>: role_mismatch" in proc.stderr, proc.stderr
+        assert f"you wrote its file(s): {s.report}" in proc.stderr, proc.stderr
+
+
+def test_g2_role_mismatch_a_read_of_its_file_unchanged_since_dispatch_passes(tmp_path):
+    """A declared file that is there but unchanged since the dispatch (the dev
+    report a QA only reads, by Read and by a Bash command naming it) is no
+    write: the next round's stop passes."""
+    report = tmp_path / "project" / "docs" / "dev" / f"dev-report-{G2_TASK}.json"  # the dev's, before it
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"report_version": "2"}) + "\n", encoding="utf-8")
+    time.sleep(0.05)
+    s = _g2_wrong_role(tmp_path, dispatched_at=datetime.now(timezone.utc))
+    _g2_bash(s, f"cat {s.report} && grep -c report_version {s.report}",
+             extra_calls=[("Read", {"file_path": str(report)}, True)])
+    first = s.stop(False)
+    assert first.returncode == 2 and "  - <obligation>: role_mismatch" in first.stderr, first.stderr
+    assert "you wrote" not in first.stderr, first.stderr
+    nxt = s.stop(True)
+    assert nxt.returncode == 0, nxt.stderr
+
+
+@pytest.mark.parametrize("call", ["write", "read"])
+def test_g2_role_mismatch_dispatched_at_ahead_of_the_stop_keeps_the_refusal(tmp_path, call):
+    """A named declared file that is there cannot be judged against a
+    dispatched_at ahead of the stop's clock (every write would precede it): the
+    notice stands at every stop, whether the call wrote the file or read it."""
+    s = _g2_wrong_role(tmp_path, dispatched_at=datetime.now(timezone.utc) + timedelta(hours=1))
+    if call == "read":
+        (s.project / s.report).write_text("{}\n", encoding="utf-8")
+    _g2_bash(s, f"cat > {s.report} <<'EOF'\n{{}}\nEOF" if call == "write" else f"cat {s.report}")
+    for active in (False, True, True):
+        proc = s.stop(active)
+        assert proc.returncode == 2, (active, proc.stderr)
+        assert "  - <obligation>: role_mismatch" in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("dispatched_at", ["not a time", None])
+def test_g2_role_mismatch_unreadable_dispatched_at_keeps_the_refusal(tmp_path, monkeypatch, dispatched_at):
+    """The grammar refuses a block whose dispatched_at does not parse, so the
+    release's own read of it is reached in process: with a named declared file
+    there, an unparseable or absent dispatched_at tells nothing (None, so the
+    notice stands); a readable one finds the write."""
+    s = _g2_wrong_role(tmp_path, dispatched_at=datetime.now(timezone.utc) - timedelta(seconds=2))
+    _g2_bash(s, f"cat > {s.report} <<'EOF'\n{{}}\nEOF")
+    transcript = next((s.home / ".claude" / "projects").glob(f"*/{s.harness}/subagents/agent-{s.agent_id}.jsonl"))
+    payload = {"session_id": s.harness, "agent_id": s.agent_id}
+
+    def resolved(doc):
+        return lambda **_: HOOK.obligation.Resolved(obligation=doc, rung="L1", prompt=s.prompt,
+                                                    transcript_path=str(transcript), cross_check="ok")
+    monkeypatch.setattr(HOOK.obligation, "resolve_own_obligation", resolved(s.doc))
+    assert HOOK._role_mismatch_writes(payload, str(s.project)) == [s.report]
+    unreadable = dict(s.doc, dispatched_at=dispatched_at)
+    if dispatched_at is None:
+        del unreadable["dispatched_at"]
+    monkeypatch.setattr(HOOK.obligation, "resolve_own_obligation", resolved(unreadable))
+    assert HOOK._role_mismatch_writes(payload, str(s.project)) is None
 
 
 def test_g2_expected_role_is_resolve_agent_type_on_the_payload(tmp_path):

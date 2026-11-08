@@ -15,9 +15,10 @@ that leaves a live harness hook or script that does not compile is a finding
 agent as (lib.agent_resolver.resolve_agent_type, P6 R3); an obligation
 naming another role (role_mismatch) refuses the agent's stop with that
 notice, and its next round's stop (stop_hook_active) passes when its own
-transcript shows it wrote none of the files that obligation declares. A
-fresh, valid producer-question file stands in for every declared artifact
-(TC-33).
+transcript shows it wrote none of the files that obligation declares: it
+ran no Write or Edit of one, and none that another of its calls names (a
+Bash heredoc, tee or cp) changed since its dispatch. A fresh, valid
+producer-question file stands in for every declared artifact (TC-33).
 Switch CLAUDE_OBLIGATION_STOPGATE (the process env, else the harness home's
 settings.json env at run time, P1b E4):
   "block"    -- a failure exits 2 (OBLIGATION_STOPGATE_BLOCKED, each failing
@@ -49,6 +50,7 @@ import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -609,28 +611,109 @@ def _lane_echo_findings(ob: dict, art: dict, record) -> list:
     return [{"path": art["path"], "reason": "lane_echo_mismatch", "errors": errors}] if errors else []
 
 
+def _call_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _call_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _call_strings(item)
+
+
+def _tool_call_texts(transcript_path) -> list | None:
+    """The input text of each tool call the transcript records (every string in it); None when it
+    cannot be read."""
+    texts = []
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except (OSError, TypeError, ValueError):
+        return None
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        message = record.get("message") if isinstance(record, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else ():
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                texts.append("\n".join(_call_strings(block.get("input"))))
+    return texts
+
+
+# A file a call names stands alone in its text: no path character other than "/" runs on either side.
+_NAME_BEFORE, _NAME_AFTER = r"(?<![A-Za-z0-9_.@%+~-])", r"(?![A-Za-z0-9_.@%+~-])"
+
+
+def _change_stamps(path: Path) -> list | None:
+    """The file's mtime and ctime (a copy that keeps an older mtime, cp -p, touch -d or mv, still
+    sets the ctime), a symlink's target's with its own; None when it is not there. A stat that fails
+    otherwise raises."""
+    try:
+        st = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    stamps = [st.st_mtime, st.st_ctime]
+    if stat.S_ISLNK(st.st_mode):
+        try:
+            target = os.stat(path)
+            stamps += [target.st_mtime, target.st_ctime]
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+    return stamps
+
+
 def _role_mismatch_writes(data: dict, project_dir: str):
-    """The files an obligation of another role (role_mismatch) declares that this agent's own
-    transcript records it writing (a Write or Edit that ran, over every account root's copy); []
-    when it wrote none, None when the obligation or its transcript cannot be read. A Bash command
-    that only names such a file (a QA reading the dev report) is no write of it."""
+    """The files an obligation of another role (role_mismatch) declares that this agent wrote, read
+    over its own transcript (every account root's copy); [] when it wrote none, None when that
+    cannot be told, so the notice stands.
+
+    A file a Write or Edit of it ran on is written. So is a file one of its tool calls names (the
+    file's name, or a spec_views directory's path, in the call's input: a Bash heredoc, tee, cp or
+    python3 -c, an MCP tool; what such a call writes cannot be parsed) when it is there and was
+    changed at or after dispatched_at (_change_stamps). A named file that is not there, or that is
+    unchanged since the dispatch, is no write: a QA that only reads the dev report passes. A named
+    file that is there with a dispatched_at that cannot be read (unparseable, or ahead of the stop's
+    clock, which every write would precede), or whose stat fails, leaves the notice standing (None).
+    The names are read here: command_span's named set leaves docs/dev/, the dev report's tree, out."""
     try:
         mine = obligation.resolve_own_obligation(
             session_id=data.get("session_id") or data.get("sessionId"), agent_id=data.get("agent_id"),
             project_dir=project_dir, payload_agent_transcript_path=data.get("agent_transcript_path"))
         if not isinstance(mine, obligation.Resolved):
             return None
-        sets = [s for s in (command_span.write_set(c, project_dir, excluded=())
-                            for c in subagent_restart._child_transcript_copies(mine.transcript_path)) if s is not None]
+        copies = subagent_restart._child_transcript_copies(mine.transcript_path)
+        sets = [s for s in (command_span.write_set(c, project_dir, excluded=()) for c in copies) if s is not None]
+        if not sets:
+            return None
+        written = set().union(*(s.written for s in sets))
+        texts = [t for c in copies for t in _tool_call_texts(c) or ()]
+        since, wrote = None, set()
+        for art in mine.obligation.get("artifacts") or []:
+            if not (isinstance(art, dict) and isinstance(art.get("path"), str) and art["path"]):
+                continue
+            for rel in _declared_files(project_dir, art):
+                if rel in written:
+                    wrote.add(rel)
+                    continue
+                names = [os.path.basename(rel)] + ([art["path"].rstrip("/")] if art.get("kind") == "spec_views" else [])
+                named = re.compile("|".join(_NAME_BEFORE + re.escape(n) + _NAME_AFTER for n in names if n))
+                stamps = _change_stamps(Path(project_dir) / rel) if any(named.search(t) for t in texts) else None
+                if stamps is None:  # not named, or not there
+                    continue
+                if since is None:
+                    dispatched = obligation.parse_iso8601(mine.obligation.get("dispatched_at"))
+                    if dispatched is None or dispatched.timestamp() > time.time():
+                        return None
+                    since = dispatched.timestamp()
+                if max(stamps) >= since:
+                    wrote.add(rel)
     except Exception:  # what it wrote cannot be read: the notice stands
         return None
-    if not sets:
-        return None
-    written = set().union(*(s.written for s in sets))
-    declared = {rel for a in mine.obligation.get("artifacts") or []
-                if isinstance(a, dict) and isinstance(a.get("path"), str) and a["path"]
-                for rel in _declared_files(project_dir, a)}
-    return sorted(declared & written)
+    return sorted(wrote)
 
 
 def _finding_lines(findings: list) -> str:
@@ -689,8 +772,9 @@ def main() -> None:
             if getattr(resolution, "reason", None) == "role_mismatch" and stopgate_mode == "block":
                 # The first stop is refused with the notice; the next round's stop (stop_hook_active)
                 # passes once the agent's own transcript shows it wrote none of the files that
-                # obligation declares (P1c D25: the agent's next stop clears it). No report of the
-                # other role is judged as its own, so the declared-report check does not run.
+                # obligation declares, by a Write or Edit or by a call naming one that is changed since
+                # its dispatch (P1c D25: the agent's next stop clears it). No report of the other role
+                # is judged as its own, so the declared-report check does not run.
                 wrote = _role_mismatch_writes(data, project_dir)
                 if data.get("stop_hook_active") is True and wrote == []:
                     sys.exit(0)

@@ -330,7 +330,9 @@ DEVIATIONS = Deviations([
     # DEVIATION: "failed_phase=timelock ... CLOSEOUT GATE: final overnight artifacts are incomplete."
     # (or "... cycle still has unresolved required_calls."): after /stop backdates the end time, the
     # time-lock's closeout rule (landscape B2.b, P2 row 9's) refuses the main agent's Stop on state
-    # fields no session step writes.
+    # fields no session step writes. The quote and hook are the base tree's: this tree's Stop gate
+    # (hooks/stop-launch.py, P5) ends the window at the human's /stop and lets this Stop through, so
+    # no refusal of this tree is passed here.
     ("/stop Stop", Deviation(
         "hooks/stop-workflow-coordinator.py", "CLOSEOUT GATE",
         "the main agent's Stop after the owner's /stop")),
@@ -674,6 +676,13 @@ def loop_context(call) -> str:
     hooks = call.post.hooks if call.post else []
     said = [t for t in (hookrun.context("PostToolUse", h) for h in hooks) if t]
     return "\n".join(said) if said else "\n".join(h["stdout"] for h in hooks if h["verdict"] == "ok")
+
+
+# The Stop gate's refusals of the main agent's Stop (hooks/stop-command-gate.py, behind the registered
+# hooks/stop-launch.py, P5): the time-lock's while the window is open (window_lock), and after end_time
+# the /dev-overnight completion block, whose gaps name the closeout's missing summary (closeout_gaps).
+WINDOW_LOCK = "COMMAND_GATE time-lock: overnight window open"
+OVERNIGHT_INCOMPLETE = "COMMAND_GATE /dev-overnight: not complete"
 
 
 def _probe_blocks(ev) -> list:
@@ -2326,8 +2335,8 @@ class Night:
         stops = probe(lambda pr: pr["kind"].startswith("Stop"))
         check("a forged ESCALATION_ACK line releases nothing: the Stop after it is blocked in the window (time-lock) "
               "and after end_time while the summary is missing (closeout)",
-              len(stops) == 2 and any("TIME-LOCK ACTIVE" in b["text"] for b in stops[0]["blocks"])
-              and any("CLOSEOUT GATE" in b["text"] and "overnight-summary" in b["text"] for b in stops[1]["blocks"]),
+              len(stops) == 2 and any(WINDOW_LOCK in b["text"] for b in stops[0]["blocks"])
+              and any(OVERNIGHT_INCOMPLETE in b["text"] and "overnight-summary" in b["text"] for b in stops[1]["blocks"]),
               [{"label": pr["label"], "blocks": [(b["hook"], b["rc"], b["text"][:160]) for b in pr["blocks"]]}
                for pr in stops])
         check("the session ends after end_time once retro and summary exist (the main agent's Stop passes), and the "
