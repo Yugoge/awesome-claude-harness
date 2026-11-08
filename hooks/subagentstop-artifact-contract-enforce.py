@@ -515,6 +515,19 @@ def _spec_views_failure(project_dir: str, art: dict):
     return {"path": art["path"], "reason": "spec_verify_strict_failed", "errors": (failed or lines)[-10:]}
 
 
+def _declared_files(project_dir: str, art: dict) -> list:
+    """The files a declared file-kind artifact consists of, relative to the
+    project: its path, or for a spec_views directory each regular file
+    directly in it (the split its producer writes there)."""
+    if art.get("kind") != "spec_views":
+        return [art["path"]]
+    try:
+        entries = sorted((Path(project_dir) / art["path"]).iterdir())
+    except OSError:
+        return []
+    return [f"{art['path']}/{p.name}" for p in entries if p.is_file()]
+
+
 def _producer_question(project_dir: str, ob: dict):
     """TC-33: docs/dev/producer-question-<task_id>-<role>.json named by the
     obligation's own task_id and role. Which producers may ask is the
@@ -545,9 +558,9 @@ def _producer_question(project_dir: str, ob: dict):
     return {"path": rel, "reason": "producer_question_invalid", "errors": errors}
 
 
-# P3 R14: a stop's artifacts stand for it only when its dispatch wrote one of
-# them, and a lane's report echoes its dispatch's lane and roster. These checks
-# block like the rest (they warned in the commit that introduced them).
+# P3 R14: a stop's artifacts stand for it only by the one freshness rule
+# (_stale_findings), and a lane's report echoes its dispatch's lane and roster.
+# These checks block like the rest (they warned in the commit that introduced them).
 DISPATCH_ECHO_BLOCKS = True
 
 
@@ -560,28 +573,55 @@ def _declares_lane_echo(schema_id) -> bool:
 
 
 def _stale_findings(project_dir: str, ob: dict, declared: list, checked: list) -> list:
-    """R14(a): the checked artifacts stand for this dispatch once it wrote any
-    file it declares (mtime, the filesystem's clock, against dispatched_at;
-    none counts as stale). Judged per dispatch, not per file: a re-dispatched
-    producer keeps a file it judges still right (the write guard refuses a
-    Write over it, an Edit needs a change); a dispatch that wrote none of its
-    files left an older round's, and each checked one is named."""
-    mtimes = {}
-    for art in declared:
-        try:
-            mtimes[art["path"]] = (Path(project_dir) / art["path"]).stat().st_mtime
-        except OSError:
-            mtimes[art["path"]] = None
-    if any(obligation.artifact_freshness_satisfied(a["kind"], mtimes[a["path"]], ob.get("dispatched_at")) is True
-           for a in declared):
+    """The one freshness rule at a producer's stop (P1b E4, P3 R14(a)) over the
+    files of its declared file-kind artifacts (_declared_files); a finding
+    names only a checked one, whose own checks did not fail. A file written
+    for this dispatch (mtime, the filesystem's clock, >= dispatched_at - 2s)
+    stands. An older one stands only when this dispatch wrote another of its
+    files and it is no older than the first dispatch of the same role that
+    declared the same path for the task (obligation.first_declared_at): a
+    re-dispatched producer keeps a file of its earlier round it judges still
+    right (the write guard refuses a Write over it, an Edit needs a change).
+    A dispatch that wrote none of its files left an older round's, and a file
+    older than the producer's first round is not its own. A freshness that
+    cannot be decided (no dispatched_at a template bound, as a base-text /spec
+    dispatch's, or one ahead of the stop's clock) decides nothing; a missing
+    file is the validators' finding."""
+    at = ob.get("dispatched_at")
+    dispatched = obligation.parse_iso8601(at)
+    if dispatched is None or dispatched.timestamp() > time.time():
+        # A dispatched_at ahead of this stop's clock is G1's clock bound to judge; here no write
+        # could ever satisfy it, so it decides nothing.
         return []
+
+    def files(art):
+        for rel in _declared_files(project_dir, art):
+            try:
+                yield rel, (Path(project_dir) / rel).stat().st_mtime
+            except OSError:
+                continue
+
+    wrote = any(obligation.artifact_freshness_satisfied(a["kind"], mtime, at) is True
+                for a in declared for _, mtime in files(a))
+    count = sum(len(_declared_files(project_dir, a)) for a in declared)
     findings = []
     for art in checked:
-        mtime = mtimes.get(art["path"])
-        written = datetime.fromtimestamp(mtime, timezone.utc).isoformat() if mtime is not None else None
-        findings.append({"path": art["path"], "reason": "stale_for_dispatch", "errors": [
-            f"written {written}, dispatched_at {ob.get('dispatched_at')!r}: this dispatch wrote none of the "
-            f"{len(declared)} file(s) it declares (slack {obligation.FILE_FRESHNESS_SLACK_SECONDS}s)"]})
+        stale = [(rel, mtime) for rel, mtime in files(art)
+                 if obligation.artifact_freshness_satisfied(art["kind"], mtime, at) is False]
+        first = (obligation.first_declared_at(ob.get("task_id"), ob.get("role"), art["path"], project_dir)
+                 if stale and wrote else None)
+        for rel, mtime in stale:
+            if first is not None and obligation.artifact_freshness_satisfied(art["kind"], mtime, first) is not False:
+                continue
+            why = (f"older than the first dispatch of role {ob.get('role')!r} declaring it for this task "
+                   f"({first.isoformat() if first else 'none recorded'})" if wrote
+                   else f"this dispatch wrote none of the {count} file(s) it declares")
+            written = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
+            findings.append({"path": rel, "reason": "artifact_stale", "errors": [
+                f"freshness: written {written}, dispatched_at {at!r}: {why} (slack "
+                f"{obligation.FILE_FRESHNESS_SLACK_SECONDS}s): write it in this dispatch: Edit it in place to "
+                "this dispatch's content, or, when after checking it the file already holds exactly that "
+                "content, touch it"]})
     return findings
 
 
@@ -676,7 +716,7 @@ def main() -> None:
                     + response_block_artifacts + spec_views_artifacts
                 )
                 failures = []
-                echo, checked = [], []
+                echo = []
                 question = _producer_question(project_dir, resolution.obligation)
                 if question == "valid":
                     # The question stands in for every declared artifact; nothing
@@ -718,7 +758,6 @@ def main() -> None:
                                     ],
                                 }
                             )
-                    checked.append(art)
                     echo += _lane_echo_findings(resolution.obligation, art, record)
                 markdown_waived_paths: set[str] = set()
                 for art in markdown_artifacts:
@@ -756,10 +795,15 @@ def main() -> None:
                                 "errors": result.get("errors", [])[:10],
                             }
                         )
-                    elif result.get("status") == "pass":
-                        checked.append(art)
-                echo += _stale_findings(project_dir, resolution.obligation, [
-                    a for a in json_artifacts + markdown_artifacts if a["path"] not in markdown_waived_paths], checked)
+                for art in spec_views_artifacts:
+                    failure = _spec_views_failure(project_dir, art)
+                    if failure is not None:
+                        failures.append(failure)
+                declared = [a for a in json_artifacts + markdown_artifacts + spec_views_artifacts
+                            if a["path"] not in markdown_waived_paths]
+                failed = {f["path"] for f in failures}
+                echo += _stale_findings(project_dir, resolution.obligation, declared,
+                                        [a for a in declared if a["path"] not in failed])
                 if DISPATCH_ECHO_BLOCKS:
                     failures, echo = failures + echo, []
                 for art in response_line_artifacts:
@@ -779,10 +823,6 @@ def main() -> None:
                                 "errors": result.get("errors", [])[:10],
                             }
                         )
-                for art in spec_views_artifacts:
-                    failure = _spec_views_failure(project_dir, art)
-                    if failure is not None:
-                        failures.append(failure)
                 for art in response_block_artifacts:
                     # response_block-kind entries (ticket 20261001-161041-r21,
                     # M2): validated against this agent's OWN final response

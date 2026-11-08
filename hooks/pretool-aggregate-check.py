@@ -18,7 +18,11 @@ A report without a lane_set declares no fan-out: a singular cycle, or one of
 the overnight pipelines' dev-report-<ts>-<N>.json, which the filenames alone
 would read as lanes of task <ts>. The canonical's one producer is the lane
 completeness watch, which runs the harness's aggregator whenever a lane report
-is written; a lane report's is its lane's dev.
+is written; a lane report's is its lane's dev. A hook has no dispatch of its
+own, so a canonical finding also names the dispatch that reaches it (P1b E5
+(a)): the declaring dispatch of one lane report, run again, whose write of
+that report runs the watch. That is the lane this QA dispatch's task id names,
+else the first declared lane.
 
 Task-id scoping (BUG-AGGCHK-2): the check covers the cycle of the task the
 QA dispatch's own obligation names. A shard family is in scope when its id and
@@ -187,36 +191,46 @@ def _same_cycle(family_task_id, scope_task_id):
 
 
 def _fanouts(lane_reports, canonicals, dev_dir, scope_task_id):
-    """Yield (task_id, declared, reported, canonical) for each fan-out in scope.
+    """Yield (task_id, declared, reported, canonical, via) for each fan-out in scope.
 
     A family is a fan-out only when one of its lane reports declares it: its
     own lane_set names two or more lanes (declared maps each to that report's
     name). A lane counts as reported when a report of the family carries its
     label or names it as its `lane`. With a scope_task_id only that task's
-    cycle is in scope (_same_cycle, BUG-AGGCHK-2).
+    cycle is in scope (_same_cycle, BUG-AGGCHK-2). via is the lane report
+    whose declaring dispatch, run again, reaches the canonical's producer (P1b
+    E5 (a)), as (lane, path).
     """
     for task_id, reports in sorted(lane_reports.items()):
         if scope_task_id is not None and not _same_cycle(task_id, scope_task_id):
             continue
         declared, reported = {}, set(reports)
+        lane_paths = dict(reports)
         for label, path in sorted(reports.items()):
             report = _read_json(path)
             if not isinstance(report, dict):
                 continue
             if isinstance(report.get("lane"), str):
                 reported.add(report["lane"])
+                lane_paths.setdefault(report["lane"], path)
             lane_set = report.get("lane_set")
             lanes = [x for x in lane_set if isinstance(x, str) and x] if isinstance(lane_set, list) else []
             if len(set(lanes)) >= 2:
                 for lane in lanes:
                     declared.setdefault(lane, path.name)
-        if declared:
-            yield task_id, declared, reported, canonicals.get(task_id) or dev_dir / f"dev-report-{task_id}.json"
+        if not declared:
+            continue
+        via_lane = next((lane for lane in sorted(declared)
+                         if scope_task_id is not None and _same_cycle(f"{task_id}-{lane}", scope_task_id)),
+                        sorted(declared)[0])
+        via = (via_lane, lane_paths.get(via_lane, dev_dir / f"dev-report-{task_id}-{via_lane}.json"))
+        yield task_id, declared, reported, canonicals.get(task_id) or dev_dir / f"dev-report-{task_id}.json", via
 
 
 def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None):
-    """Return [(code, path, problem, lane)] for each fan-out in scope whose
-    collection is incomplete; lane is None for the canonical's findings.
+    """Return [(code, path, problem, lane, via)] for each fan-out in scope
+    whose collection is incomplete. A lane report's finding names its lane
+    and via None; a canonical finding names lane None and _fanouts' via.
 
     Only once every declared lane has reported is the canonical due: it must
     exist and name each declared lane in parallel_workers. When scope_task_id
@@ -227,20 +241,21 @@ def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None):
     filename rule it replaces did.
     """
     violations = []
-    for task_id, declared, reported, canonical in _fanouts(lane_reports, canonicals, dev_dir, scope_task_id):
+    for task_id, declared, reported, canonical, via in _fanouts(lane_reports, canonicals, dev_dir, scope_task_id):
         missing = [lane for lane in sorted(declared) if lane not in reported]
         if scope_task_id is not None:
             for lane in missing:
                 violations.append((
                     "lane_report_missing", dev_dir / f"dev-report-{task_id}-{lane}.json",
                     f"lane {lane}, which the lane_set of {declared[lane]} declares, has no report", lane,
+                    None,
                 ))
         if missing:
             continue
         if not canonical.is_file():
             violations.append((
                 "canonical_missing", canonical,
-                f"the canonical aggregate of lanes {', '.join(sorted(declared))} is missing", None,
+                f"the canonical aggregate of lanes {', '.join(sorted(declared))} is missing", None, via,
             ))
             continue
         if scope_task_id is None:
@@ -253,7 +268,7 @@ def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None):
             violations.append((
                 "canonical_stale", canonical,
                 f"its parallel_workers {workers} do not name lane(s) {', '.join(unnamed)} "
-                "the lane_set declares", None,
+                "the lane_set declares", None, via,
             ))
     return violations
 
@@ -265,21 +280,22 @@ def _roster(value):
 
 
 def _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_set):
-    """P3 row 12(b): [(code, path, problem)] for each due canonical in the
+    """P3 row 12(b): [(code, path, problem, via)] for each due canonical in the
     dispatch's scope that does not parse, validate against dev-report.v2,
     carry its task's identity (task_id and request_id), or name in
     parallel_workers exactly its lane reports' lanes and the dispatch
     obligation's lane_set. A canonical not yet due, or absent, is
     _find_violations' finding."""
     findings = []
-    for task_id, declared, reported, canonical in _fanouts(lane_reports, canonicals, dev_dir, scope_task_id):
+    for task_id, declared, reported, canonical, via in _fanouts(lane_reports, canonicals, dev_dir, scope_task_id):
         if not canonical.is_file() or not reported.issuperset(declared):
             continue
         result = contract_runtime.validate_artifact_for_obligation(canonical, "dev-report.v2")
         if result.get("status") == "fail":
             parsed = "schema-invalid" in result["reason"]
             code = "canonical_schema_invalid" if parsed else "canonical_not_valid_json"
-            findings.append((code, canonical, "; ".join(map(str, [result.get("reason"), *result.get("errors", [])]))))
+            findings.append((code, canonical, "; ".join(map(str, [result.get("reason"), *result.get("errors", [])])),
+                             via))
             if not parsed:
                 continue
         aggregate = _read_json(canonical)
@@ -288,7 +304,7 @@ def _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_s
         if identity != (task_id, task_id):
             findings.append((
                 "canonical_identity_mismatch", canonical,
-                f"its task_id {identity[0]!r} and request_id {identity[1]!r} are not its task's {task_id!r}",
+                f"its task_id {identity[0]!r} and request_id {identity[1]!r} are not its task's {task_id!r}", via,
             ))
         workers = aggregate.get("parallel_workers")
         for source, lanes in (("the lanes its lane reports record", sorted(declared)),
@@ -296,7 +312,7 @@ def _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_s
             if _roster(lanes) is not None and _roster(workers) != _roster(lanes):
                 findings.append((
                     "canonical_roster_mismatch", canonical,
-                    f"its parallel_workers {workers} differ from {source} {lanes}",
+                    f"its parallel_workers {workers} differ from {source} {lanes}", via,
                 ))
     return findings
 
@@ -309,27 +325,48 @@ CANONICAL_PRODUCER = (
 CANONICAL_CHECK_EXIT = 2
 
 
-def _emit_block(violations):
+def _project_relative(path, dev_dir):
+    """The path as a dispatch's obligation declares it (relative to the
+    project that holds docs/dev), or as given when it lies elsewhere."""
+    try:
+        return str(Path(path).relative_to(Path(dev_dir).parent.parent))
+    except ValueError:
+        return str(path)
+
+
+def _reached_by(via, dev_dir):
+    """A canonical finding's suffix naming the dispatch that runs its producer, a hook."""
+    if via is None:
+        return ""
+    via_lane, via_path = via
+    return (f" | reached by: dispatching again the dev dispatch that declared "
+            f"{_project_relative(via_path, dev_dir)} (lane {via_lane}), which writes that "
+            "report again in that dispatch; the write runs it")
+
+
+def _emit_block(violations, dev_dir):
     """Print the BLOCK message to stderr and exit 2: each failing artifact's
-    path and check, and its producer."""
+    path and check, and its producer; for the canonical, whose producer is a
+    hook, also the dispatch that runs it."""
     lines = ["", "BLOCKED Agent dispatch (qa): a fan-out's lane reports and canonical "
                  "aggregate are not all collected."]
-    for code, path, problem, lane in violations:
+    for code, path, problem, lane, via in violations:
         producer = f"dev (lane {lane})" if lane is not None else CANONICAL_PRODUCER
-        lines.append(f"  [{code}] {path}: {problem} | producer: {producer}")
+        lines.append(f"  [{code}] {path}: {problem} | producer: {producer}{_reached_by(via, dev_dir)}")
     lines.append("")
     sys.stderr.write("\n".join(lines) + "\n")
     sys.exit(2)
 
 
-def _emit_canonical_findings(findings, armed):
+def _emit_canonical_findings(findings, armed, dev_dir):
     """Report row 12(b)'s findings: a block while the barrier is armed, else a warning."""
     if not findings:
         return
     blocking = CANONICAL_CHECK_EXIT if armed else 0
     verdict = "BLOCKED Agent dispatch (qa)" if blocking else "WARNING (not blocking yet)"
     lines = ["", f"{verdict}: a fan-out's canonical aggregate does not match its lanes."]
-    lines += [f"  [{code}] {path}: {problem} | producer: {CANONICAL_PRODUCER}" for code, path, problem in findings]
+    lines += [f"  [{code}] {path}: {problem} | producer: {CANONICAL_PRODUCER}{_reached_by(via, dev_dir)}"
+              for code, path, problem, via in findings]
     sys.stderr.write("\n".join(lines) + "\n\n")
     if blocking:
         sys.exit(blocking)
@@ -644,14 +681,14 @@ def main():
             # Advisory G3 keeps master's one always-on block; (a) and (b) wait for P2's arming.
             violations = [v for v in violations if v[0] == "canonical_missing"]
         if violations:
-            _emit_block(violations)
+            _emit_block(violations, dev_dir)
         if scope_task_id is not None:
             try:
                 lane_set = _parsed_obligation(_qa_prompt_body(data)).get("lane_set")
                 findings = _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_set)
             except Exception:
                 findings = []  # fail open: a self-bug here never skips the checks below
-            _emit_canonical_findings(findings, armed)
+            _emit_canonical_findings(findings, armed, dev_dir)
 
     _run_obligation_barrier(data)
     _run_gitignore_rule(data)

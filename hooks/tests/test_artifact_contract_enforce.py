@@ -2709,8 +2709,9 @@ def test_fanout_legacy_check_judges_only_the_stopping_lanes_own_report(
 
 # ---------------------------------------------------------------------------
 # P3 R14: the dispatch must have written one of the files G2 checks (mtime >=
-# dispatched_at - 2 s; a re-dispatch may keep the others unchanged) and a lane's
-# dev or qa report must echo the dispatch's lane and lane_set. Both warned in
+# dispatched_at - 2 s; a re-dispatch may keep the others as an earlier round of
+# its role wrote them, P1b E4's bound) and a lane's dev or qa report must echo
+# the dispatch's lane and lane_set. Both warned in
 # their first commit (reason on stderr, exit 0); the promotion commit flipped
 # DISPATCH_ECHO_BLOCKS in the hook and _R14_EXIT.
 # ---------------------------------------------------------------------------
@@ -2737,7 +2738,7 @@ def test_r14_report_older_than_its_dispatch_warns(tmp_path):
     _l2_write(s, _l2_dev_report(s.task))
     _age(s.project / s.art_path, s.obligation["dispatched_at"], 2 * 3600)
     proc = _l2_stop(s)
-    _assert_warns(proc, s.art_path, "stale_for_dispatch")
+    _assert_warns(proc, s.art_path, "artifact_stale")
     assert f"dispatched_at {s.obligation['dispatched_at']!r}" in proc.stderr
 
 
@@ -2748,18 +2749,18 @@ def test_r14_clock_slack_is_two_seconds(tmp_path):
     proc = _l2_stop(s)
     assert proc.returncode == 0 and _WARNING not in proc.stderr, proc.stderr
     _age(s.project / s.art_path, s.obligation["dispatched_at"], 3)
-    _assert_warns(_l2_stop(s), s.art_path, "stale_for_dispatch")
+    _assert_warns(_l2_stop(s), s.art_path, "artifact_stale")
 
 
-def test_r14_no_dispatched_at_counts_as_stale(tmp_path):
-    """A dispatch without dispatched_at shows no artifact fresh (the grammar
-    refuses such a block, so this is the helper's own rule)."""
+def test_r14_no_dispatched_at_decides_nothing(tmp_path):
+    """A dispatch without dispatched_at (the grammar refuses such a block; a
+    base-text /spec dispatch binds none) has no freshness any write could meet,
+    so the rule decides nothing rather than leave a stop no write clears."""
     s = _l2_setup(tmp_path)
     _l2_write(s, _l2_dev_report(s.task))
+    _age(s.project / s.art_path, s.obligation["dispatched_at"], 2 * 3600)
     ob = {k: v for k, v in s.obligation.items() if k != "dispatched_at"}
-    [finding] = HOOK._stale_findings(str(s.project), ob, ob["artifacts"], ob["artifacts"])
-    assert finding["reason"] == "stale_for_dispatch"
-    assert "dispatched_at None" in finding["errors"][0]
+    assert HOOK._stale_findings(str(s.project), ob, ob["artifacts"], ob["artifacts"]) == []
 
 
 @pytest.mark.parametrize("role", ["dev", "qa"])
@@ -2785,7 +2786,7 @@ def test_r14_fanout_report_not_echoing_its_lane_warns(tmp_path, role, lane, lane
     _assert_warns(proc, s.art_path, "lane_echo_mismatch")
     for line in errors:
         assert f"    {line}\n" in proc.stderr, proc.stderr
-    assert "stale_for_dispatch" not in proc.stderr
+    assert "artifact_stale" not in proc.stderr
 
 
 @pytest.mark.parametrize("role", ["dev", "qa"])
@@ -2814,7 +2815,7 @@ def test_r14_in_flight_lane_dispatched_before_the_change_passes(tmp_path, echoed
     _l2_write(s, _l2_dev_report(s.task, lane="l2" if echoed else None, lane_set=["l1", "l2"]))
     proc = _l2_stop(s)
     assert proc.returncode == (0 if echoed else _R14_EXIT), proc.stderr
-    assert "stale_for_dispatch" not in proc.stderr
+    assert "artifact_stale" not in proc.stderr
     assert ("lane_echo_mismatch" in proc.stderr) is (not echoed), proc.stderr
 
 
@@ -2830,12 +2831,14 @@ def test_r14_stale_markdown_warns(tmp_path):
     _write(s.project / ticket, f"# Ticket\nRequest ID: {G2_TASK}\n")
     assert _g2_stop(s).stderr == ""
     _age(s.project / ticket, s.dispatched_at.isoformat(), 2 * 3600)
-    _assert_warns(_g2_stop(s), ticket, "stale_for_dispatch")
+    _assert_warns(_g2_stop(s), ticket, "artifact_stale")
 
 
-def _ba_first_round(s) -> dict:
+def _ba_first_round(s, earlier=None) -> dict:
     """BA's three files as the task's first BA dispatch wrote them, a minute
-    before this (re-)dispatch."""
+    before this re-dispatch; that dispatch, two minutes before it, is recorded
+    in the parent transcript (``earlier`` replaces its record)."""
+    _g2_parent_dispatches(s, [_g2_earlier(s, 120)] if earlier is None else earlier)
     files = {
         f"docs/dev/context-{s.task}.json": {
             "task_id": s.task, "requirement": "x", "root_cause_analysis": {"affected_files": ["x.py"]},
@@ -2850,16 +2853,19 @@ def _ba_first_round(s) -> dict:
     return files
 
 
+def _ba_answers_in_context_and_ticket(s, files) -> None:
+    context, ticket = f"docs/dev/context-{s.task}.json", f"docs/dev/ticket-{s.task}.md"
+    _write(s.project / context, dict(files[context], development_approach={"strategy": "x, with the evidence"}))
+    _write(s.project / ticket, files[ticket] + "\n## QA objections addressed\n")
+
+
 def test_r14_redispatch_keeping_a_file_it_judges_right_passes(tmp_path):
     """dev variant=ba-qa-fail, armed, at the BA re-dispatched after the failing
     BA-QA verdict (commands/dev.md Step 8): it answers in its context and
     ticket and keeps its acceptance criteria, which the write guard will not let
     it Write again and an Edit cannot leave unchanged."""
     s = _g2_setup(tmp_path, "ba", _g2_ba_artifacts())
-    files = _ba_first_round(s)
-    context, ticket = f"docs/dev/context-{s.task}.json", f"docs/dev/ticket-{s.task}.md"
-    _write(s.project / context, dict(files[context], development_approach={"strategy": "x, with the evidence"}))
-    _write(s.project / ticket, files[ticket] + "\n## QA objections addressed\n")
+    _ba_answers_in_context_and_ticket(s, _ba_first_round(s))
     proc = _g2_stop(s)
     assert proc.returncode == 0 and proc.stderr == "", proc.stderr
     _g2_assert_decided_by_obligation(s)
@@ -2877,12 +2883,13 @@ def test_r14_report_left_from_an_older_round_is_refused(tmp_path, case):
     else:
         report = f"docs/dev/ba-qa-report-{G2_TASK}.json"
         s = _g2_setup(tmp_path, "qa", [_g2_json(report, "ba-qa-report.v1")], profile="ba_validation")
+        _g2_parent_dispatches(s, [_g2_earlier(s, 120)])
         _write(s.project / report, _g2_ba_qa_report(G2_TASK, "fail"))
         _age(s.project / report, s.dispatched_at.isoformat(), 60)
         stale = [report]
     proc = _g2_stop(s)
     for rel in stale:
-        _g2_assert_blocked_on(proc, rel, "stale_for_dispatch")
+        _g2_assert_blocked_on(proc, rel, "artifact_stale")
     assert f"this dispatch wrote none of the {len(stale)} file(s) it declares" in proc.stderr
 
 
@@ -2895,7 +2902,7 @@ def test_r14_a_rewritten_file_failing_its_schema_still_counts_as_written(tmp_pat
     _write(s.project / context, {"task_id": s.task})
     proc = _g2_stop(s)
     _g2_assert_blocked_on(proc, context, "schema-invalid under obligation-supplied schema")
-    assert "stale_for_dispatch" not in proc.stderr
+    assert "artifact_stale" not in proc.stderr
 
 
 def test_r14_artifacts_not_standing_for_this_stop_are_not_aged(tmp_path):
@@ -2977,6 +2984,196 @@ def test_a4_missing_dev_report_is_a_plain_block_every_round(tmp_path):
     _l2_write(s, _l2_dev_report(s.task))
     proc = _l2_stop(s)
     assert proc.returncode == 0 and proc.stderr == "", proc.stderr
+
+
+
+# (i) a stale declared artifact is stopped at its producer's stop (P1b E4) ---
+
+
+_G2_STALE = "artifact_stale"
+
+
+def _g2_age(path: Path, seconds_before: float, s) -> None:
+    """Set a file's mtime ``seconds_before`` the dispatch's dispatched_at."""
+    then = s.dispatched_at.timestamp() - seconds_before
+    os.utime(path, (then, then))
+
+
+def _g2_parent_dispatches(s, earlier: list) -> None:
+    """The parent session transcript holding the task's dispatch records:
+    each ``(role, obligation)`` of ``earlier`` as an Agent call, then this
+    stop's own dispatch (the meta file's toolUseId), as obligation.first_declared_at
+    reads them."""
+    slug = _project_slug(s.project)
+    parent = s.home / ".claude" / "projects" / slug / f"{s.harness}.jsonl"
+    records = []
+    calls = [(f"toolu-earlier-{n}", role, doc) for n, (role, doc) in enumerate(earlier)]
+    calls.append(("tooluse-test-1", s.obligation["role"], s.obligation))
+    for tool_id, role, doc in calls:
+        prompt = f'<obligation v="1">\n{json.dumps(doc, indent=2)}\n</obligation>'
+        records.append({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": tool_id, "name": "Agent",
+             "input": {"subagent_type": role, "description": "x", "prompt": prompt}}]}})
+    parent.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+
+def _g2_earlier(s, seconds_before: float, role: str | None = None, artifacts: list | None = None) -> tuple:
+    """An earlier dispatch of the task: this stop's obligation with an earlier dispatched_at."""
+    when = datetime.fromtimestamp(s.dispatched_at.timestamp() - seconds_before, tz=timezone.utc)
+    doc = dict(s.obligation, dispatched_at=when.isoformat(), role=role or s.obligation["role"])
+    if artifacts is not None:
+        doc["artifacts"] = artifacts
+    return (doc["role"], doc)
+
+
+def test_g2_stale_json_artifact_blocks_then_passes_when_written(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _g2_age(s.project / report, 3600, s)
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_STALE)
+    assert "freshness:" in proc.stderr and "dispatched_at" in proc.stderr, proc.stderr
+    # The producer's next round writes the report as drafted: the stop passes.
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    _g2_assert_decided_by_obligation(s)
+
+
+def test_g2_freshness_slack_admits_a_file_written_just_before_dispatched_at(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _g2_age(s.project / report, 1, s)
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_g2_dispatched_at_ahead_of_the_clock_decides_no_freshness(tmp_path):
+    """A dispatched_at ahead of the stop's clock (a local time written with a Z) is G1's clock
+    bound to judge; no write could satisfy it here, so a just-written report passes."""
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    ahead = datetime.fromtimestamp(s.dispatched_at.timestamp() + 3600, tz=timezone.utc).isoformat()
+    s.obligation["dispatched_at"] = ahead
+    _write_obligation_transcript(
+        s.home, s.project, s.harness, s.agent_id,
+        f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>',
+    )
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_g2_stale_artifact_names_only_the_stale_one(tmp_path):
+    s = _g2_setup(tmp_path, "ba", _g2_ba_artifacts())
+    _write(s.project / f"docs/dev/context-{G2_TASK}.json",
+           {"task_id": G2_TASK, "request_id": G2_TASK, "requirement": "x"})
+    ticket = f"docs/dev/ticket-{G2_TASK}.md"
+    _write(s.project / ticket, f"# Ticket\n{G2_TASK}\n")
+    _g2_age(s.project / ticket, 3600, s)
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, ticket, _G2_STALE)
+    assert f"docs/dev/context-{G2_TASK}.json: {_G2_STALE}" not in proc.stderr
+
+
+def test_g2_stale_markdown_artifact_blocks(tmp_path):
+    s, report = _g2_close_qa_setup(tmp_path)
+    _write(s.project / report, f"# Close Debate Report\n{G2_TASK}\nCLOSE: YES\n")
+    _g2_age(s.project / report, 3600, s)
+    proc = _g2_stop(s, msg="Done.\n\nCLOSE: YES\n")
+    _g2_assert_blocked_on(proc, report, _G2_STALE)
+
+
+def test_g2_waived_markdown_artifact_is_not_held_to_freshness(tmp_path):
+    # close-report-append.py refused to touch the report: its on-disk bytes
+    # are a prior attempt's, which the obligation's waived_by_response declares.
+    s, report = _g2_close_qa_setup(tmp_path)
+    _g2_age(s.project / report, 3600, s)
+    proc = _g2_stop(s, msg="The append helper refused.\n\nCLOSE_REPORT_APPEND_ERROR: append: disk full\n")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_g2_redispatch_keeps_an_earlier_rounds_file_only_beside_one_it_wrote(tmp_path):
+    # A re-dispatch of the same template (Step 8's BA retry, Step 16's dev
+    # retry, a lane re-dispatch) declares the path again; a file it had
+    # nothing to change in keeps the mtime of the earlier round, and stands
+    # while the dispatch wrote another of its files
+    # (test_r14_redispatch_keeping_a_file_it_judges_right_passes). A dev's
+    # report is its only file: left as round 1 wrote it, it is round 1's
+    # (P3 R14: qa-fail's leftover), refused until this round writes it.
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _g2_parent_dispatches(s, [_g2_earlier(s, 600)])
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _g2_age(s.project / report, 300, s)
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_STALE)
+    assert "this dispatch wrote none of the 1 file(s) it declares" in proc.stderr, proc.stderr
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    _g2_assert_decided_by_obligation(s)
+
+
+def test_g2_redispatch_still_blocks_a_file_older_than_the_first_round(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _g2_parent_dispatches(s, [_g2_earlier(s, 600)])
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    _g2_age(s.project / report, 3600, s)
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_STALE)
+
+
+@pytest.mark.parametrize("other", ["role", "path"])
+def test_g2_an_earlier_dispatch_of_another_role_or_path_admits_nothing(tmp_path, other):
+    # The BA answers in its context and ticket and keeps its criteria of a
+    # minute ago: only an earlier dispatch of its own role declaring that path
+    # bounds the kept file.
+    s = _g2_setup(tmp_path, "ba", _g2_ba_artifacts())
+    earlier = (_g2_earlier(s, 120, role="qa") if other == "role"
+               else _g2_earlier(s, 120, artifacts=_g2_ba_artifacts(task_id=G2_TASK + "-l1")))
+    _ba_answers_in_context_and_ticket(s, _ba_first_round(s, [earlier]))
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, f"docs/dev/acceptance-criteria-{G2_TASK}.json", _G2_STALE)
+    assert "older than the first dispatch of role 'ba' declaring it for this task" in proc.stderr, proc.stderr
+
+
+def test_g2_stale_file_no_dispatch_declares_blocks_nothing(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
+    undeclared = s.project / "docs/dev/dev-report-20250101-000000.json"
+    _write(undeclared, {"stale": True})
+    _g2_age(undeclared, 86400, s)
+    proc = _g2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_g2_freshness_is_decided_per_kind_by_the_obligation_library():
+    lib = HOOK.obligation
+    at = "2026-10-18T12:00:00+00:00"
+    then = datetime.fromisoformat(at).timestamp()
+    for kind in ("json", "markdown", "spec_views"):
+        assert lib.artifact_freshness_satisfied(kind, then - 3600, at) is False
+        assert lib.artifact_freshness_satisfied(kind, then - 1, at) is True
+    for kind in ("response_line", "response_block"):
+        assert lib.artifact_freshness_satisfied(kind, then - 3600, at) is True
+    assert lib.artifact_freshness_satisfied("json", then, "<ISO-8601 UTC>") is None
+
+
+def test_first_declared_at_reads_the_earliest_declaring_dispatch_of_the_role(tmp_path):
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
+    _g2_parent_dispatches(s, [_g2_earlier(s, 900, role="qa"), _g2_earlier(s, 600), _g2_earlier(s, 300)])
+    roots = [s.home / ".claude" / "projects"]
+    first = HOOK.obligation.first_declared_at(G2_TASK, "dev", report, s.project, roots)
+    assert first is not None
+    assert abs(first.timestamp() - (s.dispatched_at.timestamp() - 600)) < 1e-3
+    assert HOOK.obligation.first_declared_at(G2_TASK, "dev", "docs/dev/other.json", s.project, roots) is None
+    assert HOOK.obligation.first_declared_at(None, "dev", report, s.project, roots) is None
 
 
 if __name__ == "__main__":

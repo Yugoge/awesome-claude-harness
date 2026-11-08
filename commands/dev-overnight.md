@@ -210,26 +210,27 @@ CURRENT_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 [ -n "$CURRENT_SESSION_ID" ] || { echo "ERROR: no session id in environment" >&2; exit 1; }
 
 # 2. Bind the main root and STATE_FILE together, to the canonical ABSOLUTE path of
-#    THIS session's state file. CLAUDE_PROJECT_DIR is a HINT, never a precondition:
+#    the state file of THIS session. CLAUDE_PROJECT_DIR is a HINT, never a precondition:
 #    it is measured UNSET in this harness (while CLAUDE_CODE_SESSION_ID is set), and
 #    a STALE value must not veto the fallback — so BOTH it and $PWD are tried, in
 #    that order. Each start walks UP, because the state file lives at
 #    <main_root>/.claude/ and every default working root sits UNDER that root
 #    (in_place == main root; .claude/worktrees/<n>; .claude/overnight-fresh-clones/<n>).
 #    Selection is by exact session-keyed FILENAME and then a parsed field check, so
-#    it cannot be fooled by another session's file or by JSON whitespace drift.
+#    it cannot be fooled by the file of another session or by JSON whitespace drift.
 #    The walk DISCOVERS the record; it does NOT define the root. Take the root
 #    from what the record SAYS about itself, never from the directory the record
 #    happens to sit in: the launcher writes the record under its own resolved
-#    project dir but the dev-registry under the git toplevel (`main_root`), and
+#    project dir but the dev-registry under the git toplevel (main_root), and
 #    those DIFFER whenever the session was launched from a SUBDIRECTORY — the
-#    ordinary case, since the launcher's own resolution falls back to `$PWD`.
+#    ordinary case, since the launcher resolves its project dir from $PWD.
 #    Binding to the containing directory is what made Step 1 hard-abort with
 #    "verify: directory does not exist: <subdir>/.claude/dev-registry/<sid>".
-#    The state's one reading (hooks/lib/overnight.py) does the walk and the field
-#    checks and prints both paths, canonical; it exits 1 with the reason otherwise.
+#    The one reading of the state (hooks/lib/overnight.py, run by its path like
+#    the initializer below) does the walk and the field checks and prints both
+#    paths, canonical; it exits 1 with the reason otherwise.
 PROJECT_DIR=""; STATE_FILE=""
-{ read -r STATE_FILE; read -r PROJECT_DIR; } < <(python3 ~/.claude/hooks/lib/overnight.py \
+{ read -r STATE_FILE; read -r PROJECT_DIR; } < <(~/.claude/hooks/lib/overnight.py \
     session-root "$CURRENT_SESSION_ID" "${CLAUDE_PROJECT_DIR:-}" "$PWD")
 [ -n "$STATE_FILE" ] && [ -n "$PROJECT_DIR" ] || exit 1
 
@@ -249,7 +250,7 @@ REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
 ~/.claude/scripts/overnight-init.sh --verify-only --state-file "$STATE_FILE" --project-dir "$PROJECT_DIR"
 ```
 
-`PROJECT_DIR` and `STATE_FILE` are absolute and canonical, so both stay valid after the `cd` into `worktree_path`. Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent. The walk fails closed whenever no readable, session-matching record is reachable from EITHER start — an externally located fresh clone (`OVERNIGHT_FRESH_CLONE_ROOT` pointed outside the main root) is one cause, but so are a deleted or unreadable working directory and a malformed record. One more, introduced by the very launch shape this block now supports: a session launched from a SUBDIRECTORY leaves its record in that subdirectory, so on an isolated-mode CONTINUATION — where `$PWD` is the worktree, a sibling of the subdirectory rather than a descendant — the upward walk cannot reach it. First-run initialization from the subdirectory succeeds; the continuation aborts. Re-issue from the main root, or launch in place. It never guesses: the error names both searched starts, and the remedy is to re-issue the block from the main root, not to hand-bind a path.
+`PROJECT_DIR` and `STATE_FILE` are absolute and canonical, so both stay valid after the `cd` into `worktree_path`. Issue the block as written: its comments hold no apostrophe or backtick character (the Bash safety hook reads those as live syntax, comments included), and it runs both harness scripts by their path, not through an interpreter (the overnight hook guard refuses an interpreter launch when bubblewrap is unavailable). Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent. The walk fails closed whenever no readable, session-matching record is reachable from EITHER start — an externally located fresh clone (`OVERNIGHT_FRESH_CLONE_ROOT` pointed outside the main root) is one cause, but so are a deleted or unreadable working directory and a malformed record. One more, introduced by the very launch shape this block now supports: a session launched from a SUBDIRECTORY leaves its record in that subdirectory, so on an isolated-mode CONTINUATION — where `$PWD` is the worktree, a sibling of the subdirectory rather than a descendant — the upward walk cannot reach it. First-run initialization from the subdirectory succeeds; the continuation aborts. Re-issue from the main root, or launch in place. It never guesses: the error names both searched starts, and the remedy is to re-issue the block from the main root, not to hand-bind a path.
 
 **BINDING-EVAPORATION RULE (applies to EVERY later Bash call site in this document, not just this one).** The bindings above live in one shell and die with it. Any subsequent Bash call that needs `PROJECT_DIR`, `STATE_FILE`, `DEV_SESSION_ID` or `REGISTRY_DIR` MUST carry the **resolved literal value**, substituted into the command string exactly as `{pipeline.index}` is. A later `$DEV_SESSION_ID` that nobody bound expands to the empty string and silently builds a wrong path — it does not error. Where this document writes `<DEV_SESSION_ID>` or `<MAIN_ROOT>` in a command, that is a substitution slot, not a variable to expand. `<MAIN_ROOT>` is the resolved `PROJECT_DIR` above (the record's `main_root`, where the dev-registry lives) and is **distinct from** `<PROJECT_ROOT>`, which is `worktree_path`. The two are equal only in `in_place` mode. A called script that hard-requires an environment variable needs it supplied as a `VAR='<slot>' cmd …` prefix, because exporting it upstream does not reach the callee's shell. The alternative — repeating the whole binding block as a prelude in each consuming call — is permitted but is never the shorter option.
 
