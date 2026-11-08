@@ -21,14 +21,19 @@ of the keys' records, outside the user's home and project, as the test file's tm
 the artifact check's trace (row 19, E1) shows the receipt's writer and readers (terminal.json) and
 finalized.json's writer and its later-run reader from the provision call and the Stops alone.
 
-The expected outcomes, recorded in out/facts.json; the replay fails (driver error) when one does not
-hold on the tree under test:
-  future  the coordinator exits 2, blocked at the time-lock (phase_block, failed_phase timelock),
-          finalizer not called, the only block; no terminal.json; the scratch intact; no finalized.json
-  past1   the coordinator exits 0, status pass, finalizer called, not idempotent, no block;
+The registered Stop hook is the launcher (hooks/stop-launch.py, P5 R10): it runs the coordinator and
+relays its exit 0 or 2, its stdout (the coordinator's record, read here) and its stderr (the Stop
+gate's refusal). The time-lock is the Stop gate's step 4 (hooks/stop-command-gate.py), which the
+coordinator runs as its completion phase, so a time-lock block is failed_phase completion with the
+gate's time-lock refusal. The expected outcomes, recorded in out/facts.json; the replay fails (driver
+error) when one does not hold on the tree under test:
+  future  the launcher exits 2, blocked at the time-lock (phase_block, failed_phase completion, the
+          refusal the time-lock's), finalizer not called, the only block; no terminal.json; the
+          scratch intact; no finalized.json
+  past1   the launcher exits 0, status pass, finalizer called, not idempotent, no block;
           terminal.json written (terminal_status completed_by_deadline, the binding's workflow
           generation and resource session); the scratch gone; finalized.json written
-  past2   the coordinator exits 0 again, status pass, finalizer called and idempotent, no block;
+  past2   the launcher exits 0 again, status pass, finalizer called and idempotent, no block;
           terminal.json not written again (same inode, mtime and size; finalize vouches for the same
           receipt digest)
 """
@@ -42,6 +47,7 @@ import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 
+from .. import hookrun
 from .close import fact
 
 PIPELINE = "dev-overnight-receipt"
@@ -54,7 +60,11 @@ COST = 22
 TRUST_KEY_ENV = "LANEB_SESSION_RESOURCE_TRUST_KEY"
 TRUST_ROOT_ENV = "LANEB_SESSION_RESOURCE_TRUST_ROOT"
 TRUST_KEY = "cd" * 32       # 64 lowercase hex digits, not all zero
-COORDINATOR = "stop-workflow-coordinator.py"
+# The registered Stop hook, which relays the coordinator's exit, record and refusal (P5 R10)
+LAUNCHER = "stop-launch.py"
+# The first line of the Stop gate's time-lock refusal while the window is open (stop-command-gate.py
+# window_lock), which the coordinator relays from its completion phase
+TIMELOCK = "COMMAND_GATE time-lock: overnight window open until "
 # The ids are fixed: prepare() names the session's state file before the replay knows anything else.
 SID = "5f0c2e7a-8b1d-4c3e-9a6f-2d4b8e1c7a90"
 RSID = "overnight-resource-3c9e1a7b5d20"
@@ -181,19 +191,21 @@ class ReceiptRun:
     # ------------------------------------------------------------ the Stops
     def stop(self, s, label: str) -> dict:
         ev = s.stop("The overnight session's work is done.", label=f"Stop {label}")
-        coord = next((h for h in ev.hooks if h["hook"].endswith(COORDINATOR)), None)
+        coord = next((h for h in ev.hooks if h["hook"].endswith(LAUNCHER)), None)
         try:
             result = json.loads(coord["stdout"]) if coord else {}
         except ValueError:
             result = {}
         fin = result.get("finalizer") or {}
+        refusal = hookrun.refusal_first(coord) if coord and coord["verdict"] == "block" else ""
         seen = {"rc": coord["rc"] if coord else None, "status": result.get("status"),
                 "reason": result.get("reason"), "failed_phase": result.get("failed_phase"),
                 "finalizer_called": result.get("finalizer_called"), "idempotent": fin.get("idempotent"),
                 "receipt_sha256": (fin.get("finalized") or {}).get("terminal_receipt_sha256"),
                 "blocks": sorted(h["hook"] for h in ev.blocks), "terminal": _stat(self.terminal),
-                "scratch": _tree(self.scratch), "finalized": _stat(self.finalized) is not None}
-        fact(self.rp, f"Stop {label}", {k: v for k, v in seen.items() if k != "terminal"}
+                "scratch": _tree(self.scratch), "finalized": _stat(self.finalized) is not None,
+                "refusal": refusal, "timelock": refusal.startswith(TIMELOCK)}
+        fact(self.rp, f"Stop {label}", {k: v for k, v in seen.items() if k not in ("terminal", "refusal")}
              | {"terminal": seen["terminal"] is not None})
         return seen
 
@@ -210,11 +222,12 @@ class ReceiptRun:
             raise Unexpected(f"the state's end_time is {ahead:.1f} s ahead at the first Stop (LOCK_S {LOCK_S}): "
                              "the replay reached it too late to replay the Stop in the window")
         f = self.stop(s, "future")
-        e("future: coordinator exit", f["rc"] == 2, f["rc"])
+        e("future: launcher exit", f["rc"] == 2, f["rc"])
         e("future: status/reason/phase", (f["status"], f["reason"], f["failed_phase"])
-          == ("blocked", "phase_block", "timelock"), (f["status"], f["reason"], f["failed_phase"]))
+          == ("blocked", "phase_block", "completion"), (f["status"], f["reason"], f["failed_phase"]))
+        e("future: the time-lock's refusal", f["timelock"], f["refusal"])
         e("future: finalizer_called", f["finalizer_called"] is False, f["finalizer_called"])
-        e("future: blocks", f["blocks"] == ["hooks/" + COORDINATOR], f["blocks"])
+        e("future: blocks", f["blocks"] == ["hooks/" + LAUNCHER], f["blocks"])
         e("future: terminal.json", f["terminal"] is None, f["terminal"])
         e("future: scratch intact", f["scratch"] is not None and f["scratch"] == scratch0, f["scratch"])
         e("future: finalized.json", f["finalized"] is False, f["finalized"])
@@ -223,7 +236,7 @@ class ReceiptRun:
         if wait > 0:
             time.sleep(wait)
         p1 = self.stop(s, "past1")
-        e("past1: coordinator exit", p1["rc"] == 0, p1["rc"])
+        e("past1: launcher exit", p1["rc"] == 0, p1["rc"])
         e("past1: status", p1["status"] == "pass", (p1["status"], p1["reason"]))
         e("past1: finalizer_called", p1["finalizer_called"] is True, p1["finalizer_called"])
         e("past1: idempotent", p1["idempotent"] is False, p1["idempotent"])
@@ -238,7 +251,7 @@ class ReceiptRun:
         e("past1: receipt", got == ("completed_by_deadline", 2, RSID, SID, "dev-overnight"), got)
 
         p2 = self.stop(s, "past2")
-        e("past2: coordinator exit", p2["rc"] == 0, p2["rc"])
+        e("past2: launcher exit", p2["rc"] == 0, p2["rc"])
         e("past2: status", p2["status"] == "pass", (p2["status"], p2["reason"]))
         e("past2: finalizer_called", p2["finalizer_called"] is True, p2["finalizer_called"])
         e("past2: idempotent", p2["idempotent"] is True, p2["idempotent"])
