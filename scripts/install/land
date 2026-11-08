@@ -210,8 +210,10 @@ if [ "$STATE" = landed ]; then  # a later pull's conflicted stash pop (its entry
         && git update-index -q --refresh
     else touch -r settings.json "$ck"; fi
   fi >/dev/null 2>&1
-  # R2: an overlay hook command naming a harness script is checked against HEAD (land --repair).
-  grep -qsE '"command": ".*/(hooks|scripts)/' settings.machine.json && REPAIR="${REPAIR:-overlay}"
+  # R2: an overlay hook command naming a harness script is checked against HEAD (land --repair)
+  # once HEAD moved since the overlay was written or last checked, which is when HEAD can retire it.
+  [ "$COMMON/logs/HEAD" -nt settings.machine.json ] && grep -qsE '"command": ".*/(hooks|scripts)/' \
+    settings.machine.json && REPAIR="${REPAIR:-overlay}"
   [ -n "$REPAIR" ] || stale || exit 0
 fi
 mkdir -p logs 2>/dev/null

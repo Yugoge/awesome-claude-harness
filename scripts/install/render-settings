@@ -1230,6 +1230,8 @@ def repair_overlay(home):
     hooks, layers = copy.deepcopy(_d(overlay.get("hooks"))), layers_of(overlay)
     below = merge_all(parse(blob(home, "HEAD:" + SETTINGS)) or {}, layers[:-1])
     dropped = superseded(home, hooks, below) if hooks else {}
+    if hooks and not dropped:  # checked against this HEAD: land checks it again once HEAD moves
+        os.utime(os.path.join(home, OVERLAY))
     if dropped:
         old = overlay["hooks"]
         if hooks:

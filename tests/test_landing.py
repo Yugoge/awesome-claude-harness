@@ -346,8 +346,29 @@ def test_the_landing_repairs_an_overlay_registering_what_head_retired_or_runs(tm
     assert "land: overlay repaired: hooks.Stop=3 hooks.PreToolUse=1\n" in added
     for word in ("retired", "gone", "phase", "live.py", str(home)):
         assert word not in added
+    mtime = path.stat().st_mtime_ns
     assert land(env, home) == "" and path.read_bytes() == after
-    assert landing_log(home)[len(log):] == added
+    assert path.stat().st_mtime_ns == mtime and landing_log(home)[len(log):] == added
+
+
+def test_a_landed_home_checks_its_overlay_once_each_time_head_moves(tmp_path, env):
+    """Whether an overlay command is retired or already run changes only with HEAD, so a landed
+    home whose overlay keeps a live harness hook runs the check once after HEAD moved (python
+    costs about 75 ms, above P7b's 50 ms a Stop) and not at the Stops after: the check leaves the
+    overlay's bytes as they are, logs nothing and says nothing."""
+    home, _before, want = repair_home(tmp_path, env)
+    land(env, home)
+    path = home / "settings.machine.json"
+    after, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    log = landing_log(home)
+    assert land(env, home) == "" and path.stat().st_mtime_ns == mtime
+    write(home / "notes.txt", "a later note\n")
+    git(env, home, "-c", "core.hooksPath=/dev/null", "commit", "-q", "-am", "HEAD moves")
+    assert land(env, home) == ""
+    assert path.read_bytes() == after == canon(want) and path.stat().st_mtime_ns > mtime
+    mtime = path.stat().st_mtime_ns
+    assert land(env, home) == "" and path.stat().st_mtime_ns == mtime
+    assert landing_log(home) == log
 
 
 def test_the_overlay_repair_waits_while_a_rebase_is_stopped(tmp_path, env):
