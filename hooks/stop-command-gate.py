@@ -11,10 +11,11 @@ payload on stdin and decides, in order:
       harness command outside CONTROL opens or replaces (never a Skill
       expansion, a scheduled prompt or a wakeup); a plain prompt continues it;
   (4) the overnight time-lock, whatever the span and the mode: block while
-      overnight.window_open(payload); after end_time (closeout_gaps empty) or
-      the owner's /stop, block while the wake's CronCreate (overnight.WAKE_PROMPT)
-      has no later CronDelete (overnight.open_wakes), naming its id; a
-      time-lock it cannot read blocks the same way until the human's /stop;
+      overnight.window_open(payload), naming the time left; after end_time
+      (closeout_gaps empty) or the owner's /stop, block while the wake's
+      CronCreate (overnight.WAKE_PROMPT) has no later CronDelete
+      (overnight.open_wakes), naming its id; a time-lock it cannot read
+      blocks the same way until the human's /stop;
   (5) no gated span (stop-commands.json's GATED_COMMANDS): allow;
   (6) the gaps: the todo half and the command's predicate; an exception is
       the gap `gate instrument failure: <type>: <message>`, never an allow;
@@ -45,6 +46,7 @@ import os
 import shlex
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
@@ -398,11 +400,15 @@ PREDICATES = {
 
 # ---------------------------------------------------------------- the time-lock (4)
 def window_lock(payload, record):
-    """(2, the block text, None) while the session's overnight window is open
-    (P2's overnight.window_open), else None."""
-    if _lib("overnight").window_open(payload):
-        return (2, f"COMMAND_GATE time-lock: overnight window open until {record.get('end_time')}; "
-                   "continue the remaining pipelines\n", None)
+    """(2, the block text with the time left, None) while the session's overnight
+    window is open (P2's overnight.window_open), else None."""
+    overnight = _lib("overnight")
+    if overnight.window_open(payload):
+        end = overnight.parse_end_time(record.get("end_time"))
+        left = max(0, int((end - datetime.now(timezone.utc)).total_seconds()) // 60) if end else 0
+        return (2, f"COMMAND_GATE time-lock: overnight window open until "
+                   f"{end.strftime('%Y-%m-%dT%H:%M:%SZ') if end else record.get('end_time')}, "
+                   f"{left // 60}h {left % 60}m left; continue the remaining pipelines\n", None)
     return None
 
 

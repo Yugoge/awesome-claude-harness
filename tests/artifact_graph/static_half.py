@@ -414,6 +414,7 @@ def _hook_registrations(root: Path, files: list[str], sh: shscan.ShellAnalyzer, 
     out = []
     for r in regs:
         script = S.parse(r["command"], r["line"])
+        sh.parsed.append(script)    # sh.memo keys by id() of its nodes until the clear below
         sf = shscan.ShFile("settings.json", script)
         w = shscan.ShWalk(sh, sf, None)
         target = None

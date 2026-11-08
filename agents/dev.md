@@ -283,7 +283,7 @@ exit 0
 
 **Script location**:
 - Project-specific: `./scripts/` in project root
-- Global helpers: `~/.claude/scripts/`
+- Global helpers: `<HARNESS_ROOT>/scripts/`
 
 ### 3. No Hardcoded Values in Scripts
 
@@ -340,13 +340,13 @@ python "$SCRIPT"
 ```bash
 # Check existing scripts
 ls -la scripts/
-ls -la ~/.claude/scripts/
+ls -la "${CLAUDE_HOME:-$HOME/.claude}/scripts/"
 
 # Can this be merged into orchestrator.sh?
-cat scripts/orchestrator.sh
+cat "${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh"
 
 # Can this extend check-file-references.sh?
-cat ~/.claude/scripts/check-file-references.sh
+cat "${CLAUDE_HOME:-$HOME/.claude}/scripts/check-file-references.sh"
 ```
 
 **When to merge**:
@@ -414,11 +414,11 @@ Example:
 "SlashCommand"  // Already present, no update needed
 ```
 
-**2. Bash Scripts** (`scripts/xxx.sh` or `~/.claude/scripts/xxx.sh`):
+**2. Bash Scripts** (`scripts/xxx.sh` or `<HARNESS_ROOT>/scripts/xxx.sh`):
 ```json
 // Add to "allow" section based on script purpose:
 "Bash(script-name.sh:*)"  // If user-facing script
-"Bash(~/.claude/scripts/script-name.sh:*)"  // If global helper
+"Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/script-name.sh\":*)"  // If global helper
 ```
 
 **3. Python Scripts** (`scripts/xxx.py`):
@@ -426,19 +426,19 @@ Example:
 // Add to "allow" section:
 "Bash(source venv/bin/activate && python3 scripts/xxx.py:*)"
 // OR for global:
-"Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/xxx.py:*)"
+"Bash(source \"${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate\" && python3 \"${CLAUDE_HOME:-$HOME/.claude}/scripts/xxx.py\":*)"
 ```
 
 **4. Hooks** (`.claude/hooks/xxx.sh`):
 ```json
 // Hooks execute automatically, ensure they're in allowed bash patterns:
-"Bash(~/.claude/hooks/xxx.sh:*)"
+"Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/xxx.sh\":*)"
 ```
 
 **5. Todo Scripts** (`.claude/scripts/todo/xxx.py`):
 ```json
 // Add to "allow" section:
-"Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/xxx.py:*)"
+"Bash(source \"${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate\" && python3 \"${CLAUDE_HOME:-$HOME/.claude}/scripts/todo/xxx.py\":*)"
 ```
 
 **Implementation**:
@@ -735,7 +735,7 @@ Before returning execution report, verify:
 - [ ] Git root cause referenced in commit messages and documentation
 - [ ] Exit codes documented
 - [ ] Usage examples provided
-- [ ] **CRITICAL: Todo script created/updated** (if workflow has multiple steps, create `~/.claude/scripts/todo/{workflow-name}.py`)
+- [ ] **CRITICAL: Todo script created/updated** (if workflow has multiple steps, create `<HARNESS_ROOT>/scripts/todo/{workflow-name}.py`)
 - [ ] **CRITICAL: No decimal step numbering** (use sequential integers: Step 1, Step 2, Step 3, NOT Step 1.1, Step 1.2)
 - [ ] **CRITICAL: Compile/build check** — After all edits, verify the project builds:
   - TypeScript: `npx tsc --noEmit` (zero errors)
@@ -1084,7 +1084,7 @@ If you are invoked under a `/spec`-driven workflow (the orchestrator passes a no
 
 ### cp-state lifecycle SOP (canonical path)
 
-All cp-state mutations go through `python3 ~/.claude/scripts/spec-check.py`. The five subcommands:
+All cp-state mutations go through `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py"`. The five subcommands:
 
 | Subcommand | Purpose |
 |---|---|

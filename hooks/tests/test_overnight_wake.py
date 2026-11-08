@@ -206,12 +206,16 @@ def test_prompt_workflow_hands_over_restart_md_for_the_wake_in_its_span(night):
 # ---------------------------------------------------------------- the time-lock's wake check
 
 def _ended(night, summary=True):
+    """The session after end_time; with ``summary``, its closeout on disk (overnight.closeout_gaps):
+    Step 20's PM retrospective and Step 21's summary."""
     past = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600))
     start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 7200))
     (night.project / ".claude" / f"overnight-state-{night.sid}.json").write_text(json.dumps(
         {"session_id": night.sid, "start_time": start, "end_time": past, "current_phase": "exploring"}))
     if summary:
-        (night.project / "docs" / "dev").mkdir(parents=True, exist_ok=True)
+        retro = night.project / "docs" / "dev" / "overnight" / night.sid / "retro-report-cycle1.json"
+        retro.parent.mkdir(parents=True, exist_ok=True)
+        retro.write_text("{}")
         (night.project / "docs" / "dev" / "overnight-summary-2099-01-01.md").write_text("# Summary\n")
 
 
@@ -228,17 +232,8 @@ GATE = _gate()
 
 @pytest.fixture
 def lock(night, monkeypatch):
-    """The gate's time-lock on the night's payload. P2's overnight.window_open and
-    closeout_gaps(state, working_root) are not on this base: a fake with their signatures over
-    this base's readers (re-run once P2 merges); session_state_file and open_wakes are real."""
-    import types
-    fake = types.ModuleType("lib.overnight")
-    fake.session_state_file = overnight.session_state_file
-    fake.window_open = lambda payload: False  # every case here is past end_time
-    fake.closeout_gaps = lambda state, root: overnight.closeout_gaps(state)
-    fake.working_root = overnight.working_root
-    fake.open_wakes = overnight.open_wakes
-    monkeypatch.setitem(sys.modules, "lib.overnight", fake)
+    """The gate's time-lock on the night's payload, on the real lib/overnight (P2's window_open
+    and closeout_gaps, P1c's open_wakes): every case here is past end_time."""
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(night.project))
     monkeypatch.delenv("CLAUDE_COMPAT_RUNTIME", raising=False)
     payload = {"session_id": night.sid, "transcript_path": str(night.path), "cwd": str(night.project)}

@@ -8,7 +8,7 @@ disable-model-invocation: true
 Agentic commit command. Validates the close-gate (unless `--bulk`; `--force` is deprecated and no longer bypasses it), then dispatches
 the `changelog-analyst` subagent to classify files, stage them, and create real
 branch commits. Normal task mode admits every task-owned path only after partitioning
-it across an explicit supported-repository set; the control checkout and `~/.claude`
+it across an explicit supported-repository set; the control checkout and `<HARNESS_ROOT>`
 are supported without a project-root override.
 
 ## Usage
@@ -239,9 +239,9 @@ resume at this check on arrival.
 ### Step 4: Deprecated --force usage audit (only when FORCE=true)
 
 AC11: `--force` bypasses nothing — this step is a
-pure audit log, kept for backward-compatible invocation. If `FORCE=true`: create `~/.claude/logs/` and append a line with ISO timestamp, task-id, and mode=force to `~/.claude/logs/commit-overrides.log`. Best-effort; proceed even if log append fails.
+pure audit log, kept for backward-compatible invocation. If `FORCE=true`: create `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/` and append a line with ISO timestamp, task-id, and mode=force to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/commit-overrides.log`. Best-effort; proceed even if log append fails.
 
-Print: `WARNING: --force is deprecated and is now a no-op alias of the normal path — no gate is bypassed. Audit entry written to ~/.claude/logs/commit-overrides.log.`
+Print: `WARNING: --force is deprecated and is now a no-op alias of the normal path — no gate is bypassed. Audit entry written to ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/commit-overrides.log.`
 
 ### Step 5: Write commit grant(s) after resolving the repository plan
 
@@ -384,7 +384,7 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   while IFS= read -r abs_path; do
       [ -n "$abs_path" ] && ATTRIBUTION_FILES+=(--file "$abs_path")
   done < <(jq -r '.repositories[] | .repo_root as $root | (.owned_paths[]? // empty) | $root + "/" + .' <<<"$REPOSITORY_PLAN")
-  ATTRIBUTION_LOG="$(python3 ~/.claude/scripts/verify-attribution-chain.py --json "${ATTRIBUTION_FILES[@]}" 2>/dev/null)"
+  ATTRIBUTION_LOG="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/verify-attribution-chain.py" --json "${ATTRIBUTION_FILES[@]}" 2>/dev/null)"
   ATTRIBUTION_LOG="${ATTRIBUTION_LOG:-{\"results\":[],\"no_events\":[],\"discarded_lines\":[]}}"
   . ~/.claude/hooks/lib/harness_state_dir.sh
   harness_state_dir
@@ -468,12 +468,12 @@ then re-checked by the privilege guard against live Git state when each commit r
 A grant issued for one repo/branch/commit is rejected if any of the three changes.
 Never omit `--repo-root`: every grant corresponds to exactly one plan entry.
 
-**Grant timestamp format (NON-NEGOTIABLE)**: The `expires_at` and `created_at` fields MUST be ISO-8601 strings produced from timezone-aware UTC datetimes (e.g. `(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()` yields `"2026-05-19T16:18:56.123456+00:00"`). Epoch integers and epoch floats (e.g. `int(time.time()) + 600`, `time.time() + 600`) are NOT accepted by the privilege guard. The guard at `~/.claude/hooks/pretool-git-privilege-guard.py:377-384` parses these fields via `datetime.fromisoformat(end_str.replace('Z', '+00:00'))`; on `ValueError`/`TypeError`/`AttributeError` the helper `_end_time_passed` returns `True` (i.e. "already expired"), which silently rejects the grant and blocks the commit. The expiration window is 30 minutes from `created_at` — bake the offset into `expires_at` at write time. Invoke the grant-writer script (standard library only, so no venv: the orchestrator's working directory is the product repository; it resolves `CLAUDE_SESSION_ID` from the environment, generates a fresh nonce, writes timezone-aware ISO-8601 `created_at` and `expires_at` on a 30-minute window, and emits the resulting grant path on stdout):
+**Grant timestamp format (NON-NEGOTIABLE)**: The `expires_at` and `created_at` fields MUST be ISO-8601 strings produced from timezone-aware UTC datetimes (e.g. `(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()` yields `"2026-05-19T16:18:56.123456+00:00"`). Epoch integers and epoch floats (e.g. `int(time.time()) + 600`, `time.time() + 600`) are NOT accepted by the privilege guard. The guard at `<HARNESS_ROOT>/hooks/pretool-git-privilege-guard.py:377-384` parses these fields via `datetime.fromisoformat(end_str.replace('Z', '+00:00'))`; on `ValueError`/`TypeError`/`AttributeError` the helper `_end_time_passed` returns `True` (i.e. "already expired"), which silently rejects the grant and blocks the commit. The expiration window is 30 minutes from `created_at` — bake the offset into `expires_at` at write time. Invoke the grant-writer script (standard library only, so no venv: the orchestrator's working directory is the product repository; it resolves `CLAUDE_SESSION_ID` from the environment, generates a fresh nonce, writes timezone-aware ISO-8601 `created_at` and `expires_at` on a 30-minute window, and emits the resulting grant path on stdout):
 
 For each entry, invoke the existing writer with the concrete admitted root:
 
 ```bash
-python3 ~/.claude/scripts/write-commit-grant.py \
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-commit-grant.py" \
     --task-id "$TASK_ID" --repo-root "$PLANNED_REPO_ROOT"
 ```
 
@@ -500,7 +500,7 @@ A QA agent reviews **what is actually about to be committed** (each planned file
 Dispatch `changelog-analyst` (Agent, `subagent_type: changelog-analyst`) with the **same prompt as Step 7 but `DRYRUN=true`** (force dry-run regardless of the user's `--dry-run`). Under `DRYRUN=true` changelog-analyst classifies, stages the candidate set into the index, and STOPS before commit — it does NOT commit, write push-gate tokens, run any recovery commit, or consume the Step 5 grant (guaranteed by the DRYRUN guard in `agents/changelog-analyst.md` — the `nothing_to_commit_precommitted` recovery path is disabled under DRYRUN). Capture from its output:
 - `PLAN_GROUPS` — the per-proposed-commit groups, each `{repo, commit_message, files[]}` (one entry per intended commit; bulk yields several). **Preserve group boundaries — do NOT flatten across groups** (QA needs them to detect cross-task mixing).
 - `PLAN_FILES` — the union of all group files, per repo.
-- If the dry-run reports `nothing_to_commit` / empty plan: first compare it to the plan. If the plan computed OK, its owned paths exist, and those paths are not already landed, the disagreement between the owned-edit declaration and the live bytes is a finding routed to dev (not a silent no-op) and the planning phase is rerun after the fix. Only when the plan computed OK and the paths are already landed (or the plan lists no owned path), print `Nothing to commit (plan computed OK; dry-run found no pending change) — QA gate skipped.` It is never printed after a failed plan computation; then **when `BULK=false`, revoke the Step 5 commit grant** (it will never be consumed — same Grant-hygiene rationale as the Step 6 decision phase) via `python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID" --revoke-only` (skip in `BULK=true` — no per-task grant, empty TASK_ID); then proceed to Step 7 (which also no-ops). Do NOT dispatch QA on an empty plan.
+- If the dry-run reports `nothing_to_commit` / empty plan: first compare it to the plan. If the plan computed OK, its owned paths exist, and those paths are not already landed, the disagreement between the owned-edit declaration and the live bytes is a finding routed to dev (not a silent no-op) and the planning phase is rerun after the fix. Only when the plan computed OK and the paths are already landed (or the plan lists no owned path), print `Nothing to commit (plan computed OK; dry-run found no pending change) — QA gate skipped.` It is never printed after a failed plan computation; then **when `BULK=false`, revoke the Step 5 commit grant** (it will never be consumed — same Grant-hygiene rationale as the Step 6 decision phase) via `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-commit-grant.py" --task-id "$TASK_ID" --revoke-only` (skip in `BULK=true` — no per-task grant, empty TASK_ID); then proceed to Step 7 (which also no-ops). Do NOT dispatch QA on an empty plan.
 
 QA reviews each planned file's change **directly against HEAD** (staging-independent), NOT via `git diff --cached`. Rationale: in multi-group `--bulk`, changelog-analyst stages per subsystem group and Phase 4 unstages cross-group files each iteration, so after the dry-run only the LAST group remains staged — a `--cached` review would silently skip every earlier group while ALL groups still enter `QA_APPROVED_FILES` and get committed. Reviewing each `PLAN_GROUPS` file vs HEAD (or reading new files) covers ALL groups regardless of staging state.
 
@@ -584,7 +584,7 @@ That line is your verdict; nothing else carries it.
 
 **Grant hygiene (`BULK=false`, at every unstage pause — REJECT routing — and at the `--dry-run` preview end):** in addition to unstaging, when `BULK=false` REVOKE the Step 5 commit grant so a gate under repair never leaves live commit authorization lingering (30-min TTL; never hold a live grant across a producer repair — re-mint by re-entering Step 5 after the fix, because bytes and plan changed):
 ```bash
-python3 ~/.claude/scripts/write-commit-grant.py --task-id "$TASK_ID" --revoke-only
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-commit-grant.py" --task-id "$TASK_ID" --revoke-only
 ```
 **Skip this revoke entirely when `BULK=true`**: bulk wrote NO per-task commit grant (Step 5 minted the multi-use bulk-commit sentinel, which self-expires on its own 30-min TTL) and `TASK_ID` is empty, so calling the writer with an empty `--task-id` would error (exit 2). (Only the `COMMIT: APPROVE` + real-commit path keeps the grant — it is consumed by Step 7.)
 
@@ -674,7 +674,7 @@ Constraints:
 - Stage only files in the classified set; never use `git add -A` or `git add .`
 - Commit message must NOT match: `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync`
 - Handle every admitted repository independently and return a `repository_results` entry for each one
-- Write the push-gate token after each successful commit by running `python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"`, the token's one writer: it resolves the token's path under the hook state directory and checks the commit is live HEAD before it writes
+- Write the push-gate token after each successful commit by running `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"`, the token's one writer: it resolves the token's path under the hook state directory and checks the commit is live HEAD before it writes
 - Push-gate validates commit_sha only; expires_at is no longer written or checked
 - **BULK mode commit message prefix (REQUIRED when BULK=true)**: every commit message MUST begin with `auto-bulk: end-of-cycle commit for <current-branch>` where `<current-branch>` is the actual current git branch of the repo being committed (run `git rev-parse --abbrev-ref HEAD`). This prefix matches `BLESSED_BRIDGE_RE`; the privilege guard requires a valid bulk-commit sentinel (written in Step 5) to allow the commit. Do NOT use this prefix when BULK=false.
 ```
@@ -825,7 +825,7 @@ Retry with a fresh grant (each further round must pass the R15 progress test):
 1. Revoke stale grants, rebuild `REPOSITORY_PLAN`, and write a fresh bound grant
    for every newly planned repository. Never refresh only the control-root grant:
    ```bash
-   python3 ~/.claude/scripts/write-commit-grant.py \
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-commit-grant.py" \
        --task-id "$TASK_ID" --repo-root "$PLANNED_REPO_ROOT" \
        --revoke-existing-for-task "$TASK_ID"
    ```
@@ -919,18 +919,18 @@ Dispatch an inline Agent (do NOT invoke `/spec-update` as a slash-command) with 
 ```
 You are executing the spec-continuation logic for task-id=<TASK_ID>.
 
-Target spec file: <SPEC_PATH> (absolute path — this file exists; update it in place through its one writer, ~/.claude/scripts/spec-write.py, as spec-update.md's Continuation-spec mode describes).
+Target spec file: <SPEC_PATH> (absolute path — this file exists; update it in place through its one writer, <HARNESS_ROOT>/scripts/spec-write.py, as spec-update.md's Continuation-spec mode describes).
 
 DO NOT:
 - Invoke /spec-update as a slash command
 - Create a new spec file; only update the existing one at <SPEC_PATH>
-- Write <SPEC_PATH> any other way than through ~/.claude/scripts/spec-write.py
+- Write <SPEC_PATH> any other way than through <HARNESS_ROOT>/scripts/spec-write.py
 - Overwrite or delete prior "### Cycle N" sections
 - Modify any git state, commit grants, push tokens, or command files
 - Write any artifacts outside <SPEC_PATH>
-- Read or modify files outside <DEV_DOCS_ROOT>/, <SPEC_PATH>, and ~/.claude/commands/spec-update.md (allowed: read spec-update.md for instructions)
+- Read or modify files outside <DEV_DOCS_ROOT>/, <SPEC_PATH>, and <HARNESS_ROOT>/commands/spec-update.md (allowed: read spec-update.md for instructions)
 
-Follow the ## Continuation-spec mode instructions from ~/.claude/commands/spec-update.md exactly:
+Follow the ## Continuation-spec mode instructions from <HARNESS_ROOT>/commands/spec-update.md exactly:
 
 - The active task-id is <TASK_ID>.
 - The target spec to update is <SPEC_PATH>. Update this spec; do not create a new one.
@@ -964,9 +964,9 @@ Step 3's close-gate validation, never around it.
    the batch):
 
    ```bash
-   PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-   source ~/.claude/venv/bin/activate 2>/dev/null || true
-   mapfile -t COMMIT_PENDING_PARENTS < <(python3 ~/.claude/scripts/dev-lifecycle.py list-actionable --next-action commit --project-dir "$PROJECT_ROOT")
+   PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
+   source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" 2>/dev/null || true
+   mapfile -t COMMIT_PENDING_PARENTS < <(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action commit --project-dir "$PROJECT_ROOT")
    ```
 
    `list-actionable` returns a deterministically sorted list of

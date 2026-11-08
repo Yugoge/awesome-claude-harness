@@ -1069,7 +1069,8 @@ class CloseRun:
     def registry_name(self) -> None:
         o = self.o
         sec = o.section("Step 1")
-        m = re.search(r"`(python3 ~/\.claude/hooks/prompt-workflow\.py registry-dir \"\$TASK_ID\")`", sec)
+        m = re.search(r"`(python3 (?:~/\.claude|\"\$\{CLAUDE_HOME:-\$HOME/\.claude\})/hooks/prompt-workflow\.py\"?"
+                      r" registry-dir \"\$TASK_ID\")`", sec)
         if m:
             c = o.run(o.shell_bind(m.group(1)), "The task's registry directory", self.label("Step 1 Bash registry-dir"))
             self.session_id = (c.response.get("stdout") or "").strip() if c.ok else ""

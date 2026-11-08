@@ -95,6 +95,13 @@ class Layout:
     def python(self) -> str:
         return self.harness + "/venv/bin/python"
 
+    @property
+    def path(self) -> str:
+        """PATH of the replayed processes: the framework's stand-ins (bin/: bubblewrap, so the
+        replays model a host that has it, as an in-place /dev-overnight launch needs), the
+        harness's venv, then the runner's PATH."""
+        return f"{self.sb}/replay/bin:{self.harness}/venv/bin:{os.environ.get('PATH', '/usr/bin:/bin')}"
+
     def to_json(self) -> dict:
         return asdict(self)
 

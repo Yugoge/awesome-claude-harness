@@ -3,7 +3,9 @@
 The gate calls P3's disposition, P2's overnight locator and window, and P4's
 close rating; where those phases are not on this base the tests use fakes
 with their signatures (each such test says so), so the cases that rest on
-their behaviour are re-run once they merge. The rest runs the real readers:
+their behaviour are re-run once they merge. P2 is merged: the time-lock cases
+run P2's lib/overnight (locate, window_open, closeout_gaps) on the session's
+own state record (``real_overnight``). The rest runs the real readers:
 command_span on CLI-shaped transcripts, git on local repositories, the
 do-branch write-set helper and dev-lifecycle's --auto target function.
 
@@ -151,6 +153,29 @@ def overnight_fake(record=None, window=False, closeout=()):
     module.working_root = lambda state: Path(state.get("worktree_path") or ".")
     module.open_wakes = REAL_OVERNIGHT.open_wakes
     return module
+
+
+def real_overnight(env, monkeypatch, hours=None, **fields):
+    """P2's lib/overnight as merged, with the session's own record at
+    <project>/.claude/overnight-state-<SID>.json (end_time ``hours`` from now, UTC) when
+    ``hours`` is given; the record's end_time as written."""
+    monkeypatch.setitem(sys.modules, "lib.overnight", REAL_OVERNIGHT)
+    if hours is None:
+        return None
+    end = (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    claude = env.project / ".claude"
+    claude.mkdir(parents=True, exist_ok=True)
+    (claude / f"overnight-state-{SID}.json").write_text(json.dumps({"session_id": SID, "end_time": end, **fields}))
+    return end
+
+
+def closeout_on_disk(root: Path) -> None:
+    """The overnight closeout P2's closeout_gaps reads: Step 20's PM retrospective and Step
+    21's summary under the working root."""
+    retro = root / "docs" / "dev" / "overnight" / SID / "retro-report-cycle1.json"
+    retro.parent.mkdir(parents=True, exist_ok=True)
+    retro.write_text("{}")
+    (root / "docs" / "dev" / "overnight-summary-2026-11-01.md").write_text("# Summary\n")
 
 
 @pytest.fixture
@@ -1011,7 +1036,8 @@ def test_a11_advisory_reports_would_block_and_allows(env):
 
 def test_a11_off_allows_everything_and_mode_parsing(env, monkeypatch):
     dev_span(env, done=1)
-    monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake({"end_time": "x"}, window=True))
+    real_overnight(env, monkeypatch, hours=1)  # the window open (P2's window_open, real)
+    assert run(env)[0] == 2
     assert run(env, "off") == (0, "")
     assert [gate._mode(a) for a in (["--mode", "off"], ["--mode=advisory"], [], ["--mode", "bogus"])] == [
         "off", "advisory", "block", "block"]
@@ -1065,17 +1091,22 @@ def test_an_unloadable_close_rating_is_an_instrument_failure(env, monkeypatch):
     assert code == 2 and "gate instrument failure: ModuleNotFoundError" in text
 
 
-# ---------------------------------------------------------------- A12: the overnight time-lock (P2 faked)
+# ---------------------------------------------------------------- A12: the overnight time-lock (P2, real)
 def test_a12_an_open_window_blocks_any_span_in_any_mode_but_off(env, monkeypatch):
-    """Fake window_open (P2): re-run once P2 merges."""
-    monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake(
-        {"session_id": SID, "end_time": "2026-11-01T10:00:00Z"}, window=True))
+    """P2's window_open on the session's record (end_time an hour ahead, no human /stop since
+    the /dev-overnight): any span, block or advisory, is held, naming the end time and the
+    time left; off allows, and so does the Codex runtime."""
+    end = real_overnight(env, monkeypatch, hours=1)
+    env.tx.command("dev-overnight", "--hours 1")
     env.tx.command("spec")
     for mode in ("block", "advisory"):
-        assert run(env, mode) == (2, "COMMAND_GATE time-lock: overnight window open until 2026-11-01T10:00:00Z;"
+        assert run(env, mode) == (2, f"COMMAND_GATE time-lock: overnight window open until {end}, 0h 59m left;"
                                      " continue the remaining pipelines\n")
     assert run(env, "off") == (0, "")
     monkeypatch.setenv("CLAUDE_COMPAT_RUNTIME", "codex")
+    assert run(env) == (0, "")
+    monkeypatch.delenv("CLAUDE_COMPAT_RUNTIME")
+    env.tx.command("stop")  # the human's /stop closes the window
     assert run(env) == (0, "")
 
 
@@ -1103,8 +1134,9 @@ def test_a12_a_time_lock_it_cannot_read_blocks_any_span_in_any_mode_until_the_hu
 
 
 def test_a12_after_the_window_a_live_wake_blocks_naming_its_id_until_deleted(env, monkeypatch):
-    monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake({"session_id": SID, "worktree_path":
-                                                                      str(env.project)}, window=False))
+    """P2's window_open, real: the human's /stop closes the window before end_time, and the
+    wake check holds the Stop while the wake is live."""
+    real_overnight(env, monkeypatch, hours=1, worktree_path=str(env.project))
     overnight_session(env)
     env.tx.command("stop")
     code, text = run(env)
@@ -1116,9 +1148,8 @@ def test_a12_after_the_window_a_live_wake_blocks_naming_its_id_until_deleted(env
 def test_a12_only_the_wakes_cron_create_is_the_wake(env, monkeypatch):
     """The wake check reads overnight.open_wakes (a CronCreate of WAKE_PROMPT, P1c X8): another
     recurring job the session scheduled is no wake, and a wake created before the latest
-    /dev-overnight opener still counts."""
-    monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake({"session_id": SID, "worktree_path":
-                                                                      str(env.project)}, window=False))
+    /dev-overnight opener still counts. P2's window_open, real."""
+    real_overnight(env, monkeypatch, hours=1, worktree_path=str(env.project))
     overnight_session(env, prompt="check the deploy")
     env.tx.command("stop")
     assert gate.decision(env.payload) == (0, "", "cancelled_by_user")
@@ -1131,9 +1162,10 @@ def test_a12_only_the_wakes_cron_create_is_the_wake(env, monkeypatch):
 
 
 def test_a12_after_end_time_the_families_and_closeout_decide(env, monkeypatch):
-    """Fake overnight and disposition (P2, P3): re-run once they merge."""
-    record = {"session_id": SID, "worktree_path": str(env.tmp / "wt")}
-    monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake(record, closeout=["no PM retrospective"]))
+    """P2's locator, window and closeout_gaps, real (the record's end_time past, its working
+    root tmp/wt); P3's disposition faked: re-run once it merges."""
+    (env.tmp / "wt" / "docs" / "dev").mkdir(parents=True)
+    real_overnight(env, monkeypatch, hours=-1, worktree_path=str(env.tmp / "wt"))
     overnight_session(env, wake=False)
     env.tx.todos(canonical("dev-overnight", "--hours 1"), len(canonical("dev-overnight", "--hours 1")))
     env.tx.dispatch(f"{FAMILY}-1", pipeline="dev-overnight")
@@ -1142,16 +1174,22 @@ def test_a12_after_end_time_the_families_and_closeout_decide(env, monkeypatch):
     assert code == 2 and "unanswered" in text and "no PM retrospective" in text
     assert "AskUserQuestion" not in text and "record the decision" in text
     assert env.fake.calls[-1][0] == str(env.tmp / "wt")
+    assert "overnight-summary-*.md: no summary written since start_time" in text
     env.fake.answers.clear()
-    monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake(record))
+    closeout_on_disk(env.tmp / "wt")
     assert gate.decision(env.payload) == (0, "", "completed_by_deadline")
 
 
 def test_a12_no_terminal_status_without_an_overnight_record_or_with_an_open_closeout(env, monkeypatch):
+    """P2's locator and closeout_gaps, real: no record, or a record past end_time whose
+    closeout is not on disk, gives no terminal status."""
+    real_overnight(env, monkeypatch)
     env.tx.command("spec")
     assert gate.decision(env.payload) == (0, "", None)
-    monkeypatch.setitem(sys.modules, "lib.overnight", overnight_fake({"session_id": SID}, closeout=["no summary"]))
+    real_overnight(env, monkeypatch, hours=-1)
     assert gate.decision(env.payload) == (0, "", None)
+    closeout_on_disk(env.project)
+    assert gate.decision(env.payload) == (0, "", "completed_by_deadline")
 
 
 # ---------------------------------------------------------------- the time-lock's state selection

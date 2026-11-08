@@ -10,6 +10,7 @@ broader/standalone suite named in the BA ticket's files_to_create list.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -359,3 +360,46 @@ def test_list_actionable_commit_selects_without_the_chain(tmp_path):
     assert row["invoke_resolver"] is False
     assert "artifact_chain" not in row
     assert _list_actionable(project, "commit") == [task_id]
+
+
+# --------------------------------------------------------------------------
+# /dev-overnight: each pipeline whose QA passed is a /dev chain under its own
+# task id; /close --auto's discovery lists it through the completion report the
+# overnight's Step 16 has the main agent write (P2 acceptance 12)
+# --------------------------------------------------------------------------
+
+
+def _overnight_completion_template() -> tuple[str, str]:
+    """The path and the markdown template commands/dev-overnight.md's Step 16 gives the main agent
+    for a pipeline whose QA passed, read from the tree's text."""
+    text = (REPO_ROOT / "commands" / "dev-overnight.md").read_text(encoding="utf-8")
+    step = re.search(r"^### Step 16:.*?(?=^### )", text, re.M | re.S)
+    assert step, "commands/dev-overnight.md has no Step 16"
+    body = step.group(0)
+    path = re.search(r"Write `([^`\s]*completion-[^`\s]*\.md)`", body)
+    template = re.search(r"^```markdown\n(# Development Completion Report.*?)^```", body, re.M | re.S)
+    assert path and template, "Step 16 gives no completion report for a pipeline whose QA passed"
+    return path.group(1), template.group(1)
+
+
+def test_list_actionable_close_lists_each_completed_overnight_pipeline(tmp_path):
+    project = make_project(tmp_path)
+    path_tpl, template = _overnight_completion_template()
+    pipelines = [{"index": i, "timestamp_suffix": f"20260101-000021-{i}", "description": f"issue {i}"}
+                 for i in (0, 1)]
+    for p in pipelines:  # what the pipeline's BA, dev and QA dispatches wrote (QA passed)
+        task_id = p["timestamp_suffix"]
+        write_ticket_fixture(project, task_id)
+        write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id))
+        write_json(dev_dir(project) / f"qa-report-{task_id}.json", qa_report(task_id))
+    assert _list_actionable(project, "close") == []  # no completion report: no pipeline is found
+
+    def fill(text, p):
+        text = re.sub(r"\{pipeline\.(\w+)\}", lambda m: str(p[m.group(1)]), text)
+        return (text.replace("<ISO-8601>", "2026-01-01T00:00:21Z").replace("<session_id>", "s-night")
+                .replace("<N>", "1"))
+    for p in pipelines:  # Step 16, as the main agent writes it
+        write_text(project / fill(path_tpl, p), fill(template, p))
+    lines = _list_actionable(project, "close")
+    assert [line.split(" ", 1)[0] for line in lines] == [p["timestamp_suffix"] for p in pipelines]
+    assert all(json.loads(line.split(" ", 1)[1])["status"] == "pass" for line in lines)

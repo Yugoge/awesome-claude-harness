@@ -749,7 +749,7 @@ Create both output files (see Output Formats below).
 After identifying `files_to_modify` in `development_approach`, run the blast-radius tool to produce a TDAD prediction map (spec-20260518-225715 §5.3):
 
 ```
-python3 scripts/blast-radius-tool.py \
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/blast-radius-tool.py" \
   --files <comma-separated files_to_modify> \
   --output .claude/dev-registry/dev-<task_id>/blast-radius-map.json \
   --task-id <task_id>

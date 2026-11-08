@@ -7,6 +7,11 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXED_ENTRYPOINT = (
     "scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>"
 )
+# the same entrypoint as a command runs it, from the harness home (P2 R6)
+FIXED_ENTRYPOINT_RUN = (
+    'python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-artifact-chain.py"'
+    " --task-id <id> --project-dir <root>"
+)
 RESULT_FIELDS = (
     "mode",
     "lanes",
@@ -135,7 +140,7 @@ def test_spec_update_consumes_lane_matrix_without_fake_parent_context() -> None:
     ]
     flat = _squash(section)
 
-    assert FIXED_ENTRYPOINT in section
+    assert FIXED_ENTRYPOINT_RUN in section
     assert "`artifact_paths`, `report_paths`, `qa_inputs`, and" in section
     assert "`lanes[]`" in section
     assert "every lane ticket/context/dev/QA" in flat

@@ -463,15 +463,7 @@ class Session:
 
     def _context(self, ev: Event) -> None:
         for h in ev.hooks:
-            out = h["stdout"].strip()
-            if h["verdict"] != "ok" or not out:
-                continue
-            try:
-                j = json.loads(out)
-            except ValueError:
-                j = None
-            if isinstance(j, dict):
-                out = (j.get("hookSpecificOutput") or {}).get("additionalContext") or ""
+            out = hookrun.context(ev.event, h)
             if out:
                 self.append({"type": "attachment", "attachment": {"type": "hook_additional_context",
                                                                   "content": out, "hookName": ev.event}})

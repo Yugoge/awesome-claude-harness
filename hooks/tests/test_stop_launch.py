@@ -2,10 +2,9 @@
 
 The launcher runs the Stop coordinator and relays it; when the coordinator cannot decide it
 decides alone on the transcript reader (hooks/lib/command_span.py) and the overnight window
-(hooks/lib/overnight.py's window_open, P2's: a scratch copy carries a fake of its signature
-where a case needs the window open, re-run once P2 merges). Each case runs a scratch copy of
-the launcher with the modules it loads and a scratch coordinator (broken, slow, passing), so no
-case touches the tree's own files.
+(hooks/lib/overnight.py's window_open, P2's, run as merged on the session's own state record).
+Each case runs a scratch copy of the launcher with the modules it loads and a scratch
+coordinator (broken, slow, passing), so no case touches the tree's own files.
 
 Run with: python3 -m pytest hooks/tests/test_stop_launch.py -q
 """
@@ -17,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -26,8 +26,6 @@ HOOKS = REPO / "hooks"
 LAUNCHER = HOOKS / "stop-launch.py"
 SID = "8b2f4c1d-6a3e-4f70-9d12-3c5e7a9b0f14"
 LINE = "COMMAND_GATE instrument failure: {}. The gate is broken; the human can type /stop\n"
-# P2's overnight.window_open(payload), faked in a scratch copy.
-OPEN_WINDOW = "\n\ndef window_open(payload):\n    return True\n"
 
 
 def _typed(name: str, args: str = "") -> dict:
@@ -45,7 +43,7 @@ def _transcript(path: Path, *commands: str) -> Path:
     return path
 
 
-def _scratch(tmp_path: Path, coordinator: str | None, *, window: bool = False, timeout: int | None = None,
+def _scratch(tmp_path: Path, coordinator: str | None, *, timeout: int | None = None,
              whole: bool = False) -> Path:
     """A scratch harness: the launcher and the modules it loads (``whole``: all of hooks/
     and commands/), the coordinator replaced by ``coordinator`` source (None: missing)."""
@@ -59,9 +57,6 @@ def _scratch(tmp_path: Path, coordinator: str | None, *, window: bool = False, t
         for name in ("command_span.py", "stop-commands.json", "overnight.py"):
             shutil.copy(HOOKS / "lib" / name, hooks / "lib" / name)
     shutil.copytree(REPO / "commands", home / "commands", dirs_exist_ok=True)
-    if window:
-        with open(hooks / "lib" / "overnight.py", "a", encoding="utf-8") as handle:
-            handle.write(OPEN_WINDOW)
     if timeout is not None:
         text = (hooks / LAUNCHER.name).read_text(encoding="utf-8")
         assert "COORDINATOR_TIMEOUT = 280" in text
@@ -114,16 +109,48 @@ def test_a10_after_the_humans_stop_or_with_no_gated_command_it_allows(tmp_path, 
     assert (done.returncode, done.stderr, done.stdout) == (0, "", "")
 
 
+def _state(tmp_path: Path, hours: float) -> None:
+    """The session's own overnight record in the project, its end_time ``hours`` from now (UTC)."""
+    claude = tmp_path / "project" / ".claude"
+    claude.mkdir(parents=True, exist_ok=True)
+    end = (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (claude / f"overnight-state-{SID}.json").write_text(json.dumps({"session_id": SID, "end_time": end}))
+
+
 @pytest.mark.parametrize("gate", ["block", None])
 def test_a10_an_open_window_blocks_whatever_the_latest_command(tmp_path, gate):
-    """P2's window_open faked in the scratch overnight.py: re-run once P2 merges."""
-    hooks = _scratch(tmp_path, BROKEN, window=True)
+    """P2's window_open as merged, on the session's record: its end_time ahead and no human
+    /stop since the /dev-overnight, a latest human /spec still blocks."""
+    hooks = _scratch(tmp_path, BROKEN)
+    _state(tmp_path, 1)
     done = _stop(tmp_path, hooks, "dev-overnight", "spec", gate=gate)
     assert done.returncode == 2 and done.stderr.startswith("COMMAND_GATE instrument failure: ")
 
 
+@pytest.mark.parametrize(("hours", "commands", "code"), [
+    (1, ("dev-overnight", "spec"), 2),   # the window open: blocked naming the failure and /stop
+    (1, ("dev-overnight", "stop"), 0),   # the human's /stop closes the window
+    (-1, ("dev-overnight", "spec"), 0),  # end_time passed: the window closed
+    (None, ("spec",), 0),                # an ungated session with no overnight record
+])
+def test_a10_the_fallback_decides_on_the_merged_overnight_window(tmp_path, hours, commands, code):
+    """The launcher's fallback with the tree's own merged hooks/lib/overnight.py and
+    command_span.py loaded by path (no fake): window_open reaches timelock_released through
+    command_span, the one transcript reader, so an open window blocks naming /stop, a closed
+    one allows, and an ungated session allows."""
+    hooks = _scratch(tmp_path, BROKEN)
+    assert (hooks / "lib" / "overnight.py").read_bytes() == (HOOKS / "lib" / "overnight.py").read_bytes()
+    if hours is not None:
+        _state(tmp_path, hours)
+    done = _stop(tmp_path, hooks, *commands)
+    assert done.returncode == code, done.stderr
+    assert done.stderr == (LINE.format("stop-workflow-coordinator.py exited 1 (SyntaxError: invalid syntax)")
+                           if code else ""), done.stderr
+
+
 def test_a10_a11_off_allows_even_a_broken_coordinator_and_an_open_window(tmp_path):
-    hooks = _scratch(tmp_path, BROKEN, window=True)
+    hooks = _scratch(tmp_path, BROKEN)
+    _state(tmp_path, 1)
     for commands in (("dev",), ("dev-overnight",)):
         assert _stop(tmp_path, hooks, *commands, gate="off").returncode == 0
 

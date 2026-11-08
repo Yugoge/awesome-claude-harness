@@ -16,7 +16,9 @@ characters, never cutting its first line), taken from the uncut output: the
 tail of a long refusal can be its echoed command alone, while the first line
 names the block (refusal_first). An allowing hook's hookSpecificOutput.updatedInput
 (a PreToolUse rewrite of the tool's input) is kept whole as "updated_input", for
-the same reason. What the hook receives and returns is the same.
+the same reason. What the hook receives and returns is the same. What a run that
+did not block hands the model is context(): a driver acting as the model reads
+that, never a hook's raw stdout.
 """
 from __future__ import annotations
 
@@ -113,6 +115,28 @@ def refusal(result: dict) -> str:
         except ValueError:
             pass
     return (result.get("stderr") or out).strip()
+
+
+# The events whose plain-text stdout the CLI adds as context (hooks reference, "Exit code 0"): for every other
+# event an exit-0 hook's plain stdout goes to the debug log only, and its stderr reaches nobody.
+PLAIN_CONTEXT_EVENTS = {"UserPromptSubmit", "UserPromptExpansion", "SessionStart", "PostModelSwitch"}
+
+
+def context(event: str, result: dict) -> str:
+    """What the CLI hands the model from one hook run that did not block: its JSON object's
+    hookSpecificOutput.additionalContext (the object names this event, as the reference requires), or
+    plain-text stdout on the events above; nothing else."""
+    if result.get("verdict") != "ok":
+        return ""
+    out = (result.get("stdout") or "").strip()
+    if out.startswith("{") and out.endswith("}"):  # JSON output; unparseable is a non-blocking error
+        try:
+            hso = json.loads(out).get("hookSpecificOutput")
+        except (ValueError, AttributeError):
+            return ""
+        ok = isinstance(hso, dict) and hso.get("hookEventName") == event
+        return str(hso.get("additionalContext") or "") if ok else ""
+    return out if event in PLAIN_CONTEXT_EVENTS else ""
 
 
 def first_line(text) -> str:

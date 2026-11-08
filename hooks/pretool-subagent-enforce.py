@@ -5,7 +5,8 @@ PreToolUse:Agent Hook — Contract-driven role/pipeline enforcement (G1).
 For a /dev-overnight session (the session owns an overnight state record):
 
   1. Derive the calls the cycle allows: its exploration (PM PLAN through PM
-     TRIAGE, steps 2-4) from scripts/todo/dev-overnight.py ``_STEPS``, plus
+     TRIAGE, steps 2-4) from scripts/todo/dev-overnight.py ``_STEPS``, each
+     step's mode as /dev-overnight's text sets it as the session loaded it, plus
      the cycle's contract once PM TRIAGE returned (written by the PM TRIAGE
      handler in posttool-subagent-track.py). The cycle is
      ``lib.overnight.cycle_index``'s, the one the dispatch runs in (the files
@@ -15,7 +16,8 @@ For a /dev-overnight session (the session owns an overnight state record):
      TodoWrite, which pretool-todo-validate.py accepted), in every cycle.
   3. Validate the about-to-fire Agent's role / pipeline_id / mode against
      the entries for that step. On mismatch, exit 2 with a structured stderr
-     message.
+     message. A cycle contract that holds no JSON object allows only the
+     exploration steps and names itself in the block (Case M).
 
 A session with no overnight state is not an overnight workflow and is not
 contracted: exit 0 silently.
@@ -55,10 +57,9 @@ def _content_to_step(content: str) -> str:
     return content
 
 
-def _current_step_label(stdin_data: dict) -> str | None:
+def _current_step_label(span) -> str | None:
     """The in-progress step label of the span's last ok TodoWrite (command_span's
     last_todos, read from the end of the span: no line before it is counted)."""
-    span = command_span.active_span(stdin_data.get('transcript_path') or '')
     for use in span.uses('TodoWrite', newest_first=True) if span else ():
         todos = use.input.get('todos')
         if use.ok and isinstance(todos, list):
@@ -70,7 +71,7 @@ def _current_step_label(stdin_data: dict) -> str | None:
 def _resolve_session(stdin_data: dict) -> tuple[str, dict | None]:
     """(session_id, the session's overnight state record)."""
     session_id = stdin_data.get('session_id', 'default')
-    return session_id, overnight.session_state(session_id)
+    return session_id, contract_runtime.session_record(session_id, stdin_data)
 
 
 def _declared_paths(stdin_data: dict, overnight_state: dict) -> list:
@@ -86,29 +87,36 @@ def _declared_paths(stdin_data: dict, overnight_state: dict) -> list:
             if isinstance(a, dict) and isinstance(a.get('path'), str) and a['path']]
 
 
-def _allowed_calls(overnight_state: dict, written=()):
-    """The calls this cycle allows, as a contract-shaped dict, or None when the
-    canonical steps cannot be read (nothing to derive, so nothing to enforce).
+def _loaded_text(span) -> str | None:
+    """/dev-overnight's text as this session loaded it (command_span.Span.body),
+    None when the active span is another command's or no record of it holds it."""
+    return span.body() if span is not None and span.command == 'dev-overnight' else None
+
+
+def _allowed_calls(overnight_state: dict, written=(), text=None):
+    """(the calls this cycle allows, as a contract-shaped dict, or None when the
+    canonical steps cannot be read: nothing to derive, so nothing to enforce;
+    the cycle contract as loaded).
 
     The cycle is the one the dispatch runs in: ``written``, the files it
     declares, are read as not yet written, so a PM retrospective dispatched
     again after its collection refused its report stays in the cycle that
-    report would end.
+    report would end. ``text``, the session's own /dev-overnight text, says
+    which exploration steps' modes bind (contract_runtime.exploration_calls).
 
-    A cycle contract that is not a JSON object is returned as is, so the block
-    names it (Case M) instead of falling back to the exploration steps.
+    A cycle contract that is not a JSON object adds no call, so the PM TRIAGE
+    dispatch whose return replaces it still passes, and every other call is
+    refused naming it (Case M).
     """
     steps = contract_runtime.overnight_steps()
     if not steps:
-        return None
+        return None, None
     cycle_id = overnight.cycle_index(overnight_state, written=written)
-    calls = contract_runtime.exploration_calls(steps)
     contract = contract_runtime.load_contract(
         overnight_state.get('session_id', ''), cycle_id, overnight_state)
-    if contract is not None and not isinstance(contract, dict):
-        return contract
-    calls += contract_runtime._iter_required_calls(contract)
-    return {'cycle_id': cycle_id, 'required_calls': calls}
+    calls = (contract_runtime.exploration_calls(steps, text)
+             + contract_runtime._iter_required_calls(contract))
+    return {'cycle_id': cycle_id, 'required_calls': calls}, contract
 
 
 def _detect_pipeline_id_from_prompt(prompt: str) -> str:
@@ -198,10 +206,10 @@ def _diagnose_block(contract, valid_ids: str, has_step_ids: bool, entry, step: s
     """
     if not isinstance(contract, dict):
         return (
-            "Case M (contract malformed/non-dict): the loaded cycle-contract is "
-            "not a JSON object, so it has no usable required_calls.",
-            "do not retry by re-marking the step; re-publish the contract / request "
-            "orchestrator escalation.",
+            "Case M (contract malformed/non-dict): the cycle's cycle-contract.json "
+            "holds no JSON object, so it allows no call after PM TRIAGE.",
+            "mark the PM TRIAGE step in progress and re-dispatch PM TRIAGE: its "
+            "return replaces a contract that holds no JSON object.",
         )
     if not has_step_ids and entry is None:
         return (
@@ -216,14 +224,13 @@ def _diagnose_block(contract, valid_ids: str, has_step_ids: bool, entry, step: s
             "required_calls entry. The in-progress todo is most likely not on "
             "an agent-dispatching step that owns an entry.",
             f"advance the in-progress todo to one of the valid_contracted_step_ids "
-            f"({valid_ids}) and mark it in_progress before re-dispatching, OR "
-            "request orchestrator escalation.",
+            f"({valid_ids}) and mark it in_progress before re-dispatching.",
         )
     return (
         f"Case B (dimension mismatch): step '{step}' has an entry, but the Agent "
         "call does not satisfy the required role/mode/pipeline dimensions.",
         "fix the Agent's role/mode/pipeline_id to match an expected signature for "
-        "the resolved step, OR request orchestrator escalation.",
+        "the resolved step.",
     )
 
 
@@ -249,14 +256,15 @@ def _emit_block(step: str, role: str, pipeline_id: str, errors: list,
     sys.stderr.write('\n')
 
 
-def _enforce(stdin_data: dict, contract: dict, step: str) -> None:
+def _enforce(stdin_data: dict, allowed: dict, step: str, loaded=None) -> None:
     role, mode, pipeline_id = _extract_agent_fields(stdin_data)
     result = contract_runtime.validate_required_call(
-        contract, role, pipeline_id or None, mode or None, step,
+        allowed, role, pipeline_id or None, mode or None, step,
     )
     if not result['ok'] and result['severity'] == 'fail':
-        _emit_block(step, role, pipeline_id, result['errors'],
-                    mode=mode, entry=result.get('entry'), contract=contract)
+        malformed = loaded is not None and not isinstance(loaded, dict)
+        _emit_block(step, role, pipeline_id, result['errors'], mode=mode,
+                    entry=result.get('entry'), contract=loaded if malformed else allowed)
         sys.exit(2)
 
 
@@ -277,15 +285,17 @@ def _main() -> None:
     if overnight_state is None:
         # Not an overnight session: no cycle contract governs it.
         sys.exit(0)
-    contract = _allowed_calls(overnight_state, _declared_paths(stdin_data, overnight_state))
-    if contract is None:
+    span = command_span.active_span(stdin_data.get('transcript_path') or '')
+    allowed, loaded = _allowed_calls(
+        overnight_state, _declared_paths(stdin_data, overnight_state), _loaded_text(span))
+    if allowed is None:
         sys.exit(0)
-    step = _current_step_label(stdin_data)
+    step = _current_step_label(span)
     if not step:
         # No checklist / no in-progress step — cannot enforce; fail open
         # rather than block all Agent calls.
         sys.exit(0)
-    _enforce(stdin_data, contract, step)
+    _enforce(stdin_data, allowed, step, loaded)
     sys.exit(0)
 
 

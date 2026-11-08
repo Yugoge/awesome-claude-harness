@@ -42,7 +42,6 @@ Exit codes:
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -201,20 +200,9 @@ def _redact_exempt_regions(prompt: str) -> str:
 
 
 def _overnight_active() -> bool:
-    """Return True iff any .claude/overnight-state-*.json holds a record whose
-    window is live (lib.overnight.state_verdicts). Fail-soft on any error.
-    """
-    try:
-        project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
-        claude_dir = project_dir / ".claude"
-        if not claude_dir.is_dir():
-            return False
-        return any(
-            overnight.state_verdicts(overnight.read_state(p)).window_live
-            for p in claude_dir.glob("overnight-state-*.json")
-        )
-    except Exception:
-        return False
+    """True iff a live overnight record exists (lib.overnight.is_overnight_active:
+    its one state reading and end_time parser, in UTC). Never raises."""
+    return overnight.is_overnight_active()
 
 
 def _truncate_snippet(text: str, limit: int = 80) -> str:

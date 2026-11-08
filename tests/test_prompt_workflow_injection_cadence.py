@@ -671,7 +671,7 @@ class TestAC5CycleBoundaryStillDelivers(unittest.TestCase):
             self.assertIn(SPEC_HEADER, out)
             self.assertIn(spec_body_probe(), out)
             self.assertIn('OVERNIGHT CONTINUATION - Cycle 6', out.splitlines()[0])
-            self.assertIn('resume from phase="exploring"', out)
+            self.assertIn(f'Read {fixture.state_path.resolve()} and resume from phase="exploring"', out)
             self.assertIn('Phase mapping:', out)
 
             marker = json.loads(fixture.marker_path().read_text())
@@ -686,7 +686,7 @@ class TestAC5CycleBoundaryStillDelivers(unittest.TestCase):
             fixture.write_state(cycles_done=2, phase='implementing')
             out = deliver(fixture)
             self.assertNotIn(SPEC_HEADER, out)
-            self.assertIn('resume from phase="implementing"', out)
+            self.assertIn(f'Read {fixture.state_path.resolve()} and resume from phase="implementing"', out)
             self.assertIn('Phase: implementing', out)
 
 
@@ -1178,7 +1178,7 @@ class TestResolverAndReaderCannotNameDifferentFiles(unittest.TestCase):
 class TestScopeConfinement(unittest.TestCase):
     """AC-9 -- the lane boundary is honoured and the collision is not absorbed."""
 
-    TZ_OWNED = ('_is_active_state', 'find_any_overnight_state')
+    TZ_OWNED = ('find_any_overnight_state',)
 
     def test_tz_owned_symbols_are_not_edited_by_this_lane(self):
         """The tz lane's landed fix must be intact, byte for byte."""
@@ -1190,14 +1190,15 @@ class TestScopeConfinement(unittest.TestCase):
             if isinstance(node, ast.FunctionDef) and node.name in self.TZ_OWNED:
                 bodies[node.name] = '\n'.join(lines[node.lineno - 1:node.end_lineno])
         self.assertEqual(set(self.TZ_OWNED), set(bodies))
-        # tz's session binding and its fail-closed liveness predicate.
-        self.assertIn("state.get('session_id') != session_id",
-                      bodies['find_any_overnight_state'])
+        # tz's session binding is lib/overnight.py's locator (the session-keyed
+        # file and its own session_id field) and the liveness verdict its
+        # window_open (P2 R1); no predicate of the hook's own survives.
+        self.assertIn('overnight.locate(session_id, payload)', bodies['find_any_overnight_state'])
+        self.assertIn('overnight.window_open(payload)', bodies['find_any_overnight_state'])
+        self.assertNotIn('_is_active_state', source)
         # No project-wide scan survives (a prose mention in the docstring
         # explaining the removed glob is not a call site).
         self.assertNotIn('.glob(', bodies['find_any_overnight_state'])
-        # The liveness verdict is lib/overnight.py's window rule (P1b row 13).
-        self.assertIn('state_verdicts(state).window_live', bodies['_is_active_state'])
 
     def test_handle_phase_b_still_threads_the_session_id(self):
         """tz asserts this literal; the cadence fix must not break it."""

@@ -148,7 +148,7 @@ class DevCommandCycle:
     def _rules(self):
         return [
             (r"^DEV_SESSION_ID$", lambda m: self.reg),
-            (r"^(?:timestamp|task_id|task-id)$", lambda m: self.tid),
+            (r"^(?:timestamp|task_id|task-id|TASK_ID)$", lambda m: self.tid),
             (r"^(?:YYYYMMDD-HHMMSS|same timestamp)$", lambda m: self.digits),
             (r"^(?:requirement from Step 1|original requirement|requirement)$", REQUIREMENT),
             (r"^spec_path or null$", lambda m: self.spec_path or "null"),
@@ -249,9 +249,9 @@ class DevCommandCycle:
         o.values["spec_path"] = self.spec_path
         # "Read that document before authoring or editing slash commands" (Command Development Best Practices).
         doc = next(c for c in re.findall(r"`([^`\s]+\.md)`", o.section("Command Development Best Practices"))
-                   if c.startswith("~/"))
-        o.s.read(os.path.join(self.rp.layout.home, doc[2:]), label="Read command-development patterns",
-                 deviation=o.devs.at("Read command-development patterns"))
+                   if c.startswith(("~/", "<HARNESS_ROOT>/")))
+        doc = os.path.join(self.rp.layout.home, doc[2:]) if doc.startswith("~/") else o.bind(doc)
+        o.s.read(doc, label="Read command-development patterns", deviation=o.devs.at("Read command-development patterns"))
         fallback = re.compile(r"(?i)\*\*fallback\*\*|hook output (?:is )?absent|not in your context")
         o.run_step_blocks(1, skip=lambda name, b, para: bool(fallback.search(para)),
                           capture=("SPEC_ID",))

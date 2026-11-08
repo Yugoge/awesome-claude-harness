@@ -18,11 +18,15 @@ PM TRIAGE handler (/dev-overnight): when the returned Agent call is the PM
 TRIAGE step's dispatch, write the cycle's contract,
 `<working root>/docs/dev/overnight/<sid>/cycle-<N>/cycle-contract.json`
 (lib.contract_runtime.contract_path, N = lib.overnight.cycle_index). It
-renders the dispatching steps after PM TRIAGE from scripts/todo/dev-overnight.py
-_STEPS: once per pipeline the triage report creates (counted by
+renders the dispatches after PM TRIAGE from scripts/todo/dev-overnight.py
+_STEPS, each step's and each re-dispatch's (contract_runtime.post_triage_steps):
+once per pipeline the cycle's triage report (_triage_report) creates (counted by
 scripts/build-pipelines-from-triage.py, the Step-6 builder), except a step
 whose dispatch carries a mode (PM RETRO), which runs once per cycle. This hook
-is the contract's only writer; nothing edits a contract after it is written.
+is the contract's only writer and publishes it by rename; a contract the cycle
+already has that lists calls (an earlier PM TRIAGE's, or one an orchestrator
+wrote before this hook did) is kept as it is, so nothing edits a contract
+after it is written.
 
 iter1 fix (AC-WID5): the fall-through writer was previously keyed on the
 step LABEL (the literal after "Step ", e.g., '6', '5a', '8'). The validator
@@ -48,6 +52,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.todo_canonical import by_content, run_todo_script, write_bookmark
 from lib import contract_runtime
+from lib import obligation
 from lib import overnight
 
 
@@ -277,14 +282,25 @@ def _is_triage_dispatch(stdin_data: dict, steps: list) -> bool:
             and contract_runtime.detect_mode(ti.get('prompt', ''), role) == triage.get('mode'))
 
 
-def _pipeline_count(state: dict, cycle_id: int, prompt: str = '') -> int | None:
+def _triage_report(state: dict, cycle_id: int, prompt: str) -> Path:
+    """This cycle's triage report: triage-report-cycle<cycle_id>.json in the
+    session's directory. A PM TRIAGE dispatch that embeds no obligation is
+    origin/master's Step 4, held by a session started before the pull: that prose
+    numbers the cycle by the record's cycle_count, which no hook advances any
+    more, so from its second cycle on its report is the one its own "Write triage
+    report to:" line names."""
+    base = overnight.session_dir(state)
+    triage = base / f'triage-report-cycle{cycle_id}.json'
+    if triage.is_file() or not isinstance(obligation.extract_obligation_block(prompt), obligation.NoBlock):
+        return triage
+    named = re.search(r'^\s*Write triage report to:.*?\b(triage-report-cycle\d+\.json)', prompt, re.M)
+    return base / named.group(1) if named else triage
+
+
+def _pipeline_count(state: dict, cycle_id: int, prompt: str) -> int | None:
     """How many pipelines this cycle's triage report creates, counted by the
-    Step-6 builder itself so the count and the pipelines cannot disagree. The
-    report is the one the TRIAGE dispatch's prompt names (a session still on
-    the base's text numbers it by the record's cycle_count, which no hook
-    advances since P1b), else the cycle's."""
-    named = re.findall(r'triage-report-cycle\d+\.json', prompt if isinstance(prompt, str) else '')
-    triage = overnight.session_dir(state) / (named[-1] if named else f'triage-report-cycle{cycle_id}.json')
+    Step-6 builder itself so the count and the pipelines cannot disagree."""
+    triage = _triage_report(state, cycle_id, prompt)
     if not triage.is_file():
         return None
     try:
@@ -302,14 +318,18 @@ def _pipeline_count(state: dict, cycle_id: int, prompt: str = '') -> int | None:
 
 def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
     """Render the cycle contract when PM TRIAGE returns; otherwise do nothing."""
-    state = overnight.session_state(session_id)
+    state = contract_runtime.session_record(session_id, stdin_data)
     if state is None:
         return
     steps = contract_runtime.overnight_steps()
     if not _is_triage_dispatch(stdin_data, steps):
         return
     cycle_id = overnight.cycle_index(state)
-    count = _pipeline_count(state, cycle_id, (stdin_data.get('tool_input') or {}).get('prompt', ''))
+    path = contract_runtime.contract_path(state, cycle_id)
+    if contract_runtime._iter_required_calls(contract_runtime.load_contract(session_id, cycle_id, state)):
+        print(f'CYCLE CONTRACT KEPT: cycle {cycle_id} already has one: {path}')
+        return
+    count = _pipeline_count(state, cycle_id, str((stdin_data.get('tool_input') or {}).get('prompt') or ''))
     if count is None:
         sys.stderr.write(
             f'CYCLE CONTRACT NOT WRITTEN: cycle {cycle_id} has no readable triage '
@@ -326,7 +346,6 @@ def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
         'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'required_calls': calls,
     }
-    path = contract_runtime.contract_path(state, cycle_id)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f'.{path.name}.{os.getpid()}.tmp')

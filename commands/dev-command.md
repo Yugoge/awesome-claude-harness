@@ -66,7 +66,7 @@ IF QA passes → Generate completion report
 
 ## Command Development Best Practices
 
-The full tutorial — Three-Party Architecture, specialist subagent design, todo workflow scripts, the three-hook checklist enforcement chain, YAML frontmatter rules (including the `/redev` empty-body rule), complete automation patterns, script parameterization, the subagent-call enforcement gate, and the command-quality-audit case study — lives in `~/.claude/docs/dev/command-development-patterns.md`. Read that document before authoring or editing slash commands, subagents, or todo scripts. The patterns there are normative for this orchestrator and any new commands it spawns.
+The full tutorial — Three-Party Architecture, specialist subagent design, todo workflow scripts, the three-hook checklist enforcement chain, YAML frontmatter rules (including the `/redev` empty-body rule), complete automation patterns, script parameterization, the subagent-call enforcement gate, and the command-quality-audit case study — lives in `<HARNESS_ROOT>/docs/dev/command-development-patterns.md`. Read that document before authoring or editing slash commands, subagents, or todo scripts. The patterns there are normative for this orchestrator and any new commands it spawns.
 
 ---
 
@@ -92,8 +92,8 @@ If `spec_path` is not null, call the single canonical resolver and consume its s
 
 ```bash
 if [ -n "$spec_path" ]; then
-  RESOLVED_JSON=$(~/.claude/scripts/resolve-spec-artifacts.py \
-      --spec-path "$spec_path" --project-dir "$CLAUDE_PROJECT_DIR") || {
+  RESOLVED_JSON=$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" \
+      --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}") || {
     echo "spec-artifact resolution FAILED (path mismatch / present-but-invalid split). Re-finalize /spec before relying on per-agent views." >&2
     exit 1; }   # loud-fail guard: a present-but-invalid split never silently degrades to monolith mode
   ARTIFACT_ID=$(jq -r .artifact_id      <<<"$RESOLVED_JSON")
@@ -102,7 +102,7 @@ if [ -n "$spec_path" ]; then
   VIEWS_DIR=$(jq -r '.views_dir // empty'        <<<"$RESOLVED_JSON")
   CP_DIR=$(jq -r '.cp_dir // empty'              <<<"$RESOLVED_JSON")
 fi
-if [ -n "$spec_path" ] && [ -d "$CLAUDE_PROJECT_DIR/$CP_DIR" ]; then
+if [ -n "$spec_path" ] && [ -d "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/$CP_DIR" ]; then
   SPEC_ID="$ARTIFACT_ID"
 else
   SPEC_ID=""
@@ -126,7 +126,7 @@ The hook `pretool-subagent-code-block.py` blocks non-`dev` subagents from writin
 **Initialize dev-registry (hook pre-done)**:
 
 The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) has already, for this command:
-1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name, `dev-command-<timestamp>`) and `Task id: …` (the id this cycle's artifacts are named with, `<timestamp>` and `$TASK_ID` below)
+1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name, `dev-command-<timestamp>`) and `Task id: …` (the id this cycle's artifacts are named with, `<timestamp>` and `<TASK_ID>` below)
 2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
 4. Armed the enforcement flags: Codex when `--codex` was passed, and the producer-side report schema gate (see `commands/dev.md` Step 1)
@@ -136,7 +136,7 @@ The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) has already, for this c
 **When those lines are not in your context** (a compaction removed the hook output, or the hook failed and printed none), run the hook's own start function in this session with this command's text exactly as typed, and read the same lines from what it prints:
 
 ```bash
-python3 ~/.claude/hooks/prompt-workflow.py start <<'CMDEOF'
+python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/prompt-workflow.py" start <<'CMDEOF'
 <the command exactly as typed: /dev-command, then $ARGUMENTS>
 CMDEOF
 ```
@@ -144,10 +144,10 @@ CMDEOF
 It prints what the hook printed at this command's start, found through this session's bookmark (`$CLAUDE_CODE_SESSION_ID`); when the hook recorded no start of this command, it starts the cycle there exactly as the hook does, under a task id of its own. Never mint an id, pick a registry by name or age, or write a registry, requirement or flag file yourself.
 
 ```bash
-REGISTRY_DIR="$CLAUDE_PROJECT_DIR/.claude/dev-registry/$DEV_SESSION_ID"
+REGISTRY_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/dev-registry/$DEV_SESSION_ID"
 ```
 
-Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
+Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
 
 **Initialize cp-state handoff when a `/spec` view exists** (MANDATORY when `views_available=true`):
 
@@ -162,7 +162,7 @@ agent's `SECOND ACTION` for this launch. When `SPEC_ID` is non-empty, every Agen
 cp-state file MUST include a `SECOND ACTION` line immediately after the dev-registry `FIRST ACTION`:
 
 ```text
-SECOND ACTION: Read $CLAUDE_PROJECT_DIR/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with ~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with ~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
+SECOND ACTION: Read <PROJECT_ROOT>/$CP_DIR/cp-state-<agent>.json to load your mandatory checklist before doing substantive work. Mark each completed checkpoint with python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>. Waive only with python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" waive --spec-id <SPEC_ID> --agent <agent> --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN> (auto-text records actor + ISO timestamp). You MUST leave zero pending checkpoints before Stop (a discipline expectation tracked via spec-check.py — no hook blocks exit on pending checkpoints today). If `$CLAUDE_AGENT_ID` is unavailable, use the `agent_id` value written into the cp-state file by the read.
 ```
 
 This is the checklist-stop handoff: dev-registry handles role registration for
@@ -170,7 +170,7 @@ write-policy, while cp-state handles required atomic actions for Stop enforcemen
 
 ### Step 2: Graphify pre-BA Bash hydrator (mirrors commands/dev.md)
 
-Run `scripts/graphify-query.py` as a direct Bash call to inject structural context before BA analysis. Advisory — skips silently when binary absent. Output: `.claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json`. When `status=ok` or `status=degraded`, include the pre_query.json reference in the BA dispatch prompt. See `commands/dev.md` graphify hydrator block for the canonical Bash invocation.
+Run the harness's `"${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-query.py"` as a direct Bash call, spelled as `commands/dev.md`'s graphify hydrator block spells it (venv activation included), to inject structural context before BA analysis. Advisory — skips silently when binary absent. Output: `.claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json`. When `status=ok` or `status=degraded`, include the pre_query.json reference in the BA dispatch prompt. See `commands/dev.md` graphify hydrator block for the canonical Bash invocation.
 
 ### Step 3: Specialist Consultation (always evaluate, never silently skip)
 
@@ -215,7 +215,7 @@ In the orchestrator's reasoning (and in BA's context JSON when BA is invoked nex
 Use Agent tool with:
 - description: "<Specialist role> consultation for: <requirement summary>"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/<specialist-name>.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/<specialist-name>.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/<specialist-name>.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   You are the <specialist-name> specialist. Follow .claude/agents/<specialist-name>.md.
@@ -236,7 +236,7 @@ Pass all specialist findings (and the full `specialists_assessed` block) to the 
 ## Four Contracts Awareness (Orchestrator Role)
 
 The BA subagent enforces four domain-agnostic contracts (see
-`~/.claude/agents/ba.md` §Four Contracts). The orchestrator MUST
+`<HARNESS_ROOT>/agents/ba.md` §Four Contracts). The orchestrator MUST
 complement BA by surfacing context before delegation and verifying
 compliance after BA returns. The orchestrator does NOT re-do BA's work —
 it prepares inputs and validates outputs.
@@ -304,7 +304,7 @@ If dev changed L1 when spec called for L3, treat as failed implementation.
 Use Task tool with:
 - description: "Analyze requirement and build development context"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   Obligation block (docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2 — example; the orchestrator instantiates this per-dispatch from the <timestamp> / session-id values already used elsewhere in this template, never hand-invented):
@@ -368,7 +368,7 @@ Use Task tool with:
 Use Task tool with:
 - description: "Continue BA analysis with clarification answers"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}]. Orchestrator instantiates per-dispatch — never hand-invented.
@@ -424,7 +424,7 @@ Use Agent tool with:
 - subagent_type: "qa"
 - description: "Validate BA analysis quality (not code)"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="ba_validation", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1","identity":{"task_id":"<timestamp>"}}] (ba-qa-report.v1 is registered in schemas/registry.json; schema is unconditionally REQUIRED for kind:"json" per schemas/obligation.v1.json and must never be omitted). Orchestrator instantiates per-dispatch — never hand-invented.
@@ -509,7 +509,7 @@ Use Agent tool with:
 - subagent_type: "ba"
 - description: "Re-investigate: address QA objections on analysis quality"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/ba.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/ba.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"}]. Orchestrator instantiates per-dispatch — never hand-invented.
@@ -563,7 +563,7 @@ After BA-QA validation passes, dispatch the graphify subagent (mode=enrich) to e
 Use Task tool with:
 - description: "Implement development changes based on BA context"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/dev.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/dev.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/dev.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev-command", profile="singular", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
@@ -615,7 +615,7 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 Use Task tool with:
 - description: "Verify implementation quality against standards"
 - prompt: "
-  FIRST ACTION: Read $CLAUDE_PROJECT_DIR/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
+  FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/qa.json to register with the enforcement system. Do this BEFORE any other tool call.
   CHECKPOINT MARKING: see agents/qa.md §Checkpoint Marking Contract. Mark every cp-NN done or waived before Stop or SubagentStop hook will block exit.
 
   Obligation block (see Step 4's worked example above; docs/reference/close-commit-zero-failure-mechanism-20260928.md §1.2): embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev-command", profile="final_verification", task_id/dispatched_at bound to this dispatch's own <timestamp> placeholder, artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}}]. Orchestrator instantiates per-dispatch — never hand-invented.
@@ -670,7 +670,7 @@ ELIF qa.status == "warning" or "fail":
 ```
 
 ```bash
-python3 ~/.claude/scripts/aggregate-permissions.py docs/dev/qa-report-<timestamp>.json | bash ~/.claude/scripts/apply-permissions.sh /dev/stdin .claude/settings.json
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/aggregate-permissions.py" docs/dev/qa-report-<timestamp>.json | bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json
 ```
 
 The aggregator reads the validated list from the QA report; the applier merges each entry into `.permissions.<section>` (allow/ask/deny), skipping patterns already present. A missing `.claude/settings.json` is an empty object to the merge, so the applier creates it when it adds an entry; a file it cannot parse fails the merge (non-zero exit) and stays unchanged.
@@ -679,13 +679,13 @@ The aggregator reads the validated list from the QA report; the applier merges e
 
 1. **Scripts created** → Add to "allow":
    - `"Bash(scripts/<script-name>.sh:*)"`
-   - `"Bash(~/.claude/scripts/<script-name>.sh:*)"`
+   - `"Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/scripts/<script-name>.sh\":*)"`
 
 2. **Python scripts** → Add to "allow":
-   - `"Bash(source ~/.claude/venv/bin/activate && python ~/.claude/scripts/todo/<script>.py:*)"`
+   - `"Bash(source \"${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate\" && python \"${CLAUDE_HOME:-$HOME/.claude}/scripts/todo/<script>.py\":*)"`
 
 3. **Hooks created** → Add to "allow":
-   - `"Bash(~/.claude/hooks/<hook-name>.sh:*)"`
+   - `"Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/<hook-name>.sh\":*)"`
 
 4. **Commands created** → Already allowed via "SlashCommand"
 
@@ -825,13 +825,13 @@ Development completed successfully!
 
 **Save report to**: `docs/dev/completion-<timestamp>.md`
 
-**Codex-native artifact postcondition (hard check before completion)** — mirrors `commands/dev.md` Step 17's postcondition. The resolver builds the file names it reads from the task id as given (for example `dev-report-<task_id>.json`), and this command's artifacts are named `<timestamp>`, so it receives `$TASK_ID`, the hook's `Task id:` (only the registry directory and the user-requirement document carry `$DEV_SESSION_ID`).
+**Codex-native artifact postcondition (hard check before completion)** — mirrors `commands/dev.md` Step 17's postcondition. The resolver builds the file names it reads from the task id as given (for example `dev-report-<task_id>.json`), and this command's artifacts are named `<timestamp>`, so it receives `<TASK_ID>`, the hook's `Task id:` (only the registry directory and the user-requirement document carry `$DEV_SESSION_ID`).
 
 Before `/dev-command` may be treated as complete, invoke the shared read-only resolver from the project root and retain its JSON as `ARTIFACT_CHAIN`:
 
 ```bash
-ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py \
-  --task-id "$TASK_ID" --project-dir "$CLAUDE_PROJECT_DIR")" || exit 2
+ARTIFACT_CHAIN="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-artifact-chain.py" \
+  --task-id "<TASK_ID>" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}")" || exit 2
 ```
 
 The fixed entrypoint contract is `scripts/resolve-dev-artifact-chain.py --task-id <id> --project-dir <root>`. Completion requires process exit 0 and top-level `status == "pass"`; exit 2 or any other status blocks with the resolver's exact `errors[]`. Do not reproduce the validator with ad-hoc file tests.
@@ -1041,7 +1041,7 @@ WHEN TO SCRIPT:
 
 **Step 14**: Update permissions
 - Added: `SlashCommand(.claude/commands/analyze.md:*)`
-- Added: `Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/analyze.py:*)`
+- Added: `Bash(source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/todo/analyze.py":*)`
 
 **Step 16**: Completion report
 - Generated: `docs/dev/completion-20260206-120000.md`

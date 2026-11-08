@@ -82,7 +82,7 @@ resolve to the same commit, which Step 1 refuses as a self-merge before any disp
 ```bash
 RESOLVED_REF=<the-resolved-merge-source>
 SOURCE_TIP=$(git rev-parse --verify --quiet "${RESOLVED_REF}^{commit}" || echo "MISSING")
-DEFAULT_BRANCH=$(bash ~/.claude/scripts/derive-default-branch.sh)
+DEFAULT_BRANCH=$(bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/derive-default-branch.sh")
 DEFAULT_TIP=$(git rev-parse --verify --quiet "refs/heads/${DEFAULT_BRANCH}^{commit}" || echo "MISSING")
 REPO_ROOT=$(realpath "$(git rev-parse --show-toplevel)")
 REPO_HASH=$(printf '%s' "$REPO_ROOT" | sha256sum | cut -c1-16)
@@ -163,7 +163,7 @@ changed since merge-analyst ran" (action "re-run the analysis now": Step 1's REQ
 The orchestrator calls the wrapper exactly once with the resolved ref:
 
 ```bash
-bash ~/.claude/hooks/merge.sh "<resolved-ref>"
+bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/merge.sh" "<resolved-ref>"
 ```
 
 Add `--no-commit` when the merge must be inspected before it becomes history: the wrapper applies
@@ -177,7 +177,7 @@ weakens no check -- every preflight runs first, it simply stops earlier. Re-run 
 The wrapper handles every step internally so that the privilege-guard literal-string match on the merge command does not fire on main-agent PreToolUse (the wrapper runs git operations in its OWN subprocess, which is not seen by main-agent hooks):
 
 1. Argument parsing -- one merge source plus optional `--no-commit`; an unknown option, a second source or no source exits 2 (no user-intent sentinel is checked: /merge writes none)
-2. Default-branch resolution (via ~/.claude/scripts/derive-default-branch.sh)
+2. Default-branch resolution (via <HARNESS_ROOT>/scripts/derive-default-branch.sh)
 3. Source resolution -- `git rev-parse --verify --quiet "<ref>^{commit}"`; a ref resolving to no commit object is rejected
 4. Self-merge refusal -- resolved source sha equals resolved default-branch sha: abort non-zero (rule stated at Step 1)
 5. Worktree-shape detection (`IS_IN_PLACE`, same read-only check as Step 0, re-run inside the wrapper's own subprocess)

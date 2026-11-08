@@ -95,7 +95,7 @@ Step 1: run the ledger CLI `init` against `.claude/paseo-daemon/` (idempotent;
 creates inbox/plans/acked, actions, reservations, backlog, recovery,
 generations, dossiers, accounts.json, config.json, watermark), then
 reconcile the four timer schedules (tick, ctrl-core-reinject, watchdog,
-reader-board-sweep) via `scripts/paseo-daemon-timers.py ensure` (idempotent,
+reader-board-sweep) via `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/paseo-daemon-timers.py" ensure` (idempotent,
 on-disk-registry-only dedup — never via any MCP/CLI schedule-query surface,
 which returns "Schedule not found" for some live entries; creates whichever
 timer is missing, never rebuilds or overwrites an existing one's prompt).
@@ -352,7 +352,7 @@ from a crash.
 
 Stopping all four timer schedules together — a distinct operation from the
 per-event inbox drain above — is safety-ordered: run
-`scripts/paseo-daemon-timers.py drain --registry-dir <registry> --ledger-root
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/paseo-daemon-timers.py" drain --registry-dir <registry> --ledger-root
 <ledger>`. Watchdog is paused FIRST (a watchdog fire mid-teardown would judge
 the controller dead and escalate), then sweep, tick, reinject. Each timer is
 paused, never deleted, via temp-write → parse-validate → atomic
