@@ -75,13 +75,17 @@ class TX:
         self.add({"type": "queue-operation", "operation": "enqueue", "content": text})
         self.add({"type": "user", "message": {"role": "user", "content": text}})
 
-    def command(self, name: str, args: str = "", context: str | None = None):
+    def command(self, name: str, args: str = "", context: str | None = None, body: str | None = None):
+        """A typed command; with ``body``, the text the CLI recorded for it, linked to the opener
+        (parentUuid, as Span.body reads it); else an unlinked placeholder record."""
         self.add({"type": "queue-operation", "operation": "enqueue", "content": f"/{name} {args}".strip()})
-        self.add({"type": "user", "message": {"role": "user", "content":
+        opener = {"uuid": f"opener-{self.clock.timestamp():.0f}"} if body is not None else {}
+        self.add({"type": "user", **opener, "message": {"role": "user", "content":
                   f"<command-message>{name} is running…</command-message>\n<command-name>/{name}</command-name>\n"
                   f"<command-args>{args}</command-args>"}})
-        self.add({"type": "user", "isMeta": True, "message": {"role": "user", "content": [
-            {"type": "text", "text": f"body of {name}"}]}})
+        self.add({"type": "user", "isMeta": True, **({"parentUuid": opener["uuid"]} if opener else {}),
+                  "message": {"role": "user", "content": [
+                      {"type": "text", "text": f"body of {name}" if body is None else body}]}})
         if context:
             self.add({"type": "attachment", "attachment": {"type": "hook_additional_context", "content": context,
                                                            "hookName": "UserPromptSubmit"}})
@@ -1658,6 +1662,84 @@ def test_a8_real_close_needs_p4s_rating_question_after_the_landed_close_qa(real,
                                          "metadata": {"source": f"close-rating:{FAMILY}"}}, result="Skip")
     got, text = run(real)
     assert got == code and (code == 0 and text == "" or "close-rating question" in text), text
+
+
+# ---------------------------------------------------------------- D15: an in-flight command, held to the text it loaded
+# origin/master before the trains (P8's merge): the text a session of the owner's live home loaded
+MASTER = "2acc29b0c8149c32d8e424e58c6af55d073eac20"
+
+
+def loaded_text(command: str, args: str, rev: str | None = None) -> str:
+    """commands/<command>.md as the CLI records it for a typed /<command> <args> (frontmatter left out,
+    $ARGUMENTS filled), from this tree or from commit ``rev``."""
+    text = (subprocess.run(["git", "-C", str(REPO), "show", f"{rev}:commands/{command}.md"], capture_output=True,
+                           text=True, check=True).stdout if rev else (REPO / "commands" / f"{command}.md").read_text())
+    if text.startswith("---\n"):
+        text = text[text.index("\n---\n", 4) + 5:]
+    if "$ARGUMENTS" in text:
+        return text.replace("$ARGUMENTS", args)
+    return text + (f"\n\nARGUMENTS: {args}" if args else "")
+
+
+@pytest.mark.parametrize("done", [3, 4], ids=["paced-by-its-three-steps", "steps-0-to-3"])
+@pytest.mark.parametrize("loaded", ["master", "this tree", "unrecorded"])
+def test_d15_real_an_in_flight_close_is_held_to_the_close_md_it_loaded(real, loaded, done):
+    """A /close the session took up from master's close.md before the landing (A17's in-flight close:
+    master's text, this tree's hooks, which hand it this tree's five-step list) and whose close QA
+    landed. Its text words Steps 1 and 2 as this tree's does, Step 0 and Step 3 otherwise, has no Step
+    3b and asks no rating question: following its three TodoSteps it completes Steps 0-2 of this list
+    (one completion per step of its text), or 0-3, and neither Step 3, Step 3b nor the rating is asked
+    of it. The same span on this tree's own close.md, or with no recorded text, is held exactly as
+    before: every open step and the rating question."""
+    chain_on_disk(real.project, close="CLOSE: YES")
+    body = {"master": lambda: loaded_text("close", FAMILY, MASTER), "this tree": lambda: loaded_text("close", FAMILY),
+            "unrecorded": lambda: None}[loaded]()
+    assert body is None or ("### Step 1: Agent dispatch" in body and "### Step 2: Delegate close debate" in body)
+    real.tx.command("close", FAMILY, body=body)
+    steps = canonical("close", FAMILY)
+    assert [s["content"].split(":")[0] for s in steps] == ["Step 0", "Step 1", "Step 2", "Step 3", "Step 3b"]
+    real.tx.todos(steps, done)
+    real.tx.dispatch(FAMILY, role="qa", pipeline="close", result="Judged.\nCLOSE: YES")
+    got, text = run(real)
+    if loaded == "master":
+        assert (got, text) == (0, "")
+    else:
+        assert got == 2, text
+        assert text.splitlines()[1:-1] == [f"- todo: not completed: {s['content']}" for s in steps[done:]] + [
+            f"- close {FAMILY}: the close-rating question (AskUserQuestion) was not asked"], text
+
+
+@pytest.mark.parametrize("done", [1, 2])
+def test_d15_real_an_in_flight_close_keeps_every_step_its_text_has(real, done):
+    """Master's close.md words Steps 1 and 2 as this tree's does: each of them left open still holds
+    the in-flight /close, and only they are named (Steps 3 and 3b, which its text words otherwise or
+    not at all, are not asked)."""
+    chain_on_disk(real.project, close="CLOSE: YES")
+    real.tx.command("close", FAMILY, body=loaded_text("close", FAMILY, MASTER))
+    steps = canonical("close", FAMILY)
+    real.tx.todos(steps, done)
+    code, text = run(real)
+    assert code == 2 and text.splitlines()[1:-1] == [f"- todo: not completed: {s['content']}"
+                                                     for s in steps[done:3]], text
+
+
+@pytest.mark.parametrize("command,args", [("close", FAMILY), ("dev", "fix the build"), ("redev", FAMILY),
+                                          ("dev-command", "fix the build"), ("do", "fix the build"),
+                                          ("dev-overnight", "--hours 1"), ("spec", "a feature")])
+def test_d15_a_span_on_this_trees_own_text_is_asked_every_step(env, command, args):
+    """The loaded text is this tree's own: no canonical step is left out, whatever its text names
+    (/spec's `### Step 1: Parse $ARGUMENTS` too, read with the arguments the CLI filled in)."""
+    env.tx.command(command, args, body=loaded_text(command, args))
+    steps = canonical(command, args)
+    env.tx.todos(steps, 0)
+    assert gate.todo_gaps(command_span.active_span(env.tx.path)) == [
+        f"todo: not completed: {step['content']}" for step in steps]
+
+
+def test_d15_the_rating_source_is_close_ratings_and_this_trees_close_md_asks_it():
+    close_rating = gate._lib("close_rating")
+    assert close_rating.SOURCE_RE.fullmatch(f"{gate.RATING_SOURCE}{FAMILY}")
+    assert f'"source": "{gate.RATING_SOURCE}<task-id>"' in (REPO / "commands" / "close.md").read_text()
 
 
 def test_a12_real_after_end_time_the_families_chain_at_the_working_root_and_the_closeout_decide(real, monkeypatch):

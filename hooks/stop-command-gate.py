@@ -17,13 +17,17 @@ payload on stdin and decides, in order:
       (overnight.open_wakes), naming its id; a time-lock it cannot read
       blocks the same way until the human's /stop;
   (5) no gated span (stop-commands.json's GATED_COMMANDS): allow;
-  (6) the gaps: the todo half and the command's predicate; an exception is
-      the gap `gate instrument failure: <type>: <message>`, never an allow;
+  (6) the gaps: the todo half and the command's predicate, each held to the
+      command's text as the span loaded it (_loaded_lacks: a step or the
+      close-rating question an update added or reworded after the session
+      loaded its text is not asked of it); an exception is the gap
+      `gate instrument failure: <type>: <message>`, never an allow;
   (7) no gap: allow; advisory: `would block` and the gaps on stderr, exit 0;
       else the block text on stderr, exit 2.
 
 Each fact comes from the one producer that writes it: the transcript through
-command_span (the CLI's record of typed prompts, tool calls and hook context),
+command_span (the CLI's record of typed prompts, tool calls and hook context,
+and the command's text it loaded), the command's text on disk (commands/),
 git, and the producers' own deciders, called, never copied: P3's disposition
 as the chain's own disposition_lines (scripts/resolve-dev-artifact-chain.py,
 through the one adapter `disposition`), the do-report's one reading
@@ -43,6 +47,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -97,11 +102,52 @@ def disposition(root, task: str, stage: str) -> list[str]:
     return _script("scripts/resolve-dev-artifact-chain.py").disposition_lines(root, task, stage)
 
 
+# ---------------------------------------------------------------- the text the span loaded (D15)
+# The source of the /close Step 3b question (lib/close_rating.py SOURCE_RE), as a text that asks it names it.
+RATING_SOURCE = "close-rating:"
+_STEP_LABEL_RE = re.compile(r"Step ([0-9A-Za-z]+):")
+
+
+def _loaded_lacks(span):
+    """A test on a regex: the command's text on disk (commands/<command>.md) words a
+    demand (the regex's first match there) that the text the span loaded (Span.body:
+    the CLI's record of the command as the session took it up) does not hold. The
+    demand came with an update after the session loaded its text, added or reworded:
+    the session follows the text it loaded, which never makes it as the file now
+    does (D15, D25), as a span keeps the list it started with. A span with no
+    recorded text, or a demand the text on disk does not word, is held to it."""
+    loaded = span.body()
+    try:  # with the span's arguments where the CLI fills them in, as the loaded text has them
+        current = span.args.join(
+            (command_span.COMMANDS_DIR / f"{span.command}.md").read_text(encoding="utf-8").split("$ARGUMENTS"))
+    except OSError:
+        current = None
+    if loaded is None or current is None:
+        return lambda pattern: False
+
+    def lacks(pattern) -> bool:
+        found = re.search(pattern, current, re.M) if pattern else None
+        return found is not None and found.group(0) not in loaded
+    return lacks
+
+
+def _step_heading(todo) -> str | None:
+    """The pattern of the heading line of a todo step's section (`### Step 3b: ...` for
+    "Step 3b: ..."), None for a step its content labels otherwise."""
+    found = _STEP_LABEL_RE.match(str(todo.get("content") or ""))
+    return rf"^#+[ \t]+Step[ \t]+{re.escape(found.group(1))}(?![0-9A-Za-z]).*$" if found else None
+
+
 # ---------------------------------------------------------------- the todo half
 def todo_gaps(span) -> list[str]:
     """A command with a canonical list (scripts/todo/<command>.py): the span's
     last ok TodoWrite has its contents and every step completed. Any other
-    gated command: its last ok TodoWrite, if any, is all completed."""
+    gated command: its last ok TodoWrite, if any, is all completed. A step
+    whose section heading, as the command's text on disk words it, the span's
+    loaded text does not hold (_loaded_lacks: added or rewritten since) is not
+    that text's step and is not asked. Steps complete in order
+    (pretool-todo-validate.py), so a later step the text has, completed,
+    still holds every step before it."""
     if os.environ.get("CLAUDE_CODE_ENABLE_TODO_TOOLS") != "1":
         return ["todo tools disabled (CLAUDE_CODE_ENABLE_TODO_TOOLS)"]
     todo_canonical = _lib("todo_canonical")
@@ -121,8 +167,9 @@ def todo_gaps(span) -> list[str]:
         if [t.get("content") for t in current] not in ([t.get("content") for t in canonical],
                                                         [t.get("content") for t in first]):
             return [f"todo: checklist differs from the canonical {len(canonical)} steps"]
+    lacks = _loaded_lacks(span) if current else None
     return [f"todo: not completed: {t.get('content')}" for t in current or ()
-            if not isinstance(t, dict) or t.get("status") != "completed"]
+            if not isinstance(t, dict) or t.get("status") != "completed" and not lacks(_step_heading(t))]
 
 
 # ---------------------------------------------------------------- predicates
@@ -219,7 +266,9 @@ def p_overnight(span, root, payload) -> list[str]:
 
 def p_close(span, root, payload) -> list[str]:
     """/close: --stage close per target, and the close-rating question asked
-    (D9b: asked, not answered) where it is required. A typed task that names no
+    (D9b: asked, not answered) where it is required and the span's loaded text
+    asks it (a /close the session took up before the question was added to
+    close.md never asks it: _loaded_lacks). A typed task that names no
     task or chain file (_resolves; close.md asks for one) yields to the families
     the span dispatched, the task the turn closed on the owner's answer, which
     no predicate reads (D23); with none dispatched, its gap names it."""
@@ -233,10 +282,12 @@ def p_close(span, root, payload) -> list[str]:
     if targets is None:
         return ["close: no target task resolved"]
     close_rating = _lib("close_rating")  # P4's
+    asks = not _loaded_lacks(span)(re.escape(RATING_SOURCE))
     gaps = []
     for task in targets:
         gaps += disposition(root, task, "close")
-        if close_rating.rating_required(span, task) and not close_rating.rating_asked(span.transcript_path, task):
+        if asks and close_rating.rating_required(span, task) and not close_rating.rating_asked(
+                span.transcript_path, task):
             gaps.append(f"close {task}: the close-rating question (AskUserQuestion) was not asked")
     return gaps
 
