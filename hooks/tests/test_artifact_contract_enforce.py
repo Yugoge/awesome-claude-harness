@@ -320,7 +320,7 @@ def test_flag_writer_rejects_unknown_flag_naming_known_set(tmp_path):
         timeout=30,
     )
     assert proc.returncode == 1
-    assert "(expected: codex, e2e)" in proc.stderr
+    assert "(expected: codex)" in proc.stderr
 
 
 # ---------------------------------------------------------------------------
