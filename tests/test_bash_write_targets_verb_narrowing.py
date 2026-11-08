@@ -231,8 +231,8 @@ def test_tool_policy_still_detected_case_arm_verb(role, command):
 # OPTIONAL leading `(` before its pattern as if it were a grouping subshell, which also blanked the
 # arm's own matching `)` -- destroying the very `)` that _quoted_expansion_verb's endswith(")")
 # tolerance relies on to recognize a pattern-list continuation once a `|`/newline inside the pattern
-# cuts the command segment short. This made both library outputs (extract_bash_write_paths,
-# extract_bash_write_targets_with_modes) silently return empty for three shapes: `(y|x)` (a `|`
+# cuts the command segment short. This made both library outputs (extract_bash_write_paths and
+# the mode-aware reader, since deleted) silently return empty for three shapes: `(y|x)` (a `|`
 # alternative on the same line as the paren), a paren on the line after `case X in`, and `(a|b|c)`
 # (multi-alternation). All three execute a real `cp`/`mv` under real bash (BA independently confirmed
 # with a PATH-shimmed $CP, 2026-09-23). Accepted 2026-09-22 as a deferred fix (controller ruling,
@@ -378,7 +378,7 @@ def test_tool_policy_case_lead_heuristic_ignores_case_in_as_plain_arguments(role
 # "isn't", "it's") or an unterminated double quote -- as opening a real quoted region that then ran
 # to the END of the command string, silently erasing every real write target (redirect, tee, cp/mv)
 # that followed anywhere later in the same multi-line command, from BOTH extract_bash_write_paths and
-# extract_bash_write_targets_with_modes. Comment text is dead to bash; a quote character inside one
+# the mode-aware reader (since deleted). Comment text is dead to bash; a quote character inside one
 # is never a real quote-opener. Fixed by making `_strip_quoted_regions` itself comment-aware in the
 # same single left-to-right pass (see hooks/lib/bash_write_targets.py). All rows below execute a real
 # write under real bash and must stay refused.
