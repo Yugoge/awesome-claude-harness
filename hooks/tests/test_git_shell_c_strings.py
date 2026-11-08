@@ -190,6 +190,58 @@ RUNTIME_CODE_TWINS = [
     ('bash -c "docker exec c bash -c $X"', 'bash -c "docker push $IMAGE"'),
     ('echo $X | bash -c "cd $DIR; sh"', 'echo $X | bash -c "cd $DIR; cat"'),
 ]
+# A list of dangerous programs can never be complete, so the -c layer rule fails
+# closed: a run-time word given to a program it does not model may run as a
+# command or as code. These eight exited 2 at the privilege guard on 8f77f50 (P10
+# refused every -c string with an expansion) and 0 at every hook once that was
+# narrowed: an interpreter the scan does not model given run-time code, an
+# exec-style launcher given a run-time command, find -exec, a run-time environment
+# assignment that loads code, and a run-time -c value the outer shell built by
+# running code. Each is a residual again, over the privilege guard, bash-safety
+# and the branch hook, for the main agent and for a subagent.
+FAIL_CLOSED = [
+    'bash -c "octave --eval $X"',
+    'bash -c "erl -eval $X"',
+    'bash -c "chroot / $X"',
+    'bash -c "strace $X"',
+    'bash -c "find . -exec $X \\;"',
+    'bash -c "BASH_ENV=$F bash -c true"',
+    'bash -c "NODE_OPTIONS=--require=$F node x.js"',
+    'bash -c "y=$(echo $X | sh)"',
+]
+# More ways the fail-closed rule fires in a layer: an unknown program given a
+# run-time word, a known code-loading environment variable, a launcher wrapping an
+# unknown interpreter, a backtick substitution that runs code to build a value.
+FAIL_CLOSED_VARIANTS = [
+    'bash -c "octave $X"', 'bash -c "scilab -f $X"', 'bash -c "chroot /jail $X arg"',
+    'bash -c "unshare $X"', 'bash -c "nsenter -t 1 $X"', 'bash -c "find . -execdir $X +"',
+    'bash -c "find . -ok $X \\;"', 'bash -c "env strace $X"', 'bash -c "timeout 5 octave --eval $X"',
+    'bash -c "PERL5OPT=$O perl x.pl"', 'bash -c "PYTHONSTARTUP=$F python3"',
+    'bash -c "LD_PRELOAD=$L ls"', 'bash -c "ENV=$F sh -c true"', 'bash -c "GIT_SSH_COMMAND=$C git fetch"',
+    'bash -c "y=`sh <<< $X`"', 'bash -c "z=$(bash $F)"', 'bash -c "for f in $FILES; do octave $f; done"',
+]
+# (the fail-closed layer the rule refuses, a data twin it keeps). The twin runs a
+# program known to treat its run-time word as data (echo, printf, grep, cat, cd,
+# curl, sleep, test), a static operand, or an environment variable that cannot
+# load code (TZ, LANG), so it stays allowed.
+FAIL_CLOSED_TWINS = [
+    ('bash -c "octave --eval $X"', 'bash -c "printf %s $X"'),
+    ('bash -c "erl -eval $X"', 'bash -c "grep $X file"'),
+    ('bash -c "chroot / $X"', 'bash -c "cd $DIR"'),
+    ('bash -c "strace $X"', 'bash -c "sleep $N"'),
+    ('bash -c "find . -exec $X \\;"', 'bash -c "find . -name notes -print"'),
+    ('bash -c "BASH_ENV=$F bash -c true"', 'bash -c "TZ=$Z date"'),
+    ('bash -c "NODE_OPTIONS=--require=$F node x.js"', 'bash -c "LANG=$L node x.js"'),
+    ('bash -c "y=$(echo $X | sh)"', 'bash -c "y=$(echo $X)"'),
+    ('bash -c "strace $X"', 'bash -c "test -f $X"'),
+    ('bash -c "chroot / $X"', 'bash -c "curl $X"'),
+]
+# Each data command listed in the message's example given a run-time word, allowed.
+DATA_WORD_ALLOWED = [
+    'bash -c "echo $X"', 'bash -c "printf %s $X"', 'bash -c "grep $X file"',
+    'bash -c "cat $X"', 'bash -c "cd $X"', 'bash -c "curl $X"',
+    'bash -c "sleep $X"', 'bash -c "test -f $X"',
+]
 # `watch` runs its operand as a command, so `watch $X` runs run-time text as
 # code when run plainly too: (form, the hook that refuses it, the rule that hook
 # names). bash-safety's analyzer falls on a timeout to a degraded mode that
@@ -252,6 +304,8 @@ def verdicts(sandbox):
     runs.update((PRIVILEGE, cmd, actor) for cmd in [row for row, _code in REVIEW_ROWS] + GIT_SHAPED
                 for actor in (False, True))
     runs.update((hook, cmd, actor) for pair in RUNTIME_CODE for cmd in pair
+                for hook in LAYER_HOOKS for actor in (False, True))
+    runs.update((hook, cmd, actor) for cmd in FAIL_CLOSED
                 for hook in LAYER_HOOKS for actor in (False, True))
     runs.update((hook, cmd, actor) for cmd, _decider, _rule in WATCH_RULES
                 for hook in LAYER_HOOKS for actor in (False, True))
@@ -413,6 +467,33 @@ def test_a_layer_refuses_run_time_code_and_keeps_its_data_twin(refused, twin):
     kinds = [kind for kind, _seg in classify_git_command(refused)[1]]
     assert "unresolved_shell_string" in kinds, refused
     assert classify_git_command(twin) == ([], []), twin
+
+
+@pytest.mark.parametrize("command", FAIL_CLOSED, ids=FAIL_CLOSED)
+@pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
+def test_a_fail_closed_layer_exits_2_over_the_guard_and_every_hook(verdicts, command, subagent):
+    # The guard first: on a loaded host bash-safety's analyzer can time out and
+    # its degraded mode refuses any `$`, which says nothing about the classifier.
+    assert verdicts[(PRIVILEGE, command, subagent)] == 2, command
+    assert max(verdicts[(hook, command, subagent)] for hook in LAYER_HOOKS) == 2, command
+
+
+@pytest.mark.parametrize("command", FAIL_CLOSED + FAIL_CLOSED_VARIANTS)
+def test_a_run_time_word_a_program_the_scan_does_not_model_gets_is_a_residual(command):
+    kinds = [kind for kind, _seg in classify_git_command(command)[1]]
+    assert "unresolved_shell_string" in kinds, command
+
+
+@pytest.mark.parametrize("refused,twin", FAIL_CLOSED_TWINS, ids=[r for r, _t in FAIL_CLOSED_TWINS])
+def test_the_fail_closed_rule_keeps_each_refused_shape_a_data_twin(refused, twin):
+    kinds = [kind for kind, _seg in classify_git_command(refused)[1]]
+    assert "unresolved_shell_string" in kinds, refused
+    assert classify_git_command(twin) == ([], []), twin
+
+
+@pytest.mark.parametrize("command", DATA_WORD_ALLOWED)
+def test_a_data_command_given_a_run_time_word_in_a_layer_is_allowed(command):
+    assert classify_git_command(command) == ([], []), command
 
 
 def test_a_here_document_no_shell_reads_is_data():

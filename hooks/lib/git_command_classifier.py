@@ -48,6 +48,17 @@ so they are importable by other hooks via lib.git_command_classifier.
 #   (`bash -c "echo $X | sh"`, `bash -c "python3 -c $P"`, `bash -c "watch $X"`).
 #   Such a layer is also a residual when a command in it may run text computed
 #   at run time as shell or code (_runs_runtime_code).
+#
+# Fail closed on the unknown (2026-11-08, train 2): a list of dangerous programs
+#   can never be complete, so _command_runs_runtime_code now refuses a run-time
+#   word given to a program it does NOT model, keeping it only for the programs
+#   known to treat their words as data (_DATA_ONLY_COMMANDS).  So a layer running
+#   `octave --eval $X`, `erl -eval $X`, `chroot / $X`, `strace $X` or
+#   `find . -exec $X \\;` is a residual, a run-time environment assignment to a
+#   command (`BASH_ENV=$F bash …`, `NODE_OPTIONS=--require=$F node …`) is one
+#   unless the variable cannot load code (_SAFE_ENV_VARS), and a run-time `-c`
+#   value the outer shell built by running code (`bash -c "y=$(echo $X | sh)"`)
+#   is one.  echo/printf/grep and the data commands keep their run-time word.
 
 CLI usage:
   printf 'command text\\n' | python3 hooks/lib/git_command_classifier.py
@@ -593,7 +604,13 @@ def _is_obfuscation_candidate(tok):
 # file, or given it as its script or code; source and `.` given a run-time
 # file; eval, trap and the launchers that hand their arguments to a shell given
 # a run-time word.  `bash -c "echo $X | sh"` is a residual, as dfc90534 had it,
-# while `echo $X | sh` alone keeps its plain-text decision (P9-31).
+# while `echo $X | sh` alone keeps its plain-text decision (P9-31).  Because a
+# list of dangerous programs can never be complete, the rule fails closed: a
+# program it does not model, given a run-time word, runs it (so the layer is a
+# residual) unless the program keeps its words as data (_DATA_ONLY_COMMANDS); a
+# run-time environment assignment to a command may load code unless the variable
+# cannot (_SAFE_ENV_VARS); and a run-time `-c` value the outer shell built by
+# running code (`bash -c "y=$(echo $X | sh)"`) is a residual too.
 
 _MAX_SHELL_DEPTH = 4
 # A shell is known by the SHAPE of its name (bash, sh, dash, zsh, ksh93, rbash,
@@ -622,6 +639,43 @@ _STDIN_SHELL_COMMANDS = frozenset({
 _RUNTIME_ARG_COMMANDS = frozenset({
     'alias', 'trap', 'at', 'batch', 'parallel', 'runuser', 'screen', 'script',
     'ssh', 'su', 'tmux', 'watch', 'sed', 'gsed', 'ex', 'nvim', 'vi', 'view', 'vim',
+})
+# A list of dangerous programs can never be complete, so _command_runs_runtime_code
+# fails closed: a program it does not otherwise model, given a run-time word, is
+# assumed to run it as a command or as code.  _DATA_ONLY_COMMANDS names the
+# programs known to keep their words (and input) as data — a filename, a URL, a
+# host, a number, a target — never a command or code to execute.  Anything not
+# listed and not modelled elsewhere (a shell, an interpreter, source/`.`, the
+# _RUNTIME_ARG_COMMANDS, a launcher naming a shell) is refused on a run-time word.
+# Membership is the safe-to-add test: a program belongs here only when NO option
+# or operand of it runs a command or loads code.  So `tar` (--to-command/`-I`),
+# `rsync`/`nc`/`scp` (their command options), `find` (-exec), `sort`
+# (--compress-program), `wget` (--use-askpass), and every interpreter and
+# launcher are deliberately absent; a run-time word to any of them stays refused.
+_DATA_ONLY_COMMANDS = frozenset({
+    # the file, text and information utilities whose operands are data
+    'cat', 'tee', 'cd', 'pwd', 'ls', 'head', 'tail', 'wc', 'uniq', 'cut',
+    'tr', 'rev', 'tac', 'nl', 'fold', 'paste', 'join', 'comm', 'column', 'cp', 'mv',
+    'rm', 'ln', 'mkdir', 'rmdir', 'touch', 'chmod', 'chown', 'chgrp', 'stat', 'file',
+    'readlink', 'realpath', 'basename', 'dirname', 'mktemp', 'truncate', 'du', 'df',
+    'date', 'seq', 'true', 'false', 'test', 'sleep', 'diff', 'cmp', 'base64', 'cksum',
+    'md5sum', 'sha1sum', 'sha256sum', 'od', 'hexdump', 'xxd', 'strings',
+    # network fetch and lookups whose operands are a URL or a host, not a command
+    'curl', 'ping', 'host', 'dig', 'nslookup',
+    # a container client: its sub-command is data (`docker push $IMAGE`); a shell it
+    # is told to run (`docker exec c bash -c $X`) is caught by the launcher scan.
+    'docker', 'podman', 'kubectl',
+})
+# Variables whose run-time value, assigned to a command's environment, cannot load
+# code.  The inverse of _DATA_ONLY_COMMANDS: a run-time environment assignment is
+# refused unless the variable is listed, because BASH_ENV, ENV, NODE_OPTIONS,
+# PERL5OPT, PYTHONSTARTUP, RUBYOPT, LD_PRELOAD and their kind each turn a run-time
+# value into code the next command runs, and such a list can never be complete.
+_SAFE_ENV_VARS = frozenset({
+    'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES',
+    'LC_NUMERIC', 'LC_TIME', 'TZ', 'TERM', 'COLUMNS', 'LINES', 'HOME', 'PWD',
+    'OLDPWD', 'USER', 'LOGNAME', 'HOSTNAME', 'TMPDIR', 'DISPLAY', 'NO_COLOR',
+    'FORCE_COLOR', 'CLICOLOR', 'CLICOLOR_FORCE',
 })
 # A shell named among another command's words (`find -exec sh -c`, `docker exec
 # c bash`), by name: the shape _SHELL_NAME_RE reads also matches `push`.
@@ -936,6 +990,9 @@ def _shell_words(text, info=None):
     # its own on (a pipe or a group there may hand it on), and the command after
     # the body when that line goes on past it.
     doc_fed = [False] * len(cmds)
+    # Every body appended so far is a substitution ($( ), backtick, <( ) >( ))
+    # the shell runs to build a word; the here-document bodies come after it.
+    n_subst = len(bodies)
     for body, quoted, owner, stop in docs:
         texts = _here_doc_texts(body, quoted, any(map(_reads_as_shell, cmds[owner:stop])))
         bodies.extend(texts)
@@ -959,6 +1016,14 @@ def _shell_words(text, info=None):
         info['feeds'] = feeds
         info['body_fed'] = [owner is None or extra or (owner < len(piped) and piped[owner])
                             for owner, extra in owners]
+        # The command each body is a substitution/here-document of (None: a >( )
+        # body, which belongs to no one command), and how many leading bodies are
+        # substitutions.  A run-time `-c` operand whose value the OUTER shell built
+        # by running a substitution (`-c "y=$(sh <<< $X)"`) inherits that body's
+        # run-time code, which the collapsed operand hides; a here-document is
+        # input, not part of the operand word, so it is excluded.
+        info['body_owner'] = [owner for owner, _extra in owners]
+        info['body_subst_count'] = n_subst
     return cmds, bodies
 
 
@@ -1061,13 +1126,16 @@ def _shell_c_operand(words, i):
 
 
 def _shell_c_strings(text, fed=False):
-    """Yield (kind, string, fed) for each shell `-c` string text runs.
+    """Yield (kind, string, fed, built_by_code) for each shell `-c` string text runs.
 
     kind 'text': a string the scan resolved.  'runtime': one holding a value the
     outer shell computes at run time, each such value _RUNTIME in it.
     'unlexable', with text itself: quoting the scan cannot follow, in text that
     has a shell's `-c` shape.  fed: the string's shell may read run-time text
     on its standard input (_shell_words' feeds, or text that is fed itself).
+    built_by_code: a 'runtime' operand whose value the outer shell built by
+    running a substitution that runs run-time code (`-c "y=$(echo $X | sh)"`);
+    the collapsed operand no longer shows it, so the layer is a residual.
     """
     if not _SHELL_HINT_RE.search(text):
         return
@@ -1076,9 +1144,10 @@ def _shell_c_strings(text, fed=False):
         cmds, bodies = _shell_words(text, info)
     except Exception:  # quoting the scan cannot follow, or nesting past the interpreter's own limit
         if _SHELL_C_SHAPE_RE.search(text):
-            yield 'unlexable', text, fed
+            yield 'unlexable', text, fed, False
         return
-    for words, feeds in zip(cmds, info['feeds']):
+    owner, n_subst = info['body_owner'], info['body_subst_count']
+    for k, (words, feeds) in enumerate(zip(cmds, info['feeds'])):
         values = [v for v, _runtime in words]
         idx = _command_token_index(values)
         if idx is None or words[idx][1] or not _SHELL_NAME_RE.match(_basename(values[idx])):
@@ -1087,7 +1156,10 @@ def _shell_c_strings(text, fed=False):
         if op is None:
             continue
         value, runtime = words[op]
-        yield ('runtime' if runtime else 'text'), value, fed or bool(feeds)
+        built_by_code = runtime and any(
+            owner[j] == k and _runs_runtime_code(bodies[j], info['body_fed'][j])
+            for j in range(n_subst))
+        yield ('runtime' if runtime else 'text'), value, fed or bool(feeds), built_by_code
     for body, body_fed in zip(bodies, info['body_fed']):
         yield from _shell_c_strings(body, fed or body_fed)
 
@@ -1160,13 +1232,17 @@ def _command_runs_runtime_code(words, fed):
     """True iff the simple command `words` may run run-time text as shell or code.
 
     fed: its standard input may carry run-time text.  It may when eval comes
-    before a run-time word; when its program is named at run time and is fed,
-    given a run-time word, or git-shaped as _may_run_git() reads it; when it is
-    source or `.` given a run-time file or fed; when it is one of
-    _RUNTIME_ARG_COMMANDS given a run-time word or fed; and when it is a shell
-    or an interpreter, or one is named among its words, that may run such text
-    (_runner_runs_runtime).  echo, printf and grep leave their words and input
-    unexecuted.  Any other command treats its words and input as data.
+    before a run-time word; when a run-time value is assigned to its environment
+    under a variable that can load code (_SAFE_ENV_VARS is the inverse list);
+    when its program is named at run time and is fed, given a run-time word, or
+    git-shaped as _may_run_git() reads it; when it is source or `.` given a
+    run-time file or fed; when it is one of _RUNTIME_ARG_COMMANDS given a
+    run-time word or fed; and when it is a shell or an interpreter, or one is
+    named among its words, that may run such text (_runner_runs_runtime).  echo,
+    printf and grep, and the _DATA_ONLY_COMMANDS, keep their words and input as
+    data.  Any OTHER command is assumed, fail closed, to run a run-time word of
+    its own as a command or as code: the list of dangerous programs can never be
+    complete, so a program the scan does not know is refused on a run-time word.
     """
     words = _without_redirections(words)  # _shell_words' feeds read those
     values = [value for value, _runtime in words]
@@ -1177,6 +1253,13 @@ def _command_runs_runtime_code(words, fed):
             return True
     if idx is None:  # `sudo -i`, a bare xargs: a wrapper with no command reads its input
         return fed and any(_basename(value) in _WRAPPERS for value in values)
+    # A run-time value assigned to the command's environment (NAME=<run-time>)
+    # may be code the command loads (BASH_ENV, NODE_OPTIONS, ...).  Fail closed:
+    # refuse unless the variable is one that cannot load code (_SAFE_ENV_VARS).
+    for v, runtime in words[:idx]:
+        if runtime and _ENV_ASSIGN_RE.match(v) and (
+                v.split('=', 1)[0].rstrip('+').split('[', 1)[0] not in _SAFE_ENV_VARS):
+            return True
     args = words[idx + 1:]
     if words[idx][1]:
         nxt = args[0][0] if args else None
@@ -1195,8 +1278,15 @@ def _command_runs_runtime_code(words, fed):
     if runs is not None:
         return runs
     # A launcher this module does not know: a shell or an interpreter among its words.
-    return any(_runner_runs_runtime(_basename(value), words[p + 1:], fed, embedded=True)
-               for p, (value, runtime) in enumerate(words) if p > idx and not runtime)
+    if any(_runner_runs_runtime(_basename(value), words[p + 1:], fed, embedded=True)
+           for p, (value, runtime) in enumerate(words) if p > idx and not runtime):
+        return True
+    # Fail closed on a program the scan does not otherwise model: a run-time word
+    # of its own may be a command or code it runs (octave --eval, chroot, strace,
+    # find -exec, ...).  The _DATA_ONLY_COMMANDS keep such a word as data.
+    if name in _DATA_ONLY_COMMANDS:
+        return False
+    return any(runtime for _v, runtime in args)
 
 
 def _without_redirections(words):
@@ -1344,7 +1434,7 @@ def _shell_layers(command_text):
     def visit(text, depth, fed=False):
         texts.append(text.replace(_RUNTIME, _RUNTIME_PLACEHOLDER))
         codes.append((text, fed))
-        for kind, value, value_fed in _shell_c_strings(text, fed):
+        for kind, value, value_fed, built_by_code in _shell_c_strings(text, fed):
             if depth >= _MAX_SHELL_DEPTH:
                 unresolved.append(value.replace(_RUNTIME, _RUNTIME_PLACEHOLDER))
             elif kind == 'unlexable':
@@ -1353,7 +1443,7 @@ def _shell_layers(command_text):
             else:
                 first = len(texts)
                 visit(value, depth + 1, value_fed)
-                if kind == 'runtime' and (any(map(_may_run_git, texts[first:]))
+                if kind == 'runtime' and (built_by_code or any(map(_may_run_git, texts[first:]))
                                           or any(_runs_runtime_code(*code) for code in codes[first:])):
                     unresolved.append(texts[first])
 
