@@ -2345,6 +2345,8 @@ def _g2_write_upstream_chain(project: Path, task_id: str = G2_TASK) -> None:
 
 
 @pytest.mark.parametrize("qa_status", ["pass", "fail"], ids=["qa_pass_control", "qa_fail"])
+
+
 def test_g2_qa_status_fail_passes_on_shape_schema_and_identity(tmp_path, qa_status):
     """An honest QA fail is a legal terminal (D2): G2 passes the qa-report
     on shape, schema and identity alone. The pass case is the control: the
@@ -2373,6 +2375,8 @@ def test_g2_ba_qa_verdict_fail_passes(tmp_path):
 
 
 @pytest.mark.parametrize("schema", ["dev-report.v2", "dev-report.v1"])
+
+
 def test_g2_dev_status_blocked_fails_the_enum(tmp_path, schema):
     report = f"docs/dev/dev-report-{G2_TASK}.json"
     s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts(schema))
@@ -2389,6 +2393,8 @@ def test_g2_dev_status_blocked_fails_the_enum(tmp_path, schema):
 
 
 @pytest.mark.parametrize("role", ["dev", "ba"])
+
+
 def test_g2_valid_producer_question_stands_in_for_declared_artifacts(tmp_path, role):
     artifacts = _g2_dev_artifacts("dev-report.v2") if role == "dev" else _g2_ba_artifacts()
     s = _g2_setup(tmp_path, role, artifacts)
@@ -2418,6 +2424,8 @@ def test_g2_valid_producer_question_stands_in_for_declared_artifacts(tmp_path, r
     ],
     ids=["one_option", "default_not_a_label", "other_task_id"],
 )
+
+
 def test_g2_fresh_invalid_producer_question_blocks_naming_why(tmp_path, question, why):
     report = f"docs/dev/dev-report-{G2_TASK}.json"
     s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
@@ -2464,6 +2472,8 @@ def test_g2_stale_producer_question_is_ignored(tmp_path):
     ],
     ids=["awaiting_input_line", "question_text"],
 )
+
+
 def test_g2_reply_text_without_artifact_is_a_missing_artifact(tmp_path, reply):
     report = f"docs/dev/dev-report-{G2_TASK}.json"
     s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
@@ -2492,6 +2502,8 @@ def test_g2_qa_question_artifact_does_not_stand_in_for_qa_report(tmp_path):
 
 
 @pytest.mark.parametrize("role", ["pm", "architect", "test-writer"])
+
+
 def test_g2_registered_role_outside_any_list_is_decided_by_its_obligation(tmp_path, role):
     """P1b row 18: no role list says whose obligation G2 resolves. A PM or a
     specialist registered as its type, dispatched with its own obligation,
@@ -2987,7 +2999,9 @@ def test_a4_missing_dev_report_is_a_plain_block_every_round(tmp_path):
 
 
 
-# (i) a stale declared artifact is stopped at its producer's stop (P1b E4) ---
+# (i) R14's freshness rule, the cases P1b E4 brought into it in the merge of
+# c63b441 (P1b handed its own rule to P1c in 4a3bd7e): a dispatched_at ahead of
+# the clock, the first-round bound, an undeclared file, the per-kind predicate.
 
 
 _G2_STALE = "artifact_stale"
@@ -3026,30 +3040,6 @@ def _g2_earlier(s, seconds_before: float, role: str | None = None, artifacts: li
     return (doc["role"], doc)
 
 
-def test_g2_stale_json_artifact_blocks_then_passes_when_written(tmp_path):
-    report = f"docs/dev/dev-report-{G2_TASK}.json"
-    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
-    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
-    _g2_age(s.project / report, 3600, s)
-    proc = _g2_stop(s)
-    _g2_assert_blocked_on(proc, report, _G2_STALE)
-    assert "freshness:" in proc.stderr and "dispatched_at" in proc.stderr, proc.stderr
-    # The producer's next round writes the report as drafted: the stop passes.
-    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
-    proc = _g2_stop(s)
-    assert proc.returncode == 0, proc.stderr
-    _g2_assert_decided_by_obligation(s)
-
-
-def test_g2_freshness_slack_admits_a_file_written_just_before_dispatched_at(tmp_path):
-    report = f"docs/dev/dev-report-{G2_TASK}.json"
-    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
-    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
-    _g2_age(s.project / report, 1, s)
-    proc = _g2_stop(s)
-    assert proc.returncode == 0, proc.stderr
-
-
 def test_g2_dispatched_at_ahead_of_the_clock_decides_no_freshness(tmp_path):
     """A dispatched_at ahead of the stop's clock (a local time written with a Z) is G1's clock
     bound to judge; no write could satisfy it here, so a just-written report passes."""
@@ -3078,23 +3068,6 @@ def test_g2_stale_artifact_names_only_the_stale_one(tmp_path):
     assert f"docs/dev/context-{G2_TASK}.json: {_G2_STALE}" not in proc.stderr
 
 
-def test_g2_stale_markdown_artifact_blocks(tmp_path):
-    s, report = _g2_close_qa_setup(tmp_path)
-    _write(s.project / report, f"# Close Debate Report\n{G2_TASK}\nCLOSE: YES\n")
-    _g2_age(s.project / report, 3600, s)
-    proc = _g2_stop(s, msg="Done.\n\nCLOSE: YES\n")
-    _g2_assert_blocked_on(proc, report, _G2_STALE)
-
-
-def test_g2_waived_markdown_artifact_is_not_held_to_freshness(tmp_path):
-    # close-report-append.py refused to touch the report: its on-disk bytes
-    # are a prior attempt's, which the obligation's waived_by_response declares.
-    s, report = _g2_close_qa_setup(tmp_path)
-    _g2_age(s.project / report, 3600, s)
-    proc = _g2_stop(s, msg="The append helper refused.\n\nCLOSE_REPORT_APPEND_ERROR: append: disk full\n")
-    assert proc.returncode == 0, proc.stderr
-
-
 def test_g2_redispatch_keeps_an_earlier_rounds_file_only_beside_one_it_wrote(tmp_path):
     # A re-dispatch of the same template (Step 8's BA retry, Step 16's dev
     # retry, a lane re-dispatch) declares the path again; a file it had
@@ -3115,16 +3088,6 @@ def test_g2_redispatch_keeps_an_earlier_rounds_file_only_beside_one_it_wrote(tmp
     proc = _g2_stop(s)
     assert proc.returncode == 0, proc.stderr
     _g2_assert_decided_by_obligation(s)
-
-
-def test_g2_redispatch_still_blocks_a_file_older_than_the_first_round(tmp_path):
-    report = f"docs/dev/dev-report-{G2_TASK}.json"
-    s = _g2_setup(tmp_path, "dev", _g2_dev_artifacts())
-    _g2_parent_dispatches(s, [_g2_earlier(s, 600)])
-    _write(s.project / report, _g2_dev_report_v1(G2_TASK))
-    _g2_age(s.project / report, 3600, s)
-    proc = _g2_stop(s)
-    _g2_assert_blocked_on(proc, report, _G2_STALE)
 
 
 @pytest.mark.parametrize("other", ["role", "path"])
