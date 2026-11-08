@@ -90,8 +90,9 @@ Init is idempotent and safe to re-run on a populated home. In order, it:
    `python3.10` that has a hash-locked lockfile under `requirements/`;
 2. writes the machine overlay `<harness-home>/settings.machine.json` — **only when it is
    absent** — holding the module choices and `env.CLAUDE_HOME = <harness-home>`;
-3. registers the settings filter in the clone's local git config and renders the working
-   `settings.json` (clean form + enabled modules + overlay);
+3. registers the settings filter in the clone's local git config, sets `harness.autoPush false`
+   there when the key is absent ([automatic push, per repository](#automatic-push-per-repository)),
+   and renders the working `settings.json` (clean form + enabled modules + overlay);
 4. creates, **only when absent** (it never overwrites any of them):
    - `<harness-home>/logs/`;
    - the `TMPDIR` root named by the rendered settings (`/var/tmp/claude-scratch` by default), mode 1777;
@@ -129,6 +130,22 @@ files in it to have the guard protect them.
 Module flags take effect only when init writes a new overlay. Once an overlay exists its
 `modules` key wins: change it there and re-run init.
 
+#### Automatic push, per repository
+
+The automatic pushes (the checkpoint push, git-fswatch's push, session-git-init's first push) run
+where `GIT_AUTO_PUSH` is `"1"`; set it in the overlay's `env` (the tracked clean form sets `"0"`).
+A repository's own git config decides before that switch, for that repository only:
+
+```bash
+git -C <repo> config --local harness.autoPush true      # this repository pushes automatically
+git -C <repo> config --local harness.autoPush false     # this repository never does
+git -C <repo> config --local --unset harness.autoPush   # GIT_AUTO_PUSH decides again
+```
+
+Init and the landing set `false` in the harness home when the key is absent, because its `origin`
+is the public repository; they never change a value you set. A value git cannot read as a boolean
+means no push. `/push` is not affected.
+
 **Upgrading a home that predates the overlay.** A home that ran code from before the settings
 filter (its HEAD reflog, or `ORIG_HEAD`, holds such a revision) lands by itself at the next turn
 end of any of its sessions; nothing has to be stopped or typed. `hooks/auto-commit.sh` runs
@@ -139,7 +156,9 @@ new overlay (a `GIT_AUTO_PUSH` of `"1"` is not carried over), seeds an empty
 `private-literals.txt` from values the machine already holds, renames aside post-commit hooks
 that push unless `GIT_AUTO_PUSH` is `0` (here and in the repositories under `$HOME`), restarts
 git-fswatch daemons running older code with their own environment (one in its git work, or in a
-repository with a stopped rebase, at a later turn end), and runs init steps 3-5.
+repository with a stopped rebase, at a later turn end), and runs init steps 3-5. At each turn
+end it also sets `harness.autoPush false` in the home when the key is absent, already-landed
+homes included.
 A rebase or merge stopped in the home is left alone: the landing says so and waits.
 `logs/landing.log` lists what it did (counts and key names, never a value). For a home without
 sessions, `scripts/bootstrap --migrate-from <rev>` and `scripts/install/render-settings migrate`

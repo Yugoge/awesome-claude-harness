@@ -616,6 +616,7 @@ dot-claude/
 │   ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
 │   ├── `test_aggregate_dev_report_hook_ledger.py` - ledger (backlog #122 M3): scripts/aggregate-dev-report.py's len(shards_info)
 │   ├── `test_aggregate_dev_report_superseded_rounds.py` - aggregate dev-report silently dropped a retried lane's superseded round(s)'
+│   ├── `test_auto_push_per_repo.py` - harness.autoPush, the per-repository push switch (D1 as amended on 2026-11-07).
 │   ├── `test_bash_write_targets_verb_narrowing.py` - The library used to read a word that merely begins `cp-`/`mv-` (a checkpoint id such as `cp-01`, a
 │   ├── `test_candidate_tree.py` - Every test builds its own throwaway git repository. None of them reads this
 │   ├── `test_changelog_analyst_declaration_categories.py` - `agents/changelog-analyst.md` decides what a cycle commits by reading declaration
