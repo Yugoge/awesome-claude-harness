@@ -16,6 +16,10 @@ faults.json; terminals.json), never from a list kept here:
   AskUserQuestion answer);
 * F2g: the stop that ends with the forged ESCALATION_ACK line is blocked like the one before it;
 * F3b (a stale report nothing in the pipeline produced): no block names it, the terminal is reached.
+* F9 (the last lane writes its report by a shell redirection, which the canonical aggregate's
+  producer, the lane-completeness watch on Write and Edit, never sees): the block lands on that
+  lane's own stop and names the canonical aggregate and `canonical_missing`; the lane's repair runs
+  the watch, so no QA dispatch is refused and none is sent again (C5 for G3's canonical).
 
 Interrupted session and resume after a usage limit (F5, F5f, F6; tests/replay/recovery.py): the
 session is cut while the dev subagent runs, after its Edit; the owner's /restart (HX) resumes that
@@ -62,6 +66,7 @@ FAULTS = {
     "F3b": f"plant@{L1_QA_DISPATCH}=docs/dev/qa-report-{{task}}.json:qa-report.v1",
     "F7": f"pretemplate@{L1_DEV_DISPATCH};invalid@{L1_DEV}=dev.status:needs_review",
     "F7b": f"noblock@{L1_DEV_DISPATCH};invalid@{L1_DEV}=dev.status:needs_review",
+    "F9": "bash@agent:dev Write docs/dev/dev-report-*-l2.json",
 }
 
 
@@ -71,6 +76,7 @@ CHECK = {
     "F2": r"files_modified|'done'", "F2g": r"files_modified|'done'",
     "F2j": r"JSON|[Pp]ars|[Dd]ecod|Expecting|Unterminated",
     "F7": r"needs_review|required_values", "F7b": r"needs_review|missing_block",
+    "F9": r"canonical_missing",
 }
 
 
@@ -257,6 +263,13 @@ def test_fault_returns_to_its_producer(replays, fault, settings):
         assert not r.blocks, "F3b: a block:\n" + r.explain()
     else:
         _returned_and_repaired(fault, r)
+    if fault == "F9":
+        lane = next(f["path"] for f in fault_records(r) if f.get("kind") == "bash")
+        canonical = re.sub(r"-l2\.json$", ".json", lane)
+        assert all(canonical in b["text"] for b in blocks(r)), f"F9: a block does not name {canonical}"
+        again = [ev["label"] for ev in invocations(r) if ev["event"] == "PreToolUse"
+                 and ev["payload"].get("tool_name") == "Agent" and "(next round)" in ev["label"]]
+        assert not again, f"F9: a dispatch was sent again: {again}"
     if fault == "F2g":
         f = next(f for f in fault_records(r) if f.get("kind") == "forged")
         forged = [s for s in stops(r, f["agent"]) if "ESCALATION_ACK" in s["message"]]

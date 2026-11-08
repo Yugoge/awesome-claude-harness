@@ -2688,5 +2688,68 @@ def test_r8_no_obligation_block_judges_only_the_reports_the_lane_wrote(tmp_path,
     assert none.returncode == 0, none.stderr
 
 
+# ---------------------------------------------------------------------------
+# C5 for G3's canonical_missing (P2): a fan-out lane's report reaches the
+# canonical aggregate's one producer, the lane-completeness watch, only by a
+# Write or Edit. A report that completes the lane set by another route (a
+# shell redirection) leaves the canonical missing: the lane whose report is
+# the fan-out's newest is returned at its own stop, by G3's own rule, naming
+# the canonical, the check and the repair (its report saved again with Edit).
+# ---------------------------------------------------------------------------
+
+
+C5_TASK = "20261002-170011"  # a /dev fan-out's id: the shard filename patterns name its lanes
+
+
+def _c5_setup(tmp_path, *, l1=True, l1_newer=False, canonical=False):
+    s = _l2_setup(tmp_path, lane="l2", lane_set=["l1", "l2"], base_task=C5_TASK)
+    s.l1 = f"docs/dev/dev-report-{s.cycle}-l1.json"
+    s.canonical = f"docs/dev/dev-report-{s.cycle}.json"
+    _l2_write(s, _l2_dev_report(s.task, lane="l2", lane_set=["l1", "l2"]))
+    now = datetime.now(timezone.utc).timestamp()
+    os.utime(s.project / s.art_path, (now, now))
+    if l1:
+        _write(s.project / s.l1, _l2_dev_report(f"{s.cycle}-l1", lane="l1", lane_set=["l1", "l2"]))
+        at = now + 30 if l1_newer else now - 60
+        os.utime(s.project / s.l1, (at, at))
+    if canonical:
+        _write(s.project / s.canonical, {"task_id": s.cycle, "parallel_workers": ["l1", "l2"]})
+    return s
+
+
+def test_c5_lane_report_completing_the_set_unseen_by_the_watch_is_returned_at_its_stop(tmp_path):
+    s = _c5_setup(tmp_path)
+    proc = _l2_stop(s)
+    assert proc.returncode == 2, proc.stderr
+    assert "OBLIGATION_STOPGATE_BLOCKED" in proc.stderr
+    assert f"{s.art_path}: canonical_missing" in proc.stderr  # the stopping lane's own report
+    assert f"{s.canonical}: the canonical aggregate of lanes l1, l2 is missing" in proc.stderr
+    assert "posttool-lane-completeness-watch.py" in proc.stderr
+    assert "save it again with Edit" in proc.stderr  # what the receiver does
+
+
+def test_c5_canonical_on_disk_passes(tmp_path):
+    proc = _l2_stop(_c5_setup(tmp_path, canonical=True))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_c5_a_sibling_lane_reporting_later_is_that_lanes_own(tmp_path):
+    """The sibling's report is the newest: its own watch may still be running, and its stop decides."""
+    proc = _l2_stop(_c5_setup(tmp_path, l1_newer=True))
+    assert proc.returncode == 0, proc.stderr
+    assert "canonical_missing" not in proc.stderr
+
+
+def test_c5_lane_set_not_yet_complete_passes(tmp_path):
+    proc = _l2_stop(_c5_setup(tmp_path, l1=False))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_c5_advisory_stopgate_does_not_block(tmp_path):
+    s = _c5_setup(tmp_path)
+    proc = _run_hook(s.project, s.home, s.agent_id, session_id=s.harness, stopgate_mode="advisory")
+    assert proc.returncode == 0, proc.stderr
+
+
 if __name__ == "__main__":
     sys.exit(subprocess.run([sys.executable, "-m", "pytest", __file__, "-v"]).returncode)
