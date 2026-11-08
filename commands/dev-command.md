@@ -136,7 +136,7 @@ The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) has already, for this c
 **When those lines are not in your context** (a compaction removed the hook output, or the hook failed and printed none), run the hook's own start function in this session with this command's text exactly as typed, and read the same lines from what it prints:
 
 ```bash
-python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/prompt-workflow.py" start <<'CMDEOF'
+python3 "<HARNESS_ROOT>/hooks/prompt-workflow.py" start <<'CMDEOF'
 <the command exactly as typed: /dev-command, then $ARGUMENTS>
 CMDEOF
 ```
@@ -670,7 +670,7 @@ ELIF qa.status == "warning" or "fail":
 ```
 
 ```bash
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/aggregate-permissions.py" docs/dev/qa-report-<timestamp>.json | bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json
+python3 "<HARNESS_ROOT>/scripts/aggregate-permissions.py" docs/dev/qa-report-<timestamp>.json | bash "<HARNESS_ROOT>/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json
 ```
 
 The aggregator reads the validated list from the QA report; the applier merges each entry into `.permissions.<section>` (allow/ask/deny), skipping patterns already present. A missing `.claude/settings.json` is an empty object to the merge, so the applier creates it when it adds an entry; a file it cannot parse fails the merge (non-zero exit) and stays unchanged.

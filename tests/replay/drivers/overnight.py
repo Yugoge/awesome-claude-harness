@@ -1228,7 +1228,8 @@ class Night:
         sec = o.section("Step 4")
         # `overnight.py cycle-index <STATE_FILE>`, or the `Cycle:` line overnight-status.sh prints for it
         m = re.search(r"`(~/\.claude/hooks/lib/overnight\.py cycle-index <STATE_FILE>)`", sec) or re.search(
-            r"the `Cycle:` line of `(bash \"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/overnight-status\.sh\" <STATE_FILE>)`", sec)
+            r"the `Cycle:` line of `(bash \"(?:\$\{CLAUDE_HOME:-\$HOME/\.claude\}|<HARNESS_ROOT>)/scripts/overnight-status\.sh\""
+            r" <STATE_FILE>)`", sec)
         if m:
             c = self.bash(o.bind(m.group(1)), "Read the cycle number", "Step 4 Bash cycle-index")
             out = c.response.get("stdout", "").strip() if c.ok else ""
@@ -1969,7 +1970,8 @@ class Night:
         # TIME CHECK.
         code = next(c for c in cmdtext.inline_codes(o.text, "Step 19", "TIME CHECK")
                     if c.startswith(("~/.claude/scripts/overnight-status.sh",
-                                     'bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh"')))
+                                     'bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh"',
+                                     'bash "<HARNESS_ROOT>/scripts/overnight-status.sh"')))
         cmd = o.bind(code)
         if cmd.strip() == "~/.claude/scripts/overnight-status.sh" and "against the state file" in sec:
             cmd += " " + shlex.quote(self.state_file)

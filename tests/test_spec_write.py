@@ -125,6 +125,7 @@ def _update_example(spec: Path, sections: list[str]) -> str:
         one = chained if n < len(sections) - 1 else last
         one = re.sub(r"--section \S+", f"--section {sec}", one)
         out.append(one.replace('"${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-write.py"', shlex.quote(str(WRITER)))
+                   .replace('"<HARNESS_ROOT>/scripts/spec-write.py"', shlex.quote(str(WRITER)))
                    .replace("/abs/path/docs/dev/specs/spec-<ts>.md", str(spec))
                    .replace("<N>", "2").replace("<content>", f"cycle 2 of section {sec}"))
     return "".join(out)

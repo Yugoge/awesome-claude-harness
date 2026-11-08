@@ -59,7 +59,7 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
 4. Write the spec through its one writer, `<HARNESS_ROOT>/scripts/spec-write.py`, naming it by its absolute path (the `UserPromptSubmit` hook of a later `/dev`, `/dev-command` or `/dev-overnight` in this session takes this session's last spec write as that run's spec, and reads the path from the line the writer prints). It creates `docs/dev/specs/` if needed and refuses an existing file:
 
    ```bash
-   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-write.py" create --spec <spec_path> <<'SPEC_TEXT'
+   python3 "<HARNESS_ROOT>/scripts/spec-write.py" create --spec <spec_path> <<'SPEC_TEXT'
    <the populated template>
    SPEC_TEXT
    ```
