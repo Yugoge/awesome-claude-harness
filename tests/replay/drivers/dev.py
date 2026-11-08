@@ -45,7 +45,8 @@ Driver arguments (cli.py --arg K=V):
                        the lane's dev is dispatched again; the next QA passes
   variant=question     BA writes its producer question; the orchestrator relays it with one
                        AskUserQuestion inside the turn and re-dispatches BA (Step 5) with the answer
-  variant=ba-qa-fail   QA in BA-validation mode fails; BA is re-dispatched (Step 8); QA passes
+  variant=ba-qa-fail   QA in BA-validation mode fails; BA is re-dispatched (Step 8), keeps its unchanged
+                       acceptance criteria and must stop unblocked (else the replay raises); QA passes
   variant=fanout       a fan-out cycle of `lanes` lanes (default 2, at most 3), every lane passing
   variant=fanout-qa-fail  a fan-out cycle whose first lane's first QA fails; Step 16 re-dispatches
                        that lane's dev only and its QA passes; the other lanes are untouched
@@ -65,6 +66,9 @@ Driver arguments (cli.py --arg K=V):
                        turn is interrupted after Step 12, before Step 13's QA dispatch: the lane QA is
                        never dispatched, Step 17 never runs, and no Stop event fires (an interrupted
                        turn runs no Stop hook); drivers/close.py's qa-never case closes it
+  variant=qa-early     (the dead-end check's G1 fault, not in VARIANTS) while Step 10's dev still runs,
+                       the orchestrator sends Step 13's QA; G1 (armed) refuses it, the dev returns and the
+                       cycle goes on as plain
   kept=<JSON>          [[hook, step, normalised text], ...]: the blocks the base kit's replay of the
                        same variant and settings recorded. Given, a declared deviation passes only a
                        block in that list (a kept base block); without it every declared deviation
@@ -571,7 +575,11 @@ class DevCycle:
         o = self.o
         o.s.say(f"BA-QA iteration 1: QA found {len(self.objections)} objections in BA analysis. "
                 "Re-invoking BA to address objections.")
-        self.dispatch_ba("Step 8", self.L("Step 8 Agent(ba) BA-QA iteration 1"), addressed=self.objections)
+        d = self.dispatch_ba("Step 8", self.L("Step 8 Agent(ba) BA-QA iteration 1"), addressed=self.objections)
+        # D25 (1): the BA keeps its acceptance criteria unchanged, as a compliant re-dispatch may, and stops
+        # unblocked; raising fails the artifact check's armed replay of this variant (CI), not only its table.
+        if d.stop is not None and d.stop.still_blocked:
+            raise agents.PlayError(f"{d.label}: the compliant re-dispatched BA was blocked at its stop")
         self.step6(self.L("Step 8 (Step 6 again)"))
         report = self.step7(self.L("Step 8 (Step 7 again)"), "pass")
         assert report.get("verdict") == "pass", report
@@ -635,7 +643,7 @@ class DevCycle:
         sc = self.sc
         self.dispatch_dev(self.L("Step 10 Agent(dev)"),
                           sc.partial if self.variant in ("qa-fail", "fanout-qa-fail") and self.fails_first() else sc.final,
-                          sc.old)
+                          sc.old, early_qa=self.variant == "qa-early")
 
     def fails_first(self) -> bool:
         """Whether this lane's first final-verification QA fails (a qa-fail run)."""
@@ -647,7 +655,7 @@ class DevCycle:
         self.step10_dev()
 
     def dispatch_dev(self, label: str, new_code: str, old_code: str, context_rel: str | None = None,
-                     add_lines=()):
+                     add_lines=(), early_qa: bool = False):
         o, sc = self.o, self.sc
         tpl = next(t for t in self.templates(10)
                    if (t.get("subagent_type") or agents.registry_role(t["prompt"])) == self.step_role(10))
@@ -656,6 +664,13 @@ class DevCycle:
                     "baseline_dirty_snapshot": o.values.get("baseline_dirty_snapshot", "")}
         work = roles.dev([(sc.rel, old_code, new_code)], test_bodies={"*": sc.test_body} if self.tw_expected
                          else None)
+        if early_qa:  # variant=qa-early: Step 13's QA is sent while this dev still runs (G1's order, R17)
+            def work(sub, brief, player, _work=work):
+                d = self._dispatch(with_lines(self.o.template("Step 13"), self.graph_lines),
+                                   agents.Act(verdict="pass", summary="QA pass"), self.L("Step 13 (early) Agent(qa)"))
+                if not d.blocked:
+                    raise AssertionError("a QA dispatched before its dev returned was not refused")
+                return _work(sub, brief, player)
         act = agents.Act(work=work, content={"*": baseline}, summary=sc.dev_summary)
         return self._dispatch(fields, act, label, subagent_type=self.step_role(10))
 
@@ -1058,7 +1073,7 @@ VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-f
 
 def run(rp) -> None:
     variant = rp.args.get("variant", "plain")
-    if variant not in VARIANTS + ("qa-never",):
+    if variant not in VARIANTS + ("qa-never", "qa-early"):
         raise ValueError(f"unknown variant {variant!r}")
     tier = rp.args.get("tier", "STANDARD")
     if variant.startswith("fanout"):

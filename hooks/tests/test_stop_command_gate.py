@@ -513,8 +513,26 @@ def test_r8_a_versioned_report_failing_its_schema_is_a_gap(env):
     assert any("files_modified" in detail for _c, _a, detail in gaps)
 
 
-def test_r8_without_a_transcript_the_lists_stand(env):
+def test_r8_without_a_transcript_or_a_dev_report_the_lists_stand(env):
     path = do_report(env, modified=["src/never.py"])
+    assert resolver.do_report_gaps(env.project, DO_ID, path) == []
+
+
+def test_r8_without_a_transcript_the_lists_equal_dev_s_report(env):
+    """The route without a transcript (Q7, a /close or /commit stage; P3's do branch calls it at
+    P3's merge): where the task's dev-report concludes it, the do-report's lists must equal that
+    report's files, named exactly; no schema is asked of a do-report that route finds not
+    completed."""
+    path = do_report(env, modified=["src/a.py"])
+    dev = env.project / "docs" / "dev" / f"dev-report-{DO_ID}.json"
+    dev.write_text(json.dumps({"task_id": DO_ID, "dev": {"files_modified": ["src/a.py"], "files_created": ["src/b.py"]}}))
+    [(code, artifact, detail)] = resolver.do_report_gaps(env.project, DO_ID, path)
+    assert code == "FILES_NOT_DEV_REPORT" and artifact == f"docs/dev/do-report-{DO_ID}.json"
+    assert detail.endswith(json.dumps(["src/a.py", "src/b.py"]))
+    record = json.loads(path.read_text())
+    record["report_version"] = 1
+    record["do"].update(status="blocked", files_modified=["src/b.py"], files_created=[str(env.project / "src/a.py")])
+    path.write_text(json.dumps(record))
     assert resolver.do_report_gaps(env.project, DO_ID, path) == []
 
 

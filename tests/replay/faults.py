@@ -59,7 +59,8 @@ which hooks; nothing repairs it, and the pipeline goes on with its own step.
 
 Before the step whose label matches, the fault (actor "fault") writes `path` (project-relative;
 `{task}` is the cycle's task id, the shortest task id the run learned) with `content kind`:
-`qa-report.v1` (a stale schema-v1 QA report: F3b), `junk`, or `absent` (the file removed). A path
+`qa-report.v1` (a stale schema-v1 QA report: F3b), `junk`, `schema-invalid` (the file as written, its
+required owned_edits removed), or `absent` (the file removed). A path
 nothing in the pipeline produced is no producer's to repair; the pipeline must reach its terminal past
 it. One a producer wrote before is that producer's artifact, spoiled: a gate that refuses the next
 dispatch naming it returns it to its producer (_collection_round).
@@ -400,6 +401,11 @@ def _plant(rp, glob: str, what: str) -> callable:
         else:
             text = "junk\n"
         full = os.path.join(rp.layout.project, rel)
+        if content == "schema-invalid":  # the file as written, a required field gone (G3 R12's schema check)
+            with rp.acting("fault"):
+                doc = json.loads(open(full).read())
+            doc.pop("owned_edits", None)
+            text = json.dumps(doc, indent=2) + "\n"
         rec = {"kind": "plant", "label": step["label"], "path": rel, "content": content}
         with rp.acting("fault"):
             meant = open(full).read() if os.path.isfile(full) else None

@@ -148,6 +148,25 @@ def _declared(obligation) -> dict:
             if isinstance(a, dict) and isinstance(a.get("path"), str)}
 
 
+def _resumed_returns(span, session_id, before) -> dict:
+    """{id of an Agent call that never came back: the line its agent's resume
+    returned at} for the agents the /restart recovery resumed and saw come
+    back (subagent_restart.completed_resumes, the journal Gate 4 reads; P1c
+    R15): that call is its step's dispatch, with no replacement call
+    (commands/restart.md, Lesson 16), and it returned when its resume did."""
+    try:
+        from lib.subagent_restart import completed_resumes
+        journal = completed_resumes(session_id) if session_id else {}
+    except Exception:
+        return {}
+    returns = {}
+    for message in span.iter_calls("SendMessage", before=before) if journal else ():
+        original = journal.get(str((message.input or {}).get("to")))
+        if original and message.result_line and message.ok:
+            returns[original] = message.result_line
+    return returns
+
+
 def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset) -> list:
     """R17, read from the active span's dispatch order (the CLI's record of
     each Agent call and its result, never a file's mtime or a clock): for
@@ -155,10 +174,15 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
     latest such dispatch must have returned; and unless this dispatch is a
     verdict itself, the latest verdict naming that producer's artifacts must
     be issued after it returned and have returned too. A refused or errored
-    dispatch (an is_error result) ran nothing, so it has not returned."""
+    dispatch (an is_error result) ran nothing, so it has not returned; a cut
+    dispatch whose agent the /restart recovery resumed returned when its
+    resume did (_resumed_returns)."""
     span = command_span.active_span(data["transcript_path"]) if data.get("transcript_path") else None
     if span is None:
         return []
+    resumed = _resumed_returns(span, data.get("session_id") or data.get("sessionId"),
+                               data.get("tool_use_id") or None)
+    returned_at = lambda c: c.result_line if (c.result_line and c.ok) else resumed.get(c.id)
     earlier = []
     for call in span.iter_calls("Agent", "Task", before=data.get("tool_use_id") or None):
         parsed = parse_obligation(call.input.get("prompt"), known_schema_ids=known)
@@ -171,7 +195,8 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
         if call.id in seen:
             continue
         seen.add(call.id)
-        if not (call.result_line and call.ok):
+        stopped = returned_at(call)
+        if not stopped:
             findings.append(f"reason=producer_not_stopped artifact={path}: declared by dispatch "
                             f"{call.id} ({role}), which has not returned a result")
             continue
@@ -180,13 +205,13 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
                     and any(p in v.input["prompt"] for p in paths)]
         if verdicts and VERDICT_SCHEMA not in own.values():
             verdict, vpath = verdicts[-1]
-            returned = bool(verdict.result_line and verdict.ok)
-            if verdict.line < call.result_line or not returned:
+            returned = bool(returned_at(verdict))
+            if verdict.line < stopped or not returned:
                 findings.append(
                     f"reason=verdict_not_after_producer_stop artifact={vpath}: the latest verdict on "
                     f"{path}, dispatch {verdict.id} (line {verdict.line}, "
                     f"{'returned' if returned else 'not returned'}), does not follow the "
-                    f"return of dispatch {call.id} ({role}) at line {call.result_line}")
+                    f"return of dispatch {call.id} ({role}) at line {stopped}")
     return findings
 
 

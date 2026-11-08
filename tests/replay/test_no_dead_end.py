@@ -53,6 +53,7 @@ ARMED_CASES = ("obligation", "forged-ack")  # G1 and G2 block only armed (CLAUDE
 DEV = next(s for s in suite.COMPLIANT if s.name == "/dev singular")
 FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
 MERGE = next(s for s in suite.COMPLIANT if s.name == "/merge")
+QA_EARLY = suite.Scenario("/dev QA before its dev returned", "dev", (("variant", "qa-early"),), ("dev",), DEV.cost)
 QA_WRITE = "agent:qa Write docs/dev/qa-report-*"
 QA_DISPATCH = "Step 13 Agent(qa)"
 SKIP = "qa.e2e_enforcement.status:skipped_without_justification"
@@ -70,6 +71,9 @@ FAULTS = {
     "dev report spoiled before QA": (DEV, "armed", f"plant@{QA_DISPATCH}=docs/dev/dev-report-{{task}}.json:junk"),
     "canonical aggregate missing before QA": (FANOUT, "shipped",
                                               "plant@Step 13 [[]l1] Agent(qa)=docs/dev/dev-report-{task}.json:absent"),
+    "canonical aggregate schema-invalid before QA": (FANOUT, "armed", "plant@Step 13 [[]l1] Agent(qa)="
+                                                     "docs/dev/dev-report-{task}.json:schema-invalid"),
+    "qa dispatched before its dev returned": (QA_EARLY, "armed", ""),
     "merge grant invalid": (MERGE, "shipped", "invalid@agent:merge-analyst Write grant=nonce:0000"),
     # test_faults.py's F7 (shipped): a lane dispatched from the pre-P1 template, its report needs_review
     "lane from the pre-P1 template": (FANOUT, "shipped", "pretemplate@Step 10 [[]l1] Agent(dev);"
@@ -88,7 +92,7 @@ def case_key(case: str) -> str:
 
 def fault_key(fault: str) -> str:
     scn, settings, spec = FAULTS[fault]
-    return suite.replay_key(scn, settings, (("fault", spec),))
+    return suite.replay_key(scn, settings, (("fault", spec),) if spec else ())
 
 
 # /dev-overnight marking Step 0 completed before the wake's CronCreate and stopping after end_time before

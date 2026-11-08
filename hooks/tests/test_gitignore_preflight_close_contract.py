@@ -1307,30 +1307,6 @@ def test_g3_applies_the_preflight_rule_only_when_armed(landing_sandbox):
     assert run_gate(sandbox_hook(landing_sandbox), admitted)[0] == 0
 
 
-@pytest.mark.parametrize('profile,role,pipeline', READING_PRODUCERS)
-def test_g3_and_the_preflight_admit_every_reading_producer(landing_sandbox, profile, role, pipeline):
-    """P3 row 13: the admission is the rule's, so G3 armed and the preflight's
-    copy both admit it."""
-    shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
-    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
-    prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline=pipeline))
-    assert run_g3(landing_sandbox, prompt, 'block', role) == (0, '')
-    assert run_gate(sandbox_hook(landing_sandbox), prompt) == (0, '')
-
-
-@pytest.mark.parametrize('profile,role', [('singular', 'dev'), ('final_verification', 'qa')])
-def test_g3_and_the_preflight_keep_the_guard_on_a_dev_dispatch(landing_sandbox, profile, role):
-    """A dev dispatch, and /dev's own final QA (Step 13, pipeline dev)."""
-    shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
-    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
-    prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline='dev'))
-    rc, err = run_g3(landing_sandbox, prompt, 'block', role)
-    assert rc == 2
-    assert err.startswith('[gitignored_deliverable] %s: tests/generated/x/test_a.py' % rel)
-    assert run_gate(sandbox_hook(landing_sandbox), prompt) == (
-        2, 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py')
-
-
 # --------------------------------------------------------------------------
 # E6 (P1c X6): the report a dispatch's own obligation declares is its output.
 # The refusal above names the report's dev dispatched again as the round that
@@ -1361,3 +1337,26 @@ def test_e6_a_dispatch_that_reads_the_report_is_still_refused(landing_sandbox):
     prompt = 'Dev report file: %s\n%s' % (rel, dev_obligation(other, role='qa', schema='qa-report.v2'))
     rc, err = run_gate(sandbox_hook(landing_sandbox), prompt)
     assert rc == 2 and err == 'BLOCKED: gitignored deliverables detected: docs/dev/leaked.json'
+
+@pytest.mark.parametrize('profile,role,pipeline', READING_PRODUCERS)
+def test_g3_and_the_preflight_admit_every_reading_producer(landing_sandbox, profile, role, pipeline):
+    """P3 row 13: the admission is the rule's, so G3 armed and the preflight's
+    copy both admit it."""
+    shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
+    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline=pipeline))
+    assert run_g3(landing_sandbox, prompt, 'block', role) == (0, '')
+    assert run_gate(sandbox_hook(landing_sandbox), prompt) == (0, '')
+
+
+@pytest.mark.parametrize('profile,role', [('singular', 'dev'), ('final_verification', 'qa')])
+def test_g3_and_the_preflight_keep_the_guard_on_a_dev_dispatch(landing_sandbox, profile, role):
+    """A dev dispatch, and /dev's own final QA (Step 13, pipeline dev)."""
+    shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
+    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline='dev'))
+    rc, err = run_g3(landing_sandbox, prompt, 'block', role)
+    assert rc == 2
+    assert err.startswith('[gitignored_deliverable] %s: tests/generated/x/test_a.py' % rel)
+    assert run_gate(sandbox_hook(landing_sandbox), prompt) == (
+        2, 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py')

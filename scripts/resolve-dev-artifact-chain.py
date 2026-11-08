@@ -1464,7 +1464,6 @@ INSTRUMENT_CODES = frozenset({"AGGREGATE_IMPLEMENTATION_ERROR", "UNREADABLE_DEV_
 # Python's own exit status for an unhandled exception, so a failure main()
 # catches and one it cannot (raised while the interpreter loads it) read alike.
 INSTRUMENT_FAILURE_EXIT = 1
-_MINTED_RE = re.compile(r"\[/do\] task-id minted: ([A-Za-z0-9._-]+)")
 # Gap-line values stay one printable-ASCII line: anything else is a JSON string.
 _GAP_TOKEN_RE = re.compile(r'[!#-\[\]-~]+')
 _GAP_MESSAGE_UNSAFE_RE = re.compile(r'[^ -~]|^"| lane=')
@@ -1519,43 +1518,33 @@ def _check_dev_chain(validator: ChainValidator, task_id: str, obligation: Module
                 f"verdict is {report.get('verdict')!r}; expected 'pass'",
             )
         for role, question in questions:
-            # Answered once its producer's next artifacts are written after it.
-            answers = [paths["dev_report"]] if role == "dev" else [paths["ticket"], paths["context"]]
-            if question.is_file() and not all(_newer(answer, question) for answer in answers):
-                validator.error(
-                    "unanswered",
-                    _rel(question, root),
-                    f"no {' and '.join(answer.name for answer in answers)} written after the question",
-                )
+            if not question.is_file():
+                continue
+            # Asked by the dispatch whose own task_id and role name it, as G2 reads it (no obligation
+            # declares it, so declaring_dispatch finds none); all else it declares answers it (D21).
+            asking = obligation._latest([
+                r for r in obligation._task_records(task_id, root, None)
+                if (r["obligation"].get("task_id"), r["obligation"].get("role")) == (unit, role)])
+            rel = _rel(question, root)
+            owed = {Path(a["path"]).as_posix() for a in (asking["obligation"].get("artifacts", []) if asking else [])
+                    if "path" in a} - {rel}
+            late = sorted(path for path in owed if not _newer(root / path, question))
+            if not owed or late:
+                validator.error("unanswered", rel, f"{', '.join(late)} not written after the question" if late
+                                else "no dispatch of the task declares the artifacts that answer it")
     return lanes
 
 
 def _do_minted(root: Path, task_id: str) -> bool:
     """Whether the UserPromptSubmit hook minted ``task_id`` for a /do the human
-    typed: its hook-context record inside that /do's span, in any session of
-    the project's transcript store (a later session's /close finds it too)."""
-    obligation, command_span, stop_contract = (
-        _harness_lib(name) for name in ("obligation", "command_span", "stop_contract")
-    )
-    commands = stop_contract.harness_commands()
-    needle = f"[/do] task-id minted: {task_id}".encode()
+    typed: a /do span whose hook-minted id (command_span.Span.minted_id, the
+    transcripts' one reader) is the task, in any session of the project's
+    transcript store (a later session's /close finds it too)."""
+    obligation, command_span = (_harness_lib(name) for name in ("obligation", "command_span"))
     for transcript in obligation._session_transcripts(root, None):
-        try:
-            if needle not in transcript.read_bytes():
-                continue
-            records = command_span._records(transcript)
-        except OSError:
-            continue
-        command = None
-        for _line, record in records:
-            opener = stop_contract.span_opener(record, commands)
-            command = opener[0] if opener else command
-            attachment = record.get("attachment")
-            if command == "do" and isinstance(attachment, dict) and attachment.get("type") == "hook_additional_context":
-                content = attachment.get("content")
-                text = content if isinstance(content, str) else json.dumps(content)
-                if task_id in _MINTED_RE.findall(text):
-                    return True
+        for line, command, args in command_span.openers(str(transcript)):
+            if command == "do" and command_span.Span(command, args, line, str(transcript)).minted_id() == task_id:
+                return True
     return False
 
 
@@ -1627,9 +1616,12 @@ def disposition(project_root: Path | str, task_id: str, stage: str) -> dict[str,
     do_task = (do_record is not None and do_record.get("source") == "do") or (
         not report.is_file() and _do_minted(root, task_id))
     if do_task and report.is_file() and obligation.terminal_status("do-report.v1", do_record) != "completed":
-        # Q7: the report of dev, dispatched along the do-report's route, concludes the /do task (G2 verified it)
+        # Q7: the report of dev, dispatched along the do-report's route, concludes the /do task (G2 verified it),
+        # and the do-report's lists equal that report's (A3.c with no transcript, do_report_gaps)
         if (record := validator.read_json(report)) is not None:
             validator.validate_dev(record, task_id, report)
+        for code, artifact, detail in do_report_gaps(root, task_id, do_path):
+            validator.error(code, artifact, detail)
     elif do_task:
         report = do_path
         _check_do_report(validator, do_path, do_record, do_problem, obligation)
@@ -1716,16 +1708,20 @@ def _default_project_dir() -> str:
 def do_report_gaps(
     project_root: Path | str, task_id: str, path: Path, transcript: str | None = None
 ) -> list[tuple[str, str, str]]:
-    """The Stop gate's /do checks beyond the record and do.status (P5 R8), as
-    (code, artifact, detail): the report fails its versioned schema; and, with the session
-    ``transcript``, its files_modified and files_created (a created file may
-    sit in either) differ from the write set of every /do span of the task in
-    it: the main agent's own Write/Edit/MultiEdit/NotebookEdit targets with an
-    ok result, its Bash commands' paths counting as named
-    (command_span.Span.write_set). Each listed file is written or named and
-    each written file is listed, else one gap names the exact expected paths.
-    Without a transcript (a /close or /commit stage) the lists stand as the
-    report states them. Read-only."""
+    """The do branch's checks beyond the record and do.status (P5 R8, A3.c), as
+    (code, artifact, detail). With the session ``transcript`` (the /do Stop):
+    the report fails its versioned schema; and its files_modified and
+    files_created (a created file may sit in either) differ from the write set
+    of every /do span of the task in it: the main agent's own
+    Write/Edit/MultiEdit/NotebookEdit targets with an ok result, its Bash
+    commands' paths counting as named (command_span.Span.write_set). Each
+    listed file is written or named and each written file is listed, else one
+    gap names the exact expected paths. Without a transcript (the Q7 route of a
+    /close or /commit stage: the do-report is not completed and the task's
+    dev-report, which G2 verified at dev's stop, concludes it) its lists must
+    equal that dev-report's dev.files_modified and dev.files_created, else one
+    gap names them; with no dev-report they stand as the report states them.
+    Read-only."""
     harness = str(Path(__file__).resolve().parent.parent)
     if harness not in sys.path:
         sys.path.insert(0, harness)
@@ -1734,18 +1730,34 @@ def do_report_gaps(
     root = Path(project_root).resolve()
     path = Path(path)
     relative = path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path)
+
+    def listed(section) -> set:
+        lists = [section.get(key) for key in ("files_modified", "files_created")] if isinstance(section, dict) else []
+        rels = (command_span._project_relative(entry, str(root), str(root))
+                for listed in lists if isinstance(listed, list) for entry in listed if isinstance(entry, str))
+        return {rel for rel in rels if rel}
+
+    record, _problem = do_report.load(path)
+    do = record.get("do") if isinstance(record, dict) else None
+    if not transcript:
+        dev_path = root / "docs" / "dev" / f"dev-report-{task_id}.json"
+        try:
+            dev = json.loads(dev_path.read_text(encoding="utf-8")).get("dev")
+        except (OSError, ValueError, AttributeError):
+            return []  # no dev-report to compare (or one the chain's own check reads)
+        expected = listed(dev)
+        if isinstance(do, dict) and listed(do) != expected:
+            return [("FILES_NOT_DEV_REPORT", relative,
+                     "do.files_modified + do.files_created must list exactly the files of "
+                     f"{dev_path.relative_to(root).as_posix()} (dev.files_modified + dev.files_created): "
+                     f"{json.dumps(sorted(expected))}")]
+        return []
     schema = contract_runtime.validate_report_artifact(path)
     gaps = [("SCHEMA_VIOLATION", relative, str(error))
             for error in (schema.get("errors") or []) if schema.get("status") == "fail"]
-    record, _problem = do_report.load(path)
-    do = record.get("do") if isinstance(record, dict) else None
-    if not transcript or not isinstance(do, dict):
+    if not isinstance(do, dict):
         return gaps
-    declared = set()
-    lists = [do.get(key) for key in ("files_modified", "files_created")]
-    for entry in [entry for listed in lists if isinstance(listed, list) for entry in listed]:
-        rel = command_span._project_relative(entry, str(root), str(root)) if isinstance(entry, str) else None
-        declared |= {rel} if rel else set()
+    declared = listed(do)
     written, named, found = set(), set(), False
     openers = command_span.openers(transcript)
     for k, (line, command, args) in enumerate(openers):

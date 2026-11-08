@@ -666,7 +666,7 @@ def own_obligation(prompt):
 
 def exempt_task_id(prompt):
     """E5 (2): the task a close or commit producer's dispatch reads, or None,
-    read from the dispatch's own obligation."""
+    read from the dispatch's own obligation (own_obligation)."""
     doc = own_obligation(prompt)
     task_id = doc.get('task_id')
     exempt = doc.get('pipeline') in READING_PIPELINES and doc.get('role') != 'dev'
