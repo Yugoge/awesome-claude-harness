@@ -127,12 +127,14 @@ fi
 #   CLAUDE_AUTO_CREATE_REPO  unset or "ask": print the manual command and skip;
 #                            {1,true,TRUE,yes,YES} (the gate set above): create it;
 #                            anything else: skip.
-#   GIT_AUTO_PUSH            push the initial commit only when exactly "1";
-#                            otherwise create without pushing (push later with /push).
+#   GIT_AUTO_PUSH            push the initial commit only when exactly "1", unless the new
+#                            repository's harness.autoPush (from a git init template) says
+#                            otherwise (lib/auto_push.sh); else create without pushing (/push later).
 AUTO_CREATE=${CLAUDE_AUTO_CREATE_REPO:-ask}
 CREATE_ARGS=(--private --source=. --remote=origin)
-PUSH_NOTE="Initial commit not pushed: automatic push is off (enable with GIT_AUTO_PUSH=1). Push with /push or: git push -u origin HEAD"
-if [ "${GIT_AUTO_PUSH:-}" = "1" ]; then
+PUSH_NOTE="Initial commit not pushed: automatic push is off for this repository (enable with git config harness.autoPush true, or GIT_AUTO_PUSH=1). Push with /push or: git push -u origin HEAD"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/auto_push.sh" 2>/dev/null || harness_auto_push() { return 1; }  # no reader, no push
+if harness_auto_push .; then
   CREATE_ARGS+=(--push)
   PUSH_NOTE=""
 fi
@@ -153,7 +155,7 @@ esac
 # Auto-create GitHub repository
 echo -e "${BLUE}🌐 Creating GitHub repository: $REPO_NAME${NC}"
 
-# Create private repository (pushed only when GIT_AUTO_PUSH=1 added --push)
+# Create private repository (pushed only when harness_auto_push added --push)
 if gh repo create "$REPO_NAME" "${CREATE_ARGS[@]}" > /dev/null 2>&1; then
   USERNAME=$(gh api user -q .login)
   echo -e "${GREEN}✅ Repository created: https://github.com/$USERNAME/$REPO_NAME${NC}"

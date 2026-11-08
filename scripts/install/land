@@ -15,6 +15,7 @@
 # pull conflicted on settings.json or on doc-sync's date lines gets render-settings land --repair,
 # and one with a stale daemon (left running before, or older than a later pull) restarts it; a
 # settings.json that a CLI write left stat-dirty gets its index stat re-recorded (review N1).
+# In each of these states the home gets harness.autoPush false when the key is absent (D1 as amended).
 set -u
 trap 'exit 0' EXIT  # R9: exit 0 whatever fails below
 case "${BASH_SOURCE[0]}" in */*) cd -P "${BASH_SOURCE[0]%/*}/../.." ;; *) cd -P ../.. ;; esac 2>/dev/null || exit 0
@@ -103,7 +104,7 @@ stale() {
   # mtime, and the boot time as the clock now minus /proc/uptime.
   while read -r k _ v _; do [[ $v == *.* ]] && v="${v#*.}00" || v=00
     v=$((k * 100 + 10#${v:0:2})); [ "$v" -le "$newest" ] || newest=$v
-  done < <(stat -c '%Y %y' hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh 2>/dev/null)
+  done < <(stat -c '%Y %y' hooks/git-fswatch.sh hooks/lib/checkpoint-core.sh hooks/lib/auto_push.sh 2>/dev/null)
   read -r up _ < /proc/uptime; up="${up//[!0-9]/}"; now="${EPOCHREALTIME//[!0-9]/}"
   [ -n "$now" ] || now="$(date +%s%6N)"; tick="$(getconf CLK_TCK 2>/dev/null)"
   boot=$(( ${now:-0} / 10000 - 10#${up:-0} ))
@@ -175,6 +176,10 @@ restart_daemons() {  # [landed] R8: the stale processes running this home's git-
 state
 [ "${1:-}" = "--state" ] && { echo "$STATE"; exit 0; }
 case "$STATE" in landed|hooks|upgraded) ;; *) exit 0 ;; esac
+# D1 as amended: the home's origin is the public repository, so its automatic pushes stay off until
+# the owner sets harness.autoPush; a value already set (any value) is never changed. One git call.
+git config --local --get harness.autoPush >/dev/null 2>&1
+[ $? -ne 1 ] || { git config --local harness.autoPush false && log "auto-push harness.autoPush set (it was absent)"; } 2>/dev/null
 if [ "$STATE" = landed ]; then  # a later pull's conflicted stash pop (its entry is kept), or a stale daemon
   # settings.json unmerged, or an index or CLAUDE.md whose stash change is doc-sync's date lines
   # only (review LH-5: the owner's own conflict there is not the repair's, so no run per Stop).

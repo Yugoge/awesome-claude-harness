@@ -25,7 +25,8 @@
 #   4. if TREE_SHA == PARENT_TREE_SHA -> return 0 (idempotent)
 #   5. git commit-tree TREE_SHA [-p PARENT_SHA] -m "<msg>"  -> NEW_SHA
 #   6. git update-ref REF NEW_SHA OLD_SHA           (CAS; retries 5x on race)
-#   7. opt-in background push, only when GIT_AUTO_PUSH=1 (rate-limited 1/30s per repo), WITHOUT -f, gated by a
+#   7. opt-in background push, only when lib/auto_push.sh says so (the repository's harness.autoPush, else
+#      GIT_AUTO_PUSH=1) (rate-limited 1/30s per repo), WITHOUT -f, gated by a
 #      fail-closed PII/credential content scan + a fail-open oversized-blob
 #      size check on the local-minus-remote object set
 #
@@ -346,7 +347,9 @@ _checkpoint_rate_limited_push() {
     local GIT_AUTO_PUSH="${GIT_AUTO_PUSH:-}"
     [ -n "${CLAUDE_HOME:-}" ] || [ -z "${CLAUDECODE:-}${CLAUDE_PROJECT_DIR:-}" ] || eval "GIT_AUTO_PUSH=; $(env \
         -u GIT_AUTO_PUSH python3 "${BASH_SOURCE[0]%/*}/claude_home.py" env GIT_AUTO_PUSH 2>/dev/null)"
-    [ "$GIT_AUTO_PUSH" = "1" ] || return 0
+    # D1 as amended: the repository's harness.autoPush decides first, the GIT_AUTO_PUSH above
+    # when it is unset; a reader that cannot be loaded means no push.
+    . "${BASH_SOURCE[0]%/*}/auto_push.sh" 2>/dev/null && harness_auto_push "$1" || return 0
     local work_dir="$1"
     local ref="$2"
     local git_cmd
