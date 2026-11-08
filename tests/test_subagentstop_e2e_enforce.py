@@ -6,11 +6,15 @@ its obligation declares, at the declared path, never on another report of the
 session or the task (P1b row 3): AC1 (cross-session pass), AC2b (the declared
 report missing exits 2), the declared report not shadowed by a same-session
 report either way, and a dispatch that declares no qa-report (BA validation,
-close QA) owing no E2E evidence. A QA dispatch without an obligation keeps the
-session_ts correlation (P1c row 10): AC2a (no correlation exits 2), AC3
-(same-timestamp match, with branch-identity proof via M9's stderr tag) and the
-/do-profile expected_absent skip (AC7/AC8). What a QA owes comes from its own
-dispatch obligation (P1b E7), never from a switch in qa.json.
+close QA) owing no E2E evidence. A QA dispatch without an obligation is judged
+on the qa-reports its own transcript shows it wrote, never the newest file of
+the session (P1c R10): AC2a (it wrote none exits 2), AC3 (a report it wrote
+passes) and the /do-profile expected_absent skip (AC7/AC8). What a QA owes
+comes from its own dispatch obligation (P1b E7), never from a switch in qa.json.
+The session_ts correlation's unit tests went with it (R10 deleted
+_find_latest_qa_report): test_ac2a_unit_no_match_returns_none_untagged,
+test_ac2b_unit_empty_glob_short_circuits_to_none,
+test_ac3_session_ts_branch_resolves_without_obligation.
 
 Models tests/test_resolve_dev_artifact_chain.py's
 importlib.util.spec_from_file_location pattern for loading a
@@ -97,6 +101,21 @@ def _dispatch_qa(
     return path
 
 
+def _qa_wrote(project_dir: Path, agent_id: str, rels: list) -> Path:
+    """A QA dispatch with no obligation whose transcript shows it wrote `rels`."""
+    path = project_dir / "transcripts" / f"agent-{agent_id}.jsonl"
+    lines = [{"type": "user", "message": {"role": "user", "content": "You are the QA subagent."}}]
+    for k, rel in enumerate(rels):
+        use = f"toolu_{agent_id}_{k}"
+        lines.append({"type": "assistant", "cwd": str(project_dir), "message": {"content": [
+            {"type": "tool_use", "id": use, "name": "Write",
+             "input": {"file_path": str(project_dir / rel), "content": "{}"}}]}})
+        lines.append({"type": "user", "cwd": str(project_dir), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": use, "content": "ok"}]}})
+    _write(path, "".join(json.dumps(x) + "\n" for x in lines))
+    return path
+
+
 def _run_hook(project_dir: Path, agent_id: str) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["CLAUDE_PROJECT_DIR"] = str(project_dir)
@@ -168,29 +187,6 @@ def test_ac2a_no_anchor_no_session_correlation_exits_2(tmp_path):
     assert "qa-report-*.json" in proc.stderr
 
 
-def test_ac2a_unit_no_match_returns_none_untagged(tmp_path, capsys):
-    """AC2a unit leg: _find_latest_qa_report itself returns None (not just
-    the wrapping hook's exit code) when the session timestamp matches
-    nothing, and emits no resolution-branch tag at all (M9 only tags
-    successful returns)."""
-    dev_session_id = "dev-20260101-000000"
-    _write(
-        tmp_path / "docs" / "dev" / "qa-report-20269999-999999.json",
-        _qa_report("20269999-999999"),
-    )
-
-    result = HOOK._find_latest_qa_report(str(tmp_path), dev_session_id)
-
-    assert result is None
-    captured = capsys.readouterr()
-    assert "branch=" not in captured.err
-
-
-# ---------------------------------------------------------------------------
-# AC2b: fail-closed -- report missing
-# ---------------------------------------------------------------------------
-
-
 def test_ac2b_report_genuinely_missing_exits_2(tmp_path):
     """AC2b: the qa-report the QA's obligation declares does not exist -> exit
     2 naming that path. This is the second of the two branches this hook
@@ -211,36 +207,6 @@ def test_ac2b_report_genuinely_missing_exits_2(tmp_path):
     assert f"docs/dev/qa-report-{task_id}.json but no such file exists" in proc.stderr
 
 
-def test_ac2b_unit_empty_glob_short_circuits_to_none(tmp_path):
-    """AC2b unit leg: an empty docs/dev/ (glob() returns zero matches)
-    short-circuits to None before the session_ts correlation runs."""
-    (tmp_path / "docs" / "dev").mkdir(parents=True, exist_ok=True)
-
-    result = HOOK._find_latest_qa_report(str(tmp_path), "dev-20260101-000000")
-
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# AC3: unchanged behavior when session timestamp equals task timestamp
-# ---------------------------------------------------------------------------
-
-
-def test_ac3_session_ts_branch_resolves_without_obligation(tmp_path, capsys):
-    """AC3: a QA dispatch without an obligation -- the session_ts branch
-    resolves, tagged session_ts_filename_match."""
-    ts = "20260303-222222"
-    dev_session_id = f"dev-{ts}"
-    _write(tmp_path / "docs" / "dev" / f"qa-report-{ts}.json", _qa_report(ts))
-
-    result = HOOK._find_latest_qa_report(str(tmp_path), dev_session_id)
-
-    assert result is not None
-    assert result.name == f"qa-report-{ts}.json"
-    captured = capsys.readouterr()
-    assert "branch=session_ts_filename_match" in captured.err
-
-
 def test_ac3_hook_exits_zero_both_subcases(tmp_path):
     """AC3 integration leg: both sub-cases exit 0 end-to-end via main()."""
     ts = "20260303-222222"
@@ -251,7 +217,8 @@ def test_ac3_hook_exits_zero_both_subcases(tmp_path):
     _enable_e2e_enforcement(tmp_path, dev_session_id)
     _write(tmp_path / "docs" / "dev" / f"qa-report-{ts}.json", _qa_report(ts))
 
-    # Sub-case 1: no dispatch obligation, so no task_id anchor.
+    # Sub-case 1: no dispatch obligation; the report is one this QA wrote.
+    _qa_wrote(tmp_path, agent_id, [f"docs/dev/qa-report-{ts}.json"])
     proc1 = _run_hook(tmp_path, agent_id)
     assert proc1.returncode == 0, proc1.stderr
 

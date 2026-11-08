@@ -13,7 +13,11 @@ NC='\033[0m'
 echo -e "${BLUE}🔄 Starting safe pull...${NC}"
 echo ""
 
-# Step 1: Check for uncommitted changes
+# Step 1: Check for uncommitted changes; in the harness home, after the landing re-records the stat
+# of a settings.json a CLI write left unchanged through the filter (review N1, X9)
+H="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd -P)"
+[ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$H" ] \
+  && bash "$H/scripts/install/land" --settings-stat
 if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
   HAS_CHANGES=1
 else

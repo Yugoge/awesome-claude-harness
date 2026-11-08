@@ -102,6 +102,11 @@ if [ -n "$spec_path" ]; then
   VIEWS_DIR=$(jq -r '.views_dir // empty'        <<<"$RESOLVED_JSON")
   CP_DIR=$(jq -r '.cp_dir // empty'              <<<"$RESOLVED_JSON")
 fi
+if [ -n "$spec_path" ] && [ -d "$CLAUDE_PROJECT_DIR/$CP_DIR" ]; then
+  SPEC_ID="$ARTIFACT_ID"
+else
+  SPEC_ID=""
+fi
 ```
 
 When `VIEWS_AVAILABLE` is `true`, read `view_paths` from `$MANIFEST_PATH` (`views` map of agent → path). The resolver returns `views_available=false` with exit 0 for a genuinely legacy spec with no split artifacts — those are fully supported, the monolith path alone is passed to subagents with no checkpoint enforcement.
@@ -124,7 +129,7 @@ The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) has already, for this c
 1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name, `dev-command-<timestamp>`) and `Task id: …` (the id this cycle's artifacts are named with, `<timestamp>` and `$TASK_ID` below)
 2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
-4. Armed the enforcement flags: E2E, Codex when `--codex` was passed, and the producer-side report schema gate (see `commands/dev.md` Step 1)
+4. Armed the enforcement flags: Codex when `--codex` was passed, and the producer-side report schema gate (see `commands/dev.md` Step 1)
 
 **Read `DEV_SESSION_ID` and `TASK_ID` from the hook output above.** Store them for use in every Agent launch prompt below.
 
@@ -148,16 +153,10 @@ Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the 
 
 Reuse the resolver output from the views-detection step — do NOT re-derive the
 spec-id from `spec_path`. The cp-state directory is exactly the resolver's `cp_dir`:
+the resolver block above sets `SPEC_ID` to the canonical artifact id the resolver
+reports when that directory exists, and to `""` when it does not (or without a spec).
 
-```bash
-if [ -n "$spec_path" ] && [ -d "$CLAUDE_PROJECT_DIR/$CP_DIR" ]; then
-  SPEC_ID="$ARTIFACT_ID"          # resolver's canonical artifact id
-else
-  SPEC_ID=""                       # no cp-state dir -> skip SECOND ACTION below
-fi
-```
-
-If no cp-state directory exists, set `SPEC_ID=""` and skip the `SECOND ACTION`
+If no cp-state directory exists, `SPEC_ID` is `""`: skip the `SECOND ACTION`
 lines below. If a particular agent has no cp-state file under that SPEC_ID, omit that
 agent's `SECOND ACTION` for this launch. When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a
 cp-state file MUST include a `SECOND ACTION` line immediately after the dev-registry `FIRST ACTION`:

@@ -474,7 +474,7 @@ def _extract_dash_c_from_span(options_span, command_excerpt):
     """Resolve the single `-C <dir>` value from a commit invocation's
     global-options span, or '' when no explicit `-C` is present.
 
-    changelog-analyst's canonical commit form is `git -C "${GIT_ROOT}" commit
+    changelog-analyst's canonical commit form is `git -C "<GIT_ROOT>" commit
     -F <msgfile>` (agents/changelog-analyst.md) for BOTH the root repo and
     the nested ~/.claude repo -- it never `cd`s, only ever passes `-C`. The
     guard's own CWD is therefore CONTROL_ROOT for the entire session, even

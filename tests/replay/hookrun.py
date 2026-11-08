@@ -14,7 +14,9 @@ A run keeps the last TAIL characters of the hook's stdout and stderr. For a
 block it also keeps the refusal's head ("refusal_head": its first HEAD
 characters, never cutting its first line), taken from the uncut output: the
 tail of a long refusal can be its echoed command alone, while the first line
-names the block (refusal_first). What the hook receives and returns is the same.
+names the block (refusal_first). An allowing hook's hookSpecificOutput.updatedInput
+(a PreToolUse rewrite of the tool's input) is kept whole as "updated_input", for
+the same reason. What the hook receives and returns is the same.
 """
 from __future__ import annotations
 
@@ -152,6 +154,13 @@ def _run_one(h: dict, payload_raw: str, env: dict, cwd: str) -> dict:
            "command": h["command"], "timeout": h["timeout"]}
     if verdict == "block":  # from the uncut output: the kept tail can lack the refusal's first line
         rec["refusal_head"] = refusal_head(refusal({"how": how, "stdout": out, "stderr": err}))
+    elif verdict == "ok" and out.strip().startswith("{"):  # a PreToolUse input rewrite, from the uncut output
+        try:
+            upd = (json.loads(out).get("hookSpecificOutput") or {}).get("updatedInput")
+        except (ValueError, AttributeError):
+            upd = None
+        if isinstance(upd, dict):
+            rec["updated_input"] = upd
     return rec
 
 

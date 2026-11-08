@@ -4,7 +4,7 @@ PostToolUse Hook: Output checklist progress after every TodoWrite call.
 
 Fires after every TodoWrite call:
 1. Reads the command from the transcript's active span (lib.todo_canonical.checklist)
-2. Runs todo script to get canonical blocking_count (fresh, no cache)
+2. Counts the steps of the list it was given (the list's own length)
 3. Prints current checklist progress to stdout (injected into Claude's context)
 
 It writes nothing: the CLI records every TodoWrite in the transcript and in its
@@ -49,8 +49,10 @@ def main():
 
         state = checklist(data.get('transcript_path'))
         cmd_name = state.command if state else '?'
-        # Get blocking_count fresh from todo script — never from cache
-        blocking_count = len(state.canonical) if state else len(todos)
+        # The list's own length, not the canonical one's: whether its length is right is
+        # decided at a first list or a length change (pretool-todo-validate.py), and a list
+        # the session started with stays valid when the canonical list changes (P1c row 17).
+        blocking_count = len(todos)
 
         print(format_checklist('/' + cmd_name, todos, blocking_count))
 

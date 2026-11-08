@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Write one or more enforcement-flag sentinels into a dev-registry session dir.
 #
-# Merges the bodies of write-codex-enforce.sh and write-e2e-enforce.sh, which
-# were byte-for-byte identical apart from the output filename. Both remain as
-# thin wrappers around this script (command text written before this change
-# calls them by name), so this is a consolidation, not a rename.
+# Merges the body of write-codex-enforce.sh, which remains as a thin wrapper
+# around this script (command text written before this change calls it by
+# name), so this is a consolidation, not a rename. The E2E gate has no flag
+# (hooks/subagentstop-e2e-enforce.py judges every cycle's QA): its wrapper,
+# write-e2e-enforce.sh, writes nothing.
 #
 # --flag is repeatable, and that is the point: one invocation writes every flag
 # a cycle's registry needs (hooks/prompt-workflow.py _arm_registry). A flag
@@ -13,7 +14,7 @@
 #
 # Usage: write-enforce-flag.sh --source-command <dev|dev-command|redev|dev-overnight> \
 #                              --session-id <DEV_SESSION_ID> \
-#                              --flag <codex|e2e|artifact-contract> [--flag <...>]
+#                              --flag <codex|artifact-contract> [--flag <...>]
 # Exits 1 on failure; callers must abort if this script fails.
 set -euo pipefail
 
@@ -45,7 +46,6 @@ CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 flag_filename() {
   case "$1" in
     codex)             echo "codex-enforce.json" ;;
-    e2e)               echo "e2e-enforce.json" ;;
     artifact-contract) echo "artifact-contract-enforce.json" ;;
     *)                 return 1 ;;
   esac
@@ -56,7 +56,7 @@ flag_filename() {
 # bad: the first sentinel already on disk, the caller told to abort.
 for flag in "${FLAGS[@]}"; do
   flag_filename "$flag" >/dev/null || {
-    echo "ERROR: unknown --flag '$flag' (expected: codex, e2e, artifact-contract)" >&2; exit 1; }
+    echo "ERROR: unknown --flag '$flag' (expected: codex, artifact-contract)" >&2; exit 1; }
 done
 
 mkdir -p "$REGISTRY_DIR" \
@@ -85,7 +85,6 @@ for flag in "${FLAGS[@]}"; do
   # and transcripts grep for these strings.
   case "$flag" in
     codex)             echo "Codex enforcement active: $target" ;;
-    e2e)               echo "E2E enforcement active: $target" ;;
     artifact-contract) echo "Artifact-contract enforcement active: $target" ;;
   esac
 done

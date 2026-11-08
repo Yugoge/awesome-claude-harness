@@ -4,9 +4,9 @@
 Covers the contract from commands/do.md Step 5: a /do session may stop only
 when its do-report reached a terminal, shape-valid state. Block mode is the
 shipped default (DO_REPORT_GATE_MODE unset); advisory mode (opt-in) is
-asserted to never block and to write nothing. Deadlock guard:
-after MAX_BLOCKS blocks the gate force-allows and leaves the report as the
-agent wrote it (the agent is its only writer). do.status is decided by
+asserted to never block and to write nothing. No count of refused stops
+releases the gate (D23, D25): it keeps blocking until the report complies and
+never writes the report (the agent is its only writer). do.status is decided by
 lib/obligation.terminal_status on the do-report schema's vocabulary.
 
 Run: python3 hooks/tests/test_stop_do_report_gate.py
@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 
 HOOK = Path(__file__).resolve().parent.parent / "stop-do-report-gate.py"
-MAX_BLOCKS = 2  # keep in sync with the hook
+REPEATS = 4  # stops in a row with the report still missing: each one is refused
 
 sys.path.insert(0, str(HOOK.parent))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
@@ -35,12 +35,13 @@ def _sidecar_path(sid):
     return _state_path(f"claude-do-task-{sid}.json")
 
 
-def _counter_path(sid):
+def _former_counter_path(sid):
+    """Where the gate once counted refused stops; it keeps no state of its own now."""
     return _state_path(f"claude-do-report-gate-{sid}.json")
 
 
 def _cleanup(sid):
-    for p in (_sidecar_path(sid), _counter_path(sid)):
+    for p in (_sidecar_path(sid), _former_counter_path(sid)):
         try:
             p.unlink()
         except OSError:
@@ -122,29 +123,27 @@ def test_missing_report_blocks_in_block_mode():
             _cleanup(sid)
 
 
-def test_deadlock_guard_force_allows_after_max_blocks():
+def test_repeated_stops_never_release_the_gate():
     sid, tid = _sid(), "20260101-000002"
     with tempfile.TemporaryDirectory() as tmp:
         _write_sidecar(sid, tid)
         try:
-            rcs = [_run_gate(sid, tmp, tmp, task_id=tid).returncode for _ in range(MAX_BLOCKS + 1)]
-            assert rcs[:MAX_BLOCKS] == [2] * MAX_BLOCKS, f"first {MAX_BLOCKS} stops must block: {rcs}"
-            assert rcs[MAX_BLOCKS] == 0, f"stop #{MAX_BLOCKS + 1} must force-allow (deadlock guard): {rcs}"
+            rcs = [_run_gate(sid, tmp, tmp, task_id=tid).returncode for _ in range(REPEATS)]
+            assert rcs == [2] * REPEATS, f"every stop with the report missing must block: {rcs}"
+            assert not _former_counter_path(sid).exists(), "the gate keeps no count of refused stops"
         finally:
             _cleanup(sid)
 
 
-def test_completed_report_allows_and_clears_counter():
+def test_completed_report_allows_after_refused_stops():
     sid, tid = _sid(), "20260101-000003"
     with tempfile.TemporaryDirectory() as tmp:
         _write_sidecar(sid, tid)
         try:
-            assert _run_gate(sid, tmp, tmp, task_id=tid).returncode == 2  # arm the counter
+            assert _run_gate(sid, tmp, tmp, task_id=tid).returncode == 2
             _report(tmp, tid)
             r = _run_gate(sid, tmp, tmp, task_id=tid)
             assert r.returncode == 0, f"completed report must allow stop: {r.stderr}"
-            assert not _counter_path(sid).exists(), \
-                "compliance must clear the block counter"
         finally:
             _cleanup(sid)
 
@@ -263,11 +262,11 @@ def test_versioned_schema_violation_blocks():
             _cleanup(sid)
 
 
-def test_default_mode_blocks_and_forced_allow_writes_nothing():
+def test_default_mode_blocks_and_writes_nothing():
     """AC-L5-06/07/08: with DO_REPORT_GATE_MODE unset the gate blocks by
-    default; when the deadlock guard force-allows, the do-report keeps the
-    agent's bytes (D8/D24: the gate is no second writer of it), whatever the
-    violation (a non-terminal status, or a task_id mismatch)."""
+    default, at every stop, and the do-report keeps the agent's bytes (D8/D24:
+    the gate is no second writer of it), whatever the violation (a non-terminal
+    status, or a task_id mismatch)."""
     sid, tid = _sid(), "20260101-000012"
     with tempfile.TemporaryDirectory() as tmp:
         _write_sidecar(sid, tid)
@@ -275,14 +274,11 @@ def test_default_mode_blocks_and_forced_allow_writes_nothing():
             _report(tmp, tid, do_status="pending", do_summary="")
             report = Path(tmp) / "docs" / "dev" / f"do-report-{tid}.json"
             before = report.read_bytes()
-            rcs = [_run_gate(sid, tmp, tmp, mode=None, task_id=tid)
-                   for _ in range(MAX_BLOCKS + 1)]
-            assert [r.returncode for r in rcs[:MAX_BLOCKS]] == [2] * MAX_BLOCKS, \
-                f"DO_REPORT_GATE_MODE unset must block by default now: {[r.returncode for r in rcs]}"
-            assert rcs[MAX_BLOCKS].returncode == 0, "deadlock guard must still force-allow"
-            assert "FORCED ALLOW" in rcs[MAX_BLOCKS].stderr
-            assert "rewritten" not in rcs[MAX_BLOCKS].stderr
-            assert report.read_bytes() == before, "the forced allow must not write the report"
+            rcs = [_run_gate(sid, tmp, tmp, mode=None, task_id=tid) for _ in range(REPEATS)]
+            assert [r.returncode for r in rcs] == [2] * REPEATS, \
+                f"DO_REPORT_GATE_MODE unset must block at every stop: {[r.returncode for r in rcs]}"
+            assert not any("rewritten" in r.stderr for r in rcs)
+            assert report.read_bytes() == before, "the gate must not write the report"
         finally:
             _cleanup(sid)
 
@@ -295,10 +291,10 @@ def test_default_mode_blocks_and_forced_allow_writes_nothing():
             rec = json.loads(p.read_text())
             rec["task_id"] = "20991231-235959"  # mismatch: still non-compliant, status stays non-pending
             p.write_text(json.dumps(rec))
-            rcs2 = [_run_gate(sid2, tmp, tmp, task_id=tid2).returncode for _ in range(MAX_BLOCKS + 1)]
-            assert rcs2[MAX_BLOCKS] == 0, f"deadlock guard must force-allow: {rcs2}"
+            rcs2 = [_run_gate(sid2, tmp, tmp, task_id=tid2).returncode for _ in range(REPEATS)]
+            assert rcs2 == [2] * REPEATS, f"a mismatched task_id must block at every stop: {rcs2}"
             final = json.loads(p.read_text())
-            assert final == rec, "the forced allow must not write the report"
+            assert final == rec, "the gate must not write the report"
         finally:
             _cleanup(sid2)
 

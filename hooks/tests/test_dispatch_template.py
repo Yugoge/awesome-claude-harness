@@ -138,3 +138,28 @@ def test_the_current_dev_qa_templates_carry_the_codex_line_and_request_id():
     prompt = "Use Task tool with:\n- description: \"Verify implementation quality against standards\"\n" \
              + _block("qa", "final_verification")
     assert dispatch_template.template_of("dev", "qa", prompt) == final
+
+
+def test_a_template_declaring_its_obligation_in_a_sentence(tmp_path):
+    """P1c X6: most templates carry no worked example, only the sentence `embed <obligation v="1">{...}
+    </obligation> here with role=..., artifacts=[...]`. A dispatch made from one that carries no block of
+    its own declares what that sentence declares, bound to its prompt (tool-policy's derived write
+    permission, which a QA without a block otherwise lacked for the report its stop is judged on)."""
+    text = f"""### Step 13
+
+{FENCE}
+Use Agent tool with:
+- subagent_type: "qa"
+- prompt: "
+  Verify implementation for <timestamp>.
+  Obligation block: embed `<obligation v="1">{{...}}</obligation>` here with role="qa", pipeline="toy", profile="final_verification", task_id/dispatched_at bound to <timestamp>, artifacts=[{{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{{"task_id":"<timestamp>"}}}}]. Orchestrator instantiates per-dispatch.
+  "
+{FENCE}
+"""
+    commands = _command(tmp_path, text)
+    declared = dispatch_template.template_obligation("toy", "qa", "Verify implementation for 20261029-101010.",
+                                                     commands)
+    assert declared["role"] == "qa" and declared["artifacts"] == [
+        {"kind": "json", "path": "docs/dev/qa-report-20261029-101010.json", "schema": "qa-report.v2",
+         "identity": {"task_id": "20261029-101010"}}]
+    assert dispatch_template.template_obligation("toy", "qa", "Something else entirely.", commands) is None
