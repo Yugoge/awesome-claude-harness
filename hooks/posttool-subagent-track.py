@@ -18,7 +18,7 @@ TRIAGE step's dispatch, write the cycle's contract,
 (lib.contract_runtime.contract_path, N = lib.overnight.cycle_index). It
 renders the dispatches after PM TRIAGE from scripts/todo/dev-overnight.py
 _STEPS, each step's and each re-dispatch's (contract_runtime.post_triage_steps):
-once per pipeline the triage report creates (counted by
+once per pipeline the cycle's triage report (_triage_report) creates (counted by
 scripts/build-pipelines-from-triage.py, the Step-6 builder), except a step
 whose dispatch carries a mode (PM RETRO), which runs once per cycle. This hook
 is the contract's only writer and publishes it by rename; a contract the cycle
@@ -41,14 +41,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.todo_canonical import run_todo_script, write_bookmark
+from lib.todo_canonical import by_content, run_todo_script, write_bookmark
 from lib import contract_runtime
+from lib import obligation
 from lib import overnight
 
 
@@ -275,13 +277,29 @@ def _is_triage_dispatch(stdin_data: dict, steps: list) -> bool:
         return False
     role = ti.get('subagent_type')
     return (isinstance(role, str) and role.strip().lower() == triage.get('subagent_type')
-            and contract_runtime.detect_mode(ti.get('prompt', '')) == triage.get('mode'))
+            and contract_runtime.detect_mode(ti.get('prompt', ''), role) == triage.get('mode'))
 
 
-def _pipeline_count(state: dict, cycle_id: int) -> int | None:
+def _triage_report(state: dict, cycle_id: int, prompt: str) -> Path:
+    """This cycle's triage report: triage-report-cycle<cycle_id>.json in the
+    session's directory. A PM TRIAGE dispatch that embeds no obligation is
+    origin/master's Step 4, held by a session started before the pull: that prose
+    numbers the cycle by the record's cycle_count, which no hook advances any
+    more, so from its second cycle on its report is the one its own "Write triage
+    report to:" line names, else the last one its prompt names (P1c)."""
+    base = overnight.session_dir(state)
+    triage = base / f'triage-report-cycle{cycle_id}.json'
+    if triage.is_file() or not isinstance(obligation.extract_obligation_block(prompt), obligation.NoBlock):
+        return triage
+    named = re.search(r'^\s*Write triage report to:.*?\b(triage-report-cycle\d+\.json)', prompt, re.M)
+    anywhere = re.findall(r'triage-report-cycle\d+\.json', prompt)
+    return base / (named.group(1) if named else anywhere[-1]) if (named or anywhere) else triage
+
+
+def _pipeline_count(state: dict, cycle_id: int, prompt: str = '') -> int | None:
     """How many pipelines this cycle's triage report creates, counted by the
     Step-6 builder itself so the count and the pipelines cannot disagree."""
-    triage = overnight.session_dir(state) / f'triage-report-cycle{cycle_id}.json'
+    triage = _triage_report(state, cycle_id, prompt if isinstance(prompt, str) else '')
     if not triage.is_file():
         return None
     try:
@@ -310,7 +328,7 @@ def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
     if contract_runtime._iter_required_calls(contract_runtime.load_contract(session_id, cycle_id, state)):
         print(f'CYCLE CONTRACT KEPT: cycle {cycle_id} already has one: {path}')
         return
-    count = _pipeline_count(state, cycle_id)
+    count = _pipeline_count(state, cycle_id, str((stdin_data.get('tool_input') or {}).get('prompt') or ''))
     if count is None:
         sys.stderr.write(
             f'CYCLE CONTRACT NOT WRITTEN: cycle {cycle_id} has no readable triage '
@@ -365,7 +383,8 @@ def _resolve_base_context(session_id: str):
     last_todos = state.get('last_todos')
     if not cmd_name or not last_todos:
         return None
-    canonical = run_todo_script(cmd_name, state.get('arguments', '')) or []
+    # Each todo's canonical step is the one of its content, never of its index (P1c row 17).
+    canonical = by_content(run_todo_script(cmd_name, state.get('arguments', '')) or [], last_todos)
     ip_index = _current_in_progress_index(state)
     return state, last_todos, canonical, ip_index, bm_path
 

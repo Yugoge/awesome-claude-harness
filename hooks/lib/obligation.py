@@ -476,6 +476,11 @@ def _validate_artifact_entry(
             return Rejection(
                 reason="unknown_enum_value", field=f"{label}.format", detail=repr(fmt)
             )
+        roots = entry.get("repo_roots")
+        if roots is not None and (
+            not isinstance(roots, list) or any(not isinstance(r, str) or not r for r in roots)
+        ):
+            return Rejection(reason="bad_repo_roots", field=f"{label}.repo_roots")
     return None
 
 

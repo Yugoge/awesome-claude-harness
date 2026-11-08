@@ -1017,6 +1017,9 @@ class CloseRun:
                     value = ", ".join(p for p in (self.do_report, concluded) if p) or None
                 elif "parent ticket" in desc and chain.get("mode") == "singular" and not self.do_report:
                     value = json.dumps(chain.get("artifact_paths"))
+                elif name.strip() == "Completed repairs":  # what Routes completed in this /close so far
+                    value = json.dumps([f"{r['path']}: {r['problem']} | 归因: {r['role']} | 修复: dispatched again"
+                                        for r in self.repairs], ensure_ascii=False)
             if value is not None:
                 out.append(f"- {name.strip()}: {value}")
             elif "omit" not in desc:
@@ -1245,8 +1248,33 @@ class CloseRun:
         self.start(f"--late-repair {self.tid}" if self.late else self.tid)
         last = self.body()
         self.outcome = last or ("stalled at Step 0 (the line above)" if self.stalled else "")
-        self.o.s.stop(f"/close {self.tid}: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
+        ev = self.o.s.stop(f"/close {self.tid}: {self.outcome}", label="/close Stop",
+                           deviation=self.devs.at("/close Stop"))
+        report_last, n = self.report_form()
+        # /close's terminal form (P1c's suite): the report's last non-empty line is the disclosures form when
+        # routing completed a repair (<n> its `## Disclosures` lines), else the plain form.
+        form = f"CLOSE: YES - with disclosures: {len(self.repairs)} items" if self.repairs else CLOSE_YES_PLAIN
+        ok = report_last == form and n == len(self.repairs)
+        self.rp.terminal("close", (last or "").startswith("CLOSE: YES") and ok, ev, task=self.tid,
+                         last_line=last, report_last_line=report_last, disclosures=n, repairs=len(self.routed))
         return last
+
+    def report_form(self) -> tuple:
+        """The close report's last non-empty line and the line count of its last `## Disclosures` section."""
+        with self.rp.acting("driver"):
+            try:
+                with open(os.path.join(self.o.project, self.report_rel())) as fh:
+                    text = fh.read()
+            except OSError:
+                return "", 0
+        lines = text.split("\n")
+        last = next((l for l in reversed(lines) if l.strip()), "")
+        at = max((k for k, l in enumerate(lines) if l.strip() == "## Disclosures"), default=None)
+        n = 0
+        while at is not None and at + 1 + n < len(lines) and lines[at + 1 + n].strip() \
+                and not lines[at + 1 + n].startswith(("#", "CLOSE")):
+            n += 1
+        return last, n
 
     # ------------------------------------------------------------ --auto
     def mode_question(self, extra: str) -> str:
@@ -1308,7 +1336,9 @@ class CloseRun:
         o.advance(label="/close --auto TodoWrite Step 3b done")
         results = [(st["tid"], st["outcome"]) for st in states]
         self.outcome = "; ".join(f"{t}: {oc}" for t, oc in results)
-        o.s.stop(f"/close --auto: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
+        ev = o.s.stop(f"/close --auto: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
+        self.rp.terminal("close", bool(results) and all(oc.startswith("CLOSE: YES") for _, oc in results), ev,
+                         outcome=self.outcome)
         return results
 
 
@@ -1366,7 +1396,11 @@ def dev_cycle(rp, after: str, scenario=None, stop_before: int | None = None):
         except _Interrupted:
             fact(rp, "/dev interrupted", {"before": f"Step {stop_before}"})
     else:
-        cyc.run()
+        from ..recovery import SessionCut
+        try:
+            cyc.run()
+        except SessionCut:  # F8q: the cycle's session cut (fault cut@<a main-agent step>); the owner types /close
+            cyc.cut = True
     return DevProducer(cyc), cyc.tid, cyc.o.s, cyc
 
 
@@ -1402,11 +1436,20 @@ ACCEPTANCE_VARIANTS = ("auto-task", "lane-qa", "stray", "noart", "stalled", "lat
 ALIASES = {"qa-never": "lane-qa", "noartifact": "noart", "unwritten": "stray"}
 
 
-def removed_after_cycle(variant: str, tid: str) -> list:
-    """The artifacts a variant removes after the cycle reached its terminal: the qa-report (route; and the
-    QA-only gap late-repair init declines); BA's whole stage, its ticket, context and acceptance criteria (the
-    stage gaps late-repair init admits; BA, dispatched again, writes each of its declared artifacts afresh)."""
-    return {"route": [f"docs/dev/qa-report-{tid}.json"],
+def lane_report(cyc, kind: str) -> str:
+    """The report of `kind` (dev, qa) one lane of the cycle wrote: a fan-out cycle's first lane's, else the
+    cycle's own (the singular cycle is one implicit lane)."""
+    lanes = getattr(cyc, "lanes", None)
+    return f"docs/dev/{kind}-report-{lanes[0].tid if lanes else cyc.tid}.json"
+
+
+def removed_after_cycle(variant: str, cyc) -> list:
+    """The artifacts a variant removes after the cycle reached its terminal: the lane qa-report (route, F8:
+    a fan-out cycle's first lane's, lane_report; and the QA-only gap late-repair init declines); BA's whole
+    stage, its ticket, context and acceptance criteria (the stage gaps late-repair init admits; BA, dispatched
+    again, writes each of its declared artifacts afresh)."""
+    tid = cyc.tid
+    return {"route": [lane_report(cyc, "qa")],
             "late-repair-declined": [f"docs/dev/qa-report-{tid}.json"],
             "late-repair": [f"docs/dev/ticket-{tid}.md", f"docs/dev/context-{tid}.json",
                             f"docs/dev/acceptance-criteria-{tid}.json"]}.get(variant.replace("-drift", ""), [])
@@ -1428,15 +1471,18 @@ def run(rp) -> None:
     rp.pipeline = (pipeline_name(after, rp) + "+close" + (f"/{variant}" if variant != "plain" else "")
                    + ("/later" if session_kind == "later" else ""))
     producer, tid, s, cyc = dev_cycle(rp, after, stop_before=13 if variant == "lane-qa" else None)
+    end = "prompt_input_exit"
+    if getattr(cyc, "cut", False):  # F8q: /close is typed in a later session, in place of /restart
+        session_kind, end = "later", "other"
     producers = {tid: producer}
     if variant == "auto" and int(rp.args.get("parents", "1")) > 1:
         from . import dev as devdrv
         p2, tid2, s, _cyc2 = dev_cycle(rp, after, scenario=devdrv.SCENARIO_SUB)
         producers[tid2] = p2
-    remove(rp, [p for p in removed_after_cycle(variant, tid) if os.path.exists(os.path.join(rp.layout.project, p))])
+    remove(rp, [p for p in removed_after_cycle(variant, cyc) if os.path.exists(os.path.join(rp.layout.project, p))])
     if variant == "stalled":
         break_resolver(rp)
-    session = rp.later_session(s) if session_kind == "later" else s
+    session = rp.later_session(s, end) if session_kind == "later" else s
     cr = CloseRun(rp, session, tid, producer=producer, variant=variant, auto=variant.startswith("auto"),
                   producers=producers)
     if variant == "auto":

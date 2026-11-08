@@ -78,20 +78,23 @@ command line.
 Exactly two standalone commit invocation forms are permitted, each by itself on its own
 command line:
 ```bash
-git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"                 # normal commit
-git -C "${GIT_ROOT}" commit --allow-empty -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"   # recovery commit (Recovery step 3 only)
+git -C "<GIT_ROOT>" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"                 # normal commit
+git -C "<GIT_ROOT>" commit --allow-empty -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"   # recovery commit (Recovery step 3 only)
 ```
+`<GIT_ROOT>` is the repository's absolute path written out, never `${GIT_ROOT}`: the privilege
+guard refuses a commit whose `-C` argument is an unexpanded variable.
 The prohibition CP-2 enforces is about CONTENT and SIDE EFFECTS on the command line — NOT about
 shell control-flow. Specifically: no message text, no inline diff (`$(git diff ...)`), no
 `--stat`, no `cat`/`echo` of file content, no push-gate write, no heredoc, and no chained side
 effect (`&&`/`;`/`|`) that performs another action. The physical commit invocation must contain
 none of those. Wrapping the commit in pure control-flow that adds no command-line content is
-allowed — e.g. the Error-handling `if ! git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"; then …`
+allowed — e.g. the Error-handling `if ! git -C "<GIT_ROOT>" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"; then …`
 test is fine because the `if !` adds no message/diff/protected-path/side-effect to the command,
 it only branches on the exit code. The `<diff --stat>` body content is embedded into the message
 FILE (written by the Write tool in CP-1), never appended on the command line. The temp message
-file may be cleaned up in a SEPARATE later bash step (`rm -f <msgfile>`); it must not be chained
-onto the commit.
+file stays where it is: no cleanup is chained onto the commit or run after it (the removal
+policy refuses an `rm` of it; `scripts/install/tmpfiles-claude-scratch.conf` ages
+`/tmp/claude-scratch` out).
 
 **Rule CP-3 — the push-gate token reaches disk only through its one writer, in a SEPARATE step.**
 Run `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "${GIT_ROOT}" --branch "${BRANCH}" --commit "${COMMIT_SHA}"`
@@ -522,7 +525,7 @@ real staged index measured AFTER Phase 5. The ordering is:
    return to item 0's "before EACH group" steps for the NEXT group, until every group has
    been processed.
 2. **Inside** the fd-9 flock (same held lock, continuing from item 1, still per group):
-   run `git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"` (the literal path of THIS group's MSGFILE Write) for THIS group → `git rev-parse HEAD` to capture this
+   run `git -C "<GIT_ROOT>" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"` (the literal path of THIS group's MSGFILE Write) for THIS group → `git rev-parse HEAD` to capture this
    group's `COMMIT_SHA` → append `{commit_sha, source_key, sources, paths}` to this
    repository's `commits[]` result list → set `CURRENT_EXPECTED_HEAD` to `COMMIT_SHA`
    (item 0) → proceed to the next group (back to item 0), or — once every group is
@@ -548,7 +551,7 @@ break the lock's stage→commit mutual exclusion. The token write is intentional
 collision, both of which the writer checks before it writes.
 
 ```bash
-# Lock lives OUTSIDE the repo's .git/ so the protected-runtime guard never sees a
+# Lock lives OUTSIDE the .git/ of the repo so the protected-runtime guard never sees a
 # write-redirect whose (resolved) parent is a protected monorepo root. A per-repo
 # deterministic name (sha256 of the repo toplevel) keeps the mutual-exclusion guarantee
 # across concurrent commits. The redirect target MUST start with a LITERAL /tmp prefix
@@ -563,26 +566,26 @@ flock -w 30 -x 9 || {
 }
 
 # Session-private index (scripts/lib/session_index.py via scripts/session-index.py):
-# seed THIS session's own index from HEAD so staging/commit below read and write it
-# instead of the repo's one shared $GIT_DIR/index. This is additive to the flock above,
-# not a replacement for it — the flock still serializes this repo's commits across
-# sessions; the private index additionally means a peer session's own concurrent
-# stage/unstage in Phase 4/5 can never observe or clobber THIS session's staged bytes
-# (and vice versa) even outside the lock's own window. Fail-closed: a missing/corrupt
+# seed a private index for THIS session from HEAD so staging/commit below read and write it
+# instead of the one shared $GIT_DIR/index of the repo. This is additive to the flock above,
+# not a replacement for it — the flock still serializes the commits of this repo across
+# sessions; the private index additionally means a concurrent stage/unstage of a peer
+# session in Phase 4/5 can never observe or clobber the staged bytes of THIS session
+# (and vice versa) even outside the window of the lock. Fail-closed: a missing/corrupt
 # index or a HEAD that moved since seeding raises SessionIndexError — this is a genuine
 # abort (repository_plan_invalid-class), not a warn-and-continue.
 #
-# This also covers Phase 5's stage-owned-hunks.py invocations (the adoption branch
+# This also covers the stage-owned-hunks.py invocations of Phase 5 (the adoption branch
 # above and any remaining --checkpoint-provenance / --provenance-plan callers): that
 # script needs no explicit session-index call of its own, because it inherits
-# $GIT_INDEX_FILE from THIS shell's environment transparently -- see the "Session-
-# private index" paragraph in scripts/stage-owned-hunks.py's own module docstring for
+# $GIT_INDEX_FILE from the environment of THIS shell transparently -- see the "Session-
+# private index" paragraph in the module docstring of scripts/stage-owned-hunks.py for
 # the verified mechanism. Exporting it here, once, before any Phase-5 staging call in
 # this same bash process, is the complete wiring for every staging path in this file.
 #
-# Run this BEFORE EACH group's cycle (item 0 above), not just once: HEAD moves after
-# every group's own commit, and `init` must re-seed from the NEW head each time, or the
-# next group's `export`/commit_gate call below would fail-closed on `head_moved` against
+# Run this BEFORE the cycle of EACH group (item 0 above), not just once: HEAD moves after
+# the commit of every group, and init must re-seed from the NEW head each time, or the
+# export/commit_gate call of the next group below would fail-closed on head_moved against
 # a HEAD this session itself just advanced.
 SESSION_INDEX_ENV="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/session-index.py" init --git-root "${GIT_ROOT}")" && eval "$SESSION_INDEX_ENV" || {
     echo "ERROR: session-index.py init failed for ${GIT_ROOT} — see SESSION-INDEX REFUSED line above"
@@ -1050,13 +1053,11 @@ message authored from `ACTUALLY_STAGED_PATHS` still matches what is committed.
        git -C "${GIT_ROOT}" restore --staged -- ${ACTUALLY_STAGED_PATHS}   # true drift: unstage + abort
        # report failure_code: staging_error (do NOT release fd 9 to rewrite MSGFILE)
    else
-       git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"
+       git -C "<GIT_ROOT>" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"
    fi
    ```
    (Legitimate Phase-5 narrowing was already applied and recorded in `ACTUALLY_STAGED_PATHS`
    BEFORE step (e), so it never reaches this guard — only a post-message change is drift.)
-4. In a SEPARATE later bash step, clean up: `rm -f "${MSGFILE}"`. Do NOT chain the cleanup onto
-   the commit command.
 
 Capture the commit SHA for the descriptor — still INSIDE the same fd-9 Bash process (reads,
 not writes):
@@ -1240,13 +1241,13 @@ while ITERATION < MAX_ITERATIONS:
         # a message FILE via the Write tool (rules CP-1/CP-2) — NOT into a shell variable that
         # inlines `$(git diff --stat --cached)` on the command line, and NOT via heredoc. The
         # diff-stat body is captured in Phase 6 and embedded into the FILE content; the commit
-        # is the minimal `git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"` with nothing chained.
+        # is the minimal `git -C "<GIT_ROOT>" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"` with nothing chained.
         # BULK mode REQUIRES the auto-bulk: prefix (dispatched via commit.md Step 7);
         # this prefix is checked by BLESSED_BRIDGE_RE in pretool-git-privilege-guard.py
         # alongside the bulk-commit sentinel written by /commit --bulk Step 5.
         # Without the prefix the privilege guard will block the commit.
         # NOTE (CP-1/CP-2 compatibility): the auto-bulk: prefix lives in the MSGFILE, NOT on the
-        # bash command line — `git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"` is the authorized commit form and the
+        # bash command line — `git -C "<GIT_ROOT>" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"` is the authorized commit form and the
         # privilege guard's commit-grant path allows the `-F` invocation. This is the SAME
         # message-in-file arrangement the prior `git commit -F "${TMPFILE}"` already used (the
         # subject was never on the command line before either), so routing the message through the
@@ -1356,15 +1357,15 @@ FAILED_GROUPS=()
 For each subsystem group's commit step (`${MSGFILE}` is the per-group message file written via
 the Write tool per rules CP-1/CP-2 — never a heredoc; the commit stays minimal):
 ```bash
-if ! git -C "${GIT_ROOT}" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"; then
+if ! git -C "<GIT_ROOT>" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"; then
     echo "WARNING: Failed to commit group ${scope} in batch ${ITERATION}. Skipping and continuing."
     git -C "${GIT_ROOT}" restore --staged -- "${group_files[@]}"
     FAILED_GROUPS+=("${scope}")
     continue
 fi
 ```
-On the failure path, `git restore --staged` and the `rm -f "${MSGFILE}"` cleanup remain
-SEPARATE bash steps — they are not chained onto the `git commit` command.
+On the failure path, `git restore --staged` stays a SEPARATE bash step — it is not chained
+onto the `git commit` command.
 
 After bulk loop:
 ```bash
@@ -1803,11 +1804,10 @@ Execute the recovery commit using the existing single-use commit grant (not cons
 CP-2), nothing chained:
 
 ```bash
-git -C "${GIT_ROOT}" commit --allow-empty -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"
+git -C "<GIT_ROOT>" commit --allow-empty -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"
 ```
 
-In a SEPARATE later bash step, clean up: `rm -f "${MSGFILE}"`. (The
-`bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" execute-commit "${GIT_ROOT}" "${MSGFILE}"` helper, which
+(The `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" execute-commit "${GIT_ROOT}" "${MSGFILE}"` helper, which
 internally runs this same minimal `git commit --allow-empty -F`, remains an acceptable
 equivalent — it keeps the message content in the FILE and the command line minimal.)
 
@@ -1954,7 +1954,8 @@ No other content may appear between the delimiters.
 
 Consumers locate the block by scanning for the exact string
 `--- CHANGELOG-ANALYST-STATUS-BEGIN ---`. The block is the response block your
-dispatch's obligation declares: if it is absent or fails `changelog-status.v1`,
+dispatch's obligation declares: if it is absent, fails `changelog-status.v1`, or
+its `repository_results[]` do not name the obligation's `repo_roots` in `order`,
 the producer-stop gate (G2) returns your stop to you, naming the failing check,
 before `/commit` reads it.
 

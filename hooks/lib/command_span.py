@@ -358,6 +358,34 @@ class Span:
         canonical = _obligation().canonical_task_id
         return {family for _call, doc in self.obligations() if (family := canonical(doc.get("task_id")))}
 
+    def body(self) -> str | None:
+        """The command's text as this session loaded it: the isMeta record the
+        CLI writes when the command is typed, whose parentUuid is the opener's
+        uuid (CLI 2.1.319: commands/<command>.md minus its frontmatter, with
+        $ARGUMENTS filled in). It is written once, so a later edit of the file
+        leaves it as it was: a session that started before an update follows
+        this text, not the file on disk. None when no such record follows the
+        opener."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return None
+        opener = _decode(lines.data[lines.data.rfind(b"\n", 0, floor - 1) + 1:floor - 1])
+        ident = opener.get("uuid") if opener else None
+        if not isinstance(ident, str) or not ident:
+            return None
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            if not record or record.get("parentUuid") != ident:
+                continue
+            if record.get("type") != "user" or not record.get("isMeta"):
+                return None
+            content = record["message"].get("content") if isinstance(record.get("message"), dict) else None
+            if isinstance(content, str):
+                return content
+            return "".join(b.get("text", "") for b in _blocks(record) if b.get("type") == "text")
+        return None
+
 
 def _obligation():  # imported when first asked: a reader that needs none loads none of it
     import importlib
@@ -509,6 +537,25 @@ def active_span(transcript_path: str | Path, commands: frozenset | None = None) 
                 data=data, floor=end + 1, base=base, ahead=(handle, begin))
 
 
+def transcript_span(transcript_path) -> Span:
+    """The whole transcript read as one span from its first line, for a decider on the session's
+    calls whatever span is active (the overnight time-lock's wake check)."""
+    return Span("", "", 0, str(transcript_path))
+
+
+def recorded_result(transcript_path, use) -> dict:
+    """The toolUseResult the CLI recorded beside ``use``'s tool_result (a CronCreate's job id),
+    {} while none came back or it holds none."""
+    try:
+        with open(transcript_path, "rb") as handle:
+            handle.seek(use.result_at)
+            record = _decode(handle.readline())
+    except (OSError, TypeError, ValueError):
+        return {}
+    value = record.get("toolUseResult") if record else None
+    return value if isinstance(value, dict) else {}
+
+
 EDIT_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
               "NotebookEdit": "notebook_path"}
 # Trees an agent writes as the pipeline's own bookkeeping, not as product files.
@@ -522,14 +569,14 @@ class WriteSet(namedtuple("WriteSet", "written named")):
     __slots__ = ()
 
 
-def _project_relative(raw: str, cwd: str, root: str) -> str | None:
+def _project_relative(raw: str, cwd: str, root: str, excluded=EXCLUDED_TREES) -> str | None:
     path = os.path.expanduser(raw)
     if not os.path.isabs(path):
         path = os.path.join(cwd or root, path)
     rel = os.path.relpath(os.path.normpath(path), root)
     if rel in (".", "..", ".git") or rel.startswith(("../", ".git/")):
         return None
-    return None if rel.startswith(EXCLUDED_TREES) else rel
+    return None if excluded and rel.startswith(tuple(excluded)) else rel
 
 
 def _bash_named(command: str, cwd: str, root: str) -> set[str]:
@@ -549,10 +596,12 @@ def _bash_named(command: str, cwd: str, root: str) -> set[str]:
     return named
 
 
-def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: int = 0) -> WriteSet | None:
+def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: int = 0,
+              excluded=EXCLUDED_TREES) -> WriteSet | None:
     """The project-relative files the transcript's own tool calls after
-    ``start_line`` wrote or named (TC-46), outside EXCLUDED_TREES; None when
-    the transcript cannot be read."""
+    ``start_line`` wrote or named (TC-46), outside ``excluded`` (a caller
+    asking which reports an agent wrote passes none); None when the
+    transcript cannot be read."""
     root = os.path.normpath(str(project_dir))
     try:
         records = _records(transcript_path)
@@ -575,7 +624,8 @@ def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: 
     for use_id, name, tool_input, cwd in uses:
         if name in EDIT_TOOLS:
             target = tool_input.get(EDIT_TOOLS[name])
-            rel = _project_relative(target, cwd, root) if use_id in ok and isinstance(target, str) and target else None
+            rel = (_project_relative(target, cwd, root, excluded)
+                   if use_id in ok and isinstance(target, str) and target else None)
             if rel:
                 written.add(rel)
         elif name == "Bash" and isinstance(tool_input.get("command"), str):

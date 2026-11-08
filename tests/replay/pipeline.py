@@ -290,6 +290,8 @@ class Orchestrator:
 
     # ------------------------------------------------------------ Bash
     def run(self, command: str, description: str, label: str, capture=(), timeout=None, actor=None):
+        if actor is None:  # the main agent writes R1's printed HARNESS_ROOT as the literal path
+            command = command.replace("<HARNESS_ROOT>", self.harness)
         command = self.respell(command, label)
         if capture:
             command = command.rstrip("\n") + "\ndeclare -p " + " ".join(capture) + " 2>/dev/null\n"

@@ -8,6 +8,8 @@ For the stopping session's own record (overnight.locate; no record: exit 0):
      publish the cancelled_by_user receipt, with no closeout check.
   3. Otherwise end_time has passed: exit 2 naming overnight.closeout_gaps on
      stderr until none is left, then exit 0 and publish completed_by_deadline.
+In 2 and 3, the session's wake (a CronCreate of lib.overnight.WAKE_PROMPT in
+its transcript, P1c X8) needs a later CronDelete first: exit 2 naming its id.
 """
 
 import json
@@ -27,6 +29,19 @@ try:
     from lib import session_resources
 except Exception:  # pragma: no cover - fail-soft if lib missing
     session_resources = None  # type: ignore[assignment]
+
+
+def _block_open_wake(transcript_path: str) -> None:
+    """The session's wake must be deleted before it ends: a recurring job left behind would
+    fire into the idle session (P1c X8). A transcript with no wake meets nothing."""
+    jobs = overnight.open_wakes(transcript_path) if transcript_path else []
+    if jobs:
+        sys.stderr.write(
+            f"\n WAKE STILL SCHEDULED: the session's wake, CronCreate job {', '.join(jobs)}, has no later"
+            " CronDelete.\n Call CronDelete with that id (the last step of dev-overnight.md Step 21's"
+            " session-ending branch, or of stop.md), then end the session.\n"
+        )
+        sys.exit(2)
 
 
 def _publish_terminal_receipt(
@@ -77,7 +92,9 @@ def main():
         )
         sys.exit(2)
     main_root = state_file.parent.parent
+    transcript_path = str(payload.get('transcript_path') or '')
     if stop_contract.timelock_released(payload.get('transcript_path')):
+        _block_open_wake(transcript_path)
         _publish_terminal_receipt(main_root, session_id, state, 'cancelled_by_user')
         sys.exit(0)
     gaps = overnight.closeout_gaps(state, overnight.working_root(state))
@@ -87,6 +104,7 @@ def main():
             + ''.join(f' missing: {gap}\n' for gap in gaps)
         )
         sys.exit(2)
+    _block_open_wake(transcript_path)
     _publish_terminal_receipt(main_root, session_id, state, 'completed_by_deadline')
     sys.exit(0)
 

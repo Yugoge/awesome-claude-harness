@@ -124,8 +124,7 @@ def _full_read(path, before=None):
         if writes or not todo_canonical.initial_status_violations(new):
             writes.append(call)
     accepted = writes[-1].input["todos"] if writes else None
-    lock = ("not_started" if todos is None else "count_mismatch" if len(todos) < len(DEV)
-            else "sequence_violation" if not writes else "")
+    lock = "not_started" if todos is None else "sequence_violation" if not writes else ""
     return todos, accepted, lock, tuple(writes)
 
 

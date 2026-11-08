@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _dev_lifecycle_fixtures import (  # noqa: E402
     REPO_ROOT,
+    ba_qa_report,
     close_report_text,
     completion_md,
     dev_dir,
@@ -275,6 +277,36 @@ def test_derive_state_committed_end_to_end(tmp_path):
     row = dlc.derive_state(project, task_id)
     assert row["state"] == "committed"
     assert row["next_action"] == "none"
+
+
+
+def test_derive_state_an_uncommitted_closed_task_is_commit_pending(tmp_path):
+    # After /close and before /commit the task's owned file is dirty and no commit carries its
+    # trailer: /commit --auto must find it (commit_pending), not report a partial commit.
+    project = make_project(tmp_path)
+    init_git_repo(project)
+    (project / "owned.txt").write_text("hello\n", encoding="utf-8")
+    git_commit_all(project, "chore: before the cycle\n")
+    (project / "owned.txt").write_text("hello, cycle\n", encoding="utf-8")
+    task_id = "20260101-000014"
+    write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id, files_modified=["owned.txt"]))
+    write_text(dev_dir(project) / f"close-report-{task_id}.md", close_report_text(task_id, "CLOSE: YES"))
+    row = dlc.derive_state(project, task_id)
+    assert (row["state"], row["next_action"]) == ("commit_pending", "commit")
+    assert _list_actionable(project, "commit") == [task_id]
+
+
+def test_derive_state_a_trailer_with_dirty_owned_content_is_a_partial_commit(tmp_path):
+    project = make_project(tmp_path)
+    init_git_repo(project)
+    (project / "owned.txt").write_text("hello\n", encoding="utf-8")
+    task_id = "20260101-000015"
+    write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id, files_modified=["owned.txt"]))
+    write_text(dev_dir(project) / f"close-report-{task_id}.md", close_report_text(task_id, "CLOSE: YES"))
+    git_commit_all(project, f"chore: cycle\n\nTask-id: {task_id}\n")
+    (project / "owned.txt").write_text("hello, after the commit\n", encoding="utf-8")
+    row = dlc.derive_state(project, task_id)
+    assert (row["state"], row["next_action"], row["blocker"]) == ("blocked", "inspect", "PARTIAL_COMMIT")
 
 
 def _fanout(project, parent, workers=("a", "b")):
@@ -546,3 +578,53 @@ def test_scan_and_list_actionable_load_legacy_blocked_and_needs_review_records(t
     done = _list_actionable_run(project, "close")
     assert [line.split(" ", 1)[0] for line in done.stdout.splitlines()] == [passing]
     assert [line.split(": skipped: ")[0] for line in done.stderr.splitlines()] == [fanout, singular]
+
+
+# --------------------------------------------------------------------------
+# /dev-overnight: each pipeline whose QA passed is a /dev chain under its own
+# task id; /close --auto's discovery lists it through the completion report the
+# overnight's Step 16 has the main agent write (P2 acceptance 12)
+# --------------------------------------------------------------------------
+
+
+def _overnight_completion_template() -> tuple[str, str]:
+    """The path and the markdown template commands/dev-overnight.md's Step 16 gives the main agent
+    for a pipeline whose QA passed, read from the tree's text."""
+    text = (REPO_ROOT / "commands" / "dev-overnight.md").read_text(encoding="utf-8")
+    step = re.search(r"^### Step 16:.*?(?=^### )", text, re.M | re.S)
+    assert step, "commands/dev-overnight.md has no Step 16"
+    body = step.group(0)
+    path = re.search(r"Write `([^`\s]*completion-[^`\s]*\.md)`", body)
+    template = re.search(r"^```markdown\n(# Development Completion Report.*?)^```", body, re.M | re.S)
+    assert path and template, "Step 16 gives no completion report for a pipeline whose QA passed"
+    return path.group(1), template.group(1)
+
+
+def test_list_actionable_close_lists_each_completed_overnight_pipeline(tmp_path):
+    project = make_project(tmp_path)
+    path_tpl, template = _overnight_completion_template()
+    pipelines = [{"index": i, "timestamp_suffix": f"20260101-000021-{i}", "description": f"issue {i}"}
+                 for i in (0, 1)]
+    for p in pipelines:  # what the pipeline's BA, dev and QA dispatches wrote (QA passed)
+        task_id = p["timestamp_suffix"]
+        write_ticket_fixture(project, task_id)
+        write_json(dev_dir(project) / f"ba-qa-report-{task_id}.json", ba_qa_report(task_id, top_verdict="pass"))
+        write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id))
+        write_json(dev_dir(project) / f"qa-report-{task_id}.json", qa_report(task_id))
+
+    def fill(text, p):
+        text = re.sub(r"\{pipeline\.(\w+)\}", lambda m: str(p[m.group(1)]), text)
+        return (text.replace("<ISO-8601>", "2026-01-01T00:00:21Z").replace("<session_id>", "s-night")
+                .replace("<N>", "1"))
+    # No completion report yet: each chain fails on that one gap, and /close completes
+    # an unfinished chain (D7), so each pipeline is already listed with its chain failing.
+    before = _list_actionable(project, "close")
+    assert [line.split(" ", 1)[0] for line in before] == [p["timestamp_suffix"] for p in pipelines]
+    for line, p in zip(before, pipelines):
+        chain = json.loads(line.split(" ", 1)[1])
+        assert (chain["status"], chain["stage_gaps"]) == ("fail", [fill(path_tpl, p)])
+    for p in pipelines:  # Step 16, as the main agent writes it
+        write_text(project / fill(path_tpl, p), fill(template, p))
+    lines = _list_actionable(project, "close")
+    assert [line.split(" ", 1)[0] for line in lines] == [p["timestamp_suffix"] for p in pipelines]
+    assert all(json.loads(line.split(" ", 1)[1])["status"] == "pass" for line in lines)

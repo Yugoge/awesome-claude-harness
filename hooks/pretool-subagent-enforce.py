@@ -5,7 +5,8 @@ PreToolUse:Agent Hook — Contract-driven role/pipeline enforcement (G1).
 For a /dev-overnight session (the session owns an overnight state record):
 
   1. Derive the calls the cycle allows: its exploration (PM PLAN through PM
-     TRIAGE, steps 2-4) from scripts/todo/dev-overnight.py ``_STEPS``, plus
+     TRIAGE, steps 2-4) from scripts/todo/dev-overnight.py ``_STEPS``, each
+     step's mode as /dev-overnight's text sets it as the session loaded it, plus
      the cycle's contract once PM TRIAGE returned (written by the PM TRIAGE
      handler in posttool-subagent-track.py). The cycle is
      ``lib.overnight.cycle_index``'s, the one the dispatch runs in (the files
@@ -56,10 +57,9 @@ def _content_to_step(content: str) -> str:
     return content
 
 
-def _current_step_label(stdin_data: dict) -> str | None:
-    """The in-progress step label of the session's checklist, read from the
-    transcript."""
-    state = checklist(stdin_data.get('transcript_path'))
+def _current_step_label(state) -> str | None:
+    """The in-progress step label of the session's checklist (``state``, read
+    from the transcript)."""
     for item in (state.accepted if state else None) or []:
         if item.get('status') == 'in_progress':
             return _content_to_step(item.get('content', ''))
@@ -85,7 +85,14 @@ def _declared_paths(stdin_data: dict, overnight_state: dict) -> list:
             if isinstance(a, dict) and isinstance(a.get('path'), str) and a['path']]
 
 
-def _allowed_calls(overnight_state: dict, written=()):
+def _loaded_text(state) -> str | None:
+    """/dev-overnight's text as this session loaded it (command_span.Span.body),
+    None when the checklist is another command's or no record of it holds it."""
+    span = state.span if state else None
+    return span.body() if span is not None and span.command == 'dev-overnight' else None
+
+
+def _allowed_calls(overnight_state: dict, written=(), text=None):
     """(the calls this cycle allows, as a contract-shaped dict, or None when the
     canonical steps cannot be read: nothing to derive, so nothing to enforce;
     the cycle contract as loaded).
@@ -93,7 +100,8 @@ def _allowed_calls(overnight_state: dict, written=()):
     The cycle is the one the dispatch runs in: ``written``, the files it
     declares, are read as not yet written, so a PM retrospective dispatched
     again after its collection refused its report stays in the cycle that
-    report would end.
+    report would end. ``text``, the session's own /dev-overnight text, says
+    which exploration steps' modes bind (contract_runtime.exploration_calls).
 
     A cycle contract that is not a JSON object adds no call, so the PM TRIAGE
     dispatch whose return replaces it still passes, and every other call is
@@ -105,7 +113,7 @@ def _allowed_calls(overnight_state: dict, written=()):
     cycle_id = overnight.cycle_index(overnight_state, written=written)
     contract = contract_runtime.load_contract(
         overnight_state.get('session_id', ''), cycle_id, overnight_state)
-    calls = (contract_runtime.exploration_calls(steps)
+    calls = (contract_runtime.exploration_calls(steps, text)
              + contract_runtime._iter_required_calls(contract))
     return {'cycle_id': cycle_id, 'required_calls': calls}, contract
 
@@ -131,6 +139,9 @@ def _extract_agent_fields(stdin_data: dict) -> tuple[str, str, str]:
     ti = stdin_data.get('tool_input', {}) or {}
     role = (ti.get('subagent_type') or '').strip().lower()
     prompt = ti.get('prompt', '') if isinstance(ti, dict) else ''
+    # The mode the prompt carries, with no PM default: whether a step's mode binds is the text the
+    # session loaded (exploration_calls), so a base-text Step 2 PM dispatch passes through that text
+    # and a dispatch of a text that sets PM_MODE: PLAN is refused without it (P2 A15).
     mode = contract_runtime.detect_mode(prompt)
     pipeline_id = _resolve_pipeline_id(ti, prompt)
     return role, mode, pipeline_id
@@ -276,10 +287,12 @@ def _main() -> None:
     if overnight_state is None:
         # Not an overnight session: no cycle contract governs it.
         sys.exit(0)
-    allowed, loaded = _allowed_calls(overnight_state, _declared_paths(stdin_data, overnight_state))
+    state = checklist(stdin_data.get('transcript_path'))
+    allowed, loaded = _allowed_calls(
+        overnight_state, _declared_paths(stdin_data, overnight_state), _loaded_text(state))
     if allowed is None:
         sys.exit(0)
-    step = _current_step_label(stdin_data)
+    step = _current_step_label(state)
     if not step:
         # No checklist / no in-progress step — cannot enforce; fail open
         # rather than block all Agent calls.

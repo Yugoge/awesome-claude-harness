@@ -221,6 +221,14 @@ def validate_against_canonical(cmd_name, new_todos, prompt=''):
     return violations
 
 
+def by_content(steps, todos):
+    """Each of ``todos`` paired with the step of ``steps`` of the same content ({} when none): past
+    a command's first list and with its length unchanged, a hook comparing todo lists pairs them
+    so, never by index (P1c row 17: a session keeps the list it started with)."""
+    found = {s.get('content'): s for s in steps if isinstance(s, dict)}
+    return [found.get(t.get('content'), {}) for t in todos]
+
+
 def initial_status_violations(todos):
     """First-call rule: no completed step, at most 1 in_progress, at Step 0."""
     violations = []
@@ -321,11 +329,10 @@ class Checklist:
 
     @property
     def lock(self):
-        """Why the workflow gate holds other tools back, or '' when it does not."""
+        """Why the workflow gate holds other tools back, or '' when it does not. No length
+        check: pretool-todo-validate.py refuses a wrong first list or length change (P1c row 17)."""
         if self.todos is None:
             return 'not_started'
-        if len(self.todos) < len(self.canonical):
-            return 'count_mismatch'
         if not self._accepted:
             return 'sequence_violation'
         return ''

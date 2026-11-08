@@ -246,17 +246,20 @@ def _record(root: Path) -> dict:
     return json.loads(_record_path(root).read_text(encoding="utf-8"))
 
 
-def _assert_corroboration_admitted(root: Path) -> None:
-    """The three shapes below all pass verify-disclosure.
+def _assert_verify_disclosure_refuses_the_run(root: Path) -> None:
+    """The three shapes below all fail verify-disclosure, naming the run record.
 
-    That is the whole difficulty: corroboration cannot distinguish them from
-    the drift-free run, because every artifact they recorded is present and
-    still hashes to what was recorded.  Only the run record's own outcome
-    can, which is why the guard must read it.
+    Every stage report they recorded is present, so only the run record's own
+    outcome tells them from the drift-free run.  verify-disclosure reads that
+    outcome through the one test resolve_effective_report_state takes
+    (finalize_outcome; P1b row 6: it compares no stage report and admits a
+    run only once finalize has recorded its outcome).
     """
     verify = _run_controller("verify-disclosure", "--task-id", TASK_ID, "--project-dir", str(root))
-    assert verify.returncode == 0, (verify.stdout, verify.stderr)
-    assert _last_json(verify)["outcome"] == "admitted"
+    assert verify.returncode == 3, (verify.stdout, verify.stderr)
+    payload = _last_json(verify)
+    assert payload["outcome"] == "refused"
+    assert payload["path"] == f"docs/dev/late-repair-run-{TASK_ID}.json"
 
 
 def test_unroutable_drift_run_is_state_invalid(tmp_path: Path) -> None:
@@ -290,7 +293,7 @@ def test_unroutable_drift_run_is_state_invalid(tmp_path: Path) -> None:
     assert record["outcome"] == "honest_refuse"
     assert record["effective_report"] is None       # identical emptiness to drift-free
     assert record.get("drift_detected") is None     # ...but the drift itself was NOT recorded
-    _assert_corroboration_admitted(root)
+    _assert_verify_disclosure_refuses_the_run(root)
 
     state, path = CONTROLLER.resolve_effective_report_state(root, TASK_ID)
     assert state == "invalid", (
@@ -314,7 +317,9 @@ def test_not_yet_finalized_run_is_state_invalid(tmp_path: Path) -> None:
     between its last record-stage call and finalize: outcome still the null
     cmd_init wrote, effective_report still that same null.  No drift
     comparison has been performed at all, so there is no basis whatsoever
-    for telling a caller the canonical dev-report is current.
+    for telling a caller the canonical dev-report is current.  The path is
+    the effective report finalize writes, so the finding routes to finalize
+    (the run record has no owner a routing loop could dispatch).
     """
     root = tmp_path
     paths = _build_beyond_qa_chain_with_one_current_file(root, TASK_ID)
@@ -324,14 +329,14 @@ def test_not_yet_finalized_run_is_state_invalid(tmp_path: Path) -> None:
     assert record["outcome"] is None
     assert record["effective_report"] is None
     assert "drift_detected" not in record
-    _assert_corroboration_admitted(root)
+    _assert_verify_disclosure_refuses_the_run(root)
 
     state, path = CONTROLLER.resolve_effective_report_state(root, TASK_ID)
     assert state == "invalid", (
         "a repair run that had not yet run drift detection was reported as having "
         "found nothing to reconcile"
     )
-    assert path == _record_path(root)
+    assert path == root / "docs" / "dev" / f"dev-report-{TASK_ID}.effective.json"
 
 
 def test_fail_closed_run_is_state_invalid(tmp_path: Path) -> None:
@@ -362,7 +367,7 @@ def test_fail_closed_run_is_state_invalid(tmp_path: Path) -> None:
     assert record["outcome"] == "fail_closed"
     assert record["effective_report"] is None
     assert "drift_detected" not in record
-    _assert_corroboration_admitted(root)
+    _assert_verify_disclosure_refuses_the_run(root)
 
     state, path = CONTROLLER.resolve_effective_report_state(root, TASK_ID)
     assert state == "invalid", (

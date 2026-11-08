@@ -1279,7 +1279,7 @@ _CA_BEGIN = "--- CHANGELOG-ANALYST-STATUS-BEGIN ---"
 _CA_END = "--- CHANGELOG-ANALYST-STATUS-END ---"
 
 
-def _response_block_obligation(task_id: str) -> str:
+def _response_block_obligation(task_id: str, **extra) -> str:
     return _obligation_block_multi(
         task_id,
         [
@@ -1289,6 +1289,7 @@ def _response_block_obligation(task_id: str) -> str:
                 "end": _CA_END,
                 "format": "json",
                 "schema": "changelog-status.v1",
+                **extra,
             },
         ],
         role="changelog-analyst",
@@ -1376,6 +1377,107 @@ def test_response_block_unparseable_json_blocks(tmp_path):
     assert proc.returncode == 2, proc.stderr
     assert "<response_block>" in proc.stderr
     assert "unparseable_json" in proc.stderr
+
+
+def _ca_result(order: int, root: str) -> dict:
+    return {"order": order, "repo_root": root, "status": "nothing_to_commit",
+            "expected_head": "0" * 40, "push_gate_written": False}
+
+
+def _run_plan_roots_case(tmp_path, name: str, repo_roots, results) -> subprocess.CompletedProcess:
+    harness_session = f"harness-rb-{name}"
+    agent_id = f"agent-ca-rb-{name}"
+    project, home = _standard_setup(tmp_path, "changelog-analyst", agent_id)
+    _write_obligation_transcript(
+        home, project, harness_session, agent_id,
+        _response_block_obligation("20260101-000206", repo_roots=repo_roots),
+    )
+    body = json.dumps({"commit_status": "nothing_to_commit", "repository_results": results})
+    return _run_hook(
+        project, home, agent_id, session_id=harness_session, stopgate_mode="block",
+        last_assistant_message=f"{_CA_BEGIN}\n{body}\n{_CA_END}\n",
+    )
+
+
+def test_response_block_naming_the_planned_roots_in_order_passes(tmp_path):
+    """/commit's obligation carries REPOSITORY_PLAN's roots (repo_roots): a
+    block whose repository_results name exactly those roots, result i with
+    order i, passes."""
+    proc = _run_plan_roots_case(
+        tmp_path, "roots-ok", ["/r/control", "/r/nested"],
+        [_ca_result(0, "/r/control"), _ca_result(1, "/r/nested")],
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("name,results", [
+    ("roots-missing", [{"order": 0, "repo_root": "/r/control"}]),
+    ("roots-reordered", [{"order": 0, "repo_root": "/r/nested"}, {"order": 1, "repo_root": "/r/control"}]),
+    ("roots-extra", [{"order": 0, "repo_root": "/r/control"}, {"order": 1, "repo_root": "/r/nested"},
+                     {"order": 2, "repo_root": "/r/other"}]),
+    ("roots-order-field", [{"order": 1, "repo_root": "/r/control"}, {"order": 0, "repo_root": "/r/nested"}]),
+    ("roots-none", []),
+])
+def test_response_block_not_naming_the_planned_roots_blocks(tmp_path, name, results):
+    """The rule /commit Step 7 applied to the read status block (a result
+    whose repository roots/order do not exactly equal REPOSITORY_PLAN is not
+    a landing), now G2's at the analyst's own stop: a schema-valid block
+    that omits, reorders or adds a repository is returned to the analyst,
+    naming the block and the failing check."""
+    full = [dict(_ca_result(r["order"], r["repo_root"])) for r in results]
+    proc = _run_plan_roots_case(tmp_path, name, ["/r/control", "/r/nested"], full)
+    assert proc.returncode == 2, proc.stderr
+    assert "<response_block>" in proc.stderr
+    assert "plan_mismatch" in proc.stderr
+
+
+def _plan_block(status: str, results: list) -> str:
+    return f"{_CA_BEGIN}\n{json.dumps({'commit_status': status, 'repository_results': results})}\n{_CA_END}\n"
+
+
+def test_plan_roots_hold_without_a_schema_validator(monkeypatch):
+    """The comparison /commit made needed no jsonschema, so G2's needs none:
+    with the validator unavailable (Draft7Validator None) a landing that
+    leaves out a planned repository still fails with plan_mismatch, while a
+    block naming the plan in order is skipped as before."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from lib import contract_runtime as runtime
+    monkeypatch.setattr(runtime, "Draft7Validator", None)
+    roots = ["/r/control", "/r/nested"]
+    missing = runtime.validate_response_block_for_obligation(
+        _plan_block("nothing_to_commit", [_ca_result(0, "/r/control")]),
+        _CA_BEGIN, _CA_END, "changelog-status.v1", repo_roots=roots)
+    assert missing["status"] == "fail" and "plan_mismatch" in missing["reason"], missing
+    planned = runtime.validate_response_block_for_obligation(
+        _plan_block("nothing_to_commit", [_ca_result(0, "/r/control"), _ca_result(1, "/r/nested")]),
+        _CA_BEGIN, _CA_END, "changelog-status.v1", repo_roots=roots)
+    assert planned["status"] == "skip", planned
+
+
+def test_a_failed_result_is_not_held_to_the_plan(tmp_path):
+    """/commit Step 7 compared the roots only for a landing: a schema-valid
+    `failed` block that reports fewer repositories than planned is returned
+    to the analyst by no plan rule."""
+    harness_session = "harness-rb-roots-failed"
+    agent_id = "agent-ca-rb-roots-failed"
+    project, home = _standard_setup(tmp_path, "changelog-analyst", agent_id)
+    _write_obligation_transcript(
+        home, project, harness_session, agent_id,
+        _response_block_obligation("20260101-000207", repo_roots=["/r/control", "/r/nested"]),
+    )
+    body = json.dumps({"commit_status": "failed", "failure_code": "staging_error",
+                       "failure_reason": "git add failed", "repository_results": []})
+    proc = _run_hook(
+        project, home, agent_id, session_id=harness_session, stopgate_mode="block",
+        last_assistant_message=f"{_CA_BEGIN}\n{body}\n{_CA_END}\n",
+    )
+    assert "plan_mismatch" not in proc.stderr, proc.stderr
+
+
+def test_response_block_with_null_repo_roots_has_no_plan_requirement(tmp_path):
+    """Bulk mode declares no plan (repo_roots null): no roots requirement."""
+    proc = _run_plan_roots_case(tmp_path, "roots-null", None, [_ca_result(0, "/r/anything")])
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_response_block_advisory_mode_never_blocks(tmp_path):
@@ -2733,6 +2835,127 @@ def test_a4_missing_dev_report_is_a_plain_block_every_round(tmp_path):
     _l2_write(s, _l2_dev_report(s.task))
     proc = _l2_stop(s)
     assert proc.returncode == 0 and proc.stderr == "", proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# R8 (P1c F7b): a lane whose dispatch carries no obligation block at all is
+# judged on the reports its own transcript shows it wrote, never on a
+# sibling's; with no block nothing else says which report is its own.
+# ---------------------------------------------------------------------------
+
+
+def _write_writing_transcript(home, project, session, agent_id, prompt, paths):
+    """The agent's transcript: its dispatch prompt, then one Write per path
+    with an ok tool_result (the record the CLI keeps of the agent's calls)."""
+    _write_obligation_transcript(home, project, session, agent_id, prompt)
+    tpath = home / ".claude" / "projects" / _project_slug(project) / session / "subagents" / f"agent-{agent_id}.jsonl"
+    with tpath.open("a", encoding="utf-8") as fh:
+        for k, rel in enumerate(paths):
+            use = f"toolu_r8_{agent_id}_{k}"
+            fh.write(json.dumps({"type": "assistant", "cwd": str(project), "message": {"content": [
+                {"type": "tool_use", "id": use, "name": "Write",
+                 "input": {"file_path": str(project / rel), "content": "{}"}}]}}) + "\n")
+            fh.write(json.dumps({"type": "user", "cwd": str(project), "message": {"content": [
+                {"type": "tool_result", "tool_use_id": use, "content": "ok"}]}}) + "\n")
+
+
+@pytest.mark.parametrize("stopgate", [None, "block"], ids=["switch_unset", "stopgate_block"])
+def test_r8_no_obligation_block_judges_only_the_reports_the_lane_wrote(tmp_path, stopgate):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_sentinel(project, SESSION, "dev")  # G2 reads no artifact-contract flag (P4 R8)
+    tasks = {lane: f"{SESSION_TS}-{lane}" for lane in _FANOUT_LANES}
+    reports = {lane: f"docs/dev/dev-report-{task}.json" for lane, task in tasks.items()}
+    for lane, task in tasks.items():
+        agent = f"agent-dev-r8-{lane}"
+        _register_agent(project, agent, SESSION, "dev")
+        _write_writing_transcript(home, project, _FANOUT_HARNESS, agent,
+                                  "You are the dev subagent. Write your report.", [reports[lane]])
+    # l1 left a needs_review report (no longer a dev-report.v2 status); l2's is valid.
+    _write(project / reports["l1"], _l2_dev_report(tasks["l1"], status="needs_review", lane="l1",
+                                                   lane_set=list(_FANOUT_LANES)))
+    _write(project / reports["l2"], _l2_dev_report(tasks["l2"], lane="l2", lane_set=list(_FANOUT_LANES)))
+
+    sibling = _run_hook(project, home, "agent-dev-r8-l2", session_id=_FANOUT_HARNESS, stopgate_mode=stopgate)
+    assert sibling.returncode == 0, sibling.stderr
+    assert reports["l1"] not in sibling.stderr
+
+    own = _run_hook(project, home, "agent-dev-r8-l1", session_id=_FANOUT_HARNESS, stopgate_mode=stopgate)
+    assert own.returncode == 2, own.stderr
+    assert "ARTIFACT_CONTRACT_BLOCKED" in own.stderr
+    assert reports["l1"] in own.stderr and reports["l2"] not in own.stderr
+    assert "needs_review" in own.stderr  # the failing check: the status the schema refuses
+
+    # A lane that wrote no report owes none here (existence is the declaring obligation's, G2's
+    # obligation mode): nothing of a sibling's is judged at its stop.
+    _write_writing_transcript(home, project, _FANOUT_HARNESS, "agent-dev-r8-none", "You are the dev subagent.", [])
+    _register_agent(project, "agent-dev-r8-none", SESSION, "dev")
+    none = _run_hook(project, home, "agent-dev-r8-none", session_id=_FANOUT_HARNESS, stopgate_mode=stopgate)
+    assert none.returncode == 0, none.stderr
+
+
+# ---------------------------------------------------------------------------
+# C5 for G3's canonical_missing (P2): a fan-out lane's report reaches the
+# canonical aggregate's one producer, the lane-completeness watch, only by a
+# Write or Edit. A report that completes the lane set by another route (a
+# shell redirection) leaves the canonical missing: the lane whose report is
+# the fan-out's newest is returned at its own stop, by G3's own rule, naming
+# the canonical, the check and the repair (its report saved again with Edit).
+# ---------------------------------------------------------------------------
+
+
+C5_TASK = "20261002-170011"  # a /dev fan-out's id: the shard filename patterns name its lanes
+
+
+def _c5_setup(tmp_path, *, l1=True, l1_newer=False, canonical=False):
+    s = _l2_setup(tmp_path, lane="l2", lane_set=["l1", "l2"], base_task=C5_TASK)
+    s.l1 = f"docs/dev/dev-report-{s.cycle}-l1.json"
+    s.canonical = f"docs/dev/dev-report-{s.cycle}.json"
+    _l2_write(s, _l2_dev_report(s.task, lane="l2", lane_set=["l1", "l2"]))
+    now = datetime.now(timezone.utc).timestamp()
+    os.utime(s.project / s.art_path, (now, now))
+    if l1:
+        _write(s.project / s.l1, _l2_dev_report(f"{s.cycle}-l1", lane="l1", lane_set=["l1", "l2"]))
+        at = now + 30 if l1_newer else now - 60
+        os.utime(s.project / s.l1, (at, at))
+    if canonical:
+        _write(s.project / s.canonical, {"task_id": s.cycle, "parallel_workers": ["l1", "l2"]})
+    return s
+
+
+def test_c5_lane_report_completing_the_set_unseen_by_the_watch_is_returned_at_its_stop(tmp_path):
+    s = _c5_setup(tmp_path)
+    proc = _l2_stop(s)
+    assert proc.returncode == 2, proc.stderr
+    assert "OBLIGATION_STOPGATE_BLOCKED" in proc.stderr
+    assert f"{s.art_path}: canonical_missing" in proc.stderr  # the stopping lane's own report
+    assert f"{s.canonical}: the canonical aggregate of lanes l1, l2 is missing" in proc.stderr
+    assert "posttool-lane-completeness-watch.py" in proc.stderr
+    assert "save it again with Edit" in proc.stderr  # what the receiver does
+
+
+def test_c5_canonical_on_disk_passes(tmp_path):
+    proc = _l2_stop(_c5_setup(tmp_path, canonical=True))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_c5_a_sibling_lane_reporting_later_is_that_lanes_own(tmp_path):
+    """The sibling's report is the newest: its own watch may still be running, and its stop decides."""
+    proc = _l2_stop(_c5_setup(tmp_path, l1_newer=True))
+    assert proc.returncode == 0, proc.stderr
+    assert "canonical_missing" not in proc.stderr
+
+
+def test_c5_lane_set_not_yet_complete_passes(tmp_path):
+    proc = _l2_stop(_c5_setup(tmp_path, l1=False))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_c5_advisory_stopgate_does_not_block(tmp_path):
+    s = _c5_setup(tmp_path)
+    proc = _run_hook(s.project, s.home, s.agent_id, session_id=s.harness, stopgate_mode="advisory")
+    assert proc.returncode == 0, proc.stderr
 
 
 if __name__ == "__main__":

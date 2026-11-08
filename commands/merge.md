@@ -79,12 +79,12 @@ resolve to the same commit, which Step 1 refuses as a self-merge before any disp
 ```bash
 RESOLVED_REF=<the-resolved-merge-source>
 SOURCE_TIP=$(git rev-parse --verify --quiet "${RESOLVED_REF}^{commit}" || echo "MISSING")
-DEFAULT_BRANCH=$(bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/derive-default-branch.sh")
+DEFAULT_BRANCH=$(bash "<HARNESS_ROOT>/scripts/derive-default-branch.sh")
 DEFAULT_TIP=$(git rev-parse --verify --quiet "refs/heads/${DEFAULT_BRANCH}^{commit}" || echo "MISSING")
 REPO_ROOT=$(realpath "$(git rev-parse --show-toplevel)")
 REPO_HASH=$(printf '%s' "$REPO_ROOT" | sha256sum | cut -c1-16)
 REQUEST_ID=$(openssl rand -hex 16)
-SESSION_ID="${CLAUDE_SESSION_ID}"
+SESSION_ID="${CLAUDE_CODE_SESSION_ID}"
 ```
 
 `SOURCE_TIP` is resolved through `${RESOLVED_REF}^{commit}` rather than
@@ -93,7 +93,7 @@ commit hash all resolve. `--verify` makes an ambiguous or unknown name a hard MI
 a silent empty string.
 
 If `SESSION_ID` is empty or unset, abort immediately with:
-"Cannot dispatch merge-analyst: CLAUDE_SESSION_ID not set. Invoke /merge from within a Claude Code session."
+"Cannot dispatch merge-analyst: CLAUDE_CODE_SESSION_ID not set. Invoke /merge from within a Claude Code session."
 
 If either tip is "MISSING", abort with an error describing which ref was not found.
 
@@ -165,7 +165,7 @@ abort with "Tips changed since merge-analyst ran — re-run /merge to get a fres
 The orchestrator calls the wrapper exactly once with the resolved ref:
 
 ```bash
-bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/merge.sh" "<resolved-ref>"
+bash "<HARNESS_ROOT>/hooks/merge.sh" "<resolved-ref>"
 ```
 
 Add `--no-commit` when the merge must be inspected before it becomes history: the wrapper applies

@@ -619,6 +619,6 @@ def test_cp_enforce_and_role_resolution_take_one_running_rule(tmp_path):
     for payload, running, code in ((fresh, True, 2), (stale, False, 0)):
         _make_cp_state(tmp_path, spec_id, agent, payload)
         assert cp_state_running(payload) is running
-        rc = subprocess.run(["python3", str(enforce)], input="{}", text=True, capture_output=True,
-                            env=env, timeout=15)
+        rc = subprocess.run(["python3", str(enforce)], input=json.dumps({"agent_id": "a-1"}), text=True,
+                            capture_output=True, env=env, timeout=15)  # the slot's own agent stopping
         assert rc.returncode == code, rc.stderr

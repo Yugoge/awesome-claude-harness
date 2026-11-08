@@ -25,7 +25,10 @@ Derivation rules, in the order row 19 states them:
     writes (the user's own project and home files: the platform's, as the
     CLI's), and a file whose reader's own text says the user creates it by
     hand, unless a trace event or a literal code site writes it. Git's own
-    store (paths inside a git directory) is the platform's.
+    store (paths inside a git directory) is the platform's. What a replay's
+    injected fault does (the actor it acts as, FAULT_ACTOR) is the experiment's
+    perturbation, no component's relation: the trace attributes it to that actor
+    and the derivation leaves it out.
 (2) Non-file artifacts from their declarations: a response block or line by
     its obligation's markers and terminal_line_regex (producer: the declaring
     obligation's role; readers: code and command-block sites holding the
@@ -93,6 +96,8 @@ from dataclasses import dataclass, field
 from . import patterns as P
 
 RUNTIME_ROLE = re.compile(r"^(main|agent:.+|cli)$")
+# the actor a replay's fault injection acts as (tests/replay: Replay.acting): not the system under test
+FAULT_ACTOR = "fault"
 RULES = "|"     # joins the several code identities one decision's rule names (_rules)
 ALLOWED = ("producer stop", "producer tool call", "own artifact", "G1", "G3", "own stop", "chain call", "library")
 _HAND = re.compile(r"\b(by hand|manually|(user|owner|human|operator|you)\b[^\n]{0,60}\b(creat|touch|add|write|place|put)"
@@ -130,7 +135,7 @@ class Run:
 def load_run(label: str, settings: str, run_dir: str) -> Run:
     from tests.replay import differential as D
     r = Run(label, settings, run_dir)
-    r.events = D.load_events(run_dir)
+    r.events = [e for e in D.load_events(run_dir) if e["actor"] != FAULT_ACTOR]
     r.invocations = D.load_invocations(run_dir)
     for name, attr in (("env.json", "env"), ("differential.json", "differential"), ("summary.json", "summary"),
                        ("ids.json", "ids")):
@@ -557,6 +562,17 @@ class _Ctx:
             seen = {(w.who, w.via) for w in a.writers if w.source == "runtime"}
             a.writers = [w for w in a.writers if w.source != "static" or (w.who, w.via) not in seen
                          and w.who not in {x.who for x in a.writers if x.source == "runtime"}]
+        # E1: a path a replay exercises (written and read in the trace) takes its readers from the
+        # trace. A static read by a component the trace ran, which never read the path there, is a
+        # branch no replay takes (provision's finalized.json read, session_resources.py:1109): it
+        # adds no reader to that path. A component the trace never ran keeps its static read.
+        ran = {x for art in m.artifacts.values() for r in art.writers + art.readers if r.source == "runtime"
+               for x in (r.who, r.via, r.proc) if x}
+        for a in m.artifacts.values():
+            rt_readers = {r.who for r in a.readers if r.source == "runtime"}
+            if not rt_readers or not any(w.source == "runtime" for w in a.writers):
+                continue
+            a.readers = [r for r in a.readers if r.source != "static" or r.who in rt_readers or r.who not in ran]
 
     def _without_scratch(self, own: dict, rels: list) -> dict:
         """Rule (1) at literal code sites: a file a temp-name generator named, or one under a
