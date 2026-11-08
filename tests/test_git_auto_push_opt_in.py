@@ -118,6 +118,10 @@ def _scratch_env(base: Path, case: str, gitconfig: str = "") -> dict:
     # redirects plumbing stderr into CHECKPOINT_LOG_DIR, which must exist.
     for directory in (home / ".claude" / "logs", checkpoint_logs, state, tmp):
         directory.mkdir(parents=True, exist_ok=True)
+    # The post-commit hooks, copies with no path of their own, load the push
+    # switch's reader from ${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/.
+    (home / ".claude" / "hooks" / "lib").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(AUTO_PUSH_LIB, home / ".claude" / "hooks" / "lib" / "auto_push.sh")
     global_config = home / ".gitconfig"
     global_config.write_text(gitconfig)
     env = {
@@ -416,7 +420,7 @@ def test_checkpoint_command_message_matches_the_switch(tmp_path, case):
     env = _scratch_env(tmp_path, case)
     # checkpoint.sh sources $HOME/.claude/hooks/lib/checkpoint-core.sh.
     lib = Path(env["HOME"]) / ".claude" / "hooks" / "lib"
-    lib.mkdir(parents=True)
+    lib.mkdir(parents=True, exist_ok=True)
     for source in (CHECKPOINT_LIB, STATE_DIR_LIB):
         shutil.copyfile(source, lib / source.name)
     repo, _origin = _new_repo(tmp_path, env)

@@ -6,8 +6,10 @@
 # reads as true pushes; false, or a value git cannot read as a boolean, does not. Unset, the global
 # GIT_AUTO_PUSH decides as before: exactly "1" pushes. A global or system harness.autoPush is not
 # read, so the one global switch stays GIT_AUTO_PUSH. Every automatic push path calls this:
-# _checkpoint_rate_limited_push (lib/checkpoint-core.sh), safe_push (git-fswatch.sh) and the
-# initial push of session-git-init.sh.
+# _checkpoint_rate_limited_push (lib/checkpoint-core.sh), safe_push (git-fswatch.sh), the
+# initial push of session-git-init.sh, and the post-commit hooks copied into repositories
+# (git-hooks/post-commit-auto-push and install-protection-all.sh's combined hook), which load
+# it from ${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/.
 
 harness_auto_push() {
   local v rc

@@ -10,7 +10,14 @@ calls it:
   fswatch       hooks/git-fswatch.sh safe_push (its functions are loaded, the watcher never runs);
   session init  hooks/session-git-init.sh, with test_git_auto_push_opt_in.py's stub gh: the
                 initial push to the origin that gh repo create makes (--push). The hook creates
-                the repository itself, so its harness.autoPush comes from a git init template.
+                the repository itself, so its harness.autoPush comes from a git init template;
+  post_commit   hooks/git-hooks/post-commit-auto-push installed as a post-commit hook: the
+                background push of refs/backups/claude/<branch>/<sha12>;
+  combined_hook the combined "Git LFS + Auto-Push" post-commit hook body that
+                hooks/install-protection-all.sh writes (extracted, the installer never runs): the
+                background push of the branch. Both hooks are copies with no path of their own:
+                they load the reader from ${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/, and without
+                it they push nothing.
 
 Each path runs every row of SWITCHES: global on and repository false (no push), global off or
 unset and repository true (push), the key unset (the global switch decides), a repository value
@@ -23,6 +30,7 @@ Every case has its own scratch HOME and global git config (no system config) and
 repositories; every origin is a local bare repository, so nothing reaches a network or a real home.
 """
 
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,11 +39,13 @@ from typing import Optional
 import pytest
 
 from tests.test_bootstrap_init import Home
-from tests.test_git_auto_push_opt_in import (BRANCH, CHECKPOINT_CMD, CHECKPOINT_LIB,
-                                             CHECKPOINT_NOTE, NEGATIVE_SETTLE, POLL_INTERVAL,
-                                             POSITIVE_TIMEOUT, PROJECT_NAME, SKIP_MARKER, Run,
-                                             _fswatch_functions, _git, _new_repo, _origin_refs,
-                                             _run, _run_session_git_init, _scratch_env)
+from tests.test_git_auto_push_opt_in import (AUTO_PUSH_LIB, BRANCH, CHECKPOINT_CMD,
+                                             CHECKPOINT_LIB, CHECKPOINT_NOTE, NEGATIVE_SETTLE,
+                                             POLL_INTERVAL, POSITIVE_TIMEOUT, POST_COMMIT_HOOK,
+                                             PROJECT_NAME, SKIP_MARKER, Run, _combined_hook_body,
+                                             _fswatch_functions, _git, _install_post_commit,
+                                             _new_repo, _origin_refs, _run,
+                                             _run_session_git_init, _scratch_env)
 from tests.test_landing import env  # noqa: F401  (the landing tests' scratch-home fixture)
 from tests.test_landing import assert_landed, git, land, landing_log, make_home
 
@@ -116,23 +126,82 @@ def _trigger_checkpoint(base: Path, switch: Switch) -> Run:
                proc.returncode, proc.stdout + proc.stderr, triggered_at)
 
 
+def _commit_with_hook(base: Path, env: dict, switch: Switch, path: str) -> Run:
+    """One commit in a fresh repository whose post-commit hook is the path's hook body."""
+    hook_text = POST_COMMIT_HOOK.read_text(encoding="utf-8") if path == "post_commit" \
+        else _combined_hook_body()
+    repo, origin = _new_repo(base, env)
+    _set_key(env, repo, switch.repo)
+    _install_post_commit(repo, hook_text)
+    (repo / "change.txt").write_text("plain words for a fresh commit\n")
+    _git(env, "-C", repo, "add", "change.txt")
+    origin_before = _origin_refs(env, origin)
+    proc = _run(["git", "-C", repo, "commit", "-q", "-m", "plain commit under test"], env,
+                check=False)
+    triggered_at = time.monotonic()
+    head = _git(env, "-C", repo, "rev-parse", "HEAD")
+    ref = (f"refs/backups/claude/{BRANCH}/{head[:12]}" if path == "post_commit"
+           else f"refs/heads/{BRANCH}")
+    return Run(path, switch.id, env, repo, origin, origin_before, ref, head, proc.returncode,
+               proc.stdout + proc.stderr, triggered_at)
+
+
+BACKGROUND_PATHS = ("checkpoint", "post_commit", "combined_hook")
+
+
 @pytest.fixture(scope="module")
-def checkpoint_runs(tmp_path_factory) -> dict:
-    """Every checkpoint case triggered up front, so their push waits overlap."""
-    base = tmp_path_factory.mktemp("per_repo_checkpoint")
+def background_runs(tmp_path_factory) -> dict:
+    """Every case of the paths that push in the background, triggered up front so that their
+    push waits overlap; keyed by (path, switch id)."""
+    base = tmp_path_factory.mktemp("per_repo_background")
     runs = {}
-    for switch in SWITCHES:
-        (base / switch.id).mkdir()
-        runs[switch.id] = _trigger_checkpoint(base / switch.id, switch)
+    for path in BACKGROUND_PATHS:
+        for switch in SWITCHES:
+            case = base / f"{path}-{switch.id}"
+            case.mkdir()
+            runs[(path, switch.id)] = (_trigger_checkpoint(case, switch) if path == "checkpoint"
+                                       else _commit_with_hook(case, _env(case, switch), switch,
+                                                              path))
     return runs
 
 
 @pytest.mark.parametrize("switch", SWITCHES, ids=IDS)
-def test_checkpoint_push_follows_the_repository_switch(checkpoint_runs, switch):
-    run = checkpoint_runs[switch.id]
+def test_checkpoint_push_follows_the_repository_switch(background_runs, switch):
+    run = background_runs[("checkpoint", switch.id)]
     assert run.returncode == 0, run.output
     assert run.expected_sha, f"no local {run.expected_ref} was written\n{run.output}"
     _judge(run, switch.pushes)
+
+
+# --------------------------------------------------------------------------- post-commit hooks
+
+
+@pytest.mark.parametrize("switch", SWITCHES, ids=IDS)
+@pytest.mark.parametrize("path", ("post_commit", "combined_hook"))
+def test_post_commit_hook_push_follows_the_repository_switch(background_runs, path, switch):
+    run = background_runs[(path, switch.id)]
+    assert run.returncode == 0, run.output
+    _judge(run, switch.pushes)
+
+
+@pytest.mark.parametrize("where", ("claude-home", "missing"))
+def test_post_commit_hook_reads_the_switch_from_the_harness_home(tmp_path, where):
+    """The reader is found under CLAUDE_HOME when it is not under ~/.claude; found nowhere, the
+    hook pushes nothing even with GIT_AUTO_PUSH "1", and its log says why."""
+    switch = Switch(where, "1", None, where == "claude-home")
+    env = _env(tmp_path, switch)
+    (Path(env["HOME"]) / ".claude" / "hooks" / "lib" / "auto_push.sh").unlink()
+    if where == "claude-home":
+        harness = tmp_path / "harness-elsewhere"
+        (harness / "hooks" / "lib").mkdir(parents=True)
+        shutil.copyfile(AUTO_PUSH_LIB, harness / "hooks" / "lib" / "auto_push.sh")
+        env["CLAUDE_HOME"] = str(harness)
+    run = _commit_with_hook(tmp_path, env, switch, "post_commit")
+    assert run.returncode == 0, run.output
+    _judge(run, switch.pushes)
+    log = Path(env["CLAUDE_BACKUP_LOG"])
+    text = log.read_text(errors="replace") if log.exists() else ""
+    assert ("no push: the switch's reader" in text) == (where == "missing"), text
 
 
 # --------------------------------------------------------------------------- git-fswatch

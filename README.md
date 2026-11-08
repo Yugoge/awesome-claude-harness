@@ -132,8 +132,10 @@ Module flags take effect only when init writes a new overlay. Once an overlay ex
 
 #### Automatic push, per repository
 
-The automatic pushes (the checkpoint push, git-fswatch's push, session-git-init's first push) run
-where `GIT_AUTO_PUSH` is `"1"`; set it in the overlay's `env` (the tracked clean form sets `"0"`).
+The automatic pushes (the checkpoint push, git-fswatch's push, session-git-init's first push, and
+the post-commit backup hook `hooks/git-hooks/post-commit-auto-push` where you copied it into a
+repository) run where `GIT_AUTO_PUSH` is `"1"`; set it in the overlay's `env` (the tracked clean
+form sets `"0"`).
 A repository's own git config decides before that switch, for that repository only:
 
 ```bash
@@ -144,7 +146,10 @@ git -C <repo> config --local --unset harness.autoPush   # GIT_AUTO_PUSH decides 
 
 Init and the landing set `false` in the harness home when the key is absent, because its `origin`
 is the public repository; they never change a value you set. A value git cannot read as a boolean
-means no push. `/push` is not affected.
+means no push. `/push` is not affected. The post-commit hook reads the switch through the
+harness's `hooks/lib/auto_push.sh`, found under `CLAUDE_HOME` or `~/.claude` (none there: no
+push, and its log says so); a copy made before this rule existed keeps its old test until you copy
+the hook again.
 
 **Upgrading a home that predates the overlay.** A home that ran code from before the settings
 filter (its HEAD reflog, or `ORIG_HEAD`, holds such a revision) lands by itself at the next turn

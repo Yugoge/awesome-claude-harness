@@ -1,6 +1,9 @@
 #!/bin/bash
 # post-commit-auto-push - Opt-in: back up each commit to a remote recovery ref
-# Off by default; enable with export GIT_AUTO_PUSH=1 (unset, 0 or any other value = no push)
+# Off by default. The repository's own git config decides first (git config --local
+# harness.autoPush true|false); unset, export GIT_AUTO_PUSH=1 enables it (unset, 0 or any
+# other value = no push). The harness's hooks/lib/auto_push.sh reads that rule, from
+# CLAUDE_HOME or ~/.claude; when it is not there, nothing is pushed (logged).
 # Installation: cp ~/.claude/hooks/git-hooks/post-commit-auto-push .git/hooks/post-commit
 
 # Get current branch and commit
@@ -12,15 +15,20 @@ if [ -z "$BRANCH" ] || [ -z "$COMMIT_SHA" ]; then
   exit 0
 fi
 
-# Push only when explicitly enabled: GIT_AUTO_PUSH must be exactly "1"
-if [ "${GIT_AUTO_PUSH:-}" != "1" ]; then
+LOG_PATH="${CLAUDE_BACKUP_LOG:-${HOME}/.claude/logs/post-commit-auto-push.log}"
+READER="${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/auto_push.sh"
+
+# Push only when the per-repository switch says so (D1 as amended)
+if ! . "$READER" 2>/dev/null; then
+  [ "${GIT_AUTO_PUSH:-}" != "1" ] || { mkdir -p "$(dirname "$LOG_PATH")" \
+    && echo "no push: the switch's reader $READER is missing" >>"$LOG_PATH"; } 2>/dev/null
   exit 0
 fi
+harness_auto_push . || exit 0
 
 # Push only a namespaced recovery ref in background. Never publish refs/heads/<branch>.
 SHORT_SHA="${COMMIT_SHA:0:12}"
 BACKUP_REF="refs/backups/claude/${BRANCH}/${SHORT_SHA}"
-LOG_PATH="${CLAUDE_BACKUP_LOG:-${HOME}/.claude/logs/post-commit-auto-push.log}"
 REMOTE="${CLAUDE_BACKUP_REMOTE:-origin}"
 
 mkdir -p "$(dirname "$LOG_PATH")"
