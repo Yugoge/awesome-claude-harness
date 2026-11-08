@@ -180,23 +180,41 @@ def test_the_public_repository_holds_no_object_of_the_private_history(repos, tmp
     assert priv("rev-parse", "master~2:contacts.txt") not in held
 
 
-@pytest.mark.parametrize("case", ["no list", "empty list", "private main", "no source", "no public", "itself"])
+@pytest.mark.parametrize("case", ["private main", "no source", "no public", "itself"])
 def test_a_publish_that_cannot_be_trusted_is_refused_with_nothing_pushed(repos, tmp_path, case):
     priv, pub = repos
-    if case == "no list":
-        (priv.path / "private-literals.txt").unlink()
-    if case == "empty list":
-        write(priv.path / "private-literals.txt", "# none yet\n \t\n")
     if case == "private main":
         priv("push", "-q", "public", "master:main")
     before = pub.state()
     r = priv.publish(*{"no source": ("--source", "nowhere", "public"), "itself": (".",),
                        "no public": (str(tmp_path / "nowhere.git"),)}.get(case, ("public",)))
-    why = {"no list": "cannot read private-literals.txt", "empty list": "lists no literal",
-           "private main": "this repository's refs reach", "no source": "cannot read the source commit",
+    why = {"private main": "this repository's refs reach", "no source": "cannot read the source commit",
            "no public": "cannot read the public repository", "itself": "is this repository"}[case]
     assert (r.returncode, r.stdout) == (1, "") and r.stderr.startswith("publish-public: REFUSED: ") and why in r.stderr
     assert pub.state() == before
+
+
+@pytest.mark.parametrize("listing", ["no list", "empty list"])
+def test_with_no_literal_listed_the_list_is_still_the_engines_and_the_guards_to_decide_on(repos, listing):
+    """D24, one rule per artifact: the script has no rule of its own on private-literals.txt. With none
+    listed, the literal scans pass as on every push, the engine's report (shown on every run) says
+    so, and the engine's other gates still refuse."""
+    priv, pub = repos
+    if listing == "no list":
+        (priv.path / "private-literals.txt").unlink()
+    else:
+        write(priv.path / "private-literals.txt", "# none yet\n \t\n")
+    priv.commit("stray/a.txt", "an unclassified top-level path\n")
+    before = pub.state()
+    r = priv.publish("public")
+    assert r.returncode == 1 and r.stderr.splitlines()[-1].startswith("publish-public: REFUSED: ")
+    assert "unclassified top-level tracked path" in r.stderr and "SKIP: private-literal rule" in r.stderr
+    assert pub.state() == before
+    priv("rm", "-rq", "stray")
+    priv("commit", "-q", "-m", "c")
+    r = priv.publish("public")
+    assert r.returncode == 0 and r.stdout.startswith("publish-public: published ")
+    assert "SKIP: private-literal rule" in r.stderr and pub("rev-list", "--count", "main") == "1"
 
 
 def test_a_dry_run_or_a_usage_error_pushes_nothing(repos):

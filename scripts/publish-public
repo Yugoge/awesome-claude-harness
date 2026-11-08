@@ -7,13 +7,15 @@
 # here, at the current time; message "Publish <source id>") is made in a scratch repository that borrows
 # this one's objects and alone receives the fetched tip: nothing is written here, and the scratch goes
 # on every exit. It is pushed (plain, to main only) once P8's engine (default mode, on a checkout of
-# that tree with this repository's private-literals.txt at its top) and P11's guard (on that very push),
-# the copies beside this script, both pass. Refused (exit 1, nothing pushed, the step named): no literal
-# listed (both scans would be vacuous), an unreadable source or public repository, a public main that
-# this repository's refs reach (a named remote's own tracking refs aside) or whose history holds a commit
-# this script did not make (a merge, or a message other than "Publish <full commit id>"; the commit named),
-# a failed scan (its report forwarded with every listed literal masked, the longest first), or a step that
-# cannot run. The public main already holding the tree: nothing to publish. Usage errors exit 2.
+# that tree with a link to this repository's private-literals.txt at its top) and P11's guard (on that
+# very push), the copies beside this script, both pass. The list is theirs alone to decide on (D24, one
+# rule per artifact): with no literal listed the literal scans pass, and the engine's report, shown on
+# every run, says so. Refused (exit 1, nothing pushed, the step named): an unreadable source or public
+# repository, a public main that this repository's refs reach (a named remote's own tracking refs
+# aside) or whose history holds a commit this script did not make (a merge, or a message other than
+# "Publish <full commit id>"; the commit named), a failed scan (its report forwarded with every listed
+# literal masked, the longest first), or a step that cannot run. The public main already holding the
+# tree: nothing to publish. Usage errors exit 2.
 set -uo pipefail
 refuse() { echo "publish-public: REFUSED: $*" >&2; exit 1; }
 usage() { echo "usage: publish-public [--dry-run] [--source <commit>] <public repository>" >&2; exit 2; }
@@ -26,7 +28,7 @@ done
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 engine="$here/check-public-core.sh" guard="$here/install/push-guard"
 lits() {  # "<list line> <literal>", read as the engine reads the list
-  LC_ALL=C awk '{ sub(/\r$/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") } $0 != "" && !/^#/ { print FNR " " $0 }' "$list"
+  LC_ALL=C awk '{ sub(/\r$/, ""); sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") } $0 != "" && !/^#/ { print FNR " " $0 }' "$list" 2>/dev/null
 }
 mask() {  # stdin to stderr, each listed literal replaced by its list line, the longest first (sorted in as
   # read): a literal holding another goes whole, never leaving the rest of it beside the other's mask
@@ -40,8 +42,6 @@ mask() {  # stdin to stderr, each listed literal replaced by its list line, the 
 common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
   && objects="$(git rev-parse --path-format=absolute --git-path objects)" || refuse "not inside a git repository"
 list="${common%/*}/private-literals.txt"
-[ -f "$list" ] && [ -r "$list" ] || refuse "cannot read private-literals.txt beside this repository"
-[ -n "$(lits)" ] || refuse "private-literals.txt lists no literal: both scans would be vacuous"
 [ -f "$engine" ] && [ -f "$guard" ] || refuse "scripts/check-public-core.sh or scripts/install/push-guard is missing"
 src="$(git rev-parse -q --verify "$src^{commit}")" && tree="$(git rev-parse "$src^{tree}")" \
   || refuse "cannot read the source commit"
@@ -83,10 +83,10 @@ if [ -n "$tip" ]; then
     "message other than \"Publish <full commit id>\"): the public repository is publish-only"
 fi
 ! git -C "$t" cat-file -e "$tree:private-literals.txt" 2>/dev/null || refuse "the source tree tracks private-literals.txt"
-git -C "$t" read-tree --reset -u "$tree" && cp "$list" "$t/private-literals.txt" \
+git -C "$t" read-tree --reset -u "$tree" && ln -s "$list" "$t/private-literals.txt" \
   || refuse "cannot check out the source tree"
-report="$(cd "$t" && bash "$engine" 2>&1)" \
-  || { mask <<< "$report"; refuse "scripts/check-public-core.sh failed on the source tree (files named above)"; }
+report="$(cd "$t" && bash "$engine" 2>&1)"; rc=$?; mask <<< "$report"
+[ "$rc" = 0 ] || refuse "scripts/check-public-core.sh failed on the source tree (files named above)"
 [ -z "$old" ] || [ "$(git -C "$t" rev-parse "$old^{tree}")" != "$tree" ] \
   || { echo "publish-public: nothing to publish: the public main $old already holds tree $tree"; exit 0; }
 ae="${ai#*<}" ce="${ci#*<}"
