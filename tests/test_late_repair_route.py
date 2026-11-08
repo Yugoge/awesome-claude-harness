@@ -1226,7 +1226,10 @@ def _dispatch_again(root: Path, task_id: str, role: str) -> None:
     """The stage's dispatch run again: its record in the task's transcript, a fresh
     dispatched_at and its own tool_use id (toolu_<role>_again_<task>)."""
     import os
-    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / str(root.resolve()).replace("/", "-")
+    import re
+    # Claude Code's folder name, as fx.declare_stage_dispatches writes the transcript (P6): every
+    # non-alphanumeric character becomes "-", the "_" of pytest's tmp_path too.
+    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(root.resolve()))
     transcript = store / f"late-repair-{task_id}.jsonl"
     records = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
     first = next(r for r in records if r["type"] == "assistant"

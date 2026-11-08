@@ -415,7 +415,9 @@ def _g2(project: Path, home: Path, role: str, prompt: str):
     registry.mkdir(parents=True, exist_ok=True)
     (registry / "agent-index.json").write_text(json.dumps(
         {agent_id: {"agent_type": role, "dev_session_id": f"dev-overnight-{TASK}"}}))
-    subagents = (home / ".claude" / "projects" / str(project.resolve()).replace("/", "-")
+    # Claude Code's folder name (P6, subagent_restart.project_slug): every non-alphanumeric character
+    # becomes "-", the "_" of pytest's tmp_path too.
+    subagents = (home / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(project.resolve()))
                  / SID / "subagents")
     subagents.mkdir(parents=True, exist_ok=True)
     (subagents / f"agent-{agent_id}.jsonl").write_text(
