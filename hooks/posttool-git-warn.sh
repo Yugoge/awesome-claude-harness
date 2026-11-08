@@ -1,7 +1,7 @@
 #!/bin/bash
-# post-commit-warn.sh - Warn about untracked files after commit
+# posttool-git-warn.sh - Warn about untracked files after commit
 # Part of Claude Code git tracking solution
-# Location: ~/.claude/hooks/post-commit-warn.sh
+# Location: ~/.claude/hooks/posttool-git-warn.sh
 
 # Only run if warnings enabled
 if [ "$GIT_WARN_UNTRACKED" != "1" ]; then
