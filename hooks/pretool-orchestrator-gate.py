@@ -147,7 +147,7 @@ def block_permanent(tool_name: str) -> None:
     allowed = ", ".join(sorted(ALWAYS_ALLOWED))
     sys.stderr.write(
         f"[Orchestrator Gate] Permanently blocked: {tool_name} (/do does not unlock it).\n"
-        f"Delegate to a subagent (Agent tool), or the user grants one call with /allow {tool_name}.\n"
+        f"Delegate to a subagent (Agent tool), or the user grants it once with /allow {tool_name}.\n"
         f"Whitelisted tools: {allowed}\n"
     )
     sys.exit(2)
