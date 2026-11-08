@@ -21,10 +21,9 @@ expires. It does NOT grant the command: the guard clears only the unparseable-
 token refusal and then applies every other policy check as usual.
 
 Refuses to run when an agent identity is present in the environment. That is a
-narrowing, not a guarantee -- a grant under /tmp is an ordinary file and this
-repository has measured that an agent can mint one directly (route_id
-"grant-self-minting" in hooks/tests/fixtures/overwrite_corpus.json). The
-enforceable property is that every use is recorded in the transcript.
+narrowing, not a guarantee -- a grant under /tmp is an ordinary file, so an
+agent can mint one directly. The enforceable property is that every use is
+recorded in the transcript.
 """
 
 import argparse

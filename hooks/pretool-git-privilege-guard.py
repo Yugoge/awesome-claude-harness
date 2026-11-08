@@ -1468,12 +1468,10 @@ def _evaluate_forbidden_plumbing(command, data):
 # command that was never refused, and it is single-use and short-lived.
 #
 # What this route does NOT claim. It does not claim an agent cannot forge the
-# file. This repository has already MEASURED that it can -- see route_id
-# "grant-self-minting" in hooks/tests/fixtures/overwrite_corpus.json: a grant
-# under /tmp is an ordinary JSON file, creating a path that does not yet exist
-# is never denied, so any agent with Bash can mint one. That finding is
-# declared there rather than claimed closed, and this route inherits exactly
-# that declared limitation and adds no new surface. What the route does supply
+# file: a grant under /tmp is an ordinary JSON file, creating a path that does
+# not yet exist is never denied, so any agent with Bash can mint one. That
+# limitation is declared rather than claimed closed, and this route inherits
+# exactly that declared limitation and adds no new surface. What the route does supply
 # is the property forgery cannot erase: honoring an override emits a
 # non-suppressible stderr audit record naming who authorized it, why, and what
 # was refused, so a forged authorization is visible in the transcript rather
