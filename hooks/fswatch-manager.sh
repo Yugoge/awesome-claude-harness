@@ -249,7 +249,7 @@ install_service() {
         return 1
     fi
 
-    local service_file="$(dirname "$(dirname "$SCRIPT_PATH")")/systemd/git-fswatch@.service"
+    local service_file="$(dirname "$SCRIPT_PATH")/git-fswatch@.service"
 
     if [ ! -f "$service_file" ]; then
         echo -e "${RED}✗${NC} Service file not found: $service_file"

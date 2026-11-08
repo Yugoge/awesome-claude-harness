@@ -133,7 +133,7 @@ CASE_MARKING = [
 
 # ---- consumer 1: the real tool-policy hook process ----------------------------------------------
 def _run_policy(role: str, command: str):
-    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "subagent_type": role,
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "agent_type": role,
                "agent_id": "a" + role + "verbnarrow", "session_id": "verbnarrow-sess"}
     proc = subprocess.run([sys.executable, str(HOOKS / TOOL_POLICY_HOOK)], input=json.dumps(payload),
                           capture_output=True, text=True, cwd=str(PROJECT), timeout=90)
@@ -508,13 +508,13 @@ def test_noncaller_unchanged_cp_state_write_guard_imports_but_never_calls():
                and any(a.name == "extract_bash_write_paths" for a in n.names)]
     assert len(imports) == 1 and _extractor_calls(tree) == [], "the guard must stay import-only"
     for command in REDIRECT_MARKING + [DOCUMENTED_MARKING, "cp src dest", "mv src " + DEST]:
-        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "subagent_type": "ba",
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "agent_type": "ba",
                    "agent_id": "abaverbnarrow", "session_id": "verbnarrow-sess"}
         proc = subprocess.run([sys.executable, str(HOOKS / CP_STATE_GUARD_HOOK)], input=json.dumps(payload),
                               capture_output=True, text=True, cwd=str(PROJECT), timeout=90)
         assert proc.returncode == 0, "the cp-state guard changed its Bash behaviour for %r" % command
     write = {"tool_name": "Write", "tool_input": {"file_path": str(PROJECT / ".claude" / "specs" / "S-vn" / "cp-state-ba.json"),
-                                                    "content": "{}"}, "subagent_type": "ba", "agent_id": "abaverbnarrow",
+                                                    "content": "{}"}, "agent_type": "ba", "agent_id": "abaverbnarrow",
              "session_id": "verbnarrow-sess"}
     proc = subprocess.run([sys.executable, str(HOOKS / CP_STATE_GUARD_HOOK)], input=json.dumps(write),
                           capture_output=True, text=True, cwd=str(PROJECT), timeout=90)

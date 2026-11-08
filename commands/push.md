@@ -165,7 +165,7 @@ empty, refuse: "Cannot dispatch push-analyst: no session id" (action "re-run the
 
 **Step 3: Dispatch push-analyst subagent**
 
-Dispatch the `push-analyst` subagent with the following context:
+Dispatch the `push-analyst` subagent (Agent tool, `run_in_background: false`) with the following context:
 
 ```
 BRANCH=<BRANCH>

@@ -1,6 +1,6 @@
 # Git File Watcher (fswatch) Documentation
 
-> Automatically monitors file changes and performs git add, commit, and pull operations
+> Automatically monitors file changes, snapshots them to `refs/checkpoints/<branch>` and pulls; pushes only when `GIT_AUTO_PUSH` is exactly `1`
 
 **Author**: Claude + Happy
 **Version**: 1.0.0
@@ -25,22 +25,21 @@
 
 ### Automatic Git Operations
 
-- **Auto Add**: runs `git add .` when file changes are detected
-- **Auto Commit**: creates meaningful commits using timestamps and file statistics
-- **Auto Remote Sync**: sends commits to the remote repository after each commit
+- **Auto Snapshot**: on a file change, writes a snapshot to `refs/checkpoints/<branch>` through an isolated temp index (`hooks/lib/checkpoint-core.sh`); the real index and the branch HEAD are never touched
+- **Push (opt-in)**: only when `GIT_AUTO_PUSH` is exactly `1`, pushes the branch's own commits (`git push origin <branch>`) after each snapshot, and the snapshot's checkpoint ref in the background; any other value, unset included, logs "Push skipped" and pushes nothing (the shipped `settings.json` sets `0`)
 - **Periodic Pull**: pulls from the remote every 5 minutes (configurable)
 
 ### Comprehensive Error Handling
 
 - **Conflict detection**: automatically detects merge conflicts and prompts the user
 - **Lock file handling**: automatically cleans up stale `.git/index.lock` files
-- **Network retry**: retries remote sync failures automatically (up to 3 times)
+- **Network retry**: retries a failed push automatically (up to 3 times)
 - **Stash management**: automatically stashes and pops local changes during pull
 - **Branch protection**: detects detached HEAD state
 
 ### Smart Optimization
 
-- **Debouncing**: 5-second delay to avoid excessive commits
+- **Debouncing**: 12-second delay (`FSWATCH_DEBOUNCE`) to avoid excessive snapshots and pushes
 - **Exclusion rules**: automatically ignores `.git/`, `node_modules/`, etc.
 - **Resource limits**: memory <500MB, CPU <20%
 - **Logging**: full operation log for debugging
@@ -91,8 +90,8 @@ bash ~/.claude/hooks/fswatch-manager.sh logs ~/my-project
 
 ### Step 5: Test the functionality
 
-Create a file in the monitored project, wait 5 seconds (the debounce delay), then check
-`git log -1 --oneline` to confirm auto-commit ran.
+Create a file in the monitored project, wait 12 seconds (the debounce delay), then check
+`git log -1 --oneline refs/checkpoints/<branch>` to confirm the snapshot ran.
 
 ---
 
@@ -101,9 +100,10 @@ Create a file in the monitored project, wait 5 seconds (the debounce delay), the
 ### Environment Variables
 
 ```bash
-export FSWATCH_DEBOUNCE=5        # seconds to wait after a file change
+export FSWATCH_DEBOUNCE=12       # seconds to wait after a file change
 export FSWATCH_PULL_INTERVAL=300 # seconds between automatic pulls from remote
-export FSWATCH_MAX_RETRIES=3     # retries on remote sync failure
+export FSWATCH_MAX_RETRIES=3     # retries on push failure
+export GIT_AUTO_PUSH=1           # push at all; any other value keeps every push off
 ```
 
 ### Config File Locations
@@ -140,11 +140,12 @@ Manual fallback: `rm .git/index.lock`
 
 ### 3. Network Failures
 
-Remote sync is retried up to 3 times with 5-second delays. Commits are already saved locally.
+A failed push (attempted only with `GIT_AUTO_PUSH=1`) is retried up to 3 times with 5-second
+delays. The snapshot is already saved locally on `refs/checkpoints/<branch>`.
 
 ### 4. Diverged Branches
 
-The watcher detects divergence, pulls to reconcile, then retries the remote sync.
+The watcher detects divergence, pulls to reconcile, then retries the push.
 
 ### 5. Detached HEAD
 
@@ -160,8 +161,8 @@ Check file permissions (`ls -la`), remote config (`git remote -v`), and SSH auth
 
 ### Personal notes / docs auto-sync
 
-Suitable for Markdown notes, config files, personal projects. Benefits: automatic backup,
-multi-device sync, full version history.
+Suitable for Markdown notes, config files, personal projects. Benefits: automatic local
+snapshots; with `GIT_AUTO_PUSH=1`, remote backup and multi-device sync.
 
 ### Dev environment config sync
 
@@ -272,7 +273,7 @@ Periodically squash auto-commits interactively.
 | Trigger | Claude Edit/Write tool | File system changes |
 | Token cost | +16% | 0% |
 | Monitoring scope | Claude changes | All changes including external editors |
-| Latency | Immediate | 5-second debounce |
+| Latency | Immediate | 12-second debounce |
 | Where it runs | Inside Claude | System-level daemon |
 
 Recommended: enable both for complete coverage.
@@ -281,7 +282,7 @@ Recommended: enable both for complete coverage.
 
 Stop the process: `bash ~/.claude/hooks/fswatch-manager.sh stop ~/my-project`
 
-Or set `FSWATCH_DEBOUNCE=9999999` to effectively pause commits.
+Or set `FSWATCH_DEBOUNCE=9999999` to effectively pause snapshots and pushes.
 
 ### Q6: Will the log file grow indefinitely?
 
@@ -307,6 +308,7 @@ Test environment: Ubuntu 24.04, 10,000 files, fswatch 1.14.0
 
 ## Related Documentation
 
+- Checkpoint snapshots: `docs/reference/checkpoint-mechanism.md`
 - Lock file handling: `docs/reference/lock-file-handling.md`
 - Git commands: `commands/` (one file per command)
 - fswatch official docs: https://emcrisostomo.github.io/fswatch/

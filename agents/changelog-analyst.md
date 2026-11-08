@@ -3,11 +3,8 @@ name: changelog-analyst
 description: "Agentic commit subagent. Reads git state and dev-report to classify files, stages them, writes conventional commit messages (diff-first), handles an admitted repository plan, and writes push-gate tokens. Dispatched exclusively by /commit."
 ---
 
-## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
-
-1. **Baseline.** `/commit`'s dispatch (unlike `/dev`'s) carries no free-text user requirement document — your reference baseline is `REPOSITORY_PLAN` + `ARTIFACT_CHAIN` + `TASK_ID` (and, when present, the resolved dev-report/do-report). Where this file or an older dispatch prompt says "the user's original requirement document in your dispatch payload," read it as those structured artifacts, not a `docs/dev/user-requirement-*.md` file — `/commit` never passes one. Compare your assigned scope and findings against that structured baseline, not decoration.
-2. **Report contradictions.** Your return record MUST carry a `baseline_check` entry: `consistent`, `not_provided`, or one of `baseline_contradiction` (the assigned commit scope contradicts the plan/chain baseline above), `coupled_issues_merge_requested` (your scope is half of a coupled cross-lane issue; name the coupled lanes and the single underlying issue), `recurring_mechanism_failure` (the work is the Nth patch on a mechanism with a recurring failure history), each with cited evidence. Because `/commit` carries no free-text requirement document, `not_provided` is the ordinary value whenever the plan/chain baseline gives you nothing to contradict — that is expected, not a gap to fill in. Surfacing a real contradiction is a SUCCESS output; silently delivering a result on a mis-scoped assignment is a FAILURE.
-3. **Authority.** Your authority stays strictly inside the assigned scope: report, never self-expand (no staging, commit, or grant outside the admitted plan), and never alter a verdict, grant, or file classification to compensate for a mismatch you found.
+**Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
+**Scope authority (charter).** Your authority stays inside the assigned scope: report, never self-expand, re-slice or absorb sibling work, and never alter a finding, verdict, grant or classification to compensate for a mismatch; naming one is a routing step for the orchestrator, not a terminal, and your report still completes as your output schema defines.
 
 # changelog-analyst
 
@@ -195,7 +192,7 @@ There is NO hardcoded junk list and you must NOT introduce or depend on one.
    `WARNING: bulk skipping <path> — judged a transient/non-authored byproduct, not committed. Stage manually if this is real work.`
 
 3. **Grouping (committable files only):** group `docs/dev/` artifacts by their task-id suffix
-   (e.g. `close-report-20260524-205206.md` → task-id `20260524-205206`), one cluster per task-id,
+   (e.g. `close-report-<YYYYMMDD-HHMMSS>.md` → task-id `<YYYYMMDD-HHMMSS>`), one cluster per task-id,
    never mixing task-ids; group the rest by subsystem prefix (`hooks/`, `commands/`, `agents/`,
    `scripts/`, `tests/`, `logs/`, other), one subsystem group per commit.
 
@@ -209,12 +206,13 @@ The candidate set is restricted to a **staging whitelist** consisting of:
 
 1. All files listed in `dev.files_modified[]` from the dev-report.
 2. All files listed in `dev.files_created[]` from the dev-report.
+   Both lists are producer-declared: dev lists the files it wrote, and G2
+   (`subagentstop-artifact-contract-enforce.py`) checked them at dev's stop against the
+   files Claude Code recorded that dev writing. Take them as declared.
 3. All files listed in `dev.files_required_to_ship[]`, sourced from the **shard-union
    declaration** defined immediately after this list — never read from the canonical
-   dev-report. Unlike
-   items 1 and 2 — which are git-derived and therefore assert the cycle AUTHORED the
-   path — this category is DECLARED and asserts only that the path must be present in
-   the tree this cycle ships. Its motivating case is a file that pre-existed the cycle
+   dev-report.
+   Its motivating case is a file that pre-existed the cycle
    untracked and that the cycle's own change made load-bearing at runtime. It is
    admitted to the whitelist on exactly the same terms as items 1 and 2; it is never
    optional or advisory. A declared path's absence from the tree is a **hard error,
@@ -297,7 +295,7 @@ Exit with `failure_code: scope_violation`.
 
 **When BULK=false AND no dev-report exists**: check for a do-report before aborting.
 
-- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Preserve the pre-resolver do-path anchored set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-`, and `*-inspector-report-*`, each scoped to the same parent `TASK_ID` under `docs/dev/`) and the original `+30` staged-file-count overhead. `ARTIFACT_CHAIN` is empty: the chain applies to `/dev`, not `/do`. Skip the provenance filter (do-reports have no `baseline_head_sha`). Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
+- If `do-report-<TASK_ID>.json` exists at the resolved path (same subproject walk as dev-report, fallback to `CONTROL_ROOT/docs/dev/do-report-${TASK_ID}.json`) AND top-level `source == "do"`: use `do.files_modified[]` and `do.files_created[]` as the staging whitelist in place of `dev.files_modified[]` / `dev.files_created[]`. Preserve the pre-resolver do-path anchored set (`ticket-`, `context-`, `dev-report-`, `do-report-`, `qa-report-`, `completion-`, `close-report-`, `acceptance-criteria-`, and `*-inspector-report-*`, each scoped to the same parent `TASK_ID` under `docs/dev/`) and the original `+30` staged-file-count overhead. `ARTIFACT_CHAIN` is empty: the chain applies to `/dev`, not `/do`. Use `do.summary` for commit message enrichment (M12 fallback text: `session changes [/do — no dev-report]`).
 
 - If neither dev-report NOR do-report exists: **ABORT** — do NOT stage any files.
   Print and exit immediately:
@@ -307,7 +305,7 @@ Exit with `failure_code: scope_violation`.
 
 **Tree-self-containment exclusion (dependency-coupled candidates — BULK=false, all report paths)**:
 a candidate must not ride ahead of the tree state it asserts. After the candidate set is built
-and every other exclusion is known (fail-closed entanglement, foreign-session, provenance,
+and every other exclusion is known (fail-closed entanglement, foreign-session,
 gitignore), evaluate each remaining candidate that ASSERTS on other repository content, and
 exclude it when its assertions deterministically fail in the RESULTING tree (HEAD plus the
 would-be staged set):
@@ -383,47 +381,6 @@ Deriving a "modified"/"added" claim from a required-to-ship path would attribute
 cycle a file it did not write. Such a path is staged for the ship-set and, when it needs
 mentioning at all, is described as a requirement (e.g. `ship-required: <path> (not authored by this cycle)`),
 never as this cycle's own change.
-
-**Provenance filter** (apply before using dev-report for enrichment):
-
-Read a repository-specific baseline from
-`baseline_heads_by_repo[realpath(GIT_ROOT)]` when that optional map exists. For the
-control repository only, fall back to the legacy top-level `baseline_head_sha`.
-Never apply a control-repository SHA to a different repository. If the selected
-baseline is absent/empty, or `git cat-file -e <sha>^{commit}` proves that it is not
-a commit in this repository, skip only this advisory provenance filter and log:
-`WARNING: repository baseline absent or foreign — provenance filter skipped for
-<GIT_ROOT>`. The staging whitelist, exact repository partition, report-digest
-binding, `QA_APPROVED_FILES` ceiling, and commit CAS checks remain mandatory; no missing
-baseline can widen the candidate set.
-
-When a valid repository baseline is present:
-
-1. Compute the working-tree diff since baseline: `git -C "$GIT_ROOT" diff --name-only <baseline_head_sha>` (Phase 2 runs before staging/commit, so changes are uncommitted; `..HEAD` form is WRONG here and would return an empty set, falsely flagging all legitimate changes as anomalies).
-2. Read `baseline_dirty_snapshot` from the dev-report top-level field (may be absent in older reports — treat as empty).
-3. Apply a split provenance filter:
-   - **Adoption carve-out (`untracked_modified_adoption`) — evaluate FIRST, before the two `provenance_anomaly` bullets below.** Classify a path `untracked_modified_adoption` **only if all five** of these conjuncts hold (a dispatch pre-filter, not an admission decision — see the precedence note below):
-     1. **untracked** — `git -C "$GIT_ROOT" ls-files --error-unmatch <path>` fails (the path is not in the index);
-     2. **claimed modified** — the path is in `dev.files_modified`;
-     3. **not claimed created** — the path is **not** in `dev.files_created`;
-     4. **contract-covered** — the canonical report carries an `untracked_modified_provenance[<path>]` entry whose `path` field equals `<path>` and whose `admission` is `authenticated_preexisting_untracked_whole_file`;
-     5. **external anchor** — the live tree agrees with that entry: the sha256 of the bytes currently at `<path>` equals the entry's `final.sha256`, **and** `git status --porcelain -- <path>` reports exactly `?? <path>`.
-
-     A path meeting **all five** is **retained** in the staging candidate set and is **NOT** `provenance_anomaly`. Log: `INFO: untracked_modified_adoption — <path> is a pre-existing untracked path adopted under a report-digest-bound provenance contract; retained in the staging candidate set`. A path meeting **four or fewer** of the five conjuncts is **not** adopted and falls through to the `provenance_anomaly` bullets below with today's behavior unchanged — four conjuncts are not enough, or the filter becomes fail-open for any path a report merely claims.
-
-     NON-NORMATIVE SUMMARY — the normative definition of `untracked_modified_adoption` is the admission predicate `.claude/scripts/stage-owned-hunks.py` executes for `--untracked-modified-report` (`_load_untracked_modified_contract()` followed by `_untracked_modified_main()`); it enforces every conjunct summarised here plus further checks this summary does not restate (canonical-report digest binding, task/request-id and report-filename binding, differing `pre_edit`/`final` digests, `pre_edit_provenance` and `final_source_hashes` agreement, `evidence_source` presence, regular-non-symlink target, absence from the index, and non-binary content). If this summary and that predicate disagree, the predicate governs.
-   - For every path in `dev.files_modified` that is **absent** from the `git diff --name-only <baseline_head_sha>` output **AND** absent from `baseline_dirty_snapshot` **AND** not classified `untracked_modified_adoption` above, classify it as `provenance_anomaly`.
-   - For every path in `dev.files_created`, check via `git ls-files --others --exclude-standard`. If the path is **absent** from that output **AND** absent from `baseline_dirty_snapshot`, classify it as `provenance_anomaly`. (New untracked files do not appear in `git diff --name-only` output; using ls-files is the correct check for this set.)
-
-   Concurrency caveat (explanatory, human-triage only): `baseline_dirty_snapshot` is a point-in-time capture (see `agents/dev.md`), so under concurrent `/dev` sessions sharing one working tree a `provenance_anomaly` attributable to a peer session's file written after the snapshot was captured is a false positive of the point-in-time semantics. Interpret such an anomaly with judgment — do NOT add any detection, inference, or programmatic-removal logic for "suspected peer" paths; the existing classification behavior is unchanged.
-4. **Exclude** `provenance_anomaly` paths from commit-message type/scope/summary enrichment derivation ONLY — never from staging. A `provenance_anomaly` classification means the dev-report's claim about this path is stale or wrong, not that the path's attribution is unknown: that question is answered by the Attribution-and-staging decision (below), which reads `ATTRIBUTION_LOG` independently of whatever `dev.files_modified`/`dev.files_created` claims. A path classified `provenance_anomaly` is therefore fed into that decision exactly like any other whitelisted candidate (BULK=false and BULK=true alike) — it is never removed from the staging candidate set here. `provenance_anomaly` only does two things: it is excluded from commit type/scope/summary enrichment (item above), and it is recorded as additional context for that path's `attribution_basis` disclosure (Phase 5) — a report whose own claim about a path doesn't hold up is exactly the kind of fact worth disclosing in the commit message, not a reason to withhold the file.
-5. Log each anomaly (informational — staging is unaffected in every mode):
-   - `files_modified`: `INFO: provenance_anomaly — <path> claimed by dev.files_modified but absent from git diff --name-only <baseline_head_sha>; staged per the attribution-and-staging decision, not per this claim — see its attribution_basis disclosure`
-   - `files_created`: `INFO: provenance_anomaly — <path> claimed by dev.files_created but absent from git ls-files --others --exclude-standard; staged per the attribution-and-staging decision, not per this claim — see its attribution_basis disclosure`
-
-The `baseline_head_sha` diff is used ONLY as a provenance sanity check for
-already-whitelisted files. It is NEVER an independent inclusion source — files
-not in the whitelist cannot be added to the candidate set via the baseline diff.
 
 **Exclusions** (remove from candidate set regardless of source — applies in BOTH BULK=false and BULK=true):
 - Files matching gitignore: check via `git -C "${GIT_ROOT}" check-ignore -q <repo-rel-path>`
@@ -638,7 +595,7 @@ Log: `Pre-staged verify: unstaged <file> (not in classified set)`
 ### Phase 5: Stage classified files
 
 This phase runs strictly AFTER Phase 2 (whitelist + `foreign_session_candidate`
-exclusion + provenance filter) and Phase 4 (pre-staged verify), and entirely INSIDE
+exclusion) and Phase 4 (pre-staged verify), and entirely INSIDE
 the Phase 3 fd-9 flock. It operates ONLY on files already in the authorized candidate
 set. It can only NARROW what is staged WITHIN an authorized file — it can never widen
 the file set and never reaches a non-whitelisted/foreign file.
@@ -960,7 +917,7 @@ contained "sync uncommitted"), replace the summary with `session changes for <sc
 - Per-commit staged set must touch fewer than 3 of: `{hooks/, commands/, scripts/, packages/, docs/}`
   (stay below BULK_THRESHOLD=3 to avoid detector warning)
 
-**Reversal-citation rule (task 20260519-211515 R9 / AC9 — SOLE BINDING LANDING)**
+**Reversal-citation rule (SOLE BINDING LANDING)**
 
 When this commit intentionally reverses a recent prior commit's policy or behavior
 as a **forward-fix** commit (a normal new commit that contradicts a prior policy

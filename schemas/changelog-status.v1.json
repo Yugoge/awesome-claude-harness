@@ -167,7 +167,7 @@
     },
     "baseline_check": {
       "type": "object",
-      "description": "Required by the charter's 'Requirement Baseline and Scope Authority' section (agents/changelog-analyst.md, top). Optional here (not in required[]) because it predates this field and /commit's dispatch carries no requirement document for most invocations -- see agents/changelog-analyst.md's note on when verdict is necessarily not_provided.",
+      "description": "Written as the charter's 'Requirement baseline' line asks (agents/changelog-analyst.md, top): /commit's dispatch carries no requirement document, so its structured inputs are the baseline. Optional here (not in required[]) because it predates this field.",
       "additionalProperties": false,
       "required": ["verdict"],
       "properties": {

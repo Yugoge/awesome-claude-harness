@@ -6,9 +6,14 @@ declares what it owes; each declared artifact is checked while that producer
 still has the context to repair it: json (existence, schema, identity),
 markdown (identity anchor, terminal line), response_line and response_block
 (its own final reply), spec_views (spec-verify.py --strict), a dev report's
-downstream wires (attribution journal, /commit's trial plan) and P3 R14's
-dispatch echo (written for this dispatch; lane and lane_set echoed). A fresh,
-valid producer-question file stands in for every declared artifact (TC-33).
+downstream wires (attribution journal, /commit's trial plan, a fan-out lane's
+canonical aggregate, and P6 A3.a: its file lists against the files Claude Code
+recorded the dev writing) and P3 R14's dispatch echo (written for this
+dispatch; lane and lane_set echoed). Any stopping producer's own Write or Edit
+that leaves a live harness hook or script that does not compile is a finding
+(P6 F3.a). The role the obligation must name is the one Claude Code runs the
+agent as (lib.agent_resolver.resolve_agent_type, P6 R3). A fresh, valid
+producer-question file stands in for every declared artifact (TC-33).
 Switch CLAUDE_OBLIGATION_STOPGATE (the process env, else the harness home's
 settings.json env at run time, P1b E4):
   "block"    -- a failure exits 2 (OBLIGATION_STOPGATE_BLOCKED, each failing
@@ -47,9 +52,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.agent_resolver import resolve_dev_registry_entry
+from lib.agent_resolver import resolve_agent_type, resolve_dev_registry_entry
+from lib import claude_home, command_span, subagent_restart
 from lib.claude_home import settings_switch
-from lib import command_span
 from lib import contract_runtime
 from lib import dispatch_template
 from lib import obligation
@@ -286,12 +291,139 @@ def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
         return []  # a wire that cannot run judges nothing
 
 
-def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> list:
-    """The dev report's wires (ledger judgment, /commit's trial plan and, for a
-    fan-out lane, the canonical aggregate its report completes). Returns
-    findings. Another producer's artifact is otherwise never judged at this
-    stop: G3 decides on it at the next dispatch."""
-    findings = []
+# P6 A3.a (a dev's declared lists against the files Claude Code recorded it
+# writing) and F3.a (a live harness file its dev or test-writer broke) block as
+# G2 findings; each only warned, exit unchanged, in the commit introducing it.
+FILE_LISTS_BLOCK = True
+SYNTAX_BLOCK = True
+
+
+def _tree_rel(path: Path) -> tuple:  # (git work tree holding path, path in it); (None, "") outside every tree
+    tree = next((p for p in path.parents if (p / ".git").exists()), None)
+    return tree, path.relative_to(tree).as_posix() if tree else ""
+
+
+def _recorded(transcript):
+    """(written, named) resolved paths of a transcript over every account root's copy (each a partial view,
+    subagent_restart._child_transcript_copies), None if none is readable. Read on "/" to keep other
+    repositories' paths, so the excluded trees are dropped here, in each path's own repository."""
+    copies = subagent_restart._child_transcript_copies(transcript) if transcript else []
+    found = [s for s in (command_span.write_set(c, "/") for c in copies) if s is not None]
+    keep = lambda rels: {p for p in (Path("/", r).resolve() for r in rels)
+                         if not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)}
+    return tuple(keep(set().union(*(s[i] for s in found))) for i in (0, 1)) if found else None
+
+
+def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, deadline: float) -> list:
+    """A3.a: each declared path written or named by this dev or an earlier dev dispatch of its task id and lane (QA
+    loop, completion dispatch, any session of the project), or changed by a tool their Bash ran (a formatter, a
+    generator); each written path git has a change for declared."""
+    if (own := _recorded(getattr(resolution, "transcript_path", None))) is None:
+        return []
+    (written, named), unreadable, ran, tool, uses, spans = own, [], [resolution.transcript_path], set(), {}, []
+    ours = ("dev", ob.get("lane"), obligation.canonical_task_id(ob.get("task_id")))
+    # A stamp without a zone reads as UTC (parse_iso8601's "Z"), so an aware and a naive one compare.
+    stamp = lambda v: (d := obligation.parse_iso8601(v)) and (d if d.tzinfo else d.replace(tzinfo=timezone.utc))
+    mine = stamp(ob.get("dispatched_at"))
+    dev, root = report.get("dev") or {}, Path(project_dir).resolve()
+    # resolve-commit-repos.py _canonical_owned_path's form; an absolute path stays itself.
+    declared = {key: {(root / os.path.expanduser(p)).resolve(): p for p in dev.get(key) or []}
+                for key in ("files_modified", "files_created")}
+    raw = {**declared["files_created"], **declared["files_modified"]}
+    change = lambda p: (t := _tree_rel(p))[0] and subprocess.run(  # git's status line for p; "" or None: none
+        ["git", "--no-optional-locks", "--literal-pathspecs", "-C", str(t[0]), "status", "--porcelain", "-uall", "--",
+         t[1]], capture_output=True, text=True, timeout=10).stdout
+
+    def inherit():  # _task_records reads the sessions modified since a day before the id's stamp
+        for rec in obligation._task_records(ob.get("task_id"), project_dir, None):
+            other = rec["obligation"]
+            at = stamp(other.get("dispatched_at"))
+            if (rec["prompt"] == resolution.prompt or (mine and at and at > mine) or ours != (
+                    other.get("role"), other.get("lane"), obligation.canonical_task_id(other.get("task_id")))):
+                continue
+            meta = next((m for c in subagent_restart._child_transcript_copies(rec["transcript"])  # any root's
+                         if (m := subagent_restart._metadata_by_tool_use(c).get(rec["tool_use_id"]))), {})
+            sets = _recorded(meta.get("agent_transcript_path"))
+            if sets is None:
+                unreadable.append(f"dev dispatch {rec['tool_use_id']} in session {rec['transcript'].stem}")
+            else:
+                written.update(sets[0]), named.update(sets[1]), ran.append(meta["agent_transcript_path"])
+        # A tool's change: git has one, its mtime lies in such a Bash call run in its tree (its tool_use record to
+        # its tool_result, a background call's to now) and no live subagent's record wrote it.
+        for at, b, cwd in ((stamp(r.get("timestamp")), b, r.get("cwd")) for t in ran if set(raw) - written - named
+                           for c in subagent_restart._child_transcript_copies(t) if c.is_file()  # a root may hold none
+                           for _, r in command_span._records(c)
+                           for b in (r.get("message") or {}).get("content") or () if isinstance(b, dict)):
+            if at and b.get("name") == "Bash":
+                uses[b.get("id")] = (Path(cwd or "/").resolve(), at.timestamp(), b.get("input") or {})
+            elif at and (use := uses.pop(b.get("tool_use_id"), None)):
+                spans.append((*use[:2], time.time() if use[2].get("run_in_background") else at.timestamp()))
+        live = (a for t in obligation._session_transcripts(project_dir, None) if spans for a in t.with_suffix(
+            "").glob("subagents/agent-*.jsonl") if a.stat().st_mtime >= min(s[1] for s in spans))
+        tool.update(p for p in set(raw) - written - named - set().union(*(s[0] for s in map(_recorded, live) if s))
+                    if p.is_file() and change(p) and not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)
+                    and any(s <= p.stat().st_mtime <= e and c.is_relative_to(_tree_rel(p)[0]) for c, s, e in spans))
+    try:
+        _with_alarm(deadline - time.monotonic(), inherit)
+    except _WireTimeout:
+        unreadable.append("the search for earlier dev dispatches (wire budget spent)")
+    missing, extra = set(raw) - written - named - tool, {}
+    for p in written - set(raw):  # nothing to land (unchanged, ignored, gone, outside a tree): nothing to declare
+        if out := change(p):
+            extra[p] = "files_created" if out[:2] == "??" or out[0] == "A" else "files_modified"
+    if not missing and not extra:
+        return []
+    show = lambda p: p.relative_to(root).as_posix() if p.is_relative_to(root) else str(p)
+    expected = {key: [r for p, r in paths.items() if unreadable or p not in missing]
+                + [show(p) for p, k in extra.items() if k == key] for key, paths in declared.items()}
+    listed = lambda paths: ", ".join(sorted(paths)) or "(none)"
+    lines = [f"declared but not written by this dev: {listed(raw[p] for p in missing)}",
+             f"written but not declared: {listed(map(show, extra))}", "set dev.files_modified and dev.files_created "
+             "to exactly: " + "; ".join(f"{key}: {', '.join(sorted(v)) or '[]'}" for key, v in expected.items())]
+    lines += ["a file your own Bash produced counts once one of your Bash commands names it (for example "
+              "`ls -l <path>`): name it and keep it listed"] if missing else []
+    if unreadable:
+        lines.append(f"unreadable, so its files count only once your own Bash names them: {listed(unreadable)}")
+    return lines
+
+
+def _harness_syntax(resolution) -> list:
+    """F3.a: each file of the agent's own written set (no inheritance) under the live harness home's
+    hooks/ or scripts/ (realpath) that Python's compiler (.py, python shebang) or `bash -n` (.sh, bash
+    shebang) rejects as it stands now. Nothing is written: no py_compile, no __pycache__."""
+    home, findings = claude_home.resolve(), []
+    roots = [(home / d).resolve() for d in ("hooks", "scripts")] if home else []
+    try:
+        written = sorted(_recorded(getattr(resolution, "transcript_path", None))[0])
+    except Exception:  # an unreadable transcript judges nothing
+        return []
+    for p in (p for p in written if any(p.is_relative_to(r) for r in roots)):
+        try:
+            text = p.read_bytes()
+            shebang = text.split(b"\n", 1)[0] if text[:2] == b"#!" and not p.suffix else b""
+            if p.suffix == ".py" or b"python" in shebang:
+                compile(text, str(p), "exec")
+            elif (p.suffix == ".sh" or b"bash" in shebang) and (run := subprocess.run(
+                    ["bash", "-n", "--", p.name], cwd=p.parent, capture_output=True, text=True, timeout=2)).returncode:
+                raise SyntaxError("; ".join(run.stderr.strip().splitlines()))
+        except (SyntaxError, ValueError) as exc:
+            if SYNTAX_BLOCK:
+                findings.append({"path": str(p), "reason": "harness_syntax_error", "errors": [str(exc)]})
+            else:
+                sys.stderr.write(f"F3.a would block: {p}: {exc}\n")
+        except Exception:  # gone at the stop, unreadable, or bash timed out: judges nothing
+            pass
+    return findings
+
+
+def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, resolution=None) -> list:
+    """F3.a for any stopping producer (only a role the tool policy lets write the
+    harness can trip it: a dev, a test-writer under tests/generated/), then the dev
+    report's wires (ledger judgment, /commit's trial plan or, for a fan-out lane,
+    the canonical aggregate its report completes, and A3.a's file lists).
+    Returns findings. Another producer's artifact is otherwise never judged at
+    this stop: G3 decides on it at the next dispatch."""
+    findings = _harness_syntax(resolution)
     if ob.get("role") != "dev":
         return findings
     deadline = time.monotonic() + WIRE_TOTAL_BUDGET_S
@@ -308,11 +440,20 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> l
         report_rel = art["path"]
         report_full = Path(project_dir) / report_rel
         task_id = str(ob.get("task_id"))
-        findings += _wire_ledger_judgment(_read_json(report_full), project_dir, task_id, deadline)
+        report = _read_json(report_full)
+        findings += _wire_ledger_judgment(report, project_dir, task_id, deadline)
         if not shard:
             findings += _wire_trial_plan(report_full, report_rel, project_dir, task_id)
         else:
             findings += _wire_canonical(project_dir, report_rel, task_id)
+        try:
+            lines = _file_lists_errors(project_dir, ob, report, resolution, deadline)
+        except Exception:  # a check that cannot run judges nothing
+            lines = []
+        if lines and FILE_LISTS_BLOCK:
+            findings.append({"path": report_rel, "reason": "file_lists_differ", "errors": lines})
+        elif lines:
+            sys.stderr.write(f"A3.a would block: {report_rel}: file_lists_differ\n" + "".join(f"    {x}\n" for x in lines))
     return findings
 
 
@@ -485,6 +626,7 @@ def main() -> None:
     # skipped FIRST ACTION read never discards the obligation branch.
     entry = resolve_dev_registry_entry(agent_id, project_dir)
     agent_type = entry.get("agent_type", "") if entry else ""
+    role = resolve_agent_type(data)  # P6 R3: the CLI's role whenever one is known
 
     # The obligation branch: the artifacts THIS agent's own dispatch
     # obligation names. CLAUDE_OBLIGATION_STOPGATE governs it alone;
@@ -510,12 +652,17 @@ def main() -> None:
                 project_dir=project_dir,
                 payload_agent_transcript_path=transcript_hint,
                 # Every template and canonical todo step declares a dispatch's
-                # role as its subagent_type (G1 refuses any other), the type
-                # this agent registered as; no role list says which.
-                expected_role=agent_type or None,
+                # role as its subagent_type (G1 refuses any other), the role
+                # Claude Code runs this agent as; no role list says which.
+                expected_role=role or None,
             )
             if isinstance(resolution, obligation.NoObligationInPrompt):
                 resolution = _template_declared(resolution) or resolution
+            if getattr(resolution, "reason", None) == "role_mismatch" and stopgate_mode == "block":
+                sys.stderr.write(f"OBLIGATION_STOPGATE_BLOCKED: agent {agent_id} runs as {role!r}; its dispatch's "
+                                 f"obligation names role {resolution.detail}:\n  - <obligation>: role_mismatch\n"
+                                 "That obligation is not yours: write no artifact of another role; say so in your reply.\n")
+                sys.exit(2)
             if isinstance(resolution, obligation.Resolved):
                 artifacts = resolution.obligation.get("artifacts", [])
                 json_artifacts = [a for a in artifacts if a.get("kind") == "json"]
@@ -704,9 +851,8 @@ def main() -> None:
                 # shape- and terminal-valid, so the checkers see a usable report.
                 if not failures:
                     try:
-                        failures.extend(
-                            _run_downstream_wires(project_dir, resolution.obligation, json_artifacts)
-                        )
+                        failures.extend(_run_downstream_wires(
+                            project_dir, resolution.obligation, json_artifacts, resolution))
                     except Exception:
                         pass  # a crashed wire judges nothing (see its section comment)
                 who = (f"agent {agent_id} (role={resolution.obligation.get('role')}, "
@@ -720,7 +866,7 @@ def main() -> None:
                     # M3: all pass; the declared-report check does not run.
                     sys.exit(0)
                 reason = (f"{who} declared {len(verified_artifacts)} obligated artifact(s); "
-                          f"{len(failures)} failed verification:\n{_finding_lines(failures)}")
+                          f"{len(failures)} finding(s) to repair before you stop:\n{_finding_lines(failures)}")
                 if stopgate_mode == "block":
                     sys.stderr.write(
                         f"OBLIGATION_STOPGATE_BLOCKED: {reason}"

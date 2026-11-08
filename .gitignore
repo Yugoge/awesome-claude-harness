@@ -55,7 +55,6 @@ Thumbs.db
 /settings.json.backup.*
 
 logs/*
-# PERMITTED DELIVERY PATH: logs/lifecycle.jsonl is the R9 in-repo lifecycle log (spec-20260520-221059 binding constraint)
 session-env/
 
 # File history (contains session data, may include secrets)

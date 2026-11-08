@@ -168,7 +168,7 @@ def test_the_replay_window_is_strictly_younger_than_60s(tmp_path, monkeypatch, c
     monkeypatch.setattr(hook, "_check_workflow_conflict", lambda cmd: None)
     monkeypatch.setattr(hook, "_init_dev_registry", lambda cmd, prompt, sid, project: next(ids))
     monkeypatch.setattr(hook, "_start_identity", lambda task_id: f"Task id: {task_id}\n")
-    monkeypatch.setattr(hook, "decide_spec_path", lambda explicit, sid: "")
+    monkeypatch.setattr(hook, "decide_spec_path", lambda explicit, sid: ("", "Spec: none"))
 
     hook._ordinary_dev_start("redev", "/redev", SID, "d1")
     first = capsys.readouterr().out

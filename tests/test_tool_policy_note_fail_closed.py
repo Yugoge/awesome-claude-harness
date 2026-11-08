@@ -125,7 +125,7 @@ def _run_hook(tmp_path: Path, site: str, mode: str):
     command, target, _reason = REFUSALS[site]
     tool_input = "not-a-dict" if mode == "lookup" else {"command": command}
     payload = {"tool_name": "Bash", "tool_input": tool_input,
-               "subagent_type": ROLE, "agent_id": "a" + ROLE + "probe",
+               "agent_type": ROLE, "agent_id": "a" + ROLE + "probe",
                "session_id": "note-fail-closed-sess"}
     env = {**os.environ, "HOME": str(tmp_path)}
     env.pop("CLAUDE_PROJECT_DIR", None)

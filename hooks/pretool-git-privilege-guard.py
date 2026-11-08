@@ -41,6 +41,14 @@ git ls-files, git ls-tree, git restore (working-tree only), git branch
 and git stash list/show/pop (non-destructive forms). Hard reset and direct
 ref mutation are not agent-accessible.
 
+/do consent (hooks/lib/allowlist.py has_do_consent: main agent, one turn)
+releases the rules on git merge, forbidden plumbing, hard reset and direct ref
+mutation, and adds none (E2). What one of them refuses without it stays refused
+when it can move the protected branch's ref, or when the guard cannot tell the
+branch it lands on (_moves_protected_branch). git commit, git push and a git
+command the guard cannot classify are judged as without it. Each block then
+names the commands that land them (/close then /commit, /push, /merge).
+
 Spec: spec-20260424-233926 section 5.2.4 (R4.3) line 233-249.
 
 Revision history:
@@ -150,6 +158,12 @@ Revision history:
 Exit codes:
   0: Allow tool use
   2: Block tool use
+
+An error the guard does not expect, an import that fails at module load
+included, refuses a Bash call that may run git (exit 2, naming the error); it
+is not a policy refusal, and no grant or /do consent lifts it. Another tool,
+and a command that cannot run git (_may_run_git), still exit 0. Unreadable
+input (not a JSON object) is judged on its raw text the same way.
 """
 
 import glob
@@ -157,13 +171,98 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+
+# Fail closed. The code from here to the first hooks/lib import uses the standard
+# library alone, so it still decides when a lib module fails to load or anything
+# later raises; Python's own exit 1 there is a non-blocking hook error, and the
+# harness would run the command unjudged.
+_STDIN = None
+_MAY_RUN_GIT_RE = re.compile(r'git|[$`]|[<>]\(', re.IGNORECASE)
+
+
+def _read_stdin():
+    """The raw hook payload, read once, by main or by the load-failure hook."""
+    global _STDIN
+    if _STDIN is None:
+        try:
+            stream = getattr(sys.stdin, 'buffer', None)
+            _STDIN = stream.read().decode('utf-8', 'replace') if stream else sys.stdin.read()
+        except Exception:
+            _STDIN = ''
+    return _STDIN
+
+
+def _may_run_git(text):
+    """False only when text cannot run git as this guard reads a command.
+
+    The guard refuses only what classify_git_command finds: a command word that
+    names git, one that spells it with quotes or backslashes (`g\\it`, `gi""t`),
+    or one built at run time (`$GIT`, `$(which git)`, a backquote, `<(...)`). With
+    quotes, backslashes and line continuations removed, text holding no `git` in
+    any letter case, no `$`, no backquote and no `<(` or `>(` has none of them.
+    """
+    flat = text.replace('\\\n', '')
+    for ch in '\\\'"':
+        flat = flat.replace(ch, '')
+    return bool(_MAY_RUN_GIT_RE.search(flat))
+
+
+def _judged_text(raw):
+    """What an error is judged on: None for another tool's call, a Bash call's
+    command, and the raw payload when it does not read as a tool call."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return raw
+    if not isinstance(data, dict):
+        return raw
+    if data.get('tool_name', '') != 'Bash':
+        return None
+    tool_input = data.get('tool_input')
+    command = tool_input.get('command') if isinstance(tool_input, dict) else None
+    return command if isinstance(command, str) else raw
+
+
+def _internal_error_exit(exc, what='internal error'):
+    """2, naming exc on stderr, when the call may run git; else 0."""
+    text = _judged_text(_read_stdin())
+    if text is None or not _may_run_git(text):
+        return 0
+    sys.stderr.write(
+        '\nBLOCKED: git-privilege guard %s, not a policy refusal: %s: %s\n'
+        % (what, type(exc).__name__, str(exc)[:300])
+        + 'The guard could not judge this command, which may run git, so it refuses '
+        'it; no /allow grant or /do consent lifts this. Report it.\n')
+    return 2
+
+
+def _refuse_on_load_failure(exc_type, exc, tb):
+    """sys.excepthook while this file runs as the hook: an exception escaping the
+    module (a hooks/lib import that fails, any module-level error) exits through
+    _internal_error_exit instead of Python's exit 1."""
+    try:
+        code = _internal_error_exit(exc)
+    except BaseException:
+        code = 2
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(code)
+
+
+if __name__ == '__main__':
+    sys.excepthook = _refuse_on_load_failure
+
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command  # noqa: E402
+from lib.agent_resolver import resolve_agent_type  # noqa: E402
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
     iter_git_invocations, GitInvocation, classify_git_command)
@@ -171,14 +270,14 @@ from lib.git_command_classifier import (  # noqa: E402
 # can enumerate EVERY git-commit invocation in a chained command string and
 # inspect each invocation's leading env-assignments + global-option flags
 # token-aware (precise, no false match on the word "commit" inside a message).
-# These are consumed, NOT modified — the shared classifier stays untouched
-# (scope: this fix is the COMMIT grant path only).
+# The /do protected-branch rule (_moves_protected_branch) reads segments with
+# them too. They are the classifier's own; this file does not redefine them.
 from lib.git_command_classifier import (  # noqa: E402
     _unquote_token,
     _segments as _shell_segments,
     _command_token_index as _cmd_token_index,
     _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,
-    _GIT_GLOBAL_VALUE as _GIT_GLOBAL_VALUE,
+    GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS,
 )
 # Commit-grant provenance contract (minted_by / expected_consumer) and the
 # hook-written changelog-analyst dispatch attestation. Shared with
@@ -188,23 +287,29 @@ from lib import commit_pipeline  # noqa: E402
 # The per-event pointer a spent grant hands to the PostToolUse finalizer, which
 # appends the commit-event journal entry from it.
 from lib import commit_journal  # noqa: E402
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
 
 
 BLESSED_BRIDGE_RE = re.compile(r'auto-bulk:\s*end-of-cycle commit for\b')
 
-GIT_GLOBAL_OPTION_RE = (
-    r'(?:\s+(?:-[Cc]\s+\S+|-[Cc]\S+|'
-    r'--(?:git-dir|work-tree|namespace|exec-path|super-prefix|config-env)'
-    r'(?:=\S+|\s+\S+)|'
-    r'--(?:bare|no-pager|paginate|no-replace-objects|literal-pathspecs|'
-    r'glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|'
-    r'-[pP]))*'
+
+def _option_alternation(opts):
+    return '|'.join(re.escape(o) for o in sorted(opts, key=lambda o: (-len(o), o)))
+
+
+# git's global options between `git` and the subcommand, built from the
+# classifier's option table: a value option and its value (the next word, or
+# `=value` for a long one) or a flag (`=value` allowed: `--exec-path=<dir>`). Git
+# rejects the attached `-C<dir>` / `-cname=value`; the guard still reads them as
+# `-C <dir>` / `-c <name>=<value>`.
+GIT_GLOBAL_OPTION_RE = r'(?:\s+(?:(?:%s)\s*\S+|(?:%s)(?:=\S+|\s+\S+)|(?:%s)(?:=\S+)?))*' % (
+    _option_alternation(o for o in GIT_GLOBAL_VALUE_OPTS if not o.startswith('--')),
+    _option_alternation(o for o in GIT_GLOBAL_VALUE_OPTS if o.startswith('--')),
+    _option_alternation(GIT_GLOBAL_FLAGS),
 )
 GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 
 # Matches a `git <global-options>* commit` invocation and CAPTURES the
-# global-options span (group 1) so `_extract_commit_dash_c_dir` can pull an
+# global-options span (group 1) so `_extract_dash_c_from_span` can pull an
 # explicit `-C <dir>` out of it. Reuses the exact GIT_GLOBAL_OPTION_RE grammar
 # above (kept in sync intentionally) so a change to one does not silently
 # desync from the other.
@@ -522,19 +627,6 @@ def _extract_dash_c_from_span(options_span, command_excerpt):
     return value
 
 
-def _extract_commit_dash_c_dir(command):
-    """Back-compat single-invocation `-C <dir>` extractor (whole command).
-
-    Retained for external/test callers; the live binding path now enumerates
-    EVERY commit invocation via `_iter_commit_invocations` and calls
-    `_extract_dash_c_from_span` per invocation.
-    """
-    m = GIT_COMMIT_INVOCATION_RE.search(command)
-    if not m:
-        return ''
-    return _extract_dash_c_from_span(m.group(1), command)
-
-
 def _ambient_git_redirect_present():
     """True iff the guard's OWN environment carries a GIT_DIR / GIT_WORK_TREE /
     GIT_COMMON_DIR redirect.
@@ -594,7 +686,7 @@ def _iter_commit_invocations(command):
         i = 0
         while i < len(after_git):
             a = after_git[i]
-            if a in _GIT_GLOBAL_VALUE:
+            if a in GIT_GLOBAL_VALUE_OPTS:
                 i += 2
                 continue
             if a.startswith('-'):
@@ -700,7 +792,7 @@ def _enforce_commit_grant_binding(grant, command):
 def _commit_target_git_output(target_dir, *args):
     """Like _git_output, but scoped to `target_dir` via `-C` when non-empty.
 
-    target_dir is the (possibly empty) result of _extract_commit_dash_c_dir.
+    target_dir is the (possibly empty) result of _extract_dash_c_from_span.
     Empty target_dir falls back to the hook's own CWD, matching the
     no-override push-grant precedent.
     """
@@ -971,7 +1063,7 @@ def _commit_message_text(command, cwd):
             continue
         base, i = cwd, idx + 1
         while i < len(words) and words[i].startswith('-'):
-            if words[i] in _GIT_GLOBAL_VALUE:
+            if words[i] in GIT_GLOBAL_VALUE_OPTS:
                 base = os.path.join(base, words[i + 1]) if words[i] == '-C' and i + 1 < len(words) else base
                 i += 1
             i += 1
@@ -1053,12 +1145,6 @@ def _extract_reset_target(invocation):
     except ValueError:
         pass
     return ''
-
-
-def _is_head_ref(ref):
-    if not ref:
-        return True
-    return ref == 'HEAD'
 
 
 def _end_time_passed(end_str):
@@ -1204,23 +1290,21 @@ def _grant_provenance_refusal(grant, grant_path, data):
          PIPELINE_ORIGIN. A grant minted by an older copy of the writer
          carries no `minted_by` at all and is refused -- that is deliberate:
          an unsigned ticket is exactly the thing being retired.
-      2. Is the caller a DISPATCHED SUBAGENT? `agent_id` must be non-empty.
-         Measured, not assumed: hooks/pretool-cp-checkin.py is itself a
-         PreToolUse hook and writes this same payload field into
-         .claude/dev-registry/agent-index.json, where the recorded
-         `a`-prefixed ids map to real agent types -- re-derive the asymmetry
-         from that index rather than from this docstring. A dispatched
-         subagent's payload carries a non-empty id, while the main agent's
-         carries none. This single check is what refuses the
+      2. Is the caller a DISPATCHED SUBAGENT? `agent_id` must be non-empty:
+         a dispatched subagent's payload carries a non-empty id, while the
+         main agent's carries none. This single check is what refuses the
          orchestrator-as-bearer -- step 4 of the measured bypass.
       3. Is it THE subagent this pipeline run dispatched? A live
          hook-written changelog-analyst dispatch attestation must exist,
-         dated at or after the mint, whose `prompt_sha256` is the digest of
-         the prompt that dispatched this agent_id (read from the caller's own
-         transcript, as the producer-stop gate reads it). Every repository
-         of that dispatch's plan is committed under the same attestation; a
-         second, unrelated subagent presenting a grant was dispatched with
-         another prompt and is refused. Nothing is written to decide this.
+         dated at or after the mint, whose `subagent_type` is the caller's
+         CLI role (lib.agent_resolver.resolve_agent_type) and whose
+         `prompt_sha256` is the digest of the prompt that dispatched this
+         agent_id (read from the caller's own transcript, as the producer-stop
+         gate reads it). Every repository of that dispatch's plan is committed
+         under the same attestation; a dev or QA presenting the grant is
+         refused naming its role and changelog-analyst, and a second,
+         unrelated subagent was dispatched with another prompt and is refused.
+         Nothing is written to decide this.
 
     Returns a reason string rather than blocking directly, so the caller can
     move on to the next candidate grant instead of letting one stale or
@@ -1266,15 +1350,17 @@ def _grant_provenance_refusal(grant, grant_path, data):
         os.environ.get('CLAUDE_PROJECT_DIR') or str(data.get('cwd') or '') or os.getcwd(),
         str(data.get('agent_transcript_path') or '') or None,
         str(data.get('transcript_path') or '') or None)
+    role = resolve_agent_type(data)
     attestation, why = commit_pipeline.select_dispatch_attestation(
-        sids, str(grant.get('created_at') or ''), prompt_digest)
+        sids, str(grant.get('created_at') or ''), prompt_digest,
+        caller_role=role, prompt_why=digest_why)
     if not attestation:
         return (
             '\nBLOCKED: no changelog-analyst dispatch attestation backs this commit '
             'grant for this caller.\n'
             f'  grant: {grant_path}\n'
-            f'  caller agent_id: {agent_id}\n'
-            f'  reason: {digest_why or why}\n'
+            f'  caller agent_id: {agent_id}, role: {role or "unresolved"}\n'
+            f'  reason: {why}\n'
             'The only intended writer of an attestation is '
             'hooks/pretool-commit-dispatch-attest.py, on the real PreToolUse:Agent '
             'event for a changelog-analyst dispatch; Bash writes into that namespace '
@@ -1396,6 +1482,161 @@ def _evaluate_merge(command, data):
         'Command excerpt: %s\n' % command[:200]
         + 'Main agent may bypass with /allow <pattern> before the git merge command.\n'
         'Spec: spec-20260424-233926 section 5.2.4 (R4.3).\n'
+    )
+
+
+# E2: added to every block the guard emits while the main agent holds /do consent.
+DO_NOT_COVERED = (
+    '/do consent does not cover git commit, git push, a git operation this guard refuses '
+    'without it that can move the protected branch, or a git command this guard cannot '
+    'classify, which may be any of them: a commit lands through /close, then /commit; a '
+    'push through /push; a merge into the protected branch through /merge.\n'
+)
+
+# E2: with one of these words in a command, git may run in another directory
+# than the hook's (_DIR_CHANGE_RE) or on another branch than the hook-time HEAD
+# (_BRANCH_CHANGE_RE). Read anywhere in the command: `&`, `|`, loops, functions
+# and traps run its parts in an order the text does not give. `\.` is the dot
+# builtin (source).
+_DIR_CHANGE_RE = re.compile(
+    r'(?<![\w./-])(?:cd|pushd|popd|source|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)(?![\w./-])'
+    r'|(?:^|[;&|(){]|\b(?:then|do|else))\s*\.\s')
+_BRANCH_CHANGE_RE = re.compile(r'(?<![\w./-])(?:checkout|switch|symbolic-ref)(?![\w./-])')
+_EXPANSION = re.compile(r'[$`*?\[{]')  # a name the shell or git may expand
+
+
+# E2: the git subcommands that can move a branch ref: on HEAD's branch, or by name.
+_MOVES_HEAD = frozenset({'merge', 'pull', 'rebase', 'cherry-pick', 'revert', 'am', 'reset'})
+_MOVES_NAMED = frozenset({'pull', 'fetch', 'rebase', 'update-ref', 'symbolic-ref', 'branch',
+                          'checkout', 'switch', 'worktree', 'filter-branch', 'filter-repo',
+                          'fast-import'})
+
+
+def _operands(words, takes_value=()):
+    """The words that are not options, nor the value of an option in `takes_value`."""
+    return [w for i, w in enumerate(words) if (not w.startswith('-') or w == '-')
+            and not (i and words[i - 1] in takes_value)]
+
+
+def _reset_moves(args):
+    """`git reset <args>` moves HEAD's branch: one commit operand other than
+    HEAD and no pathspec; an operand that names no commit is a path."""
+    if '--' in args:
+        if args[args.index('--') + 1:]:
+            return False
+        args = args[:args.index('--')]
+    ops = _operands(args)
+    if len(ops) != 1 or {'-p', '--patch'} & set(args) or any(
+            a.startswith('--pathspec-from-file') for a in args):
+        return False
+    return ops[0] not in ('HEAD', '@') and bool(_EXPANSION.search(ops[0]) or _git_output(
+        ['rev-parse', '-q', '--verify', ops[0] + '^{commit}']))
+
+
+def _branch_writes(inv):
+    """E2: (moves the branch HEAD is on, [branch names it writes]) for one git
+    invocation; the name `*` stands for refs the guard cannot list."""
+    sub = inv.subcommand
+    if sub not in _MOVES_HEAD | _MOVES_NAMED:
+        return False, []
+    try:  # the words as the shell passes them (ref names hold no space)
+        args = shlex.split(' '.join(inv.args))
+    except ValueError:  # the segment splitter cut a quoted word: its operands are unknown
+        return sub in _MOVES_HEAD, ['*'] if sub in _MOVES_NAMED else []
+    ops = _operands(args)
+    if sub in ('cherry-pick', 'revert') and {'-n', '--no-commit'} & set(args):
+        return False, []
+    if sub in ('merge', 'cherry-pick', 'revert', 'am', 'reset'):
+        return sub != 'reset' or _reset_moves(args), []
+    if sub in ('pull', 'fetch'):  # a refspec's destination is a local ref
+        return sub == 'pull', [o.rpartition(':')[2] for o in ops if ':' in o]
+    if sub == 'rebase':
+        ops = _operands(args, ('--onto', '-x', '--exec', '-s', '--strategy', '-X',
+                               '--strategy-option'))
+        branch = ops[:1] if '--root' in args else ops[1:2]
+        return not branch, branch + (['*'] if '--update-refs' in args else [])
+    if sub in ('update-ref', 'symbolic-ref'):
+        ops = _operands(args, ('-m',))
+        if '--stdin' in args:
+            return False, ['*']
+        if sub == 'symbolic-ref' and len(ops) < 2 and not {'-d', '--delete'} & set(args):
+            return False, []
+        if ops[:1] == ['HEAD']:  # update-ref HEAD writes HEAD's branch; symbolic-ref switches
+            return sub == 'update-ref' and '--no-deref' not in args, []
+        return False, ops[:1]
+    if sub == 'branch':
+        flags = {f for a in args if a.startswith('-') for f in (
+            [a.partition('=')[0]] if a.startswith('--') else ['-' + c for c in a[1:]])}
+        if flags & {'-d', '-D', '--delete'}:
+            return False, ops
+        if flags & {'-m', '-M', '--move'}:  # one operand renames HEAD's branch
+            return len(ops) == 1, ops
+        if flags & {'-c', '-C', '--copy'}:
+            return False, ops[-1:]
+        return False, ops[:1] if flags & {'-f', '--force'} else []
+    if sub in ('checkout', 'switch', 'worktree'):  # -B/-C reset the branch they name
+        return False, [args[i + 1] for i, a in enumerate(args[:-1])
+                       if a in ('-B', '-C', '--force-create')] + [
+                           a.partition('=')[2] for a in args if a.startswith('--force-create=')]
+    return False, ['*'] if sub in ('filter-branch', 'filter-repo', 'fast-import') else []
+
+
+def _names_protected(name, protected):
+    """The branch `name` (a ref, a refspec destination) is or may be `protected`."""
+    name = name.lstrip('+')
+    if re.match(r'refs/(?!heads/)[\w.-]+/', name):
+        return False
+    name = re.sub(r'^(?:refs/)?heads/', '', name)
+    return name == protected or bool(_EXPANSION.search(name))
+
+
+def _protected_branch():
+    """The branch refs/remotes/origin/HEAD names (local refs, as the overnight
+    launcher resolves it), or ''. Full ref names: `--short` prints `heads/main`
+    once a tag is named `main` too."""
+    ref = _git_output(['symbolic-ref', 'refs/remotes/origin/HEAD'])
+    return ref[len('refs/remotes/origin/'):] if ref.startswith('refs/remotes/origin/') else ''
+
+
+def _moves_protected_branch(command, invocations):
+    """E2: True when a git operation in `command` can move the protected
+    branch's ref (_branch_writes: one on HEAD's branch while HEAD is on it, or
+    one that writes it by name), or the guard cannot tell where it lands: a
+    directory change or GIT_DIR-style redirect in the command, a branch change
+    in it for an operation on HEAD, a prefix or an option before the operation's
+    subcommand, a detached HEAD, or an unset origin/HEAD."""
+    writes = [_branch_writes(inv) for inv in invocations]
+    on_head = any(head for head, _names in writes)
+    names = [name for _head, named in writes for name in named]
+    if not (on_head or names):
+        return False
+    if (_ambient_git_redirect_present() or _DIR_CHANGE_RE.search(command)
+            or (on_head and _BRANCH_CHANGE_RE.search(command))):
+        return True
+    for seg in _shell_segments(command):
+        toks = seg.split()
+        if any(any(_branch_writes(inv)) and (
+                _cmd_token_index(toks) or toks[1:2] != [inv.subcommand])
+               for inv in iter_git_invocations(seg)):
+            return True
+    protected = _protected_branch()
+    if not protected or any(_names_protected(name, protected) for name in names):
+        return True
+    head = _git_output(['symbolic-ref', '--quiet', 'HEAD']) if on_head else None
+    return head in ('', 'refs/heads/' + protected)
+
+
+def _evaluate_protected_move(command, data):
+    if _check_git_allowlist(command, data):
+        return
+    _block(
+        '\nBLOCKED: agent git ref move - this merge, plumbing, hard reset or ref '
+        'mutation, refused without /do, can move the protected branch (%s), or the '
+        'guard cannot tell the branch it lands on: a cd, pushd, popd, '
+        'source or GIT_DIR-style redirect in it, a checkout, switch or symbolic-ref '
+        'with an operation on HEAD, a prefix or an option before the subcommand, a '
+        'detached HEAD or an unset origin/HEAD.\n'
+        'Command excerpt: %s\n' % (_protected_branch() or 'unresolved', command[:200])
     )
 
 
@@ -1577,6 +1818,11 @@ def _evaluate_forbidden_plumbing(command, data):
     )
 
 
+# E2: the rules /do consent releases (_evaluate_command).
+_DO_RELEASED = (_looks_like_git_merge, _looks_like_git_forbidden_plumbing,
+                _looks_like_git_reset_hard, _looks_like_git_direct_ref_mutation)
+
+
 # ---------------------------------------------------------------------------
 # Residual-refusal recovery route (2026-09-03)
 #
@@ -1750,7 +1996,12 @@ def _audit_residual_override(path, ovr, kinds, segments, digest):
     )
 
 
-def _evaluate_command(command, data):
+def _evaluate_command(command, data, do_consent=False):
+    # do_consent: the main agent holds /do consent, which releases the rules in
+    # _DO_RELEASED and adds none (E2): what one of them refuses stays refused when
+    # it can move the protected branch or the guard cannot tell the branch it lands
+    # on (_moves_protected_branch); git commit, git push and a git command the
+    # guard cannot classify are judged as without it.
     # Classify once: build invocations list for all _looks_like_* and _evaluate_* calls.
     # iter_git_invocations uses token-aware parsing so path-qualified forms like
     # /usr/bin/git are detected alongside bare 'git' (closes RISK-3 bypass).
@@ -1828,15 +2079,18 @@ def _evaluate_command(command, data):
     # (force-push must stay blocked even with a broad /allow grant).
     if not _looks_like_git_push(invocations) and _check_git_allowlist(command, data):
         return
-    if _looks_like_git_forbidden_plumbing(invocations):
+    if (do_consent and any(rule(invocations) for rule in _DO_RELEASED)
+            and _moves_protected_branch(command, invocations)):
+        _evaluate_protected_move(command, data)
+    if not do_consent and _looks_like_git_forbidden_plumbing(invocations):
         _evaluate_forbidden_plumbing(command, data)
-    if _looks_like_git_reset_hard(invocations):
+    if not do_consent and _looks_like_git_reset_hard(invocations):
         _evaluate_reset_hard(command, invocations, data)
-    if _looks_like_git_direct_ref_mutation(invocations):
+    if not do_consent and _looks_like_git_direct_ref_mutation(invocations):
         _evaluate_direct_ref_mutation(command, data)
     if _looks_like_git_push(invocations):
         _evaluate_push(command, invocations, data)
-    if _looks_like_git_merge(invocations):
+    if not do_consent and _looks_like_git_merge(invocations):
         _evaluate_merge(command, data)
     if _looks_like_git_commit(invocations):
         _evaluate_commit(command, data)
@@ -1844,9 +2098,11 @@ def _evaluate_command(command, data):
 
 def main():
     try:
-        data = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+        data = json.loads(_read_stdin())
+    except ValueError as exc:
+        # No tool or command to read: 0 as before, unless the raw text may run git
+        # (the hook is registered for Bash calls alone).
+        sys.exit(_internal_error_exit(exc, 'could not read its input'))
     try:
         if data.get('tool_name', '') != 'Bash':
             sys.exit(0)
@@ -1856,14 +2112,20 @@ def main():
         command = (data.get('tool_input', {}) or {}).get('command', '') or ''
         if not command:
             sys.exit(0)
-        # /do bypass: main-agent-only; subagents never benefit from consent flag.
-        if has_do_consent(data):
-            sys.exit(0)
-        _evaluate_command(command, data)
+        # /do consent (main agent only) releases rules and adds none (E2,
+        # _evaluate_command).
+        do_consent = has_do_consent(data)
+        try:
+            _evaluate_command(command, data, do_consent)
+        except SystemExit as exc:
+            if do_consent and exc.code == 2:
+                sys.stderr.write(DO_NOT_COVERED)
+            raise
     except SystemExit:
         raise
-    except Exception:
-        sys.exit(0)
+    except Exception as exc:
+        # An error is no verdict: refuse what may run git (_internal_error_exit).
+        sys.exit(_internal_error_exit(exc))
     sys.exit(0)
 
 

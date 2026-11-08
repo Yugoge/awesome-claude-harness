@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
 r"""
-PreToolUse Hook: Bulk-commit detector.
+PreToolUse Hook: Bulk-commit detector (advisory: exit 0 always).
 
-Scope: Runs on every Bash tool call. Inspects `git commit` invocations
-and refuses commits that match the b5d447e shape:
+Scope: Runs on every Bash tool call. Inspects a `git commit` written with
+nothing between `git` and `commit` (`git -C <dir> commit` is not inspected)
+and warns on stderr when the commit matches the b5d447e shape:
   - staged set spans 3 or more of {hooks/, commands/, scripts/, packages/, docs/}
-  - AND commit subject matches `sync.*uncommitted` (case-insensitive) OR
-    `chore\(claude\): sync` (the b5d447e exact form)
+  - AND commit subject matches `\bsync\b.*\buncommitted\b` (case-insensitive)
+    OR `chore\(claude\)\s*:\s*sync` (the b5d447e exact form)
 
 Why exists:
   - At 2026-04-21 17:45:03 UTC, commit b5d447e
     `chore(claude): sync all uncommitted config, hooks, scripts, sessions, docs`
     landed 93 files spanning hooks/, commands/, scripts/, sessions/, docs/.
     This is the canonical AI-bulk signature.
-  - The orchestrator-gate is rate-based and was bypassed by a Grep
-    streak-reset. R4.3 (privilege-guard) catches the agent-vs-user
-    authorship; this hook (R4.4) catches the multi-subsystem fan-out
-    even when the privilege-guard is disabled or bypassed.
-  - Spec reference: spec-20260424-233926 §5.2.4 (R4.4).
 
-Exit codes:
-  0: Allow tool use
-  2: Block tool use
+Exit code: 0 (the warning is the only effect).
 
 Fail-open: Any uncaught exception during hook evaluation results in
 exit 0 — the hook never wedges the harness. In particular, if `git diff
@@ -147,14 +141,13 @@ def _emit_bulk_block(message: str, prefixes: list, files: list) -> None:
         f'\nWARN (bulk-commit-detector, not blocking): touched: '
         f'{", ".join(prefixes)}\n'
         f'Commit subject {message[:120]!r} matches AI-bulk pattern '
-        f'(`sync.*uncommitted` or `chore(claude): sync`) AND staged set '
+        f'(the words sync ... uncommitted, or `chore(claude): sync`) AND staged set '
         f'spans {len(prefixes)} subsystem prefixes (threshold: '
         f'{BULK_THRESHOLD}).\n'
         f'Sample staged files (first 10): {files[:10]}\n'
         f'This is the b5d447e shape (2026-04-21 17:45 UTC, 93 files). '
         f'If this is intentional, split into per-subsystem commits OR '
         f'use a non-AI-bulk subject line.\n'
-        f'Spec: spec-20260424-233926 §5.2.4 (R4.4).\n'
     )
 
 
@@ -173,7 +166,7 @@ def _evaluate_commit(command: str) -> None:
 
 
 def main() -> None:
-    """Entry point: read JSON-from-stdin, evaluate, exit 0/2."""
+    """Entry point: read JSON-from-stdin, evaluate, exit 0."""
     try:
         data = json.load(sys.stdin)
     except Exception:

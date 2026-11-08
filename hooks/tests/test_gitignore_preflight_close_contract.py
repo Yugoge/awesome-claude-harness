@@ -51,6 +51,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -126,7 +127,7 @@ def declare_cycle(root, task_id, paths, writes=()):
     `paths` (E2 admits what the cycle declares), and whose own Write calls
     wrote `writes` (a written file is no declaration)."""
     store = os.path.join(os.environ['CLAUDE_CONFIG_DIR'], 'projects',
-                         os.path.realpath(str(root)).replace('/', '-'))
+                         re.sub(r'[^A-Za-z0-9]', '-', os.path.realpath(str(root))))
     os.makedirs(store, exist_ok=True)
     artifacts = [
         {'kind': 'markdown', 'path': p, 'identity_anchor': task_id} if p.endswith('.md') else

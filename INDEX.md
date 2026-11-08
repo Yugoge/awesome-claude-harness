@@ -42,12 +42,12 @@ dot-claude/
 │   ├── `dev-command.md` - Enhanced development workflow with BA subagent delegation, command development best practices, Three-Party Architecture, and comprehensive automation patterns
 │   ├── `dev-overnight.md` - Autonomous overnight development loop - continuously explores codebase, finds issues, fixes them, and repeats until end-time
 │   ├── `dev.md` - Orchestrated development workflow with BA subagent delegation, parallel agent execution, and iterative QA verification. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
-│   ├── `do.md` - Allow main agent to bypass orchestrator-gate restrictions for this turn (subagent-only operations become directly allowed). Auto-clears at stop.
+│   ├── `do.md` - Allow main agent to bypass orchestrator-gate restrictions for this turn (subagent-only operations become directly allowed). The next prompt clears it.
 │   ├── `merge.md` - Merge any resolvable commit-ish into the default branch, on either a linked (registered_worktree) worktree or an in_place one (the main checkout -- see commands/dev-overnight.md's isolation_kind vocabulary). On a linked worktree, the agent infers the branch from active overnight state, auto-removes the worktree, deletes the merged branch, and removes the overnight-state file. In_place, the agent merges the current (or explicit) ref directly in the main root, requires a clean tree first, and keeps the branch afterward. Bare /merge typical; explicit /merge <ref> overrides.
 │   ├── `paseo-daemon.md` - paseo multi-session monitoring and three-account dynamic scheduling control plane — bootstrap of a persistent disk-backed state machine (blueprint F1–F15, amended 22-entry runtime baseline). Human-only.
 │   ├── `pull.md` - Pull Command
 │   ├── `push.md` - Push Command
-│   ├── `redev.md` - dev workflow harness re-attach — for conversations where the /dev workflow context has already appeared; may be invoked with no new requirement text to purely re-attach the harness (canonical TodoList, gates, dev-registry, artifact conventions) to that context. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
+│   ├── `redev.md` - /redev is /dev when saving context — the /dev workflow (same arguments, steps, gates and artifacts) without re-emitting its text, under a fresh task id on every invocation. Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
 │   ├── `restart.md` - Resume every quota-interrupted subagent in the current Claude Code parent session from its original transcript and agent ID; when none is recoverable, continue the invoking session's own main agent.
 │   ├── `spec-update.md` - Update an existing spec, continue unfinished development, or write a temp session note.
 │   ├── `spec.md` - Create spec files for any dev workflow (/dev, /dev-overnight, or standalone reference). Pass --codex to enable adversarial codex consultation on each spec-subagent / QA dispatch; default is self-review only.
@@ -90,7 +90,6 @@ dot-claude/
 │       └── `run-hero-demo.sh` - Description: Five-beat guard demo — a real agent git push is refused pre-execution, a
 ├── hooks/
 │   ├── doc_sync/
-│   │   ├── `claude.py` - CLAUDE.md auto-creation and patching.
 │   │   ├── `config.py` - The git-tracked helpers (WS5, AC-WS5-1) let the INDEX/README generators list
 │   │   ├── `docker.py` - Parse docker-compose.yml and generate markdown table.
 │   │   ├── `extract.py` - Extract description from various file types.
@@ -489,7 +488,6 @@ dot-claude/
 │   ├── `graphify_lib.py` - graphify_lib.py — shared library for Graphify knowledge-graph integration
 │   ├── `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 │   ├── `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
-│   ├── `iterate-failed-pipelines.py` - Reads pipelines JSON path; outputs iteration plan JSON to stdout. The orchestrator
 │   ├── `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 │   ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 │   ├── `measure-hero-fold.py` - Description: Renders README.md LOCALLY from the working tree in headless Chromium at the
@@ -556,7 +554,7 @@ dot-claude/
 │   │   └── `SKILL.md` - Five LLM-driven contextual accessibility insights that axe cannot detect (heading hierarchy, link text, focus order, color reliance, decorative-as-interactive). MUST receive axe findings as input and dedup against them. Use during ui-specialist Phase 6 (Accessibility) AFTER ui-axe-injector.
 │   ├── ui-shared/
 │   │   ├── `anti-pattern-catalog.yml` - YAML config: rules
-│   │   ├── `report-schema.json` - Schema for the ui-specialist subagent's final JSON report. Implements spec-20260426-080555 section 5.5 (6 channels) + 5.11 (hard_defect vs taste_heuristic) + 5.15 (skill outputs) + double-defense severity hard-cap on aesthetic_findings.
+│   │   ├── `report-schema.json` - Schema for the ui-specialist subagent's final JSON report: 6 channels, hard_defect vs taste_heuristic findings, skill outputs, and a double-defense severity hard-cap on aesthetic_findings.
 │   │   ├── `review-phases.yml` - YAML config: phase_order, phases
 │   │   └── `rule-map.json` - JSON config: $schema_version, meta, rules
 │   ├── ui-state-matrix/
@@ -564,6 +562,12 @@ dot-claude/
 │   └── ui-token-conformance/
 │       └── `SKILL.md` - Conditional capability — measure design-token conformance (color/spacing/typography) of computed CSS values against a project's declared token source (DTCG / tailwind.config.js / theme.ts). If no token source is detected, emit capability_unavailable to unknowns and DO NOT raise findings on guesses. Use during ui-specialist Phase 5 (Aesthetic).
 ├── templates/
+│   ├── prompt-includes/
+│   │   ├── `anti-give-up.md` - Anti-Give-Up Discipline
+│   │   ├── `checkpoint-marking.md` - Checkpoint Marking Contract
+│   │   ├── `codex-consultation.md` - Codex adversarial consultation
+│   │   ├── `overnight-spec-integration.md` - Overnight Spec Integration
+│   │   └── `specialist-findings-intake.md` - Specialist Findings Intake Protocol
 │   ├── `overnight-spec.md` - Spec: <issue_description>
 │   └── `spec-template.md` - Spec: <issue_description>
 ├── tests/

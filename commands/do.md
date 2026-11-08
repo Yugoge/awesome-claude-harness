@@ -1,9 +1,9 @@
 ---
-description: Allow main agent to bypass orchestrator-gate restrictions for this turn (subagent-only operations become directly allowed). Auto-clears at stop.
+description: Allow main agent to bypass orchestrator-gate restrictions for this turn (subagent-only operations become directly allowed). The next prompt clears it.
 disable-model-invocation: true
 ---
 
-(hook-only: `disable-model-invocation: true` suppresses a standalone AI turn, but the body IS injected into context. This line exists so the body is never empty — see commands/dev-command.md for the empty-body API-400 lesson.)
+(Human-only: `disable-model-invocation: true` keeps the model from invoking /do itself. When the owner types it, `hooks/prompt-workflow.py` writes the consent flag and mints the task id, and this body reaches the model with the typed arguments. The consent lasts this turn: the next prompt that is not /do clears it. It does not cover `git commit`, `git push`, a git operation the guard refuses without /do that can move the protected branch or whose landing branch it cannot tell, or a git command the guard cannot classify (`hooks/pretool-git-privilege-guard.py`): a commit lands through /close then /commit, a push through /push, a merge into the protected branch through /merge.)
 
 ## Argument parsing
 
@@ -13,7 +13,7 @@ CODEX_REQUESTED = $ARGUMENTS contains literal token "--codex"
 TASK = $ARGUMENTS with "--codex" token removed (trimmed)
 ```
 
-If `TASK` is empty, ask the user for the task before proceeding.
+If `TASK` is empty, ask the user for the task with AskUserQuestion inside the turn before proceeding (a typed reply would be a new prompt, which ends the /do consent).
 
 ## Workflow
 
@@ -23,7 +23,7 @@ Read `TASK`. In one sentence state: what is being changed and what the end state
 
 ### Step 2: Develop
 
-Do the work. Gate bypass is active — all tools are available. Edit files, run commands, make changes as needed.
+Do the work. The orchestrator gate lets every tool through this turn except EnterPlanMode and ExitPlanMode, which it always blocks; every other hook still applies. Edit files, run commands, make changes as needed.
 
 ### Step 3: Codex audit (only when `CODEX_REQUESTED = true`)
 
@@ -45,9 +45,9 @@ State what changed, which files were modified, and (if Step 3 ran) whether codex
 
 ### Step 5: Write do-report
 
-End every `/do` with a do-report at `docs/dev/do-report-<TASK_ID>.json`. You write it whole (the template below; no hook pre-writes it): `do.status` `"completed"`, `do.summary` saying what was done, `do.files_modified`/`do.files_created` filled. NEVER report unfinished work as completed: when the task cannot be finished as asked, ask the user in this turn how to go on (below).
+End every `/do` with a do-report at `docs/dev/do-report-<TASK_ID>.json`. You write it whole (the template below; no hook pre-writes it) once the task is done: `do.status` `"completed"`, `do.summary` saying what was done, `do.files_modified`/`do.files_created` filled. /do has that one terminal. NEVER report unfinished work as completed: when the task cannot be finished as asked, ask the user in this turn how to go on (below).
 
-The gate: the Stop gate (`hooks/stop-command-gate.py`) holds this `/do` until the report validates against `schemas/do-report.v1.json`, `do.status` is `"completed"` and its file lists are exact (below). It writes and deletes nothing: only finishing the report releases it. A decision only the user can make is asked in this turn with AskUserQuestion; the answer releases no gate.
+The gate: the Stop gate (`hooks/stop-command-gate.py`) holds this `/do` until the report validates against `schemas/do-report.v1.json`, `do.status` is `"completed"` and its file lists are exact (below). It writes and deletes nothing: only finishing the report releases it. A decision only the user can make (an operation a hook refuses included) is one specific AskUserQuestion in this turn, naming it; then the work continues. The answer releases no gate.
 
 **`TASK_ID`** is the id in the hook's `[/do] task-id minted: <id>` line: a reserved `YYYYMMDD-HHMMSS` timestamp. The hook is the only mint: never mint one, and never take the newest `claude-orchestrator-consent-*.flag` in the state dir (two concurrent `/do` sessions would alias onto one id and overwrite each other's do-reports). To read it back for the CURRENT session (after a compaction):
 1. `SID = $CLAUDE_CODE_SESSION_ID` (fallback `$CLAUDE_SESSION_ID`).

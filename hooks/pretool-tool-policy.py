@@ -20,7 +20,7 @@ NotebookEdit target and every Bash write target:
     prefixes, tool lists and the scratch rule below still apply.
   - Any other caller's write of a declared path -> exit 2 naming the path and
     the declaring obligation's role, whatever an allow prefix (dev's '*',
-    general-purpose's '*/docs/dev/*') says. No prefix table names an artifact.
+    changelog-analyst's '*/docs/dev/') says. No prefix table names an artifact.
   - An undeclared path keeps the role policy rows below.
   - What a dispatch can declare has the shapes of the paths the current
     command files' templates write ("path" in their JSON, any bracketed text
@@ -63,15 +63,18 @@ NotebookEdit target and every Bash write target:
     lib/declared_paths, loaded only for a write; this file keeps the rule
     and the session transcript's reader (_Record).
 
+Grant binding (D8), beside it and for every caller alike: only <name> writes
+under <state dir>/agentic-commit/<name>/, <name> a listed role (the push- and
+merge-analyst grants); a removal is no write (_check_grant_writes).
+
 Behavior:
   - Every caller, first: a protected file's write, delete or rename, and a
     ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
-  - Main agent (no agent_id, no subagent_type) -> exit 0 after the derived
-    permission (the orchestrator gate handles the rest of the main agent).
-  - Subagent role unresolvable -> exit 0 (defer to the backstop shim). An
-    unresolved role is a NORMAL state (a subagent may write before any sentinel-
-    creating tool runs; agent_resolver LOW-10: callers MUST NOT hard-block on
-    None). Role-specific deny is enforced once the role resolves.
+  - Main agent (no agent_id) -> exit 0 after the derived permission and the
+    grant binding (the orchestrator gate handles the rest of the main agent).
+  - Subagent role unresolvable (a NORMAL state, agent_resolver LOW-10), or one
+    the policy does not list (Explore, Plan, general-purpose, `<plugin>:<name>`)
+    -> exit 0: no role row applies, never is_allowed's "unknown role".
   - Resolved role + denied tool/path -> exit 2 with structured stderr
     JSON: {"role", "tool", "target", "deny_reason"}.
   - Deny-logic import/bootstrap failure -> exit 2 (FAIL CLOSED, WS1): the
@@ -120,6 +123,7 @@ WRITE_TOOLS: set
 resolve_agent_type = None  # type: ignore[assignment]
 extract_bash_write_paths = None  # type: ignore[assignment]
 is_allowed = None  # type: ignore[assignment]
+harness_state_dir = None  # type: ignore[assignment]
 
 
 def _bootstrap_security() -> None:
@@ -128,11 +132,12 @@ def _bootstrap_security() -> None:
     This MUST be called from main() BEFORE any authorization decision and MUST
     NOT be wrapped by the blanket fail-open `except` in __main__.
     """
-    global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, is_allowed
+    global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, is_allowed, harness_state_dir
     try:
         from lib.agent_resolver import resolve_agent_type as _rat
         from lib.bash_write_targets import extract_bash_write_paths as _ebwp
         from lib.policy_registry import WRITE_TOOLS as _wt, is_allowed as _ia
+        from lib.harness_state_dir import harness_state_dir as _hsd
     except Exception as e:  # ImportError, bootstrap failure, resolver failure
         sys.stderr.write(
             "BLOCKED by tool-policy.v1: deny-logic bootstrap FAILED — the policy "
@@ -144,6 +149,7 @@ def _bootstrap_security() -> None:
     resolve_agent_type = _rat
     extract_bash_write_paths = _ebwp
     is_allowed = _ia
+    harness_state_dir = _hsd
 
 
 def _read_payload() -> dict:
@@ -202,11 +208,13 @@ def _role_temp_exceptions(role: str) -> list:
 
     An entry qualifies when it names tmp/var-tmp and is NOT one of the bare
     raw-temp grants.  These survive the raw-temp denial verbatim, for exactly
-    the role that holds each.
+    the role that holds each.  A CLAUDE_STATE_DIR below a temp root is no
+    arbitrary temp: the role's '*/' entries (an analyst's grants) hold in it.
     """
     from lib.policy_registry import get_role_policy
 
     allowed = get_role_policy(role).get("allowed_write_path_prefixes", []) or []
+    state = harness_state_dir()
     out = []
     for entry in allowed:
         if not isinstance(entry, str) or entry in _RAW_TEMP_GRANTS:
@@ -214,6 +222,8 @@ def _role_temp_exceptions(role: str) -> list:
         parts = entry.strip("*").split("/")
         if "tmp" in parts:
             out.append(entry)
+        elif state not in _SYSTEM_TEMP_ROOTS and entry.startswith("*/"):
+            out.append(state + entry[1:] + ("" if entry.endswith("*") else "*"))
     return out
 
 
@@ -615,6 +625,30 @@ def _caller_label(role, data: dict) -> str:
     return data.get("agent_type") or "unresolved"
 
 
+def _check_grant_writes(role, tool_name: str, targets: list, data: dict) -> None:
+    """Exit 2 when a caller other than <name> creates or overwrites a file under
+    <state dir>/agentic-commit/<name>/, <name> a listed role (any, the policy
+    unreadable); an unexpanded Bash word is judged by the directory it spells."""
+    from lib import policy_registry
+
+    base = f"{_resolved(harness_state_dir())}/agentic-commit/"
+    roles = (policy_registry.load_policy() or {}).get("roles")
+    for target in targets[1:] if tool_name == "Bash" else targets[:1] if tool_name in WRITE_TOOLS else []:
+        if not isinstance(target, str) or not target or "\x00" in target:
+            continue
+        if "$" in target or "`" in target:
+            match = re.search(r"/agentic-commit/([^/$`]+)/", target)
+            owner = match.group(1) if match else None
+        else:
+            path = f"{_resolved(target)}/"
+            owner = path[len(base):].split("/")[0] if path.startswith(base) else None
+        if owner and owner != role and (roles is None or owner in roles):
+            _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
+                        f"write target {target} is in the {owner} grant directory; only the {owner} "
+                        "creates or overwrites a file there")
+            sys.exit(2)
+
+
 def _check_declared_writes(role, tool_name: str, targets: list, data: dict) -> set:
     """Apply the derived write permission; exit 2 on another caller's write of
     a declared path. Returns the targets the caller itself declared."""
@@ -985,15 +1019,13 @@ def main() -> None:
     _check_protected(role, tool_name, tool_input, targets, data)
     _check_scheduled_prompt(role, tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
-    if not role:
-        # An unresolved role is a NORMAL state, not an error: Claude Code may
-        # dispatch a subagent before any sentinel-creating tool runs, so the
-        # agent-index entry can legitimately be missing during a first write.
-        # Per the agent_resolver LOW-10 contract, callers MUST NOT hard-block on
-        # None — defer to the backstop shim (exit 0). (Reverted: the prior
-        # unresolved-role fail-closed broke every subagent lacking a registry.)
-        # The main agent has no role rows either; the derived permission above
-        # is all that applies to it.
+    _check_grant_writes(role, tool_name, targets, data)
+    from lib import policy_registry
+
+    if not role or policy_registry.get_role_policy(role).get("_unknown_role"):
+        # Unresolved is NORMAL (agent_resolver LOW-10: never hard-block on None);
+        # the main agent and an unlisted (built-in or plugin) role have no role
+        # rows: the checks above are all that applies to them.
         sys.exit(0)
     _check_targets(role, tool_name, targets, data, own)
     sys.exit(0)

@@ -45,12 +45,12 @@ REGISTER_TIMEOUT_S = 20
 # workflows. These workflows produce no spec views, so VIEW_PATH_PATTERN never
 # fires for them. Root cause: commit e086ccb scoped enforcement to /spec only;
 # /dev sessions have no cp-state files, so the enforcement hook fails open.
-# Fix: each dispatched subagent reads .claude/dev-registry/<session_id>/<agent>.json
-# as its FIRST ACTION; this hook extracts the agent type from the path, writes the
-# Claude-stdin agent_id -> agent_type mapping to .claude/dev-registry/agent-index.json,
-# and is the sentinel's one producer: it creates the sentinel in the cycle's armed
-# registry right before that read, so a sentinel exists for exactly the roles a
-# dispatch reads (P1b goal 2). See ba-spec-20260424-110000.md.
+# Fix (ba-spec-20260424-110000.md): a subagent's Read of
+# .claude/dev-registry/<session_id>/<agent>.json writes <agent> under its Claude-stdin
+# agent_id into .claude/dev-registry/agent-index.json only when the payload carries
+# no agent_type (an older CLI; with one, the role is the CLI's, lib/agent_resolver.py).
+# The hook stays the sentinel's one producer: it creates the sentinel in the
+# cycle's armed registry right before that read (P1b goal 2).
 DEV_SENTINEL_PATTERN = re.compile(
     r".*/\.claude/dev-registry/(?P<session_id>[^/]+)/(?P<agent>[^/]+)\.json$"
 )
@@ -64,7 +64,7 @@ DEV_SENTINEL_PATTERN = re.compile(
 # (cp-state-<agent>-<N>.json, N>=2). Mirrors _CP_STATE_FILENAME_RE in
 # /root/.claude/scripts/spec-check.py (which is the writer).
 CP_STATE_PATH_PATTERN = re.compile(
-    r".*/\.claude/specs/(?P<spec_id>[^/]+)/cp-state-(?P<agent>[A-Za-z0-9_-]+?)(?:-\d+)?\.json$"
+    r".*/\.claude/specs/(?P<spec_id>[^/]+)/cp-state-(?P<agent>[A-Za-z0-9_-]+?)(?:-(?P<instance>\d+))?\.json$"
 )
 
 
@@ -167,10 +167,11 @@ def _handle_cp_state_direct_read(data, project_dir):
     Treats a direct Read of .claude/specs/<spec-id>/cp-state-<agent>(-N).json
     as the SECOND ACTION registration trigger. The write itself is
     scripts/spec-check.py's (`register`), the one writer of cp-state files:
-    it picks the slot (the one this agent_id holds, else the first idle one,
-    else a new numbered slot carrying the primary's checklist), restamps
-    ownership and keeps every checkpoint state, under the spec directory's
-    lock. A Read with no agent_id (the main agent's) registers nobody.
+    it picks the slot (the one this agent_id holds, else the file Read, its
+    running holder moved aside), restamps ownership and keeps every checkpoint
+    state, under the spec directory's lock. A Read with no agent_id (the main
+    agent's) or a payload naming another role (/spec reading a slot it set; the
+    path's role counts only without agent_type) registers nobody.
     Returns True when the Read targets a cp-state file.
 
     BUG-CPSTATE-1: the SECOND ACTION blocks in commands/dev.md instruct
@@ -181,10 +182,11 @@ def _handle_cp_state_direct_read(data, project_dir):
     if spec_id is None:
         return False
     agent_id = data.get("agent_id")
-    if agent_id:
+    if agent_id and data.get("agent_type") in (None, "", agent):
+        instance = CP_STATE_PATH_PATTERN.match(data["tool_input"]["file_path"]).group("instance")
         subprocess.run(
-            [sys.executable, str(SPEC_CHECK), "register", "--spec-id", spec_id,
-             "--agent", agent, "--agent-id", agent_id],
+            [sys.executable, str(SPEC_CHECK), "register", "--spec-id", spec_id, "--agent", agent,
+             "--agent-id", agent_id] + (["--instance-id", instance] if instance else []),
             env={**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir)},
             capture_output=True, timeout=REGISTER_TIMEOUT_S,
         )
@@ -221,7 +223,8 @@ def _ensure_dev_sentinel(file_path, agent, session_id):
 
 def _handle_dev_sentinel(data, project_dir):
     """Process a DEV_SENTINEL_PATTERN Read; create the sentinel, register UUID ->
-    agent_type.
+    agent_type only for a payload without agent_type (with one, the role is the CLI's
+    and a path the agent chose to read must not write a second, possibly different, one).
 
     Returns True when handled, False when the Read does not target a sentinel
     or the Claude-stdin agent_id is missing (main-agent Read is ignored).
@@ -233,7 +236,8 @@ def _handle_dev_sentinel(data, project_dir):
     if not agent_id:
         return False
     _ensure_dev_sentinel((data.get("tool_input") or {}).get("file_path") or "", agent, session_id)
-    _update_dev_registry_index(project_dir, agent_id, agent, session_id)
+    if not data.get("agent_type"):
+        _update_dev_registry_index(project_dir, agent_id, agent, session_id)
     return True
 
 

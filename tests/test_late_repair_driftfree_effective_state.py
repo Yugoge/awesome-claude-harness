@@ -35,6 +35,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -75,7 +76,7 @@ def _declare_stage_dispatches(root: Path, task_id: str) -> None:
     """The task's BA, dev and QA dispatch records in a session transcript of
     the store CLAUDE_CONFIG_DIR names: record-stage takes a stage report's
     role from the dispatch that declared it."""
-    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / str(root.resolve()).replace("/", "-")
+    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(root.resolve()))
     store.mkdir(parents=True, exist_ok=True)
     records = [{"type": "user", "message": {"role": "user", "content": f"/close --late-repair {task_id}"}}]
     for role, artifacts in (

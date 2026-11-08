@@ -73,14 +73,6 @@ def _get_relative_path(fp: Path, project_dir: Path) -> str | None:
     return None
 
 
-def _match_watch_dir(rel: str):
-    """Find matching watched dir prefix, or None."""
-    for wd in WATCHED_DIRS:
-        if rel.startswith(wd + '/') or rel.startswith(wd + os.sep):
-            return wd
-    return None
-
-
 def _refusal_shape(path: Path):
     """(shape, detail) of a MALFORMED skip, by re-classifying the file the skip left untouched.
 
@@ -121,33 +113,17 @@ def _regen_if_dir(d: Path, project_dir: Path, results: list | None = None):
     return status
 
 
-def _maybe_regen_global(parent_dir: Path, rel: str, results: list | None = None):
-    """Same for the matching global directory; the README status, or None when not applicable."""
-    wd = _match_watch_dir(rel)
-    if wd is None:
-        return None
-    global_dir = Path.home() / wd
-    if global_dir.is_dir() and global_dir.resolve() != parent_dir.resolve():
-        # Global dirs live under ~/.claude; anchor the reserved-subtree check to
-        # $HOME so it is framed the same way global rel paths are (.claude/...).
-        status = _regen_and_record(regen_readme, ArtifactKind.README, global_dir, Path.home(), results)
-        _regen_and_record(regen_index, ArtifactKind.INDEX, global_dir, Path.home(), results)
-        return status
-    return None
-
-
 def process_parent_dirs(parent_dir: Path, project_dir: Path, results: list | None = None):
-    """Regenerate the parent (and matching global) directory; returns the `results` list.
+    """Regenerate the written file's own directory; returns the `results` list.
 
-    Records (README first, then INDEX, per directory) are appended to the caller's `results`
-    as each call finishes, so a failure in a later call does not lose what an earlier one
-    already reported.
+    Records (README first, then INDEX) are appended to the caller's `results` as each call
+    finishes, so a failure in a later call does not lose what an earlier one already reported.
+    No other directory is touched: a product repository's write leaves the global ~/.claude
+    copies alone.
     """
     if results is None:
         results = []
     _regen_if_dir(parent_dir, project_dir, results)
-    rel = str(parent_dir.relative_to(project_dir))
-    _maybe_regen_global(parent_dir, rel, results)
     return results
 
 

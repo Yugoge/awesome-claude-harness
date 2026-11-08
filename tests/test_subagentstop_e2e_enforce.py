@@ -147,7 +147,9 @@ def test_ac1_hook_exits_zero_cross_session(tmp_path):
     agent_id = "agent-close-cross-session"
 
     _register_agent(tmp_path, agent_id, dev_session_id)
-    _enable_e2e_enforcement(tmp_path, dev_session_id)
+    # The cycle the QA's obligation names is armed (P6 R4: the index entry
+    # names the cycle only of a dispatch without one).
+    _enable_e2e_enforcement(tmp_path, f"dev-{task_id}")
     _dispatch_qa(tmp_path, agent_id, task_id)
     _write(tmp_path / "docs" / "dev" / f"qa-report-{task_id}.json", _qa_report(task_id))
 
@@ -196,7 +198,9 @@ def test_ac2b_report_genuinely_missing_exits_2(tmp_path):
     agent_id = "agent-report-missing"
 
     _register_agent(tmp_path, agent_id, dev_session_id)
-    _enable_e2e_enforcement(tmp_path, dev_session_id)
+    # The cycle the QA's obligation names is armed (P6 R4: the index entry
+    # names the cycle only of a dispatch without one).
+    _enable_e2e_enforcement(tmp_path, f"dev-{task_id}")
     _dispatch_qa(tmp_path, agent_id, task_id)
     (tmp_path / "docs" / "dev").mkdir(parents=True, exist_ok=True)
     # deliberately write NO qa-report-*.json anywhere
@@ -366,7 +370,9 @@ def test_ac8_non_do_session_still_blocks_on_genuinely_missing_report(tmp_path):
     agent_id = "agent-ordinary-dev"
 
     _register_agent(tmp_path, agent_id, dev_session_id)
-    _enable_e2e_enforcement(tmp_path, dev_session_id)
+    # The cycle the QA's obligation names is armed (P6 R4: the index entry
+    # names the cycle only of a dispatch without one).
+    _enable_e2e_enforcement(tmp_path, f"dev-{task_id}")
     _dispatch_qa(tmp_path, agent_id, task_id)
     (tmp_path / "docs" / "dev").mkdir(parents=True, exist_ok=True)
     # No do-report-<TID>.json exists at all.

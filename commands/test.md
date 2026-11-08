@@ -38,7 +38,7 @@ source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HO
 
 Set up working directory: create `tests/reports/`, generate `REQUEST_ID="test-$(date +%Y%m%d-%H%M%S)"` and `TIMESTAMP` in ISO-8601 format.
 
-**Test folder structure**: If `tests/` does not exist, initialize it by creating subdirectories `tests/{scripts,instructions,data/fixtures,data/mocks,reports}` and copying template files from `<HARNESS_ROOT>/tests/` (README.md, INDEX.md, and instructions/*.md).
+**Test folder structure**: If `tests/` does not exist, initialize it by creating subdirectories `tests/{scripts,instructions,data/fixtures,data/mocks,reports}` and copying the instruction templates from `<HARNESS_ROOT>/tests/instructions/*.md`; it copies no README.md or INDEX.md into the project.
 
 ### Step 2: Analyze Git History for Edge Cases
 
@@ -226,11 +226,11 @@ Save to: `tests/reports/validation-context-{REQUEST_ID}.json`
 
 ### Step 8: Invoke Test Validator
 
-Delegate to test-validator subagent. The validator performs syntax validation, dependency checks, quality checks, and edge case coverage verification. Expected output: `tests/reports/validation-report-{REQUEST_ID}.json` with fields: `status`, `validators_checked`, `syntax_errors`, `dependency_errors`, `quality_issues`, `edge_case_coverage`, `summary`.
+Delegate to test-validator subagent (Agent tool, `run_in_background: false`). The validator performs syntax validation, dependency checks, quality checks, and edge case coverage verification. Expected output: `tests/reports/validation-report-{REQUEST_ID}.json` with fields: `status`, `validators_checked`, `syntax_errors`, `dependency_errors`, `quality_issues`, `edge_case_coverage`, `summary`.
 
 ### Step 9: Process Validation Results
 
-Read the validation report status. If `fail`, present errors and stop. If `pass`, proceed.
+Read the validation report status. If `fail`, present the errors, fix them and re-validate. If `pass`, proceed.
 
 **Decision tree**:
 
@@ -240,9 +240,7 @@ IF validation.status == "pass":
 
 ELIF validation.status == "fail":
   → Present errors to user
-  → Offer to fix automatically OR exit
-  → If fix: Apply fixes → Re-validate (max 3 attempts)
-  → If exit: Stop workflow
+  → Apply fixes → Re-validate (Step 8), until validation.status == "pass"
 
 ```
 
@@ -319,6 +317,7 @@ Delegate to test-executor subagent using Task tool:
 ```
 Use Task tool with:
 - subagent_type: "test-executor"
+- run_in_background: false
 - description: "Execute validated tests"
 - prompt: "
   You are the test-executor subagent. Follow agents/test-executor.md instructions precisely.
@@ -358,14 +357,14 @@ Read `executor.status`, `executor.summary.total_tests`, `.passed`, `.failed`, an
 IF executor.status == "completed" AND failed == 0 AND errors == 0:
   → All tests passed → Skip to Step 16 (Generate Success Report)
 
-ELIF executor.status == "completed" AND failed > 0:
-  → Tests failed → Proceed to Step 14 (Present Failures)
+ELIF executor.status == "completed" AND (failed > 0 OR errors > 0):
+  → Tests failed or errored → Proceed to Step 14 (Present Failures)
 
 ELIF executor.status == "partial":
   → Some tests couldn't run → Proceed to Step 14 (Present Failures)
 
-ELIF executor.status == "blocked":
-  → Execution blocked → Present error → Exit
+ELSE (no readable report, or a status other than completed|partial):
+  → Present the executor's error, fix its cause, re-run Step 12
 ```
 
 ### Step 14: Present Test Failures to User
@@ -429,10 +428,9 @@ Manual fix: edit each affected file and update venv usage to match the project's
 
 ## 🎯 Next Steps
 
-1. Review failed tests above
-2. Apply recommended fixes
-3. Re-run tests: `/test`
-4. When all pass, proceed with confidence
+1. Fix each failure above (Step 15)
+2. Re-run the tests (Steps 10-13)
+3. Completion report once every test passes (Step 16)
 
 ## 📁 Detailed Reports
 
@@ -441,57 +439,21 @@ Manual fix: edit each affected file and update venv usage to match the project's
 - Registry: tests/reports/validator-registry-{REQUEST_ID}.json
 ```
 
-### Step 15: Collect User Decision
+### Step 15: Fix Failures and Re-run
 
-Based on failures, offer options:
+Fix every failure Step 14 presented, from its recommendation or the failed validator's fix script where one exists, then re-run from Step 10 (from Step 8 when a fix changed a validator). Step 13 routes the new report; repeat Steps 14-15 until it routes to Step 16.
 
-```markdown
-## Test Execution Options
-
-**Current Status**: {failed} tests failed
-
-1. **Fix failures manually** - Review recommendations and update files
-2. **Apply automated fixes** (if available) - Run fix scripts
-3. **View detailed report** - Inspect JSON reports for full context
-4. **Ignore failures** - Generate report and exit (NOT recommended)
-5. **Cancel** - Exit without report
-
-Select option [1-5]:
-```
-
-**Option 1: Fix manually**
-- User makes changes
-- Offer to re-run tests
-- If re-run → Return to Step 10 (Execution)
-
-**Option 2: Apply automated fixes**
-- Check if fix scripts exist for failed validators
-- Run fix scripts with user approval
-- Re-run tests automatically
-- If still fail → Show remaining failures
-
-**Option 3: View detailed report**
-- Display JSON report paths
-- User inspects manually
-- Return to option selection
-
-**Option 4: Ignore failures**
-- Proceed to Step 16 with failures noted
-- NOT recommended for critical failures
-
-**Option 5: Cancel**
-- Exit workflow
-- Preserve reports for manual review
+Ask the owner only when a fix needs a decision the recommendation, the code or a sensible default cannot make (for example, two fixes that change the project's behaviour differently): one AskUserQuestion inside the turn that names that decision and offers the candidate fixes as its options. Every option is a fix that is applied and re-run; no option ends /test, skips a validator or accepts a failure. The answer only pauses: apply the chosen fix and continue.
 
 ### Step 16: Generate Completion Report
 
-Create `tests/reports/completion-{REQUEST_ID}.md` summarizing: request ID, project path, timestamp, overall status; validation phase results (validators checked, syntax/dependency/quality issues); execution phase results (total/passed/failed/errors, pass rate, execution time); edge case prevention summary; per-failed-test details with recommendations; git checkpoint hash and rollback command; and paths to all related report files.
+Create `tests/reports/completion-{REQUEST_ID}.md` summarizing: request ID, project path, timestamp, overall status; validation phase results (validators checked, syntax/dependency/quality issues); execution phase results (total/passed/failed/errors, pass rate, execution time); edge case prevention summary; each failure fixed in an earlier round, with its fix; git checkpoint hash and rollback command; and paths to all related report files.
 
 ---
 
 ## Test Folder Initialization
 
-If project has no `tests/` directory, initialize it: create subdirectories `{scripts,instructions,data/fixtures,data/mocks,reports}`, copy template README.md and INDEX.md from `<HARNESS_ROOT>/tests/`, and copy instruction templates from `<HARNESS_ROOT>/tests/instructions/`. Implement validators per `docs/test/edge-case-analysis.json`.
+If project has no `tests/` directory, initialize it: create subdirectories `{scripts,instructions,data/fixtures,data/mocks,reports}` and copy instruction templates from `<HARNESS_ROOT>/tests/instructions/` (no README.md or INDEX.md is copied). Implement validators per `docs/test/edge-case-analysis.json`.
 
 ## Scripts
 

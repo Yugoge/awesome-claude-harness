@@ -191,9 +191,10 @@ complete, valid prepare result, never an error to retry.
    - **No stand-in agent.** Continuation is the main agent resuming its own
      work. It never becomes an `Agent`/`Task` dispatch carrying the session's
      transcript as a prompt.
-   - **Report honestly.** If the interrupted work cannot be resumed from the
-     surviving state, say so and name what is missing. Never claim a phase
-     complete when no evidence of it exists.
+   - **Rebuild what is missing.** When the surviving state lacks what the next
+     phase needs, name what is missing and produce it again by the step that
+     makes it, then continue. Never claim a phase complete when no evidence of it
+     exists.
 
 ## Non-negotiable prohibitions
 

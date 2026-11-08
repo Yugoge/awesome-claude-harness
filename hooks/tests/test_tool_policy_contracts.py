@@ -48,8 +48,10 @@ def test_ba_search_without_fetch(monkeypatch):
     _use_current_policy(monkeypatch)
     assert policy_registry.is_allowed("ba", "WebSearch", None) == (True, "ok")
     assert policy_registry.is_allowed("ba", "WebFetch", None) == (True, "ok")
-    assert policy_registry.is_allowed("general-purpose", "WebSearch", None) == (True, "ok")
-    assert policy_registry.is_allowed("general-purpose", "WebFetch", None) == (True, "ok")
+    # general-purpose keeps today's behaviour (P6 experiment): no row, so the hook
+    # applies none to it (hooks/tests/test_grant_binding.py); its WebSearch and
+    # WebFetch stay allowed there.
+    assert "general-purpose" not in policy_registry.load_policy()["roles"]
 
 
 def test_browser_provider_aliases_are_role_equivalent(monkeypatch):

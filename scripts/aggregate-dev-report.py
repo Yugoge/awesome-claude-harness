@@ -1555,8 +1555,8 @@ _MAX_COMPLETENESS_HUNK_CHAIN_NODES = 1000
 
 def _load_stage_owned_hunks_replay():
     """Import scripts/stage-owned-hunks.py and return its ENTRY-side replay
-    primitives, following scripts/check-owned-edits-ledger.py:127-165's exact
-    file-location import pattern -- never invoking main()/the --dry-run CLI,
+    primitives, loaded by file location (importlib.util.spec_from_file_location
+    beside this script) -- never invoking main()/the --dry-run CLI,
     so the irrelevant BASELINE-side ownership-conflict probe (the false-
     positive source, task 20261001-close-multilane-stall) is never reached.
 

@@ -9,10 +9,9 @@ Read-only lifecycle table. Runs `scripts/dev-lifecycle.py scan` and renders
 the result. Never writes to `docs/dev/`, `.git` (HEAD/refs/index/worktree), or
 any commit-grant or bulk-commit-sentinel file: the scan writes nothing at all.
 
-Root-cause reference: `docs/dev/ticket-20260808-035658-lanel.md` (5.2 — the
-user's requirement for an always-available table showing what state every
-ticket and every spec has reached in the development lifecycle, like
-Unfuddle; verbatim original preserved in that ticket file).
+It answers the owner's requirement for an always-available table showing what
+state every ticket and every spec has reached in the development lifecycle,
+like Unfuddle.
 
 ## Invocation
 

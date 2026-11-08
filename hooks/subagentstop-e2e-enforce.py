@@ -3,19 +3,25 @@
 
 Activation logic:
   1. Read agent_id from stdin. If absent, exit 0 (non-subagent stop).
-  2. The stopping agent's type (the payload's agent_type, else its
-     agent-index entry): any type other than "qa" exits 0.
+  2. The role is Claude Code's record of the agent
+     (lib.agent_resolver.resolve_agent_type, P6 R4), so a QA that Read
+     another role's sentinel is still a QA. Another role: exit 0. An agent
+     the CLI names no role for is a QA only when its own dispatch obligation
+     says so.
   3. Its own dispatch obligation (P1b E7, R10), read also when the block
      fails the grammar: when the dispatch carries one, it decides alone,
      whatever the registry holds and whatever form the session id takes:
      the qa-report.v2 artifact it declares is the report judged, at exactly
      the path declared (missing: exit 2 naming that path); one that declares
-     none (BA validation, close QA) owes no E2E evidence here: exit 0.
+     none (BA validation, close QA) owes no E2E evidence here: exit 0. The
+     cycle it names (lib/agent_cycle.py: the registry of its task, else of
+     the session that dispatched it) only labels the message.
   4. A dispatch without an obligation, of a QA its agent-index entry binds to
-     a cycle's registry (dev_session_id): the docs/dev/qa-report-*.json files
-     this QA's own transcript shows it wrote (command_span.write_set), never
-     another agent's. None written: exit 2, unless the session's do-report
-     declares qa-report expected-absent.
+     a cycle's registry (lib/agent_cycle.py; no such registry: exit 0): the
+     docs/dev/qa-report-*.json files this QA's own transcript shows it wrote
+     (command_span.write_set), never another agent's. None written: exit 2,
+     unless the session's do-report declares qa-report expected-absent.
+     The gate has no flag (D24): no e2e-enforce.json is read.
   5. Each judged report's e2e_enforcement.status: "performed",
      "legitimately_skipped", "ran" or "blocked_app_unavailable" pass;
      "skipped_without_justification", another value or an absent field exit
@@ -35,8 +41,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.agent_resolver import resolve_dev_registry_entry
-from lib import command_span, obligation
+from lib.agent_resolver import resolve_agent_type
+from lib import agent_cycle, command_span, obligation
 
 # Only enforce for QA agents
 ENFORCED_AGENT_TYPE = "qa"
@@ -143,8 +149,8 @@ def _enforce_e2e_status(
     # status is skipped_without_justification, empty, or unrecognized
     blocking_reason = e2e.get("blocking_reason") or "(none provided)"
     sys.stderr.write(
-        f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={agent_type}) QA report at "
-        f"{qa_report_path} ({session_context}) has e2e_enforcement.status={status!r}.\n"
+        f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type={agent_type}) {session_context} "
+        f"has e2e_enforcement.status={status!r} in the QA report at {qa_report_path}.\n"
         f"blocking_reason: {blocking_reason}\n"
         f"artifact: {qa_report_path} (failing check: e2e_enforcement.status not a passing status)\n"
         f"E2E verification is required. Perform E2E testing and update "
@@ -154,19 +160,15 @@ def _enforce_e2e_status(
     sys.exit(2)
 
 
-def _own_dispatch(data: dict, agent_id: str, project_dir: str) -> tuple[dict, str | None]:
+def _own_dispatch(data: dict, project_dir: str) -> tuple[dict, str | None]:
     """This QA's own dispatch obligation as declared, read also when the block
     fails the grammar (a pre-P1 template), {} when there is none or it cannot
     be read; and the agent's own transcript (the payload's, else the one the
-    resolver found)."""
+    resolver found). Read through lib/agent_cycle.py, the one reading the
+    codex gate and its ledger share (P6 R4)."""
     transcript = data.get("agent_transcript_path")
     try:
-        resolution = obligation.resolve_own_obligation(
-            session_id=data.get("session_id") or data.get("sessionId"),
-            agent_id=agent_id,
-            project_dir=project_dir,
-            payload_agent_transcript_path=transcript,
-        )
+        resolution = agent_cycle.own_resolution(data, project_dir)[0]
     except Exception:
         return {}, transcript
     transcript = transcript or getattr(resolution, "transcript_path", None)
@@ -230,28 +232,41 @@ def main() -> None:
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
 
-    entry = resolve_dev_registry_entry(agent_id, project_dir) or {}
-    agent_type = data.get("agent_type") or entry.get("agent_type") or ""
-    if agent_type and agent_type != ENFORCED_AGENT_TYPE:
+    # The role is Claude Code's record (P6 R4): a QA that Read dev.json is
+    # still judged. An agent it names no role for is a QA only by its own
+    # dispatch, which declares what it owes (P1b E7, row 3).
+    agent_type = resolve_agent_type(data)
+    if agent_type not in (None, ENFORCED_AGENT_TYPE):
         # Not a QA agent: bypass enforcement unconditionally
         sys.exit(0)
+    declared, transcript = _own_dispatch(data, project_dir)
+    if (agent_type or declared.get("role")) != ENFORCED_AGENT_TYPE:
+        sys.exit(0)
+    agent_type = ENFORCED_AGENT_TYPE
+    # The cycle (P6 R4, lib/agent_cycle.py): the registry the obligation's task
+    # names, else the dispatching session's; without an obligation, the
+    # agent-index entry's. No flag in it is read (D24).
+    try:
+        cycle = agent_cycle.registry_dir(data, declared, project_dir)
+    except Exception:
+        cycle = None
 
     # What this QA owes is in its own dispatch obligation (P1b E7, R10): a
     # dispatch that carries one is judged on the report it declares alone,
-    # whatever the registry holds and whatever form the session id takes.
-    declared, transcript = _own_dispatch(data, agent_id, project_dir)
+    # whatever the registry holds and whatever form the session id takes; its
+    # cycle only labels the message.
     if declared:
-        if declared.get("role", ENFORCED_AGENT_TYPE) == ENFORCED_AGENT_TYPE:
-            _enforce_declared_report(
-                declared, agent_id, project_dir, session_context=f"task_id={declared.get('task_id')}"
-            )
+        context = f"(task_id={declared.get('task_id')})"
+        if cycle is not None:
+            context = f"in session {cycle.name} {context}"
+        _enforce_declared_report(declared, agent_id, project_dir, session_context=context)
         sys.exit(0)
 
     # A dispatch without an obligation, of a QA a cycle's registry holds: the
     # QA report this QA's own transcript shows it wrote, never another agent's.
-    dev_session_id = entry.get("dev_session_id")
-    if agent_type != ENFORCED_AGENT_TYPE or not dev_session_id:
+    if cycle is None:
         sys.exit(0)
+    dev_session_id = cycle.name
 
     written = command_span.write_set(transcript, project_dir, excluded=()) if transcript else None
     reports = sorted(p for p in (written.written if written else ()) if QA_REPORT_RE.fullmatch(p))

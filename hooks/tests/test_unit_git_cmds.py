@@ -35,6 +35,13 @@ def test_git_subcommand_index_skips_global_opts_with_arg():
     assert git_cmds._git_subcommand_index(["git", "-c", "k=v", "log"], 0) == ("log", 3)
 
 
+def test_git_subcommand_index_uses_the_classifier_option_table():
+    # --config-env and --attr-source take a value; bare --exec-path takes none.
+    assert git_cmds._git_subcommand_index(["git", "--config-env", "k=E", "clean"], 0) == ("clean", 3)
+    assert git_cmds._git_subcommand_index(["git", "--attr-source", "HEAD", "clean"], 0) == ("clean", 3)
+    assert git_cmds._git_subcommand_index(["git", "--exec-path", "clean"], 0) == ("clean", 2)
+
+
 def test_git_subcommand_index_none_when_no_subcommand():
     assert git_cmds._git_subcommand_index(["git"], 0) == (None, None)
 

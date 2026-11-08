@@ -607,15 +607,13 @@ def test_projected_qa_is_accepted_by_permission_and_e2e_readers(
     enforce = tmp_path / ".claude" / "dev-registry" / session_id / "e2e-enforce.json"
     enforce.parent.mkdir(parents=True)
     enforce.write_text('{"enabled": true}', encoding="utf-8")
+    (tmp_path / ".claude" / "dev-registry" / "agent-index.json").write_text(
+        json.dumps({"qa-agent": {"agent_type": "qa", "dev_session_id": session_id}}),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
-    monkeypatch.setattr(e2e_reader, "_load_stdin", lambda: {"agent_id": "qa-agent"})
     monkeypatch.setattr(
-        e2e_reader,
-        "resolve_dev_registry_entry",
-        lambda agent_id, project_dir: {
-            "dev_session_id": session_id,
-            "agent_type": "qa",
-        },
+        e2e_reader, "_load_stdin", lambda: {"agent_id": "qa-agent", "agent_type": "qa"}
     )
     # The QA is judged on the report its own dispatch declares (R10).
     declared = {"role": "qa", "task_id": "20260101-120000-projection", "artifacts": [

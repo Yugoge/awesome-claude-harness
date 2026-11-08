@@ -1,7 +1,10 @@
 """Subagent detection for Claude Code hooks.
 
-Single source of truth for is_subagent_context() and supporting helpers.
-Stdlib-only; Python 3.12+.
+is_subagent_context() and supporting helpers, for the hooks that import it
+(the orchestrator gate and lib.allowlist's /do consent decision among them).
+Many hooks test the payload's `agent_id` themselves instead, so a payload that
+carries only an alias below is a subagent here and the main agent there.
+Stdlib-only; Python 3.10+.
 """
 
 import json

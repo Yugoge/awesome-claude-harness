@@ -24,6 +24,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -139,6 +140,12 @@ def _run_hook(
     if stopgate_mode is not None:
         env["CLAUDE_OBLIGATION_STOPGATE"] = stopgate_mode
     payload: dict = {"agent_id": agent_id}
+    # P6 R10: a registered agent's payload carries the role Claude Code
+    # reports for it (agent_id plus agent_type), the type it registered as.
+    index = project_dir / ".claude" / "dev-registry" / "agent-index.json"
+    entry = json.loads(index.read_text(encoding="utf-8")).get(agent_id) if index.is_file() else None
+    if isinstance(entry, dict) and entry.get("agent_type"):
+        payload["agent_type"] = entry["agent_type"]
     payload.update(extra_payload or {})
     if session_id is not None:
         payload["session_id"] = session_id
@@ -157,7 +164,8 @@ def _run_hook(
 
 
 def _project_slug(project_dir: Path) -> str:
-    return str(project_dir.resolve()).replace("/", "-")
+    """Claude Code's folder name for the project: each non-alphanumeric character becomes "-"."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(project_dir.resolve()))
 
 
 def _write_obligation_transcript(
@@ -166,6 +174,7 @@ def _write_obligation_transcript(
     harness_session_id: str,
     agent_id: str,
     prompt: str,
+    calls=(),
 ) -> None:
     """Minimal harness transcript-store fixture for resolve_own_obligation's
     L1 rung: a subagent transcript whose first record is the dispatch
@@ -173,19 +182,38 @@ def _write_obligation_transcript(
     deliberately NOT written, so the meta cross-check degrades to "parent
     unreadable" (accepted, not a cross-check failure) -- this lane does not
     test the cross-check itself, only whether an obligation is resolved from
-    the dispatch prompt."""
+    the dispatch prompt. ``calls`` are the agent's own tool calls after it
+    (see :func:`_tool_records`), what G2's A3.a reads as its write set."""
     slug = _project_slug(project_dir)
     subagents_dir = (
         home_dir / ".claude" / "projects" / slug / harness_session_id / "subagents"
     )
     subagents_dir.mkdir(parents=True, exist_ok=True)
+    records = [{"type": "user", "message": {"content": prompt}}]
+    records += _tool_records(project_dir, calls)
     (subagents_dir / f"agent-{agent_id}.jsonl").write_text(
-        json.dumps({"type": "user", "message": {"content": prompt}}) + "\n",
+        "".join(json.dumps(r) + "\n" for r in records),
         encoding="utf-8",
     )
     (subagents_dir / f"agent-{agent_id}.meta.json").write_text(
         json.dumps({"toolUseId": "tooluse-test-1"}), encoding="utf-8"
     )
+
+
+def _tool_records(project_dir: Path, calls) -> list:
+    """The records Claude Code writes for an agent's own tool calls, each
+    ``(name, input, ok)``: the assistant record holding the tool_use and the
+    user record holding its tool_result (``is_error`` when it was refused or
+    failed), both carrying the session's cwd."""
+    records = []
+    for n, (name, tool_input, ok) in enumerate(calls):
+        ident = f"toolu_{n:04d}"
+        for role, block in (("assistant", {"type": "tool_use", "id": ident, "name": name, "input": tool_input}),
+                            ("user", {"type": "tool_result", "tool_use_id": ident, "is_error": not ok,
+                                      "content": "ok" if ok else "refused"})):
+            records.append({"type": role, "isSidechain": True, "cwd": str(project_dir),
+                            "message": {"role": role, "content": [block]}})
+    return records
 
 
 def _obligation_block(
@@ -1791,9 +1819,13 @@ def _l2_setup(tmp_path, *, role="dev", lane=None, lane_set=None, base_task=L2_TA
         doc["lane_set"] = lane_set or [lane]
     s.obligation = doc
     _register_agent(s.project, agent_id, SESSION, role)
+    # The dev the report describes: its own Edit of src.txt (the change
+    # _git_init_project leaves) is what Claude Code recorded it writing (A3.a).
+    calls = [("Edit", {"file_path": str(s.project / "src.txt"), "old_string": "alpha",
+                       "new_string": "beta"}, True)] if git and role == "dev" else []
     _write_obligation_transcript(
         s.home, s.project, s.harness, agent_id,
-        f'<obligation v="1">\n{json.dumps(doc, indent=2)}\n</obligation>')
+        f'<obligation v="1">\n{json.dumps(doc, indent=2)}\n</obligation>', calls)
     return s
 
 
@@ -1908,6 +1940,13 @@ def test_l2_ac4_unplannable_blocks_plannable_passes(tmp_path):
     _ledger_entangled()) -- "ghost.txt" is a plain-filesystem test write with
     no journal evidence, so it is now plannable too, not unplannable."""
     s = _l2_setup(tmp_path)
+    # The dev wrote both files it declares, so its lists match what Claude
+    # Code recorded (A3.a) and the plan alone decides this stop.
+    _write_obligation_transcript(
+        s.home, s.project, s.harness, s.agent_id,
+        f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>',
+        [("Edit", {"file_path": str(s.project / "src.txt"), "old_string": "alpha", "new_string": "beta"}, True),
+         ("Write", {"file_path": str(s.project / "ghost.txt"), "content": "ghost\n"}, True)])
     rep = _l2_dev_report(s.task)
     rep["dev"]["files_modified"] = ["src.txt", "ghost.txt"]
     _l2_write(s, rep)
@@ -2387,9 +2426,10 @@ def test_g2_registered_role_outside_any_list_is_decided_by_its_obligation(tmp_pa
 
 
 def test_g2_obligation_of_another_role_than_registered_is_not_this_agents(tmp_path):
-    """An agent registered as qa whose dispatch carries a dev obligation: the
-    obligation is not the one its type declares (role_mismatch), so the
-    obligation branch decides nothing for it."""
+    """P6 A7: an agent Claude Code runs as qa whose dispatch carries a dev
+    obligation: the obligation is not the one its role declares
+    (role_mismatch), and the armed gate stops it naming that, never judging
+    the dev report as its own. The same dispatch run as dev resolves."""
     report = f"docs/dev/dev-report-{G2_TASK}.json"
     s = _g2_setup(tmp_path, "qa", [])
     doc = dict(s.obligation, role="dev", artifacts=_g2_dev_artifacts())
@@ -2399,7 +2439,45 @@ def test_g2_obligation_of_another_role_than_registered_is_not_this_agents(tmp_pa
     assert isinstance(resolution, HOOK.obligation.Unresolvable)
     assert resolution.reason == "role_mismatch"
     proc = _g2_stop(s)
+    assert proc.returncode == 2, proc.stderr
+    assert "OBLIGATION_STOPGATE_BLOCKED" in proc.stderr
+    assert "  - <obligation>: role_mismatch" in proc.stderr, proc.stderr
+    assert "runs as 'qa'" in proc.stderr and "names role 'dev'" in proc.stderr, proc.stderr
     assert f"  - {report}:" not in proc.stderr, proc.stderr
+    advisory = _run_hook(s.project, s.home, s.agent_id, session_id=s.harness, stopgate_mode="advisory")
+    assert advisory.returncode == 0 and "role_mismatch" not in advisory.stderr, advisory.stderr
+
+    _register_agent(s.project, s.agent_id, SESSION, "dev")
+    assert isinstance(_resolution(s.home, s.project, s.harness, s.agent_id, "dev"), HOOK.obligation.Resolved)
+    proc = _g2_stop(s)
+    _g2_assert_blocked_on(proc, report, _G2_MISSING)
+    assert "role_mismatch" not in proc.stderr, proc.stderr
+
+
+def test_g2_expected_role_is_resolve_agent_type_on_the_payload(tmp_path):
+    """P6 R3: the role G2 expects is the one role reader's answer for the
+    stop payload (lib.agent_resolver.resolve_agent_type, called as is), not
+    the index entry's type; a payload carries agent_id with agent_type."""
+    s = _g2_setup(tmp_path, "qa", [])
+    doc = dict(s.obligation, role="dev", artifacts=_g2_dev_artifacts())
+    _write_obligation_transcript(s.home, s.project, s.harness, s.agent_id,
+                                 f'<obligation v="1">\n{json.dumps(doc)}\n</obligation>')
+    seen = []
+    real = HOOK.resolve_agent_type
+
+    def spy(payload):
+        seen.append(dict(payload))
+        return real(payload)
+    payload = {"agent_id": s.agent_id, "agent_type": "qa", "session_id": s.harness}
+    env = {"CLAUDE_PROJECT_DIR": str(s.project), "HOME": str(s.home),
+           "CLAUDE_CONFIG_DIR": str(s.home / ".claude"), "CLAUDE_OBLIGATION_STOPGATE": "block"}
+    import io
+    from unittest import mock
+    with mock.patch.dict(os.environ, env), mock.patch.object(HOOK, "resolve_agent_type", spy), \
+            mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))), pytest.raises(SystemExit) as stop:
+        HOOK.main()
+    assert stop.value.code == 2
+    assert seen == [payload]
 
 
 # (h) close-QA: the waiver reads the reply's final non-empty line ---------
@@ -2705,7 +2783,8 @@ def test_r14_in_flight_lane_dispatched_before_the_change_passes(tmp_path, echoed
         datetime.now(timezone.utc).timestamp() - 3600, timezone.utc).isoformat()
     _write_obligation_transcript(
         s.home, s.project, s.harness, s.agent_id,
-        f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>')
+        f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>',
+        [("Edit", {"file_path": str(s.project / "src.txt"), "old_string": "alpha", "new_string": "beta"}, True)])
     _l2_write(s, _l2_dev_report(s.task, lane="l2" if echoed else None, lane_set=["l1", "l2"]))
     proc = _l2_stop(s)
     assert proc.returncode == (0 if echoed else _R14_EXIT), proc.stderr

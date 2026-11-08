@@ -528,8 +528,8 @@ def test_import_contract_imp_keep_stable_names():
     expected = {
         'regen_readme': ['RegenStatus', 'regen_readme', 'README_MARKER_ID', 'SKIP_NAMES', 'SKIP_PREFIXES',
                          '_is_skipped', '_list_files', '_build_stats', '_skip_status'],
-        'patch': ['_replace_section', 'patch_claude_md', 'datetime'],
-        'main': ['main', 'patch_claude_md', '_maybe_regen_global', 'process_parent_dirs', '_regen_if_dir'],
+        'patch': ['_replace_section', 'patch_claude_md'],
+        'main': ['main', 'patch_claude_md', 'process_parent_dirs', '_regen_if_dir'],
         'notice': ['_readme_digest', 'write_state', 'STATE_ROOT_ENV', 'MAX_NOTICE_CHARS',
                    'STATE_FILE_TEMPLATE', 'emit_post_tool_notice'],
         'regen_index': ['AUTO_START', 'AUTO_END', 'regen_index', 'datetime'],

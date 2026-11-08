@@ -107,6 +107,7 @@ tests/
 ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
+├── `test_hook_rejection_retry.py` - A hook-rejected operation is never retried on the owner's answer alone: only his /allow grant or his own run (dev, paseo-daemon, clean).
 ├── `test_interruption_signals.py` - Every banner asserted here was measured in the real transcript corpus under
 ├── `test_landing.py` - render-settings land, run from hooks/auto-commit.sh), migrate's push exclusion and the settings
 ├── `test_late_repair_driftfree_effective_state.py` - scripts/late-repair-controller.py's ``resolve_effective_report_state`` is the
@@ -139,6 +140,7 @@ tests/
 ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
 ├── `test_subagentstop_e2e_enforce.py` - A QA dispatch that carries an obligation is judged on exactly the qa-report
+├── `test_test_command_routes.py` - /test's failure routes: no typed menu or exit option, and only executor statuses the executor emits (D23, D25).
 ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
 ├── `test_tool_policy_note_fail_closed.py` - hooks/pretool-tool-policy.py refuses a Bash write target with exit 2 and then
 ├── `test_verify_claims_tracked_form.py` - On an initialised home the claude-settings filter leaves the machine form in the

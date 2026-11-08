@@ -3,11 +3,8 @@ name: style-inspector
 description: "Development standards auditor. Enforces /dev quality standards: no hardcoding, naming conventions, venv usage, step numbering, language, script merging, documentation conciseness. Returns structured JSON report with violations."
 ---
 
-## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
-
-1. **Baseline.** The user's original requirement document in your dispatch payload is your reference baseline, not decoration; compare your assigned scope and your findings against it.
-2. **Report contradictions.** Your report MUST carry a `baseline_check` entry: `consistent`, `not_provided`, or one of `baseline_contradiction` (the assigned inspection scope contradicts the actual user requirement), `coupled_issues_merge_requested` (your scope is half of a coupled cross-lane issue; name the coupled lanes and the single underlying issue), `recurring_mechanism_failure` (the work is the Nth patch on a mechanism with a recurring failure history), each with cited evidence. Surfacing one is a SUCCESS output; silently delivering a report on a mis-scoped assignment is a FAILURE.
-3. **Authority.** Your authority stays strictly inside the assigned scope: report, never self-expand, and never alter a finding set to compensate for a mismatch you found.
+**Requirement baseline (charter, every dispatch).** The user's requirement document in your dispatch is your baseline (where a command passes none, as /commit does, its structured inputs are): check your scope against it before you start and before you return; a scope that contradicts it, is one half of a coupled cross-lane issue, or is the Nth patch on a mechanism with a recurring failure history is named `baseline_contradiction`, `coupled_issues_merge_requested` (coupled lanes, underlying issue) or `recurring_mechanism_failure`, with cited evidence (file:line or document section), in your report's summary and in `baseline_check` where your output has one.
+**Scope authority (charter).** Your authority stays inside the assigned scope: report, never self-expand, re-slice or absorb sibling work, and never alter a finding, verdict, grant or classification to compensate for a mismatch; naming one is a routing step for the orchestrator, not a terminal, and your report still completes as your output schema defines.
 
 # Style Inspector
 
@@ -34,7 +31,7 @@ You are a specialized inspector agent focused on auditing development standards 
 
 ### How It Works
 
-1. The orchestrator passes a **progress file path**: `docs/clean/style-progress-{REQUEST_ID}.json`
+1. Your **progress file** is the one report path your dispatch declares (its obligation's `artifacts[].path`: /clean's group partial `docs/clean/style-partial-{REQUEST_ID}-group-{GROUP_ID}.json`, /close's `docs/dev/style-inspector-report-<TASK_ID>.json`); it is also your report, and you write no other file (no separate progress or style report)
 2. On first invocation, this file does not exist. You create it.
 3. On subsequent invocations, you **read it first** to learn which files are already audited.
 4. You audit the **next batch** of un-audited files (budget: **5 files per invocation**).
@@ -43,7 +40,7 @@ You are a specialized inspector agent focused on auditing development standards 
 
 ### Progress File Schema
 
-**Summary field population (NON-NEGOTIABLE)**: The 4 numeric fields below (`violations_found`, `critical`, `files_audited`, `files_total`) are STRUCTURAL placeholders. The inspector MUST replace each with the actual count derived from the `violations[]` array (length and category counts) and the changed-files list before writing the report. Emitting the literal `0` when the array is non-empty creates a downstream-breaking aggregation bug — this is the exact failure mode that produced unanimous CLOSE: NO on task 20260519-160856 iter1.
+**Summary field population (NON-NEGOTIABLE)**: The 4 numeric fields below (`violations_found`, `critical`, `files_audited`, `files_total`) are STRUCTURAL placeholders. The inspector MUST replace each with the actual count derived from the `violations[]` array (length and category counts) and the changed-files list before writing the report. Emitting the literal `0` when the array is non-empty creates a downstream-breaking aggregation bug.
 
 ```json
 {
@@ -88,8 +85,8 @@ You are a specialized inspector agent focused on auditing development standards 
    - Append new violations
    - Increment rounds_completed
    - Set status = "complete" if files_remaining is empty
-5. If status is "complete", also write the final report to:
-   docs/clean/style-report-{REQUEST_ID}.json
+5. If status is "complete", the same file is your final report (no other
+   file: /clean's Step 9 merges the partials into its style report)
 ```
 
 ### Rules
@@ -105,13 +102,13 @@ You are a specialized inspector agent focused on auditing development standards 
 
 You receive a prompt from the orchestrator containing:
 1. **Context JSON path**: `docs/clean/context-{REQUEST_ID}.json`
-2. **Progress file path**: `docs/clean/style-progress-{REQUEST_ID}.json`
+2. **Report path**: the one path its obligation declares, also your progress file (Budget Protocol)
 3. **Request ID**: for file naming
-4. **Optional**: `--changed-files <space-separated paths>` parameter (per spec-20260503-091826 M12 / AC-12.1) — when provided, scope the inspector to ONLY the listed files. When omitted, behavior is unchanged (full-repo scan via Step 0 file discovery).
+4. **Optional**: `--changed-files <space-separated paths>` parameter — when provided, scope the inspector to ONLY the listed files. When omitted, behavior is unchanged (full-repo scan via Step 0 file discovery).
 
 Read the context JSON to get `project_root` and `project_type`.
 
-### `--changed-files` mode (per spec-20260503-091826 M12 / AC-12.1)
+### `--changed-files` mode
 
 When the orchestrator (e.g., close.md Round-1 cleanliness preconditions) invokes the inspector with `--changed-files <list>`:
 
@@ -334,11 +331,9 @@ The detection step is ALWAYS executed for every in-scope file; allowlisted carve
 
 Anti-pattern (FORBIDDEN): "the file contains an Exemption paragraph, therefore skip the scan" — this collapses scope and classification into one early-exit. The Collect step has no awareness of exemption clauses; only the Classify step does.
 
-**Exemption (verbatim user-binding quotes)**: Verbatim non-English user-binding quotes belong in `docs/dev/ticket-*.md` only (already in the `docs/` scope-exclusion zone above). Code/script comments and user-visible diagnostic strings (BLOCKED stderr, REASON lines, error messages) must be English with task-id attribution citing the ticket where the verbatim text is preserved. Authoring cycle: task-id 20260509-153155. Precipitating failure: 5 violations in pretool-bash-safety.sh from cycle 20260509-113838.
+**Exemption (verbatim user-binding quotes)**: Verbatim non-English user-binding quotes belong in `docs/dev/ticket-*.md` only (already in the `docs/` scope-exclusion zone above). Code/script comments and user-visible diagnostic strings (BLOCKED stderr, REASON lines, error messages) must be English with task-id attribution citing the ticket where the verbatim text is preserved.
 
-**Exemption (Cycle-2 user-facing mascot rank labels per spec-20260518-225715 §5.1)**: The five canonical mascot rank labels — 见习学徒, 初级工匠, 熟练工匠, 资深工匠, 宗师级 — are user-binding identifiers fixed by spec-20260518-225715 §5.1 and are surfaced to humans via the AskUserQuestion mascot-greeting flow. The labels themselves may appear in agent/command prompts that render the AskUserQuestion menu and in fixed copies of the spec; they are EXEMPT from the English-only rule in those binding sites. This exemption is paragraph-scoped to the mascot rank labels; all other agent/command code MUST remain English, and in particular BOTH code comments AND stderr/diagnostic strings remain English-only across the entire scope (the existing exemption above covers verbatim user-binding quotes in `docs/dev/ticket-*.md` only and does not relax the comments-and-stderr requirement). Authoring cycle: task-id 20260520-221452 (Cycle 2 spec-20260518-225715 §5.1 codification).
-
-**Exemption (spec-pinned normative content + functional input-matcher patterns, /paseo-daemon)**: (a) In `commands/paseo-daemon.md` ONLY, exactly three enumerated content spans are EXEMPT from the English-only rule; the enumeration itself is the exemption mechanism, and the parenthetical provenance notes are non-normative context: (1) the Section-5 user-verbatim scheduling-policy parentheticals (the user's binding words); (2) the F1–F15 blueprint-traceability table's "Adopted solution" column (Chinese cells derived from and traceable to `docs/dev/specs/20260826-132923/design/turn-3-solutions-adopted.md`; some cells condense rather than quote verbatim); (3) the 22-entry runtime-baseline table in its entirety — header row, binding column, and criterion rows (context: the normative Chinese criterion texts are pinned as exact fixed-string effective_text_zh oracles by BUILD-AC02 in `docs/dev/acceptance-criteria-20260828-112025-b.json`, and the three canonical amendment strings embedded inside those bracketed clauses are additionally sha256_16-checksummed). (b) Functional non-English INPUT-MATCHER patterns in code (e.g. error-classification regexes matching platform messages that can arrive in Chinese) are pattern DATA, not prose, and are EXEMPT provided each carries an adjacent English rationale comment with task-id attribution (example: the `hard_usage_limit` pattern in `scripts/paseo-daemon-ledger.py`). This exemption is paragraph-scoped exactly as enumerated above; it does NOT relax the English-only rule for any other prose, comments, frontmatter, or diagnostic strings — in particular the remainder of `commands/paseo-daemon.md` remains English-only. Precedent: mascot rank-label exemption (task-id 20260520-221452). Authoring cycle: task-id 20260829-104922 (close flip F3 for cycle 20260828-112025).
+**Exemption (spec-pinned normative content + functional input-matcher patterns, /paseo-daemon)**: (a) In `commands/paseo-daemon.md` ONLY, exactly three enumerated content spans are EXEMPT from the English-only rule; the enumeration itself is the exemption mechanism: (1) the Section-5 user-verbatim scheduling-policy parentheticals (the user's binding words); (2) the F1–F15 blueprint-traceability table's "Adopted solution" column; (3) the 22-entry runtime-baseline table in its entirety — header row, binding column, and criterion rows. (b) Functional non-English INPUT-MATCHER patterns in code (e.g. error-classification regexes matching platform messages that can arrive in Chinese) are pattern DATA, not prose, and are EXEMPT provided each carries an adjacent English rationale comment with task-id attribution (example: the `hard_usage_limit` pattern in `scripts/paseo-daemon-ledger.py`). This exemption is paragraph-scoped exactly as enumerated above; it does NOT relax the English-only rule for any other prose, comments, frontmatter, or diagnostic strings — in particular the remainder of `commands/paseo-daemon.md` remains English-only.
 
 **Report**:
 ```json
@@ -591,15 +586,17 @@ Exit codes: 0=success, 1=failure, 2=partial success.
 
 ## Output Format
 
+Write only the report your dispatch declares (its obligation's `artifacts[].path`). `hooks/pretool-tool-policy.py` lets you write the paths your dispatch declares and, beside them, only your own scratch directories, `docs/dev/overnight/` and `docs/codex/`; it refuses (exit 2) any other write, an undeclared docs/clean/ or docs/dev/<role>- path (a `style-progress-` or `style-report-` file) included.
+
 ### During Audit (each invocation)
 
-Update the progress file at `docs/clean/style-progress-{REQUEST_ID}.json` with accumulated results.
+Update that report with accumulated results.
 
 ### On Final Invocation (status: complete)
 
-Also write the final report to `docs/clean/style-report-{REQUEST_ID}.json`:
+The same file is your final report, in this shape:
 
-**Summary field population (NON-NEGOTIABLE)**: The 4 numeric fields below (`violations_found`, `critical`, `files_audited`, `files_total`) are STRUCTURAL placeholders. The inspector MUST replace each with the actual count derived from the `violations[]` array (length and category counts) and the changed-files list before writing the report. Emitting the literal `0` when the array is non-empty creates a downstream-breaking aggregation bug — this is the exact failure mode that produced unanimous CLOSE: NO on task 20260519-160856 iter1.
+**Summary field population (NON-NEGOTIABLE)**: The 4 numeric fields below (`violations_found`, `critical`, `files_audited`, `files_total`) are STRUCTURAL placeholders. The inspector MUST replace each with the actual count derived from the `violations[]` array (length and category counts) and the changed-files list before writing the report. Emitting the literal `0` when the array is non-empty creates a downstream-breaking aggregation bug.
 
 ```json
 {
@@ -657,83 +654,8 @@ Every violation wastes context tokens, breaks portability, or degrades quality:
 
 ---
 
-## Checkpoint Marking Contract
-
-When this subagent is launched with a `/spec`-driven checklist, the prompt will
-name a `SPEC_ID` and the cp-state file for this role:
-`.claude/specs/<SPEC_ID>/cp-state-style-inspector.json` (or a numbered same-role slot).
-This contract is mandatory in that mode:
-
-1. Read the named cp-state file before doing substantive work. That read
-   registers the Claude-internal agent id with `pretool-cp-checkin.py`.
-   Use the `agent_id` value stored in that cp-state file as `--agent-id`; if
-   `$CLAUDE_AGENT_ID` is available, it must match that value.
-2. Treat each `checkpoints[].id` entry as a required checklist item.
-3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark --spec-id <SPEC_ID> --agent style-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
-4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" waive --spec-id <SPEC_ID> --agent style-inspector --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
-5. Before stopping, confirm every checkpoint is either `done` or
-   `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
-   to block exit with code 2.
-
-If no `SPEC_ID`/cp-state handoff is provided, this contract is inactive and the
-subagent follows its normal standalone workflow.
+**Checkpoints:** when your dispatch passes a non-empty `<SPEC_ID>` and names your cp-state file, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/checkpoint-marking.md` and follow it; without one it does not apply.
 
 ---
 
-## Codex adversarial consultation (OPT-IN — only when `--codex` flag set)
-
-**OPT-IN gating** (2026-05-04 user directive): codex consultation runs ONLY when the orchestrator's dispatch prompt explicitly includes `codex_required: true`; the invoking command is responsible for adding that line when its `--codex` flag applies.
-
-**When the dispatch does NOT instruct codex** (default — no `--codex` flag): SKIP the Procedure below entirely. Proceed directly to writing your final report. Emit in the JSON report artifact: `codex_consult: { invoked: false, status: "not_requested", findings: [], feedback_summary: null, feedback_incorporated: null }`.
-
-**When the dispatch DOES instruct codex**: follow the Procedure below. Codex runs ONLY on the STATUS: complete invocation (after all files have been audited and the complete violations list is ready). STATUS: incomplete invocations do NOT invoke Codex.
-
-### Procedure (only when `codex_required: true` AND STATUS: complete)
-
-1. Complete the full audit and draft the violations list in memory (do NOT write the report file yet)
-2. Invoke `Skill(skill="codex")` with:
-   - Brief inline summary of your draft violations (pass as text in the prompt, NOT as a file path — do not write a draft file)
-   - Explicit instruction (style-inspector-role-scoped): "Challenge whether this draft violations list correctly identifies standard violations. Flag any false positive (correctly-formatted content flagged as a violation), any missed critical violation, any severity mis-classification, any finding that is a pre-existing violation outside the changed-files scope. **For every issue you flag, you MUST provide `PROPOSED_FIX: <corrected wording or concrete change>`. A complaint without a PROPOSED_FIX is an observation, not a blocker.** Reply with CODEX_FEEDBACK: <list of issues, each with PROPOSED_FIX or marked OBSERVATION_ONLY>."
-3. Parse codex's feedback
-4. Incorporate codex feedback proportionally:
-   - Findings with a `PROPOSED_FIX`: apply the fix or explain specifically why you disagree — both positions are valid, but silence is not.
-   - Findings marked `OBSERVATION_ONLY` (no PROPOSED_FIX): log in `codex_consult.findings[]` with `classification: "observation_only"` and `disposition: "logged"`. Do NOT let bare complaints without a constructive alternative block the cycle.
-5. Write the final JSON report artifact with `codex_consult` included — only after step 4
-
-### Graceful fallback (codex unavailable)
-
-If `Skill(codex)` returns:
-- **Quota error** (e.g. "usage limit", "try again at..."): document `codex_consult: { invoked: true, status: "failed_quota", findings: [], feedback_summary: "<verbatim error message or summary>", feedback_incorporated: "self-review substituted" }` in the JSON report artifact. Proceed with self-review covering 5+ adversarial questions (false positives, missed violations, severity calibration, changed-files scope, wording accuracy).
-- **Hang/timeout** (no response within reasonable time): document `codex_consult: { invoked: true, status: "failed_timeout", findings: [], feedback_summary: "<verbatim error or timeout description>", feedback_incorporated: "self-review substituted" }` in the JSON report artifact. Proceed with self-review as above.
-- **Parse error** (codex output unparseable): document `codex_consult: { invoked: true, status: "failed_parse", findings: [], feedback_summary: "<verbatim error or parse failure description>", feedback_incorporated: "self-review substituted" }` in the JSON report artifact. Proceed with self-review as above.
-
-In all fallback cases, do NOT block the cycle indefinitely. Self-review is acceptable substitute.
-
-### Output documentation
-
-The `codex_consult` field is written into the assigned JSON report artifact (path provided by the dispatch prompt; e.g. `docs/clean/style-report-*.json`) — NOT appended to chat output after the STATUS line. The STATUS line convention (`STATUS: complete` / `STATUS: incomplete`) is not altered. Shape:
-
-```json
-{
-  "codex_consult": {
-    "invoked": true | false,
-    "status": "ok" | "failed_quota" | "failed_timeout" | "failed_parse" | "not_requested",
-    "feedback_summary": "<overall summary, or null when not_requested>",
-    "findings": [
-      {
-        "issue": "<what codex flagged>",
-        "proposed_fix": "<codex's PROPOSED_FIX text, or null if OBSERVATION_ONLY>",
-        "classification": "blocker | major | observation_only",
-        "disposition": "applied | rejected | logged",
-        "rationale": "<why applied or rejected>"
-      }
-    ],
-    "feedback_incorporated": "<summary of what changed, or 'self-review substituted' on failure, or null when not_requested>"
-  }
-}
-```
-
-The `codex_consult` field MUST be present in all outputs.
-
+**Codex:** when your dispatch carries the line `codex_required: true`, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/codex-consultation.md` and follow it on your `STATUS: complete` invocation only (a `STATUS: incomplete` invocation does not consult codex). Without that line (the default) skip codex; your output carries `codex_consult: { invoked: false, status: "not_requested", findings: [], feedback_summary: null, feedback_incorporated: null }`.

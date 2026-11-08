@@ -168,7 +168,7 @@ TP_HOOK="$CLONE/hooks/pretool-tool-policy.py"
 
 # NEGATIVE: dev role attempts a tool NOT in its allowlist (WebFetch) -> BLOCK (2)
 # with the guard's own marker "BLOCKED by tool-policy.v1".
-neg_payload='{"subagent_type":"dev","agent_id":"smoke","tool_name":"WebFetch","tool_input":{"url":"http://x"}}'
+neg_payload='{"agent_id":"smoke","agent_type":"dev","tool_name":"WebFetch","tool_input":{"url":"http://x"}}'
 err="$(printf '%s' "$neg_payload" | run_probe "$CLONE" HOME="$CLONE" CLAUDE_PROJECT_DIR="$CLONE" -- \
         python3 "$TP_HOOK" 2>&1 1>/dev/null)"; rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$err" | grep -q "BLOCKED by tool-policy.v1"; then
@@ -190,7 +190,7 @@ sed "s/{{CANARY_TOKEN}}/$CANARY_TOKEN/g" "$FIXTURE_DIR/canary-tool-policy.v1.jso
     > "$CANARY_HOME/policies/tool-policy.v1.json"
 chmod -R a+rX "$TMP_BASE/canary-home" 2>/dev/null || true
 canary_target="$CANARY_HOME/scripts/${CANARY_TOKEN}-evil.txt"
-pos_payload="{\"subagent_type\":\"dev\",\"agent_id\":\"smoke\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$canary_target\"}}"
+pos_payload="{\"agent_id\":\"smoke\",\"agent_type\":\"dev\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$canary_target\"}}"
 perr="$(printf '%s' "$pos_payload" | run_probe "$CANARY_HOME" HOME="$CANARY_HOME" CLAUDE_PROJECT_DIR="$CANARY_HOME" -- \
         python3 "$CANARY_HOME/hooks/pretool-tool-policy.py" 2>&1 1>/dev/null)"; prc=$?
 if [ "$prc" -eq 2 ] && printf '%s' "$perr" | grep -q "$CANARY_TOKEN" \
@@ -203,7 +203,7 @@ fi
 # CLEAN-EXIT: an ALLOWED op (dev Read of an in-clone file) returns 0 with clean
 # stderr (no leaked author path / command-not-found). Plus the negative rc above
 # was 2 (already asserted) and never 1/126/127.
-allow_payload="{\"subagent_type\":\"dev\",\"agent_id\":\"smoke\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$CLONE/settings.json\"}}"
+allow_payload="{\"agent_id\":\"smoke\",\"agent_type\":\"dev\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$CLONE/settings.json\"}}"
 aerr="$(printf '%s' "$allow_payload" | run_probe "$CLONE" HOME="$CLONE" CLAUDE_PROJECT_DIR="$CLONE" -- \
         python3 "$TP_HOOK" 2>&1 1>/dev/null)"; arc=$?
 if [ "$arc" -eq 0 ] && stderr_is_clean "$aerr" && [ "$rc" != 1 ] && [ "$rc" != 126 ] && [ "$rc" != 127 ]; then
