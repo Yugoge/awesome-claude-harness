@@ -64,8 +64,8 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   refuses calls and names its remedy, `git worktree remove <path> --force`; that is
                   the main agent's next call, then the call it meant to make.
   report-schema   a plain prompt in a project holding a /dev cycle's registry, armed as /dev's start
-                  arms it (the artifact-contract flag; the fault actor runs scripts/write-enforce-flag.sh
-                  as the prompt hook does): outside a command's span no obligation is owed (G1), so
+                  arms it (the directory the prompt hook reserves; the fault actor makes it, with no
+                  flag, as a start without --codex leaves it): outside a command's span no obligation is owed (G1), so
                   the dev dispatch carries none; its FIRST ACTION read of the registry's dev sentinel
                   binds it to the cycle, and it writes its dev report declaring report_version 2
                   without the `dev` section dev-report.v2 requires: the legacy correlated-report
@@ -311,8 +311,9 @@ def _registry_report(rp, s, toy: str, rounds: list) -> None:
     registry, judged at its own stop on the report its transcript shows it wrote."""
     from .. import agents, schemagen
     project, sid = rp.layout.project, "20990101-000001"
-    cmd = (f"bash ~/.claude/scripts/write-enforce-flag.sh --source-command dev --session-id {sid} "
-           "--flag artifact-contract")
+    # The registry directory /dev's start reserves (prompt-workflow.py _init_dev_registry); without
+    # --codex the start writes no flag into it (P10 R6 and P4 R8 left codex the one flag).
+    cmd = f"mkdir -p .claude/dev-registry/{sid}"
     with rp.acting("fault"):  # the registry /dev's start arms (prompt-workflow.py _init_dev_registry)
         p = subprocess.run(["bash", "-c", cmd], cwd=project, env=dict(rp.bash_env, CLAUDE_PROJECT_DIR=project),
                            capture_output=True, text=True)
