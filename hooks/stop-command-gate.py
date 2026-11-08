@@ -210,27 +210,16 @@ def p_close(span, root, payload) -> list[str]:
     return gaps
 
 
-def _result_text(record) -> str:
-    """The text of the tool_result blocks of a result record."""
-    texts = []
-    for block in ((record or {}).get("message") or {}).get("content") or ():
-        content = block.get("content") if isinstance(block, dict) and block.get("type") == "tool_result" else ""
-        texts.append(content if isinstance(content, str) else
-                     "\n".join(c.get("text", "") for c in content or () if isinstance(c, dict)))
-    return "\n".join(texts)
-
-
 def _bulk_block(span):
     """The status block of the span's last ok commit-bulk dispatch (its
     obligation's response_block, changelog-status.v1, checked at the
     analyst's own stop), or None."""
-    obligation, found = _lib("obligation"), None
-    for use, record in span.returns("Agent", "Task"):
-        parsed = obligation.parse_obligation(str(use.input.get("prompt") or "")) if use.ok else None
-        if not isinstance(parsed, obligation.ParsedObligation) or parsed.obligation.get("profile") != "commit-bulk":
+    found = None
+    for call, doc in span.obligations():
+        if doc.get("profile") != "commit-bulk":
             continue
-        block = next((a for a in parsed.obligation.get("artifacts") or () if a.get("kind") == "response_block"), {})
-        begin, end, text = block.get("begin") or "", block.get("end") or "", _result_text(record)
+        block = next((a for a in doc.get("artifacts") or () if a.get("kind") == "response_block"), {})
+        begin, end, text = block.get("begin") or "", block.get("end") or "", span.result_text(call.id)
         try:
             found = json.loads(text.split(begin, 1)[1].split(end, 1)[0]) if begin and end and begin in text else None
         except ValueError:

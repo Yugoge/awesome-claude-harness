@@ -447,6 +447,44 @@ class Span:
                 todos = call.input["todos"]
         return todos
 
+    def result_text(self, ident: str) -> str:
+        """The text of call ``ident``'s tool_result in the span ('' while none came back); an Agent
+        call's is the agent's own reply, its record's toolUseResult content without the agentId trailer."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return ""
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            for block in _blocks(record):
+                if block.get("type") == "tool_result" and block.get("tool_use_id") == ident:
+                    own = record.get("toolUseResult")
+                    content = own["content"] if isinstance(own, dict) and isinstance(own.get("content"), list) \
+                        else block.get("content")
+                    return content if isinstance(content, str) else "\n".join(
+                        b.get("text") or "" for b in (content if isinstance(content, list) else ())
+                        if isinstance(b, dict) and b.get("type") == "text")
+        return ""
+
+    def obligations(self) -> list:
+        """(call, obligation) of each ok Agent/Task dispatch whose prompt parses to an obligation, in span order."""
+        ob = _obligation()
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task") if c.ok)
+        return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
+
+    def session_families(self) -> set:
+        """The task families (obligation.task_family) of the span's ok
+        dispatches whose artifacts are the task's: a dispatch whose file
+        artifacts are all named otherwise (a session-level report: an
+        overnight triage, a retrospective) stamps an id but works on no task."""
+        ob, families = _obligation(), set()
+        for _call, doc in self.obligations():
+            task = ob.canonical_task_id(doc.get("task_id"))
+            paths = [a.get("path") for a in doc.get("artifacts") or () if isinstance(a, dict) and a.get("path")]
+            if task and (not paths or any(task in str(path) for path in paths)):
+                families.add(ob.task_family(task))
+        return families
+
     def opened_at(self) -> float | None:
         """The time the CLI recorded for the opener (seconds since the epoch);
         None when its record carries none."""
@@ -481,46 +519,6 @@ class Span:
                     return found.group(1)
             pos = end + 1
         return None
-
-    def returns(self, *names: str):
-        """(Use, its tool_result record or None) of each of the span's
-        ``names`` calls, in order: the record the CLI wrote of the call's
-        result (the result block's content, the record's toolUseResult)."""
-        try:
-            lines, floor = self._lines()
-        except (OSError, TypeError, ValueError):
-            return
-        for _begin, end, block in _found(lines, floor, names, False, None):
-            ident = block.get("id") or ""
-            found, ok = _result(lines, end, ident)
-            record = None if found is None else _decode(lines.data[found:lines._bounds(found)[1]])
-            yield Use(id=ident, name=block.get("name") or "", input=block["input"], ok=ok,
-                      result_at=None if found is None else self._base + found), record
-
-    def obligations(self) -> list[dict]:
-        """The obligation blocks of the span's dispatches that came back ok
-        (Agent or Task), parsed by obligation.parse_obligation, in order."""
-        obligation = _harness_lib("obligation")
-        found = []
-        for call in self.uses("Agent", "Task"):
-            parsed = obligation.parse_obligation(str(call.input.get("prompt") or "")) if call.ok else None
-            if isinstance(parsed, obligation.ParsedObligation):
-                found.append(parsed.obligation)
-        return found
-
-    def session_families(self) -> set:
-        """The task families (obligation.task_family) of the span's ok
-        dispatches whose artifacts are the task's: a dispatch whose file
-        artifacts are all named otherwise (a session-level report: an
-        overnight triage, a retrospective) stamps an id but works on no task."""
-        obligation = _harness_lib("obligation")
-        families = set()
-        for found in self.obligations():
-            task = obligation.canonical_task_id(found.get("task_id"))
-            paths = [a.get("path") for a in found.get("artifacts") or () if isinstance(a, dict) and a.get("path")]
-            if task and (not paths or any(task in str(path) for path in paths)):
-                families.add(obligation.task_family(task))
-        return families
 
     def write_set(self, project_dir, actor: str | None = "main", stop_line: int | None = None):
         """write_set() of the span: the files written or named after its
@@ -565,13 +563,9 @@ MINTED_LINE_RE = re.compile(
     r"^(?:\[/do\] task-id minted|DEV_SESSION_ID pre-initialized by hook): ([A-Za-z0-9._-]+)", re.M)
 
 
-def _harness_lib(name: str):
-    """A sibling harness module, imported only when a reader that needs it is
-    called: loading this module imports none (R10)."""
+def _obligation():  # imported when first asked: a reader that needs none loads none of it
     import importlib
-    if __package__:
-        return importlib.import_module(f"{__package__}.{name}")
-    return importlib.import_module(name)
+    return importlib.import_module(f"{__package__}.obligation" if __package__ else "obligation")
 
 
 def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):
