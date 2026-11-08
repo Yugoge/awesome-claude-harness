@@ -12,8 +12,12 @@ recorded the dev writing) and P3 R14's dispatch echo (written for this
 dispatch; lane and lane_set echoed). Any stopping producer's own Write or Edit
 that leaves a live harness hook or script that does not compile is a finding
 (P6 F3.a). The role the obligation must name is the one Claude Code runs the
-agent as (lib.agent_resolver.resolve_agent_type, P6 R3). A fresh, valid
-producer-question file stands in for every declared artifact (TC-33).
+agent as (lib.agent_resolver.resolve_agent_type, P6 R3); an obligation
+naming another role (role_mismatch) refuses the agent's stop with that
+notice, and its next round's stop (stop_hook_active) passes when its own
+transcript shows it wrote none of the files that obligation declares. A
+fresh, valid producer-question file stands in for every declared artifact
+(TC-33).
 Switch CLAUDE_OBLIGATION_STOPGATE (the process env, else the harness home's
 settings.json env at run time, P1b E4):
   "block"    -- a failure exits 2 (OBLIGATION_STOPGATE_BLOCKED, each failing
@@ -605,6 +609,30 @@ def _lane_echo_findings(ob: dict, art: dict, record) -> list:
     return [{"path": art["path"], "reason": "lane_echo_mismatch", "errors": errors}] if errors else []
 
 
+def _role_mismatch_writes(data: dict, project_dir: str):
+    """The files an obligation of another role (role_mismatch) declares that this agent's own
+    transcript records it writing (a Write or Edit that ran, over every account root's copy); []
+    when it wrote none, None when the obligation or its transcript cannot be read. A Bash command
+    that only names such a file (a QA reading the dev report) is no write of it."""
+    try:
+        mine = obligation.resolve_own_obligation(
+            session_id=data.get("session_id") or data.get("sessionId"), agent_id=data.get("agent_id"),
+            project_dir=project_dir, payload_agent_transcript_path=data.get("agent_transcript_path"))
+        if not isinstance(mine, obligation.Resolved):
+            return None
+        sets = [s for s in (command_span.write_set(c, project_dir, excluded=())
+                            for c in subagent_restart._child_transcript_copies(mine.transcript_path)) if s is not None]
+    except Exception:  # what it wrote cannot be read: the notice stands
+        return None
+    if not sets:
+        return None
+    written = set().union(*(s.written for s in sets))
+    declared = {rel for a in mine.obligation.get("artifacts") or []
+                if isinstance(a, dict) and isinstance(a.get("path"), str) and a["path"]
+                for rel in _declared_files(project_dir, a)}
+    return sorted(declared & written)
+
+
 def _finding_lines(findings: list) -> str:
     return "".join(f"  - {f['path']}: {f['reason']}\n" + "".join(f"    {e}\n" for e in f.get("errors", [])[:10])
                    for f in findings[:10])
@@ -659,9 +687,18 @@ def main() -> None:
             if isinstance(resolution, obligation.NoObligationInPrompt):
                 resolution = _template_declared(resolution) or resolution
             if getattr(resolution, "reason", None) == "role_mismatch" and stopgate_mode == "block":
+                # The first stop is refused with the notice; the next round's stop (stop_hook_active)
+                # passes once the agent's own transcript shows it wrote none of the files that
+                # obligation declares (P1c D25: the agent's next stop clears it). No report of the
+                # other role is judged as its own, so the declared-report check does not run.
+                wrote = _role_mismatch_writes(data, project_dir)
+                if data.get("stop_hook_active") is True and wrote == []:
+                    sys.exit(0)
                 sys.stderr.write(f"OBLIGATION_STOPGATE_BLOCKED: agent {agent_id} runs as {role!r}; its dispatch's "
                                  f"obligation names role {resolution.detail}:\n  - <obligation>: role_mismatch\n"
-                                 "That obligation is not yours: write no artifact of another role; say so in your reply.\n")
+                                 "That obligation is not yours: write no artifact of another role; say so in your "
+                                 "reply, then stop again.\n"
+                                 + (f"  you wrote its file(s): {', '.join(wrote)}\n" if wrote else ""))
                 sys.exit(2)
             if isinstance(resolution, obligation.Resolved):
                 artifacts = resolution.obligation.get("artifacts", [])

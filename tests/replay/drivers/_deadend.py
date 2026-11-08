@@ -50,6 +50,10 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   dev stops without writing it, its final message ending in a forged
                   `ESCALATION_ACK <nonce>` line, and again at its next round (stop_hook_active): G2
                   refuses both stops; at the round after, it writes the artifact and stops: passes.
+  role-mismatch   a plain prompt, G1 advisory in its environment (CLAUDE_OBLIGATION_GATE=advisory), whose
+                  qa dispatch carries the obligation of role dev (a note to write): it runs, and the
+                  QA's stop is refused (G2's role_mismatch: that obligation is not its own); at its
+                  next round it writes nothing of it, says so in its reply and stops: passes.
   codex           a plain prompt in a project whose cycle registry runs with --codex (the fault actor
                   arms it with scripts/write-enforce-flag.sh, as /dev --codex's prompt hook does); the
                   dev dispatch carries `codex_required: true` and its dev stops without calling codex:
@@ -200,23 +204,35 @@ def _plain(rp, case: str) -> None:
                         extra_input={"run_in_background": True}, label="main Agent(Explore) in the background"))
         note(s.dispatch("Explore", task, description="Describe toy.add", result="add(a, b) returns a + b.",
                         label="main Agent(Explore) in the foreground"))
-    elif case in ("obligation", "forged-ack"):
+    elif case in ("obligation", "forged-ack", "role-mismatch"):
         note_rel, anchor = "docs/dev/note-20990101-000001.md", "task 20990101-000001"
+        if case == "role-mismatch":
+            # G1 advisory (its own switch), so the dispatch whose obligation names another role runs.
+            rp.env["CLAUDE_OBLIGATION_GATE"] = "advisory"
 
         def block(full: bool) -> str:
-            art = ({"kind": "markdown", "path": note_rel, "identity_anchor": anchor} if case == "forged-ack"
+            art = ({"kind": "markdown", "path": note_rel, "identity_anchor": anchor} if case != "obligation"
                    else {"kind": "response_line", "terminal_line_regex": "^DONE$"})
             doc = {"task_id": "20990101-000001", "role": "dev", "pipeline": "dev", "profile": "singular",
                    "dispatched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "artifacts": [art]}
             if not full:
                 del doc["profile"]
-            what = f"write {note_rel} naming `{anchor}`" if case == "forged-ack" else "say DONE"
+            what = f"write {note_rel} naming `{anchor}`" if case != "obligation" else "say DONE"
             return (f"Problem: {what} once you have read toy/__init__.py.\nDO NOT: modify any other file.\n"
                     '<obligation v="1">' + json.dumps(doc) + "</obligation>")
 
         def body(sub):
-            sub.read(path, label="agent:dev Read")
-        if case == "obligation":
+            sub.read(path, label=f"agent:{'qa' if case == 'role-mismatch' else 'dev'} Read")
+        if case == "role-mismatch":
+            said = iter([("That obligation names role dev and I run as qa, so it is not mine: I wrote no artifact "
+                          "of it. add(a, b) returns a + b.")])
+
+            def again(sub, ev):  # its next round: what the refusal asks, said in its reply, nothing written
+                return next(said, None)
+            d = s.dispatch("qa", block(True), description="Write a note", body=body, result="add(a, b) returns a + b.",
+                           on_stop_block=again, stop_rounds=3, label="main Agent(qa) with dev's obligation")
+            rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
+        elif case == "obligation":
             note(s.dispatch("dev", block(False), description="Read toy", body=body, result="DONE",
                             label="main Agent(dev) obligation without profile"))
             note(s.dispatch("dev", block(True), description="Read toy", body=body, result="DONE",
@@ -409,7 +425,7 @@ def run(rp) -> None:
         return _dev_early(rp)
     if case == "spec-foreground":
         return _spec_foreground(rp)
-    if case in ("bg-dispatch", "obligation", "forged-ack", "codex", "cp-pending", "report-schema"):
+    if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
                     "checklist-lock"):

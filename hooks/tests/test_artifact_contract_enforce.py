@@ -2454,6 +2454,37 @@ def test_g2_obligation_of_another_role_than_registered_is_not_this_agents(tmp_pa
     assert "role_mismatch" not in proc.stderr, proc.stderr
 
 
+def test_g2_role_mismatch_next_round_passes_when_it_wrote_none_of_that_obligation(tmp_path):
+    """P1c D25: the role_mismatch refusal is no dead end. Its first stop is
+    refused with the notice; the stop of its next round (stop_hook_active)
+    passes when the agent's own transcript shows it wrote none of the files
+    that obligation declares, and stays refused, naming the file, when it
+    wrote one. A Bash call that only names the file writes nothing."""
+    report = f"docs/dev/dev-report-{G2_TASK}.json"
+    s = _g2_setup(tmp_path, "qa", [])
+    doc = dict(s.obligation, role="dev", artifacts=_g2_dev_artifacts())
+    prompt = f'<obligation v="1">\n{json.dumps(doc)}\n</obligation>'
+    read_only = [("Bash", {"command": f"cat {report}"}, True)]
+    _write_obligation_transcript(s.home, s.project, s.harness, s.agent_id, prompt, calls=read_only)
+
+    def stop(active: bool):
+        return _run_hook(s.project, s.home, s.agent_id, session_id=s.harness, stopgate_mode="block",
+                         extra_payload={"stop_hook_active": active})
+    first = stop(False)
+    assert first.returncode == 2 and "  - <obligation>: role_mismatch" in first.stderr, first.stderr
+    assert "you wrote" not in first.stderr, first.stderr
+    nxt = stop(True)
+    assert nxt.returncode == 0, nxt.stderr
+
+    wrote = read_only + [("Write", {"file_path": str(s.project / report), "content": "{}\n"}, True)]
+    _write_obligation_transcript(s.home, s.project, s.harness, s.agent_id, prompt, calls=wrote)
+    for active in (False, True):
+        proc = stop(active)
+        assert proc.returncode == 2, proc.stderr
+        assert "  - <obligation>: role_mismatch" in proc.stderr, proc.stderr
+        assert f"you wrote its file(s): {report}" in proc.stderr, proc.stderr
+
+
 def test_g2_expected_role_is_resolve_agent_type_on_the_payload(tmp_path):
     """P6 R3: the role G2 expects is the one role reader's answer for the
     stop payload (lib.agent_resolver.resolve_agent_type, called as is), not
