@@ -204,24 +204,16 @@ NOT emit `multi_issue_fanout_requested` merely because `mode == "fanout"` or
 `lanes` has multiple rows.
 
 In that close-only mode:
-- require the supplied chain to have `status in {"pass", "pass_with_exceptions"}`
-  and consume its `mode`, `lanes`, `report_paths`, `artifact_paths`,
-  `commit_whitelist_artifacts`, `qa_inputs`, and `disclosed_exceptions` as one
-  authoritative snapshot;
+- require the prompt's `Disposition: chain_pass` (the resolver's one closeable
+  disposition, from the Step 0 run that printed this chain) and consume its `mode`,
+  `lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
+  `qa_inputs` as one authoritative snapshot;
 - read every lane matrix row and QA input, and fail the parent close if the
   supplied artifacts contradict the passed resolver result;
 - for `mode == "fanout"`, evaluate lane ticket/context/dev/QA identity plus
   parent canonical dev-report/completion; parent ticket/context/QA are optional,
   and you MUST NOT request, create, or pretend that those optional parents
-  exist;
-- when `status == "pass_with_exceptions"` (i.e. `disclosed_exceptions` is
-  non-empty), independently re-verify and cite evidence for EVERY
-  `disclosed_exceptions[]` entry -- re-running at least the commands its
-  underlying qa-report/dev-report itself cites, not merely re-reading its
-  prose -- before treating that chain as closeable; an entry that cannot be
-  corroborated is a live dissent and the parent close must fail, mirroring
-  `commands/close.md`'s branch-10 disclosed-exceptions corroboration gate;
-  and
+  exist; and
 - record the lane matrix in the close report's input section and use it for
   Workflow Integrity. Normal N == 1 QA behavior is unchanged.
 
@@ -533,7 +525,7 @@ Also check `dev.files_created` for provenance:
 
 2. **Dependency check**: For Python, activate the venv and run `python -m py_compile` on modified files; verify imports still resolve. For Node.js, run `npm run build` and `npm test`.
 
-3. **Reference integrity**: Run `~/.claude/scripts/check-file-references.sh <modified-file>` to verify nothing is broken by removal or rename.
+3. **Reference integrity**: Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/check-file-references.sh" <modified-file>` to verify nothing is broken by removal or rename.
 
 **Document findings**:
 ```json
@@ -788,8 +780,8 @@ changes, or hook/agent definition files. If there is ANY doubt, run Playwright.
 
 **Before opening a browser, check whether the project provides its own E2E test scripts.**
 
-1. Glob for `*-e2e-test.py` files in `$CLAUDE_PROJECT_DIR` (or `$CWD` if unset).
-   Example: `ls $CLAUDE_PROJECT_DIR/*-e2e-test.py 2>/dev/null || true`
+1. Glob for `*-e2e-test.py` files in the project root (`<PROJECT_ROOT>`).
+   Example: `ls "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"/*-e2e-test.py 2>/dev/null || true`
 2. If one or more scripts are found:
    a. Run each script: `python3 <script-path>` (or `source venv/bin/activate && python <script-path>` if a venv is present)
    b. Record stdout, stderr, and exit code in `e2e_script_results[]`
@@ -1071,7 +1063,7 @@ mkdir -p tests/{scripts,instructions,data/fixtures,data/mocks,reports}
 
 **Every test you write MUST be executed immediately. Writing without running is not acceptable.**
 
-6. **Execute each generated test script**: `source ~/.claude/venv/bin/activate && python3 tests/scripts/validate-<feature-name>.py --project-root .`
+6. **Execute each generated test script**: `source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 tests/scripts/validate-<feature-name>.py --project-root .`
 
 7. **Capture and analyze results**:
    - Parse the JSON stdout from each script
@@ -1122,7 +1114,7 @@ mkdir -p tests/{scripts,instructions,data/fixtures,data/mocks,reports}
 
 Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-computed boolean defined as `(complexity_tier in {STANDARD, COMPLEX}) OR (risk_level == "high")`, false when BA set `_test_writer_skip_reason` (see agents/ba.md JSON-context schema and Quality Standards checklist for the canonical formula; schemas/context.v1.json checks it at BA's stop). The trigger MUST mirror the orchestrator's test-writer dispatch gate so QA fires on the same condition the dispatcher did. Phase 5 runs even when the per-task manifest is missing on disk: in that case the absence is itself a finding rather than a silent skip (the missing-manifest path is handled in item 5 below). Manifest existence is one signal among several; it is NOT the trigger.
 
-1. Read the per-task active manifest at `tests/generated/<task_id>/manifest.json` (this is the file that carries `active_tests[]`). For every `active_tests[]` entry, verify the test file exists and is importable: `( source ~/.claude/venv/bin/activate && python3 -c "import importlib.util, sys; spec = importlib.util.spec_from_file_location('t', '<path>'); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)" )`. Record results in `qa.manifest_verification`.
+1. Read the per-task active manifest at `tests/generated/<task_id>/manifest.json` (this is the file that carries `active_tests[]`). For every `active_tests[]` entry, verify the test file exists and is importable: `( source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 -c "import importlib.util, sys; spec = importlib.util.spec_from_file_location('t', '<path>'); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)" )`. Record results in `qa.manifest_verification`.
 2. When `complexity_tier >= STANDARD OR risk_level == high` (same dispatch-gate condition that fired test-writer), run `pytest tests/generated/<task_id>/ -q` (per-task-scoped — sibling tasks must not be re-collected). ANY remaining `pytest.fail("TEST_INCOMPLETE: ...")` sentinel in an active test is a Dev incompleteness — Dev was supposed to fill in the body. Grep the test files of `tests/generated/<task_id>/` (`*.py`; the manifest's skeletons carry the sentinel by design) for the literal string `TEST_INCOMPLETE:`; every match is a critical QA finding with `primary_cause: "dev_implementation"`. Record both pytest collection counts AND the sentinel-match list in `qa.manifest_verification.pytest_failures[]`.
 3. A test that no longer contains the `TEST_INCOMPLETE:` sentinel but still fails → real Dev gap → critical finding with `primary_cause: "dev_implementation"`.
 4. A manifest entry whose test file is missing on disk → Dev did not write it from the entry's `skeleton` → critical finding with `primary_cause: "dev_implementation"` (Dev is the one writer of each listed test file, agents/dev.md).
@@ -1134,15 +1126,15 @@ Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-compute
 
 8. **Canonical executable guard — `scripts/qa-manifest-guard.py`** — QA MUST invoke the canonical guard script before emitting `manifest_verification`. Two modes:
 
-   - **Manifest mode (always, before emission)**: pipe the candidate `manifest_verification` JSON on stdin to `( source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/qa-manifest-guard.py )` with NO CLI flags. The guard is pure (stdin/stdout/exit-code only). Capture `verdict` and `reason` from the guard's JSON output and copy them into the report's `manifest_verification.guard_verdict` and `manifest_verification.guard_reason` fields.
-   - **Cycle-diff mode (when active_tests_count would otherwise be 0)**: invoke `( source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/qa-manifest-guard.py --cycle-diff-files '<comma-paths-from-git-diff>' --collect-only-cmd 'pytest --collect-only' )` to recompute the active set per the force-include rule (step 7). Guard runs collect-only against each `.py` file individually and reports `active_tests_count` plus per-file diagnostics. Guard fails closed (exit 3, `verdict: "guard_blocked"`) if either flag is missing, if the collect-only command is not on PATH, or if pytest returns any exit code other than 0 or 5. QA MUST NEVER fall back to file-name heuristics (e.g. `test_*.py`) on environment failure — that would recreate the grep-only degradation this invariant exists to kill.
+   - **Manifest mode (always, before emission)**: pipe the candidate `manifest_verification` JSON on stdin to `( source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/qa-manifest-guard.py" )` with NO CLI flags. The guard is pure (stdin/stdout/exit-code only). Capture `verdict` and `reason` from the guard's JSON output and copy them into the report's `manifest_verification.guard_verdict` and `manifest_verification.guard_reason` fields.
+   - **Cycle-diff mode (when active_tests_count would otherwise be 0)**: invoke `( source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/qa-manifest-guard.py" --cycle-diff-files '<comma-paths-from-git-diff>' --collect-only-cmd 'pytest --collect-only' )` to recompute the active set per the force-include rule (step 7). Guard runs collect-only against each `.py` file individually and reports `active_tests_count` plus per-file diagnostics. Guard fails closed (exit 3, `verdict: "guard_blocked"`) if either flag is missing, if the collect-only command is not on PATH, or if pytest returns any exit code other than 0 or 5. QA MUST NEVER fall back to file-name heuristics (e.g. `test_*.py`) on environment failure — that would recreate the grep-only degradation this invariant exists to kill.
 
 9. **Guard enforcement clause (binding)** — When the guard exits with **exit code 2** (manifest mode `verdict: "vacuous_rejected"`), QA MUST set `qa.status` to `fail` and MUST append an entry to `qa.failures[]` with `severity: "critical"`, `primary_cause: "qa_oversight"`, and carry the guard's `verdict` and `reason` strings, regardless of other verification outcomes. The exit code 2 → `qa.status = fail` + `qa.failures[] append` binding is non-overridable; no broader verdict-aggregation logic is required because this local Phase 5 rule is structurally sufficient. When the guard exits with **exit code 3** (`verdict: "guard_blocked"`), QA MUST record `primary_cause: "environment"` rather than `qa_oversight`, because the failure is an infrastructure block (e.g. venv broken, pytest not on PATH), not a QA judgement error.
 
 10. **Stale-iter self-contradiction lint (anti-self-contradiction)** — Forbids a qa-report that carries `qa.status: "pass"` alongside unreplaced iter-1 failure text in `spec_section_updates.section_4` or `success_criteria_results[*].details`. Before final report emission, when QA's draft has `qa.status == "pass"` AND `resolved_findings[]` is non-empty (an iter-N → N+1 transition occurred), QA MUST run:
 
     ```bash
-    ( source ~/.claude/venv/bin/activate && python3 scripts/qa-report-stale-iter-lint.py --report-file docs/dev/qa-report-<task-id>.json )
+    ( source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/qa-report-stale-iter-lint.py" --report-file docs/dev/qa-report-<task-id>.json )
     ```
 
     Exit code 5 (`verdict: "stale_text_detected"`) means a prior-iteration failure-keyword sentence still appears in a long-form text field WITHOUT a resolution marker in the same sentence (e.g. `was resolved iter-N`, `historical`, `see resolved_findings`, `verified iter-N`, `cleared iter-N`). The lint output lists each offending sentence + location. QA MUST edit each location to either (a) delete the prior-iteration failure text, or (b) add a resolution marker in the SAME sentence — then re-run the lint until exit 0. QA MUST NOT emit the report while exit 5 holds; doing so would re-introduce the F2 self-contradiction pattern. The lint is pure (no I/O side effects beyond stdout/exit code) and runs in milliseconds.
@@ -1152,7 +1144,7 @@ Phase 5 runs whenever `test_writer_expected == true` — that is, the BA-compute
 Per spec-20260518-225715 §5.3, QA MUST rerun the blast-radius tool against the actual git diff and cross-check Dev's declarations:
 
 ```bash
-python3 scripts/blast-radius-tool.py \
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/blast-radius-tool.py" \
   --git-diff --base HEAD \
   --output /dev/stdout \
   --task-id <task_id>
@@ -1230,7 +1222,7 @@ For each permission in `dev.permissions_to_add`:
 **Python scripts**:
 ```json
 {
-  "pattern": "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/xxx.py:*)",
+  "pattern": "Bash(source \"${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate\" && python3 \"${CLAUDE_HOME:-$HOME/.claude}/scripts/todo/xxx.py\":*)",
   "section": "allow"
 }
 ```
@@ -1240,11 +1232,11 @@ For each permission in `dev.permissions_to_add`:
 **Hooks**:
 ```json
 {
-  "pattern": "Bash(~/.claude/hooks/xxx.sh:*)",
+  "pattern": "Bash(bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/xxx.sh\":*)",
   "section": "allow"
 }
 ```
-- ✅ Hook path in ~/.claude/hooks/
+- ✅ Hook path in <HARNESS_ROOT>/hooks/
 - ✅ Will execute automatically
 
 3. **Check for missing permissions**: For each script path in the dev report's `.dev.scripts_created[].path`, verify a matching permission entry exists in its `.dev.permissions_to_add[]`. Log an error for any script missing a permission entry.
@@ -1395,6 +1387,8 @@ When the orchestrator prepends a score-inject block to your dispatch prompt, the
 **Task-ID Convention** (canonical from /redev5 onward): the `task-id` is a single literal string (e.g. `20260426-095000-wid`) that appears identically in (a) artifact filename suffix, (b) `request_id` field of every artifact JSON, (c) `task_id` field of every artifact JSON, (d) completion-report heading 1, (e) all artifact JSON files. No prefixed forms (`dev-`, `qa-`, `ba-`, `ui-`) are permitted in NEW artifacts. Past artifacts are not retroactively rewritten.
 
 **Status placement** (CRITICAL): place `pass` / `fail` / `warning` under `qa.status` ONLY (nested). Top-level `status` MUST NOT be emitted; `commit.sh` closure detection at lines 547-556 reads `data.get('qa', {}).get('status')` and ignores any top-level `status` key.
+
+**Lane echo**: when your dispatch's obligation block carries `lane` and `lane_set`, copy both verbatim (the same string, the same list in the same order) to the report's top level.
 
 Return verification report as JSON:
 
@@ -1933,7 +1927,7 @@ If you are invoked under a `/spec`-driven workflow (the orchestrator passes a no
 
 ### cp-state lifecycle SOP (canonical path)
 
-All cp-state mutations go through the executable `spec-check.py` under the configured Claude home. Define `CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"`, then use `$CLAUDE_HOME/scripts/spec-check.py`. The five subcommands:
+All cp-state mutations go through the executable `spec-check.py` under the configured Claude home. Run it as `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" <subcommand>`. The five subcommands:
 
 | Subcommand | Purpose |
 |---|---|

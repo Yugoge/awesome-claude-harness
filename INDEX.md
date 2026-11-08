@@ -2,7 +2,7 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-10-29T06:24:47Z*
-**Total entries**: 768
+**Total entries**: 773
 **Convention**: kebab
 
 ## Tree
@@ -36,7 +36,7 @@ dot-claude/
 │   ├── `allow.md` - Single-use break-glass for a declared grant-aware safety hook; it never overrides a settings DENY. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is the owner-authorized match-all selector, still single-use and TTL-bounded; every explicit selector is refuse-by-default when no narrow command is derivable. A literal selector matches as a POSITIONAL PREFIX of the argument tokens, not a substring. When the head token is git, repo-retargeting global options (-C, --git-dir, --work-tree, --namespace) are skipped so a short selector reaches the canonical `git -C <dir> <verb>` shape; -c / --config-env / --exec-path are never skipped and fail closed. Trailing tokens become a comment the grant notice echoes. Sentinel TTL 300s, consumed on any terminal result.
 │   ├── `checkpoint.md` - Checkpoint Command
 │   ├── `clean.md` - Aggressive project cleanup - normalize docs structure, archive everything, delete one-time scripts/tests. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
-│   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). QA evaluates Workflow Integrity bullets and returns CLOSE YES/with-disclosures. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. --force is DEPRECATED -- a no-op alias of the normal path (audit-logged, skips nothing). Pass --auto to discover and sequentially close every close_pending parent (see `--auto mode` below).
+│   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). Step 0 resolves the cycle's disposition and completes an unfinished cycle; QA evaluates the Workflow Integrity bullets and returns CLOSE YES; Step 3b asks the user to rate the cycle. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Pass --auto to close every close_pending parent (see `--auto mode` below). --force is accepted and ignored.
 │   ├── `codex.md` - Delegate a task to OpenAI Codex CLI (gpt-5.6-sol, xhigh reasoning) for a second opinion or parallel coding
 │   ├── `commit.md` - Commit session changes via changelog-analyst subagent
 │   ├── `dev-command.md` - Enhanced development workflow with BA subagent delegation, command development best practices, Three-Party Architecture, and comprehensive automation patterns
@@ -149,6 +149,7 @@ dot-claude/
 │   │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   │   ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
+│   │   ├── `close_rating.py` - Stop gate imports. The /close Step 3b question (source ``close-rating:<task-id>``) is required ask...
 │   │   ├── `closeout.py` - CLI:
 │   │   ├── `command_span.py` - The span is the records after the latest human-typed harness command outside
 │   │   ├── `commit_journal.py` - WHY THIS EXISTS
@@ -185,7 +186,7 @@ dot-claude/
 │   │   ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 │   │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 │   │   ├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
-│   │   ├── `test_artifact_contract_enforce.py` - The hook is the producer-side port of /close's Artifact schema gate
+│   │   ├── `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
 │   │   ├── `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
 │   │   ├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
 │   │   ├── `test_baseline_snapshot_preflight.py` - agents/dev.md:535 declares that the orchestrator captures baseline_dirty_snapshot
@@ -200,6 +201,7 @@ dot-claude/
 │   │   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 │   │   ├── `test_checklist_record.py` - Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
 │   │   ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
+│   │   ├── `test_close_rating.py` - hooks/posttool-close-rating.py, the rating log's one writer
 │   │   ├── `test_close_verdict_round_open.py` - `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 │   │   ├── `test_command_span.py` - The span is the records after the latest human-typed harness command outside
 │   │   ├── `test_commit_artifact_rw_boundary.py` - WHY THIS FILE EXISTS
@@ -222,7 +224,7 @@ dot-claude/
 │   │   ├── `test_doc_sync_regen_readme_status.py` - Backlog #83: regen_readme() returned None on every path, so nobody could tell a skipped
 │   │   ├── `test_doc_sync_regions.py` - Backlog #85: four unrelated marker predicates (README first occurrence, INDEX substring
 │   │   ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
-│   │   ├── `test_e2e_enforce.py` - obligation fallback (ticket 20261001-161041-r06, M1)
+│   │   ├── `test_e2e_enforce.py` - report the QA's own obligation names
 │   │   ├── `test_env_configured_defaults.py` - or derived; such values come back only through the environment (normally the
 │   │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
@@ -302,6 +304,7 @@ dot-claude/
 │   ├── `post_tool_use.sh` - PostToolUse Hook - Code quality hints after file modifications
 │   ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 │   ├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
+│   ├── `posttool-close-rating.py` - main agent's (no agent_id) one close-rating question (metadata.source close-rating:<task-id>) ans...
 │   ├── `posttool-codex-skill-ledger.py` - Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
 │   ├── `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 │   ├── `posttool-doc-sync.py` - PostToolUse Hook: keep the marked INDEX.md, README.md and CLAUDE.md sections in sync
@@ -387,10 +390,10 @@ dot-claude/
 │   ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 │   ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 │   ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
-│   ├── `subagentstop-artifact-contract-enforce.py` - Ports the /close "Artifact schema gate" (commands/close.md §"Artifact schema gate" — the
+│   ├── `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 │   ├── `subagentstop-codex-enforce.py` - Activation logic:
 │   ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
-│   ├── `subagentstop-e2e-enforce.py` - Activation logic:
+│   ├── `subagentstop-e2e-enforce.py` - What a QA owes is in its own dispatch obligation (P1b E7): the qa-report.v2
 │   ├── `subagentstop-restart-track.py` - SubagentStop: persist response evidence for a /restart-resumed agent.
 │   ├── `userprompt-bulk-commit-capability.py` - human prompt, NOT from an LLM-emitted Bash command
 │   ├── `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use
@@ -455,7 +458,7 @@ dot-claude/
 │   │   ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 │   │   ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 │   │   ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
-│   │   ├── `score_log.py` - ``scripts/score-update.sh`` (the log's writer) and ``scripts/score-inject.sh`` read
+│   │   ├── `score_log.py` - ``scripts/score-update.sh`` (whose rows go through the log's one writer,
 │   │   ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
 │   │   ├── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
 │   │   └── `soundness_gate.py` - HUNK-level failure attribution
@@ -472,7 +475,7 @@ dot-claude/
 │   │   └── `spec_verify_summary.py` - Lives alongside `spec_verify_parsers.py` as a sibling sidecar because
 │   ├── todo/
 │   │   ├── `clean.py` - Preloaded TodoList for /clean workflow
-│   │   ├── `close.py` - Three user-visible TodoSteps (flat-integer per agents/style-inspector.md
+│   │   ├── `close.py` - the same five steps under every prompt (--auto walks each step over its parents;
 │   │   ├── `code-review.py` - Python script
 │   │   ├── `deep-search.py` - Python script
 │   │   ├── `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
@@ -520,7 +523,7 @@ dot-claude/
 │   ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 │   ├── `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
 │   ├── `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
-│   ├── `commit.sh` - Description: Discoverable canonical entrypoint for commands/dev-overnight.md's
+│   ├── `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
 │   ├── `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 │   ├── `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
 │   ├── `derive-default-branch.sh` - Description: Resolve the repository's default branch name dynamically (handles main/master/any other).
@@ -683,8 +686,8 @@ dot-claude/
 │   ├── `_dev_lifecycle_fixtures.py` - NOT a test file itself (no test_ prefix, not collected by pytest). Imported by
 │   ├── `_late_repair_fixtures.py` - Not collected by pytest (leading underscore).  Builds four representative
 │   ├── `fresh-clone-bootstrap-smoke.sh` - Description: Fresh-clone bootstrap smoke — proves "core is runnable + guards engaged"
-│   ├── `test_ac_deviation_fanout_consumer.py` - records and the lifecycle presentation of ``pass_with_exceptions``
-│   ├── `test_ac_deviation_record_chain.py` - A dev report that legitimately records an acceptance-criteria deviation is
+│   ├── `test_ac_deviation_fanout_consumer.py` - fan-out lanes that stop short of ``completed`` and the lifecycle row of a chain, under strict pass
+│   ├── `test_ac_deviation_record_chain.py` - A dev report that records an acceptance-criteria deviation fails the chain like any other blocked report
 │   ├── `test_aggregate_dev_report.py` - Unit tests for scripts/aggregate-dev-report.py
 │   ├── `test_aggregate_dev_report_superseded_rounds.py` - aggregate dev-report's ownership-completeness check over a multi-lane,
 │   ├── `test_apply_permissions.py` - /dev and /dev-command apply the permissions QA validated with the line their permission step
@@ -697,6 +700,7 @@ dot-claude/
 │   ├── `test_changelog_analyst_required_to_ship_sourcing.py` - unobtainable declaration must not be silently read as an empty one
 │   ├── `test_checkpoint_provenance.py` - These modes are DORMANT: no command, agent definition, or hook invokes them by
 │   ├── `test_clean_orchestrator_merge.py` - clean-merge-reports reads the three inspector reports of the request the Step 3 context
+│   ├── `test_close_command_text.py` - commands/close.md as P4 decided it: one disposition call, in-turn questions, the native rating.
 │   ├── `test_close_report_append.py` - failure semantics (round-7 CRITICAL fix, ticket dev-20260919-135733)
 │   ├── `test_codex_workflow_gate.py` - Regression tests for Codex-native workflow-plan compatibility.
 │   ├── `test_commit_multi_repo_plan.py` - Python script
@@ -704,7 +708,7 @@ dot-claude/
 │   ├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
 │   ├── `test_completeness_span_accounting.py` - halves on one code path
 │   ├── `test_conftest_hermetic.py` - conftest.py removes CLAUDE_PROJECT_DIR, PASEO_CONFIG_DIR, CLAUDE_HOME, CODEX_HOME,
-│   ├── `test_declared_vocab_readers.py` - (P1b row 19 rule 7): the chain resolver's disclosed-exception
+│   ├── `test_declared_vocab_readers.py` - (P1b row 19 rule 7): readers that take a set from its declaration instead of a copy
 │   ├── `test_dev_artifact_chain_consumer_contracts.py` - Contract tests for shared /dev artifact-chain consumers.
 │   ├── `test_dev_todo_accounting.py` - Python script
 │   ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
@@ -745,6 +749,7 @@ dot-claude/
 │   ├── `test_spec_write.py` - Each test runs the script as a subprocess against a throw-away project under
 │   ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 │   ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
+│   ├── `test_step8_spec_update_markers.py` - COMMIT_STEP8_TRACE=1 emits the STEP8_* markers on stderr, and stage 4's unlinked spec is printed
 │   ├── `test_subagentstop_e2e_enforce.py` - A QA dispatch that carries an obligation is judged on exactly the qa-report
 │   ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.
 │   ├── `test_tool_policy_note_fail_closed.py` - hooks/pretool-tool-policy.py refuses a Bash write target with exit 2 and then

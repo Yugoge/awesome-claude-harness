@@ -1,11 +1,14 @@
 """The checklist hooks read the record, not a copy (P1b E7).
 
 Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
-workflow gate, the TodoWrite validators, the progress tracker and the step the
+workflow gate, the TodoWrite validator, the progress tracker and the step the
 dispatch check uses are read from it (lib.todo_canonical.checklist over
 lib.command_span); none of them writes the workflow bookmark or the CLI's todo
 file. Each hook runs as the CLI runs it: its own call is already in the
-transcript (T1), with its tool_result before PostToolUse.
+transcript (T1), with its tool_result before PostToolUse. pretool-todo-validate.py
+is the TodoWrite rules' one decider (P5 R18, R19): a list that breaks one never
+runs, so the PostToolUse TodoWrite group holds only the tracker and the overnight
+loop.
 """
 from __future__ import annotations
 
@@ -86,9 +89,7 @@ class _Session:
         self.result(tid, error=pre.returncode == 2)
         post = None
         if pre.returncode != 2:
-            post = [self.hook(h, "PostToolUse", "TodoWrite", {"todos": todos}, tid)
-                    for h in ("posttool-todo-tracker.py", "posttool-todo-count.py",
-                              "posttool-todo-sequence.py")]
+            post = [self.hook("posttool-todo-tracker.py", "PostToolUse", "TodoWrite", {"todos": todos}, tid)]
         return pre, post
 
     def agent(self, subagent_type):
@@ -132,18 +133,57 @@ def test_a_refused_todowrite_does_not_start_the_checklist(s):
     assert s.gate().returncode == 2
 
 
-def test_a_first_list_that_breaks_the_first_call_rule_locks_until_a_valid_one(s):
+def test_a_first_list_with_an_item_completed_is_refused_before_it_runs(s):
+    """A18: a first list with an item completed is blocked (the first-call rule, P5 R18)."""
     s.command("/dev fix the bug")
     skipped = _frontier(1)  # Step 1 completed in the very first list
     pre, post = s.todo(skipped)
-    assert pre.returncode == 0 and post[2].returncode == 2
-    locked = s.gate()
-    assert locked.returncode == 2 and "STEP SKIPPING DETECTED" in locked.stderr
-    # Sending it again is still a first call: still refused, still locked.
-    _, post = s.todo(skipped)
-    assert post[2].returncode == 2 and s.gate().returncode == 2
-    _, post = s.todo(_frontier(0))
-    assert all(p.returncode == 0 for p in post) and s.gate().returncode == 0
+    assert pre.returncode == 2 and post is None
+    assert "Initial TodoWrite cannot have completed steps" in pre.stderr
+    assert "Call TodoWrite with:" in pre.stderr  # the canonical first call, Step 0 in progress
+    held = s.gate()
+    assert held.returncode == 2 and "CHECKLIST NOT STARTED" in held.stderr
+    # Sending it again is still a first call: still refused.
+    assert s.todo(skipped)[0].returncode == 2
+    second = _frontier(0)
+    second[0]["status"], second[1]["status"] = "pending", "in_progress"  # in progress past Step 0
+    assert s.todo(second)[0].returncode == 2
+    pre, post = s.todo(_frontier(0))
+    assert pre.returncode == 0 and post[0].returncode == 0 and s.gate().returncode == 0
+
+
+def test_a_short_first_list_is_refused_with_no_bookmark(s):
+    """A18: a 5-of-17 list is refused by pretool-todo-validate.py, which reads no bookmark."""
+    s.command("/dev fix the bug")
+    pre, _ = s.todo(_frontier(0)[:5])
+    assert pre.returncode == 2 and "Todo count mismatch: canonical has 17, submitted has 5" in pre.stderr
+    assert s.gate().returncode == 2
+    assert list((s.project / ".claude").iterdir()) == []
+
+
+def test_a_two_step_skip_is_refused_with_no_bookmark(s):
+    """A18: completing two steps in one call (a 2-step skip) is refused before it runs."""
+    s.command("/dev fix the bug")
+    s.todo(_frontier(0))
+    skip = _frontier(2)  # Steps 1 and 2 completed at once, Step 3 in progress
+    pre, post = s.todo(skip)
+    assert pre.returncode == 2 and post is None
+    assert "Completed 2 steps in one call (max 1)" in pre.stderr
+    assert todo_canonical.checklist(str(s.path)).todos == _frontier(0)
+    assert list((s.project / ".claude").iterdir()) == []
+
+
+def test_the_in_flight_todowrite_is_compared_with_the_previous_ok_call(s):
+    """A18: the hook's own call is already the last TodoWrite of the record, with no result yet;
+    the list it is checked against is the previous ok call's, a refused one in between left out."""
+    s.command("/dev fix the bug")
+    s.todo(_frontier(0))
+    assert s.todo(_frontier(2))[0].returncode == 2  # refused: an error result, not a previous list
+    pending = s.use("TodoWrite", {"todos": _frontier(1)})  # in flight, the newest TodoWrite record
+    pre = s.hook("pretool-todo-validate.py", "PreToolUse", "TodoWrite", {"todos": _frontier(1)}, pending)
+    assert pre.returncode == 0, pre.stderr
+    s.result(pending)
+    assert todo_canonical.checklist(str(s.path)).todos == _frontier(1)
 
 
 def test_a_list_the_step_rules_refuse_never_runs(s):
@@ -169,9 +209,9 @@ def test_sequence_check_compares_with_the_list_before_its_own_call(s):
     s.command("/dev fix the bug")
     s.todo(_frontier(0))
     pre, post = s.todo(_frontier(1))
-    assert pre.returncode == 0 and post[2].returncode == 0
+    assert pre.returncode == 0 and post[0].returncode == 0
     state = todo_canonical.checklist(str(s.path))
-    assert state.accepted == _frontier(1) and state.lock == ""
+    assert state.todos == _frontier(1) and state.lock == ""
 
 
 def test_a_subagent_step_completes_only_after_its_dispatch(s):
@@ -183,6 +223,20 @@ def test_a_subagent_step_completes_only_after_its_dispatch(s):
     assert pre.returncode == 2 and "requires a subagent call (ba)" in pre.stderr
     s.agent("qa")  # another role's dispatch does not count for it
     assert s.todo(_frontier(4))[0].returncode == 2
+    s.agent("ba")
+    assert s.todo(_frontier(4))[0].returncode == 0
+
+
+def test_a_dispatch_before_the_step_went_in_progress_does_not_count(s):
+    """A18 (Gate 4): completing a subagent step needs a matching ok Agent call after the TodoWrite
+    that set it in_progress; a BA call made while the step before it was in progress does not."""
+    s.command("/dev fix the bug")
+    for n in range(3):
+        s.todo(_frontier(n))
+    s.agent("ba")  # Step 3 in progress, BA's Step 4 still pending
+    s.todo(_frontier(3))  # Step 4 (BA) in progress
+    pre, _ = s.todo(_frontier(4))
+    assert pre.returncode == 2 and "requires a subagent call (ba) made after the step went in_progress" in pre.stderr
     s.agent("ba")
     assert s.todo(_frontier(4))[0].returncode == 0
 
@@ -201,3 +255,16 @@ def test_a_dispatch_counts_for_its_steps_current_run_only(s):
     for n in range(4):
         s.todo(_frontier(n))
     assert s.todo(_frontier(4))[0].returncode == 2
+
+
+@pytest.mark.parametrize("name", ["posttool-todo-sequence.py", "posttool-todo-count.py"])
+def test_the_retired_todo_hooks_are_unregistered_exit_0_stubs(name):
+    """P5 R19: both leave the PostToolUse TodoWrite group and stay as tracked stubs (a running
+    session keeps the hook list it loaded); their rules are pretool-todo-validate.py's."""
+    text = (HOOKS / name).read_text()
+    assert sum(line.startswith("# STUB:") for line in text.splitlines()) == 1
+    assert name not in (HOOKS.parent / "settings.json").read_text()
+    for payload in ("", json.dumps({"tool_name": "TodoWrite", "tool_input": {"todos": _frontier(1)}})):
+        p = subprocess.run([sys.executable, str(HOOKS / name)], input=payload, capture_output=True, text=True,
+                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, timeout=60)
+        assert (p.returncode, p.stdout, p.stderr) == (0, "", "")

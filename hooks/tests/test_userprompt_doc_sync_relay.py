@@ -11,11 +11,12 @@ a relayed notice the whole stdout is one JSON object (resynced lines plus notice
 additionalContext for the agent, the notices alone in systemMessage for the user);
 without one the stdout is the plain resync text it always was.
 
-Isolation: the hook is loaded or run with a temporary HOME (its cache file and project
-root come from Path.home()), a temporary TMPDIR, and CLAUDE_PROJECT_DIR and
-CLAUDE_DOC_SYNC_ROOTS scrubbed. The end-to-end cases give the child a real COPY of
-posttool-doc-sync.py and the doc_sync package under that HOME; a symlink to the
-repository hooks would let a resync of the watched hooks directory write the real repo.
+Isolation: the hook is loaded or run with a temporary HOME (its cache file, with
+CLAUDE_CONFIG_DIR scrubbed, and project root come from Path.home()), a temporary TMPDIR,
+and CLAUDE_PROJECT_DIR and CLAUDE_DOC_SYNC_ROOTS scrubbed. The end-to-end cases run a COPY
+of the hook beside a real COPY of posttool-doc-sync.py and the doc_sync package under that
+HOME (the hook runs its children from its own directory); a symlink to the repository
+hooks would let a resync of the watched hooks directory write the real repo.
 """
 
 import importlib.util
@@ -34,7 +35,7 @@ CHILD_HOOK = REPO_ROOT / 'hooks' / 'posttool-doc-sync.py'
 DOC_SYNC_PACKAGE = REPO_ROOT / 'hooks' / 'doc_sync'
 
 OPEN = '<!-- AUTO:readme-stats -->'
-SCRUBBED_ENV = ('CLAUDE_PROJECT_DIR', 'CLAUDE_DOC_SYNC_ROOTS', 'CLAUDE_DOC_SYNC_STATE_ROOT')
+SCRUBBED_ENV = ('CLAUDE_PROJECT_DIR', 'CLAUDE_DOC_SYNC_ROOTS', 'CLAUDE_DOC_SYNC_STATE_ROOT', 'CLAUDE_CONFIG_DIR')
 RELAYED_TEXT = 'doc-sync: README not regenerated (SKIPPED_NO_CLOSING_MARKER). README: /somewhere/README.md'
 CHILD_JSON = json.dumps({
     'systemMessage': RELAYED_TEXT,
@@ -103,7 +104,7 @@ def build_home(root, readme_text=None):
     return home
 
 
-def run_hook(home, tmp_root):
+def run_hook(home, tmp_root, hooks_dir=None, **extra_env):
     environment = {key: value for key, value in os.environ.items() if key not in SCRUBBED_ENV}
     # The hook starts its child as `python3`; put the interpreter running the tests first.
     environment.update(
@@ -111,9 +112,11 @@ def run_hook(home, tmp_root):
         TMPDIR=str(tmp_root),
         PATH=os.path.dirname(sys.executable) + os.pathsep + os.environ.get('PATH', ''),
         PYTHONDONTWRITEBYTECODE='1',
+        **extra_env,
     )
+    installed = shutil.copy(HOOK, (hooks_dir or home / '.claude' / 'hooks') / HOOK.name)
     return subprocess.run(
-        [sys.executable, str(HOOK)], capture_output=True, text=True, env=environment,
+        [sys.executable, str(installed)], capture_output=True, text=True, env=environment,
         cwd=str(home), timeout=120)
 
 
@@ -167,6 +170,27 @@ def test_e2e_stdout_never_mixed(tmp_path, with_notice):
     else:
         assert not any(line.startswith('{') for line in lines)
         assert 'systemMessage' not in completed.stdout
+
+
+def test_cache_under_the_config_dir_and_children_from_the_hooks_own_directory(tmp_path):
+    """P2 R5: the cache is runtime state under ${CLAUDE_CONFIG_DIR:-$HOME/.claude}, and the
+    child hook is a harness asset run from the hook's own directory: with the harness outside
+    HOME (no HOME/.claude/hooks) and CLAUDE_CONFIG_DIR set, the child's notice still arrives,
+    the cache is written under CLAUDE_CONFIG_DIR and none appears under $HOME/.claude."""
+    home = build_home(tmp_path, readme_text=f'# Legacy\n\n{OPEN}\nstale stats without a terminator\n')
+    harness_hooks = tmp_path / 'harness' / 'hooks'
+    harness_hooks.parent.mkdir()
+    shutil.move(str(home / '.claude' / 'hooks'), str(harness_hooks))
+    config = tmp_path / 'config'
+    config.mkdir()
+    (home / '.claude' / '.doc-sync-cache.json').rename(config / '.doc-sync-cache.json')
+
+    completed = run_hook(home, tmp_path, hooks_dir=harness_hooks, CLAUDE_CONFIG_DIR=str(config))
+
+    assert completed.returncode == 0, completed.stderr
+    assert 'SKIPPED_NO_CLOSING_MARKER' in json.loads(completed.stdout)['systemMessage']
+    assert json.loads((config / '.doc-sync-cache.json').read_text())['last_check'] > 0
+    assert not (home / '.claude' / '.doc-sync-cache.json').exists()
 
 
 def test_e2e_second_run_within_throttle_silent(tmp_path):

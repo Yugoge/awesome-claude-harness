@@ -602,6 +602,49 @@ def test_a_chain_calls_change_is_the_chains_and_measures_no_other_reader():
     assert {d.who for d in ctx.m.artifacts[other].decisions} == {"scripts/plan.py"}
 
 
+def test_a_unit_the_final_state_does_not_reproduce_runs_on_its_events_transcripts(tmp_path, monkeypatch):
+    """E1 re-runs a unit on the replay's final state, where the transcripts have grown since its
+    event: a Stop gate that let a /do Stop pass blocks there on the later /commit span, and its
+    decision on the report it read would go unmeasured. Run again with the transcripts cut back to
+    the event (one written after it removed), it gives the recorded decision, and the report's
+    mutations change it."""
+    from tests.replay import differential as D
+    home, store = tmp_path / "home", tmp_path / "home" / "projects" / "p"
+    store.mkdir(parents=True)
+    tx, later = store / "s.jsonl", store / "s" / "subagents" / "agent-a.jsonl"
+    tx.write_text('{"span": "do"}\n')
+    at_event = tx.stat().st_size
+    tx.write_text('{"span": "do"}\n{"span": "commit"}\n')
+    later.parent.mkdir(parents=True)
+    later.write_text("{}\n")
+    report = home / "r.json"
+    report.write_text("{}")
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = {"session_id": "s", "transcript_path": str(tx), "hook_event_name": "Stop"}
+    (work / "invocations.jsonl").write_text(json.dumps(
+        {"seq": 4, "event": "Stop", "label": "/do Stop", "payload": payload,
+         "transcripts": {str(tx): at_event}, "hooks": []}) + "\n")
+    for name in ("env.json", "bash-env.json"):
+        (work / name).write_text("{}")
+    unit = {"kind": "hook", "command": "gate", "timeout": 5, "original": [0, "ok", ""], "seq": 4,
+            "origin": "hooks/g.py", "event": "Stop", "label": "/do Stop",
+            "reads": [{"comp": "hooks/g.py", "pattern": "<home>/r.json", "raw": str(report)}]}
+    (work / "units.json").write_text(json.dumps({"units": [unit], "schemas": {}, "workers": 1, "layout": {
+        "home": str(home), "state": str(tmp_path / "state"), "temp_dirs": [], "project": str(tmp_path)}}))
+
+    def gate(cfg, n, unit, mutation, payload, env, cut=()):
+        at = dict(zip(cut[1::2], cut[0::2]))
+        do_span = at == {str(tx): str(at_event), str(later): "-"}
+        return {"decision": [0, "ok", ""] if do_span and mutation is None else [2, "block", "exit2"],
+                "ms": 1, "stderr": ""}
+    monkeypatch.setattr(D, "_one", gate)
+    assert D._inner(str(work / "units.json")) == 0
+    [rec] = json.loads((work / "results.json").read_text())["units"]
+    assert rec["reproduced"] and rec["cut"], rec
+    assert {(r["how"], r["changed"]) for r in rec["runs"]} == {("removed", True), ("invalid", True)}
+
+
 def test_a_decision_elsewhere_that_takes_an_allowed_deciders_verdict_is_its_use():
     """Row 13's use: a reader outside the allowed positions that decides from the return of the
     one function a decider at an allowed position decides by uses that verdict; with a rule of

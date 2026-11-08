@@ -19,7 +19,7 @@ You are the Graphify enrichment subagent. You run between Step 7 and Step 8 of t
 
 ## FIRST ACTION
 
-Read `$CLAUDE_PROJECT_DIR/.claude/dev-registry/<dev_session_id>/graphify.json` to register with the enforcement system.
+Read `<PROJECT_ROOT>/.claude/dev-registry/<dev_session_id>/graphify.json` (the path your dispatch's FIRST ACTION line gives) to register with the enforcement system.
 
 ---
 
@@ -44,7 +44,7 @@ You are purely infrastructure. You do NOT:
 Run the enrichment script with the task ID and context file path provided in your dispatch:
 
 ```
-source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py --task-id <task_id> --context-file <context_file_path>
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-enrich.py" --task-id <task_id> --context-file <context_file_path>
 ```
 
 The script handles all failure states advisorily — it never throws or blocks.

@@ -107,7 +107,9 @@ class Orchestrator:
         self.s = session or rp.session()
         self.devs = deviations or Deviations()
         self.respellings = list(respellings)
-        self.rules = list(rules)            # (regex on a placeholder's inner text, value or fn(match))
+        # (regex on a placeholder's inner text, value or fn(match)); the roots prompt-workflow.py prints
+        # for a harness command (PROJECT_ROOT, HARNESS_ROOT) last, so a driver's own rule for one wins
+        self.rules = list(rules) + [(r"^PROJECT_ROOT$", self.project), (r"^HARNESS_ROOT$", self.harness)]
         self.line_rules = list(line_rules)  # (regex on a prompt line, fn(line) -> line | DROP | DROP_NEXT)
         self.profile = profile
         self.tree = agents.Tree(rp)
@@ -288,6 +290,8 @@ class Orchestrator:
 
     # ------------------------------------------------------------ Bash
     def run(self, command: str, description: str, label: str, capture=(), timeout=None, actor=None):
+        if actor is None:  # the main agent writes R1's printed HARNESS_ROOT as the literal path
+            command = command.replace("<HARNESS_ROOT>", self.harness)
         command = self.respell(command, label)
         if capture:
             command = command.rstrip("\n") + "\ndeclare -p " + " ".join(capture) + " 2>/dev/null\n"

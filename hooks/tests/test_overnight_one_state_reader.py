@@ -83,13 +83,44 @@ def test_read_state_refuses_empty_and_non_object(tmp_path):
     assert overnight.read_state(listed) is None
 
 
-def test_session_state_binds_file_name_and_session_id(tmp_path):
+def test_session_state_binds_file_name_and_session_id(tmp_path, monkeypatch):
     claude = tmp_path / ".claude"
     claude.mkdir()
     (claude / f"overnight-state-{SID}.json").write_text(json.dumps(_record()))
     (claude / "overnight-state-other.json").write_text(json.dumps(_record()))
     assert overnight.session_state(SID, tmp_path)["session_id"] == SID
     assert overnight.session_state("other", tmp_path) is None
+    # With no project dir the locator finds it, by the same rule.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    assert overnight.session_state(SID)["session_id"] == SID
+    assert overnight.session_state("other") is None
+    assert overnight.session_state("") is None
+
+
+def test_no_function_of_lib_overnight_calls_itself_back():
+    """The artifact check's static half summarizes a function on a call cycle by
+    whichever caller enters the cycle first, so with session_state -> locate ->
+    session_state_file -> session_state, /stop's write through the located file
+    (break-overnight-lock.py) reached write_state or named no file, by the order of
+    the tree's files: the state then had two producers (the launcher's and /stop's)."""
+    import ast
+    tree = ast.parse(OVERNIGHT_PY.read_text())
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    calls = {name: {c.func.id for c in ast.walk(f) if isinstance(c, ast.Call)
+                    and isinstance(c.func, ast.Name) and c.func.id in funcs}
+             for name, f in funcs.items()}
+
+    def reached(name):
+        seen, todo = set(), list(calls[name])
+        while todo:
+            f = todo.pop()
+            if f not in seen:
+                seen.add(f)
+                todo += calls[f]
+        return seen
+
+    assert [f for f in funcs if f in reached(f)] == []
 
 
 def test_write_state_publishes_by_rename(tmp_path):
@@ -171,8 +202,11 @@ def test_script_write_state_and_cycle_index(tmp_path):
 def test_steps_come_from_the_canonical_todo():
     steps = contract_runtime.overnight_steps()
     assert [e["step"] for e in contract_runtime.exploration_calls(steps)] == ["2", "3", "4"]
-    assert [label for label, _call in contract_runtime.post_triage_steps(steps)] == [
-        "8", "10", "11g", "12", "15", "20"]
+    # Each dispatching step after PM TRIAGE, and the re-dispatches of BA (9, 11), dev (13) and
+    # dev and QA (17), in step order (P2 R13).
+    assert [(label, call["subagent_type"]) for label, call in contract_runtime.post_triage_steps(steps)] == [
+        ("8", "ba"), ("9", "ba"), ("10", "qa"), ("11", "ba"), ("11g", "graphify"), ("12", "dev"),
+        ("13", "dev"), ("15", "qa"), ("17", "dev"), ("17", "qa"), ("20", "pm")]
     assert contract_runtime.triage_call(steps)["mode"] == "TRIAGE"
 
 
@@ -226,10 +260,15 @@ def _todos(label: str | None, done: str = "") -> list:
     return out
 
 
-def _bookmark(project: Path, label: str, *cycles: list) -> None:
+def _bookmark(project: Path, label: str, *cycles: list, loaded: str | None = None) -> None:
     """The session transcript: /dev-overnight, then its TodoWrites (``cycles``
-    earlier lists first), ending with ``label`` in progress."""
-    records = [{"type": "user", "message": {"role": "user", "content": "/dev-overnight 2h"}}]
+    earlier lists first), ending with ``label`` in progress. With ``loaded``, the
+    command's text follows the opener as the CLI records it when the command is
+    typed (an isMeta record whose parentUuid is the opener's uuid)."""
+    records = [{"type": "user", "uuid": "u-open", "message": {"role": "user", "content": "/dev-overnight 2h"}}]
+    if loaded is not None:
+        records.append({"type": "user", "isMeta": True, "parentUuid": "u-open", "uuid": "u-text",
+                        "message": {"role": "user", "content": loaded}})
     for n, todos in enumerate([_todos(None), *cycles, _todos(label)]):
         records.append({"type": "assistant", "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": f"tw{n}", "name": "TodoWrite", "input": {"todos": todos}}]}})
@@ -274,16 +313,40 @@ def test_exploration_steps_pass_and_a_wrong_role_is_refused(session):
     assert before_triage.returncode == 2 and "Case A" in before_triage.stderr
 
 
-def test_a_pm_prompt_without_a_mode_is_plan_as_pm_md_reads_it(session):
-    """P1c A11: a session still running the base's Step 2 text dispatches PM PLAN with no PM_MODE line;
-    agents/pm.md reads a missing PM_MODE as PLAN, and so does the dispatch check. A mode the prompt
-    does carry is still compared, and only a PM prompt defaults."""
-    assert contract_runtime.detect_mode("You are the PM subagent.", "pm") == "PLAN"
-    assert contract_runtime.detect_mode("You are the PM subagent.", "architect") == ""
-    assert contract_runtime.detect_mode("PM_MODE: TRIAGE", "pm") == "TRIAGE"
-    _bookmark(session, "2")
+# origin/master's /dev-overnight text as the CLI records it (excerpt): its Step 2 template sets no
+# PM_MODE, its Step 4 template sets TRIAGE.
+BASE_PROSE = """#### Step 2: Launch PM Subagent
+- prompt: "
+  You are the PM subagent. Follow agents/pm.md instructions precisely.
+  Output test plan to: docs/dev/overnight/<session_id>/test-plan.json
+  "
+#### Step 4: Launch PM-Triage Subagent
+- prompt: "
+  PM_MODE: TRIAGE
+  You are the PM subagent in TRIAGE mode.
+  "
+"""
+
+
+def test_a_pm_prompt_without_a_mode_passes_where_the_loaded_text_sets_none(session):
+    """P1c A11, under P2's rule (G1: a step's mode binds only when the text the session loaded sets
+    it): a session still running the base's Step 2 text dispatches PM PLAN with no PM_MODE line, and
+    passes on that recorded text. The prompt's mode is read from the prompt alone, never from the
+    role; a mode the prompt does carry is still compared; a mode-less prompt of another role is
+    still held to Step 2's role."""
+    assert contract_runtime.detect_mode("You are the PM subagent.") == ""
+    assert contract_runtime.detect_mode("PM_MODE: TRIAGE") == "TRIAGE"
     base = "You are the PM subagent. Follow agents/pm.md instructions precisely.\nOutput test plan to: x"
-    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 0
+    _bookmark(session, "2", loaded=BASE_PROSE)
+    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 0, "base text"
+    other = _run("pretool-subagent-enforce.py", session, _agent("architect", base))
+    assert other.returncode == 2 and "role mismatch on step '2'" in other.stderr
+    _bookmark(session, "4", loaded=BASE_PROSE)
+    triage = _run("pretool-subagent-enforce.py", session, _agent("pm", base))
+    assert triage.returncode == 2 and "mode missing on step '4'" in triage.stderr
+    _bookmark(session, "2")  # no record of the text the session loaded: every step's mode binds
+    missing = _run("pretool-subagent-enforce.py", session, _agent("pm", base))
+    assert missing.returncode == 2 and "mode missing on step '2'" in missing.stderr
     refused = _run("pretool-subagent-enforce.py", session, _agent("pm", "PM_MODE: RETRO"))
     assert refused.returncode == 2 and "mode='RETRO'" in refused.stderr
 
@@ -310,9 +373,12 @@ def test_triage_handler_writes_the_contract_and_the_dispatch_hook_reads_it(sessi
     path = session / "docs" / "dev" / "overnight" / SID / "cycle-1" / "cycle-contract.json"
     contract = json.loads(path.read_text())
     assert [(c["step"], c["role"], c["mode"]) for c in contract["required_calls"]] == [
-        ("8", "ba", None), ("8", "ba", None), ("10", "qa", None), ("10", "qa", None),
+        ("8", "ba", None), ("8", "ba", None), ("9", "ba", None), ("9", "ba", None),
+        ("10", "qa", None), ("10", "qa", None), ("11", "ba", None), ("11", "ba", None),
         ("11g", "graphify", None), ("11g", "graphify", None),
-        ("12", "dev", None), ("12", "dev", None), ("15", "qa", None), ("15", "qa", None),
+        ("12", "dev", None), ("12", "dev", None), ("13", "dev", None), ("13", "dev", None),
+        ("15", "qa", None), ("15", "qa", None),
+        ("17", "dev", None), ("17", "dev", None), ("17", "qa", None), ("17", "qa", None),
         ("20", "pm", "RETRO")]
     import jsonschema
     jsonschema.validate(contract, json.loads((REPO / "schemas" / "cycle-contract.v1.json").read_text()))
@@ -569,23 +635,38 @@ def test_launcher_record_carries_no_cycle_counter(tmp_path):
 
 
 def test_stop_writes_through_the_launchers_write_path(tmp_path, monkeypatch):
+    """/stop's helper records the stop in the stopping session's own record,
+    through the launcher's write path, and never writes end_time (P2 R14): with
+    the /stop helper-auth token it releases the isolation fields too. Another
+    session's record is left byte for byte."""
     import importlib.util
     claude = tmp_path / ".claude"
     claude.mkdir()
     state_file = claude / f"overnight-state-{SID}.json"
     state_file.write_text(json.dumps(_record()))
+    other = claude / "overnight-state-other.json"
+    other.write_text(json.dumps(_record(session_id="other")))
+    other_bytes = other.read_bytes()
+    end_time = json.loads(state_file.read_text())["end_time"]
     inode = state_file.stat().st_ino
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_SESSION_ID", SID)
     spec = importlib.util.spec_from_file_location("break_lock_one_writer", REPO / "scripts" / "break-overnight-lock.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    past = _iso(-1)
-    assert module._backdate(state_file, past, release_isolation=True) == SID
+    tokens = tmp_path / "tokens"
+    tokens.mkdir()
+    monkeypatch.setattr(module, "_SENTINEL_DIR", str(tokens))
+    (tokens / f"claude-stop-helper-auth-{SID}.json").write_text(json.dumps({"expires_at": 2 ** 40}))
+    assert module.main() == 0
     after = json.loads(state_file.read_text())
-    assert (after["end_time"], after["current_phase"], after["isolation_active_until"]) == (
-        past, "completed", past)
+    assert (after["end_time"], after["current_phase"]) == (end_time, "completed")
     assert after["isolation_released_at"]
+    assert overnight.parse_end_time(after["isolation_active_until"]) < datetime.now(timezone.utc)
     assert state_file.stat().st_ino != inode
-    assert sorted(p.name for p in claude.iterdir()) == [state_file.name]
+    assert other.read_bytes() == other_bytes
+    assert sorted(p.name for p in claude.iterdir()) == sorted([state_file.name, other.name])
+    assert list(tokens.iterdir()) == []
     verdicts = overnight.state_verdicts(after)
     assert (verdicts.window_live, verdicts.isolation_held, verdicts.released) == (False, False, True)
+    assert verdicts.before_end

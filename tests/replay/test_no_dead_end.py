@@ -39,9 +39,10 @@ import pytest
 
 from tests.replay import sites, suite
 
-DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
-            "todo-first")
-PLAIN_CASES = ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending")
+DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
+            "checklist-lock")
+PLAIN_CASES = ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending",
+               "report-schema")
 CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
 CASES["dev-early"] = suite.Scenario("dead end: dev-early", "_deadend", (("case", "dev-early"),), ("dev",), 100)
@@ -52,6 +53,7 @@ ARMED_CASES = ("obligation", "forged-ack")  # G1 and G2 block only armed (CLAUDE
 DEV = next(s for s in suite.COMPLIANT if s.name == "/dev singular")
 FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
 MERGE = next(s for s in suite.COMPLIANT if s.name == "/merge")
+QA_EARLY = suite.Scenario("/dev QA before its dev returned", "dev", (("variant", "qa-early"),), ("dev",), DEV.cost)
 QA_WRITE = "agent:qa Write docs/dev/qa-report-*"
 QA_DISPATCH = "Step 13 Agent(qa)"
 SKIP = "qa.e2e_enforcement.status:skipped_without_justification"
@@ -69,10 +71,17 @@ FAULTS = {
     "dev report spoiled before QA": (DEV, "armed", f"plant@{QA_DISPATCH}=docs/dev/dev-report-{{task}}.json:junk"),
     "canonical aggregate missing before QA": (FANOUT, "shipped",
                                               "plant@Step 13 [[]l1] Agent(qa)=docs/dev/dev-report-{task}.json:absent"),
+    "canonical aggregate schema-invalid before QA": (FANOUT, "armed", "plant@Step 13 [[]l1] Agent(qa)="
+                                                     "docs/dev/dev-report-{task}.json:schema-invalid"),
+    "qa dispatched before its dev returned": (QA_EARLY, "armed", ""),
     "merge grant invalid": (MERGE, "shipped", "invalid@agent:merge-analyst Write grant=nonce:0000"),
     # test_faults.py's F7 (shipped): a lane dispatched from the pre-P1 template, its report needs_review
     "lane from the pre-P1 template": (FANOUT, "shipped", "pretemplate@Step 10 [[]l1] Agent(dev);"
                                       "invalid@agent:dev Write docs/dev/dev-report-*-l1.json=dev.status:needs_review"),
+    # test_faults.py's F9 (shipped): the newest lane's report reaches disk by a shell redirection, so the
+    # canonical aggregate is missing at that lane's stop (G2's canonical wire, C5)
+    "last lane report written by a shell redirection": (FANOUT, "shipped",
+                                                        "bash@agent:dev Write docs/dev/dev-report-*-l2.json"),
 }
 FORGED = re.compile(r"^ESCALATION_ACK [0-9a-f]+\s*$", re.M)
 
@@ -83,7 +92,7 @@ def case_key(case: str) -> str:
 
 def fault_key(fault: str) -> str:
     scn, settings, spec = FAULTS[fault]
-    return suite.replay_key(scn, settings, (("fault", spec),))
+    return suite.replay_key(scn, settings, (("fault", spec),) if spec else ())
 
 
 # /dev-overnight marking Step 0 completed before the wake's CronCreate and stopping after end_time before
@@ -333,7 +342,7 @@ def test_the_wakes_gates_are_cleared_by_the_actors_next_action(replays, catalog,
     r = replays.get(key)
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     bl = blocks(r, catalog)
-    assert sorted(s.func for b in bl for s in b["sites"]) == ["_block_open_wake", "check_wake_step"], r.explain()
+    assert sorted(s.func for b in bl for s in b["sites"]) == ["check_wake_step", "wake_lock"], r.explain()
     assert all(catalog.of(s) == "G" for b in bl for s in b["sites"]), r.explain()
     bad = check_replay(r, catalog, compliant=False)
     assert not bad, "\n".join(bad)

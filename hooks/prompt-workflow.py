@@ -3,16 +3,20 @@
 UserPromptSubmit Hook: Checklist Injection for Slash Commands
 
 Phase A (slash command detected):
-  - Runs scripts/todo/<command>.py to get the step list
+  - Runs the harness's scripts/todo/<command>.py to get the step list
   - Starts the bookmark .claude/workflow-{session_id}.json: the command, its
     arguments and the workflow instance. The Codex plan path of
     pretool-workflow-gate.py and posttool-subagent-track.py update it; every
     write goes through lib.todo_canonical.write_bookmark, its one writer
   - If /dev-overnight: creates overnight-state-<session_id>.json with parsed end-time
   - Prints checklist-ready message + exact first TodoWrite call to use
+  - For every harness command (stop_contract.harness_commands), first prints
+    PROJECT_ROOT=<abs> and HARNESS_ROOT=<abs>, the roots its text's Read paths
+    start from; at /push, then the branch and commit HEAD is at (print_push_head)
 
 Phase B (subsequent prompts, no slash command):
-  - If any overnight-state-*.json exists with future end_time: inject continuation
+  - While the session's overnight window is open (lib/overnight.window_open):
+    inject continuation, led by the PROJECT_ROOT and HARNESS_ROOT lines
   - Reads the checklist from the transcript (lib.todo_canonical.checklist)
   - Injects current progress + exact next TodoWrite call template
 
@@ -105,45 +109,19 @@ def overnight_state_path(session_id: str = 'default') -> Path:
     return PROJECT_DIR / '.claude' / f'overnight-state-{session_id}.json'
 
 
-def _is_active_state(state: dict) -> bool:
-    """Return True if the record's window is live.
-
-    The verdict is lib/overnight.py's state_verdicts, the one rule every
-    overnight reader decides by: a missing, empty, non-string or unparseable
-    end_time is not live (fail closed), a zoned end_time is compared in UTC
-    and a zone-less one as local time, and a completed session is not live.
-    """
-    import overnight  # hooks/lib is on sys.path (see the WS1 block above)
-    return overnight.state_verdicts(state).window_live
-
-
 def find_any_overnight_state(session_id: str = '') -> tuple:
-    """Return the live overnight state OWNED BY session_id, else (None, None).
-
-    Strict identity binding: the record is resolved from the submitting
-    session_id alone -- no project-wide glob and no fallback scan -- and the
-    record's own session_id must equal that id before liveness is considered.
-    A foreign, blank or absent id on either side injects nothing.
-
-    Deliberately stricter than the posttool-overnight-loop.py:156-159 mirror,
-    whose `if state_session_id and ...` guard still broadcasts a record carrying
-    a blank/absent session_id to every session. The previous project-wide glob
-    returned the first live match, so a second live session was served the first
-    one's state, and any session -- including one with no overnight of its own --
-    received the full continuation block.
-    """
-    if not isinstance(session_id, str) or not session_id:
+    """(record, state file) of the submitting session's overnight while its
+    window is open, else (None, None). lib/overnight decides both on the payload
+    this hook received: `locate` finds the session's own record (its file name
+    and session_id field; from a worktree or a fresh clone, the main root's),
+    and `window_open` closes at end_time or at the human's typed /stop. No
+    glob, no other session's record, no state field."""
+    import overnight  # hooks/lib is on sys.path (see the WS1 block above)
+    payload = {'session_id': session_id, 'transcript_path': CURRENT_TRANSCRIPT_PATH, 'cwd': str(PROJECT_DIR)}
+    if not overnight.window_open(payload):
         return None, None
-    p = overnight_state_path(session_id)
-    try:
-        state = json.loads(p.read_text())
-    except Exception:
-        return None, None
-    if not isinstance(state, dict) or state.get('session_id') != session_id:
-        return None, None
-    if not _is_active_state(state):
-        return None, None
-    return state, p
+    state_path, state = overnight.locate(session_id, payload)
+    return state, state_path
 
 
 def extract_command_name(user_input: str) -> str:
@@ -307,13 +285,10 @@ def resolve_command_spec_path(cmd_name: str) -> Path | None:
 
 
 def run_todo_script(cmd_name: str, user_input: str = "") -> list:
-    todo_script = PROJECT_DIR / 'scripts' / 'todo' / f'{cmd_name}.py'
+    # The harness's own todo script; a product repository's scripts/todo never runs.
+    todo_script = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
     if not todo_script.exists():
-        global_todo = Path(__file__).resolve().parent.parent / 'scripts' / 'todo' / f'{cmd_name}.py'
-        if global_todo.exists():
-            todo_script = global_todo
-        else:
-            return []
+        return []
     # Forward the raw user prompt to the todo script via env var so
     # argument-aware scripts (e.g. spec.py) can distinguish modes.
     # Other todo scripts don't read this var; setting it is harmless.
@@ -364,50 +339,6 @@ def build_completion_template(todos: list) -> str:
     return json.dumps(result, ensure_ascii=False, separators=(",", ": "))
 
 
-def build_sequence_fix_call(last_todos: list) -> str:
-    """For sequence violations: compute correct next state."""
-    if not last_todos:
-        return ''
-    try:
-        result = [t.copy() for t in last_todos]
-        idx = next(
-            (i for i, t in enumerate(result) if t.get('status') == 'in_progress'),
-            None,
-        )
-        if idx is not None:
-            result[idx]['status'] = 'completed'
-            _set_first_pending_ip(result[idx + 1:])
-        else:
-            _set_first_pending_ip(result)
-        return json.dumps(result, ensure_ascii=False, separators=(",", ": "))
-    except Exception:
-        return ''
-
-
-def _find_current_step(todos: list) -> str:
-    """Find the content of the current in_progress step."""
-    ip = next((t for t in todos if t.get('status') == 'in_progress'), None)
-    return ip["content"] if ip else "current step"
-
-
-def format_sequence_violation(todos: list, last_todos: list) -> str:
-    """Format locked message for sequence violations."""
-    if last_todos:
-        current = _find_current_step(last_todos)
-        fix_json = build_sequence_fix_call(last_todos)
-    else:
-        current = _find_current_step(todos)
-        fix_json = ''
-    lines = [
-        'WORKFLOW LOCKED (sequence_violation): Steps skipped or out of order.',
-        f'REQUIRED: complete "{current}" first, then advance ONE step.',
-        'Call TodoWrite to fix the sequence.',
-    ]
-    if fix_json:
-        lines += ['', 'Call TodoWrite with this exact todos array:', '', fix_json]
-    return '\n'.join(lines)
-
-
 def format_active_progress(todos: list, ack: bool) -> str:
     """Format progress message for active (non-locked) workflow."""
     total = len(todos)
@@ -431,16 +362,6 @@ def format_active_progress(todos: list, ack: bool) -> str:
         lines.append('Call TodoWrite NOW with this array (pass as array, NOT string):')
         lines.append(build_next_todowrite_call(todos, mark_first=False))
     return '\n'.join(lines)
-
-
-def format_progress(
-    todos: list, lock_reason: str = '', canonical: list = None,
-    todo_acknowledged: bool = False, last_todos: list = None,
-) -> str:
-    """Phase B: show current progress. Dispatches to formatters."""
-    if lock_reason == 'sequence_violation':
-        return format_sequence_violation(todos, last_todos or [])
-    return format_active_progress(todos, todo_acknowledged)
 
 
 # --- Overnight helpers ---
@@ -553,17 +474,6 @@ def create_overnight_state(end_time: str, focus: str = '', spec_path: str = '', 
     except Exception as exc:
         print(f'overnight state creation failed: {exc}', file=sys.stderr)
         return False
-
-
-def load_overnight_state(session_id: str = '') -> dict | None:
-    """Load overnight state file. Returns None if missing or corrupt."""
-    sp = overnight_state_path(session_id)
-    if not sp.exists():
-        return None
-    try:
-        return json.loads(sp.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
 
 
 def _build_worktree_instruction(state: dict) -> str:
@@ -1065,7 +975,8 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
     overnight_todos = _load_overnight_todos()
     step_count = len(overnight_todos) or 22
     step_labels = '; '.join(str(item.get('content', '')) for item in overnight_todos)
-    parts = [f'OVERNIGHT CONTINUATION - Cycle {cycle}', '']
+    # The roots the re-sent command text's Read paths start from (print_roots').
+    parts = [f'OVERNIGHT CONTINUATION - Cycle {cycle}', root_lines(state), '']
     if include_spec and spec_delivered:
         parts += [OVERNIGHT_SPEC_HEADER, '', cmd_spec, '']
     parts += [
@@ -1081,7 +992,7 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
         'the system automatically resets for a new cycle.',
         f'Canonical steps: {step_labels}',
         'Do NOT create state file.',
-        f'Read .claude/overnight-state-{state.get("session_id", "default")}.json and resume from phase="{phase}".',
+        f'Read {overnight.locate(state.get("session_id"), {"cwd": str(PROJECT_DIR)})[0]} and resume from phase="{phase}".',
         # Phase->step map MUST match the markdown Continuation-Mode map in
         # commands/dev-overnight.md (### Continuation Mode), the single source of
         # truth. implementing->Step 12 lands on the shared Step 11g Dev-dispatch
@@ -1213,11 +1124,7 @@ def handle_phase_b(session_id: str) -> None:
     todos = state.todos if state.todos is not None else state.canonical
     if all(t.get('status') == 'completed' for t in todos):
         return
-    lock = state.lock if state.lock != 'not_started' else ''
-    print(format_progress(
-        todos, lock_reason=lock, canonical=state.canonical,
-        todo_acknowledged=not state.lock, last_todos=state.accepted or [],
-    ))
+    print(format_active_progress(todos, state.todos is not None))
 
 
 def checklist_message(cmd_name: str, todos: list) -> str:
@@ -1271,8 +1178,8 @@ def _mint_unique_do_taskid() -> str:
     /close + /commit task-id resolution compatible (no nonce suffix that /close's
     timestamp-pattern branch might reject). The flat /tmp marker is reachable by the
     maxdepth-1 /tmp sweep AND self-pruned here. The ONLY non-reserved return path is
-    an unwritable state dir (OSError) — but there the sidecar write fails too, so
-    the id never reaches the agent and a collision on it is moot."""
+    a state dir that refuses the marker (OSError): the id is then returned
+    unreserved, and the consent flag and the sidecar fail in that dir too."""
     base = datetime.now()
     # Opportunistic prune — a marker only matters for the ~1s it guards (mint
     # always scans forward from `now`), so markers older than 5 min are pure debris.
@@ -1297,12 +1204,10 @@ def _mint_unique_do_taskid() -> str:
         except FileExistsError:
             continue  # this second already reserved by another mint -> bump forward
         except OSError:
-            # State dir unwritable: the sidecar write will also fail, so an
-            # unreserved id here is moot (it never reaches the agent). Return it.
-            return ts
+            return ts  # the state dir refuses the marker: unreserved (see above)
     # 300 consecutive seconds all reserved — unreachable in practice. FAIL CLOSED
-    # rather than return an already-reserved (colliding) id: handle_do_consent's
-    # try/except then skips the sidecar, so no /do task-id is minted for this prompt.
+    # rather than return an already-reserved (colliding) id: handle_do_consent
+    # then prints no minted line and writes no sidecar for this prompt.
     raise RuntimeError("unable to reserve a unique /do task-id after 300 probes")
 
 
@@ -1317,21 +1222,27 @@ def handle_do_consent(sid: str) -> None:
     flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag")
     try:
         flag.write_text("true")
-        print(f"[/do] Consent granted. Main agent may now perform direct operations this session.")
+        print("[/do] Consent granted. Main agent may now perform direct operations this turn.")
     except Exception as e:
         sys.stderr.write(f"[/do] Failed to write consent flag: {e}\n")
     # Mint a unique task-id and expose it via a session-keyed sidecar. Kept
     # SEPARATE from the consent flag (the orchestrator-gate trust root, whose
     # content stays "true" so every existence-checking reader is unaffected).
+    # The minted line is printed first: the Stop gate reads the task id from
+    # this hook's output in the transcript, not from the sidecar (TC-26), so a
+    # failed sidecar write leaves the id named all the same.
     try:
         task_id = _mint_unique_do_taskid()
-        sidecar = Path(f"{harness_state_dir()}/claude-do-task-{sid}.json")
-        sidecar.write_text(json.dumps({
+    except Exception as e:
+        sys.stderr.write(f"[/do] Failed to mint a task-id: {e}\n")
+        return
+    print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → {harness_state_dir()}/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
+    try:
+        Path(f"{harness_state_dir()}/claude-do-task-{sid}.json").write_text(json.dumps({
             "task_id": task_id,
             "session_id": sid,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }))
-        print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → {harness_state_dir()}/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
     except Exception as e:
         sys.stderr.write(f"[/do] Failed to write task sidecar: {e}\n")
 
@@ -1436,12 +1347,10 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
 
 def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, project_dir: Path) -> str:
     """Reserve a /dev, /dev-command or /redev task id and arm its registry
-    (_arm_registry) with the cleaned requirement and the artifact-contract
-    flag, plus codex under --codex (the E2E gate needs no flag: it judges every
-    cycle's QA). The artifact-contract flag arms
-    hooks/subagentstop-artifact-contract-enforce.py, the producer-side
-    port of /close's Artifact schema gate. A flag that cannot be written is
-    reported and the start goes on (fail-open). Returns the task id."""
+    (_arm_registry) with the cleaned requirement, plus the codex flag under
+    --codex (the E2E gate needs no flag: it judges every cycle's QA). A flag
+    that cannot be written is reported and the start goes on (fail-open).
+    Returns the task id."""
     # Reserving the directory with mkdir(exist_ok=False) is the allocation
     # linearization point shared by concurrent sessions.  No existing family is
     # opened for replacement, even when the wall clock has only second precision.
@@ -1464,7 +1373,7 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     # Also strip inline --spec=<path> form
     clean_requirement = re.sub(r'(?:--|[–—])spec\s+\S+', '', ' '.join(clean_tokens)).strip()
 
-    flags = ['artifact-contract'] + (['codex'] if '--codex' in tokens else [])
+    flags = ['codex'] if '--codex' in tokens else []
     error = _arm_registry(cmd_name, dev_session_id, clean_requirement.encode('utf-8'),
                           claude_session_id, project_dir, flags, _write_new_file)
     if error:
@@ -1515,22 +1424,6 @@ def _dev_replay_path(sid: str, envelope_digest: str) -> Path:
     return PROJECT_DIR / '.claude' / 'dev-start-replays' / sid / f'{envelope_digest}.json'
 
 
-def _dev_report_reached_terminal(task_id: str) -> bool:
-    """True iff docs/dev/dev-report-<task_id>.json exists and its dev.status
-    is a terminal value (obligation.terminal_status, the schema's vocabulary).
-    Fails OPEN to False (non-terminal) on any read/parse
-    error, missing file, wrong shape, or unrecognized status -- the fail-safe
-    direction here is to PRESERVE the current replay behavior, not to mint a
-    surprising new task_id."""
-    try:
-        from lib.obligation import terminal_status  # lazy: only a replay pays the import
-        path = PROJECT_DIR / 'docs' / 'dev' / f'dev-report-{task_id}.json'
-        record = json.loads(path.read_text(encoding='utf-8'))
-        return terminal_status('dev-report.v2', record) is not None
-    except Exception:
-        return False
-
-
 def decide_spec_path(explicit: str, sid: str) -> str:
     """E14 (PLAN-v2 P9 row 1): the one decision of a run's spec, made here at
     UserPromptSubmit and printed in the start output (`Spec: <path>`) or passed
@@ -1557,30 +1450,29 @@ def _start_identity(task_id: str) -> str:
 
 
 def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_digest: str) -> None:
-    """Commit one distinct Dev family or replay an exact envelope verbatim."""
+    """Commit one distinct Dev family or replay an exact envelope verbatim
+    while its replay record is younger than 60 s."""
     if not envelope_digest:
         envelope_digest = hashlib.sha256(
             f'{sid}\0{user_input}'.encode('utf-8')
         ).hexdigest()
     replay_path = _dev_replay_path(sid, envelope_digest)
     with _exclusive_lock(_dev_start_lock_path(sid)):
-        terminal_notice = ''
-        if replay_path.exists():
+        # The replay absorbs one envelope delivered again; the same text typed
+        # later (a bare /redev or /dev) is a new invocation and mints a fresh id.
+        try:
+            fresh = time.time() - replay_path.stat().st_mtime < 60
+        except OSError:
+            fresh = False
+        if fresh:
             replay = json.loads(replay_path.read_text(encoding='utf-8'))
             output = replay.get('stdout')
             error_output = replay.get('stderr', '')
             if not isinstance(output, str) or not isinstance(error_output, str):
                 raise RuntimeError('malformed Dev start replay record')
-            prior_task_id = replay.get('task_id', '')
-            if not (isinstance(prior_task_id, str) and prior_task_id
-                    and _dev_report_reached_terminal(prior_task_id)):
-                sys.stdout.write(output)
-                sys.stderr.write(error_output)
-                return
-            terminal_notice = (
-                f'[dev] Previous cycle {prior_task_id} already reached a '
-                'terminal state; starting a new one.\n'
-            )
+            sys.stdout.write(output)
+            sys.stderr.write(error_output)
+            return
 
         todos = run_todo_script(cmd_name, user_input)
         if not todos:
@@ -1632,7 +1524,6 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
         codex_active = '--codex' in user_input.split()
         spec = decide_spec_path(_strip_spec_arg(user_input)[1], sid)
         output = ''.join([
-            terminal_notice,
             diagnostics,
             _start_identity(task_id),
             f'Spec: {spec or "none"}\n',
@@ -1657,6 +1548,10 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
 
 def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: str = '') -> None:
     """Phase A: slash command detected -- setup todos, state, emit checklist."""
+    if cmd_name != 'dev-overnight':
+        print_roots(cmd_name, sid)
+    if cmd_name == "push":
+        print_push_head()
     if cmd_name in ("commit", "stop"):
         _write_userintent_sentinel(cmd_name, sid)
     if cmd_name == "do":
@@ -1693,8 +1588,44 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
                   'command spec injected.', file=sys.stderr)
             _cleanup_overnight_partials(sid)
             raise SystemExit(2)
+        print_roots(cmd_name, sid)  # after the launcher: worktree_path exists now
     _write_bookmark(cmd_name, sid, _extract_arguments(user_input, cmd_name))
     emit_checklist_message(cmd_name, todos)
+
+
+def print_roots(cmd_name: str, sid: str) -> None:
+    """The root lines (root_lines) for a harness command only; in /dev-overnight
+    from the session's record, found by lib/overnight's locator."""
+    try:
+        from stop_contract import harness_commands  # hooks/lib: the one list of them
+    except ImportError:  # the checklist after this never waits on the roots
+        return
+    if cmd_name in harness_commands():
+        import overnight  # hooks/lib is on sys.path (see the WS1 block above)
+        state = overnight.locate(sid, {'cwd': str(PROJECT_DIR)})[1] if cmd_name == 'dev-overnight' else None
+        print(root_lines(state))
+
+
+def print_push_head() -> None:
+    """At a /push opener, HEAD as git has it then: `[/push] HEAD at the opener: <refs/heads/<branch>
+    or detached> <commit>` (P5 review H2); nothing while HEAD names no commit. The /push Stop judges
+    that branch and commit (command_span's Span.opener_heads): git's reflog, whose dates a command's
+    GIT_COMMITTER_DATE sets, and the branch, which a reset moves, are no record of them."""
+    def git(*args):
+        done = subprocess.run(['git', '-C', str(PROJECT_DIR), *args], capture_output=True, text=True, timeout=5)
+        return done.stdout.strip() if done.returncode == 0 else ''
+    commit = git('rev-parse', '--verify', '-q', 'HEAD^{commit}')
+    if commit:
+        ref = git('symbolic-ref', '-q', 'HEAD')
+        print(f"[/push] HEAD at the opener: {ref if ref.startswith('refs/heads/') else 'detached'} {commit}")
+
+
+def root_lines(state) -> str:
+    """PROJECT_ROOT (with an overnight record, its worktree_path: the command's
+    <PROJECT_ROOT>; its <MAIN_ROOT> is Step 1's) and HARNESS_ROOT (this hook's
+    install), the roots a command text's Read paths start from."""
+    project = state.get('worktree_path') if isinstance(state, dict) else None
+    return f'PROJECT_ROOT={project or PROJECT_DIR}\nHARNESS_ROOT={Path(__file__).resolve().parent.parent}'
 
 
 def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
@@ -1826,6 +1757,7 @@ def cli(argv: list) -> int:
             print('prompt-workflow.py start: needs CLAUDE_CODE_SESSION_ID and the '
                   '/dev, /dev-command or /redev command text on stdin', file=sys.stderr)
             return 2
+        print_roots(cmd_name, sid)
         recorded = _recorded_start(cmd_name, user_input, sid)
         if recorded:
             sys.stdout.write(recorded)

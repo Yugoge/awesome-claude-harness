@@ -725,13 +725,48 @@ def test_ac11_late_repair_flag_is_the_only_behavior_switch(tmp_path: Path) -> No
     assert rc1 == 0
 
 
-def test_ac11_static_grep_confirms_close_md_uses_close_route_select(tmp_path: Path) -> None:
-    # Routing invariant: /close reaches the late-repair controller only through
-    # the route selector, so the controller is not named before the R4 section.
+def test_route_select_cli_passes_only_a_pass_chain_and_loads_a_legacy_needs_review_report(tmp_path: Path) -> None:
+    # /close Step 0's arguments; a dev-report older code left as needs_review
+    # with a status_rationale is a failing chain: exit 2 with the JSON.
+    for task_id, legacy, expected_rc, expected_status in (
+        ("20260101-000520", False, 0, "pass"),
+        ("20260101-000521", True, 2, "fail"),
+    ):
+        root = tmp_path / task_id
+        paths = fx.build_complete(root, task_id)
+        if legacy:
+            report = json.loads(paths["dev_report"].read_text(encoding="utf-8"))
+            report["dev"]["status"] = "needs_review"
+            report["dev"]["status_rationale"] = {
+                "classification": "other_disclosed_handoff",
+                "blocked_by": "a lane could not finish",
+                "forbidden_action": "see the lane dev-report",
+            }
+            paths["dev_report"].write_text(json.dumps(report), encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(ROUTE_SELECT_PATH), "--task-id", task_id, "--project-dir", str(root)],
+            capture_output=True, text=True, check=False,
+        )
+        assert proc.returncode == expected_rc, proc.stderr
+        assert "Traceback" not in proc.stderr
+        payload = json.loads(proc.stdout)
+        assert payload["outcome"] == "not_selected"
+        assert payload["artifact_chain"]["status"] == expected_status
+
+
+def test_ac11_static_grep_confirms_close_md_reaches_init_only_in_the_r4_section(tmp_path: Path) -> None:
+    # Routing invariant (P4): /close calls no route selector; its late-repair
+    # section alone names the controller, whose init it calls once, and only
+    # when --late-repair is passed. close-route-select.py stays, uncalled.
     close_md = (REPO_ROOT / "commands" / "close.md").read_text(encoding="utf-8")
-    assert "### Late-repair route" in close_md
-    assert "scripts/close-route-select.py" in close_md
-    assert "late-repair-controller.py" not in close_md.split("### Late-repair route")[0]
+    head, rest = close_md.split("### Late-repair route")
+    r4 = rest.split("\n### ")[0]
+    assert "close-route-select" not in close_md
+    assert "late-repair-controller.py" not in head
+    assert close_md.count("late-repair-controller.py") == r4.count("late-repair-controller.py")
+    assert 'late-repair-controller.py" init --task-id "$TASK_ID"' in r4
+    assert "without `--late-repair`, nothing in this section runs" in r4
+    assert ROUTE_SELECT_PATH.is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -1044,6 +1079,36 @@ def test_ac9_companion_resolve_commit_repos_selects_effective_report_when_verifi
         report_arg=None,
     )
     assert Path(plan["report_path"]).resolve() == effective_path.resolve()
+
+
+def _commit_step5_block() -> str:
+    """commands/commit.md Step 5's repository-plan block, as the command spells it."""
+    text = (REPO_ROOT / "commands" / "commit.md").read_text(encoding="utf-8")
+    step5 = text[text.index("### Step 5:") : text.index("### Step 6:")]
+    import re
+    body = next(b for b in re.findall(r"```bash\n(.*?)```", step5, re.S) if "LATE_REPAIR_JSON" in b)
+    assert "resolve-commit-repos.py" in body, body
+    return "\n".join(line[2:] if line.startswith("  ") else line for line in body.splitlines())
+
+
+def test_commit_step5_plans_from_the_verified_effective_report(tmp_path: Path) -> None:
+    """P4 R5/R6 (late-repair entry as /commit uses it): with the controller's state verified,
+    commit.md Step 5's own block plans from the effective report, which the changelog-analyst
+    then admits into its whitelist because the plan names it (agents/changelog-analyst.md item 4)."""
+    task_id = "20260101-000805"
+    root = tmp_path / "project"
+    effective_path = _produce_verified_effective_report(root, task_id)
+    script = (_commit_step5_block() + '\nprintf "TASK_REPORT=%s\\n" "$TASK_REPORT"'
+              + '\nprintf "PLAN=%s\\n" "$(jq -c . <<<"$REPOSITORY_PLAN")"\n')
+    env = {**__import__("os").environ, "CLAUDE_HOME": str(REPO_ROOT), "TASK_ID": task_id,
+           "CLOSE_REPORT": str(root / "docs" / "dev" / f"close-report-{task_id}.md")}
+    proc = subprocess.run(["bash", "-c", script], cwd=root, env=env, capture_output=True, text=True)
+    out = dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+    assert json.loads(out["LATE_REPAIR"])["state"] == "verified", proc.stdout + proc.stderr
+    assert Path(out["TASK_REPORT"]).resolve() == effective_path.resolve()
+    assert Path(json.loads(out["PLAN"])["report_path"]).resolve() == effective_path.resolve()
+    analyst = (REPO_ROOT / "agents" / "changelog-analyst.md").read_text(encoding="utf-8")
+    assert "when `REPOSITORY_PLAN.report_path` is\n   `dev-report-<TASK_ID>.effective.json`" in analyst
 
 
 def test_ac9_companion_resolve_commit_repos_regression_no_run_record(tmp_path: Path) -> None:
@@ -1490,11 +1555,15 @@ def test_close_todo_declares_finalize_as_a_main_agent_step_under_late_repair(tmp
 
     plain = todos("/close")
     late = todos("/close --late-repair 20260101-000960")
-    assert todos("/close --force") != plain
-    assert late[1:] == plain
+    # P4 R11: the same five steps under every prompt; under --late-repair,
+    # Step 0 (the main agent's own) also declares finalize's effective report.
+    assert todos("/close --force") == plain
+    assert todos("/close --auto") == plain
+    assert late[1:] == plain[1:]
     finalize = late[0]
-    assert finalize["content"] == "Step 0: Finalize the late repair"
+    assert finalize["content"] == plain[0]["content"] == "Step 0: Resolve the disposition; complete the cycle when incomplete"
     assert "subagent_call" not in finalize
+    assert "artifacts" not in plain[0]
     [declared] = finalize["artifacts"]
 
     # The declared path is the one finalize writes and records.

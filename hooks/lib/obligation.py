@@ -1085,23 +1085,9 @@ def _session_transcripts(project_dir: str | Path, roots: Iterable[str | Path] | 
 
 
 def _span_openers(transcript: Path, commands: frozenset) -> list[tuple[int, str, str]]:
-    """(line, command, arguments) of each human-typed harness command."""
-    stop_contract = _lib_module("stop_contract")
-    openers = []
-    try:
-        with transcript.open(encoding="utf-8", errors="replace") as handle:
-            for number, line in enumerate(handle, 1):
-                if '"user"' not in line:
-                    continue
-                try:
-                    found = stop_contract.span_opener(json.loads(line), commands)
-                except ValueError:
-                    continue
-                if found:
-                    openers.append((number, found[0], found[1]))
-    except OSError:
-        return []
-    return openers
+    """(line, command, arguments) of each human-typed harness command: the
+    transcript reader's own list (command_span.openers)."""
+    return _lib_module("command_span").openers(transcript, commands)
 
 
 def _task_records(task_id: str, project_dir: str | Path,
@@ -1303,8 +1289,10 @@ def _canonical_step(family: str, path: str, spans: list[tuple[str, str]],
     a step that declares it itself (the main agent's own, as /close's
     late-repair Step 0 declares finalize's effective report), else the step
     whose dispatch template declares it (the step under whose heading the
-    template sits, else the step whose subagent_call names the template's
-    role). Each step is returned with what its entry names."""
+    template sits, when the template is in that command's own file, else the
+    step whose subagent_call names the template's role: a label never binds
+    across files, where "Step 4" may be another command's unrelated step).
+    Each step is returned with what its entry names."""
     todo_canonical = _lib_module("todo_canonical")
     for command, args in spans:
         steps = todo_canonical.run_todo_script(command, args) or []
@@ -1321,7 +1309,8 @@ def _canonical_step(family: str, path: str, spans: list[tuple[str, str]],
                                                  path, family)
                     if values is None:
                         continue
-                    owner = next((s for s in steps if _step_label(s) == template["step"]), None)
+                    owner = next((s for s in steps if source == command
+                                  and _step_label(s) == template["step"]), None)
                     call = owner.get("subagent_call") if owner else None
                     if owner is None or (call and call.get("subagent_type") != template["role"]):
                         owner = next((s for s in steps if (s.get("subagent_call") or {}).get("subagent_type")
@@ -1435,6 +1424,36 @@ def declaring_dispatch(
     if step is not None:
         return step
     return _writer(records, wanted, project_dir)
+
+
+def first_declared_at(
+    task_id: Any,
+    role: Any,
+    path: str,
+    project_dir: str | Path,
+    roots: Iterable[str | Path] | None = None,
+) -> datetime | None:
+    """The earliest ``dispatched_at`` among the task's dispatch records (every
+    session of the project, as :func:`declaring_dispatch` reads them) whose
+    obligation names ``role`` and declares ``path``: when the producer's
+    first round of that artifact began. A re-dispatch of the same template (a
+    clarification answer, a QA-rejected retry, a lane re-dispatch, a re-split)
+    declares the path again; a file it had nothing to change in keeps the
+    mtime of the round that wrote it, which is no earlier than this. None when
+    no record of the task declares it (a null task_id included). Read-only."""
+    if not isinstance(path, str) or not path:
+        return None
+    wanted = Path(path).as_posix()
+    times = [
+        parse_iso8601(r["obligation"].get("dispatched_at"))
+        for r in _task_records(task_id, project_dir, roots)
+        if r["obligation"].get("role") == role
+        and any(isinstance(a, Mapping) and isinstance(a.get("path"), str)
+                and Path(a["path"]).as_posix() == wanted
+                for a in r["obligation"].get("artifacts") or [])
+    ]
+    times = [t for t in times if t is not None and t.tzinfo is not None]
+    return min(times, default=None)
 
 
 def _main(argv: list[str]) -> int:

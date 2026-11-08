@@ -394,6 +394,18 @@ if [[ "$WORKTREE_CHOICE" == "in_place" ]]; then
         exit 1
     fi
 
+    # BUBBLEWRAP. In place, the keystone's core.hooksPath sits in this checkout's
+    # own .git/config, and only the guard's bubblewrap read-only bind keeps the
+    # actor's Bash commands off it. Replayed with no bubblewrap (P2 R13's experiment),
+    # every removal of the key, by the main agent and by a subagent, passed the
+    # hooks and removed it. bwrap is probed by running it, as the guard runs it;
+    # CLAUDE_OVERNIGHT_FORCE_NO_BWRAP=1 is the guard's own no-bubblewrap seam.
+    if [[ "${CLAUDE_OVERNIGHT_FORCE_NO_BWRAP:-}" == "1" ]] || ! bwrap --ro-bind / / -- true >/dev/null 2>&1; then
+        echo "Error: in-place mode requires bubblewrap (bwrap), which this host does not provide or cannot run: without its read-only bind the overnight actor can remove the git keystone (core.hooksPath) from this checkout's .git/config. No state written." >&2
+        echo "Remedy: install bubblewrap, or relaunch with --worktree to work in an isolated worktree." >&2
+        exit 1
+    fi
+
     WORKTREE_PATH="$MAIN_ROOT"
     WORKTREE_BRANCH="$IN_PLACE_BRANCH"
     WORKTREE_HEAD_AT_START="$MAIN_HEAD_AT_START"

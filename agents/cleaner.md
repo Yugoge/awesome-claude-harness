@@ -73,10 +73,10 @@ Before executing any action:
 | **delete** | Remove file (ONLY if approved) | Bash (rm) |
 | **rename** | Rename file | Bash (mv) |
 | **fix_style** | Replace old_line with new_line | Edit tool |
-| **update_gitignore** | Run `~/.claude/scripts/update-gitignore.sh "$PROJECT_ROOT"` | Bash |
-| **generate_index** | Run `~/.claude/scripts/generate-folder-index.sh "$PROJECT_ROOT/docs"` (docs/INDEX.md, the index commands/clean.md names) | Bash |
-| **merge_test_folders** | Run `~/.claude/scripts/migrate-test-to-tests.sh "$PROJECT_ROOT"` | Bash |
-| **cleanup_tests** | Run `~/.claude/scripts/cleanup-tests-folder.sh "$PROJECT_ROOT"` | Bash |
+| **update_gitignore** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/update-gitignore.sh" "$PROJECT_ROOT"` | Bash |
+| **generate_index** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/generate-folder-index.sh" "$PROJECT_ROOT/docs"` (docs/INDEX.md, the index commands/clean.md names) | Bash |
+| **merge_test_folders** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/migrate-test-to-tests.sh" "$PROJECT_ROOT"` | Bash |
+| **cleanup_tests** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/cleanup-tests-folder.sh" "$PROJECT_ROOT"` | Bash |
 
 After each operation, stage changes: `git add <affected files>`
 
@@ -109,7 +109,7 @@ cleanup: Execute approved cleanup actions
 After each successful commit (exit code 0), write the push-gate token so `/push` can proceed, with the token's one writer (the same one changelog-analyst runs under `/commit`):
 
 ```bash
-python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/write-push-gate-token.py" --repo-root "<GIT_ROOT>" --branch "<BRANCH>" --commit "<COMMIT_SHA>"
 ```
 
 `GIT_ROOT` is `git rev-parse --show-toplevel`, `BRANCH` is `git branch --show-current`, and `COMMIT_SHA` is the sha `git rev-parse HEAD` printed right after your commit. The writer resolves the token's path under the hook state directory (the one `/push` reads), writes nothing unless the commit is live HEAD (exit 3), and never overwrites another session's token (exit 4: print a WARNING and continue). It prints the token path on success.
@@ -186,9 +186,9 @@ This contract is mandatory in that mode:
    `$CLAUDE_AGENT_ID` is available, it must match that value.
 2. Treat each `checkpoints[].id` entry as a required checklist item.
 3. Immediately after completing a checkpoint's atomic action, mark it done with
-   `~/.claude/scripts/spec-check.py mark --spec-id <SPEC_ID> --agent cleaner --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark --spec-id <SPEC_ID> --agent cleaner --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 4. If a checkpoint is genuinely not applicable, waive it (auto-text records actor + ISO timestamp):
-   `~/.claude/scripts/spec-check.py waive --spec-id <SPEC_ID> --agent cleaner --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
+   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" waive --spec-id <SPEC_ID> --agent cleaner --agent-id $CLAUDE_AGENT_ID --cp-id <cp-NN>`.
 5. Before stopping, confirm every checkpoint is either `done` or
    `waived-with-reason`. Pending checkpoints cause `subagentstop-cp-enforce.py`
    to block exit with code 2.

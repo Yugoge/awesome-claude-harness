@@ -57,8 +57,9 @@ from dataclasses import asdict, dataclass, field
 MARK = ".replay-sandbox"
 FIXED_DATE = "2026-01-01T00:00:00+0000"
 COPY_IGNORE = shutil.ignore_patterns(".git", "venv", "__pycache__", ".pytest_cache", "*.pyc")
+# G1-G3 block, and the Stop gate (P5 A20: test-only, never the tracked settings.json).
 ARM = {"CLAUDE_OBLIGATION_GATE": "block", "CLAUDE_OBLIGATION_STOPGATE": "block",
-       "CLAUDE_OBLIGATION_BARRIER": "block"}
+       "CLAUDE_OBLIGATION_BARRIER": "block", "CLAUDE_COMMAND_GATE": "block"}
 TOY_FILES = {
     ".gitignore": "__pycache__/\n.pytest_cache/\n",
     "CLAUDE.md": "# CLAUDE.md\n\n> Project-specific settings for toyproj\n",
@@ -93,6 +94,13 @@ class Layout:
     @property
     def python(self) -> str:
         return self.harness + "/venv/bin/python"
+
+    @property
+    def path(self) -> str:
+        """PATH of the replayed processes: the framework's stand-ins (bin/: bubblewrap, so the
+        replays model a host that has it, as an in-place /dev-overnight launch needs), the
+        harness's venv, then the runner's PATH."""
+        return f"{self.sb}/replay/bin:{self.harness}/venv/bin:{os.environ.get('PATH', '/usr/bin:/bin')}"
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -368,7 +376,7 @@ def clone(template: str, sb: str) -> dict:
 
 
 def armed(settings: dict) -> dict:
-    """The sandbox-armed copy (P1 "Sandbox and arming"): G1-G3 block, G4 left advisory."""
+    """The sandbox-armed copy (P1 "Sandbox and arming"): G1-G3 block, and the Stop gate."""
     s = json.loads(json.dumps(settings))
     env = s.setdefault("env", {})
     env.update(ARM)

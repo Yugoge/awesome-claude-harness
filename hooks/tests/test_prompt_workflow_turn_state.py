@@ -4,7 +4,7 @@ hooks/prompt-workflow.py ``_clear_turn_state`` runs at every UserPromptSubmit: i
 ``claude-tool-streak-<sid>.json`` and, unless the prompt is /do, also
 ``claude-orchestrator-consent-<sid>.flag``, both in the hook state dir (CLAUDE_STATE_DIR,
 hooks/lib/harness_state_dir.py). The Stop-time clearers in hooks/stop-cleanup-allowlist.sh and
-hooks/stop-do-report-gate.py are gone, so /do consent lasts exactly one turn: a Stop (blocked or
+the retired hooks/stop-do-report-gate.py are gone, so /do consent lasts exactly one turn: a Stop (blocked or
 not) and an AskUserQuestion answered inside the turn keep it, and the next UserPromptSubmit ends
 it, whether the human typed it or the CLI fired it for a scheduled task or a task notification.
 
@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HOOKS = ROOT / "hooks"
 PROMPT_WORKFLOW = HOOKS / "prompt-workflow.py"
 ORCHESTRATOR_GATE = HOOKS / "pretool-orchestrator-gate.py"
-DO_REPORT_GATE = HOOKS / "stop-do-report-gate.py"
+STOP_HOOK = HOOKS / "stop-launch.py"  # the registered Stop hook; its gate holds the /do span (P5)
 CLEANUP = HOOKS / "stop-cleanup-allowlist.sh"
 TOOL_POLICY = HOOKS / "pretool-tool-policy.py"
 SETTINGS = ROOT / "settings.json"
@@ -210,20 +210,6 @@ def _streak_state(count: int) -> dict:
             "bash_consecutive": {"last_tool": "Bash", "count": count}}
 
 
-def _complete_do_report(sess: Session) -> None:
-    """The /do main agent writes the whole report (commands/do.md Step 5); no hook pre-writes it."""
-    task_id = sess.do_task_id()
-    report = sess.do_report()
-    report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps({
-        "report_version": 1, "task_id": task_id, "request_id": task_id, "source": "do",
-        "request": "rename heading", "profile": "do",
-        "expected_absent": ["qa-report", "dev-report", "ticket", "context", "completion"],
-        "do": {"status": "completed", "summary": "Renamed the README heading.",
-               "files_modified": ["README.md"], "files_created": []},
-    }, indent=2))
-
-
 def _matcher_applies(matcher, tool_name: str) -> bool:
     """Claude Code matcher semantics: absent, "" and "*" match every tool; a plain
     name list (letters, digits, _ and |) matches exactly; anything else is a regex."""
@@ -277,9 +263,9 @@ def test_plain_prompt_after_a_blocked_stop_removes_the_streak(sess):
         assert gate.returncode == 0, gate.stderr
     assert json.loads(sess.streak().read_text())["bash_consecutive"] == {
         "last_tool": "Bash", "count": 2}
-    # The Stop is blocked: the /do report is still absent.
-    stop = sess.stop([sys.executable, str(DO_REPORT_GATE)])
-    assert stop.returncode == 2 and "DO_REPORT_GATE_BLOCKED" in stop.stderr, stop.stderr
+    # The Stop is blocked: the /do span is not complete.
+    stop = sess.stop([sys.executable, str(STOP_HOOK)])
+    assert stop.returncode == 2 and "COMMAND_GATE /do: not complete" in stop.stderr, stop.stderr
     assert sess.streak().exists(), "a blocked Stop must not be what clears the streak"
 
     proc = sess.prompt("why did it stop?")
@@ -351,23 +337,22 @@ def test_ask_user_question_round_trip_keeps_the_flag(sess):
 
 # -- (d) the former Stop-time clearers leave the flag and the streak ----------------------
 
-def test_do_report_gate_with_a_completed_report_keeps_the_flag_and_streak(sess):
+def test_a_blocked_then_an_allowed_stop_keep_the_flag_and_streak(sess):
     assert sess.prompt("/do rename heading").returncode == 0
     sess.streak().write_text(json.dumps(_streak_state(2)))
-    blocked = sess.stop([sys.executable, str(DO_REPORT_GATE)])
-    assert blocked.returncode == 2, "the gate must see this /do cycle (no report yet)"
-    _complete_do_report(sess)
-    proc = sess.stop([sys.executable, str(DO_REPORT_GATE)])
+    blocked = sess.stop([sys.executable, str(STOP_HOOK)])
+    assert blocked.returncode == 2, "the gate must see this /do span (no report yet)"
+    proc = sess.stop([sys.executable, str(STOP_HOOK)], {"CLAUDE_COMMAND_GATE": "off"})
     assert proc.returncode == 0, proc.stderr
     assert sess.flag().read_text() == "true"
     assert json.loads(sess.streak().read_text()) == _streak_state(2)
     sess.assert_other_session_untouched()
 
 
-def test_do_report_gate_refused_stops_keep_the_flag(sess):
+def test_refused_stops_keep_the_flag(sess):
     assert sess.prompt("/do rename heading").returncode == 0
     for _ in range(3):  # no count of refused stops releases the gate (D23, D25)
-        assert sess.stop([sys.executable, str(DO_REPORT_GATE)]).returncode == 2
+        assert sess.stop([sys.executable, str(STOP_HOOK)]).returncode == 2
     assert sess.flag().read_text() == "true"
     sess.assert_other_session_untouched()
 

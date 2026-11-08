@@ -1,19 +1,28 @@
-"""Read-only span reader for a main-session transcript (TC-4).
+"""Read-only span reader for a main-session transcript (TC-4), and the one
+rule of which transcript record is a prompt the human typed.
 
 The span is the records after the latest human-typed harness command outside
-stop_contract.CONTROL_COMMANDS. Every plain prompt continues it; built-in and
-plugin commands, CONTROL commands and every record not typed by the human
-(Skill-tool expansions, subagent records, tool results, queue-operation and
-attachment records) never change it. The opener rule lives in stop_contract.
-P1 ships the span itself, whose command G1 reads. P1b's E7 added the span's
-calls() and last_todos(): every TodoWrite and Agent call the CLI ran is in the
-record, so the checklist readers take them from here and no hook keeps a copy
-of them in a file.
+CONTROL_COMMANDS. Every plain prompt continues it; built-in and plugin
+commands, CONTROL commands and every record not typed by the human
+(Skill-tool expansions, scheduled prompts, subagent records, tool results,
+queue-operation and attachment records) never change it. P1 ships the span
+itself, whose command G1 reads. P1b's E7 added the span's calls() and
+last_todos(): every TodoWrite and Agent call the CLI ran is in the record, so
+the checklist readers take them from here and no hook keeps a copy of them in
+a file.
 
 write_set() is TC-46's one write-set reader, for any transcript (a main
 session's from its span opener on, or a subagent's whole file): the record the
 CLI writes of the agent's own tool calls, never an agent's report of them.
 P1b's E6 took it as the producer of "which files this agent wrote".
+
+Stdlib only, importing no harness module (P5 R10): the Stop launcher loads
+this module alone, so a broken stop_contract.py or coordinator leaves it
+loadable. stop_contract.py re-exports the human-record rule from here. The
+command sets live in stop-commands.json beside this file, which the launcher
+reads too. Only human-typed records count; no CLI error or cancellation
+record is read (D4c), and nothing an agent writes opens, replaces or closes a
+span.
 """
 from __future__ import annotations
 
@@ -22,12 +31,122 @@ import os
 import re
 import stat
 from collections import namedtuple
+from datetime import datetime
 from pathlib import Path
 
-try:  # imported as hooks.lib.command_span (tests) or lib.command_span (hooks)
-    from . import stop_contract
-except ImportError:  # hooks/lib placed directly on sys.path
-    import stop_contract  # type: ignore[no-redef]
+COMMANDS_DIR = Path(__file__).resolve().parent.parent.parent / "commands"
+COMMAND_SETS_FILE = Path(__file__).resolve().parent / "stop-commands.json"
+
+
+def _command_sets() -> tuple[tuple, tuple]:
+    sets = json.loads(COMMAND_SETS_FILE.read_text(encoding="utf-8"))
+    return tuple(sets["GATED_COMMANDS"]), tuple(sets["CONTROL_COMMANDS"])
+
+
+# The commands a Stop gate guards, and the commands that never open a span.
+GATED_COMMANDS, CONTROL_COMMANDS = _command_sets()
+
+# Markers a typed prompt never carries: a Skill-tool expansion (isMeta,
+# sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
+# compaction's summary (isCompactSummary; no isMeta or origin).
+_NON_HUMAN_KEYS = ("isMeta", "isSidechain", "sourceToolUseID", "toolUseResult", "isCompactSummary")
+# The CLI records a typed command as <command-message>..</command-message>
+# <command-name>/x</command-name><command-args>..</command-args> at the start.
+_CMD_TAG_RE = re.compile(
+    r"\s*(?:<command-message>.*?</command-message>\s*)?<command-name>/?([A-Za-z0-9:_-]+)</command-name>", re.S
+)
+_ARGS_TAG_RE = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+_SLASH_RE = re.compile(r"\s*/([A-Za-z0-9:_-]+)(?:\s+(.*))?\Z", re.S)
+
+
+def harness_commands() -> frozenset:
+    """commands/*.md stems of this harness, INDEX and README excluded."""
+    try:
+        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.stem not in ("INDEX", "README"))
+    except OSError:
+        return frozenset()
+
+
+def prompt_text(record) -> str | None:
+    """Text of a human-typed prompt record, else None (TC-4)."""
+    if not isinstance(record, dict) or record.get("type") != "user":
+        return None
+    if any(record.get(key) for key in _NON_HUMAN_KEYS):
+        return None
+    for key in ("origin", "turnOrigin"):  # a typed prompt records origin kind "human"
+        value = record.get(key)
+        kind = value.get("kind") if isinstance(value, dict) else value
+        if kind is not None and kind != "human":
+            return None
+    message = record.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list) or any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+        return None
+    return "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text") or None
+
+
+def is_human_prompt(record) -> bool:
+    return prompt_text(record) is not None
+
+
+def slash_command(text: str) -> tuple[str, str] | None:
+    """(name, args) of a slash command typed as ``/x`` or recorded as
+    ``<command-name>/x</command-name>``, else None."""
+    match = _CMD_TAG_RE.match(text)
+    if match:
+        args = _ARGS_TAG_RE.search(text)
+        return match.group(1), (args.group(1).strip() if args else "")
+    match = _SLASH_RE.match(text)
+    return (match.group(1), (match.group(2) or "").strip()) if match else None
+
+
+def span_opener(record, commands: frozenset) -> tuple[str, str] | None:
+    """(command, args) when ``record`` is a human-typed harness command outside
+    CONTROL_COMMANDS; built-in and plugin commands never qualify."""
+    text = prompt_text(record)
+    found = slash_command(text) if text is not None else None
+    if found and found[0] in commands and found[0] not in CONTROL_COMMANDS:
+        return found
+    return None
+
+
+def active_command(transcript_path) -> str | None:
+    """The latest human-typed harness command outside CONTROL_COMMANDS in the
+    whole transcript, or None (no such prompt, or the file is unreadable)."""
+    found = openers(transcript_path)
+    return found[-1][1] if found else None
+
+
+def openers(transcript_path, commands: frozenset | None = None) -> list[tuple[int, str, str]]:
+    """(line, command, args) of each human-typed harness command outside
+    CONTROL_COMMANDS in the whole transcript, in order; [] when it cannot be
+    read. ``commands`` defaults to this harness's commands/*.md stems."""
+    commands = harness_commands() if commands is None else commands
+    found = []
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as handle:
+            for number, line in enumerate(handle, 1):
+                if '"user"' not in line:
+                    continue
+                try:
+                    opener = span_opener(json.loads(line), commands)
+                except ValueError:
+                    continue
+                if opener:
+                    found.append((number, opener[0], opener[1]))
+    except (OSError, TypeError, ValueError):
+        return []
+    return found
+
+
+def timelock_released(transcript_path) -> bool:
+    """True iff the latest human-typed /stop or /dev-overnight record of the
+    transcript is /stop: the human's /stop follows the session's latest
+    /dev-overnight."""
+    span = active_span(transcript_path, frozenset(("stop", "dev-overnight")))
+    return span is not None and span.command == "stop"
 
 
 class Call(namedtuple("Call", "id name input line result_line ok")):
@@ -328,6 +447,138 @@ class Span:
                 todos = call.input["todos"]
         return todos
 
+    def result_text(self, ident: str) -> str:
+        """The text of call ``ident``'s tool_result in the span ('' while none came back); an Agent
+        call's is the agent's own reply, its record's toolUseResult content without the agentId trailer."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return ""
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            for block in _blocks(record):
+                if block.get("type") == "tool_result" and block.get("tool_use_id") == ident:
+                    own = record.get("toolUseResult")
+                    content = own["content"] if isinstance(own, dict) and isinstance(own.get("content"), list) \
+                        else block.get("content")
+                    return content if isinstance(content, str) else "\n".join(
+                        b.get("text") or "" for b in (content if isinstance(content, list) else ())
+                        if isinstance(b, dict) and b.get("type") == "text")
+        return ""
+
+    def obligations(self) -> list:
+        """(call, obligation) of each ok Agent/Task dispatch whose prompt parses to an obligation, in span order."""
+        ob = _obligation()
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task") if c.ok)
+        return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
+
+    def session_families(self) -> set:
+        """The task families (obligation.task_family) of the span's ok
+        dispatches whose artifacts are the task's: a dispatch whose file
+        artifacts are all named otherwise (a session-level report: an
+        overnight triage, a retrospective) stamps an id but works on no task."""
+        ob, families = _obligation(), set()
+        for _call, doc in self.obligations():
+            task = ob.canonical_task_id(doc.get("task_id"))
+            paths = [a.get("path") for a in doc.get("artifacts") or () if isinstance(a, dict) and a.get("path")]
+            if task and (not paths or any(task in str(path) for path in paths)):
+                families.add(ob.task_family(task))
+        return families
+
+    def opened_at(self) -> float | None:
+        """The time the CLI recorded for the opener (seconds since the epoch);
+        None when its record carries none."""
+        lines, floor = self._lines()
+        end = min(floor, len(lines.data) + 1) - 1  # the opener line's end
+        record = _decode(lines.data[lines.data.rfind(b"\n", 0, max(end, 0)) + 1:end]) or {}
+        try:
+            return datetime.fromisoformat(str(record.get("timestamp")).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+
+    def minted_id(self) -> str | None:
+        """The task id the UserPromptSubmit hook printed for the opener
+        (MINTED_LINE_RE): the first in the opener's hook context."""
+        return next((found.group(1) for found in self._opener_context(MINTED_LINE_RE)), None)
+
+    def opener_heads(self) -> list:
+        """(branch, commit) of each HEAD line the UserPromptSubmit hook printed for a /push opener
+        (OPENER_HEAD_LINE_RE; branch None: HEAD detached), in order; [] for an opener with none
+        (one typed before the hook printed it)."""
+        return [(None if found.group(1) == "detached" else found.group(1)[len("refs/heads/"):], found.group(2))
+                for found in self._opener_context(OPENER_HEAD_LINE_RE)]
+
+    def _opener_context(self, regex):
+        """The matches of ``regex`` in the opener's hook context: the context
+        records the CLI writes after the typed prompt and before the turn's
+        first assistant record. An agent's echo of a line (its text, a tool
+        result) is never read."""
+        lines, pos = self._lines()
+        data = lines.data
+        while pos < len(data):
+            end = data.find(b"\n", pos)
+            end = len(data) if end < 0 else end
+            raw = data[pos:end]
+            if b'"type":"assistant"' in raw or b'"type": "assistant"' in raw:
+                return
+            attachment = (_decode(raw) or {}).get("attachment") if b"hook_additional_context" in raw else None
+            if isinstance(attachment, dict) and attachment.get("type") == "hook_additional_context":
+                content = attachment.get("content")
+                if isinstance(content, list):
+                    content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
+                yield from regex.finditer(content) if isinstance(content, str) else ()
+            pos = end + 1
+
+    def write_set(self, project_dir, actor: str | None = "main", stop_line: int | None = None):
+        """write_set() of the span: the files written or named after its
+        opener and before line ``stop_line`` (the next opener, when given), by
+        ``actor``: "main", the main session's own calls (no subagent's
+        isSidechain record), or None, every record."""
+        return write_set(self.transcript_path, project_dir, self.start_line, stop_line=stop_line,
+                         main_only=actor == "main")
+
+
+    def body(self) -> str | None:
+        """The command's text as this session loaded it: the isMeta record the
+        CLI writes when the command is typed, whose parentUuid is the opener's
+        uuid (CLI 2.1.319: commands/<command>.md minus its frontmatter, with
+        $ARGUMENTS filled in). It is written once, so a later edit of the file
+        leaves it as it was: a session that started before an update follows
+        this text, not the file on disk. None when no such record follows the
+        opener."""
+        try:
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return None
+        opener = _decode(lines.data[lines.data.rfind(b"\n", 0, floor - 1) + 1:floor - 1])
+        ident = opener.get("uuid") if opener else None
+        if not isinstance(ident, str) or not ident:
+            return None
+        for begin, end in lines.offsets((json.dumps(ident).encode(),), floor):
+            record = _decode(lines.data[begin:end])
+            if not record or record.get("parentUuid") != ident:
+                continue
+            if record.get("type") != "user" or not record.get("isMeta"):
+                return None
+            content = record["message"].get("content") if isinstance(record.get("message"), dict) else None
+            if isinstance(content, str):
+                return content
+            return "".join(b.get("text", "") for b in _blocks(record) if b.get("type") == "text")
+        return None
+
+
+# The task-id lines the UserPromptSubmit hook prints for a /do and a /dev-family opener.
+MINTED_LINE_RE = re.compile(
+    r"^(?:\[/do\] task-id minted|DEV_SESSION_ID pre-initialized by hook): ([A-Za-z0-9._-]+)", re.M)
+# The HEAD line it prints for a /push opener (prompt-workflow.py print_push_head).
+OPENER_HEAD_LINE_RE = re.compile(r"^\[/push\] HEAD at the opener: (refs/heads/\S+|detached) ([0-9a-f]{40}(?:[0-9a-f]{24})?)$",
+                                 re.M)
+
+
+def _obligation():  # imported when first asked: a reader that needs none loads none of it
+    import importlib
+    return importlib.import_module(f"{__package__}.obligation" if __package__ else "obligation")
+
 
 def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):
     """(begin, end, block) of each main-session tool_use block from offset
@@ -399,7 +650,7 @@ def _last_opener(data: bytes, lo: int, hi: int, commands: frozenset):
             end = hi if end < 0 else end
             if any(data.find(needle, begin, end) >= 0 for needle in _USER_RECORD):
                 record = _decode(data[begin:end])
-                opener = stop_contract.span_opener(record, commands) if record else None
+                opener = span_opener(record, commands) if record else None
                 if opener:
                     return begin, end, opener
         pos = data.rfind(_USER_WORD, lo, begin)
@@ -427,7 +678,7 @@ def active_span(transcript_path: str | Path, commands: frozenset | None = None) 
     are neither read nor decoded. A span longer than those chunks is searched
     in one read of the whole file, as copying ever larger chunks together
     would cost more than reading the file once."""
-    commands = stop_contract.harness_commands() if commands is None else commands
+    commands = harness_commands() if commands is None else commands
     try:
         handle = open(transcript_path, "rb")
         info = os.fstat(handle.fileno())
@@ -534,11 +785,12 @@ def _bash_named(command: str, cwd: str, root: str) -> set[str]:
 
 
 def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: int = 0,
-              excluded=EXCLUDED_TREES) -> WriteSet | None:
+              excluded=EXCLUDED_TREES, stop_line: int | None = None, main_only: bool = False) -> WriteSet | None:
     """The project-relative files the transcript's own tool calls after
-    ``start_line`` wrote or named (TC-46), outside ``excluded`` (a caller
-    asking which reports an agent wrote passes none); None when the
-    transcript cannot be read."""
+    ``start_line`` (and before ``stop_line``) wrote or named (TC-46), outside
+    ``excluded`` (a caller asking which reports an agent wrote passes none);
+    with ``main_only`` a subagent's own records (isSidechain) are left out.
+    None when the transcript cannot be read."""
     root = os.path.normpath(str(project_dir))
     try:
         records = _records(transcript_path)
@@ -546,8 +798,10 @@ def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: 
         return None
     uses, ok = [], set()
     for number, record in records:
-        if number <= start_line:
+        if number <= start_line or (main_only and record.get("isSidechain")):
             continue
+        if stop_line is not None and number >= stop_line:
+            break
         message = record.get("message")
         content = message.get("content") if isinstance(message, dict) else None
         for block in content if isinstance(content, list) else ():

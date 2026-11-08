@@ -64,6 +64,8 @@ NotebookEdit target and every Bash write target:
     and the session transcript's reader (_Record).
 
 Behavior:
+  - Every caller, first: a protected file's write, delete or rename, and a
+    ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
   - Main agent (no agent_id, no subagent_type) -> exit 0 after the derived
     permission (the orchestrator gate handles the rest of the main agent).
   - Subagent role unresolvable -> exit 0 (defer to the backstop shim). An
@@ -749,7 +751,7 @@ def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, tran
         tasks = sorted({str(d[2]) for d in covering if d[2]})
         reason = (f"write target {target} is declared by the obligation of the "
                   f"{', '.join(roles)} dispatch" + (f" for task {', '.join(tasks)}" if tasks else "")
-                  + "; only that dispatch writes it")
+                  + f"; only {' or '.join(roles)} writes this artifact (D8)")
         check_tool = "Write" if tool_name == "Bash" else tool_name
         _emit_block(_caller_label(role, data), check_tool, target, reason)
         sys.exit(2)
@@ -806,6 +808,168 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
                 sys.exit(2)
 
 
+# -- protected paths (P5 R2, R3; D11/D12) -------------------------------------
+# No caller, /do or not, writes, deletes or renames a file the settings filter,
+# the commit checks or a Stop decision reads. The harness home's are its own
+# (a product repository's of the same names stay writable); a transcript's
+# agent meta counts with it, since the derived permission above reads it; the
+# /push Stop's push-gate token and push-analyst grant count too (review H2),
+# the grant's own producer's Write of it aside. What a script or interpreter
+# writes is not seen.
+_HOME_PROTECTED = ("settings.machine.json", "private-literals.txt", "scripts/check-public-core.sh",
+                   "scripts/install/render-settings", "hooks/git-hooks/pre-commit", ".git/config",
+                   ".git/hooks", ".gitattributes")
+
+
+def _below(path: str, root) -> str | None:
+    """``path`` relative to ``root``, either taken as written or real; None outside it."""
+    for p in {os.path.normpath(path), os.path.realpath(path)}:
+        for r in {os.path.normpath(root), os.path.realpath(root)}:
+            rel = os.path.relpath(p, r)
+            if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+                return rel
+    return None
+
+
+_GRANT = "a push-analyst grant, which only the push-analyst dispatched for its request writes"
+
+
+def _push_input(path: str, state: str) -> str | None:
+    """What the /push Stop reads at ``path``, else None: a file of the push-gate
+    token tree (the token's one writer, scripts/write-push-gate-token.py, writes
+    it from no tool call this hook sees), or a push-analyst grant
+    (<grant tree>/<repo hash>/<session>/<request>.json, merge_grant's path rule)."""
+    rel = _below(path, os.path.join(state, "agentic-commit"))
+    parts = rel.split(os.sep) if rel else []
+    if parts[:1] == ["push"] and len(parts) > 1:
+        return "a push-gate token, whose one writer is scripts/write-push-gate-token.py"
+    if parts[:1] == ["push-analyst"] and len(parts) == 4 and parts[3].endswith(".json"):
+        return _GRANT
+    return None
+
+
+def _protected(path: str, removed: bool, home, config: str, state: str) -> str | None:
+    """What protected file absolute ``path`` is, else None; deleting or
+    renaming (``removed``) a directory takes the protected files beneath it:
+    the harness home's by name, the projects tree's and the /push inputs' as
+    the directory holds them."""
+    from fnmatch import fnmatchcase
+
+    def kept(name: str) -> bool:  # a transcript or agent meta, below ``config``
+        return name.endswith(".jsonl") or fnmatchcase(name, "agent-*.meta.json")
+
+    rel, name = (_below(path, home) if home else None), os.path.basename(path)
+    if rel and any(rel == p or rel.startswith(p + "/") for p in _HOME_PROTECTED):
+        return f"the harness home's {rel}"
+    if _below(path, config) and kept(name):
+        return "a session transcript or its subagent meta"
+    if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
+        return "a /do task sidecar"
+    push = _push_input(path, state)
+    if push:
+        return push
+    held = [os.path.join(home, p) for p in _HOME_PROTECTED] if home else []
+    if removed and (any(_below(p, path) for p in held + [config])
+                    or (_below(path, config) and any(kept(n) for _, _, names in os.walk(path) for n in names))):
+        return "a directory holding the harness home's protected files or the session transcripts"
+    inputs = os.path.join(state, "agentic-commit")  # walked from the deeper of it and the removed directory
+    walked = path if _below(path, inputs) else inputs if removed and _below(inputs, path) else None
+    if removed and walked and any(_push_input(os.path.join(d, n), state) for d, _, names in os.walk(walked)
+                                  for n in names):
+        return "a directory holding a push-gate token or a push-analyst grant"
+    return None
+
+
+def _grant_producer(target: str, state: str, data: dict) -> bool:
+    """Whether the caller is the push-analyst grant's producer: a subagent
+    whose own dispatch (the declaring-dispatch reader's: its record found back
+    from the end of the session transcript by the call its meta names, as
+    _own_from_tail finds it) is a dispatch of the role the grant's folder names
+    (merge_grant's path rule), by a subagent of that type, whose command
+    template binds the grant's repository hash, session and request id."""
+    try:
+        from lib import command_span, declared_paths, dispatch_template, obligation
+
+        transcript = _session_transcript(data)
+        agent_transcript, meta = declared_paths._agent_files(transcript, data.get("agent_id"))
+        if agent_transcript is None:
+            return False
+        prompt = obligation.read_first_record_prompt(agent_transcript)
+        with open(meta) as fh:
+            named = json.load(fh).get("toolUseId")
+        if prompt is None or not isinstance(named, str) or not command_span._PLAIN_ID.match(named):
+            return False
+        record = _Record(transcript)
+        try:
+            call = record.find_call(named, prompt)
+        finally:
+            record.close()
+        parsed = obligation.parse_obligation(prompt)
+        own = parsed.obligation if isinstance(parsed, obligation.ParsedObligation) else {}
+        folder, *values = _below(target, os.path.join(state, "agentic-commit")).split(os.sep)
+        if call is None or not folder == own.get("role") == call.input.get("subagent_type"):
+            return False
+        found = dispatch_template._template(own.get("pipeline"), folder, prompt, None)
+        bound = set(dispatch_template._bindings(found[2]).values()) if found else set()
+        return {values[0], values[1], values[2][:-len(".json")]} <= bound
+    except Exception:  # an unreadable record names no producer: the write stays refused
+        return False
+
+
+def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data: dict) -> None:
+    from lib import claude_home
+    from lib.bash_write_targets import extract_bash_touched_paths
+    from lib.harness_state_dir import harness_state_dir
+
+    found = [(t, False) for t in _write_targets(tool_name, targets)]
+    if tool_name == "Bash" and isinstance(tool_input, dict):
+        try:  # on a failure the frozen extractor's targets still count, and the rules below still run
+            found += extract_bash_touched_paths(tool_input.get("command") or "")
+        except Exception:
+            pass
+    if not found:
+        return
+    base = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    roots = (claude_home.resolve(), os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
+                                                 "projects"), harness_state_dir())
+    for target, removed in dict.fromkeys(found):  # a variable the hook's environment holds is the shell's
+        word = os.path.expandvars(re.sub(r"\$\{(\w+):-([^}]*)\}", lambda m: os.environ.get(m[1]) or m[2], target))
+        path = os.path.join(base, os.path.expanduser(word))
+        what = not any(c in word for c in "$`\x00") and _protected(path, removed, *roots)
+        if what == _GRANT and not removed and data.get("agent_id") and _grant_producer(path, roots[2], data):
+            continue  # the push-analyst's own Write of its grant (agents/push-analyst.md Phase 7)
+        if what:
+            _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
+                        f"{target} is {what}: no agent writes, deletes or renames it (D11/D12)")
+            sys.exit(2)
+
+
+# -- scheduled prompts (P5 R5) ------------------------------------------------
+# P1's capture (COV-7, CLI 2.1.303) measured a fired CronCreate prompt's record
+# (isMeta, turnOrigin "scheduled"): stop_contract.is_human_prompt excludes it.
+# A ScheduleWakeup prompt's record is unmeasured, so one typing a harness
+# command outside CONTROL is refused, the overnight wake's own text aside.
+def _check_scheduled_prompt(role, tool_name: str, tool_input: dict, data: dict) -> None:
+    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
+    if tool_name != "ScheduleWakeup" or not isinstance(prompt, str):
+        return
+    from lib import stop_contract
+
+    found = stop_contract.slash_command(prompt)
+    if not found or found[0] not in stop_contract.harness_commands() or found[0] in stop_contract.CONTROL_COMMANDS:
+        return
+    try:
+        from lib import overnight
+
+        wake = overnight.WAKE_PROMPT
+    except Exception:  # no wake text on this tree: nothing to exempt
+        wake = None
+    if prompt.strip() != wake:
+        _emit_block(_caller_label(role, data), tool_name, f"/{found[0]}",
+                    f"a {tool_name} prompt that types /{found[0]}: only the human types a harness command")
+        sys.exit(2)
+
+
 def main() -> None:
     # WS1: bootstrap the deny-logic FIRST, fail-closed (exit 2) on import error.
     _bootstrap_security()
@@ -818,6 +982,8 @@ def main() -> None:
     tool_input = data.get("tool_input") or {}
     role = resolve_agent_type(data)
     targets = _extract_targets(tool_name, tool_input)
+    _check_protected(role, tool_name, tool_input, targets, data)
+    _check_scheduled_prompt(role, tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
     if not role:
         # An unresolved role is a NORMAL state, not an error: Claude Code may

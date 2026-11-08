@@ -22,7 +22,7 @@ SOURCE_ROOT = Path(__file__).resolve().parents[2]
 PROMPT = SOURCE_ROOT / "hooks" / "prompt-workflow.py"
 PRETOOL = SOURCE_ROOT / "hooks" / "pretool-workflow-gate.py"
 POSTTODO = SOURCE_ROOT / "hooks" / "posttool-todo-tracker.py"
-CLAUDE_STOP = SOURCE_ROOT / "hooks" / "stop-overnight-timelock.py"
+CLAUDE_STOP = SOURCE_ROOT / "hooks" / "stop-launch.py"  # the registered Stop hook (P5 R12)
 ACTIVE_CONFIGS = {
     "claude": SOURCE_ROOT / "settings.json",
 }
@@ -136,7 +136,7 @@ def _owner_command(runtime: str, event: str) -> str:
         "UserPromptSubmit": "prompt-workflow.py",
         "PreToolUse": "pretool-workflow-gate.py",
         "PostToolUse": "posttool-todo-tracker.py",
-        "Stop": "stop-workflow-coordinator.py",
+        "Stop": "stop-launch.py",
     }[event]
 
 
@@ -402,11 +402,11 @@ def test_claude_root_real_entrypoint_stop_is_not_time_locked(tmp_path: Path, fro
     assert len(list((root / "docs" / "dev").glob("user-requirement-*.md"))) == 1
 
 
-def test_claude_root_bare_dev_replay_mints_new_id_after_terminal_dev_report(tmp_path: Path) -> None:
-    """AC-L5-03/04: an identical bare /dev prompt still replays byte-for-byte
-    while the prior cycle's dev-report is missing (unchanged behavior); once
-    that dev-report exists with a terminal dev.status, the IDENTICAL prompt
-    must mint a brand-new task_id instead of replaying, and say so."""
+def test_claude_root_bare_dev_replays_only_while_its_record_is_younger_than_60s(tmp_path: Path) -> None:
+    """P3 R10: an identical bare /dev prompt replays byte-for-byte while its
+    replay record is younger than 60 s, whatever the prior cycle's dev-report
+    says (missing, blocked or completed); once the record is 120 s old, the
+    IDENTICAL prompt mints a brand-new task_id, with no terminal notice."""
     root = tmp_path / "claude-terminal-replay"
     (root / "scripts" / "todo").mkdir(parents=True)
     shutil.copy2(SOURCE_ROOT / "scripts" / "todo" / "dev.py", root / "scripts" / "todo" / "dev.py")
@@ -421,38 +421,32 @@ def test_claude_root_bare_dev_replay_mints_new_id_after_terminal_dev_report(tmp_
     assert len(list(registry.iterdir())) == 1
     first_task_id = next(registry.iterdir()).name
 
-    # Prior dev-report MISSING: identical envelope must still replay verbatim.
-    replay = _run(PROMPT, None, payload, env)
-    assert replay.returncode == 0 and replay.stdout == first.stdout, \
-        "replay with a non-terminal (missing) dev-report must stay byte-identical"
-    assert len(list(registry.iterdir())) == 1, "no new task_id while prior cycle is non-terminal"
+    # Within 60 s the dev-report decides nothing: missing, blocked or completed,
+    # the identical envelope replays verbatim.
+    for status in (None, "blocked", "completed"):
+        if status:
+            (root / "docs" / "dev" / f"dev-report-{first_task_id}.json").write_text(json.dumps({
+                "request_id": first_task_id, "task_id": first_task_id,
+                "dev": {"status": status, "files_modified": [], "files_created": []},
+            }))
+        replay = _run(PROMPT, None, payload, env)
+        assert replay.returncode == 0 and replay.stdout == first.stdout, \
+            f"replay within 60 s with dev-report {status} must stay byte-identical"
+        assert len(list(registry.iterdir())) == 1, f"no new task_id within 60 s ({status})"
 
-    # A dev.status outside the dev-report schema's terminal vocabulary (D2: one
-    # dev terminal, completed) is no terminal either: still a verbatim replay.
-    (root / "docs" / "dev" / f"dev-report-{first_task_id}.json").write_text(json.dumps({
-        "request_id": first_task_id, "task_id": first_task_id,
-        "dev": {"status": "blocked", "files_modified": [], "files_created": []},
-    }))
-    replay = _run(PROMPT, None, payload, env)
-    assert replay.returncode == 0 and replay.stdout == first.stdout, \
-        "replay with a blocked dev-report must stay byte-identical"
-    assert len(list(registry.iterdir())) == 1, "no new task_id for a blocked prior cycle"
-
-    # Prior dev-report now reaches a terminal state.
-    (root / "docs" / "dev" / f"dev-report-{first_task_id}.json").write_text(json.dumps({
-        "request_id": first_task_id, "task_id": first_task_id,
-        "dev": {"status": "completed", "files_modified": [], "files_created": []},
-    }))
+    [record] = (root / ".claude" / "dev-start-replays" / sid).iterdir()
+    stat = record.stat()
+    os.utime(record, ns=(stat.st_atime_ns, stat.st_mtime_ns - 120 * 10**9))
 
     second = _run(PROMPT, None, payload, env)
     assert second.returncode == 0, second.stderr
-    assert len(list(registry.iterdir())) == 2, "terminal prior cycle must mint a NEW task_id, not replay"
+    assert len(list(registry.iterdir())) == 2, "a record 120 s old must mint a NEW task_id, not replay"
     new_ids = {p.name for p in registry.iterdir()} - {first_task_id}
     assert len(new_ids) == 1
     second_task_id = next(iter(new_ids))
-    assert second_task_id != first_task_id
-    assert "already reached a terminal state" in second.stdout, second.stdout
-    assert first_task_id in second.stdout
+    assert f"DEV_SESSION_ID pre-initialized by hook: {second_task_id}\n" in second.stdout
+    assert "terminal state" not in second.stdout, second.stdout
+    assert first_task_id not in second.stdout
 
 
 @pytest.mark.parametrize("runtime", ["claude"])
@@ -463,6 +457,14 @@ def test_r03_configured_full_chain_resolution_execution_and_aggregation(
     evidence = []
     evidence.append(_full_start(fixture, f"/dev r03 full chain {runtime}"))
     evidence.extend(_full_progress(fixture, 0))
+    # P5: a Stop inside an unfinished /dev span is the Stop gate's block (its own tests,
+    # test_stop_command_gate.py, decide it); this test checks the configured chain's resolution,
+    # execution and aggregation, so its Stop runs with the gate's process-env off switch, and the
+    # same Stop armed is checked to block naming the gate.
+    armed = execute_configured_chain(fixture, "Stop", configured_payload(fixture, "Stop"))
+    assert armed["aggregate"]["decision"] == "block"
+    assert "COMMAND_GATE /dev: not complete" in armed["aggregate"]["combined_user_visible_output"]
+    fixture["env"]["CLAUDE_COMMAND_GATE"] = "off"
     evidence.append(execute_configured_chain(fixture, "Stop", configured_payload(fixture, "Stop")))
     assert [item["event"] for item in evidence] == [
         "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"
@@ -554,6 +556,9 @@ def test_r03_whole_stop_then_next_generation_progress(tmp_path: Path, runtime: s
     prior_bytes = _task_families(fixture)[prior_task]
     family_count = len(_task_families(fixture))
 
+    # P5: the unfinished /dev span's Stop is the Stop gate's block; this test checks what a whole
+    # Stop leaves for the next generation, so it stops with the gate's process-env off switch.
+    fixture["env"]["CLAUDE_COMMAND_GATE"] = "off"
     stopped = execute_configured_chain(fixture, "Stop", configured_payload(fixture, "Stop"))
     combined = stopped["aggregate"]["combined_user_visible_output"].lower()
     assert stopped["aggregate"]["decision"] == "allow", combined

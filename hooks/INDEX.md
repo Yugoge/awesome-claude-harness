@@ -2,7 +2,7 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 300
+**Total entries**: 303
 **Convention**: kebab
 
 ## Tree
@@ -50,6 +50,7 @@ hooks/
 │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
+│   ├── `close_rating.py` - Stop gate imports. The /close Step 3b question (source ``close-rating:<task-id>``) is required ask...
 │   ├── `closeout.py` - CLI:
 │   ├── `command_span.py` - The span is the records after the latest human-typed harness command outside
 │   ├── `commit_journal.py` - WHY THIS EXISTS
@@ -66,7 +67,7 @@ hooks/
 │   ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
 │   ├── `merge_grant.py` - The merge-analyst writes its grant with the Write tool at
 │   ├── `obligation.py` - Rollout step S2 of the converged zero-failure design
-│   ├── `overnight.py` - The state record `<project>/.claude/overnight-state-<sid>.json` has one producer,
+│   ├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` (main root: the parent of the git common dir) has one producer; the module holds the one end_time parser, the locator, window_open and closeout_gaps
 │   ├── `pol_degraded_removal_reference.ere` - ere file
 │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
 │   ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
@@ -94,7 +95,7 @@ hooks/
 │   ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 │   ├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
-│   ├── `test_artifact_contract_enforce.py` - The hook is the producer-side port of /close's Artifact schema gate
+│   ├── `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
 │   ├── `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
 │   ├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
 │   ├── `test_baseline_snapshot_preflight.py` - agents/dev.md:535 declares that the orchestrator captures baseline_dirty_snapshot
@@ -109,6 +110,7 @@ hooks/
 │   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 │   ├── `test_checklist_record.py` - Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
 │   ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
+│   ├── `test_close_rating.py` - hooks/posttool-close-rating.py, the rating log's one writer
 │   ├── `test_close_verdict_round_open.py` - `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 │   ├── `test_command_span.py` - The span is the records after the latest human-typed harness command outside
 │   ├── `test_commit_artifact_rw_boundary.py` - WHY THIS FILE EXISTS
@@ -132,7 +134,7 @@ hooks/
 │   ├── `test_doc_sync_regen_readme_status.py` - Backlog #83: regen_readme() returned None on every path, so nobody could tell a skipped
 │   ├── `test_doc_sync_regions.py` - Backlog #85: four unrelated marker predicates (README first occurrence, INDEX substring
 │   ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
-│   ├── `test_e2e_enforce.py` - obligation fallback (ticket 20261001-161041-r06, M1)
+│   ├── `test_e2e_enforce.py` - report the QA's own obligation names
 │   ├── `test_env_configured_defaults.py` - or derived; such values come back only through the environment (normally the
 │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
@@ -213,6 +215,7 @@ hooks/
 ├── `post_tool_use.sh` - PostToolUse Hook - Code quality hints after file modifications
 ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 ├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
+├── `posttool-close-rating.py` - main agent's (no agent_id) one close-rating question (metadata.source close-rating:<task-id>) ans...
 ├── `posttool-codex-skill-ledger.py` - Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
 ├── `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 ├── `posttool-doc-sync.py` - PostToolUse Hook: keep the marked INDEX.md, README.md and CLAUDE.md sections in sync
@@ -226,8 +229,8 @@ hooks/
 ├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
 ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark
-├── `posttool-todo-count.py` - It blocked a TodoWrite whose list held fewer steps than the active command's
-├── `posttool-todo-sequence.py` - PostToolUse Hook: the first-call rule of a workflow checklist
+├── `posttool-todo-count.py` - PostToolUse hook (TodoWrite step count), retired to a no-op.
+├── `posttool-todo-sequence.py` - PostToolUse hook (TodoWrite step sequence), retired to a no-op.
 ├── `posttool-todo-tracker.py` - PostToolUse Hook: Output checklist progress after every TodoWrite call
 ├── `pre-commit-check.sh` - pre-commit-check.sh - Detect untracked files before commit
 ├── `pre_slashcommand_validate.sh` - pre_slashcommand_validate.sh
@@ -290,18 +293,19 @@ hooks/
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
 ├── `stop-completion-gate.py` - blocked compliant /dev Stops with GATE_ERROR and its only release was a
-├── `stop-do-report-gate.py` - A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) at
-├── `stop-obligation-gate.py` - It re-validated, at the orchestrating session's Stop, the json artifacts its
-├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
+├── `stop-do-report-gate.py` - Stop hook (the /do do-report's shape at session stop), retired to a no-op.
+├── `stop-launch.py` - The registered Stop hook (P5 R10): run the Stop coordinator, relay its exit 0 or 2, stdout and
+├── `stop-obligation-gate.py` - Stop hook (G4, session-terminal obligation gate), retired to a no-op.
+├── `stop-overnight-timelock.py` - Stop hook (the /dev-overnight time-lock), retired to a no-op.
 ├── `stop-spec-coverage-enforce.py` - It ran spec-verify.py on the views of the spec the /spec session last wrote, at
-├── `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7: the registered Stop hook, running the four former Stop
+├── `stop-workflow-coordinator.py` - Serialize Stop phases and call the sole receipt-gated resource finalizer.
 ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
-├── `subagentstop-artifact-contract-enforce.py` - Ports the /close "Artifact schema gate" (commands/close.md §"Artifact schema gate" — the
+├── `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 ├── `subagentstop-codex-enforce.py` - Activation logic:
 ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
-├── `subagentstop-e2e-enforce.py` - Activation logic:
+├── `subagentstop-e2e-enforce.py` - What a QA owes is in its own dispatch obligation (P1b E7): the qa-report.v2
 ├── `subagentstop-restart-track.py` - SubagentStop: persist response evidence for a /restart-resumed agent.
 ├── `userprompt-bulk-commit-capability.py` - human prompt, NOT from an LLM-emitted Bash command
 ├── `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use

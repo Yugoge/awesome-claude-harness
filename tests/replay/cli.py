@@ -86,7 +86,7 @@ def run_one(sb: str, tree: str, out_dir: str, *, driver: str, mode: str, setting
     argv = [lay.python, "-m", "replay.inner", lay.sb + "/run-config.json"]
     if traced:
         argv = trace.strace_argv(lay.trace + "/raw.txt") + argv
-    env_inner = {"PATH": f"{lay.harness}/venv/bin:{os.environ.get('PATH', '/usr/bin:/bin')}", "HOME": lay.home,
+    env_inner = {"PATH": lay.path, "HOME": lay.home,
                  "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": lay.sb}
     t0, ru0 = time.monotonic(), resource.getrusage(resource.RUSAGE_CHILDREN)
     rc = sandbox.launch(sb, lay, argv, env_inner, guard=guard)

@@ -15,7 +15,7 @@ than leaving the reader to assume all of them — is the whole point of publishi
 
 **Three columns are derived.** <!-- published-columns:derived:begin -->`event_class`, `matcher`
 and `hook`<!-- published-columns:derived:end --> are recomputed from
-the checked-out `settings.json` (the row set was last reconciled against `@ef6e9037`) by
+the checked-out `settings.json` (the row set was last reconciled against `@2a806c79`) by
 `scripts/check-enforcement-evidence.py --claims`, which
 compares the derived triple set against the published rows and fails on **either** symmetric
 difference. That check runs inside the already required `baseline` CI job via
@@ -34,7 +34,7 @@ no more:
   sets declared in `DECLARED_SCHEMA`;
 - `citation` is validated for the presence of an `@<sha8>` revision pin.
 
-**On falsifiability.** 79 of the 81 registered-hook rows carry `proof_layer: source-level`, which
+**On falsifiability.** 76 of the 78 registered-hook rows carry `proof_layer: source-level`, which
 as section 1.3 defines it means those rows rest on **reading the code rather than running it**;
 the remaining 2 carry `component-tested` and none carry `host-observed` or `host-shaped`. The gate validates
 proof-layer membership and a non-blank `verifying_test`, and it does **not** execute the
@@ -170,14 +170,22 @@ be reconciled rather than argued.
 ## 3. Registered-hook rows
 
 All **nine** lifecycle event classes are represented. The tracked `settings.json` wires 9 event
-classes / 51 matchers / **81 hook commands**, and there are exactly 81 rows below: 66 recorded
+classes / 50 matchers / **78 hook commands**, and there are exactly 78 rows below: 64 recorded
 `@4c33f2f5`; H-071 records the later `PostToolUseFailure` registration and H-072 a later
 `PostToolUse` one; H-073 – H-086 record the hooks the tracked `settings.json @ef6e9037` wires that
-the ledger did not list before. Ids H-060 – H-063 are retired and not reused: those four scripts
-are not direct `Stop` entries in `settings.json` — they run as phases inside
-`stop-workflow-coordinator.py` (row H-084) — so they are recorded in section 4 as S-004 – S-007.
+the ledger did not list before; H-087 records the close-rating `PostToolUse` registration (P4)
+and H-088 the one `Stop` entry P5 wires. Ids H-060 – H-063 are retired and not reused: those
+four scripts were never direct `Stop` entries in `settings.json` — they were the phases of
+`stop-workflow-coordinator.py` — so they are recorded in section 4 as S-004 – S-007 (S-004
+retired in P5).
 Id H-081 is retired as well: `stop-completion-gate.py` lost its `Stop` entry in P1 and is an
-exit-0 stub until P10.
+exit-0 stub until P10. Ids H-052 and H-053 are retired too: `posttool-todo-count.py` and
+`posttool-todo-sequence.py` left the `PostToolUse` `TodoWrite` group in P5 and are exit-0 stubs;
+`pretool-todo-validate.py` (H-037) decides their rules before the call runs. Ids H-082 – H-084 are
+retired in P5: the `Stop` group is one entry, `stop-launch.py` (H-088), which runs
+`stop-workflow-coordinator.py`, whose completion phase is `stop-command-gate.py` (section 4,
+S-008). `stop-do-report-gate.py` and `stop-obligation-gate.py` left the group and are exit-0 stubs
+(the gate decides a `/do` task's report), and the coordinator is no longer a direct `Stop` entry.
 
 **The authoring rule `behavior` follows** — applied by hand, and checked only for closed-set
 membership, not recomputed from the event class: events that can deny a pending action
@@ -207,18 +215,18 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | H-017 | PreToolUse | (universal) | pretool-subagent-enforce.py | none | advisory | unexercised | source-level | hooks/pretool-subagent-enforce.py:1 @4c33f2f5 | none yet |
 | H-018 | PreToolUse | (universal) | pretool-workflow-gate.py | none | advisory | unexercised | source-level | hooks/pretool-workflow-gate.py:1 @4c33f2f5 | none yet |
 | H-019 | PreToolUse | (universal) | pretool-worktree-guard.sh | none | advisory | unexercised | source-level | hooks/pretool-worktree-guard.sh:1 @4c33f2f5 | none yet |
-| H-020 | PreToolUse | * | pretool-tool-policy.py | every caller, the main agent included: a Write, Edit, MultiEdit or NotebookEdit target or Bash write target that another dispatch of the session declares (its obligation's artifacts, the producer question it may write, its template's declarations) exits 2; a subagent whose role resolves also takes that role's rows of policies/tool-policy.v1.json and exits 2 on a denied tool or path; a deny-logic import failure exits 2; an unresolved role and any other internal error exit 0 | advisory | unexercised | source-level | hooks/pretool-tool-policy.py:1 @4c33f2f5 | none yet |
-| H-021 | PreToolUse | Agent | pretool-aggregate-check.py | none | advisory | unexercised | source-level | hooks/pretool-aggregate-check.py:1 @4c33f2f5 | none yet |
+| H-020 | PreToolUse | * | pretool-tool-policy.py | every caller, the main agent included: a write, delete or rename of a protected file (the harness home's settings.machine.json, private-literals.txt, scripts/check-public-core.sh, scripts/install/render-settings, hooks/git-hooks/pre-commit, .git/config, .git/hooks/, .gitattributes; a session transcript or its subagent meta; a /do task sidecar) exits 2, as does a ScheduleWakeup prompt typing a harness command outside CONTROL; a Write, Edit, MultiEdit or NotebookEdit target or Bash write target that another dispatch of the session declares (its obligation's artifacts, the producer question it may write, its template's declarations) exits 2, naming the path, the declaring role and "only <role> writes this artifact (D8)"; a subagent whose role resolves also takes that role's rows of policies/tool-policy.v1.json and exits 2 on a denied tool or path; a deny-logic import failure exits 2; an unresolved role and any other internal error exit 0 | advisory | unexercised | source-level | hooks/pretool-tool-policy.py:1 @eba87f69 | hooks/tests/test_tool_policy_derived_permission.py, hooks/tests/test_tool_policy_protected_paths.py |
+| H-021 | PreToolUse | Agent | pretool-aggregate-check.py | G3, armed by the shipped settings.json (CLAUDE_OBLIGATION_BARRIER=block): a qa dispatch (Agent or Task) exits 2 in every mode while every lane of a fan-out in its scope (the task its own obligation names) has reported and the canonical aggregate dev-report is missing, and exits 0 under the session's /do consent or, from the main agent, an /allow grant for Agent; the lane-roster and parallel_workers checks, the canonical-validity check, the obligation barrier (a prior dispatch's declared artifact of the same task family missing or invalid at a later dispatch that does not declare it again) and the gitignore rule exit 2 under =block; under =advisory or with the key unset the barrier prints each finding it would block on stderr (OBLIGATION BARRIER ADVISORY) and the canonical-validity check a warning, and the dispatch proceeds; =off also skips the barrier; writes nothing; internal errors exit 0 | advisory | unexercised | source-level | hooks/pretool-aggregate-check.py:1 @98e41855 | tests/test_aggregate_dev_report.py |
 | H-022 | PreToolUse | Agent | pretool-bisect-gate.sh | none | advisory | unexercised | source-level | hooks/pretool-bisect-gate.sh:1 @4c33f2f5 | none yet |
 | H-023 | PreToolUse | Agent | pretool-gitignore-preflight.py | none | advisory | unexercised | source-level | hooks/pretool-gitignore-preflight.py:1 @4c33f2f5 | none yet |
 | H-024 | PreToolUse | Agent | pretool-layer-escalation-check.sh | none | advisory | unexercised | source-level | hooks/pretool-layer-escalation-check.sh:1 @4c33f2f5 | none yet |
 | H-025 | PreToolUse | Agent | pretool-orchestrator-prompt-purity.py | none | advisory | unexercised | source-level | hooks/pretool-orchestrator-prompt-purity.py:1 @4c33f2f5 | none yet |
 | H-026 | PreToolUse | Agent | pretool-spec-block-foreground-agent.py | none | advisory | unexercised | source-level | hooks/pretool-spec-block-foreground-agent.py:1 @4c33f2f5 | none yet |
-| H-027 | PreToolUse | Bash | pretool-bash-safety.sh | none | advisory | exercised | component-tested | hooks/pretool-bash-safety.sh:1657 @4c33f2f5 | hooks/tests/test_blackbox_integration.py |
+| H-027 | PreToolUse | Bash | pretool-bash-safety.sh | no mode or precondition. Since P5 its hard ban reads a listed name merely after `(`, `;`, `\|`, `!` or `&` inside quoted data as text unless a word outside quotes can run text, its commit guard keeps single-quoted text beside a trailing `# comment` or a `$'..'` word as data, and a local keystone `git config` write from the harness home naming another repository by a literal absolute `-C`, `--git-dir` or `GIT_DIR` passes; a called alias whose value `--config-env` takes from the environment, a double-quoted `bash -c` or `eval` string inside a double-quoted `$(...)`, and commit or config text nested past the scanner's depth bound exit 2 (commit-hook-bypass, fail closed) | advisory | exercised | component-tested | hooks/pretool-bash-safety.sh:1657 @4c33f2f5 | hooks/tests/test_blackbox_integration.py |
 | H-028 | PreToolUse | Bash | pretool-bash-views-guard.py | none | advisory | unexercised | source-level | hooks/pretool-bash-views-guard.py:1 @4c33f2f5 | none yet |
 | H-029 | PreToolUse | Bash | pretool-block-branch-pr-worktree.py | none | advisory | unexercised | source-level | hooks/pretool-block-branch-pr-worktree.py:1 @4c33f2f5 | none yet |
 | H-030 | PreToolUse | Bash | pretool-bulk-commit-detector.py | none | advisory | unexercised | source-level | hooks/pretool-bulk-commit-detector.py:1 @4c33f2f5 | none yet |
-| H-031 | PreToolUse | Bash | pretool-git-privilege-guard.py | none | advisory | exercised | component-tested | hooks/pretool-git-privilege-guard.py:145 @4c33f2f5 | hooks/tests/test_blackbox_integration.py |
+| H-031 | PreToolUse | Bash | pretool-git-privilege-guard.py | no mode or precondition. Since P5 a commit under a live `/commit` grant whose task_id is non-null exits 2 unless its whole message (the `-m`/`--message` values as git joins them, or the whole `-F`/`--file` regular file) carries the line `Task-id: <task_id>`; a message it cannot read exits 2; the bulk-commit route takes no such line | advisory | exercised | component-tested | hooks/pretool-git-privilege-guard.py:145 @4c33f2f5 | hooks/tests/test_blackbox_integration.py |
 | H-032 | PreToolUse | Bash | pretool-grep-backtrack-guard.py | none | advisory | unexercised | source-level | hooks/pretool-grep-backtrack-guard.py:1 @4c33f2f5 | none yet |
 | H-033 | PreToolUse | Bash | pretool-wrapper-userintent.py | none | advisory | unexercised | source-level | hooks/pretool-wrapper-userintent.py:1 @4c33f2f5 | none yet |
 | H-034 | PreToolUse | Edit\|Write\|MultiEdit\|Bash | pretool-claude-config-guard.py | none | advisory | unexercised | source-level | hooks/pretool-claude-config-guard.py:1 @4c33f2f5 | none yet |
@@ -227,7 +235,7 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | H-037 | PreToolUse | TodoWrite | pretool-todo-validate.py | none | advisory | unexercised | source-level | hooks/pretool-todo-validate.py:1 @4c33f2f5 | none yet |
 | H-038 | PreToolUse | Write | pretool-write-guard.sh | none | advisory | unexercised | source-level | hooks/pretool-write-guard.sh:1 @4c33f2f5 | none yet |
 | H-039 | PreToolUse | Write\|Edit\|MultiEdit | pretool-quality-gate.py | none | advisory | unexercised | source-level | hooks/pretool-quality-gate.py:1 @4c33f2f5 | none yet |
-| H-040 | PreToolUse | Write\|Edit\|MultiEdit\|Bash | pretool-overnight-hook-guard.py | none | advisory | unexercised | source-level | hooks/pretool-overnight-hook-guard.py:1 @4c33f2f5 | none yet |
+| H-040 | PreToolUse | Write\|Edit\|MultiEdit\|Bash\|AskUserQuestion | pretool-overnight-hook-guard.py | none | advisory | unexercised | source-level | hooks/pretool-overnight-hook-guard.py:1 @4c33f2f5 | none yet |
 | H-041 | PreToolUse | Write\|Edit\|MultiEdit\|NotebookEdit\|Bash | pretool-cp-state-write-guard.py | none | advisory | unexercised | source-level | hooks/pretool-cp-state-write-guard.py:1 @4c33f2f5 | none yet |
 | H-042 | PreToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | pretool-subagent-code-block.py | none | advisory | unexercised | source-level | hooks/pretool-subagent-code-block.py:1 @4c33f2f5 | none yet |
 | H-043 | PreToolUse | mcp__playwright__browser_run_code | pretool-runcode-watchdog.py | none | advisory | unexercised | source-level | hooks/pretool-runcode-watchdog.py:1 @4c33f2f5 | none yet |
@@ -238,13 +246,11 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | H-048 | PostToolUse | Bash\(git commit.*\) | posttool-git-warn.sh | none | detected | unexercised | source-level | hooks/posttool-git-warn.sh:1 @4c33f2f5 | none yet |
 | H-049 | PostToolUse | SendMessage | posttool-restart-sendmessage.py | none | detected | unexercised | source-level | hooks/posttool-restart-sendmessage.py:1 @4c33f2f5 | none yet |
 | H-050 | PostToolUse | Skill | posttool-codex-skill-ledger.py | none | detected | unexercised | source-level | hooks/posttool-codex-skill-ledger.py:1 @4c33f2f5 | none yet |
-| H-051 | PostToolUse | TodoWrite | posttool-overnight-loop.py | none | detected | unexercised | source-level | hooks/posttool-overnight-loop.py:1 @4c33f2f5 | none yet |
-| H-052 | PostToolUse | TodoWrite | posttool-todo-count.py | none | detected | unexercised | source-level | hooks/posttool-todo-count.py:1 @4c33f2f5 | none yet |
-| H-053 | PostToolUse | TodoWrite | posttool-todo-sequence.py | none | detected | unexercised | source-level | hooks/posttool-todo-sequence.py:1 @4c33f2f5 | none yet |
+| H-051 | PostToolUse | TodoWrite | posttool-overnight-loop.py | acts only on a TodoWrite whose todos are all completed, for a session that owns an overnight state record (lib/overnight.py locate): while the time-lock window is open (window_open) it prints the continuation instructions (reset the todos, resume from Step 2), and once the window has closed a session-complete line; writes no state and never exits 2, so the todo reset is never blocked | detected | unexercised | source-level | hooks/posttool-overnight-loop.py:1 @63060b3b | hooks/tests/test_posttool_overnight_loop_terminal_gate.py |
 | H-054 | PostToolUse | TodoWrite | posttool-todo-tracker.py | none | detected | unexercised | source-level | hooks/posttool-todo-tracker.py:1 @4c33f2f5 | none yet |
 | H-055 | PostToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | posttool-command-frontmatter-validate.py | none | detected | unexercised | source-level | hooks/posttool-command-frontmatter-validate.py:1 @4c33f2f5 | none yet |
 | H-056 | PostToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | posttool-doc-sync.py | none | detected | unexercised | source-level | hooks/posttool-doc-sync.py:1 @4c33f2f5 | none yet |
-| H-057 | PostToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | posttool-git-checkpoint.sh | none | detected | unexercised | source-level | hooks/posttool-git-checkpoint.sh:1 @4c33f2f5 | none yet |
+| H-057 | PostToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | posttool-git-checkpoint.sh | acts only when the repository's pending files reach GIT_CHECKPOINT_THRESHOLD (default 10): writes a `refs/checkpoints/<branch>` snapshot through `hooks/lib/checkpoint-core.sh`; a snapshot the library refuses (nothing written) is reported as one JSON `systemMessage`, auto-commit.sh's refusal notice (S-006), as the hook's whole stdout; exits 0 on every path | detected | unexercised | source-level | hooks/posttool-git-checkpoint.sh:1 @10000fbd | hooks/tests/test_posttool_checkpoint_refusal.py |
 | H-058 | PostToolUse | mcp__playwright__browser_run_code | posttool-runcode-watchdog.py | none | detected | unexercised | source-level | hooks/posttool-runcode-watchdog.py:1 @4c33f2f5 | none yet |
 | H-059 | Notification | idle_prompt | notification-idle-overnight.py | exit-0 stub kept at its registered path: reads nothing, writes nothing (its idle log had no reader) and exits 0 on every path | detected | unexercised | source-level | hooks/notification-idle-overnight.py:1 @4c33f2f5 | none yet |
 | H-064 | SubagentStop | * | pretool-layer-match-gate.sh | none | advisory | unexercised | source-level | hooks/pretool-layer-match-gate.sh:1 @4c33f2f5 | none yet |
@@ -252,23 +258,22 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | H-066 | SubagentStop | * | subagent-stop-guard-integrity.sh | none | advisory | unexercised | source-level | hooks/subagent-stop-guard-integrity.sh:1 @4c33f2f5 | none yet |
 | H-067 | SubagentStop | * | subagentstop-codex-enforce.py | none | advisory | unexercised | source-level | hooks/subagentstop-codex-enforce.py:1 @4c33f2f5 | none yet |
 | H-068 | SubagentStop | * | subagentstop-cp-enforce.py | advisory when CP_ENFORCE_MODE is unset (the default); blocking only under CP_ENFORCE_MODE=block | advisory | unexercised | source-level | hooks/subagentstop-cp-enforce.py:1 @4c33f2f5 | none yet |
-| H-069 | SubagentStop | * | subagentstop-e2e-enforce.py | none | advisory | unexercised | source-level | hooks/subagentstop-e2e-enforce.py:1 @4c33f2f5 | none yet |
+| H-069 | SubagentStop | * | subagentstop-e2e-enforce.py | subagent stops only (agent_id present); no mode switch. Judges only the qa-report.v2 the stopping agent's own dispatch obligation (role qa) declares, at its declared path; an agent the dev registry resolves is judged only while its session's `.claude/dev-registry/<dev_session_id>/e2e-enforce.json` is enabled, one it does not resolve on its obligation alone; exits 2 (E2E_ENFORCE_BLOCKED) when that report is missing, its e2e_enforcement is absent or malformed, or its status is skipped_without_justification or outside the qa-report.v2 vocabulary; a dispatch declaring no such report (BA validation, close QA, another role) and any internal error exit 0 | advisory | unexercised | source-level | hooks/subagentstop-e2e-enforce.py:1 @9f4acd03 | hooks/tests/test_e2e_enforce.py |
 | H-070 | SubagentStop | * | subagentstop-restart-track.py | none | advisory | unexercised | source-level | hooks/subagentstop-restart-track.py:1 @4c33f2f5 | none yet |
 | H-071 | PostToolUseFailure | Bash | posttool-allowlist-consume.py | none | detected | unexercised | source-level | hooks/posttool-allowlist-consume.py:1 @4c33f2f5 | hooks/tests/test_commit_event_pointer.py |
 | H-072 | PostToolUse | Write | posttool-push-gate-token-verify.py | exit-0 stub kept at its registered path: reads nothing and exits 0 on every path; the push-gate token's commit checks run in its one writer, scripts/write-push-gate-token.py, before the write | detected | unexercised | source-level | hooks/posttool-push-gate-token-verify.py:1 @4e9d06e4 | hooks/tests/test_write_push_gate_token.py |
 | H-073 | SessionStart | (universal) | session-scratch-init.sh | creates the session's own scratch directory `$TMPDIR/<session-id>/` and writes its `.owner` record; skips when no session id is available or the id contains `/` or `..`; best-effort, exits 0 on every path | detected | unexercised | source-level | hooks/session-scratch-init.sh:1 @ef6e9037 | hooks/tests/test_scratch_lifecycle.py |
 | H-074 | PreToolUse | (universal) | pretool-do-block-subagents.py | exits 2 only for a main-agent Agent or Task call while this session's /do consent reads true (lib/allowlist.py has_do_consent), unless this session holds an /allow grant for the Agent tool; every other call, and any internal error, exits 0 | advisory | unexercised | source-level | hooks/pretool-do-block-subagents.py:1 @ef6e9037 | hooks/tests/test_do_block_subagents.py |
 | H-075 | PreToolUse | Agent | pretool-commit-dispatch-attest.py | witness only, exits 0 on every path: writes a dispatch attestation (later required by pretool-git-privilege-guard.py) only for an Agent or Task call whose subagent_type is changelog-analyst and whose payload carries a session id | advisory | unexercised | source-level | hooks/pretool-commit-dispatch-attest.py:1 @ef6e9037 | none yet |
-| H-076 | PreToolUse | Agent | pretool-obligation-gate.py | advisory when CLAUDE_OBLIGATION_GATE is unset (the default): a dispatch without a valid obligation block is allowed (a missing block counts only when the active command's dispatch templates in `commands/<command>.md` declare an obligation for its subagent_type; a malformed block counts on any dispatch); exits 2 for it only under CLAUDE_OBLIGATION_GATE=block; skipped under =off; internal errors exit 0 | advisory | unexercised | source-level | hooks/pretool-obligation-gate.py:1 @ef6e9037 | hooks/tests/test_obligation_gate.py |
+| H-076 | PreToolUse | Agent | pretool-obligation-gate.py | G1, armed by the shipped settings.json (CLAUDE_OBLIGATION_GATE=block): a dispatch without a valid obligation block (a missing block counts only when the active command's dispatch templates in `commands/<command>.md`, as its session loaded them (the text the CLI recorded when the command was typed), declare an obligation for its subagent_type; a malformed block counts on any dispatch) exits 2; under =advisory or with the key unset it is allowed, the reason it would block printed on one stderr line (OBLIGATION GATE ADVISORY) and nothing written; skipped under =off; internal errors exit 0 | advisory | unexercised | source-level | hooks/pretool-obligation-gate.py:1 @98e41855 | hooks/tests/test_obligation_gate.py |
 | H-077 | PreToolUse | Bash | pretool-push-analyst-grant-guard.py | exit-0 stub kept at its registered path: reads nothing and exits 0 on every path; scripts/execute-push.py is the push-analyst grant's one validator, and hooks/push.sh refuses a direct call without the sentinel it writes | advisory | unexercised | source-level | hooks/pretool-push-analyst-grant-guard.py:1 @ef6e9037 | none yet |
 | H-078 | PreToolUse | Write\|Edit\|MultiEdit\|NotebookEdit\|Bash | pretool-attribution-pre.py | observational: records the pre-mutation content hash of each write target in the attribution journal; never blocks, exits 0 on every path | advisory | unexercised | source-level | hooks/pretool-attribution-pre.py:1 @ef6e9037 | hooks/tests/test_attribution_journal.py |
 | H-079 | PostToolUse | Write\|Edit\|MultiEdit\|NotebookEdit\|Bash | posttool-attribution-post.py | observational: appends the attribution event(s) paired with the H-078 record, then runs the periodic journal seal check (skipped under ATTRIBUTION_AUTOSEAL_DISABLE=1); exits 0 on every path | detected | unexercised | source-level | hooks/posttool-attribution-post.py:1 @ef6e9037 | hooks/tests/test_attribution_journal.py |
 | H-080 | PostToolUse | Write\|Edit\|NotebookEdit\|MultiEdit | posttool-lane-completeness-watch.py | acts only when the written file is a lane dev-report shard whose own lane_set is a non-empty list: it then runs scripts/aggregate-dev-report.py for that task, the canonical aggregate's one producer (whether every lane has reported is G3's check, H-021); exits 0 on every path | detected | unexercised | source-level | hooks/posttool-lane-completeness-watch.py:1 @ef6e9037 | none yet |
-| H-082 | Stop | (universal) | stop-do-report-gate.py | blocking when DO_REPORT_GATE_MODE is unset (the default): only for a session with a /do task sidecar, exits 2 while its docs/dev do-report is missing or not a well-formed terminal report, at every stop (no count releases it); allows under =advisory, skipped under =off; internal errors exit 0 | advisory | unexercised | source-level | hooks/stop-do-report-gate.py:1 @ef6e9037 | hooks/tests/test_stop_do_report_gate.py |
-| H-083 | Stop | (universal) | stop-obligation-gate.py | exit-0 stub kept at its registered path: reads nothing and exits 0 on every path; each declared artifact is decided at its producer's own stop (H-086) and at the next dispatch (H-021) | advisory | unexercised | source-level | hooks/stop-obligation-gate.py:1 @ef6e9037 | hooks/tests/test_stop_obligation_gate.py |
-| H-084 | Stop | (universal) | stop-workflow-coordinator.py | runs the four Stop phases S-004 – S-007 (section 4) in fixed order; only timelock and coverage may block, and a block relays failed_phase and the last 4 KB of that phase's stderr; an auto_commit or cleanup failure, or a coverage failure other than exit 2, is recorded in its result JSON and allowed, and the later phases still run; a timelock instrument failure blocks only while the human-typed command is /dev-overnight (a typed /stop releases it), else it is recorded and allowed; exits 0 without running any phase when the payload carries an agent_id or no session_id; LANEB_COORDINATOR_PHASES_JSON may replace the phase commands (exit 2 if malformed or reordered); resource finalisation runs only when both LANEB_SESSION_RESOURCE_TRUST_KEY and LANEB_SESSION_RESOURCE_TRUST_ROOT are set | advisory | unexercised | source-level | hooks/stop-workflow-coordinator.py:1 @ef6e9037 | none yet |
 | H-085 | SessionEnd | (universal) | sessionend-scratch-sweep.sh | removes only `$TMPDIR/<own-session-id>/`, and only when it is a real directory directly under that root whose `.owner` sid equals the session id; skips otherwise; best-effort, exits 0 on every path | detected | unexercised | source-level | hooks/sessionend-scratch-sweep.sh:1 @ef6e9037 | hooks/tests/test_scratch_lifecycle.py |
-| H-086 | SubagentStop | * | subagentstop-artifact-contract-enforce.py | subagent stops only (agent_id present). Obligation path: advisory when CLAUDE_OBLIGATION_STOPGATE is unset (the default), exits 2 on a failed obligated artifact only under =block, skipped under =off. Legacy path (reached unless the obligation path resolved and checked the agent's own obligation): blocking when ARTIFACT_CONTRACT_ENFORCE_MODE is unset (the default), exits 2 when a json report the agent's own dispatch declares (read as declared even when its block fails the grammar) declares report_version but fails its schema, only while the cycle's artifact-contract-enforce.json is enabled; allows under =advisory | advisory | unexercised | source-level | hooks/subagentstop-artifact-contract-enforce.py:1 @ef6e9037 | none yet |
+| H-086 | SubagentStop | * | subagentstop-artifact-contract-enforce.py | subagent stops only (agent_id present). Obligation path: G2, armed by the shipped settings.json (CLAUDE_OBLIGATION_STOPGATE=block; a process env without the key takes it from the harness home's settings.json env): exits 2 on a failed obligated artifact; under =advisory, or with the key unset in both, each failing obligated artifact's path and check are printed on stderr (OBLIGATION_STOPGATE_ADVISORY) and the stop is allowed; under =off nothing is read or judged. An exception inside the obligation path is named on stderr (OBLIGATION_STOPGATE_FAULT) and the declared-report check decides the stop. Declared-report check (reached when the agent's own obligation does not resolve, or on that fault; an agent the dev registry does not resolve is never blocked): blocking when ARTIFACT_CONTRACT_ENFORCE_MODE is unset (the default), exits 2 when a json report the agent's own dispatch declares (read as declared even when its block fails the grammar) declares report_version but fails its schema; under =advisory prints the same reason on stderr (ARTIFACT_CONTRACT_ADVISORY) and allows; a missing report never blocks; writes nothing | advisory | unexercised | source-level | hooks/subagentstop-artifact-contract-enforce.py:1 @c1d17a27 | hooks/tests/test_artifact_contract_enforce.py |
+| H-087 | PostToolUse | AskUserQuestion | posttool-close-rating.py | the owner's close rating's one writer: appends one row `{ts, task_id, rating, tool_use_id}` to `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/lifecycle.jsonl` under an exclusive lock on the score scripts' `<log>.lock`, only for a main-agent call (no agent_id) whose metadata.source is `close-rating:<task-id>` and whose tool_response answers its one question with one of the four rating labels, and only while that task has no rating row; Skip, free text, a decline, an error result and an AFK auto-continue write nothing; prints nothing and exits 0 on every path | detected | unexercised | source-level | hooks/posttool-close-rating.py:1 @31c9636e | hooks/tests/test_close_rating.py |
+| H-088 | Stop | (universal) | stop-launch.py | the `Stop` group's one entry (`"timeout": 300`): runs `stop-workflow-coordinator.py` on the payload (280 s) and relays its exit 0 or 2, stdout and stderr; the coordinator's phases are S-005 – S-008 (section 4). When the coordinator does not decide (another exit, a timeout, a launch error, a missing file) the launcher decides alone on the transcript reader (`hooks/lib/command_span.py`) and `hooks/lib/overnight.py`'s `window_open`, both loaded by path: CLAUDE_COMMAND_GATE=off exits 0; an open overnight window, or a gated latest human-typed command in block mode, exits 2 naming the failure and `/stop`; anything else exits 0; a check whose module cannot load counts as not holding | advisory | unexercised | source-level | hooks/stop-launch.py:1 @067a29ff | hooks/tests/test_stop_launch.py |
 
 ---
 
@@ -279,10 +284,10 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | S-001 | black-box-tests-against-real-Claude-Code-builds | unsupported | unexercised | none | docs/ENFORCEMENT-LEDGER.md:1 @4c33f2f5 | none yet | unsupported |
 | S-002 | permission-layer-git-backstop | unsupported | unexercised | source-level | settings.json:1 @4c33f2f5 | none yet | unsupported |
 | S-003 | destructive-reset-gate-regex-backstop | advisory | exercised | component-tested | hooks/pretool-bash-safety.sh:1667 @4c33f2f5 | hooks/tests/test_blackbox_integration.py | component-tested |
-| S-004 | stop-coordinator-phase-timelock:stop-overnight-timelock.py | advisory | unexercised | source-level | hooks/stop-overnight-timelock.py:1 @4c33f2f5 | none yet | source-level |
-| S-005 | stop-coordinator-phase-coverage:stop-spec-coverage-enforce.py | advisory | unexercised | source-level | hooks/stop-spec-coverage-enforce.py:1 @4c33f2f5 | none yet | source-level |
-| S-006 | stop-coordinator-phase-auto_commit:auto-commit.sh | advisory | unexercised | source-level | hooks/auto-commit.sh:1 @4c33f2f5 | none yet | source-level |
-| S-007 | stop-coordinator-phase-cleanup:stop-cleanup-allowlist.sh | advisory | unexercised | source-level | hooks/stop-cleanup-allowlist.sh:1 @4c33f2f5 | none yet | source-level |
+| S-005 | stop-coordinator-phase-coverage:stop-spec-coverage-enforce.py | advisory | unexercised | source-level | hooks/stop-spec-coverage-enforce.py:1 @eba87f69 | none yet | source-level |
+| S-006 | stop-coordinator-phase-auto_commit:auto-commit.sh | advisory | unexercised | source-level | hooks/auto-commit.sh:1 @eba87f69 | hooks/tests/test_stop_checkpoint_refusal.py | source-level |
+| S-007 | stop-coordinator-phase-cleanup:stop-cleanup-allowlist.sh | advisory | unexercised | source-level | hooks/stop-cleanup-allowlist.sh:1 @eba87f69 | none yet | source-level |
+| S-008 | stop-coordinator-phase-completion:stop-command-gate.py | advisory | unexercised | source-level | hooks/stop-command-gate.py:1 @eba87f69 | hooks/tests/test_stop_command_gate.py | source-level |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -291,44 +296,92 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
   (`Bash(git push --force:*)`, `Bash(git push -f:*)`, `Bash(git reset --hard:*)`), all
   **prefix-anchored** and therefore matching no wrapped or redirected form. There is no
   permission-layer backstop behind the hook layer for this class.
+  Outside this class, `permissions.deny` carries a `Skill(<stem>:*)` entry for each human-only
+  command, and `hooks/tests/test_skill_deny_coverage.py` requires one for every `commands/*.md`
+  stem outside CONTROL that no harness text calls through the Skill tool. `Skill(codex:*)` is
+  not denied, by decision (P5): agents and `/close`, `/commit`, `/do` call `Skill(skill="codex")`
+  under `--codex`, and `subagentstop-codex-enforce.py` (H-067) requires the ledger entry that
+  call's PostToolUse (H-050) writes.
 - **S-003** — see `docs/THREAT-MODEL.md` RISK-3. This gate's regex fallback is *mutually
   exclusive* with its classifier branch, so an input the classifier parses successfully but
   finds no git in suppresses its own backstop.
-- **S-004 – S-007** — the four `Stop` phases that `hooks/stop-workflow-coordinator.py`
-  (registered-hook row H-084) runs itself, in the fixed order its `PHASE_ORDER` declares
-  (`hooks/stop-workflow-coordinator.py:40 @ef6e9037`), with the default commands at
-  `hooks/stop-workflow-coordinator.py:63-68 @ef6e9037`. They were previously registered-hook rows
-  H-060 – H-063 (event class `Stop`, matcher `(universal)`, mode/precondition `none`), matching
-  the direct `Stop` entries of the since-retired settings template. `settings.json @ef6e9037`
-  wires none of the
-  four as a direct `Stop` entry, so none of them is an `(event_class, matcher, hook)` triple and
-  `--claims` rejects a registered-hook row for any of them. Their `behavior`, `exercise_status`,
-  `proof_layer`, `citation` and `verifying_test` values are carried over unchanged. How they run,
-  from the coordinator source: each phase is a child process that receives the `Stop` payload on
-  stdin, with `LANEB_COORDINATED_STOP=1` added to its environment; no phase runs when the payload
-  carries an `agent_id` or no `session_id`. Only `timelock` and `coverage` may block: exit 2 (or,
-  for `timelock`, an exit-0 run whose last stdout line is a block decision) ends the run and the
-  coordinator exits 2, relaying `failed_phase` and the phase's stderr tail. Any other failure —
-  another non-zero exit, a timeout (30 s; 120 s for `auto_commit`), a launch error or a missing
-  script — is recorded in the coordinator's result JSON and allowed, and the later phases still
-  run; for `timelock` it is an instrument failure, which blocks only while the human-typed command
-  is `/dev-overnight` (a typed `/stop` releases it). Per phase, from each script's own source at
-  `@ef6e9037`:
-  - **S-004 `timelock`** (`stop-overnight-timelock.py`): acts only when
-    `.claude/overnight-state-<session_id>.json` exists for this session; exits 2 before that
-    state's end time, and after it while closeout artifacts are missing.
-  - **S-005 `coverage`** (`stop-spec-coverage-enforce.py`): acts only when the transcript's active
-    command span is `/spec` and no TodoWrite in it has come back with every step completed, and
-    the spec the session last wrote (`hooks/lib/spec_path.py`) has a views directory; exits 2 when
-    `spec-verify.py` reports incomplete monolith coverage, and allows the stop when that verifier
-    is absent.
+- **S-004 – S-008** — the `Stop` phases that `hooks/stop-workflow-coordinator.py` runs itself,
+  in the fixed order its `PHASE_ORDER` declares: `coverage`, `auto_commit`, `completion`,
+  `cleanup`. S-004 – S-007 were previously registered-hook rows H-060 – H-063 (event class `Stop`,
+  matcher `(universal)`, mode/precondition `none`), matching the direct `Stop` entries of the
+  since-retired settings template; `settings.json` wires none of them, nor since P5 the
+  coordinator itself, as a direct `Stop` entry, so none of them is an
+  `(event_class, matcher, hook)` triple and `--claims` rejects a registered-hook row for any of
+  them. **S-004 is retired and not reused:** P5 deleted the `timelock` phase;
+  `stop-overnight-timelock.py` is a tracked exit-0 stub, and the overnight time-lock is the
+  completion phase's (S-008). How the phases run, from the coordinator source: `stop-launch.py`
+  (registered-hook row H-088) runs the coordinator, and a session that loaded an older hook list
+  runs it directly; each phase is a child process that receives the `Stop` payload on stdin, with
+  `LANEB_COORDINATED_STOP=1` added to its environment; no phase runs when the payload carries an
+  `agent_id` or no `session_id`; `LANEB_COORDINATOR_PHASES_JSON` may replace the phase commands
+  (exit 2 if malformed or reordered); resource finalisation runs only when both
+  `LANEB_SESSION_RESOURCE_TRUST_KEY` and `LANEB_SESSION_RESOURCE_TRUST_ROOT` are set, and no phase
+  receives either key. Only `coverage` and `completion` may block: exit 2 ends the run and the
+  coordinator exits 2, relaying a coverage block as `failed_phase=coverage` and the last 4 KB of
+  its stderr, and a completion block as the gate's own text, whole. An `auto_commit` or `cleanup`
+  failure — another non-zero exit, a timeout (30 s; 120 s for `auto_commit`, 60 s for
+  `completion`; 240 s in all, under the launcher's 280 s), a launch error or a missing script —
+  is recorded in the coordinator's result JSON and allowed. `CLAUDE_COMMAND_GATE` is read from
+  the process environment only, never from a settings file: `off` skips `completion`, and the
+  time-lock with it; any other value, or none, runs it in block mode when the launcher started the
+  coordinator (it marks the coordinator it runs with `CLAUDE_STOP_LAUNCHER=1`). A coordinator run
+  directly, unmarked — a session that loaded the hook list from before P5 — runs `completion`
+  advisory (`would block` on stderr, exit 0) and still blocks an open overnight window (P5's
+  arming option 1, decided by `tests/replay/test_live_arming.py`). Per phase, from each
+  script's own source at `@eba87f69`:
+  - **S-005 `coverage`** (`stop-spec-coverage-enforce.py`): a tracked exit-0 `# STUB:` file since
+    P1b that reads nothing and decides nothing; the `/spec` split's coverage is decided at the
+    spec subagent's own stop (H-086). The coordinator would relay an exit 2 from it as a block;
+    the stub never exits 2.
   - **S-006 `auto_commit`** (`auto-commit.sh`): writes a `refs/checkpoints/<branch>` snapshot when
-    the working tree is dirty; its exit 1 on a failed checkpoint is recorded in the coordinator's
-    result JSON and in `logs/checkpoint.log`, and the Stop is allowed.
-  - **S-007 `cleanup`** (`stop-cleanup-allowlist.sh`): exits 0 on every path. It runs last, on
-    every Stop that `timelock` and `coverage` do not block, an `auto_commit` failure included; its own header comment
-    ("Registered LAST in Stop hooks array so earlier hook failures do not block cleanup")
-    describes the former direct registration, not this sequencing.
+    the working tree is dirty. It runs before `completion`, so a Stop the gate blocks still writes
+    its snapshot. A snapshot the library refuses (the private-literal rule, the settings check or
+    the settings clean filter; nothing written) is reported as the one line
+    `Checkpoint snapshot refused by <rule>: nothing written, see logs/checkpoint.log` in a JSON
+    `systemMessage` the coordinator shows as its own (the launcher relays its stdout), and the
+    Stop is allowed; the PostToolUse checkpoint hook (H-057) reports its own refused snapshot the
+    same way. That the host shows this notice to the user is documented
+    (code.claude.com/docs/en/hooks, read 2026-11-01: `systemMessage`, "Warning message shown to
+    the user", with no exception in the `Stop` or `PostToolUse` section), and emitted end to end
+    in the sandbox; not observed on a harness host (no owner step). Its exit 1 on any other
+    failed checkpoint is recorded in the coordinator's result JSON and in `logs/checkpoint.log`,
+    and the Stop is allowed.
+  - **S-007 `cleanup`** (`stop-cleanup-allowlist.sh`): exits 0 on every path. It runs last, and
+    only on a Stop that `coverage` and `completion` allow (an `auto_commit` failure included), so a
+    blocked Stop keeps its `/allow` grants; its own header comment ("Registered LAST in Stop hooks
+    array so earlier hook failures do not block cleanup") describes the former direct
+    registration, not this sequencing.
+  - **S-008 `completion`** (`stop-command-gate.py`): the one Stop gate for every gated command
+    (`hooks/lib/stop-commands.json`: `/do`, `/dev`, `/redev`, `/dev-command`, `/dev-overnight`,
+    `/close`, `/commit`, `/merge`, `/push`). It allows a subagent's Stop (`agent_id`) and mode
+    `off`; it holds the overnight time-lock in any span, for the stopping session's own
+    `<main root>/.claude/overnight-state-<session_id>.json` (`hooks/lib/overnight.py`'s one
+    locator): exit 2 while its window is open (`window_open`: end time ahead, no human-typed
+    `/stop` since the session's `/dev-overnight`; no state field releases it); after `end_time`
+    with `overnight.closeout_gaps` empty, or the owner's `/stop`, while the wake's `CronCreate`
+    has no later `CronDelete`;
+    it allows when the active span is not a gated command's (only a human-typed harness command
+    outside CONTROL opens or replaces a span, never a Skill expansion, a scheduled prompt or a
+    wakeup; a plain prompt continues it); else it exits 2 with
+    `COMMAND_GATE /<command>: not complete` and one line per gap (the todo half and the
+    command's predicate: the dev chain's disposition per family, `/dev-overnight`'s closeout
+    after `end_time` (`overnight.closeout_gaps`: no PM retrospective report, or no non-empty
+    overnight summary written since `start_time`), the hook-minted
+    `/do` task's do-report with lists equal to its write set, close and commit stages, git facts
+    for `/merge` and `/push`), an exception being the gap
+    `gate instrument failure: <type>: <message>`. It writes no file and keeps no count; the next
+    compliant step clears each gap, and the human's `/stop` opens a span that is not gated. A
+    completion failure (exit outside {0, 2}, a timeout, a launch error, a missing file) is decided
+    by the coordinator's stdlib fallback on the transcript reader: an open overnight window, or a
+    gated latest human-typed command in block mode, exits 2 with `COMMAND_GATE instrument
+    failure: <reason>. The gate is broken; the human can type /stop`; anything else is recorded
+    and allowed. When resource finalisation runs, the coordinator alone publishes the overnight
+    terminal receipt, from the terminal time-lock status the gate prints on an allowed Stop.
 
 ---
 
@@ -446,8 +499,9 @@ missing.
 ## 7. Evidence claims resting on internal sources only
 
 Every claim in this document is `tier_2_verified` against this repository's own code and
-configuration — read, greped, parsed or executed in-tree this cycle. **None** rests on an
-official Claude Code source, because no external documentation was fetched. Specifically
+configuration — read, greped, parsed or executed in-tree this cycle. Only one also rests on an
+official Claude Code source: S-006's `systemMessage` notice cites code.claude.com/docs/en/hooks,
+read 2026-11-01, and is not host-observed either. Specifically
 unverified against upstream: the meaning of each lifecycle event class, whether the host honors
 a non-zero hook exit code, and what a "supported build" means to the vendor. Those three are the
 load-bearing gaps between this ledger and a genuine enforcement guarantee, and they are named
