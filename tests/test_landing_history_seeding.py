@@ -17,7 +17,8 @@ import stat
 
 import pytest
 
-from tests.test_landing import env, git, land, landing_log, make_home, run, write  # noqa: F401
+from tests.test_landing import (  # noqa: F401
+    assert_landed, env, git, land, landing_log, make_home, run, write)
 
 STAND_IN = "acct-test-123"
 DOMAIN = "demo" + ".internal"  # a private-use name outside A2's allowlist
@@ -265,8 +266,10 @@ def test_a_ref_to_an_object_the_home_lacks_is_skipped(tmp_path, env):
 @pytest.mark.parametrize("state", ["hooks", "upgraded"])
 def test_a_failed_history_scan_exits_0_with_one_notice_and_a_counts_only_log(tmp_path, env, state):
     """The walk fails (a git that refuses rev-list, put first on PATH): exit 0, one notice line
-    naming the step, a log of counts and names only, the list and the hooks left as they were, and
-    the next turn end lands."""
+    naming the step, a log of counts and names only, and the list left as it was. An upgraded home
+    is left as it was and lands at the next turn end; at the hooks state step 5 installs the hooks
+    (the pre-push guard too) with the list as it is, so the next Stop scans nothing, and the next
+    hooks state appends what the failed scan lacked."""
     home, _ = make_home(tmp_path, env)
     if state == "hooks":
         land(env, home)
@@ -278,14 +281,27 @@ def test_a_failed_history_scan_exits_0_with_one_notice_and_a_counts_only_log(tmp
           % shutil.which("git"), 0o755)
     log_before = landing_log(home)
     notice = land(dict(env, PATH="%s:%s" % (stub, env["PATH"])), home)  # asserts exit 0
-    step = "history seeding" if state == "hooks" else "settings"
-    assert notice.startswith("Harness landing failed at the %s step (see logs/landing.log)" % step)
-    assert notice.count("\n") == 1 and notice.endswith("it runs again at the next turn end.\n")
     new = landing_log(home)[len(log_before):]
-    assert "land: failed: RuntimeError" in new and "result=failed-%s head=" % step in new
+    if state == "hooks":
+        assert notice == REFRESHED + (", with private-literals.txt as it is: the history seeding "
+                                      "step failed (see logs/landing.log).\n")
+        assert "steps 5 done" in new
+        assert "result=hooks-refreshed failed-history seeding head=" in new
+    else:
+        assert notice.startswith("Harness landing failed at the settings step (see "
+                                 "logs/landing.log)")
+        assert notice.count("\n") == 1 and notice.endswith("it runs again at the next turn end.\n")
+        assert "result=failed-settings head=" in new
+    assert "land: failed: RuntimeError" in new
     assert not [v for v in ("/opt/demo/bin/tool", private("kept"), STAND_IN) if v in notice + new]
     assert literals(home) == ["/opt/demo/bin/tool"]
-    assert land(env, home, "--state").strip() == state  # tried again at the next turn end
+    if state == "hooks":
+        assert_landed(env, home)  # the git hooks installed, the pre-push guard among them
+        log_after = landing_log(home)
+        assert land(env, home) == "" and landing_log(home) == log_after
+        to_hooks_state(env, home)
+    else:
+        assert land(env, home, "--state").strip() == state  # tried again at the next turn end
     assert "1 %s" % ADDED in land(env, home)
     assert literals(home) == ["/opt/demo/bin/tool", private("kept")]
     assert land(env, home, "--state").strip() == "landed"
