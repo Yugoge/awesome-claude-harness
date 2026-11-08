@@ -666,9 +666,13 @@ def run_experiment(sub, exp: dict) -> dict:
 
 def loop_context(call) -> str:
     """What the TodoWrite's PostToolUse hooks hand the main agent (hookrun.context: the loop's
-    additionalContext), never their raw stdout: the agent acts on that and nothing else."""
-    said = (hookrun.context("PostToolUse", h) for h in (call.post.hooks if call.post else []))
-    return "\n".join(t for t in said if t)
+    additionalContext), never their raw stdout: the agent acts on that and nothing else. A base tree's
+    loop hook (origin/master's, P1b's) prints its reset as plain stdout, which the CLI keeps in its debug
+    log; P1c's live-landing replays of such a session read it as P1c's driver did, so when no hook hands
+    any context the plain stdout of the hooks that passed stands in."""
+    hooks = call.post.hooks if call.post else []
+    said = [t for t in (hookrun.context("PostToolUse", h) for h in hooks) if t]
+    return "\n".join(said) if said else "\n".join(h["stdout"] for h in hooks if h["verdict"] == "ok")
 
 
 def _probe_blocks(ev) -> list:
@@ -2127,6 +2131,8 @@ class Night:
                 (r"^cycle index - 1$", str(self.n)), (r"^issues_found$", str(len(self.triage.get("issues") or []))),
                 # the base text's (origin/master's, P1b's) Step 21 template: an in-flight session parks nothing
                 (r"^cycle_count$", str(self.n)), (r"^issues_parked$", "0"),
+                (r"^base_ref$", "$DEFAULT_BRANCH"),  # as the base announcement itself defines it
+                (r"^summary$", "; ".join(p.sc.dev_summary for p in self.pipes)),
                 (r"^issues_fixed$", str(fixed)),
                 (r"^issues_triage_deferred$", str(len(self.triage.get("skipped_issues") or []))),
                 (r"^percentage$", str(round(100 * fixed / max(1, len(self.pipes))))),
