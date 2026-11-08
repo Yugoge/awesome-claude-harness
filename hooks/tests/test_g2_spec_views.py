@@ -262,8 +262,9 @@ def _aged_stop(tmp_path: Path, prompt_of, aged: dict, earlier_seconds: float | N
 
 
 def test_a_view_older_than_the_dispatch_goes_back_to_the_spec_subagent(tmp_path):
-    """P1b E4: a view the split's dispatch did not write (mtime an hour before its dispatched_at)
-    passes spec-verify on content, and is stopped by the freshness rule, naming the view."""
+    """P3 R14 (the spec_views case P1b E4 brought into it; P1b handed its rule on in 4a3bd7e): a
+    view the split's dispatch did not write (mtime an hour before its dispatched_at) passes
+    spec-verify on content, and is stopped by the freshness rule, naming the view."""
     run = _aged_stop(tmp_path, _obligation_prompt, {"qa.md": 3600})
     assert run.returncode == 2, run.stderr
     assert f"  - {VIEWS}/qa.md: artifact_stale" in run.stderr, run.stderr

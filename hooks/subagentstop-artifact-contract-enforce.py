@@ -436,8 +436,9 @@ def _declares_lane_echo(schema_id) -> bool:
 
 
 def _stale_findings(project_dir: str, ob: dict, declared: list, checked: list) -> list:
-    """The one freshness rule at a producer's stop (P1b E4, P3 R14(a)) over the
-    files of its declared file-kind artifacts (_declared_files); a finding
+    """The one freshness rule at a producer's stop (P3 R14(a), with the bounds
+    P1b E4 brought before 4a3bd7e handed P1b's own rule on) over the files of
+    its declared file-kind artifacts (_declared_files); a finding
     names only a checked one, whose own checks did not fail. A file written
     for this dispatch (mtime, the filesystem's clock, >= dispatched_at - 2s)
     stands. An older one stands only when this dispatch wrote another of its

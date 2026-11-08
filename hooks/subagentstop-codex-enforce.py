@@ -132,6 +132,8 @@ def main() -> None:
     sys.stderr.write(
         f"CODEX_ENFORCE_BLOCKED: agent {agent_id} (type={agent_type}) has not called "
         f"codex skill in session {dev_session_id}.\n"
+        f"artifact: {ledger_path} (failing check: absent; posttool-codex-skill-ledger.py writes it "
+        f"when this agent calls the codex skill)\n"
         f"Call Skill(skill='codex') before stopping, or ask the orchestrator to "
         f"disable enforcement if codex is genuinely unavailable.\n"
     )
