@@ -42,12 +42,12 @@ and git stash list/show/pop (non-destructive forms). Hard reset and direct
 ref mutation are not agent-accessible.
 
 /do consent (hooks/lib/allowlist.py has_do_consent: main agent, one turn)
-releases every rule here except those on git commit and git push, which are
-judged as without it, and a git command the guard cannot classify (E2). Under
-it a git operation that can move the protected branch's ref, or one whose
-landing branch the guard cannot tell, is refused (_moves_protected_branch).
-Each block then names the commands that land them (/close then /commit,
-/push, /merge).
+releases the rules on git merge, forbidden plumbing, hard reset and direct ref
+mutation, and adds none (E2). What one of them refuses without it stays refused
+when it can move the protected branch's ref, or when the guard cannot tell the
+branch it lands on (_moves_protected_branch). git commit, git push and a git
+command the guard cannot classify are judged as without it. Each block then
+names the commands that land them (/close then /commit, /push, /merge).
 
 Spec: spec-20260424-233926 section 5.2.4 (R4.3) line 233-249.
 
@@ -1355,10 +1355,10 @@ def _evaluate_merge(command, data):
 
 # E2: added to every block the guard emits while the main agent holds /do consent.
 DO_NOT_COVERED = (
-    '/do consent does not cover git commit, git push, a git operation that can move '
-    'the protected branch, or a git command this guard cannot classify, which may be '
-    'any of them: a commit lands through /close, then /commit; a push through /push; '
-    'a merge into the protected branch through /merge.\n'
+    '/do consent does not cover git commit, git push, a git operation this guard refuses '
+    'without it that can move the protected branch, or a git command this guard cannot '
+    'classify, which may be any of them: a commit lands through /close, then /commit; a '
+    'push through /push; a merge into the protected branch through /merge.\n'
 )
 
 # E2: with one of these words in a command, git may run in another directory
@@ -1498,8 +1498,9 @@ def _evaluate_protected_move(command, data):
     if _check_git_allowlist(command, data):
         return
     _block(
-        '\nBLOCKED: agent git ref move - this command can move the protected branch '
-        '(%s), or the guard cannot tell the branch it lands on: a cd, pushd, popd, '
+        '\nBLOCKED: agent git ref move - this merge, plumbing, hard reset or ref '
+        'mutation, refused without /do, can move the protected branch (%s), or the '
+        'guard cannot tell the branch it lands on: a cd, pushd, popd, '
         'source or GIT_DIR-style redirect in it, a checkout, switch or symbolic-ref '
         'with an operation on HEAD, a prefix or an option before the subcommand, a '
         'detached HEAD or an unset origin/HEAD.\n'
@@ -1685,6 +1686,11 @@ def _evaluate_forbidden_plumbing(command, data):
     )
 
 
+# E2: the rules /do consent releases (_evaluate_command).
+_DO_RELEASED = (_looks_like_git_merge, _looks_like_git_forbidden_plumbing,
+                _looks_like_git_reset_hard, _looks_like_git_direct_ref_mutation)
+
+
 # ---------------------------------------------------------------------------
 # Residual-refusal recovery route (2026-09-03)
 #
@@ -1861,10 +1867,11 @@ def _audit_residual_override(path, ovr, kinds, segments, digest):
 
 
 def _evaluate_command(command, data, do_consent=False):
-    # do_consent: the main agent holds /do consent, which covers every rule
-    # here except git commit, git push and a git command the guard cannot
-    # classify, which may be one of them (E2); under it an operation that can
-    # move the protected branch is refused (_moves_protected_branch).
+    # do_consent: the main agent holds /do consent, which releases the rules in
+    # _DO_RELEASED and adds none (E2): what one of them refuses stays refused when
+    # it can move the protected branch or the guard cannot tell the branch it lands
+    # on (_moves_protected_branch); git commit, git push and a git command the
+    # guard cannot classify are judged as without it.
     # Classify once: build invocations list for all _looks_like_* and _evaluate_* calls.
     # iter_git_invocations uses token-aware parsing so path-qualified forms like
     # /usr/bin/git are detected alongside bare 'git' (closes RISK-3 bypass).
@@ -1942,7 +1949,8 @@ def _evaluate_command(command, data, do_consent=False):
     # (force-push must stay blocked even with a broad /allow grant).
     if not _looks_like_git_push(invocations) and _check_git_allowlist(command, data):
         return
-    if do_consent and _moves_protected_branch(command, invocations):
+    if (do_consent and any(rule(invocations) for rule in _DO_RELEASED)
+            and _moves_protected_branch(command, invocations)):
         _evaluate_protected_move(command, data)
     if not do_consent and _looks_like_git_forbidden_plumbing(invocations):
         _evaluate_forbidden_plumbing(command, data)
@@ -1974,8 +1982,8 @@ def main():
         command = (data.get('tool_input', {}) or {}).get('command', '') or ''
         if not command:
             sys.exit(0)
-        # /do consent (main agent only) releases every rule but commit and push,
-        # and refuses a move of the protected branch (E2).
+        # /do consent (main agent only) releases rules and adds none (E2,
+        # _evaluate_command).
         do_consent = has_do_consent(data)
         try:
             _evaluate_command(command, data, do_consent)

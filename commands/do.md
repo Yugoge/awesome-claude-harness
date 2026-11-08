@@ -3,7 +3,7 @@ description: Allow main agent to bypass orchestrator-gate restrictions for this 
 disable-model-invocation: true
 ---
 
-(Human-only: `disable-model-invocation: true` keeps the model from invoking /do itself. When the owner types it, `hooks/prompt-workflow.py` writes the consent flag and mints the task id, and this body reaches the model with the typed arguments. The consent lasts this turn: the next prompt that is not /do clears it. It does not cover `git commit`, `git push`, a git operation that can move the protected branch or whose landing branch the guard cannot tell, or a git command the guard cannot classify (`hooks/pretool-git-privilege-guard.py`): a commit lands through /close then /commit, a push through /push, a merge into the protected branch through /merge.)
+(Human-only: `disable-model-invocation: true` keeps the model from invoking /do itself. When the owner types it, `hooks/prompt-workflow.py` writes the consent flag and mints the task id, and this body reaches the model with the typed arguments. The consent lasts this turn: the next prompt that is not /do clears it. It does not cover `git commit`, `git push`, a git operation the guard refuses without /do that can move the protected branch or whose landing branch it cannot tell, or a git command the guard cannot classify (`hooks/pretool-git-privilege-guard.py`): a commit lands through /close then /commit, a push through /push, a merge into the protected branch through /merge.)
 
 ## Argument parsing
 
