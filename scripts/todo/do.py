@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preloaded TodoList for /do workflow.
 
-Injects the 5-step /do workflow checklist via hook-todo-injection.
+Injects the 5-step /do workflow checklist via hooks/prompt-workflow.py.
 Step 3 (Codex audit) is always listed; the agent skips it when --codex is absent.
 Step 5 (do-report) is enforced at session stop by hooks/stop-do-report-gate.py.
 """
