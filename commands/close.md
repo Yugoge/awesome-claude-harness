@@ -375,13 +375,13 @@ The dialog adds its own Skip control and free-text box; no other option is added
    mapfile -t CLOSE_PENDING_PARENTS < <(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action close --project-dir "<PROJECT_ROOT>")
    ```
 
-   Each line's first word is a parent's task-id (sorted; lane rows and spec rows never appear); the rest of the line is not used here.
+   Each line's first word is a parent's task-id (sorted; lane rows and spec rows never appear); the rest of the line is not used here. A task with a gap no dispatch record or todo step owes is not listed (`/close <task-id>` takes it): its `<task-id>: skipped: <reason>` line is on stderr.
 
 2. **Walk the steps over the parents.** Each TodoStep runs for every parent, in list order, before it is marked completed: Step 0 completes each parent's cycle (`TASK_ID` bound to that parent as Task-id resolution binds a timestamp argument, a `/do` parent's `DO_REPORT` included, then its own disposition call), Step 1 dispatches each parent's inspectors, Step 2 runs each parent's close debate until it lands, Step 3 echoes each verdict with its Session Summary and next step, and Step 3b asks one rating question per landed parent. No two dispatches run at once; `codex_required` is shared by the batch.
 
 3. **An owner decision** a parent meets — a hook rejection (CLAUDE.md Subagent Hook Discipline: the rejected operation is never retried, disguised or worked around) or a genuine choice — is one owner question naming the parent and the decision (header `Authorize` for a hook rejection: the rejected operation, the exact command the human may authorize, and declining it under Hook Discipline #4). The parent then goes on to its landed verdict; no parent is recorded and passed over.
 
-4. **Batch line**: after Step 3, one line per parent (`<task-id>: <its landed CLOSE: line>`).
+4. **Batch line**: after Step 3, one line per parent (`<task-id>: <its landed CLOSE: line>`), then each `skipped:` line of the discovery, verbatim.
 
 ## Constraints
 

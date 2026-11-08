@@ -11,7 +11,11 @@ Derives, per on-disk task-id, a state (docs/dev/ticket-20260808-035658-lanel.md)
                (resolve-dev-artifact-chain.py resolve_chain), its result used
                verbatim: close_pending whether it passes or not, as the
                disposition takes an incomplete chain (D7); its instrument
-               failure, which the disposition's dev-chain check raises, blocked
+               failure, which the disposition raises, blocked. A gap the
+               reader (obligation.declaring_dispatch) names no owner for can
+               never be produced unattended: list-actionable --next-action
+               close passes the task over, its reason on stderr (`auto_skip`);
+               /close <task> still takes it
   close     -- a close-report exists: the one classifier's class of its last
                line (hooks/lib/close-verdict.py), then commit detection; the
                chain is not called
@@ -341,9 +345,13 @@ def derive_state(project_root: Path, task_id: str) -> dict:
                 return row
             resolver = _load_resolver_module()
             result = resolver.resolve_chain(project_root, task_id)
-            if resolver.exit_status(result):  # incomplete: its instrument failure raises, a blocked row (below)
-                resolver._check_dev_chain(resolver.ChainValidator(project_root, task_id), task_id, obligation)
             row.update(chain_state(task_id, result))
+            if resolver.exit_status(result):  # incomplete: its instrument failure raises, a blocked row (below)
+                gaps = resolver.disposition(project_root, task_id, "dev")["gaps"]
+                ownerless = next((gap["artifact"] for gap in gaps if obligation.declaring_dispatch(
+                    task_id, gap["artifact"], project_root) is None), None)
+                if ownerless:  # /close <task> still takes it; --auto passes it over, saying why
+                    row["auto_skip"] = f"no dispatch record or todo step owes {ownerless}"
             return row
 
         if ba_qa_path.is_file():
@@ -595,6 +603,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         rows = scan(project_root)
         by_id = {row["task_id"]: row for row in rows if row.get("kind") == "ticket"}
         for task_id in actionable_parents(rows, args.next_action):
+            if args.next_action == "close" and by_id[task_id].get("auto_skip"):
+                print(f"{task_id}: skipped: {by_id[task_id]['auto_skip']}", file=sys.stderr)
+                continue
             chain = by_id[task_id].get("artifact_chain")
             if chain is None:
                 print(task_id)

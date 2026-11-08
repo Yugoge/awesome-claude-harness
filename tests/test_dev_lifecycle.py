@@ -277,12 +277,12 @@ def test_derive_state_committed_end_to_end(tmp_path):
     assert row["next_action"] == "none"
 
 
-def _fanout(project, parent):
+def _fanout(project, parent, workers=("a", "b")):
     dd = dev_dir(project)
     write_text(dd / f"ticket-{parent}.md", f"Task-id: {parent}\n")
     write_json(dd / f"dev-report-{parent}.json",
-               dev_report(parent, parallel_workers=["a", "b"]))
-    for worker in ("a", "b"):
+               dev_report(parent, parallel_workers=list(workers)))
+    for worker in workers:
         lane_id = f"{parent}-{worker}"
         write_text(dd / f"ticket-{lane_id}.md", f"Task-id: {lane_id}\n")
         write_json(dd / f"dev-report-{lane_id}.json", dev_report(lane_id))
@@ -307,18 +307,79 @@ def test_scan_marks_lane_rows_non_actionable(tmp_path):
         assert lane_row["parent_task_id"] == parent
 
 
+def _dev_session(project, parent, lanes):
+    """The project's transcript store (the test's CLAUDE_CONFIG_DIR) holding the /dev session that
+    ran the fan-out: its typed command and each lane's dev dispatch, declaring the lane's report."""
+    from hooks.lib import obligation
+    from hooks.lib.subagent_restart import project_slug
+    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / project_slug(project)
+    store.mkdir(parents=True)
+    records = [{"type": "user", "message": {"role": "user", "content": "/dev build the thing"}}]
+    for lane in lanes:
+        lane_id = f"{parent}-{lane}"
+        doc = {"task_id": lane_id, "lane": lane, "lane_set": list(lanes), "role": "dev", "pipeline": "dev",
+               "profile": "fanout-lane", "dispatched_at": "2026-01-01T00:00:10Z",
+               "artifacts": [{"kind": "json", "path": f"docs/dev/dev-report-{lane_id}.json",
+                              "schema": "dev-report.v2", "identity": {"task_id": lane_id}}]}
+        records.append({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": f"toolu_dev_{lane}", "name": "Agent",
+             "input": {"subagent_type": "dev", "prompt": obligation.serialize_obligation(doc)}}]}})
+    (store / "s-dev.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+
+def _list_actionable_run(project, next_action):
+    return subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "dev-lifecycle.py"), "list-actionable",
+         "--next-action", next_action, "--project-dir", str(project)],
+        capture_output=True, text=True, timeout=120,
+    )
+
+
 def test_a_fanout_whose_lane_qa_never_ran_is_close_actionable(tmp_path):
-    # D7: /close completes the cycle, its disposition naming the lane's qa-report as a gap, so the
-    # --auto discovery offers the parent (never its lanes), as /close <task> completes it.
+    # D7: /close completes the cycle, its disposition naming the lane's qa-report as a gap whose
+    # owner the reader names (/dev's lane-QA todo step), so the --auto discovery offers the parent
+    # (never its lanes), as /close <task> completes it.
     project = make_project(tmp_path)
     parent = "20260101-000009"
-    _fanout(project, parent)
-    (dev_dir(project) / f"qa-report-{parent}-b.json").unlink()
+    _fanout(project, parent, ("l1", "l2"))
+    _dev_session(project, parent, ("l1", "l2"))
+    (dev_dir(project) / f"qa-report-{parent}-l2.json").unlink()
     row = {r["task_id"]: r for r in dlc.scan(project)}[parent]
-    assert (row["state"], row["next_action"]) == ("close_pending", "close")
-    assert ("MISSING_ARTIFACT", f"docs/dev/qa-report-{parent}-b.json") in {
+    assert (row["state"], row["next_action"]) == ("close_pending", "close") and "auto_skip" not in row
+    assert ("MISSING_ARTIFACT", f"docs/dev/qa-report-{parent}-l2.json") in {
         (error["code"], error["path"]) for error in row["artifact_chain"]["errors"]}
-    assert [line.split(" ", 1)[0] for line in _list_actionable(project, "close")] == [parent]
+    done = _list_actionable_run(project, "close")
+    assert [line.split(" ", 1)[0] for line in done.stdout.splitlines()] == [parent] and done.stderr == ""
+
+
+def test_a_chain_with_a_gap_nobody_owes_is_passed_over_by_auto_with_its_reason(tmp_path):
+    # Review finding 2 (D25): an old task (a completed dev-report, no ticket, context or QA report,
+    # no dispatch record) is a gap /close's Request route could never fill: list-actionable leaves
+    # it out, its reason on stderr, and lists the rest; the row stays close_pending for /close <task>.
+    project = make_project(tmp_path)
+    old, passing = "20250101-000001", "20260101-000010"
+    write_json(dev_dir(project) / f"dev-report-{old}.json", dev_report(old))
+    _passing_singular(project, passing)
+    row = dlc.derive_state(project, old)
+    assert (row["state"], row["next_action"]) == ("close_pending", "close")
+    assert row["auto_skip"] == f"no dispatch record or todo step owes docs/dev/ticket-{old}.md"
+    assert "auto_skip" not in dlc.derive_state(project, passing)
+    done = _list_actionable_run(project, "close")
+    assert done.returncode == 0, done.stderr
+    assert [line.split(" ", 1)[0] for line in done.stdout.splitlines()] == [passing]
+    assert done.stderr == f"{old}: skipped: no dispatch record or todo step owes docs/dev/ticket-{old}.md\n"
+    assert _list_actionable_run(project, "commit").stderr == ""
+
+
+def test_a_lane_qa_gap_without_its_dev_session_is_passed_over(tmp_path):
+    # The same fan-out with no /dev session left in the store: no owner for its lanes' gaps.
+    project = make_project(tmp_path)
+    parent = "20260101-000019"
+    _fanout(project, parent, ("l1", "l2"))
+    (dev_dir(project) / f"qa-report-{parent}-l2.json").unlink()
+    done = _list_actionable_run(project, "close")
+    assert done.stdout == "" and done.stderr.count("\n") == 1
+    assert done.stderr.startswith(f"{parent}: skipped: no dispatch record or todo step owes docs/dev/")
 
 
 def test_actionable_parents_excludes_lanes_and_specs():
@@ -477,8 +538,11 @@ def test_scan_and_list_actionable_load_legacy_blocked_and_needs_review_records(t
         assert "Traceback" not in done.stderr
 
     rows = {row["task_id"]: row for row in dlc.scan(project)}
-    for task_id in (fanout, singular):  # unfinished cycles /close completes (D7)
+    for task_id in (fanout, singular):  # unfinished cycles /close <task> completes (D7)
         row = rows[task_id]
         assert (row["state"], row["next_action"]) == ("close_pending", "close") and "blocker" not in row
         assert row["artifact_chain"]["status"] == "fail"
-    assert [line.split(" ", 1)[0] for line in _list_actionable(project, "close")] == [fanout, singular, passing]
+    # No dispatch record of either is left: --auto passes both over, saying why (review finding 2).
+    done = _list_actionable_run(project, "close")
+    assert [line.split(" ", 1)[0] for line in done.stdout.splitlines()] == [passing]
+    assert [line.split(": skipped: ")[0] for line in done.stderr.splitlines()] == [fanout, singular]
