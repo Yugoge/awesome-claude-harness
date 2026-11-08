@@ -39,6 +39,13 @@ Driver arguments (cli.py --arg K=V):
   variant=plain     BA ready, BA-QA pass, dev writes the command, QA pass (default)
   variant=qa-fail   the first final-verification QA fails (the command runs the whole tree,
                     not `-q tests/`); Step 15 iterates: dev edits the command, the next QA passes
+  ctx=compact       the hook ran, but its output is no longer in the main agent's context
+  ctx=noid          the hook recorded no start: its output is gone and the session bookmark is as it
+                    was before the prompt
+                    In both, the main agent runs Step 1's fallback (the start function, with the command
+                    as typed) where the text orders it, clears a workflow-gate refusal with the todos
+                    array the refusal gives, and reads the ids, the Spec line and the checklist from what
+                    the start function prints; ctx.json records the hook's and the start function's ids.
 
 Respellings (P1b Scope row 7), applied by the driver only and only where the text still has the
 old form; each application is recorded in blocks.json "respellings":
@@ -161,6 +168,8 @@ class DevCommandCycle:
         # commands/dev.md, which Steps 2 and 9 point to for the canonical block and template.
         self.ref = Orchestrator(rp, "dev", session=self.o.s, deviations=self.o.devs)
         self.tid = self.reg = self.digits = ""
+        self.ctx: dict = {}
+        self.patterns_read = False
 
     # ------------------------------------------------------------ binding rules
     def _rules(self):
@@ -224,7 +233,18 @@ class DevCommandCycle:
     # ------------------------------------------------------------ start and Step 1
     def start(self) -> None:
         o = self.o
+        ctx = self.rp.args.get("ctx")
+        if ctx not in (None, "compact", "noid"):
+            raise ValueError(f"unknown ctx {ctx!r}")
+        bm = os.path.join(o.project, ".claude", f"workflow-{o.s.sid}.json")
+        before = None
+        if ctx == "noid" and os.path.exists(bm):
+            with self.rp.acting("driver"):
+                with open(bm, encoding="utf-8") as fh:
+                    before = fh.read()
         o.slash(REQUIREMENT)
+        if ctx:
+            self.lose_hook_output(ctx, bm, before)
         sec = o.section("Step 1")
         # The names the item tells the main agent to read, and the hook lines the step quotes for them.
         item = next(c for c in re.split(r"\n\s*\n", sec) if re.search(r"Read `[A-Z_]+`.*from the hook output", c))
@@ -245,7 +265,83 @@ class DevCommandCycle:
             self.rp.task(v)
         req = re.search(r"User requirement document:\s*(\S+)", o.template("Step 4")["prompt"]).group(1)
         o.values.update(DEV_SESSION_ID=self.reg, TASK_ID=self.tid, REQUIREMENT_DOC=o.bind(req))
-        o.todo_start()
+        if self.ctx:
+            self.ctx["task_ids"] = {"DEV_SESSION_ID": self.reg, "TASK_ID": self.tid}
+            with self.rp.acting("driver"):
+                with open(os.path.join(self.rp.layout.out, "ctx.json"), "w", encoding="utf-8") as fh:
+                    json.dump(self.ctx, fh, indent=1)
+        if self.o.todos is None:
+            o.todo_start()
+
+    # ------------------------------------------------------------ context loss (ctx=compact|noid)
+    def gated(self, call, label: str):
+        """call(label), and when the workflow gate refuses it for an unstarted checklist, the refusal's
+        own remedy (TodoWrite with the exact array it gives) and the call again."""
+        from .. import hookrun
+        c = call(label)
+        if not (c.blocked and c.pre is not None):
+            return c
+        ref = "\n".join(hookrun.refusal(b) for b in c.pre.blocks)
+        m = re.search(r"Call TodoWrite with this exact todos array:\s*(\[.*\])", ref, re.S)
+        self.ctx.setdefault("refusals", []).append({"label": label, "first_line": hookrun.first_line(ref)[:200],
+                                                    "gives_todo_array": bool(m)})
+        if not m or self.o.todos is not None:
+            return c
+        self.o.todos = json.loads(m.group(1))
+        self.o._todo("TodoWrite (from the workflow gate's refusal)")
+        return call(label + " (again)")
+
+    def read_patterns(self) -> None:
+        """The Read the Command Development Best Practices section asks for before authoring a command."""
+        if self.patterns_read:
+            return
+        o = self.o
+        try:
+            practices = o.section("Command Development Best Practices")
+        except cmdtext.TextNotFound:  # the text names no patterns document (a dangling one was removed)
+            practices = ""
+        doc = next((c for c in re.findall(r"`([^`\s]+\.md)`", practices) if c.startswith("~/")), None)
+        if doc is None:
+            self.patterns_read = True
+            return
+        path = os.path.join(self.rp.layout.home, doc[2:])
+        self.gated(lambda label: o.s.read(path, label=label, deviation=o.devs.at(label)),
+                   "Read command-development patterns")
+        self.patterns_read = True
+
+    def lose_hook_output(self, ctx: str, bm: str, before) -> None:
+        o = self.o
+        idre = r"(?m)^(DEV_SESSION_ID pre-initialized by hook:|Task id:)\s*(\S+)"
+        self.ctx = {"kind": ctx, "hook_ids": dict(re.findall(idre, o.hook_out))}
+        if ctx == "noid":  # the bookmark as it was before this prompt
+            with self.rp.acting("driver"):
+                if before is None:
+                    if os.path.exists(bm):
+                        os.remove(bm)
+                else:
+                    with open(bm, "w", encoding="utf-8") as fh:
+                        fh.write(before)
+        o.hook_out = ""  # no longer in the main agent's context
+        sec = o.section("Step 1")
+        found = [(b, para) for _n, b, para in o.step_blocks("Step 1") if "prompt-workflow.py start" in b.text]
+        if not found:
+            raise cmdtext.TextNotFound("Step 1 has no start-function fallback")
+        blk = found[0][0]
+        # The prose that follows the fallback block, up to the step's next block.
+        follow = sec[sec.find(blk.text) + len(blk.text):].lstrip("`\n").split("```")[0]
+        # The text's own order for the call: after the patterns Read where it says so, else right away.
+        self.ctx["read_first"] = "command-development patterns" in follow
+        if self.ctx["read_first"]:
+            self.read_patterns()
+        typed = f"/{o.typed} {REQUIREMENT}"
+        cmd = re.sub(r"(?m)^<the command exactly as typed[^\n]*>$", lambda m: typed, blk.text)
+        c = self.gated(lambda label: o.s.bash(cmd, "Re-read this command's start", label=label,
+                                              deviation=o.devs.at(label)),
+                       f"Step 1 Bash start function ({ctx})")
+        out = c.response.get("stdout", "") if isinstance(c.response, dict) else ""
+        o.hook_out = out
+        self.ctx["start_function_ids"] = dict(re.findall(idre, out))
+        self.ctx["same_task_id"] = self.ctx["start_function_ids"].get("Task id:") == self.ctx["hook_ids"].get("Task id:")
 
     def step1(self) -> None:
         o = self.o
@@ -266,15 +362,8 @@ class DevCommandCycle:
             o.s.say(f"Spec: {self.spec_path}")
         o.values["spec_path"] = self.spec_path
         # "Read that document before authoring or editing slash commands" (Command Development Best
-        # Practices), where the text still names one: the base's does, a document no published tree holds.
-        try:
-            practices = o.section("Command Development Best Practices")
-        except cmdtext.TextNotFound:
-            practices = ""
-        doc = next((c for c in re.findall(r"`([^`\s]+\.md)`", practices) if c.startswith("~/")), None)
-        if doc:
-            o.s.read(os.path.join(self.rp.layout.home, doc[2:]), label="Read command-development patterns",
-                     deviation=o.devs.at("Read command-development patterns"))
+        # Practices), where the text still names one (read_patterns skips when it names none).
+        self.read_patterns()
         fallback = re.compile(r"(?i)\*\*fallback\*\*|hook output (?:is )?absent|not in your context")
         o.run_step_blocks(1, skip=lambda name, b, para: bool(fallback.search(para)),
                           capture=("SPEC_ID",))
@@ -518,4 +607,6 @@ def run(rp) -> None:
     if variant not in ("plain", "qa-fail"):
         raise ValueError(f"unknown variant {variant!r}")
     rp.pipeline = f"{PIPELINE}/{variant}" if variant != "plain" else PIPELINE
+    if rp.args.get("ctx"):
+        rp.pipeline += f"/ctx={rp.args['ctx']}"
     DevCommandCycle(rp, variant).run()

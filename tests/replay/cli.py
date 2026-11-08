@@ -108,7 +108,7 @@ def run_one(sb: str, tree: str, out_dir: str, *, driver: str, mode: str, setting
                outer_s=round(outer, 2), cpu_s=round(cpu, 1), tree=tree, raw_trace_bytes="", relations="", outside_writes="")
     if traced:
         raw = os.path.join(sb, "trace", "raw.txt")
-        stats = trace.parse(raw, out_dir)
+        stats = trace.parse(raw, out_dir, code_root=os.path.join(sb, "home", ".claude"))
         row.update(raw_trace_bytes=stats["raw_bytes"], relations=stats["relations"],
                    outside_writes=stats["outside_writes"])
         if keep_raw:

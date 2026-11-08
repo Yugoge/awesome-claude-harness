@@ -402,6 +402,7 @@ def test_ac5_registered_unjustified_skip_message_unchanged(tmp_path):
         f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type=qa) in session "
         f"{dev_session_id} has e2e_enforcement.status='skipped_without_justification'.\n"
         f"blocking_reason: (none provided)\n"
+        f"artifact: {report_path} (failing check: e2e_enforcement.status not a passing status)\n"
         f"E2E verification is required. Perform E2E testing and update "
         f"e2e_enforcement.status to 'performed', 'legitimately_skipped', "
         f"'blocked_app_unavailable', or 'ran' before stopping.\n"

@@ -557,6 +557,17 @@ class _Ctx:
             seen = {(w.who, w.via) for w in a.writers if w.source == "runtime"}
             a.writers = [w for w in a.writers if w.source != "static" or (w.who, w.via) not in seen
                          and w.who not in {x.who for x in a.writers if x.source == "runtime"}]
+        # E1: a path a replay exercises (written and read in the trace) takes its readers from the
+        # trace. A static read by a component the trace ran, which never read the path there, is a
+        # branch no replay takes (provision's finalized.json read, session_resources.py:1109): it
+        # adds no reader to that path. A component the trace never ran keeps its static read.
+        ran = {x for art in m.artifacts.values() for r in art.writers + art.readers if r.source == "runtime"
+               for x in (r.who, r.via, r.proc) if x}
+        for a in m.artifacts.values():
+            rt_readers = {r.who for r in a.readers if r.source == "runtime"}
+            if not rt_readers or not any(w.source == "runtime" for w in a.writers):
+                continue
+            a.readers = [r for r in a.readers if r.source != "static" or r.who in rt_readers or r.who not in ran]
 
     def _without_scratch(self, own: dict, rels: list) -> dict:
         """Rule (1) at literal code sites: a file a temp-name generator named, or one under a
