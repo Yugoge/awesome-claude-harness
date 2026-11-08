@@ -1,11 +1,16 @@
 """Grants bind to their analyst; a role the policy does not list gets no role row (P6 R9, A5, A8).
 
 hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
-a file under <state dir>/agentic-commit/push-analyst/ (merge-analyst/) is created or overwritten
-by the push-analyst (merge-analyst) only, by Write, Edit, MultiEdit, NotebookEdit or a Bash write
-target; removing it is no write. A role the policy does not list (a built-in or plugin agent type,
-general-purpose under the "Keep today's behaviour" outcome) has no role row. The never-registered
-analysts' documented steps, read from their agent files, all pass under their CLI role.
+a file under <state dir>/agentic-commit/merge-analyst/ is created or overwritten by the
+merge-analyst only, by Write, Edit, MultiEdit, NotebookEdit or a Bash write target; removing it is
+no write. A push-analyst grant is one of the /push Stop's inputs (P5 review H2, its protected
+stage, which runs first): only the push-analyst whose own dispatch (commands/push.md Step 3's,
+in the session transcript) binds the grant's repository hash, session and request id writes it,
+and no caller removes it; every other caller, a push-analyst with no dispatch record of its own
+too, is refused in that stage's words, and so is any write of the push-gate token tree. A role the
+policy does not list (a built-in or plugin agent type, general-purpose under the "Keep today's
+behaviour" outcome) has no role row. The never-registered analysts' documented steps, read from
+their agent files, all pass under their CLI role, the push-analyst's from its own dispatch.
 
 Each case runs the real hook as a subprocess with the payload's agent_id and agent_type as the CLI
 sends them. The project lies outside /tmp and is never created; only paths are judged.
@@ -33,12 +38,15 @@ REPO_HASH, SID, NONCE = "0123456789abcdef", "sess-p6-grants", "ab" * 16
 MAIN, DEV, PLUGIN = None, "dev", "demo-plugin:reviewer"
 
 
-def run(tool: str, tool_input: dict, role, home: Path, state=None):
-    """The hook's exit code and stderr for one call; role None is the main agent."""
+def run(tool: str, tool_input: dict, role, home: Path, state=None, dispatch=None):
+    """The hook's exit code and stderr for one call; role None is the main agent. ``dispatch`` is the
+    caller's own dispatch record (_dispatched): its agent id and the session transcript."""
     payload = {"session_id": SID, "cwd": PROJECT, "hook_event_name": "PreToolUse",
                "tool_name": tool, "tool_input": tool_input}
     if role:
-        payload.update(agent_id="a" + uuid.uuid4().hex[:16], agent_type=role)
+        payload.update(agent_id=dispatch[0] if dispatch else "a" + uuid.uuid4().hex[:16], agent_type=role)
+    if dispatch:
+        payload["transcript_path"] = str(dispatch[1])
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
     env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), CLAUDE_PROJECT_DIR=PROJECT,
@@ -72,16 +80,61 @@ def _writes(path: str):
     yield "Bash", {"command": f"cat > {path} <<EOF\n{{}}\nEOF"}
 
 
+# The refusal of another caller's write: P6's grant binding (D8) for the merge-analyst's grant; for a
+# push-analyst grant and the push-gate token, P5's protected stage (review H2), which decides first.
+REFUSED = {"merge-analyst": "only the merge-analyst creates or overwrites a file there",
+           "push-analyst": "is a push-analyst grant, which only the push-analyst dispatched for its request writes: "
+                           "no agent writes, deletes or renames it (D11/D12)",
+           "push": "is a push-gate token, whose one writer is scripts/write-push-gate-token.py: "
+                   "no agent writes, deletes or renames it (D11/D12)"}
+
+
+def _dispatched(home: Path, repo_hash: str = REPO_HASH) -> tuple:
+    """commands/push.md Step 3's dispatch of the push-analyst, its placeholders bound to the grant's
+    repository hash, session and request id and its obligation instantiated, in the session
+    transcript, and the child the CLI starts for it (its first record and meta): (agent id, session
+    transcript), for run's ``dispatch``. The grant's one writer (P5 review H2)."""
+    text = (ROOT / "commands" / "push.md").read_text(encoding="utf-8")
+    fence = next(b for b in re.findall(r"^```[^\n]*\n(.*?)^```", text, re.M | re.S) if "REQUEST_ID=<REQUEST_ID>" in b)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fence = re.sub(r'"<ISO-8601 UTC ending in Z[^"]*>"', f'"{now}"', fence)
+    values = {"BRANCH": "main", "PRE_HEAD": "1" * 40, "RESOLVED_REMOTE": "origin", "REMOTE_URL": "/elsewhere/o.git",
+              "REQUEST_ID": NONCE, "SESSION_ID": SID, "REPO_HASH": repo_hash}
+    prompt = re.sub(r"<([A-Z_]+)>", lambda m: values[m[1]], fence).strip()
+    store, call, agent = home / ".claude" / "projects" / "-p6-grant-binding", "toolu_p6grant0001", "a0p6push"
+    (store / SID / "subagents").mkdir(parents=True, exist_ok=True)
+    session = store / f"{SID}.jsonl"
+    session.write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content":
+                    "<command-name>/push</command-name>\n<command-args></command-args>"}}) + "\n"
+        + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": call, "name": "Agent", "input": {
+                "description": "pre-push analysis", "prompt": prompt, "subagent_type": "push-analyst"}}]}}) + "\n",
+        encoding="utf-8")
+    (store / SID / "subagents" / f"agent-{agent}.jsonl").write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n", encoding="utf-8")
+    (store / SID / "subagents" / f"agent-{agent}.meta.json").write_text(
+        json.dumps({"agentType": "push-analyst", "toolUseId": call}), encoding="utf-8")
+    return agent, session
+
+
 @pytest.mark.parametrize("analyst", ["push-analyst", "merge-analyst"])
 @pytest.mark.parametrize("caller", [MAIN, DEV, PLUGIN], ids=["main", "dev", "plugin"])
 def test_only_the_analyst_writes_its_grant(tmp_path, state, analyst, caller):
-    path = _grant(analyst, state)
+    home, path = tmp_path / "home", _grant(analyst, state)
     for tool, tool_input in _writes(path):
-        denial = _denial(*run(tool, tool_input, caller, tmp_path / "home", state))
+        denial = _denial(*run(tool, tool_input, caller, home, state))
         assert denial["role"] == (caller or "main") and denial["target"] == path
-        assert f"only the {analyst} creates or overwrites" in denial["deny_reason"]
+        assert REFUSED[analyst] in denial["deny_reason"]
+    # A push-analyst grant's analyst is the one its own dispatch binds (P5 review H2): a push-analyst
+    # whose session records no dispatch of it is refused as any other caller.
+    own = _dispatched(home) if analyst == "push-analyst" else None
+    if own:
+        for tool, tool_input in _writes(path):
+            denial = _denial(*run(tool, tool_input, analyst, home, state))
+            assert denial["role"] == analyst and REFUSED[analyst] in denial["deny_reason"]
     for tool, tool_input in _writes(path):
-        assert run(tool, tool_input, analyst, tmp_path / "home", state) == (0, "")
+        assert run(tool, tool_input, analyst, home, state, own) == (0, "")
 
 
 def test_every_write_tool_and_an_unexpanded_word_are_bound(tmp_path):
@@ -100,12 +153,18 @@ def test_every_write_tool_and_an_unexpanded_word_are_bound(tmp_path):
 def test_removal_and_the_rest_of_the_state_dir_are_not_bound(tmp_path):
     home = tmp_path / "home"
     # /merge Step 3's removal by the main agent (the base text), and any unlink, is no write.
-    for path in (_grant("merge-analyst", None), _grant("push-analyst", None)):
-        assert run("Bash", {"command": f'rm -f "{path}"'}, MAIN, home) == (0, "")
-    # A directory under agentic-commit/ that names no role binds nobody: the lock, the push-gate token.
+    path = _grant("merge-analyst", None)
+    assert run("Bash", {"command": f'rm -f "{path}"'}, MAIN, home) == (0, "")
+    # A push-analyst grant is a /push Stop input, which no caller removes (P5 review H2).
+    path = _grant("push-analyst", None)
+    denial = _denial(*run("Bash", {"command": f'rm -f "{path}"'}, MAIN, home))
+    assert denial["target"] == path and REFUSED["push-analyst"] in denial["deny_reason"]
+    # A directory under agentic-commit/ that names no role binds nobody: the lock. The push-gate token
+    # is no grant either: only the protected stage (review H2) refuses its write, never the binding.
     assert run("Bash", {"command": f'exec 9>"/tmp/agentic-commit/locks/{REPO_HASH}.lock"'}, MAIN, home) == (0, "")
     token = f"/tmp/agentic-commit/push/{REPO_HASH}/{SID}/main.json"
-    assert run("Write", {"file_path": token, "content": "{}"}, MAIN, home) == (0, "")
+    reason = _denial(*run("Write", {"file_path": token, "content": "{}"}, MAIN, home))["deny_reason"]
+    assert REFUSED["push"] in reason and "grant directory" not in reason
 
 
 # -- roles the policy does not list ------------------------------------------------------------
@@ -133,7 +192,7 @@ def test_an_unlisted_role_still_meets_the_derived_permission(tmp_path, role):
     s.dispatch("You are the BA subagent.\n" + derived._block(derived._obligation("ba", "singular", derived.CONTEXT)))
     other = s.dispatch("Look around the toy package.", role)
     denial = derived._denial(s.run(tmp_path, "Write", derived._write(derived.CONTEXT), (other, role)))
-    assert denial["role"] == role and denial["deny_reason"].endswith("only that dispatch writes it")
+    assert denial["role"] == role and denial["deny_reason"].endswith("only ba writes this artifact (D8)")
 
 
 def test_general_purpose_keeps_todays_behaviour_and_a_listed_role_keeps_its_row(tmp_path):
@@ -192,12 +251,14 @@ def test_a_never_registered_analyst_keeps_every_documented_step(tmp_path, state,
     assert blocks
     if agent == "changelog-analyst":
         assert any('exec 9>"/tmp/agentic-commit/locks/${REPO_HASH}.lock"' in b for b in blocks)
+    # The push-analyst runs from its /push dispatch, whose record binds the grant it writes (P5 review H2).
+    own = _dispatched(home) if agent == "push-analyst" else None
     refused = []
     for command in blocks + OLDER[agent]:
-        code, err = run("Bash", {"command": command}, agent, home, state)
+        code, err = run("Bash", {"command": command}, agent, home, state, own)
         refused += [(command[:80], err)] if code else []
     for path in _documented_writes(agent, state):
-        code, err = run("Write", {"file_path": path, "content": "{}"}, agent, home, state)
+        code, err = run("Write", {"file_path": path, "content": "{}"}, agent, home, state, own)
         refused += [(path, err)] if code else []
     assert not refused
 
@@ -240,7 +301,9 @@ def test_execute_push_completes_with_its_chain_b_sentinel(tmp_path):
     body = {"verdict": "approved", "risks": [], "analysis_summary": "ok", "branch": "main", "head_sha": head,
             "remote_name": "origin", "remote_url": str(origin), "session_id": SID, "nonce": NONCE,
             "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=600)).strftime("%Y-%m-%dT%H:%M:%SZ")}
-    assert run("Write", {"file_path": str(grant), "content": json.dumps(body)}, "push-analyst", home, state) == (0, "")
+    own = _dispatched(home, repo_hash)  # the /push dispatch whose record binds this grant (P5 review H2)
+    assert run("Write", {"file_path": str(grant), "content": json.dumps(body)}, "push-analyst", home, state,
+               own) == (0, "")
     grant.parent.mkdir(parents=True)
     grant.write_text(json.dumps(body))
     command = (f'python3 ~/.claude/scripts/execute-push.py --repo-hash "{repo_hash}" --branch "main" '
