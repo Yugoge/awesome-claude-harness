@@ -476,7 +476,22 @@ def test_AC_L1_13_malformed_block_unconditional_no_active_session(tmp_path):
                                 prompt="do work\n" + _malformed_block())
     result = _run_hook(home, project, payload, switch="block")
     assert result.returncode == 2
-    assert "reason=missing_field" in result.stderr, result.stderr
+    assert "reason=missing_field at profile)" in result.stderr, result.stderr
+
+
+def test_G1_names_the_field_a_pre_p1_template_fails(tmp_path):
+    """P1c F7: a dispatch from the pre-P1 template (its json artifact still
+    carries required_values) is refused naming the check and the field it
+    fails, so the orchestrator's next round knows which template to send."""
+    home, project = _dirs(tmp_path)
+    sid = _unique_sid("f7")
+    doc = _obligation_doc(role="dev")
+    doc["artifacts"][0]["required_values"] = {"dev.status": ["completed"]}
+    prompt = "do work\n" + _block(doc)
+    result = _run_hook(home, project, _dispatch_payload(project, sid, _span_records("dev"), prompt=prompt),
+                       switch="block")
+    assert result.returncode == 2
+    assert "reason=unknown_field at artifacts[0].required_values)" in result.stderr, result.stderr
 
 
 def test_AC_L1_14_absent_prompt_routes_to_bad_prompt_rejection(tmp_path):

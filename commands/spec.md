@@ -438,9 +438,10 @@ Only proceed to Step 6 when a STRONG signal fires.
 
    If the loop exited via round-3 exhaustion (sub-step 3), also append `"warning: unresolved split-QA issues (<N>); see split-qa-unresolved.json"` so reviewers see the warning inline with the marker.
 
-5. The split's own predicates (its manifest of this monolith and the views the manifest references)
-   were checked at the spec subagent's own stop (G2, with `resolve-spec-artifacts.py`'s own rule), which
-   returned a failing split to it; every `/dev*` consumer resolves the split with the same resolver.
+5. The split's own predicates (its manifest of this monolith, the monolith hash it records and the
+   views the manifest references) were checked at the spec subagent's own stop (G2, with
+   `resolve-spec-artifacts.py`'s own rule), which returned a failing split to it; every `/dev*` consumer
+   resolves the split, with the marker of sub-step 4, by the same resolver.
 
 6. **Centralization lint (advisory — surfaces inline spec-id re-derivation regressions)**: run `scripts/lint-spec-id-centralization.py` over the `/dev*`/`/spec` command files that consume the resolver. This is NON-BLOCKING here (a WARNING only) — finalize must not hard-fail on an unrelated command-file edit. The authoritative hard gate for this lint belongs at the `.claude`-repo commit boundary (a pre-commit check on staged `commands/*.md` / `scripts/*.sh`), the only place command-file edits actually land; this advisory is a safety-net that makes a regression visible at every finalize.
 
@@ -455,7 +456,7 @@ Only proceed to Step 6 when a STRONG signal fires.
 ### Step 7: Display result + workflow update
 
 Before the final stdout response, create a compact temp update using
-`/spec-update --temp`. Default to `mktemp -t update-XXXXXX.md`; do not write this
+`/spec-update --temp` (its `update.md` in a `mktemp -d` directory); do not write this
 update into the repo unless the user explicitly asks. The update focuses on
 the next `/dev` session and references the spec path, split marker, views
 folder, checkpoints, and unresolved split-QA file by path instead of duplicating

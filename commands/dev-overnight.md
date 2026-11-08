@@ -58,6 +58,8 @@ Every Agent dispatch from this orchestrator shares the following invariant prelu
 ```
 Hook creates state file + view detection (automatic; a worktree only under --worktree)
   |
+Step 0: Schedule the wake (one recurring CronCreate, deleted where the session ends)
+  |
 Step 1: Read state file + cd into the working root (first run only)
   |
   +---> EXPLORATION PHASE (Step 2)
@@ -117,7 +119,7 @@ Step 1: Read state file + cd into the working root (first run only)
    - **Clause C (autonomy-directive override)** — `spec_mode == "user-provided"` AND focus contains any of `\b(autonomously|manual\s+interrupt|don.?t\s+ask|no\s+questions)\b` (case-insensitive): treat the run as autonomous regardless of spec_mode. The orchestrator MUST NOT emit `<options>` XML or interrogative endings. When genuine deadlock occurs (e.g., META-DEADLOCK where a hook blocks the very fix needed), the decision the deadlock needs is decided without the owner and recorded (Hard Rule 5), the deadlocked pipeline continues with the chosen option, and the other pipelines continue meanwhile. Asking the user is a Clause-C violation.
 2. **Loop continuously until `end_time`**. After each fix cycle the todo completion hook handles looping; this is non-negotiable. When every pipeline is done before `end_time`, the time-lock still holds until `end_time` and the next cycle's PM plans more work; `/stop` is the human control that ends a session early. A spec-defined user gate does not pause the loop (Clause B).
 3. **Cycles are user-pathway-filtered and priority-driven** (per spec-20260503-091826 Section 5.5 decision #2 — same user-need-centric philosophy as `/dev`, with explore-mode compatibility preserved per Section 5.7 anti-pattern #5). Specialists' free exploration behavior is unchanged — they continue to discover broadly. PM triage applies the user-need path-relevance filter (agents/pm.md Step 4): in **user-provided mode**, the user spec's Section 5 user-need IS the path; pipelines are gated to user-pathway-relevant findings. In **autonomous mode**, only Tier 1 blockers AND multi-agent-consensus findings get pipelines; remaining findings route to the cycle's `out_of_scope_observations` array (per agents/pm.md schema). Within the gated pipeline set, ordering remains by tier: Tier 1 (blockers) first, Tier 2 (major), Tier 3 (minor/cosmetic). Specialists continue to explore broadly — the gating is purely on what becomes a pipeline, not on what specialists are allowed to discover.
-4. **ALL exploration and fixes via subagents**. Use Agent tool for ALL scanning, analysis, and implementation work. Main context only handles TodoWrite and loop control.
+4. **ALL exploration and fixes via subagents**. Use Agent tool for ALL scanning, analysis, and implementation work. Main context only handles TodoWrite and loop control. Every file the main context writes itself (Step 5's spec copies, the pipeline marks of Steps 16-17 in `pipelines.json`, Step 16's completion reports, Step 19's cycle log, Step 21's summary) is written by a Bash call with a quoted heredoc (`cat > <path> <<'EOF'` ... `EOF`, or `>>` to append), never with Write or Edit: the orchestrator gate allows the main agent one Write and one Edit per turn (CLAUDE.md, Orchestrator-Only Rule), and the whole session is one turn.
 5. **Inside /dev-overnight a producer question is decided without the owner and recorded; nothing waits for the owner. Nothing is ever skipped**. A BA or dev producer that needs a real, specific decision, one that the request, the code or a sensible default cannot settle, writes `docs/dev/producer-question-<task_id>-<role>.json` (schema producer-question.v1: `task_id` and `role` exactly as in its obligation, `need`, 2-4 `options` of `{label, description}`, a `default` that is one of the labels, `why`) instead of its report, and ends. That artifact is a subagent's only question path. QA has no question path: a QA fail or warning is a process step that sends the pipeline back to dev (Step 17). Nobody is asked, in the window or after `end_time`: `hooks/pretool-overnight-hook-guard.py` denies AskUserQuestion to every caller in this session until the next human-typed prompt. Each question is decided:
    - **by experiment** when one can settle it: the orchestrator re-dispatches the producer that asked with the decision, its options and the experiment to run; the producer runs it, takes the option its result supports and records the decision, the options, the experiment, its result and the chosen option in its report;
    - **else by the question's `default`**: the orchestrator re-dispatches that producer with the line `Decision without the owner: <need>; options <labels>; the question's default; chosen <default label>`.
@@ -194,6 +196,16 @@ The `focus` string is stored in the state file and passed to all 4 specialist su
 
 ## Implementation
 
+### Step 0: Schedule the Wake
+
+First, before Step 1, schedule the session's wake: one recurring `CronCreate` with exactly this input, the prompt verbatim:
+
+```json
+{"cron": "3,13,23,33,43,53 * * * *", "recurring": true, "prompt": "[awesome-claude-harness/overnight-wake-v1] Scheduled wake of this /dev-overnight session: resume what a usage limit cut (commands/restart.md's recovery), then carry on with the checklist step in progress."}
+```
+
+Keep the job id its result returns. The wake fires only while the session is idle, as after a usage limit ended the turn; the hooks then issue the `/restart` capability to it inside this session's span and hand you `commands/restart.md`'s recovery, which you run with no human, then carry on. A wake that finds nothing cut finalizes with 0 candidates and the cycle goes on. `pretool-todo-validate.py` completes Step 0 only after this call. On a loop reset (Step 21) and in Continuation Mode the wake scheduled at launch still runs: mark Step 0 completed with no second `CronCreate`. The wake ends with a `CronDelete` of its id, as the last step of Step 21's session-ending branch, or of `/stop`; the time-lock refuses the Stop after `end_time` until then.
+
 ### Step 1: Read State File and Establish the Working Root
 
 The state file has already been created by the UserPromptSubmit hook at `.claude/overnight-state-<session_id>.json`, including `isolation_kind`, `worktree_path`, `worktree_branch`, `view_paths`, `user_spec_path`, `spec_mode`, and `current_phase: "exploring"`. List `.claude/overnight-state-*.json` and read the file matching the current session.
@@ -253,7 +265,7 @@ REGISTRY_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/de
 bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-init.sh" --verify-only --state-file "$STATE_FILE" --project-dir "$PROJECT_DIR"
 ```
 
-`PROJECT_DIR` and `STATE_FILE` are absolute and canonical, so both stay valid after the `cd` into `worktree_path`. Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent. The walk fails closed whenever no readable, session-matching record is reachable from EITHER start — an externally located fresh clone (`OVERNIGHT_FRESH_CLONE_ROOT` pointed outside the main root) is one cause, but so are a deleted or unreadable working directory and a malformed record. One more, introduced by the very launch shape this block now supports: a session launched from a SUBDIRECTORY leaves its record in that subdirectory, so on an isolated-mode CONTINUATION — where `$PWD` is the worktree, a sibling of the subdirectory rather than a descendant — the upward walk cannot reach it. First-run initialization from the subdirectory succeeds; the continuation aborts. Re-issue from the main root, or launch in place. It never guesses: the error names both searched starts, and the remedy is to re-issue the block from the main root, not to hand-bind a path.
+`PROJECT_DIR` and `STATE_FILE` are absolute and canonical, so both stay valid after the `cd` into `worktree_path`. Issue the block as written: its comments hold no apostrophe or backtick character (the Bash safety hook reads those as live syntax, comments included), and it runs both harness scripts through the `CLAUDE_HOME` channel as the operand of their interpreter, as every harness call in this document does (the Bash safety hook refuses a command that starts with the channel, and the overnight hook guard reads the operand at its expanded path; an in-place launch requires bubblewrap, without which that guard refuses an interpreter launch). Do NOT split this block across Bash calls, and do NOT invoke the initializer on its own: a fresh shell expands `$STATE_FILE` empty, which is the failure this block exists to prevent. The walk fails closed whenever no readable, session-matching record is reachable from EITHER start — an externally located fresh clone (`OVERNIGHT_FRESH_CLONE_ROOT` pointed outside the main root) is one cause, but so are a deleted or unreadable working directory and a malformed record. One more, introduced by the very launch shape this block now supports: a session launched from a SUBDIRECTORY leaves its record in that subdirectory, so on an isolated-mode CONTINUATION — where `$PWD` is the worktree, a sibling of the subdirectory rather than a descendant — the upward walk cannot reach it. First-run initialization from the subdirectory succeeds; the continuation aborts. Re-issue from the main root, or launch in place. It never guesses: the error names both searched starts, and the remedy is to re-issue the block from the main root, not to hand-bind a path.
 
 **BINDING-EVAPORATION RULE (applies to EVERY later Bash call site in this document, not just this one).** The bindings above live in one shell and die with it. Any subsequent Bash call that needs `PROJECT_DIR`, `STATE_FILE`, `DEV_SESSION_ID` or `REGISTRY_DIR` MUST carry the **resolved literal value**, substituted into the command string exactly as `{pipeline.index}` is. A later `$DEV_SESSION_ID` that nobody bound expands to the empty string and silently builds a wrong path — it does not error. Where this document writes `<DEV_SESSION_ID>` or `<MAIN_ROOT>` in a command, that is a substitution slot, not a variable to expand. `<MAIN_ROOT>` is the resolved `PROJECT_DIR` above (the record's `main_root`, where the dev-registry lives) and is **distinct from** `<PROJECT_ROOT>`, which is `worktree_path`. The two are equal only in `in_place` mode. A called script that hard-requires an environment variable needs it supplied as a `VAR='<slot>' cmd …` prefix, because exporting it upstream does not reach the callee's shell. The alternative — repeating the whole binding block as a prelude in each consuming call — is permitted but is never the shorter option.
 
@@ -316,7 +328,7 @@ Beginning autonomous exploration...
 
 Re-run it verbatim on every continuation cycle. The actor never runs the MUTATING form — the launcher ran it before publishing the record — and the actor's `--verify-only` writes nothing and checks nothing: it only prints the values below. If the last line is not `OVERNIGHT_INIT_OK` (no readable record, an unsafe session id, or a spec that does not resolve), ABORT — do not attempt the individual steps by hand.
 
-The mutating form, in one invocation: renders the verbatim user-requirement document including Section 5 and hands it to the registry's one writer, `hooks/prompt-workflow.py arm-registry`, which creates `.claude/dev-registry/<session_id>/` with one sentinel JSON per roster role (each `agents/*.md` file with front matter), the requirement document, the always-on `e2e` enforcement flag and `codex` when the record sets `codex_required`; and resolves the spec artifacts.
+The mutating form, in one invocation: renders the verbatim user-requirement document including Section 5 and hands it to the registry's one writer, `hooks/prompt-workflow.py arm-registry`, which creates `.claude/dev-registry/<session_id>/` with one sentinel JSON per roster role (each `agents/*.md` file with front matter), the requirement document and the `codex` enforcement flag when the record sets `codex_required`; and resolves the spec artifacts.
 
 Bind these from its `KEY=VALUE` output — they are the only initialization values you need:
 
@@ -777,6 +789,8 @@ For each pipeline that will be created (from triage report's `pipeline_order`):
 5. Replace `<ISO-8601>` with current timestamp
 6. Replace Section 5's `_Not yet populated._` with the pipeline's `description` from triage, verbatim
 7. Store spec paths in the pipeline definitions: `pipeline.spec_path = "docs/dev/overnight/<session_id>/spec-pipeline-<index>.md"`
+
+Write every copy in ONE Bash call, one quoted heredoc per copy (`cat > docs/dev/overnight/<session_id>/spec-pipeline-<index>.md <<'SPEC'`, the copy's text, `SPEC`; Hard Rule 4): one call keeps Steps 4-8 within the orchestrator gate's five consecutive Bash calls before the first BA dispatch.
 
 **User-spec mode** (`spec_mode == "user-provided"`):
 1. The user's spec file at `user_spec_path` is the primary spec
@@ -1315,7 +1329,7 @@ ELIF qa.status == "warning" OR qa.status == "fail":
   → Mark pipeline phase = "qa_failed" (a process step: it enters iteration in Step 17; only pass ends the loop)
 ```
 
-**Completion report** (each pipeline whose QA passes, here or at its Step 17 loop exit): a pipeline's chain is a `/dev` chain under its own task id `{pipeline.timestamp_suffix}`: ticket and context (its BA, Step 8), dev report (Step 12), QA report (Step 15), and this report, which the main agent writes when the pipeline's QA passes, as `/dev`'s Step 17 does. `/close --auto` (Post-loop flow) finds a pipeline only through it: its discovery lists a task once the artifact chain (`resolve-dev-artifact-chain.py`) passes for it, and the chain names this report, so a pipeline without it is never closed or committed. Write `docs/dev/completion-{pipeline.timestamp_suffix}.md`:
+**Completion report** (each pipeline whose QA passes, here or at its Step 17 loop exit): a pipeline's chain is a `/dev` chain under its own task id `{pipeline.timestamp_suffix}`: ticket and context (its BA, Step 8), dev report (Step 12), QA report (Step 15), and this report, which the main agent writes when the pipeline's QA passes, as `/dev`'s Step 17 does. `/close --auto` (Post-loop flow) finds a pipeline only through it: its discovery lists a task once the artifact chain (`resolve-dev-artifact-chain.py`) passes for it, and the chain names this report, so a pipeline without it is never closed or committed. Write `docs/dev/completion-{pipeline.timestamp_suffix}.md` with one Bash call (Hard Rule 4): `cat > docs/dev/completion-{pipeline.timestamp_suffix}.md <<'REPORT'`, the report below, `REPORT`:
 
 ```markdown
 # Development Completion Report — {pipeline.timestamp_suffix}
@@ -1440,7 +1454,7 @@ The aggregator filters QA reports to those whose `timestamp_suffix` matches a `s
 
 **Aggregate results from ALL pipelines**: a pipeline leaves Step 17 only on a QA pass, so the tally is the cycle's fixed pipelines and their iterations.
 
-**Append to running log** at `docs/dev/overnight-log-<date>.md`:
+**Append to running log** at `docs/dev/overnight-log-<date>.md`, one Bash call (Hard Rule 4): `cat >> docs/dev/overnight-log-<date>.md <<'LOG'`, the entry below, `LOG`.
 
 ```markdown
 ### Cycle <N>: {total_pipelines} pipelines ({fixed_count} fixed)
@@ -1550,12 +1564,12 @@ Simply mark this step as completed via TodoWrite. The PostToolUse:TodoWrite hook
 2. Check overnight-state.json for future end_time
 3. Tell you to reset all todos to pending (the hook writes no todos itself)
 4. Hand you the loop continuation instructions as PostToolUse additionalContext
-5. You then resume from Step 2 (the working root is already established)
+5. You then mark Step 0 (the wake still runs) and Step 1 completed and resume from Step 2 (the working root is already established)
 
 **If time expired** (session ending):
-**Read the full state file** to get all cycle data.
+**Read the full state file** (start time, end time, isolation) and the cycle data, which the state file does not hold: the PM retro reports (`docs/dev/overnight/<session_id>/retro-report-cycle*.json`) and the cycle log.
 
-**Generate summary report** at `docs/dev/overnight-summary-<date>.md`:
+**Generate summary report** at `docs/dev/overnight-summary-<date>.md`, one Bash call (Hard Rule 4): `cat > docs/dev/overnight-summary-<date>.md <<'SUMMARY'`, the report below, `SUMMARY`. The time-lock lets the session end after `end_time` once this summary and a PM retrospective report (Step 20) are on disk (below).
 
 ```markdown
 # Overnight Development Summary
@@ -1665,6 +1679,8 @@ There is no session-created branch, so there is nothing to /merge.
 
 The closeout is on disk; the time-lock lets the session end.
 ```
+
+**Delete the wake** (the last step of this branch): `CronDelete` with the job id Step 0's `CronCreate` returned, then mark Step 21 completed. The time-lock refuses the Stop after `end_time` while the wake has no `CronDelete`.
 
 ### Post-loop flow (typed by the owner)
 

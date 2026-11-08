@@ -92,6 +92,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_dev_registry_entry
 from lib.claude_home import settings_switch
+from lib import command_span
 from lib import contract_runtime
 from lib import dispatch_template
 from lib import obligation
@@ -344,8 +345,11 @@ def _spec_views_failure(project_dir: str, art: dict):
     """P1b row 8 (moved from stop-spec-coverage-enforce.py): a split's own
     properties at its producer's stop, `spec-verify.py --strict` on the declared
     views against the declared monolith (coverage 100%, pairwise overlap and
-    per-view uniqueness thresholds). A missing verifier checks nothing, as the
-    Stop hook it replaces did."""
+    per-view uniqueness thresholds) and, with --project-dir, its manifest of this
+    monolith, the monolith hash it records and the views it references, by the
+    resolver every /dev* consumer runs (P1b E4: /spec's finalize guard ran it after
+    this stop), but for the marker /spec writes after this stop. A missing verifier
+    checks nothing, as the Stop hook it replaces did."""
     verifier = SCRIPTS_DIR / "spec-verify" / "spec-verify.py"
     if not verifier.is_file():
         return None
@@ -354,19 +358,10 @@ def _spec_views_failure(project_dir: str, art: dict):
     if not monolith.is_file() or not views.is_dir():
         return {"path": art["path"], "reason": "spec_views_missing",
                 "errors": [f"monolith {art['monolith']} or views directory {art['path']} does not exist"]}
-    # The split's own manifest and the views it references, by the predicates every /dev* consumer's
-    # resolver applies (resolve-spec-artifacts.py split_problem; P1b E4: /spec's finalize guard ran
-    # them in the orchestrator's call after this stop). A resolver that will not load checks nothing.
-    try:
-        problem = _load_script_module("resolve-spec-artifacts.py").split_problem(
-            str(views.parent), str(monolith.resolve()), project_dir)
-    except Exception:
-        problem = None
-    if problem:
-        return {"path": f"{art['path']}/manifest.json", "reason": "spec_manifest_invalid", "errors": [problem]}
     try:
         run = subprocess.run(
-            [sys.executable, str(verifier), "--monolith", str(monolith), "--views-dir", str(views), "--strict"],
+            [sys.executable, str(verifier), "--monolith", str(monolith), "--views-dir", str(views), "--strict",
+             "--project-dir", project_dir],
             capture_output=True, text=True, timeout=WIRE_FILE_TIMEOUT_S, cwd=project_dir,
         )
     except subprocess.TimeoutExpired:
@@ -557,7 +552,8 @@ def main() -> None:
                     # jsonschema call path (see
                     # contract_runtime.validate_response_block_for_obligation).
                     result = contract_runtime.validate_response_block_for_obligation(
-                        last_assistant_message, art.get("begin"), art.get("end"), art["schema"]
+                        last_assistant_message, art.get("begin"), art.get("end"), art["schema"],
+                        repo_roots=art.get("repo_roots"),
                     )
                     if result.get("status") == "skip":
                         continue
@@ -667,16 +663,17 @@ def main() -> None:
 
     # The reports this producer owes are the json artifacts its own dispatch
     # declares, read as declared even when the block fails the grammar (a
-    # pre-P1 template): each producer is judged on its own reports at its own
-    # stop, never on a sibling lane's. validate_report_artifact decides the
-    # dev, qa and do report kinds and skips every other.
+    # pre-P1 template); a dispatch with no obligation block owes the reports
+    # its own transcript shows it wrote (R8). Each producer is judged on its
+    # own reports at its own stop, never on a sibling lane's.
+    # validate_report_artifact decides the dev, qa and do report kinds and
+    # skips every other.
     declared = _dispatch_obligation(getattr(resolution, "prompt", None))
-    report_paths = [
-        Path(project_dir) / a["path"]
-        for a in declared.get("artifacts") or []
-        if isinstance(a, dict) and a.get("kind") == "json"
-        and obligation._legal_repo_relative_path(a.get("path"))
-    ]
+    rels = [a.get("path") for a in declared.get("artifacts") or [] if isinstance(a, dict) and a.get("kind") == "json"]
+    if not declared and isinstance(resolution, obligation.NoObligationInPrompt):
+        written = command_span.write_set(resolution.transcript_path, project_dir, excluded=())
+        rels = sorted(written.written) if written else []
+    report_paths = [Path(project_dir) / r for r in rels if obligation._legal_repo_relative_path(r)]
     report_paths = [p for p in report_paths if p.is_file()]
     if not report_paths:
         # Existence enforcement belongs to subagentstop-e2e-enforce.py (qa)

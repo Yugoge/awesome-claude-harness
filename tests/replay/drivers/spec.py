@@ -82,8 +82,8 @@ the quoted CLAUDE_HOME channel, `"${CLAUDE_HOME:-$HOME/.claude}/scripts/<x>"`, w
 follows the script's name: the driver finds each call the text makes under either spelling
 (_calls), and activates the venv as Step 5 spells it wherever the text has it activated.
 
-Deviations: DEVIATIONS below, one entry per block the base tree's (2acc29b) replay meets,
-each with a comment quoting the hook's text; nothing else passes a block.
+Deviations: none (DEVIATIONS is empty since P1c fixed each block at its cause): every block a
+replay meets stays blocked and is reported; P1c's suite (tests/replay/test_pipelines.py) fails on it.
 """
 from __future__ import annotations
 
@@ -94,7 +94,6 @@ import shlex
 
 from .. import cmdtext
 from ..pipeline import DROP_NEXT, Deviations, Orchestrator, utc_now
-from ..replay import Deviation
 
 PIPELINE = "spec"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -182,33 +181,12 @@ SPLIT_QA_ISSUE = {"check": "FUNCTIONAL COMPLETENESS", "view": "qa.md",
 CONTINUATION_FOCUS = "no /dev cycle has run yet; the next session implements the type check"
 UPDATE_TITLE, UPDATE_TEXT = "bool arguments", "bool arguments keep being accepted, as int subclasses."
 
-# Blocks the base tree's replay meets, each passed by a deviation at the step it occurs on: the
-# refused call is applied as if allowed, so every later step runs and is traced.
-DEVIATIONS = Deviations([
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_obligation_undischarged:substitution@223,substitution@343"
-    # pretool-bash-safety.sh refuses agents/spec.md Phase 2's check-in block as the text spells it
-    # (the backticked `cp-state-path:` in its own `#` comment lines reads to the hook as a substitution).
-    ("spec Bash check-in *", Deviation(
-        "hooks/pretool-bash-safety.sh", "UNRESOLVED census_obligation_undischarged:substitution",
-        "Phase 2's check-in block as agents/spec.md spells it")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote"
-    # pretool-bash-safety.sh refuses the capture routine's folder block as the base text spells it
-    # (the apostrophe of "splitter's" in its `#` comment).
-    ("Capture Bash mkdir", Deviation(
-        "hooks/pretool-bash-safety.sh", "UNRESOLVED census_fatal:unbalanced:single_quote",
-        "the capture routine's folder block as the text spells it")),
-    # DEVIATION: "[Write Guard] BLOCKED: File already exists: /var/tmp/claude-scratch/update-<rand>.md"
-    # /spec-update --temp (which /spec Step 7 runs) creates the note with mktemp, reads it, then writes it.
-    ("Step 7 Write update note", Deviation(
-        "hooks/pretool-write-guard.sh", "[Write Guard] BLOCKED: File already exists",
-        "the temp note mktemp created, written as /spec-update --temp says")),
-    # DEVIATION: "[Orchestrator Gate] BLOCKED: Edit used consecutively beyond limit (2/1)."
-    # /spec-update as the base text spells it has the main agent append to the spec itself, one Edit
-    # per section of the continuation (and the --update Section 8 note after its 5.N Edit).
-    ("/spec-update*", Deviation(
-        "hooks/pretool-orchestrator-gate.py", "Edit used consecutively beyond limit",
-        "/spec-update's own appends as the base text spells them")),
-])
+# P1c removed each block these passed at its cause: agents/spec.md Phase 2's check-in block keeps its
+# explanation in prose, not in `#` comments the bash-safety census reads as substitutions; /spec-update
+# --temp writes its note as a new file in a `mktemp -d` directory (the write guard refuses a Write over
+# the file `mktemp -t` made). The capture routine's folder block and /spec-update's per-section Edits
+# were gone already (spec-update.md appends through spec-write.py in one Bash call).
+DEVIATIONS = Deviations([])
 
 _SECTION_RE = re.compile(r"^## Section (\d+):")
 _SENTINEL_FALLBACK = r"^\s*-\s*\((inline|unpersisted design|unpersisted)\)\s"
@@ -953,7 +931,10 @@ class SpecRun:
         o.advance()  # Step 6 done, Step 7 in progress
         self.step7()
         o.advance()  # Step 7 done
-        s.stop(self.display, label="Stop", deviation=o.devs.at("Stop"))
+        ev = s.stop(self.display, label="Stop", deviation=o.devs.at("Stop"))
+        spec = os.path.join(self.project, self.path) if not os.path.isabs(self.path) else self.path
+        self.rp.terminal("spec", os.path.isfile(spec) and getattr(self, "split_verdict", "") == "pass", ev,
+                         spec=self.path)
 
     def finalize(self) -> None:
         o, s = self.o, self.s
@@ -986,6 +967,7 @@ class SpecRun:
                 self.agent.extra.setdefault(issue["view"], []).append(named.group(1))
             self.dispatch_spec(2, f"Step 6 Agent(spec) re-split round {self.qa_round}")
             verdict = self.split_qa()
+        self.split_verdict = verdict
         # 4. The marker, written by this command after the split QA's last verdict.
         marker_item = next(it for it in re.split(r"\n(?=\d+\.\s)", sec) if ".split-complete" in it and "Mark split" in it)
         content = re.search(r'Write `"([^`]+)"` to `([^`]+)`', marker_item)
@@ -1058,6 +1040,12 @@ class SpecRun:
         mk = su.inline("Temp-note mode", "mktemp", startswith="mktemp")
         c = o.run(mk, "Create the temp update note", "Step 7 Bash mktemp update note")
         note_path = c.response.get("stdout", "").strip() if c.ok else ""
+        # `mktemp -d`: the note is the new file the text names in that directory, written with no Read first.
+        in_dir = "-d" in mk.split()
+        if in_dir and note_path:
+            name = next(code for code in cmdtext.inline_codes(su.text, "Temp-note mode", "mktemp")
+                        if re.fullmatch(r"[\w.-]+\.md", code))
+            note_path = os.path.join(note_path, name)
         disp = o.bind(cmdtext.blocks(o.section("Step 7"), None)[0].text,
                       [(r"^absolute path$", self.path), (r"^temp update path", note_path or "(none)")])
         disp = "\n".join(l for l in disp.split("\n")
@@ -1065,10 +1053,11 @@ class SpecRun:
         self.display = disp.replace(" N requirements", " 2 requirements")
         if not note_path:
             return
-        m = re.search(r"update-([A-Za-z0-9]+)\.md$", note_path)
+        m = re.search(r"update-([A-Za-z0-9]+)(?:\.md$|/)", note_path)
         if m:
             rp.rand(m.group(1))
-        s.read(note_path, label="Step 7 Read update note", deviation=o.devs.at("Step 7 Read update note"))
+        if not in_dir:  # a file mktemp created: Read before writing it, as the text says
+            s.read(note_path, label="Step 7 Read update note", deviation=o.devs.at("Step 7 Read update note"))
         note = su.block("Temp-note mode", anchor="# Update")
         note = su.bind(note, [(r"^short focus$", "implement the spec with /dev"), (r"^ISO-8601$", utc_now()),
                               (r'id or "unknown"', self.spec_id), (r"^spec\|dev\|close", "spec"),

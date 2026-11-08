@@ -580,17 +580,15 @@ For each agent selected in Phase 0 (excluding orchestrator), read the view file 
 
 Write cp-state files only through `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py"`, their one writer. Do not write cp-state JSON directly (no Write, Edit or Python stanza).
 
+First register the agent (this creates its cp-state file). `spec-check.py` AUTO-ALLOCATES
+the cp-state slot: the primary `cp-state-<agent>.json` if free, otherwise the next
+`cp-state-<agent>-N.json` (N>=2). Capture the actual path from the `cp-state-path:` line
+in stdout — do NOT assume a filename. `--agent-id` is REQUIRED (stored INSIDE the payload
+as `agent_id`). It is NEVER used as a filename suffix; the slot number alone disambiguates
+slots, but `agent_id` disambiguates the LOGICAL caller when multiple same-type instances
+run concurrently. Without it, Phase 2 cannot reliably pin to the correct slot.
+
 ```bash
-# 1. Register agent (creates cp-state file). spec-check.py AUTO-ALLOCATES
-#    the cp-state slot: primary cp-state-<agent>.json if free, otherwise
-#    the next cp-state-<agent>-N.json (N>=2). Capture the actual path from
-#    the `cp-state-path:` line in stdout — do NOT assume a filename.
-#
-#    --agent-id is REQUIRED (stored INSIDE the payload as `agent_id`).
-#    It is NEVER used as a filename suffix; the slot number alone
-#    disambiguates slots, but agent_id disambiguates the LOGICAL caller
-#    when multiple same-type instances run concurrently. Without it,
-#    Phase 2 cannot reliably pin to the correct slot.
 source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" check-in \
     --spec-id <spec-id> \
     --agent <agent> \

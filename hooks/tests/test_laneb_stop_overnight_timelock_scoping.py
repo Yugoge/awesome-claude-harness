@@ -233,6 +233,13 @@ def test_stop_hook_does_not_revalidate_the_cycle_contract(tmp_path: Path) -> Non
     assert after.returncode == 0, after.stderr
 
 
+def _write_closeout(root: Path, session_id: str) -> None:
+    """What Step 21 leaves on disk under the working root: the overnight summary."""
+    summary = root / "docs" / "dev" / "overnight-summary-2026-01-01.md"
+    summary.parent.mkdir(parents=True, exist_ok=True)
+    summary.write_text("# Overnight Development Summary\n")
+
+
 def test_stop_hook_allows_once_end_time_passed_and_closeout_complete(
     tmp_path: Path,
 ) -> None:
@@ -267,3 +274,34 @@ def test_stop_hook_allows_once_end_time_passed_and_closeout_complete(
     result = _run_stop_hook(tmp_path, session_id)
     assert result.returncode == 0, result.stderr
     assert "TIME-LOCK ACTIVE" not in result.stderr
+
+
+def test_stop_hook_after_end_time_names_the_missing_summary(tmp_path: Path) -> None:
+    """After end_time the Stop is refused until Step 21's summary is on disk; the
+    refusal names it by path. Self-declared state fields (final_summary_path,
+    pm_retro_reports, artifact_checkpoint_status) release nothing, a summary older
+    than start_time is not this session's, and an empty one is no summary (P1c).
+    The summary alone still leaves Step 20's PM retrospective named (P2 R7)."""
+    session_id = "closeout-gaps"
+    past = (datetime.now() - timedelta(hours=2)).isoformat()
+    _write_state(tmp_path, session_id, start_time=past, end_time=past, worktree_path=str(tmp_path),
+                 final_summary_path=str(tmp_path), pm_retro_reports=["retro-1"],
+                 artifact_checkpoint_status="checkpointed")
+    old = tmp_path / "docs" / "dev" / "overnight-summary-2020-01-01.md"
+    old.parent.mkdir(parents=True)
+    old.write_text("an earlier session's")
+    os.utime(old, (0, 0))
+    first = _run_stop_hook(tmp_path, session_id)
+    assert first.returncode == 2
+    assert "CLOSEOUT GATE" in first.stderr and "no summary written since start_time" in first.stderr
+    assert "overnight-summary-*.md" in first.stderr
+    (tmp_path / "docs" / "dev" / "overnight-summary-2026-01-02.md").write_text("")
+    assert _run_stop_hook(tmp_path, session_id).returncode == 2
+
+    _write_closeout(tmp_path, session_id)
+    summary_only = _run_stop_hook(tmp_path, session_id)
+    assert summary_only.returncode == 2
+    assert "retro-report-cycle*.json" in summary_only.stderr
+    assert "overnight-summary-*.md" not in summary_only.stderr
+    _closeout_on_disk(tmp_path, session_id)
+    assert _run_stop_hook(tmp_path, session_id).returncode == 0

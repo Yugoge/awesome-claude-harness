@@ -152,6 +152,12 @@ routing, Step 7 failure routing). Per failed check:
      `docs/dev/commit-qa-report-<TASK_ID>.md`, whose QA dispatch runs again and
      names an artifact; outside a QA round, print the awaiting-input line
      naming the check (re-running `/close`, for example).
+   - On the late-repair site, a dispatch of one of the route's stages (a role
+     `record-stage` takes): the run record holds each stage's report and the
+     dispatch that declared it, so when the dispatch returns, record the
+     report it wrote as `/close --late-repair` records each stage (`<role>`
+     its role, `<path>` the entry's path):
+     `python3 ~/.claude/scripts/late-repair-controller.py record-stage --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT" --stage <role> --report-path <path> --repair-run-id "$(jq -r .repair_run_id "$TASK_PROJECT_ROOT/docs/dev/late-repair-run-$TASK_ID.json")"`
 3. Rerun ONLY the entry's `source_check` (e.g. `resolve-dev-artifact-chain.py`,
    `resolve-commit-repos.py`, `late-repair-controller.py
    resolve-effective-report`, the close-report resolver) — never the whole
@@ -286,7 +292,10 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   use the exact `docs/dev` directory that supplied `CLOSE_REPORT`, prefer this
   task's dev-report there, then its do-report, and fall back to the control-root
   `docs/dev` only when no close-report directory is available. Pass the selected
-  canonical report explicitly; never scan reports by mtime.
+  canonical report explicitly; never scan reports by mtime. The block below is one
+  Bash call, and each retry loop opens its body with the assignment
+  (`while :; do VAR="$(...)" && break`), the form the removal policy of
+  bash-safety reads, never `until VAR="$(...)"`.
 
   ```bash
   CONTROL_ROOT="$(git rev-parse --show-toplevel)"
@@ -322,17 +331,19 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   fi
   if [ "$TASK_REPORT" != "$TASK_DOCS_ROOT/do-report-$TASK_ID.json" ]; then
       # A failed chain check names its gaps in errors[]: each path is one
-      # finding, routed to the dispatch that owes it, then the SAME call is
+      # finding, routed to the dispatch that owes it with the errors the
+      # chain names on it (code: detail) verbatim, then the SAME call is
       # rerun until it passes; ARTIFACT_CHAIN is never blanked.
-      until ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py \
-          --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")"; do
-          while IFS= read -r GAP_PATH; do
+      while :; do
+          ARTIFACT_CHAIN="$(python3 ~/.claude/scripts/resolve-dev-artifact-chain.py \
+              --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT")" && break
+          while IFS= read -r GAP_PATH && IFS= read -r GAP_ERRORS; do
               route_finding "$GAP_PATH" \
-                  "resolve-dev-artifact-chain.py (chain-recheck) failed during commit-time repository planning" \
+                  "resolve-dev-artifact-chain.py reported $GAP_ERRORS during commit-time repository planning" \
                   "resolve-dev-artifact-chain.py --task-id $TASK_ID --project-dir $TASK_PROJECT_ROOT"
           done < <(jq -r --arg report "$TASK_REPORT" \
-              '[.errors[]? | .path // .artifact // $report] | if length == 0 then [$report] else . end | unique[]' \
-              <<<"$ARTIFACT_CHAIN" 2>/dev/null || printf '%s\n' "$TASK_REPORT")
+              '[.errors[]? | {path: (.path // .artifact // $report), error: ((.code // "an error") + ": " + (.detail // "") | gsub("\n"; " "))}] | if length == 0 then [{path: $report, error: "a non-zero exit"}] else . end | group_by(.path)[] | .[0].path, (map(.error) | join("; "))' \
+              <<<"$ARTIFACT_CHAIN" 2>/dev/null || printf '%s\n%s\n' "$TASK_REPORT" "a non-zero exit")
       done
   else
       ARTIFACT_CHAIN=""
@@ -341,25 +352,32 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   # commit": the plan derives from the dev-report, so route the finding on
   # that report and rerun the SAME computation until it succeeds (exit
   # status 0).
-  until REPOSITORY_PLAN="$(python3 ~/.claude/scripts/resolve-commit-repos.py \
-      --task-id "$TASK_ID" --control-root "$CONTROL_ROOT" \
-      --report "$TASK_REPORT" \
-      --supported-repo "$NESTED_REPO")"; do
+  while :; do
+      REPOSITORY_PLAN="$(python3 ~/.claude/scripts/resolve-commit-repos.py \
+          --task-id "$TASK_ID" --control-root "$CONTROL_ROOT" \
+          --report "$TASK_REPORT" \
+          --supported-repo "$NESTED_REPO")" && break
       route_finding "$TASK_REPORT" \
           "resolve-commit-repos.py could not construct a repository plan" \
           "resolve-commit-repos.py --task-id $TASK_ID --control-root $CONTROL_ROOT --report $TASK_REPORT --supported-repo $NESTED_REPO"
   done
   ```
 
-  **Attribution-log slice (ground-truth attribution, additive to the plan above).**
-  Immediately after `REPOSITORY_PLAN` resolves, build `ATTRIBUTION_LOG` — a slice of
+  **Attribution-log slice (ground-truth attribution, additive to the plan above),
+  with the dispatch snapshot's inputs.** Once `REPOSITORY_PLAN` resolves, the next
+  Bash call (the block below) builds `ATTRIBUTION_LOG` — a slice of
   the write-time attribution journal (`hooks/lib/attribution_journal.py`) scoped to
   exactly this plan's owned paths. This is the fact-based attribution source
   `agents/changelog-analyst.md`'s staging decision reads instead of (or as a
   cross-check alongside) the dev-report's self-reported ledger fields. No retry
   loop here — unlike `REPOSITORY_PLAN`, an exit code of 2 (no journaled events for
   any requested path — e.g. the path pre-dates the journal's rollout) is an
-  ordinary, expected outcome, not a finding to route:
+  ordinary, expected outcome, not a finding to route, and nothing in this call
+  decides: its output is what the manifest below records. The same call prints
+  the manifest's other inputs: the state dir, the session id and each plan
+  entry's `git status --porcelain=v1`. (The orchestrator gate allows five Bash
+  calls in a row; with `--auto`'s discovery, Step 3 and the plan this is the
+  fourth, a one-repository plan's grant writer the fifth.)
 
   ```bash
   ATTRIBUTION_FILES=()
@@ -368,6 +386,13 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   done < <(jq -r '.repositories[] | .repo_root as $root | (.owned_paths[]? // empty) | $root + "/" + .' <<<"$REPOSITORY_PLAN")
   ATTRIBUTION_LOG="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/verify-attribution-chain.py" --json "${ATTRIBUTION_FILES[@]}" 2>/dev/null)"
   ATTRIBUTION_LOG="${ATTRIBUTION_LOG:-{\"results\":[],\"no_events\":[],\"discarded_lines\":[]}}"
+  . "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"
+  harness_state_dir
+  echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"
+  while IFS= read -r PLAN_ROOT; do
+      echo "--- $PLAN_ROOT"
+      git -C "$PLAN_ROOT" status --porcelain=v1
+  done < <(jq -r '.repositories[].repo_root' <<<"$REPOSITORY_PLAN")
   ```
 
   `ATTRIBUTION_LOG.results[]` carries, per owned path, its folded write-event
@@ -390,8 +415,9 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   user-supplied root override, or a report field to populate this list.
 
   **Write the dispatch-snapshot manifest FIRST — before minting any grant** (non-bulk
-  mode only; ordering is load-bearing since 2026-10-06, see below). Capture
-  `git status --porcelain=v1` independently for every admitted plan entry, then write
+  mode only; ordering is load-bearing since 2026-10-06, see below). From the
+  snapshot call above (each admitted plan entry's own `git status --porcelain=v1`,
+  the state dir and the session id it printed), write
   `manifest_path = <state-dir>/claude-commit-manifest-{sid}.json` — where `<state-dir>`
   is `CLAUDE_STATE_DIR` when set to an absolute path and `/tmp` otherwise, resolved by
   `hooks/lib/harness_state_dir`, which is the SAME resolver the manifest's readers use;
@@ -607,7 +633,8 @@ QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo — 
       "begin": "--- CHANGELOG-ANALYST-STATUS-BEGIN ---",
       "end": "--- CHANGELOG-ANALYST-STATUS-END ---",
       "format": "json",
-      "schema": "changelog-status.v1"
+      "schema": "changelog-status.v1",
+      "repo_roots": <the JSON array of REPOSITORY_PLAN.repositories[].repo_root, in order, when BULK=false, else null>
     }
   ]
 }
@@ -658,14 +685,11 @@ Wait for changelog-analyst to complete. Echo its final status to the user.
 #### Changelog-analyst result handling and retry protocol
 
 Read changelog-analyst's structured status block verbatim (see `agents/changelog-analyst.md`
-§Structured Final Status Output): the producer-stop gate (G2) validated it against
-`changelog-status.v1` at the analyst's own stop. It carries `commit_status`,
+§Structured Final Status Output): the producer-stop gate (G2) validated it at the analyst's
+own stop, against `changelog-status.v1` and, in normal mode, its repository roots and
+order against the obligation's `repo_roots`. It carries `commit_status`,
 `repository_results[]`, and, when applicable, `failure_code`, `failure_reason`, and
-`auto_bulk_commits[]`. In normal mode a result whose repository roots/order do not
-exactly equal `REPOSITORY_PLAN` is not accepted as a landing (the schema does not
-hold the plan): it is a finding on the analyst's status block (it names no file: the
-changelog-analyst dispatch whose status block it is runs again), routed through the
-dispatch-and-recheck loop and re-read.
+`auto_bulk_commits[]`.
 
 **Handle each commit_status value:**
 

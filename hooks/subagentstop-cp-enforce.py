@@ -13,9 +13,12 @@
 # no subprocess. The outer try/except guarantees a hook bug can never trap a
 # subagent.
 #
-# Detection: scans $CLAUDE_PROJECT_DIR/.claude/specs/*/cp-state-*.json for files
+# Detection: scans $CLAUDE_PROJECT_DIR/.claude/specs/*/cp-state-*.json for the
+# stopping agent's own slots (agent_id, as spec-check.py register records it)
 # that are running (hooks/lib/agent_resolver.py cp_state_running, the one rule
 # role resolution also takes) AND have >=1 checkpoint still in state "pending".
+# Another agent's pending checkpoints are not this agent's to mark (P1c X6: a
+# /spec split's dev and qa slots refused the spec subagent's stop, a dead end).
 from __future__ import annotations
 
 import glob
@@ -30,6 +33,10 @@ def main() -> int:
     from agent_resolver import cp_state_running  # inside main: an import error fails safe
 
     mode = (os.environ.get("CP_ENFORCE_MODE", "advisory") or "advisory").strip().lower()
+    try:
+        agent_id = json.load(sys.stdin).get("agent_id")
+    except Exception:
+        agent_id = None
 
     project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     specs_glob = os.path.join(project, ".claude", "specs", "*", "cp-state-*.json")
@@ -42,7 +49,7 @@ def main() -> int:
                     st = json.load(fh)
             except Exception:
                 continue
-            if not cp_state_running(st):
+            if not agent_id or st.get("agent_id") != agent_id or not cp_state_running(st):
                 continue
             cps = st.get("checkpoints") or []
             pend = [c.get("id") for c in cps if (c.get("state") or "pending") == "pending"]

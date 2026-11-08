@@ -102,6 +102,11 @@ if [ -n "$spec_path" ]; then
   VIEWS_DIR=$(jq -r '.views_dir // empty'        <<<"$RESOLVED_JSON")
   CP_DIR=$(jq -r '.cp_dir // empty'              <<<"$RESOLVED_JSON")
 fi
+if [ -n "$spec_path" ] && [ -d "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/$CP_DIR" ]; then
+  SPEC_ID="$ARTIFACT_ID"
+else
+  SPEC_ID=""
+fi
 ```
 
 When `VIEWS_AVAILABLE` is `true`, read `view_paths` from `$MANIFEST_PATH` (`views` map of agent → path). The resolver returns `views_available=false` with exit 0 for a genuinely legacy spec with no split artifacts — those are fully supported, the monolith path alone is passed to subagents with no checkpoint enforcement.
@@ -124,7 +129,7 @@ The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) has already, for this c
 1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name, `dev-command-<timestamp>`) and `Task id: …` (the id this cycle's artifacts are named with, `<timestamp>` and `<TASK_ID>` below)
 2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
-4. Armed the enforcement flags: E2E, Codex when `--codex` was passed, and the producer-side report schema gate (see `commands/dev.md` Step 1)
+4. Armed the enforcement flags: Codex when `--codex` was passed, and the producer-side report schema gate (see `commands/dev.md` Step 1)
 
 **Read `DEV_SESSION_ID` and `TASK_ID` from the hook output above.** Store them for use in every Agent launch prompt below.
 
@@ -138,9 +143,9 @@ CMDEOF
 
 It prints what the hook printed at this command's start, found through this session's bookmark (`$CLAUDE_CODE_SESSION_ID`); when the hook recorded no start of this command, it starts the cycle there exactly as the hook does, under a task id of its own. Never mint an id, pick a registry by name or age, or write a registry, requirement or flag file yourself.
 
-```bash
-REGISTRY_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/dev-registry/$DEV_SESSION_ID"
-```
+Its output also holds the `Spec:` line and the checklist, so it is the first Bash call of this command, before the views block above; make it after the Read of the command-development patterns document (Command Development Best Practices). While the checklist is not started, `hooks/pretool-workflow-gate.py` refuses that Read with the exact todos array: pass it to TodoWrite, then Read again. `hooks/pretool-orchestrator-gate.py` refuses a sixth Bash call in a row, and only an Agent dispatch clears the count; this order keeps the start function at five with this step's views and cp-state blocks, Step 2's hydrator and Step 4's retry-signal query, before Step 4's BA dispatch.
+
+`$REGISTRY_DIR` below is `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/dev-registry/$DEV_SESSION_ID`, spelled out in the call that uses it: it is not a Bash call of its own, since a Bash call keeps no variable for the next one.
 
 Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
 
@@ -148,16 +153,10 @@ Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the 
 
 Reuse the resolver output from the views-detection step — do NOT re-derive the
 spec-id from `spec_path`. The cp-state directory is exactly the resolver's `cp_dir`:
+the resolver block above sets `SPEC_ID` to the canonical artifact id the resolver
+reports when that directory exists, and to `""` when it does not (or without a spec).
 
-```bash
-if [ -n "$spec_path" ] && [ -d "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/$CP_DIR" ]; then
-  SPEC_ID="$ARTIFACT_ID"          # resolver's canonical artifact id
-else
-  SPEC_ID=""                       # no cp-state dir -> skip SECOND ACTION below
-fi
-```
-
-If no cp-state directory exists, set `SPEC_ID=""` and skip the `SECOND ACTION`
+If no cp-state directory exists, `SPEC_ID` is `""`: skip the `SECOND ACTION`
 lines below. If a particular agent has no cp-state file under that SPEC_ID, omit that
 agent's `SECOND ACTION` for this launch. When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a
 cp-state file MUST include a `SECOND ACTION` line immediately after the dev-registry `FIRST ACTION`:
@@ -752,7 +751,7 @@ Dev iterates and QA re-checks until QA's status is `pass`; pass is the only exit
 ```markdown
 # Development Completion Report
 
-**Request ID**: dev-<timestamp>
+**Request ID**: <timestamp>
 **Completed**: <ISO-8601>
 **Iterations**: <N>
 
@@ -810,6 +809,7 @@ Dev iterates and QA re-checks until QA's status is `pass`; pass is the only exit
 
 ## Files Generated
 
+- Ticket: `docs/dev/ticket-<timestamp>.md`
 - Context: `docs/dev/context-<timestamp>.json`
 - Dev Report: `docs/dev/dev-report-<timestamp>.json`
 - QA Report: `docs/dev/qa-report-<timestamp>.json`
@@ -824,6 +824,8 @@ Development completed successfully!
 ```
 
 **Save report to**: `docs/dev/completion-<timestamp>.md`
+
+The report's identity is the task id as given (`<timestamp>`, no `dev-` prefix), and its Files Generated list names every artifact of the chain (ticket, context, dev report, QA report): the postcondition below reads both, and a prefixed id or a missing reference fails it.
 
 **Codex-native artifact postcondition (hard check before completion)** — mirrors `commands/dev.md` Step 17's postcondition. The resolver builds the file names it reads from the task id as given (for example `dev-report-<task_id>.json`), and this command's artifacts are named `<timestamp>`, so it receives `<TASK_ID>`, the hook's `Task id:` (only the registry directory and the user-requirement document carry `$DEV_SESSION_ID`).
 

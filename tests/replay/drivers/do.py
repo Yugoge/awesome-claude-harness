@@ -190,8 +190,14 @@ class DoTurn:
         o.advance(label=self.label("TodoWrite Step 5 done"))
         done = ("blocked: the task was abandoned before the change" if self.variant == "blocked"
                 else "done: toy.add rejects non-numbers")
-        o.s.stop(f"/do {self.tid} {done}; do-report {self.report_rel}. "
-                 f"Next: /close {self.tid}", label="/do Stop", deviation=o.devs.at("/do Stop"))
+        ev = o.s.stop(f"/do {self.tid} {done}; do-report {self.report_rel}. "
+                      f"Next: /close {self.tid}", label="/do Stop", deviation=o.devs.at("/do Stop"))
+        try:
+            with open(os.path.join(o.project, self.report_rel)) as fh:
+                status = (json.load(fh).get("do") or {}).get("status")
+        except (OSError, ValueError, AttributeError):
+            status = None
+        self.rp.terminal("do", status == "completed", ev, task=self.tid, report=self.report_rel)
         return self.tid
 
 

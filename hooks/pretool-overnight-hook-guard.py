@@ -1403,7 +1403,9 @@ def _scan_script_files_for_main_git(command: str, main_real: str) -> bool:
     # already covers it; here we focus on file operands.
     home = os.environ.get('CLAUDE_HOME') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for tok in command.split():
-        t = _CHANNEL_RE.sub(lambda _m: home, tok.strip('\'"'))
+        # `~/x.py` names the script bash runs (tilde expansion), so it is read, not "unreadable"; a
+        # channel-spelled operand is read at the path the shell expands it to (P2 R6).
+        t = os.path.expanduser(_CHANNEL_RE.sub(lambda _m: home, tok.strip('\'"')))
         if not t or t.startswith('-'):
             continue
         # heuristically a script operand: a path ending in a known script ext OR
@@ -1871,7 +1873,7 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
 
 
 def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
-                      isolation_kind: str) -> list[str] | None:
+                      isolation_kind: str, journal: tuple = ()) -> list[str] | None:
     """Build the bwrap argv that re-execs `command` with the PROTECTED MAIN tree
     RO and the overnight worktree RW. Returns None if the layout cannot be built.
 
@@ -1919,6 +1921,15 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
         '--die-with-parent',
         '--bind', wt_real, wt_real,     # (5) the worktree: RW, nested over RO main
     ]
+    # A TMPDIR outside /tmp (settings.json pins one) is private and writable too, as /tmp is, or
+    # every mktemp of the command fails on the RO host; never one holding main or the worktree.
+    tmp = os.path.realpath(os.environ.get('TMPDIR') or '/tmp')
+    if os.path.isdir(tmp) and not _path_under_prefix(tmp, '/tmp') and not any(
+            _path_under_prefix(r, tmp) or _path_under_prefix(tmp, r) for r in (main_real, wt_real)):
+        argv += ['--tmpfs', tmp]
+    for d in journal:  # /restart's (_restart_journal): over the private tmps, under step 7's RO rebinds
+        if not any(_path_under_prefix(r, d) for r in (main_real, wt_real)):  # never holding main or wt
+            argv += ['--bind-try', d, d]
     # (4) LINKED worktree: RW-expose exactly the git-derived metadata paths the
     # supported surface needs. A fresh_clone worktree is self-contained (its .git
     # lives under the RW worktree already) -> ZERO .git exceptions.
@@ -2036,7 +2047,8 @@ def _raw_git_metadata_write_into_main(command: str, main_root: str,
     return False
 
 
-def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str) -> None:
+def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
+                          journal: tuple = ()) -> None:
     """WRITE-HALF entry (fix-7): for the ACTIVE overnight actor's Bash command,
     re-exec it inside the bwrap RO-bind boundary (emit updatedInput.command) when
     the boundary is available; FAIL-CLOSED (deny non-worktree-local commands)
@@ -2061,7 +2073,7 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str) -> N
             'keystone and the RO-bind). Use git inside the worktree instead.\n'
         )
     if _bwrap_boundary_available():
-        argv = _build_bwrap_argv(command, main_root, worktree_path, isolation_kind)
+        argv = _build_bwrap_argv(command, main_root, worktree_path, isolation_kind, journal)
         if argv:
             # shlex-quote the argv into a single re-exec command string.
             import shlex
@@ -2083,6 +2095,16 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str) -> N
             'closed (write_boundary_active=false). Run a command that writes '
             'only inside the worktree, or restore bubblewrap.\n'
         )
+
+
+def _restart_journal(payload: dict) -> tuple:
+    """The dirs /restart's exact helper invocation writes (its state and grant dirs), () otherwise."""
+    if 'restart-subagents.py' not in str(payload.get('tool_input')):
+        return ()
+    from lib import subagent_restart as restart
+    if not restart.is_helper_invocation(payload):
+        return ()
+    return tuple(os.path.realpath(d) for d in (restart.state_dir(), restart.grant_dir()))
 
 
 _UNATTENDED_DENY = {  # D20: nobody answers a question asked inside /dev-overnight
@@ -2166,8 +2188,13 @@ def main():
             # actor — re-exec the surviving command inside the RO-bind boundary
             # (emit updatedInput.command + exit 0) when bwrap is available, else
             # FAIL-CLOSED. Layered ON TOP OF the L4 guard (STEP A still ran).
-            _apply_write_boundary(
-                tool_input.get('command', ''), gov_state, main_git_dir)
+            # /restart's helper (the overnight wake runs it, P1c X8) runs inside the boundary too, with
+            # only its journal bound writable: option (b) of P1c review 1, by D18. A check of the
+            # helper against its blobs at the harness's HEAD (option (a)) cannot see what it runs:
+            # measured, its hooks/lib modules load from untracked __pycache__ bytecode and the untracked
+            # venv runs any .pth in it; a planted .pyc and .pth ran with the check passing.
+            _apply_write_boundary(tool_input.get('command', ''), gov_state, main_git_dir,
+                                  _restart_journal(payload))
         elif classification == 'worktree_context':
             # VECTOR-3 fail-closed: cwd is inside an active worktree but no
             # governing overnight state could be resolved for it. We cannot derive

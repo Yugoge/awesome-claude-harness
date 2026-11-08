@@ -139,6 +139,11 @@ if [ -n "$spec_path" ]; then
   SPLIT_MARKER=$(jq -r '.split_marker // empty'  <<<"$RESOLVED_JSON")
   VIEWS_DIR=$(jq -r '.views_dir // empty'        <<<"$RESOLVED_JSON")
   CP_DIR=$(jq -r '.cp_dir // empty'              <<<"$RESOLVED_JSON")
+  SPEC_ID="$ARTIFACT_ID"
+  CP_STATE_DIR="$CP_DIR"
+else
+  SPEC_ID=""
+  CP_STATE_DIR=""
 fi
 ```
 
@@ -160,7 +165,7 @@ The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) started this cycle and 
 1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name) and `Task id: …` (the id this cycle's artifacts are named with, `<TASK_ID>` below)
 2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
-4. Armed the enforcement flags: E2E, Codex when `--codex` was passed (both named in its output), and the producer-side report schema gate (`hooks/subagentstop-artifact-contract-enforce.py` blocks a dev/qa subagent from stopping with a versioned-but-schema-invalid report; same `contract_runtime` engine as `/close`'s "Artifact schema gate" section)
+4. Armed the enforcement flags: Codex when `--codex` was passed (named in its output with E2E, whose gate needs no flag), and the producer-side report schema gate (`hooks/subagentstop-artifact-contract-enforce.py` blocks a dev/qa subagent from stopping with a versioned-but-schema-invalid report; same `contract_runtime` engine as `/close`'s "Artifact schema gate" section)
 
 **Read `DEV_SESSION_ID` and `TASK_ID` from the hook output above** (lines `DEV_SESSION_ID pre-initialized by hook: …` and `Task id: …`). Store them for use in every Agent launch prompt below.
 
@@ -174,24 +179,11 @@ CMDEOF
 
 It prints what the hook printed at this command's start, found through this session's bookmark (`$CLAUDE_CODE_SESSION_ID`); when the hook recorded no start of this command, it starts the cycle there exactly as the hook does, under a task id of its own (ids, registry, requirement document and flags). Never mint an id, pick a registry by name or age, or write a registry, requirement or flag file yourself.
 
-```bash
-REGISTRY_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/dev-registry/$DEV_SESSION_ID"
-```
+`$REGISTRY_DIR` below stands for `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/dev-registry/$DEV_SESSION_ID`.
 
 Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
 
-**Also reuse the resolver's `<SPEC_ID>` for cp-state checkpoint propagation.** `/spec` writes per-agent `cp-state-<agent>.json` files into the directory the resolver reports as `cp_dir` (`.claude/specs/<artifact_id>/`). Do NOT re-derive the id from `spec_path` — reuse the resolver output computed above so the producer and consumers agree byte-for-byte:
-
-```bash
-# SPEC_ID / cp-state dir come straight from the resolver JSON (no inline basename derivation).
-if [ -n "$spec_path" ]; then
-  SPEC_ID="$ARTIFACT_ID"          # resolver's canonical artifact id (de-prefixed or prefixed, per disk)
-  CP_STATE_DIR="$CP_DIR"          # .claude/specs/<artifact_id>
-else
-  SPEC_ID=""
-  CP_STATE_DIR=""
-fi
-```
+**Also reuse the resolver's `<SPEC_ID>` for cp-state checkpoint propagation.** `/spec` writes per-agent `cp-state-<agent>.json` files into the directory the resolver reports as `cp_dir` (`.claude/specs/<artifact_id>/`). Do NOT re-derive the id from `spec_path` — the resolver block above sets `SPEC_ID` to the canonical artifact id the resolver reports (de-prefixed or prefixed, per disk) and `CP_STATE_DIR` to its `cp_dir` (`.claude/specs/<artifact_id>`), both empty without a spec, so the producer and consumers agree byte-for-byte.
 
 When `SPEC_ID` is non-empty, every Agent launch prompt for an agent that has a cp-state file MUST include a `SECOND ACTION` block (template under each Step's prompt below) instructing the subagent to read `<PROJECT_ROOT>/$CP_STATE_DIR/cp-state-<agent>.json` and to mark each checkpoint via `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" mark` (or `waive` — auto-text records actor + ISO timestamp) before Stop. Agents SHOULD leave zero pending checkpoints before they Stop. (Note: `subagentstop-cp-enforce.py` **is** wired under `SubagentStop` in `settings.json` and fires when an agent stops with a cp-state file — it blocks (exit 2) on any `pending` checkpoint. Marking via `spec-check.py` is therefore both a discipline expectation and a hook-enforced block.) When `SPEC_ID` is empty (non-`/spec` invocation), or a particular agent has no cp-state file under that artifact id, the SECOND ACTION block is omitted — there are no checkpoints to mark for that launch.
 
@@ -205,19 +197,16 @@ Run `scripts/graphify-query.py` as a direct Bash call (NOT a subagent — avoids
 source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-query.py" \
   --task-id "$DEV_SESSION_ID" \
   --requirement-file "$REQUIREMENT_DOC"
+# Auto-init (async, non-blocking): if no cached graph exists, launch a background
+# full build for the NEXT run. Returns immediately and never stalls /dev (R-7).
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-maintain.py" ensure-async || true
 ```
 
 Output is written to `.claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json`. When this file exists with `status=ok` or `status=degraded`, include it in the BA dispatch prompt (Step 4) as `Pre-query context file: .claude/dev-registry/$DEV_SESSION_ID/graphify/pre_query.json` so BA sees repo structure BEFORE forming its initial interpretation. When `status=unavailable` or `status=skipped`, omit the pre-query context from the BA prompt — BA runs its original flow unchanged.
 
-After the query above (still within Step 2), fire a second advisory, non-blocking Bash call that auto-initializes the graph for the NEXT run when no cached graph exists yet. This call returns immediately and never stalls `/dev`: it launches a detached background full build (when needed) and exits at once, so this run proceeds with whatever the query already returned — the freshly-built graph only becomes available on a subsequent `/dev` run. This preserves the R-7 spirit (the pipeline never blocks on a graph build).
+The same call's last line, after the query, auto-initializes the graph for the NEXT run when no cached graph exists yet. It returns immediately and never stalls `/dev`: it launches a detached background full build (when needed) and exits at once, so this run proceeds with whatever the query already returned — the freshly-built graph only becomes available on a subsequent `/dev` run. This preserves the R-7 spirit (the pipeline never blocks on a graph build). The query and the auto-init are one Bash call: the orchestrator gate allows at most five consecutive Bash calls between dispatches (CLAUDE.md, Orchestrator-Only Rule), and Steps 1-4 all run before BA's dispatch.
 
-```bash
-# Auto-init (async, non-blocking): if no cached graph exists, launch a background
-# full build for the NEXT run. Returns immediately — never stalls /dev (R-7).
-source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-maintain.py" ensure-async || true
-```
-
-If `--no-graphify` was passed in `$ARGUMENTS`, add `--no-graphify` to the `graphify-query.py` Bash call above and skip the `ensure-async` call entirely.
+If `--no-graphify` was passed in `$ARGUMENTS`, add `--no-graphify` to the `graphify-query.py` line and drop the `ensure-async` line.
 
 ### Step 3: Specialist Consultation (always evaluate, never silently skip)
 
@@ -1041,6 +1030,7 @@ initial worker shard.
 ## Files Generated
 
 *(Single-lane cycle, N == 1)*
+- Ticket: `docs/dev/ticket-<timestamp>.md`
 - Context: `docs/dev/context-<timestamp>.json`
 - Dev Report: `docs/dev/dev-report-<timestamp>.json`
 - QA Report: `docs/dev/qa-report-<timestamp>.json`

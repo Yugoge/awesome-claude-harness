@@ -7,7 +7,12 @@ disable-model-invocation: true
 
 Human-only emergency recovery; invoke only after a session or usage limit has
 interrupted this session — every recoverable interrupted subagent, or, when the
-session had none, the main agent's own work.
+session had none, the main agent's own work. Inside `/dev-overnight` the session's
+own wake (dev-overnight.md Step 0) starts the same Mandatory procedure with no
+human: `userprompt-restart-authorize.py` issues the capability to the wake's fixed
+text only while the `/dev-overnight` span is open (never after `/stop`), and
+`prompt-workflow.py` hands this procedure over; with 0 candidates it finalizes and
+the session carries on with its checklist step in progress (D20).
 
 ## Usage
 
@@ -131,6 +136,10 @@ directive to this session's own main agent — see
    ```
 
    Report the recovered agent IDs and point to their existing transcript paths.
+   Then go on with the command whose subagents were cut, from the checklist step
+   that was in progress: each resumed agent's original `Agent` call is that
+   step's dispatch (`pretool-todo-validate.py` reads the recovery journal), so
+   complete the step once its artifacts are checked; never dispatch a replacement.
 
 ## Zero-candidate continuation
 
@@ -199,8 +208,8 @@ complete, valid prepare result, never an error to retry.
 - **DO NOT copy a transcript into a fresh prompt** and call that a restart.
 - **DO NOT repeat irreversible operations.** The fixed recovery message requires
   each resumed agent to inspect its last tool result and workspace side effects first.
-- **DO NOT overwrite or complete the active `/dev`, `/redev`, `/spec`, or
-  `/dev-overnight` TodoWrite/workflow bookmark.** `/restart` is an orthogonal
+- **DO NOT overwrite the active `/dev`, `/redev`, `/spec`, or `/dev-overnight`
+  TodoWrite/workflow bookmark, nor complete its steps before step 5.** `/restart` is an orthogonal
   control operation and intentionally has no todo script. Because of this,
   `pretool-workflow-gate.py` exempts the exact `restart-subagents.py`
   invocations in steps 2, 4, and 5 from the checklist gate: even a session

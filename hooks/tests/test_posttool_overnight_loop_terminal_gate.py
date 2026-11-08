@@ -197,7 +197,8 @@ def test_the_text_reaches_the_agent_as_posttool_additional_context(tmp_path, hou
     if hours > 0:
         assert lines[0] == "OVERNIGHT LOOP: Cycle 1 complete (PM retro filed). Starting cycle 2."
         assert "INSTRUCTIONS: Reset your todo list to all-pending and begin Step 1 again." in lines
-        assert lines[-1] == "Resume from Step 2 (exploration) -- Step 1 setup is already done."
+        assert lines[-1] == ("Resume from Step 2 (exploration) -- Step 1 setup is already done, and the wake Step 0"
+                                " scheduled still runs (no second CronCreate).")
     else:
         assert lines == ["OVERNIGHT SESSION COMPLETE: the time-lock window has closed. Cycles: 1, Fixed: 0",
                          "Generate your summary and finish up."]

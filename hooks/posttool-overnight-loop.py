@@ -61,7 +61,8 @@ def _loop_instructions(state: dict, end_time: datetime, state_path: Path) -> str
         f'State file: {state_path} (read it for current state)',
         f'Worktree: {wt} (already exists, DO NOT create another)',
         '',
-        'Resume from Step 2 (exploration) -- Step 1 setup is already done.'])
+        'Resume from Step 2 (exploration) -- Step 1 setup is already done, and the wake Step 0'
+        ' scheduled still runs (no second CronCreate).'])
 
 
 def _tell_agent(text: str) -> None:

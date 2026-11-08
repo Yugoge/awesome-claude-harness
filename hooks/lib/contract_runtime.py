@@ -14,7 +14,7 @@ Public surface:
     post_triage_steps(steps) -> [(label, subagent_call)]   # what the contract renders
     triage_call(steps) -> dict                # the PM TRIAGE step's subagent_call
     call_entry(label, subagent_call) -> dict  # a required_calls entry for one step
-    detect_mode(prompt) -> str
+    detect_mode(prompt, role) -> str
     type_strict_json_equal(left, right) -> bool
     validate(record, schema_name) -> Result
     validate_required_call(contract, role, pipeline_id, mode, step) -> Result
@@ -222,11 +222,13 @@ def call_entry(label: str, subagent_call: dict) -> dict:
     }
 
 
-def detect_mode(prompt: str) -> str:
-    """The mode keyword a dispatch prompt carries ('' when none)."""
+def detect_mode(prompt: str, role: str = '') -> str:
+    """The mode keyword a dispatch prompt carries; a PM prompt carrying none is PLAN, as agents/pm.md
+    reads it ("If `PM_MODE:` is missing, default to `PLAN`."); else ''."""
     if not isinstance(prompt, str):
         return ''
-    return next((keyword for keyword in _MODE_KEYWORDS if keyword in prompt), '')
+    found = next((keyword for keyword in _MODE_KEYWORDS if keyword in prompt), '')
+    return found or (PLAN_MODE if str(role or '').strip().lower() == 'pm' else '')
 
 
 # ---------------------------------------------------------------------------
@@ -1150,7 +1152,8 @@ def validate_response_line_for_obligation(
 
 
 def validate_response_block_for_obligation(
-    last_assistant_message, begin: Optional[str], end: Optional[str], schema_id: str
+    last_assistant_message, begin: Optional[str], end: Optional[str], schema_id: str,
+    repo_roots: Optional[list] = None,
 ) -> dict:
     """Obligation-authority response_block gate (ticket 20261001-161041-r21, M2).
 
@@ -1179,6 +1182,16 @@ def validate_response_block_for_obligation(
         same infra fail-safe every obligation-authority gate shares).
       - ``'pass'`` -- the delimited substring parses as JSON and validates
         against ``schema_id``.
+
+    ``repo_roots`` (the obligation's own list of the dispatch's planned
+    repository roots, in order; /commit's REPOSITORY_PLAN) adds one
+    requirement on a block that reports a landing (any ``commit_status`` but
+    ``failed``, as /commit Step 7 applied it): its ``repository_results[]``
+    name exactly those roots, the result at index i with ``order`` i, else
+    ``'fail'`` with ``reason`` containing ``'plan_mismatch'``. The comparison
+    needs no schema validator, so it holds when jsonschema is unavailable
+    too, as /commit's own comparison did. ``None`` (bulk mode, or an
+    obligation that declares no plan) adds none.
     """
     if not isinstance(begin, str) or not begin or not isinstance(end, str) or not end:
         return _gate_result(
@@ -1206,14 +1219,39 @@ def validate_response_block_for_obligation(
             'fail', schema_id, [f'unparseable JSON between sentinels: {exc}'],
             'unparseable_json: response_block content between sentinels is not valid JSON',
         )
+    plan_errors = _plan_mismatch(record, repo_roots)
+    plan_fail = _gate_result(
+        'fail', schema_id, plan_errors,
+        'plan_mismatch: repository_results do not name the obligation\'s repo_roots in order',
+    ) if plan_errors else None
     result = validate(record, schema_id)
     skip_reason = _skip_reason_if_unvalidatable(result)
     if skip_reason is not None:
-        return _gate_result('skip', schema_id, [], skip_reason)
-    if result.get('ok'):
-        return _gate_result('pass', schema_id, [], 'valid against obligation-supplied response_block schema')
-    return _gate_result(
-        'fail', schema_id, result.get('errors', []),
-        'schema-invalid under obligation-supplied response_block schema',
-    )
+        return plan_fail or _gate_result('skip', schema_id, [], skip_reason)
+    if not result.get('ok'):
+        return _gate_result(
+            'fail', schema_id, result.get('errors', []),
+            'schema-invalid under obligation-supplied response_block schema',
+        )
+    if plan_fail:
+        return plan_fail
+    return _gate_result('pass', schema_id, [], 'valid against obligation-supplied response_block schema')
+
+
+def _plan_mismatch(record, repo_roots) -> list:
+    """The plan requirement of validate_response_block_for_obligation: [] when
+    ``repo_roots`` declares no plan, the block reports no landing (its
+    ``commit_status`` is ``failed``), or its repository_results name exactly
+    those roots in order; else the one error naming both."""
+    if not isinstance(repo_roots, list) or not isinstance(record, dict):
+        return []
+    if record.get('commit_status') == 'failed':
+        return []
+    results = record.get('repository_results')
+    reported = [[r.get('order'), r.get('repo_root')] for r in results if isinstance(r, dict)] \
+        if isinstance(results, list) else []
+    planned = [[i, root] for i, root in enumerate(repo_roots)]
+    if reported == planned:
+        return []
+    return [f'repository_results (order, repo_root) {reported!r} != the obligation\'s repo_roots {planned!r}']
 

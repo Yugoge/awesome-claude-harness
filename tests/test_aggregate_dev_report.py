@@ -237,7 +237,7 @@ class TestPrefixedTaskIdNaming:
         assert sorted(workers[PREFIXED_TID]) == ["a", "b", "c"]
 
         def found(scope_task_id):
-            return [(code, path.name) for code, path, _, _ in
+            return [(code, path.name) for code, path, *_ in
                     _hook_mod._find_violations(workers, canonical, dev_dir, scope_task_id)]
 
         assert found(scope) == [("canonical_missing", f"dev-report-{PREFIXED_TID}.json")]
@@ -2806,6 +2806,7 @@ class TestFanoutCollectionCheck:
                 "| producer: dev (lane l2)") in result.stderr
         assert "canonical" not in result.stderr.split("collected.")[1]
         assert "orchestrator must write" not in result.stderr and "dev.md" not in result.stderr
+        assert "reached by" not in result.stderr
 
     @pytest.mark.parametrize("mode", [None, "block"])
     def test_missing_canonical_names_the_hook_as_its_producer(self, project_dir, tmp_path, mode):
@@ -2817,6 +2818,11 @@ class TestFanoutCollectionCheck:
         assert (f"[canonical_missing] {dev_dir / f'dev-report-{BARE_TID}.json'}: the canonical "
                 "aggregate of lanes l1, l2 is missing | producer: "
                 "hooks/posttool-lane-completeness-watch.py") in result.stderr
+        # A hook has no dispatch: the finding names the one that reaches it, the
+        # declaring dispatch of this QA dispatch's own lane report (E5 (a)).
+        assert (f"| reached by: dispatching again the dev dispatch that declared "
+                f"docs/dev/dev-report-{BARE_TID}-l2.json (lane l2), which writes that report "
+                "again in that dispatch; the write runs it") in result.stderr
 
     def test_canonical_that_misses_a_lane_is_stale(self, project_dir, tmp_path):
         dev_dir = project_dir / "docs" / "dev"
@@ -2828,6 +2834,8 @@ class TestFanoutCollectionCheck:
         assert result.returncode == 2
         assert (f"[canonical_stale] {dev_dir / f'dev-report-{BARE_TID}.json'}: its "
                 "parallel_workers ['l1', 'l2'] do not name lane(s) l3") in result.stderr
+        assert (f"reached by: dispatching again the dev dispatch that declared "
+                f"docs/dev/dev-report-{BARE_TID}-l1.json (lane l1)") in result.stderr
 
     def test_advisory_g3_blocks_only_a_missing_canonical(self, project_dir, tmp_path):
         # Until P2 arms G3 a missing lane report and a stale canonical pass,
@@ -2857,7 +2865,7 @@ class TestFanoutCollectionCheck:
         assert _hook_mod._find_violations(workers, canonicals, dev_dir, None) == []
         (dev_dir / f"dev-report-{OTHER_TID}.json").unlink()
         workers, canonicals = _hook_mod._scan_dev_dir(dev_dir)
-        assert [(code, path.name) for code, path, _, _ in
+        assert [(code, path.name) for code, path, *_ in
                 _hook_mod._find_violations(workers, canonicals, dev_dir, None)] == [
             ("canonical_missing", f"dev-report-{OTHER_TID}.json")]
 

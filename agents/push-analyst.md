@@ -58,11 +58,13 @@ GIT_ROOT=$(git rev-parse --show-toplevel)
 
 Determine commits-to-push range. Use `refs/remotes/<REMOTE_NAME>/<BRANCH>..HEAD` — this
 matches the exact remote push.sh will target. Do NOT use `@{u}..HEAD` (which may track a
-different remote in fork workflows).
+different remote in fork workflows). A word that ends in the tracking ref spells it with its
+`^{commit}` peel: the removal policy of bash-safety proves no word inert whose last path
+component is an expanded variable.
 
 ```bash
 # Check if remote tracking ref exists
-if git rev-parse "refs/remotes/${REMOTE_NAME}/${BRANCH}" >/dev/null 2>&1; then
+if git rev-parse --verify --quiet "refs/remotes/${REMOTE_NAME}/${BRANCH}^{commit}" >/dev/null; then
     RANGE="refs/remotes/${REMOTE_NAME}/${BRANCH}..HEAD"
 else
     # First push — no remote tracking ref; analyze all commits in HEAD
@@ -110,9 +112,9 @@ If BRANCH is `main` or `master`:
 Check ahead/behind relative to the resolved remote tracking ref:
 
 ```bash
-if git rev-parse "refs/remotes/${REMOTE_NAME}/${BRANCH}" >/dev/null 2>&1; then
+if git rev-parse --verify --quiet "refs/remotes/${REMOTE_NAME}/${BRANCH}^{commit}" >/dev/null; then
     AHEAD=$(git rev-list --count "refs/remotes/${REMOTE_NAME}/${BRANCH}..HEAD")
-    BEHIND=$(git rev-list --count "HEAD..refs/remotes/${REMOTE_NAME}/${BRANCH}")
+    BEHIND=$(git rev-list --count "HEAD..refs/remotes/${REMOTE_NAME}/${BRANCH}^{commit}")
 fi
 ```
 
