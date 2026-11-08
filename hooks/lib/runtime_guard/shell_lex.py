@@ -2,8 +2,6 @@
 """Shell-command lexing primitives for the protected-runtime guard.
 
 Dependency LEAF: imports only the stdlib, references nothing from _core.
-See docs/reference/monolith-split-plan.md for the decomposition rationale and
-the INV-3 dual-context import contract.
 
 Scope: quote-aware pipeline / compound-group splitting, fd-redirect detection,
 and write-redirect target extraction — the one layer that must agree

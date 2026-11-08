@@ -632,6 +632,8 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 
 > Full, auto-maintained roster: [`agents/README.md`](agents/README.md).
 
+Agents remove a tracked file with a non-forced `git rm` (with or without `-r`, `-n`, `-q` or `--`): git refuses a file that differs from HEAD or the index, so a removed file comes back with `git checkout <sha> -- <path>`. bash-safety allows it for literal paths outside the harness home that are not submodules, and refuses a forced or wrapped `git rm`, `rm`, `unlink`, and a `git rm` that removes a file in the harness home.
+
 ---
 
 ## The command surface: 21 slash commands
@@ -660,7 +662,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Control** | `/codex` | OpenAI Codex adversarial delegation. | You want an adversarial second opinion from an outside model. |
 | **Control** | `/paseo-daemon` | Multi-session monitoring and three-account scheduling control plane. | Bootstrapping or advancing the persistent scheduling state machine. |
 
-> Full, auto-maintained list: [`commands/README.md`](commands/README.md).
+> Each command's own file: [`commands/`](commands/).
 
 ---
 
@@ -899,6 +901,8 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 | Stop | 3 | Workflow coordinator (overnight time-lock, spec coverage, auto-commit, allowlist cleanup phases), `/do` report gate, obligation gate (an exit-0 stub: artifacts are decided at each producer's stop) |
 | SessionEnd | 1 | Scratch-directory sweep |
 | SubagentStop | 8 | cp-state enforcement, artifact contract, subagent output capture |
+
+Retired hooks stay in the tree as exit-0 stubs (marked by a `# STUB:` line), so a running session whose loaded hook list still names one gets exit 0, never a missing file. `render-settings check` (run by `scripts/doctor`) fails a hook command whose file is missing or is a stub the clean form does not register. The landing repairs an overlay that registers one: at the first Stop after HEAD moves, it drops from `settings.machine.json`, and from the working `settings.json`, each hook command whose script is a harness hook HEAD deleted or marks `# STUB:`, or that another registered command already runs, and `logs/landing.log` names the drops by event and count.
 
 ---
 

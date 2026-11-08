@@ -179,7 +179,7 @@ four scripts were never direct `Stop` entries in `settings.json` — they were t
 `stop-workflow-coordinator.py` — so they are recorded in section 4 as S-004 – S-007 (S-004
 retired in P5).
 Id H-081 is retired as well: `stop-completion-gate.py` lost its `Stop` entry in P1 and is an
-exit-0 stub until P10. Ids H-052 and H-053 are retired too: `posttool-todo-count.py` and
+exit-0 stub that stays tracked. Ids H-052 and H-053 are retired too: `posttool-todo-count.py` and
 `posttool-todo-sequence.py` left the `PostToolUse` `TodoWrite` group in P5 and are exit-0 stubs;
 `pretool-todo-validate.py` (H-037) decides their rules before the call runs. Ids H-082 – H-084 are
 retired in P5: the `Stop` group is one entry, `stop-launch.py` (H-088), which runs

@@ -521,9 +521,7 @@ class TestAlreadyDirtyBaselinePrefersDeclaredBlobOverHead:
 
         rc = main(["--task-id", TASK_ID])
         capsys.readouterr()
-        # Attribution-journal consumer cutover (docs/reference/attribution-
-        # journal-cutover-flip-plan-20261003.md, superseded by the zero-
-        # blocking constraint of the follow-up consumer-cutover task): the
+        # Attribution-journal consumer cutover: the
         # exit code no longer comes from this replay at all -- it comes from the write-time ledger,
         # which defers (no journal evidence in this git-only fixture) rather
         # than blocks. The monkeypatched pre-fix _resolve_baseline_snapshot

@@ -62,7 +62,6 @@ COMMIT_GRANT_RE="$(printf '%s' "${USERINTENT_SENTINEL_DIR%/}/claude-commit-grant
 # awk on most Linux), `node(js)?`. NEVER remove a token to narrow a layer: an
 # interpreter writes with no redirection at all, so dropping one opens a hole
 # the redirection branch cannot see.
-# Full record: docs/reference/bash-safety-verb-anchoring-20261008.md
 ARTIFACT_WRITE_VERB_RE='(\btee([^A-Za-z_]|$)|\bcp(io)?([^A-Za-z_]|$)|\bmv([^A-Za-z_]|$)|\bln([^A-Za-z_]|$)|\btouch([^A-Za-z_]|$)|\bsed\s+-i|\bi?python([^A-Za-z_]|$)|\binstall([^A-Za-z_]|$)|\bdd\s|\btruncate([^A-Za-z_]|$)|\bshred([^A-Za-z_]|$)|\brsync([^A-Za-z_]|$)|\b[gmn]?awk([^A-Za-z_]|$)|\bperl([^A-Za-z_]|$)|\bnode(js)?([^A-Za-z_]|$)|\bruby([^A-Za-z_]|$))'
 # A shell NAME=VALUE capture, used as a PREFIX to a namespace regex: it matches
 # the point where a command binds the protected namespace into a variable.
@@ -196,9 +195,17 @@ _runtime_guard_fail_closed() {
   # guaranteed. Over-denial is the intended direction: this path runs ONLY when the
   # engine already failed to decide. This helper is DEFENSE-IN-DEPTH over specific
   # tested forms, NOT a guarantee for any family. The families it covers are listed
-  # per-line below; what is NOT covered is named in the residual-gap note in
-  # docs/reference/core-context-refactor-plan.md (the authoritative, detailed record;
-  # lib/runtime_guard/context.py carries a short summary of it plus a pointer here).
+  # per-line below. Residual gaps (measured 2026-07-17; stated, not fixed):
+  #   1. no filesystem-mutation family: with the engine crashed, cp/tee/truncate/
+  #      `sed -i`/`>` onto a protected statefile, hotfile or global bin is ALLOWed,
+  #      so STEP0 (config self-protection), P3, P4 and P7 stay fail-OPEN on a crash;
+  #   2. the path-qualified/quoted tolerance is P5/P6-only: the service-control,
+  #      package-manager, build and runtime lines stay bare-token (a path-qualified
+  #      `systemctl` is not matched);
+  #   3. no family is fail-CLOSED family-wide, P5/P6 included: the quote-split and
+  #      backslash forms above stay engine=BLOCK, fallback=ALLOW; do not chase them;
+  #   4. `_core.main()` catches only around evaluate(): parseable non-object JSON
+  #      (`"hello"`, `[1,2]`, `42`, `null`) exits with empty stdout and a traceback.
   #
   # Coverage of the P5/P6 front-end TOKEN SETS is asserted mechanically against the
   # engine's own definitions by hooks/tests/test_fail_closed_drift.py — adding a token
@@ -1002,7 +1009,7 @@ fi
 #      listed verb through its environment.
 # The verb alternation itself is ARTIFACT_WRITE_VERB_RE, defined ONCE near the
 # top of this file and shared with Layer 1.E4 -- add verbs there, anchored, not
-# here. Full record: docs/reference/bash-safety-verb-anchoring-20261008.md
+# here.
 # Stable label: commit-dispatch-attestation-write.
 if echo "$COMMAND" | grep -qE "${COMMIT_DISPATCH_ATTEST_RE}" \
    && { echo "$COMMAND" | grep -qE ">>?[&|]?[[:space:]]*['\"]?${COMMIT_DISPATCH_ATTEST_RE}" \
@@ -1082,7 +1089,7 @@ fi
 # textually IDENTICAL to Layer 1.E3's modulo the namespace variable, and
 # hooks/tests/test_commit_artifact_rw_boundary.py fails if the two diverge.
 # See Layer 1.E3's comment for the four branches, the relaxation they bind, and
-# the residual; and docs/reference/bash-safety-verb-anchoring-20261008.md.
+# the residual.
 # Stable label: commit-grant-raw-write.
 if echo "$COMMAND" | grep -qE "${COMMIT_GRANT_RE}" \
    && { echo "$COMMAND" | grep -qE ">>?[&|]?[[:space:]]*['\"]?${COMMIT_GRANT_RE}" \
@@ -1154,19 +1161,24 @@ fi
 # Run ONCE here; reused by all danger-git blocks below.
 # Uses COMMAND_CONTEXT_STRIPPED (normalized) NOT raw $COMMAND to avoid
 # false positives from quoted git references in echo/printf/heredoc bodies.
-# Prefilter: skip subprocess if no 'git' token in normalized command.
+# A git inside a shell -c string (`bash -c "git push --force"`) is just as
+# invisible to the bare regexes: the classifier resolves those strings from the
+# raw command (after a NUL, CMD_RAW=stdin), marks their invocations "nested", and every rule's
+# classifier branch below reads a nested invocation as it reads a path-qualified
+# one. Prefilter: skip the subprocess if neither view holds a 'git' token (the
+# stripped view blanks some -c strings, e.g. `bash -c -- "..."`).
 CLASSIFIER_HAS_PATH_QUALIFIED_GIT=0
 CLASSIFIER_STATUS='unavailable'
 CLASSIFIER_JSON=''
 CLASSIFIER_PY="$(dirname "${BASH_SOURCE[0]}")/lib/git_command_classifier.py"
-if ! printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git'; then
-  # The normalized execution view contains no candidate token.  This is a
+if ! printf '%s\n%s\n' "$COMMAND_CONTEXT_STRIPPED" "$COMMAND" | grep -q 'git'; then
+  # Neither view contains a candidate token.  This is a
   # conclusive empty classification, not classifier unavailability.
   CLASSIFIER_STATUS='ok'
   CLASSIFIER_JSON='[]'
 elif [ -r "$CLASSIFIER_PY" ]; then
-  CLASSIFIER_JSON=$(printf '%s\n' "$COMMAND_CONTEXT_STRIPPED" | \
-    "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
+  CLASSIFIER_JSON=$(printf '%s\n\0%s' "$COMMAND_CONTEXT_STRIPPED" "$COMMAND" | \
+    CMD_RAW=stdin "$PYTHON_BIN" "$CLASSIFIER_PY" 2>/dev/null)
   _classifier_status=$?
   if [ "$_classifier_status" -eq 0 ] && \
      printf '%s\n' "$CLASSIFIER_JSON" | "$PYTHON_BIN" -c '
@@ -1177,13 +1189,13 @@ if not isinstance(value, list):
 for item in value:
     if not isinstance(item, dict):
         raise SystemExit(1)
-    if set(item) != {"subcommand", "args", "path_qualified"}:
+    if set(item) != {"subcommand", "args", "path_qualified", "nested"}:
         raise SystemExit(1)
     if item["subcommand"] is not None and not isinstance(item["subcommand"], str):
         raise SystemExit(1)
     if not isinstance(item["args"], list) or not all(isinstance(arg, str) for arg in item["args"]):
         raise SystemExit(1)
-    if not isinstance(item["path_qualified"], bool):
+    if not isinstance(item["path_qualified"], bool) or not isinstance(item["nested"], bool):
         raise SystemExit(1)
 ' 2>/dev/null; then
     CLASSIFIER_STATUS='ok'
@@ -1193,14 +1205,14 @@ for item in value:
   unset _classifier_status
 fi
 if [ "$CLASSIFIER_STATUS" = "ok" ] && \
-   printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true'; then
+   printf '%s\n' "$CLASSIFIER_JSON" | grep -qE '"(path_qualified|nested)": true'; then
   CLASSIFIER_HAS_PATH_QUALIFIED_GIT=1
 fi
-# Helper: check whether the classifier found a path-qualified invocation with
-# the given subcommand token.  Usage: _pq_git_has_subcmd reset
+# Helper: check whether the classifier found a path-qualified or nested invocation
+# with the given subcommand token.  Usage: _pq_git_has_subcmd reset
 _pq_git_has_subcmd() {
   local sub="$1"
-  printf '%s\n' "$CLASSIFIER_JSON" | grep -q '"path_qualified": true' && \
+  printf '%s\n' "$CLASSIFIER_JSON" | grep -qE '"(path_qualified|nested)": true' && \
   printf '%s\n' "$CLASSIFIER_JSON" | grep -q "\"subcommand\": \"$sub\""
 }
 # Helper: check whether ANY classifier invocation (bare or path-qualified)
@@ -1798,7 +1810,7 @@ _EB_DECISION=''
 if [ -r "$_EB_PY" ]; then
   _EB_OUT=$(
     ulimit -v "${CLAUDE_HOOK_BOUNDARY_MEM_KB:-524288}" 2>/dev/null || true
-    CMD_INPUT="$COMMAND" timeout "${CLAUDE_HOOK_BOUNDARY_TIMEOUT:-5s}" \
+    printf '%s' "$INPUT" | CMD_INPUT="$COMMAND" CMD_PAYLOAD=stdin timeout "${CLAUDE_HOOK_BOUNDARY_TIMEOUT:-5s}" \
       "$PYTHON_BIN" "$_EB_PY" 2>/dev/null
   )
   if [ $? -eq 0 ]; then
@@ -1827,7 +1839,7 @@ case "$_EB_DECISION" in
   "DENY "*)
     echo "BLOCKED: removal-policy — ${_EB_DECISION#DENY }" >&2
     echo "Command: $COMMAND" >&2
-    echo "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. git rm --cached, docker container rm); this command has a boundary that is neither." >&2
+    echo "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no submodule); this command has a boundary that is none of these." >&2
     exit 2 ;;
   *)
     # DEGRADED MODE. The analyzer is missing, crashed, timed out, or hit the
@@ -1923,7 +1935,7 @@ if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd stash; t
 import json,sys
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='stash':
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='stash':
     args=inv.get('args',[])
     bad={'push','save','create','store','-u','--include-untracked','-a','--all'}
     if not args or (args and (args[0] in bad or (args[0].startswith('-') and not args[0].startswith('--') and any(c in args[0][1:] for c in 'ua')))):
@@ -1951,7 +1963,7 @@ if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd stash; t
 import json,sys
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='stash' and not inv.get('args'):
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='stash' and not inv.get('args'):
     print('bare'); break
 " 2>/dev/null)
   [ "$_stash_bare" = "bare" ] && _PQ_STASH_BARE=1
@@ -1974,7 +1986,7 @@ if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd checkout
 import json,sys,re
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='checkout':
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='checkout':
     args=inv.get('args',[])
     try:
       dd=args.index('--')
@@ -2010,7 +2022,7 @@ if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd restore;
 import json,sys
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='restore':
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='restore':
     args=inv.get('args',[])
     has_source=any(a in ('--source','-s') or a.startswith('--source=') or a.startswith('-s=') for a in args)
     if has_source:
@@ -2096,7 +2108,7 @@ import json,sys
 invs=json.load(sys.stdin)
 bad={'--force','-f','--force-with-lease','--delete','-d','--mirror'}
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='push':
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='push':
     for tok in inv.get('args',[]):
       if tok in bad or tok.startswith('--force-with-lease=') or tok.startswith('+') or tok.startswith(':'):
         print('match'); sys.exit(0)
@@ -2118,7 +2130,7 @@ import json,sys,re
 invs=json.load(sys.stdin)
 bad_branch_flags={'--delete','--force','--move'}
 for inv in invs:
-  if not inv.get('path_qualified'):
+  if not (inv.get('path_qualified') or inv.get('nested')):
     continue
   sub=inv.get('subcommand','')
   args=inv.get('args',[])
@@ -2599,7 +2611,7 @@ import json,sys
 invs=json.load(sys.stdin)
 blocked={'revert','cherry-pick','rebase'}
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand') in blocked:
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand') in blocked:
     print('match'); break
 " 2>/dev/null | grep -q match && _PQ_SUBAGENT_HISTORY=1
   fi
@@ -2631,7 +2643,7 @@ if [ "$CLASSIFIER_HAS_PATH_QUALIFIED_GIT" = "1" ] && _pq_git_has_subcmd revert; 
 import json,sys,re
 invs=json.load(sys.stdin)
 for inv in invs:
-  if inv.get('path_qualified') and inv.get('subcommand')=='revert':
+  if (inv.get('path_qualified') or inv.get('nested')) and inv.get('subcommand')=='revert':
     args=inv.get('args',[])
     # Find the ref arg (first non-flag arg)
     for a in args:

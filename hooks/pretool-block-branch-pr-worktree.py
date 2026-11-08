@@ -43,9 +43,11 @@ split so an inner creation command is classified on its own.
 Inherent limitations (a command-text guardrail CANNOT block these; they are
 intentionally out-of-scope — this is an AGENT SPEED-BUMP, not an adversarial
 sandbox, mitigated by the /do consent and /allow grant escape hatches):
-  - a creation command hidden in a quoted string passed to an interpreter, e.g.
-    `eval "git checkout -b x"`, `sh -c "..."`, `bash -c "..."`: the quoted string
-    is context-stripped before tokenizing, so the inner command is never seen.
+  - a creation command hidden in a quoted string passed to `eval`
+    (`eval "git checkout -b x"`): the quoted string is context-stripped before
+    tokenizing, so the inner command is never seen. A shell's `-c` string
+    (`sh -c "..."`, `bash -c "..."`) is not hidden: it is classified like the
+    command itself (lib.git_command_classifier.iter_shell_texts).
   - user-defined git aliases (`git co` → checkout, etc.): the alias name is
     opaque to a static token classifier.
   - a creation command read from a file or from stdin rather than the argv.
@@ -55,7 +57,7 @@ sandbox, mitigated by the /do consent and /allow grant escape hatches):
   - a quoted-subcommand / backslash-escape evasion (`git 'checkout' -b x`,
     `\\git checkout -b x`): the quoted/escaped token is removed by _norm's
     context-strip before tokenizing, so the inner command is never seen — same
-    class as the eval/sh -c interpreter-string limit above.
+    class as the eval interpreter-string limit above.
   - a wrapper that consumes its OWN value args before the command (e.g.
     `nice -n 5 git checkout -b x`): _command_token_index skips wrappers but not
     their value args, so the command token resolves to `5` and the segment is
@@ -98,7 +100,7 @@ from lib.allowlist import (  # noqa: E402
 from lib.overnight import is_overnight_active  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
     _segments, _basename, _WRAPPERS, _ENV_ASSIGN_RE,
-    _command_token_index, _GIT_GLOBAL_VALUE, _git_subcommand,
+    _command_token_index, _GIT_GLOBAL_VALUE, _git_subcommand, iter_shell_texts,
 )
 
 
@@ -557,11 +559,11 @@ def _classify_segment(seg):
 
 
 def _detect(command):
-    c = _norm(command)
-    for seg in _segments(c):
-        kind = _classify_segment(seg)
-        if kind:
-            return kind
+    for text in iter_shell_texts(command):  # the command, then each shell -c string it runs
+        for seg in _segments(_norm(text)):
+            kind = _classify_segment(seg)
+            if kind:
+                return kind
     return None
 
 

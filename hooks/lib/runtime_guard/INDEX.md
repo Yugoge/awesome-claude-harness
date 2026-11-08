@@ -8,7 +8,6 @@
 ## Tree
 ```
 runtime_guard/
-├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
 ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
 ├── `anchor.py` - The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan
 ├── `config.py` - Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch

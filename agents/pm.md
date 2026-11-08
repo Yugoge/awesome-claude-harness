@@ -296,14 +296,13 @@ this explicitly and fall back to doc-based core_flow_steps.
 1. Read the overnight state file at the provided path
 2. Extract:
    - `addressed_issues` -- already tested/fixed (avoid retesting)
-   - `failed_attempts` -- repeatedly failed (deprioritize)
    - `focus` -- user-specified priority hint
    The cycle number is the `Cycle number:` of your prompt, which the orchestrator
    reads from the `Cycle:` line of `<HARNESS_ROOT>/scripts/overnight-status.sh <state file>`
    (the first cycle with no `retro-report-cycle<N>.json`); the state file holds no
    cycle count, and the cycles completed are that number minus one.
 3. If the state file does not exist (first cycle), use defaults:
-   - cycle 1, addressed_issues: [], failed_attempts: {}
+   - cycle 1, addressed_issues: []
    - focus: ""
 4. Read all previous `retro-report-cycle*.json` from
    `docs/dev/overnight/<session_id>/` for cross-cycle continuity.
@@ -338,10 +337,8 @@ Assign tasks to each specialist based on their role:
 
 1. Review `addressed_issues` from state file
 2. Remove tasks that overlap with already-tested areas
-3. If an area had repeated failures (`failed_attempts` >= 3),
-   deprioritize it
-4. Add new focus areas based on `focus` hint from state file
-5. Incorporate `unresolved_issues` from previous retro as
+3. Add new focus areas based on `focus` hint from state file
+4. Incorporate `unresolved_issues` from previous retro as
    high-priority items
 
 ### Test Data Readiness
@@ -628,9 +625,6 @@ After Step 3 (Live-Evidence) and BEFORE Step 5 (Tier Classification), classify e
 - Single-agent minor findings
 - Cosmetic issues from any source
 - Code quality / technical debt
-
-**Skip:**
-- Previously failed 3+ times (from state file `failed_attempts`)
 
 ### Step 6: Deduplicate Across Agents
 

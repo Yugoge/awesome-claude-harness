@@ -16,7 +16,6 @@
 - `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
 - `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
 - `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
-- `test_baseline_snapshot_preflight.py` - agents/dev.md:535 declares that the orchestrator captures baseline_dirty_snapshot
 - `test_bash_execution_boundary.py` - These cover the properties the 436-case matrix cannot express on its own:
 - `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 - `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
@@ -77,7 +76,7 @@
 - `test_overnight_state_file_write_guard.py` - overnight-state write-protection (ticket 20261001-161041-r10, AC4/AC5/AC6)
 - `test_overnight_trace_evidence.py` - (P1b E3). Which report is inspected and which of its fields are required is
 - `test_overnight_trace_yield.py` - (P1b row 18)
-- `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
+- `test_overwrite_guard.py` - The overwrite guard was never registered and was deleted with its route
 - `test_pol_generative_sweeps.py` - AC-R02-10 .. AC-R02-16 (revision 2). Every deny-side population here is
 - `test_posttool_checkpoint_refusal.py` - Drives hooks/posttool-git-checkpoint.sh as settings.json registers it (PostToolUse on
 - `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
@@ -87,7 +86,6 @@
 - `test_push_no_upstream_guard.sh` - Regression test for hooks/push.sh R22 (line ~375): HAS_UPSTREAM must be
 - `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 - `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
-- `test_regen_index_dirs_script.py` - Backlog #85: the script printed `regenerated: <INDEX>` for every directory, including the ones
 - `test_report_projection_contract.py` - Focused contract tests for deterministic Dev/QA v1 report projections.
 - `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
 - `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.

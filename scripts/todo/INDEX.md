@@ -9,23 +9,14 @@
 todo/
 ├── `clean.py` - Preloaded TodoList for /clean workflow
 ├── `close.py` - Three user-visible TodoSteps (flat-integer per agents/style-inspector.md
-├── `code-review.py` - Python script
 ├── `deep-search.py` - Python script
 ├── `dev-command.py` - This todo script generates workflow steps for the BA-delegated dev-command workflow
 ├── `dev-overnight.py` - Preloaded TodoList for /dev-overnight workflow
 ├── `dev.py` - Preloaded TodoList for /dev workflow
-├── `do.py` - Injects the 4-step /do workflow checklist via hook-todo-injection
-├── `doc-gen.py` - Python script
-├── `explain-code.py` - Python script
-├── `file-analyze.py` - Preloaded TodoList for /file-analyze workflow
-├── `optimize.py` - Python script
-├── `playwright-helper.py` - Python script
-├── `quick-prototype.py` - Preloaded TodoList for /quick-prototype workflow
+├── `do.py` - Injects the 5-step /do workflow checklist via hooks/prompt-workflow.py
 ├── `redev.py` - Preloaded TodoList for /redev workflow. Delegates to dev.py (single source of truth).
-├── `refactor.py` - Python script
 ├── `reflect-search.py` - Preloaded TodoList for /reflect-search workflow
 ├── `research-deep.py` - Python script
-├── `security-check.py` - Python script
 ├── `site-navigate.py` - Python script
 ├── `spec.py` - Mirrors the ask.py structure in the knowledge-system scripts/todo directory
 └── `test.py` - Preloaded TodoList for /test workflow

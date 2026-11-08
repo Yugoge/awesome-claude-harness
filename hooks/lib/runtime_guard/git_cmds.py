@@ -2,10 +2,8 @@
 """git destructive-subcommand argument parsing for the guard.
 
 Depends on shell_lex (`_strip_quotes`) + pathmatch (`_expand_leading_home`) +
-stdlib; references nothing from _core. See docs/reference/monolith-split-plan.md
-for the decomposition rationale (incl. why `_git_inspection_head` and the
-forward-referencing orchestrator `_git_destructive_pathspec_hits` stay in _core)
-and the INV-3 dual-context import contract.
+stdlib; references nothing from _core. `_git_inspection_head` and the
+forward-referencing orchestrator `_git_destructive_pathspec_hits` stay in _core.
 
 Scope: the pure argv PARSERS for a git invocation -- global-option-aware
 subcommand location and `-C` chdir folding (`_git_subcommand_index`,
@@ -22,8 +20,8 @@ import os
 from typing import Optional
 
 # git argv parsers key on the phase-1 quote stripper and the phase-3 leading-home
-# expander (for `git -C ~/dir`). Dual-context import (INV-3) --
-# see docs/reference/monolith-split-plan.md.
+# expander (for `git -C ~/dir`). Dual-context import (INV-3; the contract
+# is stated at _core's first re-import block).
 try:
     from .shell_lex import _strip_quotes
     from .pathmatch import _expand_leading_home

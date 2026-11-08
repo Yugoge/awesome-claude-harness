@@ -108,5 +108,4 @@ evidence rather than lowering the bar.
 Hand-editing the ledger would satisfy bullet 1's own failure trigger — a human patching the
 artifact — while also putting a hand-authored claim into a record meant to be machine-produced.
 The lane was stopped and reported instead. Related: `docs/reference/merge-pipeline-blocked-steps-20261007.md`
-(two earlier structural gaps on the merge path) and
-`docs/reference/bash-safety-verb-anchoring-20261008.md` (the verb-anchoring defect class).
+(two earlier structural gaps on the merge path).

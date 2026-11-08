@@ -28,7 +28,6 @@ hooks/
 │   └── `reference-transaction` - reference-transaction file
 ├── lib/
 │   ├── runtime_guard/
-│   │   ├── `__main__.py` - Package entry-point so `python -m lib.runtime_guard` still works.
 │   │   ├── `_core.py` - This module contains ZERO project identifiers. Every project-specific name
 │   │   ├── `anchor.py` - The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan
 │   │   ├── `config.py` - Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
@@ -84,7 +83,6 @@ hooks/
 ├── tests/
 │   ├── fixtures/
 │   │   ├── `adversarial_corpus.json` - json config
-│   │   ├── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
 │   │   ├── `pol_benign_strictness_exceptions.json` - JSON config: schema, criterion, task_id, iteration, _doc
 │   │   ├── `pol_installed_program_allow_set.json` - JSON config: allowing, allowing_count, criterion, probe_shape, program_set_size
 │   │   ├── `pol_iteration5_qa_matrix.v1.json` - JSON config: schema, schema_descriptor, provenance_key, digests, counts
@@ -98,7 +96,6 @@ hooks/
 │   ├── `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
 │   ├── `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
 │   ├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
-│   ├── `test_baseline_snapshot_preflight.py` - agents/dev.md:535 declares that the orchestrator captures baseline_dirty_snapshot
 │   ├── `test_bash_execution_boundary.py` - These cover the properties the 436-case matrix cannot express on its own:
 │   ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 │   ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
@@ -159,7 +156,7 @@ hooks/
 │   ├── `test_overnight_state_file_write_guard.py` - overnight-state write-protection (ticket 20261001-161041-r10, AC4/AC5/AC6)
 │   ├── `test_overnight_trace_evidence.py` - (P1b E3). Which report is inspected and which of its fields are required is
 │   ├── `test_overnight_trace_yield.py` - (P1b row 18)
-│   ├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
+│   ├── `test_overwrite_guard.py` - The overwrite guard was never registered and was deleted with its route
 │   ├── `test_pol_generative_sweeps.py` - AC-R02-10 .. AC-R02-16 (revision 2). Every deny-side population here is
 │   ├── `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
 │   ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
@@ -168,8 +165,7 @@ hooks/
 │   ├── `test_push_no_upstream_guard.sh` - Regression test for hooks/push.sh R22 (line ~375): HAS_UPSTREAM must be
 │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
-│   ├── `test_regen_index_dirs_script.py` - Backlog #85: the script printed `regenerated: <INDEX>` for every directory, including the ones
-│   ├── `test_report_projection_contract.py` - Focused contract tests for deterministic Dev/QA v1 report projections.
+│   ├── `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 │   ├── `test_residual_false_positives.py` - Context (task 20260903-residual-fp). `classify_git_command()` returns a
 │   ├── `test_runcode_watchdog_aliases.py` - Direct lifecycle parity tests for both browser run-code provider names.
 │   ├── `test_runtime_guard.py` - Two layers:
@@ -204,15 +200,12 @@ hooks/
 ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 ├── `git-fswatch@.service` - service file
-├── `hook-todo-injection.py` - Global PreToolUse Hook: Todo Injection for Slash Commands
 ├── `install-auto-sync.sh` - LEGACY / DO NOT USE — describes an obsolete auto-sync model.
 ├── `install-git-hooks.sh` - LEGACY / DO NOT USE — describes an obsolete git-tracking model.
 ├── `install-protection-all.sh` - LEGACY / DO NOT USE — describes an obsolete auto-push protection model.
 ├── `install.sh` - LEGACY / DO NOT USE — describes an obsolete auto-commit model.
 ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 ├── `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
-├── `post-commit-warn.sh` - post-commit-warn.sh - Warn about untracked files after commit
-├── `post_tool_use.sh` - PostToolUse Hook - Code quality hints after file modifications
 ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 ├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
 ├── `posttool-close-rating.py` - main agent's (no agent_id) one close-rating question (metadata.source close-rating:<task-id>) ans...
@@ -220,7 +213,7 @@ hooks/
 ├── `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 ├── `posttool-doc-sync.py` - PostToolUse Hook: keep the marked INDEX.md, README.md and CLAUDE.md sections in sync
 ├── `posttool-git-checkpoint.sh` - posttool-git-checkpoint.sh - PostToolUse checkpoint trigger
-├── `posttool-git-warn.sh` - post-commit-warn.sh - Warn about untracked files after commit
+├── `posttool-git-warn.sh` - posttool-git-warn.sh - Warn about untracked files after commit
 ├── `posttool-lane-completeness-watch.py` - producer of a fan-out's canonical aggregate dev-report (P1b E5). Every write
 ├── `posttool-overnight-file-check.py` - PostToolUse:Agent Hook — Contract-driven overnight file check (G3)
 ├── `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
@@ -233,11 +226,8 @@ hooks/
 ├── `posttool-todo-sequence.py` - PostToolUse hook (TodoWrite step sequence), retired to a no-op.
 ├── `posttool-todo-tracker.py` - PostToolUse Hook: Output checklist progress after every TodoWrite call
 ├── `pre-commit-check.sh` - pre-commit-check.sh - Detect untracked files before commit
-├── `pre_slashcommand_validate.sh` - pre_slashcommand_validate.sh
-├── `pre_tool_use_safety.sh` - PreToolUse Safety Hook - Warn before dangerous operations
 ├── `pretool-aggregate-check.py` - existence before allowing the orchestrator to dispatch the QA subagent in
 ├── `pretool-attribution-pre.py` - Phase 0 of the write-time attribution journal (see hooks/lib/attribution_journal.py)
-├── `pretool-baseline-snapshot-preflight.py` - pretool-baseline-snapshot-preflight.py — PreToolUse hook (matcher: Agent)
 ├── `pretool-bash-safety.sh` - PreToolUse Safety Hook - Warn or block before dangerous operations
 ├── `pretool-bash-views-guard.py` - Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass
 ├── `pretool-bisect-gate.sh` - pretool-bisect-gate.sh
@@ -260,7 +250,6 @@ hooks/
 ├── `pretool-orchestrator-gate.py` - PreToolUse Hook: Orchestrator Gate (Unified)
 ├── `pretool-orchestrator-prompt-purity.py` - PreToolUse hook: Orchestrator Prompt Purity
 ├── `pretool-overnight-hook-guard.py` - PreToolUse Hook: Overnight session file modification guard
-├── `pretool-overwrite-guard.py` - REGISTRATION: matcher ``Bash`` ONLY. This hook registers against no other tool
 ├── `pretool-push-analyst-grant-guard.py` - PreToolUse (matcher Bash): exit-0 stub kept at its registered path (D15).
 ├── `pretool-quality-gate.py` - PreToolUse Hook: Quality gate for Write/Edit operations
 ├── `pretool-read-size-guard.py` - PreToolUse Hook: Read Size Guard
@@ -274,13 +263,11 @@ hooks/
 ├── `pretool-worktree-guard.sh` - PreToolUse hook: Detect stale agent worktrees before ANY tool call
 ├── `pretool-wrapper-userintent.py` - fix-4 (Cycle-2, spec-20260604-204954 §7.4). The /stop slash command releases
 ├── `pretool-write-guard.sh` - PreToolUse Hook - Block Write tool from overwriting existing files
-├── `project-settings-template.json` - JSON config: $schema, comment, comment_usage, hooks, permissions
 ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
 ├── `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 ├── `pull.sh` - pull.sh - Executable version of /pull command
 ├── `push.sh` - push.sh - Executable version of /push command
 ├── `QUICKSTART.md` - Quick Start — the hooks layer
-├── `README-TODO-INJECTION.md` - Global Todo Injection Hook
 ├── `sentinel-lint.sh` - sentinel-lint.sh - Guards the dev-registry sentinel anchor in orchestrator files
 ├── `session-git-init.sh` - Ensure Git Repository Hook for Claude Code
 ├── `session-gitignore-propagate.sh` - SessionStart hook: append missing standard harness gitignore rules to project repo
@@ -288,7 +275,6 @@ hooks/
 ├── `session-promote-hook.sh` - Description: SessionStart hook that promotes a cold session back to ramdisk.
 ├── `session-scratch-init.sh` - session-scratch-init.sh — SessionStart hook (Scratch Lifecycle Contract
 ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
-├── `session_start.sh` - SessionStart Hook - Display working environment info
 ├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.

@@ -307,9 +307,8 @@ Test environment: Ubuntu 24.04, 10,000 files, fswatch 1.14.0
 
 ## Related Documentation
 
-- Smart checkpoints doc: `~/.claude/docs/auto-sync-analysis.md`
-- Lock file handling: `~/.claude/docs/lock-file-handling.md`
-- Git command reference: `~/.claude/commands/README.md`
+- Lock file handling: `docs/reference/lock-file-handling.md`
+- Git commands: `commands/` (one file per command)
 - fswatch official docs: https://emcrisostomo.github.io/fswatch/
 
 ---

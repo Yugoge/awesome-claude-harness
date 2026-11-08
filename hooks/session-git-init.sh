@@ -91,7 +91,7 @@ fi
 # Remote repository step (environment variables):
 #   CLAUDE_AUTO_CREATE_REPO  unset or "ask": print the manual command and skip;
 #                            {1,true,TRUE,yes,YES} (the gate set above): create it;
-#                            anything else: skip.
+#                            {0,false,FALSE,no,NO}: skip; anything else: skip, saying so.
 #   GIT_AUTO_PUSH            push the initial commit only when exactly "1";
 #                            otherwise create without pushing (push later with /push).
 AUTO_CREATE=${CLAUDE_AUTO_CREATE_REPO:-ask}
@@ -110,8 +110,11 @@ case "$AUTO_CREATE" in
     echo -e "${YELLOW}   Skipping for now. Run manually: $MANUAL_CMD${NC}"
     [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
     exit 0 ;;
-  *)
+  0|false|FALSE|no|NO)
     echo -e "${YELLOW}⚠️  Auto-create disabled. Skipping GitHub repository creation.${NC}"
+    exit 0 ;;
+  *)
+    echo -e "${YELLOW}⚠️  CLAUDE_AUTO_CREATE_REPO value not recognised (true/1/yes create, false skips). Skipping GitHub repository creation.${NC}"
     exit 0 ;;
 esac
 
@@ -126,6 +129,7 @@ if gh repo create "$REPO_NAME" "${CREATE_ARGS[@]}" > /dev/null 2>&1; then
 else
   echo -e "${RED}❌ Failed to create GitHub repository.${NC}"
   echo -e "${YELLOW}   You can create it manually: $MANUAL_CMD${NC}"
+  [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
   exit 1
 fi
 

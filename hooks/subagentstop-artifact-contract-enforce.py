@@ -204,9 +204,7 @@ def _load_lib_module(name: str):
 
 
 def _wire_ledger_judgment(report: dict, project_dir: str, task_id: str, deadline: float) -> list:
-    """Attribution-journal consumer cutover (docs/reference/attribution-
-    journal-cutover-flip-plan-20261003.md, superseded by the zero-blocking
-    constraint of the follow-up consumer-cutover task): replaces this hook's
+    """Attribution-journal consumer cutover: replaces this hook's
     two self-reported-ledger replay checks -- check-owned-edits-ledger.py's
     structural+replay validation and stage-owned-hunks.py --dry-run's hunk-
     replay exclusion. check-owned-edits-ledger.py has since been deleted;
@@ -303,9 +301,8 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> l
     shard = isinstance(lane_set, list) and len(lane_set) > 1
     for art in json_artifacts:
         # Only the v2 report carries the nested dev section, owned_edits
-        # ledger and pre_edit_snapshots the downstream consumers read; the
-        # flat v1 shape is unplannable by /commit itself and is shape-gated
-        # only (schema + identity + terminal state).
+        # ledger and pre_edit_snapshots the downstream consumers read; any
+        # other json artifact is shape-gated only (schema + identity).
         if not str(art.get("schema", "")).startswith("dev-report.v2"):
             continue
         report_rel = art["path"]

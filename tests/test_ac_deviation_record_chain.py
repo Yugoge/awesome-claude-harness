@@ -4,11 +4,10 @@ A dev report that records an acceptance-criteria deviation is reported
 ``blocked`` with a non-empty ``blocking_issues`` list.  The resolver no longer
 reads the record: such a report fails with exactly the two codes every other
 blocked report gets (``INVALID_DEV_STATUS``, ``UNRESOLVED_BLOCKERS``), exit 2,
-whatever the record holds, and the route selector passes that chain through
-verbatim.  Ordinary chains are unchanged.
+whatever the record holds.  Ordinary chains are unchanged.
 
 Self-contained: every fixture is built under pytest's ``tmp_path``.  The
-resolver and the route selector are loaded from the directory named by the
+resolver is loaded from the directory named by the
 environment variable ``AC_DEVIATION_SCRIPTS_DIR`` (default: the repository
 ``scripts/`` directory), so the same tests can be aimed at a mutated copy.
 """
@@ -215,10 +214,6 @@ def cli(root):
     return run_script("resolve-dev-artifact-chain.py", root)
 
 
-def select(root, *extra):
-    return run_script("close-route-select.py", root, *extra)
-
-
 def codes(result):
     return sorted(e["code"] for e in result["errors"])
 
@@ -237,14 +232,9 @@ def gap(result):
 
 
 def assert_passes_through(root, want_rc):
-    """The CLI exits with the chain's verdict and the selector passes the very
-    same chain through with the same exit status."""
+    """The CLI exits with the chain's verdict."""
     rc_cli, out_cli = cli(root)
-    rc, out = select(root)
-    assert rc_cli == rc == want_rc
-    assert out["outcome"] == "not_selected"
-    assert sorted(out) == ["artifact_chain", "outcome"]
-    assert json.dumps(out["artifact_chain"], sort_keys=True) == json.dumps(out_cli, sort_keys=True)
+    assert rc_cli == want_rc
     return out_cli
 
 
@@ -371,11 +361,6 @@ def test_a_recorded_report_plus_a_stage_gap_is_not_late_repair_eligible(tmp_path
     assert result["status"] == "fail"
     assert errs(result) == sorted([(code, PATHS[gone])] + [(c, PATHS["dev"]) for c in DEV_CODES])
     assert gap(result) == ([PATHS[gone]], [PATHS["dev"]], False, "beyond_qa")
-    rc, out = select(root, "--late-repair")
-    assert rc == 2 and out.get("outcome") == "not_selected"
-    assert out["late_repair"]["outcome"] == "refuse"
-    assert json.dumps(out["artifact_chain"], sort_keys=True) == json.dumps(cli(root)[1], sort_keys=True)
-    assert not (root / "docs" / "dev" / ("late-repair-run-%s.json" % TASK)).exists()
 
 
 @pytest.mark.parametrize("skip", ["completion", "ticket"])
@@ -383,15 +368,6 @@ def test_control_an_ordinary_stage_gap_is_late_repair_eligible(tmp_path, skip):
     root = singular(tmp_path, completed_dev(), skip=(skip,))
     result = resolve(root)
     assert gap(result) == ([PATHS[skip]], [], True, "beyond_qa")
-    rc, out = select(root, "--late-repair")
-    assert rc == 0 and out.get("outcome") == "initialized"
-    assert (root / "docs" / "dev" / ("late-repair-run-%s.json" % TASK)).exists()
-
-
-def test_late_repair_combined_with_force_is_still_a_usage_refusal(tmp_path):
-    rc, out = select(singular(tmp_path), "--late-repair", "--force")
-    assert rc == 1
-    assert out.get("outcome") == "refuse"
 
 
 # ==========================================================================

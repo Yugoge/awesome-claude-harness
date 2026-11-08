@@ -69,8 +69,8 @@ Before executing any action:
 | Action | Operation | Tools |
 |--------|-----------|-------|
 | **move** | `mkdir -p` dest dir, move file | Bash (mv) |
-| **archive** | Same as move, destination in `docs/archive/YYYY-MM/` | Bash (mv) |
-| **delete** | Remove file (ONLY if approved) | Bash (rm) |
+| **archive** | Discard, as **delete** does: git history is the archive | Bash (git rm) |
+| **delete** | Discard a tracked path: `git rev-parse HEAD`, `git rm -q -- <path>` (`-r` for a directory), print `DISCARDED <path> - recover: git checkout <sha> -- <path>` | Bash (git rm) |
 | **rename** | Rename file | Bash (mv) |
 | **fix_style** | Replace old_line with new_line | Edit tool |
 | **update_gitignore** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/update-gitignore.sh" "$PROJECT_ROOT"` | Bash |
@@ -78,7 +78,9 @@ Before executing any action:
 | **merge_test_folders** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/migrate-test-to-tests.sh" "$PROJECT_ROOT"` | Bash |
 | **cleanup_tests** | Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/cleanup-tests-folder.sh" "$PROJECT_ROOT"` | Bash |
 
-After each operation, stage changes: `git add <affected files>`
+After each operation, stage changes: `git add <affected files>` (a discard is staged by its `git rm`).
+
+**Discards (archive, delete).** `<sha>` is HEAD at the removal. bash-safety passes a non-forced `git rm` of literal paths outside the harness home (`${CLAUDE_HOME:-$HOME/.claude}`) unless a path is a submodule; it refuses `rm`, `unlink`, every forced or wrapped git rm and every git rm that removes a file in the harness home. git refuses a file that differs from HEAD or the index: record it in `actions_failed` with git's message (the file stays). Skip, with no removal call, an untracked path (reason `untracked`: no recoverable removal exists) and a path in the harness home (reason `harness home`: the harness repository drops it by a git rm in a clone, landed by /pull). Print each DISCARDED line in your final message and in its action's `discarded` field.
 
 ### 3. Execution Order
 
@@ -127,7 +129,8 @@ If the commit fails (nothing staged, or git error), do NOT write the token.
   "cleaner": {
     "status": "completed|partial|blocked",
     "actions_completed": [
-      { "action_id": "id", "action": "move", "source": "path", "destination": "path", "result": "success", "git_staged": true }
+      { "action_id": "id", "action": "move", "source": "path", "destination": "path", "result": "success", "git_staged": true },
+      { "action_id": "id", "action": "delete", "file": "path", "result": "success", "discarded": "DISCARDED path - recover: git checkout <sha> -- path" }
     ],
     "actions_failed": [
       { "action_id": "id", "action": "delete", "file": "path", "result": "failed", "error": "reason" }
@@ -165,7 +168,7 @@ If the commit fails (nothing staged, or git error), do NOT write the token.
 - **Never delete without explicit `approved: true`**
 - **Verify files exist** before operations
 - If critical error occurs, stop execution, set status to "blocked", return partial results
-- Rollback instruction for user: `git reset --hard <checkpoint_commit>`
+- Recovery: a DISCARDED line's command restores its file
 
 ---
 

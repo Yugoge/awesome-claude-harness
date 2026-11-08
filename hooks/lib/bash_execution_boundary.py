@@ -7,7 +7,8 @@ boundary in a command ends in exactly one of:
     PROVEN_INERT         nothing executes here, or what executes is a named
                          program that is not a filesystem-removal front end
     PROVEN_SAFE_REMOVAL  a removal that is provably NOT a filesystem removal
-                         (git rm --cached, docker container/image/compose rm)
+                         (git rm --cached, docker container/image/compose rm),
+                         or a recoverable non-forced git rm (prove_git_rm)
     FORBIDDEN_REMOVAL    a filesystem removal front end executes
     UNRESOLVED           the analyzer could not PROVE which of the above holds
 
@@ -39,7 +40,7 @@ structural UNRESOLVED.  The census is never imported into the semantic
 decision; it is only compared against it.
 
 ZERO EXECUTION: nothing in this module executes, expands, evals, or otherwise
-runs the text it analyzes.  Command text is data.
+runs the text it analyzes.  Command text is data (prove_git_rm runs git itself).
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1450,6 +1452,17 @@ GIT_RM = _spec(
     ("-n", "--dry-run", "-r", "--cached", "-f", "--force", "-q", "--quiet",
      "--ignore-unmatch", "--sparse", "--pathspec-file-nul"),
     ("--pathspec-from-file",))
+# A non-forced `git rm` is recoverable: git refuses a file that differs from HEAD or the index, and a
+# removed clean file comes back with `git checkout <sha>^ -- <path>`. It is allowed only when the walk
+# can hand prove_git_rm the repository it runs in: written at the top level as its command's own head
+# (no wrapper, nested shell or assignment), only these git options before `rm`, literal pathspecs, and
+# no shell state a later command inherits other than `cd`/`pushd` to a literal absolute directory.
+_GIT_RM_LOCATION_OPTS = ("-C", "--git-dir", "--work-tree")
+_GIT_RM_PATHSPEC_OPTS = ("--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
+                         "--icase-pathspecs")
+_SHELL_STATE_BUILTINS = {"export", "declare", "typeset", "local", "readonly", "unset", "source",
+                         ".", "enable", "read", "readarray", "mapfile", "getopts", "trap", "for",
+                         "select"}
 
 # Non-removal git subcommands: known names, so the head is RESOLVED even though
 # this policy has nothing to say about them.
@@ -2065,6 +2078,10 @@ class Analyzer:
         self.removal_evidence = bool(_REMOVAL_EVIDENCE_RE.search(raw))
         self.depth = 0
         self.overflow = False
+        # A non-forced git rm's run-time obligations (git options, pathspecs), the
+        # directories a `cd` may leave a later one in, and why they cannot be known.
+        self.git_rm, self.git_rm_cwds, self.git_rm_unresolved = [], [], ""
+        self._head, self.direct = None, False
 
     def note_removal_position(self, shape, text):
         """Record EVERY parse-derived position a removal NAME was placed in.
@@ -2649,6 +2666,8 @@ class Analyzer:
                 # command records nothing — there is no boundary to attach to
                 # and the note would drain into an unrelated later one.
                 self.note_removal_word(SHAPE_ASSIGNMENT_PREFIX, w)
+        if k:  # a variable (GIT_DIR, HOME, PATH, ...) a later git may run with
+            self.git_rm_unresolved = self.git_rm_unresolved or "variable assignment"
         for w in words[:k]:
             self.cover(w)
         rest = words[k:]
@@ -2706,6 +2725,7 @@ class Analyzer:
                 words = words[1:]
                 continue
             if lit in self.HEADER:
+                self._shell_state(lit, words[1:])  # `for`/`select` assign their variable
                 return  # loop/case header: its words are patterns, not commands
             if lit == "coproc":
                 words = words[1:]
@@ -2716,7 +2736,27 @@ class Analyzer:
             break
         if not words:
             return
+        self._head = words[0]  # a simple command's own head, not one a wrapper runs
         self.eval_argv(words, redirs, env, piped)
+
+    def _shell_state(self, base, args):
+        """Record what a later command inherits from shell builtin `base` (see _GIT_RM_LOCATION_OPTS)."""
+        lits = [a.literal() for a in args]
+        if base in ("cd", "pushd"):  # popd only returns to a directory already listed
+            ops = [x for x in lits if x is None or x == "-" or not x.startswith("-")]
+            if len(ops) == 1 and ops[0] and ops[0].startswith("/"):
+                self.git_rm_cwds.append(ops[0])
+                return
+        elif base == "set":  # allexport, keyword and posix let an assignment reach git
+            if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in (
+                    "-", "+") and x != "--" and ("a" in x or "k" in x) for x in lits):
+                return
+        elif base == "printf":
+            if None not in lits and not any(x.startswith("-v") for x in lits):
+                return
+        elif base not in _SHELL_STATE_BUILTINS:
+            return
+        self.git_rm_unresolved = self.git_rm_unresolved or base
 
     # -- the boundary verdict ------------------------------------------------
 
@@ -2739,6 +2779,9 @@ class Analyzer:
         if name in env.hashed:
             name = env.hashed[name]
         base = basename(name)
+        self.direct, self._head = head is self._head and self.depth == 1, None
+        if base in ("cd", "pushd", "set", "printf") or base in _SHELL_STATE_BUILTINS:
+            self._shell_state(base, args)
 
         if base in REMOVAL_EXES:
             self.cover(head)  # accounted for: it IS the removal we denied
@@ -3740,6 +3783,7 @@ class Analyzer:
         return Src(body, [-1] * len(body))
 
     def _h_git(self, name, args, redirs, env, piped):
+        direct = self.direct
         aliases = {}
         alias_words = {}
         i = 0
@@ -3798,7 +3842,7 @@ class Analyzer:
         rest = args[i + 1:]
         if sub == "rm":
             mark = len(self.boundaries)
-            self._git_rm(rest)
+            self._git_rm(rest, args[:i], direct)
             if any(b["verdict"] in _TERMINAL_SAFE
                    for b in self.boundaries[mark:]):
                 self.cover(args[i])  # this `rm` was resolved as an index-only op
@@ -3828,8 +3872,9 @@ class Analyzer:
         # environment, whose body is not in the command text.
         self.scoped("git_unresolved_subcommand", "git " + sub)
 
-    def _git_rm(self, rest):
-        cached = False
+    def _git_rm(self, rest, git_opts=(), direct=False):
+        cached = unproven = False
+        paths = []
         i = 0
         n = len(rest)
         while i < n:
@@ -3838,8 +3883,10 @@ class Analyzer:
                 self.scoped("dynamic_git_rm_argument", rest[i].raw.text[:60])
                 return
             if lit == "--":
+                paths += [w.literal() for w in rest[i + 1:]]
                 break  # everything after is a pathspec, never an option
             if not lit.startswith("-") or lit == "-":
+                paths.append(lit)
                 i += 1
                 continue
             if lit.startswith("--"):
@@ -3849,6 +3896,8 @@ class Analyzer:
                     return
                 if res == "--cached":
                     cached = True
+                # forced, or pathspecs git reads from a file: nothing to prove at run time
+                unproven = unproven or res in ("--force", "--pathspec-from-file")
                 if res in GIT_RM["val"] and "=" not in lit:
                     i += 2
                     continue
@@ -3858,13 +3907,24 @@ class Analyzer:
                 if "-" + ch not in GIT_RM["bool"]:
                     self.scoped("unknown_option:-" + ch, "git rm")
                     return
+            unproven = unproven or "f" in lit
             i += 1
+        loc = [w.literal() for w in git_opts]  # kept only if they just locate the repository
+        if None in loc or not all(x in _GIT_RM_LOCATION_OPTS + _GIT_RM_PATHSPEC_OPTS or "=" in x and x.split(
+                "=", 1)[0] in _GIT_RM_LOCATION_OPTS[1:] or loc[j - 1:j] and loc[j - 1] in _GIT_RM_LOCATION_OPTS
+                for j, x in enumerate(loc)):
+            loc = None
         if cached:
             # --cached removes from the index only; the working tree is untouched.
             self.note_removal_position(SHAPE_SUBCOMMAND_RESOURCE, self.raw)
             self.add(PROVEN_SAFE_REMOVAL, "git_rm_cached_index_only", "git rm --cached")
-        else:
+        elif unproven or not direct or loc is None or any(x is None or "~" in x for x in loc + paths):
             self.add(FORBIDDEN_REMOVAL, "git_rm_worktree", "git rm")
+        else:
+            # Recoverable; prove_git_rm checks the repository at run time.
+            self.note_removal_position(SHAPE_SUBCOMMAND_RESOURCE, self.raw)
+            self.git_rm.append({"git": loc, "paths": paths})
+            self.add(PROVEN_SAFE_REMOVAL, "git_rm_recoverable", "git rm")
 
     # -- docker --------------------------------------------------------------
 
@@ -4027,6 +4087,10 @@ def analyze(raw):
                                  for o in undischarged[:5]))
     if az.overflow:
         az.add_terminal(UNRESOLVED, "boundary_limit_exceeded", str(MAX_BOUNDARIES))
+    for b in az.boundaries if az.git_rm_unresolved else ():  # git rm's directory unknown
+        if b["reason"] == "git_rm_recoverable":
+            b.update(verdict=FORBIDDEN_REMOVAL, reason="git_rm_worktree",
+                     detail="git rm after " + az.git_rm_unresolved)
 
     # OVERFLOW DENIES ITSELF: THE EXHAUSTION PATH IS DECIDED BY THE FLAG,
     # NOT BY A RECORDER.
@@ -4105,6 +4169,46 @@ def analyze(raw):
                 shapes.append(shape)
     result["removal_positional_shapes"] = shapes or [SHAPE_UNCLASSIFIED]
     result["removal_positional_shape"] = result["removal_positional_shapes"][0]
+    if result["allowed"] and az.git_rm:
+        result["git_rm_proof"] = {"cwds": az.git_rm_cwds, "removals": az.git_rm}
+    return result
+
+
+def prove_git_rm(result, cwd, home):
+    """The run-time half of a non-forced git rm's proof. From each directory the command can run
+    it in, git must resolve the repository and the pathspecs must match no gitlink (git removes a
+    clean submodule's work tree with its ignored files, which no history holds); the repository
+    must not be the harness home, whose running sessions run its current files (a registered hook
+    also runs files no registration names, so no set derived from settings.json covers it). Git
+    runs on the command's location options and pathspecs only, never on the command text."""
+    proof = result.get("git_rm_proof")
+    if not proof:
+        return result
+    home = {os.path.realpath(home), os.path.realpath(os.path.join(home, ".git"))}
+    run = dict(capture_output=True, text=True, timeout=2, env=dict(os.environ, LC_ALL="C"))
+    # `cd` resolves `..` lexically (-L) or after symlinks (-P): both directories are checked
+    for d in dict.fromkeys([cwd] + proof["cwds"] + [os.path.normpath(x) for x in proof["cwds"]]):
+        for rm in proof["removals"] if os.path.isdir(d) else ():
+            git = ["git", "-c", "core.fsmonitor=false"] + rm["git"]
+            try:
+                where = subprocess.run(git + ["rev-parse", "--path-format=absolute", "--show-toplevel",
+                                              "--git-common-dir"], cwd=d, **run)
+                ls = subprocess.run(git + ["ls-files", "-s", "-z", "--full-name", "--"] + rm["paths"],
+                                    cwd=d, **run)
+            except (OSError, subprocess.SubprocessError):
+                where = ls = None
+            if where and where.returncode and "not a git repository" in where.stderr:
+                continue  # no repository here: git rm removes nothing
+            if where is None or where.returncode or ls.returncode:
+                why = "git_rm_location_unresolved"
+            elif home & {os.path.realpath(os.path.join(d, x)) for x in where.stdout.splitlines()}:
+                why = "git_rm_in_harness_home"
+            elif any(e.startswith("160000 ") for e in ls.stdout.split("\0")):
+                why = "git_rm_gitlink"
+            else:
+                continue
+            result.update(verdict=FORBIDDEN_REMOVAL, allowed=False, reason=why + ":" + d[:120])
+            return result
     return result
 
 
@@ -4113,7 +4217,9 @@ def main():
     if raw is None:
         raw = sys.stdin.read()
     try:
-        out = analyze(raw)
+        payload = json.loads(sys.stdin.read() or "{}") if os.environ.get("CMD_PAYLOAD") == "stdin" else {}
+        out = prove_git_rm(analyze(raw), payload.get("cwd") or os.getcwd(),
+                           os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     except Exception as exc:  # analyzer failure is a DENY, never an allow
         out = {
             "schema": SCHEMA,

@@ -121,7 +121,7 @@ def _run_check(data: dict) -> int:
         # Hard cutover: no contract for this cycle yet — silent passthrough. One that
         # holds no JSON object is Case M at dispatch (pretool-subagent-enforce.py).
         return 0
-    entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt))
+    entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt, agent_type))
     if entry is None:
         return 0
     # G2's one rule: a fresh producer question stands in for every declared artifact when valid.

@@ -16,12 +16,12 @@
     "lines": 1555,
     "measured_at": "2026-09-18",
     "materializer": "agents/changelog-analyst.md Phase 5, anchor '2. Snapshot materialization (REQUIRED'",
-    "binding": "ACTIVE, not decorative. tests/test_owned_edits_ledger_contract.py::test_consumer_digest_binding_is_active recomputes this digest from the delivered file and FAILS when it differs, so a consumer change cannot silently invalidate the rules derived from it. scripts/check-owned-edits-ledger.py additionally imports the consumer's own _count_occurrences/_locate_unique and asserts their empty-needle semantics at every startup, so a behavioural change is caught even within one digest.",
+    "binding": "Not bound: nothing recomputes this digest or compares it with the delivered file, so it records the consumer as it was at measured_at.",
     "on_failure": "Do not re-pin the digest reflexively. Re-read the consumer's replay primitives and _load_untracked_modified_contract, confirm every rule below still describes them, and only then record the new digest."
   },
 
   "x-unexpressible-in-schema": {
-    "note": "These consumer requirements CANNOT be expressed in pure JSON Schema. They are enforced by scripts/check-owned-edits-ledger.py instead. A validator that runs this schema ALONE is incomplete; run the checker.",
+    "note": "These consumer requirements CANNOT be expressed in pure JSON Schema. Each rule's consumer_source names where it is enforced; a validator that runs this schema ALONE is incomplete.",
     "rules": [
       {
         "id": "REPLAY-UNIQUE",

@@ -9,13 +9,10 @@ Organization and usage documentation for `scripts/`.
 - **Naming convention**: kebab
 
 ## Files
-- `adjudicate-attribution-staging.py` - CLI: journal-based three-way staging adjudicator (read-only unless --capture-dispatch-baselines-into or --escalation-store is given; see scripts/lib/attribution_adjudicator.py).
 - `aggregate-dev-report.py` - Scans docs/dev/ for per-worker shard dev-reports matching a given task-id,
 - `aggregate-permissions.py` - Usage: aggregate-permissions.py <qa-glob-or-dir> [pipelines.json]
-- `analyze-folder-history.sh` - Description: Analyze Git history for folder to discover file creation patterns
 - `analyze-git-edge-cases.sh` - Description: Analyze git history for edge cases from bug fix commits
 - `apply-permissions.sh` - apply-permissions.sh — merge aggregated permissions JSON list into settings.json
-- `attribution-aggregate-view.py` - CLI: journal-backed canonical aggregate view (read-only unless --escalation-store is given; see scripts/lib/attribution_aggregate_view.py).
 - `blast-radius-tool.py` - Two phases:
 - `bootstrap` - bootstrap file
 - `break-overnight-lock.py` - Backdates end_time on every active overnight-state-*.json so
@@ -31,12 +28,9 @@ Organization and usage documentation for `scripts/`.
 - `check-overnight-reports.sh` - STUB: each specialist's dispatch obligation declares its report and schema, and G2
 - `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 - `check-readme-freshness.sh` - Check README.md freshness for all major folders
-- `check-security-hook-drift.sh` - Description: Audit always-on security-critical hook files against a cycle baseline SHA
 - `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
-- `close-route-select.py` - Without ``--late-repair`` this is a pass-through: it resolves the artifact
-- `close-scoring-decide.py` - Description: Decide which close_success_* event /close should issue based on
 - `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
 - `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 - `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
@@ -51,7 +45,6 @@ Organization and usage documentation for `scripts/`.
 - `discover-folders.sh` - Description: Dynamically discover project folders excluding system directories
 - `doctor` - doctor file
 - `execute-push.py` - Eliminates the timing window that exists when validate + push are && -chained
-- `gen-test-baseline.py` - Usage:
 - `generate-folder-index.sh` - Description: Generate INDEX.md for folder (inventory of contents)
 - `generate-folder-readme.sh` - Description: Generate README.md for folder (purpose and organization rules)
 - `generate-hero-status.py` - Description: One source of truth emits THREE marker-delimited canonical regions -- the
@@ -83,7 +76,6 @@ Organization and usage documentation for `scripts/`.
 - `qa-manifest-guard.py` - Dual-mode tool per BA spec docs/dev/ticket-20260529-081014.md M4:
 - `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
 - `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
-- `regen-index-dirs.py` - hand-written prose outside the generated stats+tree block), then regenerate the
 - `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 - `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 - `resolve-commit-repos.py` - The normal ``/commit`` workflow uses this helper before it writes any commit
@@ -105,12 +97,10 @@ Organization and usage documentation for `scripts/`.
 - `test` - test file
 - `update-gitignore.sh` - update-gitignore.sh - Auto-update .gitignore with project-specific rules
 - `verify-attribution-chain.py` - Folds each file's events across ALL session journals into a hash chain and
-- `verify-claims-extended.sh` - Description: Extended headline-claims gate. Binds the slash-command count and the
 - `verify-claims.sh` - Description: Self-verifying headline-claims gate. Runs ALL THREE hero-provenance audits in
 - `verify-hero-provenance.py` - Description: Re-runs the demo, normalizes both outputs and byte-diffs them; verifies raw
 - `verify-release-manifest.sh` - Description: Verify a PUBLISHED release artifact end-to-end, WITHOUT rebuilding it.
 - `write-bulk-commit-sentinel.py` - Invoked from commands/commit.md Step 5 (BULK=true) to authorize the
-- `write-codex-enforce.sh` - Writes codex-enforce.json into the dev-registry for the given session.
 - `write-commit-grant.py` - Invoked from `commands/commit.md` Step 5 (non-bulk mode) to author a
 - `write-e2e-enforce.sh` - STUB: the E2E gate (hooks/subagentstop-e2e-enforce.py) has no flag; it judges
 - `write-enforce-flag.sh` - Write one or more enforcement-flag sentinels into a dev-registry session dir.

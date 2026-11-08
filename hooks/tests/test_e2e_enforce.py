@@ -554,5 +554,21 @@ def test_p4_a12_force_sentinel_changes_nothing(tmp_path, monkeypatch):
     assert proc.returncode == 2 and "E2E_ENFORCE_BLOCKED" in proc.stderr, proc.stderr
 
 
+def test_write_e2e_enforce_is_an_exit_0_stub_that_writes_nothing(tmp_path):
+    """scripts/write-e2e-enforce.sh (P1c): the gate has no flag, so the call earlier /dev, /dev-command
+    and /dev-overnight text makes (`write-e2e-enforce.sh <session-id>`) exits 0 and writes no
+    e2e-enforce.json; with no argument too."""
+    stub = Path(__file__).resolve().parents[2] / "scripts" / "write-e2e-enforce.sh"
+    assert sum(line.startswith("# STUB:") for line in stub.read_text().splitlines()) == 1
+    assert stub.stat().st_mode & 0o100, "the earlier text executes it by path"
+    project = tmp_path / "project"
+    project.mkdir()
+    env = {"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(project), "HOME": str(tmp_path)}
+    for args in (["dev-20260101-000000"], []):
+        done = subprocess.run([str(stub), *args], capture_output=True, text=True, env=env)
+        assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+    assert list(project.rglob("*")) == []
+
+
 if __name__ == "__main__":
     sys.exit(subprocess.run([sys.executable, "-m", "pytest", __file__, "-v"]).returncode)

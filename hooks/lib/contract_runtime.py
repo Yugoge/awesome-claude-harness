@@ -14,7 +14,7 @@ Public surface:
     post_triage_steps(steps) -> [(label, subagent_call)]   # what the contract renders
     triage_call(steps) -> dict                # the PM TRIAGE step's subagent_call
     call_entry(label, subagent_call) -> dict  # a required_calls entry for one step
-    detect_mode(prompt) -> str
+    detect_mode(prompt, role) -> str
     type_strict_json_equal(left, right) -> bool
     validate(record, schema_name) -> Result
     validate_required_call(contract, role, pipeline_id, mode, step) -> Result
@@ -222,13 +222,13 @@ def call_entry(label: str, subagent_call: dict) -> dict:
     }
 
 
-def detect_mode(prompt: str) -> str:
-    """The mode keyword a dispatch prompt carries ('' when none). A PM prompt
-    without one is compared as it is: whether a step's mode binds is decided by
-    the text the session loaded (exploration_calls), not by a default here."""
+def detect_mode(prompt: str, role: str = '') -> str:
+    """The mode keyword a dispatch prompt carries; a PM prompt carrying none is PLAN, as agents/pm.md
+    reads it ("If `PM_MODE:` is missing, default to `PLAN`."); else ''."""
     if not isinstance(prompt, str):
         return ''
-    return next((keyword for keyword in _MODE_KEYWORDS if keyword in prompt), '')
+    found = next((keyword for keyword in _MODE_KEYWORDS if keyword in prompt), '')
+    return found or (PLAN_MODE if str(role or '').strip().lower() == 'pm' else '')
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ def _projection_prefix(schema_name: str) -> str:
 
 
 def _check_projection_header(record: dict, schema_name: str) -> list[str]:
-    """Check the two source-free fields shared by both v1 report contracts."""
+    """Check the two source-free fields of the qa-report.v1 projection."""
     errors: list[str] = []
     prefix = _projection_prefix(schema_name)
     version = record.get('report_version', _MISSING)
@@ -309,9 +309,6 @@ def _check_projected_field(
     flat_field: str,
     source_path: tuple[str, ...],
     source_type: type,
-    *,
-    source_must_be_non_empty: bool = False,
-    projected_value=_MISSING,
 ) -> list[str]:
     """Validate one flat alias against its canonical nested source."""
     prefix = _projection_prefix(schema_name)
@@ -322,75 +319,22 @@ def _check_projected_field(
             f"{prefix}: canonical source '{source_name}' missing for flat field "
             f"'{flat_field}'"
         ]
-    if type(source) is not source_type or (source_must_be_non_empty and not source):
-        qualifier = 'non-empty ' if source_must_be_non_empty else ''
+    if type(source) is not source_type:
         return [
             f"{prefix}: canonical source '{source_name}' must be an exact "
-            f"{qualifier}JSON {_json_type_name(source_type)} for flat field "
-            f"'{flat_field}'"
+            f"JSON {_json_type_name(source_type)} for flat field '{flat_field}'"
         ]
     if flat_field not in record:
         return [
             f"{prefix}: flat field '{flat_field}' missing for canonical source "
             f"'{source_name}'"
         ]
-    expected = source if projected_value is _MISSING else projected_value
-    actual = record[flat_field]
-    if not type_strict_json_equal(actual, expected):
+    if not type_strict_json_equal(record[flat_field], source):
         return [
             f"{prefix}: flat field '{flat_field}' must type-strictly equal "
             f"canonical source '{source_name}'"
         ]
     return []
-
-
-def _check_dev_report_projection(record: dict) -> list[str]:
-    """Validate the deterministic dev-report.v1 compatibility projection."""
-    schema_name = 'dev-report.v1'
-    errors = _check_projection_header(record, schema_name)
-
-    source_status = _nested_value(record, ('dev', 'status'))
-    status_map = {'completed': 'completed'}
-    if source_status is _MISSING:
-        errors.append(
-            f"{_projection_prefix(schema_name)}: canonical source 'dev.status' "
-            "missing for flat field 'status'"
-        )
-    elif type(source_status) is not str or source_status not in status_map:
-        errors.append(
-            f"{_projection_prefix(schema_name)}: canonical source 'dev.status' "
-            f"has unsupported value {source_status!r} for flat field 'status'"
-        )
-    else:
-        errors.extend(_check_projected_field(
-            record,
-            schema_name,
-            'status',
-            ('dev', 'status'),
-            str,
-            projected_value=status_map[source_status],
-        ))
-
-    for flat_field, source_path, source_type, non_empty in (
-        ('files_modified', ('dev', 'files_modified'), list, False),
-        ('files_created', ('dev', 'files_created'), list, False),
-        (
-            'root_cause_addressed',
-            ('dev', 'git_rationale', 'how_fix_addresses_root'),
-            str,
-            True,
-        ),
-        ('ac_status', ('dev', 'ac_status'), dict, False),
-    ):
-        errors.extend(_check_projected_field(
-            record,
-            schema_name,
-            flat_field,
-            source_path,
-            source_type,
-            source_must_be_non_empty=non_empty,
-        ))
-    return errors
 
 
 def _check_qa_report_projection(record: dict, schema: dict) -> list[str]:
@@ -453,11 +397,9 @@ def _check_qa_report_projection(record: dict, schema: dict) -> list[str]:
 
 
 def _check_report_projection(record: dict, schema_name: str, schema: dict) -> list[str]:
-    """Dispatch the v1 report projection pre-pass in a stable field order."""
+    """The qa-report.v1 projection pre-pass; every other schema has none."""
     if not isinstance(record, dict):
         return [f'{_projection_prefix(schema_name)}: report must be a JSON object']
-    if schema_name == 'dev-report.v1':
-        return _check_dev_report_projection(record)
     if schema_name == 'qa-report.v1':
         return _check_qa_report_projection(record, schema)
     return []
@@ -768,13 +710,12 @@ def validate_required_call(
 # overnight path uses (Draft7Validator), without touching the overnight
 # machinery.
 #
-# It is deliberately VERSION-GATED. The v1 report schemas make ``report_version``
-# a required const (dev-report.v1 / qa-report.v1 both require report_version==1),
-# so an artifact that does NOT declare report_version is, by the schema's own
-# contract, not claiming to be a v1 report. Validating such a record against v1
-# would be a category error that mass-rejects every current nested (``dev.*`` /
-# ``do.*``) report. The gate therefore validates ONLY records that opt in via
-# report_version, and is a no-op (skip, NEVER fail-closed) for:
+# It is deliberately VERSION-GATED. Every report schema makes ``report_version``
+# a required const, so an artifact that does NOT declare report_version is, by
+# the schema's own contract, not claiming to be a versioned report. Validating
+# such a record would be a category error that mass-rejects every current nested
+# (``dev.*`` / ``do.*``) report. The gate therefore validates ONLY records that
+# opt in via report_version, and is a no-op (skip, NEVER fail-closed) for:
 #   - a missing/optional artifact,
 #   - an artifact kind with no registered schema (e.g. do-report),
 #   - an unparseable artifact (upstream /close preflight already blocks on that),
@@ -785,25 +726,24 @@ def validate_required_call(
 # schema name. Version-gating still applies: an unversioned legacy record (no
 # report_version) skips, so pre-schema do-reports are never retro-rejected.
 _INTERACTIVE_REPORT_SCHEMAS = {
-    'dev-report': 'dev-report.v1',
+    'dev-report': 'dev-report.v2',
     'qa-report': 'qa-report.v1',
     'do-report': 'do-report.v1',
 }
 
-# Versioned overlay (zero-failure design §1.6, rollout S1): report kinds with a
-# registered v2 schema. Selection is by the record's DECLARED report_version:
+# Versioned overlay (zero-failure design §1.6, rollout S1): the kinds whose
+# report_version 2 has a schema of its own beside the one above. Selection is
+# by the record's DECLARED report_version:
 #   - 2 -> the kind's .v2 name (nested producer shape);
-#   - 1 -> the kind's .v1 name (today's path, byte-identical);
-#   - any OTHER declared version (e.g. 3), and every do-report version, falls
-#     through to the kind's v1 schema, whose report_version const then fails —
-#     preserving today's observed behavior for alien versions. Mapping unknown
-#     versions to SKIP was deliberately REJECTED (ticket 20260929-104216-a M5):
-#     it would silently turn today's fail into a pass-through and weaken the
-#     gate. Unversioned records never reach selection: the version gate in
-#     validate_report_artifact returns skip first, so the measured unversioned
-#     legacy corpus is never retro-rejected.
+#   - any OTHER declared version falls through to the kind's schema above,
+#     whose report_version const then fails, naming that schema: a dev report
+#     has one schema, dev-report.v2, so one declaring version 1 is told to be
+#     v2. Mapping unknown versions to SKIP was deliberately REJECTED (ticket
+#     20260929-104216-a M5): it would silently turn today's fail into a
+#     pass-through and weaken the gate. Unversioned records never reach
+#     selection: the version gate in validate_report_artifact returns skip
+#     first, so the measured unversioned legacy corpus is never retro-rejected.
 _INTERACTIVE_REPORT_SCHEMAS_V2 = {
-    'dev-report': 'dev-report.v2',
     'qa-report': 'qa-report.v2',
 }
 
@@ -1004,7 +944,7 @@ def validate_artifact_for_obligation(path, schema_id: str) -> dict:
         return _gate_result('pass', schema_id, [], 'valid against obligation-supplied schema')
     return _gate_result(
         'fail', schema_id, result.get('errors', []),
-        'schema-invalid under obligation-supplied schema',
+        f'schema-invalid under obligation-supplied schema {schema_id!r}',
     )
 
 

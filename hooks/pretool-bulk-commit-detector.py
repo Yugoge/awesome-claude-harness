@@ -33,6 +33,14 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from lib.git_command_classifier import iter_git_invocations
+except Exception:  # fail open: the regex below still runs
+    def iter_git_invocations(_command):
+        return iter(())
 
 
 SUBSYSTEM_PREFIXES = ['hooks/', 'commands/', 'scripts/', 'packages/', 'docs/']
@@ -60,8 +68,9 @@ def _warn(message: str) -> None:
 
 
 def _looks_like_git_commit(command: str) -> bool:
-    """True iff the command starts a `git commit` invocation."""
-    return bool(re.search(r'(?:^|[\s;&|()`])git\s+commit\b', command))
+    """True iff the command starts a `git commit` invocation (one in a shell -c string too)."""
+    return bool(re.search(r'(?:^|[\s;&|()`])git\s+commit\b', command)) or any(
+        inv.subcommand == 'commit' for inv in iter_git_invocations(command))
 
 
 def _extract_commit_message(command: str) -> str:

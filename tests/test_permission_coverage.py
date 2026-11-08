@@ -41,18 +41,22 @@ PROGRAMS = {"python3", "python", "bash", "sh"}
 SHELL_LANGS = {"", "bash", "sh", "shell", "text", "console"}
 
 # The old `~/.claude` spellings kept beside their successors for sessions that loaded command text
-# before the respelling (P2's permission-coverage experiment): each one covers a line origin/master's
-# texts run that no generic entry covers.
+# before the respelling: P10's Exp 6 under Claude Code 2.1.319's own Bash permission check, over
+# origin/master's command, agent and skill lines and DELETED_OLD_LINES (product and harness-home cwd):
+# each one allows a line that asks without it.
 RUNNING_SESSION_SPELLINGS = [
     "Bash(~/.claude/scripts/check-overnight-reports.sh:*)",
-    "Bash(~/.claude/scripts/detect-orphan-agents.sh:*)",
-    "Bash(~/.claude/scripts/detect-orphan-commands.sh:*)",
-    "Bash(~/.claude/scripts/detect-orphan-scripts.sh:*)",
     "Bash(~/.claude/scripts/orchestrator.sh clean-inspect:*)",
     "Bash(~/.claude/scripts/orchestrator.sh clean-merge-reports:*)",
-    "Bash(~/.claude/scripts/orchestrator.sh record-checkpoint:*)",
-    "Bash(~/.claude/scripts/orchestrator.sh rule-inspect:*)",
-    "Bash(~/.claude/scripts/scan-project.sh:*)",
+]
+
+# Old spellings P10's Exp 6 deleted: replayed through 2.1.319's Bash permission check, no line of
+# origin/master's texts starts asking without them, for one of two reasons. A line that runs its script
+# after `source ~/.claude/venv/bin/activate &&` asks at that part ("'source' evaluates arguments as
+# shell code"), with or without them; a line that passes a shell variable (`"$PROJECT_ROOT"`, any `$NAME`
+# but `$HOME`, any `${...}`) asks ("A variable in this command can't be checked before it runs"), with or
+# without them.
+EXP6_DELETED_SPELLINGS = [
     "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-enrich.py:*)",
     "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py:*)",
     "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-query.py:*)",
@@ -60,6 +64,12 @@ RUNNING_SESSION_SPELLINGS = [
     "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/clean.py:*)",
     "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/close.py:*)",
     "Bash(source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/todo/test.py:*)",
+    "Bash(~/.claude/scripts/detect-orphan-agents.sh:*)",
+    "Bash(~/.claude/scripts/detect-orphan-commands.sh:*)",
+    "Bash(~/.claude/scripts/detect-orphan-scripts.sh:*)",
+    "Bash(~/.claude/scripts/orchestrator.sh record-checkpoint:*)",
+    "Bash(~/.claude/scripts/orchestrator.sh rule-inspect:*)",
+    "Bash(~/.claude/scripts/scan-project.sh:*)",
 ]
 
 
@@ -311,13 +321,31 @@ def test_no_rewritten_command_loses_its_permission():
 
 def test_a_running_session_keeps_the_old_spellings_it_loaded():
     rules = bash_rules(_allow())
-    before = old_rules(rules)
+    before = [r for r in old_rules(rules) if "Bash(%s)" % r not in EXP6_DELETED_SPELLINGS]
     asks = []
     for where, line, simple in rewritten_commands():
         old = (old_spellings(line)[0], old_spellings(simple)[0])
         if covering(before, *old) and covering(rules, *old) is None:
             asks.append(f"{where}: {old[1]}")
     assert not asks, "\n".join(asks)
+
+
+def test_exp6_deleted_spellings_decided_no_line():
+    """Each old line an Exp 6 deleted spelling covers asks under 2.1.319 with or without it: it has a
+    part `source ~/.claude/venv/bin/activate`, which no entry covers, or a shell variable the CLI
+    cannot check before the command runs."""
+    allow = _allow()
+    activate = "source ~/.claude/venv/bin/activate"
+    assert covering(bash_rules(allow), activate) is None
+    seen = []
+    for entry in EXP6_DELETED_SPELLINGS:
+        assert entry not in allow
+        for where, line, _simple in rewritten_commands():
+            old = old_spellings(line)[0]
+            if rule_covers(entry[5:-1], old):
+                seen.append(where)
+                assert activate in simple_commands(old) or UNCHECKABLE.search(old), f"{where}: {old}"
+    assert seen
 
 
 # Old lines a running session can still hold whose text P1b's G2 arming deleted from today's

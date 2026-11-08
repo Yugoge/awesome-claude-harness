@@ -1,6 +1,6 @@
 ---
 name: harness-issues-backlog
-description: 待下次 spec 处理的 harness 问题清单（当前有 harness 修复在 worktree 跑，新问题只记录不并行修）
+description: harness 问题清单：/dev 会话里发现的新 harness 问题只记录于此、不在该会话修；harness 的 /spec 会话处理它们，条目的 spec 落库后删除
 metadata:
   node_type: memory
   type: project
@@ -22,9 +22,9 @@ metadata:
 >
 > 上方 frontmatter 与下方全部条目**逐字搬运**自记忆副本（搬运时源文件 sha256
 > `1c42dbb958e1bb4bfe6633a31e6cb0fb2aa1f95515ae498772ecd016fbdd0d5f`，21965 字节，52 行），
-> 未改写、未重排、未增删任何一条。frontmatter 一并原样保留，仅作来源存证。
+> 未改写、未重排、未增删任何一条。frontmatter 一并原样保留，仅作来源存证；其中 `description` 已于 2026-11-07 改写为下方现行规则。
 
-按用户规则（见 [[paseo-per-session-monitor-workflow]]），harness 修复串行进行；期间新发现的问题记在这里，等下一次 `/spec` 统一处理。
+**只记录规则**：在 harness 上跑的 `/dev` 会话（`/redev`、`/dev-command`、`/dev-overnight` 同属此类）遇到需求范围之外的新 harness 问题时，只在本文件末尾追加一条，不在该会话里修；条目由发现它的会话写入。BA 在 `/dev-overnight` 里提出的退役（retire）建议也作为条目记在这里（`agents/ba.md`「Who decides a retire verdict」）。本文件的消费者是 harness 的 `/spec` 会话：它从这里取条目写成 spec；某条目的 spec 落库后即删除该条目。查条目用 grep（按受影响的文件路径和 hook 名），不通读全文。
 
 > **标注记号约定（2026-09-25 起生效）**：`#143` 曾发生一次标错署名的事故——`✓` 紧跟在一条自述性质的陈述后面，写的人以为在说"这是自述、来源已交代清楚"，后来的读者读成"这条已经被独立核实为真"，两义相反且都能自圆其说，直到有人去查才发现是控制器测的、不是台席测的。往后统一三档记号，不再使用裸 `✓`：
 > - `✓` —— 本台席独立核实，内容确认为真（可附核实方法，如命令或文件坐标）

@@ -31,11 +31,17 @@ so they are importable by other hooks via lib.git_command_classifier.
 #   command-position command-substitution (`$(which git) push`) — is reported
 #   through classify_git_command()'s `residuals` channel so a caller can fail
 #   closed instead of mistaking an unparseable command for a git-free one.
+#
+# Shell `-c` strings (2026-11-07): `bash -c "git commit -m y"` runs git under
+#   the command token `bash`.  Each shell's `-c` string is resolved and
+#   classified as a command line of its own (see _shell_layers()); one the
+#   scan cannot resolve is the residual `unresolved_shell_string`.
 
 CLI usage:
   printf 'command text\\n' | python3 hooks/lib/git_command_classifier.py
   CMD_INPUT='command text' python3 hooks/lib/git_command_classifier.py
-  Output: JSON array of {"subcommand": str, "args": list, "path_qualified": bool}
+  Output: JSON array of {"subcommand": str, "args": list, "path_qualified": bool,
+  "nested": bool}; `nested` marks an invocation inside a shell `-c` string.
 
 Prefilter hint for callers:
   printf '%s\\n' "$COMMAND_CONTEXT_STRIPPED" | grep -q 'git' before spawning
@@ -46,9 +52,14 @@ Normalization contract:
   _segments().  Normalization is the CALLER's responsibility.
   pretool-bash-safety.sh MUST feed COMMAND_CONTEXT_STRIPPED (already
   normalized by bash_context_strip.py at lines 733-743), NOT raw $COMMAND.
+  That view no longer shows where a `-c` string ends, so with CMD_RAW=stdin
+  the caller writes the view, a NUL, then the raw command: the strings are
+  resolved from the raw command and each one is normalized the same way
+  before it is classified.
 """
 
 import collections
+import functools
 import json
 import os
 import re
@@ -439,8 +450,7 @@ def _resolves_to_non_git(tok, assigns):
 
     Known limitation: an assignment that is syntactically present but does not
     execute (`false && G=echo`) is treated as pinning.  Closing that requires
-    control-flow analysis; it is strictly narrower than the pre-existing hole
-    that a single-line `bash -c "git push"` raises nothing at all.
+    control-flow analysis.
     """
     refs = _VARREF_RE.findall(tok)
     if not refs:
@@ -515,7 +525,345 @@ def _is_obfuscation_candidate(tok):
     return _is_command_name_shaped(tok) and os.path.basename(_dequote_all(tok)) == 'git'
 
 
+# ---------------------------------------------------------------------------
+# Shell `-c` strings
+# ---------------------------------------------------------------------------
+# A shell's `-c` string is a command line the shell parses again, so the
+# segment walk above sees only the shell's name as the command token.  The scan
+# below reads the command text with the shell's own quoting rules, finds each
+# shell in command position and its `-c` string, and returns that string as a
+# command line of its own; iter_git_invocations() and _residual_shapes() then
+# treat it exactly as they treat a plain command.  A string the scan cannot
+# know is a residual, never "no git": one holding an expansion or substitution
+# the OUTER shell performs (outside single quotes; the inner shell parses its
+# run-time value as commands), one whose quoting the scan cannot follow, and
+# one nested deeper than _MAX_SHELL_DEPTH.
+
+_MAX_SHELL_DEPTH = 4
+# A shell is known by the SHAPE of its name (bash, sh, dash, zsh, ksh93, rbash,
+# ...), as pretool-bash-safety.sh's clean rule knows it: a name list is what let
+# unlisted shells through there.  No dot before `sh`: `deploy.sh` is a script.
+_SHELL_NAME_RE = re.compile(r'[^/\s.]*sh[0-9.]*\Z')
+_SHELL_HINT_RE = re.compile(r'sh[0-9.]*["\']?\s')
+# A shell word, its options, then an option cluster holding `c`: what makes a
+# text the scan cannot lex a residual rather than git-free.
+_SHELL_C_SHAPE_RE = re.compile(r'sh[0-9.]*["\']?\s+(?:[-+]\S*\s+(?:\w+\s+)?)*-[A-Za-z]*c')
+_REDIR_OP_RE = re.compile(r'&>>?|<<<|<<-|<<|>>|>&|<&|>\||<>|>|<')
+_RUNTIME = '\x00'  # stands for text the shell computes at run time
+
+
+def _skip_backtick(text, i):
+    """Index just past the backtick closing a substitution whose body starts at i."""
+    while i < len(text):
+        if text[i] == '\\':
+            i += 2
+        elif text[i] == '`':
+            return i + 1
+        else:
+            i += 1
+    raise ValueError('unterminated backtick')
+
+
+def _skip_dquote(text, i):
+    """Index just past the `"` closing a double-quoted string whose body starts at i."""
+    while i < len(text):
+        ch = text[i]
+        if ch == '\\':
+            i += 2
+        elif ch == '"':
+            return i + 1
+        elif ch == '`':
+            i = _skip_backtick(text, i + 1)
+        elif text.startswith(('$(', '${'), i):
+            i = _skip_group(text, i + 2, ')' if text[i + 1] == '(' else '}')
+        else:
+            i += 1
+    raise ValueError('unterminated double quote')
+
+
+def _skip_group(text, i, close):
+    """Index just past the `close` ending a $( ) or ${ } whose body starts at i."""
+    opener, depth = '(' if close == ')' else '{', 1
+    while i < len(text):
+        ch = text[i]
+        if ch == '\\':
+            i += 2
+            continue
+        if ch == "'":
+            j = text.find("'", i + 1)
+            if j < 0:
+                raise ValueError('unterminated single quote')
+            i = j + 1
+            continue
+        if ch == '"':
+            i = _skip_dquote(text, i + 1)
+            continue
+        if ch == '`':
+            i = _skip_backtick(text, i + 1)
+            continue
+        if ch == opener:
+            depth += 1
+        elif ch == close:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    raise ValueError('unterminated substitution')
+
+
+def _expansion(text, i, quoted=False):
+    """(end, body) of the expansion at text[i] (`$` or a backtick), or None for a plain `$`.
+
+    body is the text a substitution runs as commands (None for a parameter).
+    quoted: text[i] is inside double quotes, where `$'` and `$"` are a plain `$`.
+    """
+    if text[i] == '`':
+        end = _skip_backtick(text, i + 1)
+        return end, re.sub(r'\\([\\`$])', r'\1', text[i + 1:end - 1])
+    nxt = text[i + 1:i + 2]
+    if nxt in ('(', '{'):
+        end = _skip_group(text, i + 2, ')' if nxt == '(' else '}')
+        return end, text[i + 2:end - 1]
+    if quoted and nxt in ('"', "'"):
+        return None
+    if nxt == "'":  # $'...': its escapes are not modelled, so its value is unknown here
+        j = i + 2
+        while j < len(text) and text[j] != "'":
+            j += 2 if text[j] == '\\' else 1
+        if j >= len(text):
+            raise ValueError("unterminated $'")
+        return j + 1, None
+    if nxt == '"':  # $"...": a translated string
+        return _skip_dquote(text, i + 2), None
+    if nxt.isdigit() or (nxt and nxt in '@*#?-$!'):
+        return i + 2, None
+    if nxt.isalpha() or nxt == '_':
+        j = i + 2
+        while j < len(text) and (text[j].isalnum() or text[j] == '_'):
+            j += 1
+        return j, None
+    return None
+
+
+def _shell_words(text):
+    """Split shell text into simple commands of words, with the shell's quoting.
+
+    Returns (commands, bodies).  A command is a list of (value, runtime) words:
+    value is the word as the command receives it, quotes and escapes removed and
+    each expansion replaced by _RUNTIME; runtime is True when it holds one.
+    bodies are texts that run as commands of their own: the bodies of $( ),
+    backtick and <( ) >( ) substitutions, and of here-documents.  Raises
+    ValueError on quoting the scan cannot follow.
+    """
+    cmds, words, bodies, heredocs = [], [], [], []
+    st = {'buf': [], 'runtime': False, 'inword': False, 'pending': None}
+
+    def add(part, runtime=False):
+        st['buf'].append(part)
+        st['inword'] = True
+        st['runtime'] = st['runtime'] or runtime
+
+    def end_word():
+        if st['inword']:
+            value = ''.join(st['buf'])
+            if st['pending']:
+                heredocs.append((value, st['pending'] == '<<-'))
+                st['pending'] = None
+            elif value.lstrip('0123456789') in ('<<', '<<-'):
+                st['pending'] = value.lstrip('0123456789')
+            words.append((value, st['runtime']))
+        st.update(buf=[], runtime=False, inword=False)
+
+    def end_cmd():
+        end_word()
+        if words:
+            cmds.append(list(words))
+        del words[:]
+
+    def expand(i, quoted=False):
+        exp = _expansion(text, i, quoted)
+        if exp is None:
+            add('$')
+            return i + 1
+        end, body = exp
+        if body is not None:
+            bodies.append(body)
+        add(_RUNTIME, runtime=True)
+        return end
+
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '\\':
+            if text[i + 1:i + 2] != '\n':  # a backslash-newline joins the lines
+                add(text[i + 1:i + 2])
+            i += 2
+        elif ch == "'":
+            j = text.find("'", i + 1)
+            if j < 0:
+                raise ValueError('unterminated single quote')
+            add(text[i + 1:j])
+            i = j + 1
+        elif ch == '"':
+            add('')
+            i += 1
+            while text[i:i + 1] != '"':
+                if i >= n:
+                    raise ValueError('unterminated double quote')
+                if text[i] == '\\' and text[i + 1:i + 2] in ('$', '`', '"', '\\', '\n'):
+                    add(text[i + 1].replace('\n', ''))
+                    i += 2
+                elif text[i] in '$`':
+                    i = expand(i, quoted=True)
+                else:
+                    add(text[i])
+                    i += 1
+            i += 1
+        elif ch in '$`':
+            i = expand(i)
+        elif ch in ' \t':
+            end_word()
+            i += 1
+        elif ch == '#' and not st['inword']:
+            j = text.find('\n', i)
+            i = n if j < 0 else j
+        elif ch == '\n':
+            end_cmd()
+            i += 1
+            for delim, tabs in heredocs:  # the body follows the line that opened it
+                body = []
+                while i < n:
+                    j = text.find('\n', i)
+                    j = n if j < 0 else j
+                    line, i = text[i:j], j + 1
+                    if (line.lstrip('\t') if tabs else line) == delim:
+                        break
+                    body.append(line)
+                bodies.append('\n'.join(body))
+            del heredocs[:]
+        elif ch in '<>' and text[i + 1:i + 2] == '(':
+            end = _skip_group(text, i + 2, ')')
+            bodies.append(text[i + 2:end - 1])
+            add(_RUNTIME, runtime=True)
+            i = end
+        elif ch in '<>' or text.startswith('&>', i):
+            if st['inword'] and not ''.join(st['buf']).isdigit():
+                end_word()
+            m = _REDIR_OP_RE.match(text, i)
+            add(m.group())
+            i = m.end()
+            end_word()
+        elif ch in ';&|()':
+            end_cmd()
+            i += 1
+        else:
+            add(ch)
+            i += 1
+    end_cmd()
+    return cmds, bodies
+
+
+def _shell_c_operand(words, i):
+    """Index of the `-c` command string among a shell's arguments from words[i], or None."""
+    seen_c = maybe_c = False
+    while i < len(words):
+        value, runtime = words[i]
+        if runtime:
+            if seen_c:  # the -c string itself
+                break
+            maybe_c = True  # an unknown word may be any option, -c included
+            i += 1
+            continue
+        if value in ('--', '-'):
+            i += 1
+            break
+        if value.startswith('--'):
+            i += 2 if value in ('--rcfile', '--init-file') else 1
+        elif len(value) > 1 and value[0] in '-+':
+            seen_c = seen_c or 'c' in value[1:]
+            # -o / -O take an option name each
+            i += 1 + value[1:].count('o') + value[1:].count('O')
+        else:
+            break
+    return i if (seen_c or maybe_c) and i < len(words) else None
+
+
+def _shell_c_strings(text):
+    """Yield ('text', string) for each shell `-c` string in text, ('unresolved', text) for one it cannot know."""
+    if not _SHELL_HINT_RE.search(text):
+        return
+    try:
+        cmds, bodies = _shell_words(text)
+    except Exception:  # quoting the scan cannot follow, or nesting past the interpreter's own limit
+        if _SHELL_C_SHAPE_RE.search(text):
+            yield 'unresolved', text
+        return
+    for words in cmds:
+        values = [v for v, _runtime in words]
+        idx = _command_token_index(values)
+        if idx is None or words[idx][1] or not _SHELL_NAME_RE.match(_basename(values[idx])):
+            continue
+        op = _shell_c_operand(words, idx + 1)
+        if op is None:
+            continue
+        if words[op][1]:
+            yield 'unresolved', ' '.join(values).replace(_RUNTIME, '$...')
+        else:
+            yield 'text', words[op][0]
+    for body in bodies:
+        yield from _shell_c_strings(body)
+
+
+@functools.lru_cache(maxsize=32)
+def _shell_layers(command_text):
+    """(texts, unresolved) for command_text.
+
+    texts: command_text, then the text of every shell `-c` string it runs, in
+    the order they appear, resolved recursively up to _MAX_SHELL_DEPTH levels.
+    unresolved: the `-c` strings that could not be resolved, and those nested
+    past the limit.
+    """
+    texts, unresolved = [], []
+
+    def visit(text, depth):
+        texts.append(text)
+        for kind, value in _shell_c_strings(text):
+            if kind == 'unresolved' or depth >= _MAX_SHELL_DEPTH:
+                unresolved.append(value)
+            else:
+                visit(value, depth + 1)
+
+    try:
+        visit(command_text, 0)
+    except Exception:  # never let the scan cost the plain text its own checks
+        shaped = _SHELL_C_SHAPE_RE.search(command_text)
+        return (command_text,), ((command_text,) if shaped else ())
+    return tuple(texts), tuple(unresolved)
+
+
+def iter_shell_texts(command_text):
+    """Yield command_text, then the text of every shell `-c` string it runs."""
+    return iter(_shell_layers(command_text)[0])
+
+
 def _residual_shapes(command_text):
+    """Yield (kind, segment) for command tokens that MIGHT be git but did not parse.
+
+    Every shell `-c` string the text runs is examined like the text itself, and
+    one that cannot be resolved is the kind `unresolved_shell_string`.
+    """
+    texts, unresolved = _shell_layers(command_text)
+    for text in texts:
+        yield from _segment_residual_shapes(text)
+    for text in unresolved:
+        yield ('unresolved_shell_string', text)
+
+
+RESIDUAL_KINDS = frozenset({'obfuscated_git_token', 'dynamic_git_token',
+                            'substituted_git_token', 'unresolved_shell_string'})
+
+
+def _segment_residual_shapes(command_text):
     """Yield (kind, segment) for command tokens that MIGHT be git but did not parse.
 
     This is the answer to "an empty invocation list must not mean 'no git'".
@@ -593,7 +941,16 @@ def iter_git_invocations(command_text):
     (e.g. COMMAND_CONTEXT_STRIPPED from bash_context_strip.py) when the raw
     $COMMAND may contain multi-line quoted bodies that would produce false
     positives.
+
+    The text of every shell `-c` string command_text runs is walked the same
+    way, after command_text's own segments (see _shell_layers()).
     """
+    for text in iter_shell_texts(command_text):
+        yield from _segment_invocations(text)
+
+
+def _segment_invocations(command_text):
+    """iter_git_invocations() for command_text's own segments only."""
     for seg in _segments(command_text):
         toks = seg.split()
         if not toks:
@@ -650,12 +1007,25 @@ if __name__ == '__main__':
     if not cmd_text:
         cmd_text = sys.stdin.read()
 
+    if os.environ.get('CMD_RAW') == 'stdin':
+        # A normalized view, a NUL, then the raw command it was made from: the
+        # view no longer shows where a `-c` string ends (normalization contract).
+        cmd_text, _nul, raw = cmd_text.partition('\0')
+        try:
+            from bash_context_strip import strip_non_executable_contexts as _norm
+        except Exception:
+            _norm = str
+        layers = [cmd_text] + [_norm(text) for text in list(iter_shell_texts(raw))[1:]]
+    else:
+        layers = list(iter_shell_texts(cmd_text))
     results = []
-    for inv in iter_git_invocations(cmd_text):
-        results.append({
-            'subcommand': inv.subcommand,
-            'args': inv.args,
-            'path_qualified': inv.path_qualified,
-        })
+    for k, text in enumerate(layers):
+        for inv in _segment_invocations(text):
+            results.append({
+                'subcommand': inv.subcommand,
+                'args': inv.args,
+                'path_qualified': inv.path_qualified,
+                'nested': k > 0,
+            })
     print(json.dumps(results))
     sys.exit(0)

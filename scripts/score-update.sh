@@ -24,7 +24,7 @@
 #   orchestrator issued close_success_qa_fail_fixed scoring BEFORE QA finalized
 #   verdict. M3 adds a script-side precondition: close_success_* events require
 #   --note matching ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$ (no / \ . traversal). The
-#   events themselves are the ones scripts/close-scoring-decide.py returns from
+#   events themselves were the ones /close's old Step 3 helper returned from
 #   the close report's verdict (/close Step 3); the report and its verdict line
 #   are checked at close QA's own stop (G2), so this script reads neither (P1b E4).
 #
@@ -67,7 +67,6 @@ Reversal modes (M1/M2 — task 20260529-210616):
 
 close_success_* precondition (M3 — both qa_pass and qa_fail_fixed):
   --note REQUIRED matching ^[A-Za-z0-9][A-Za-z0-9_-]{2,80}\$ (no /, \\, ., ..).
-  The event is one scripts/close-scoring-decide.py returned (/close Step 3).
 
 Score has no lower bound (negative scores accumulate), upper bound 100.
 Rank is recomputed from final score:
