@@ -26,7 +26,7 @@ P5 = `repair/P5` fa66a1a（PR #14）；P6 = `repair/P6` 84f87a9；P9 = `repair/P
   - owner 打分之后，看到趋势、最差的 agent 和原因。
   - 分数低的生产者，在它自己停下时（G2）必须交出 self-review 一类的字段；dev 分数低时，QA 还要做对抗性检查。
   - /close 和 /commit 不加任何检查。
-- **(c) 新阶段 P13。** 排在 P12 之后、P11 之前，拆成 P13-1、P13-2、P13-3，每个约一天。P13-1 和 P13-2 可以并行（`phase-prompt.md`）。
+- **(c) 新阶段 P13。** 排在 P12 之后、P11 之前，拆成 P13-1、P13-2、P13-3，每个约一天，按顺序合并（`phase-prompt.md`）。
 - **在途工作必须先改的地方**（§6）：
   - PR #16（P9）在快照提交 6c4c0d1 里删掉了全部评分代码，必须逐块恢复；
   - PR #12（P4）满足 D28 第 2 条，但审阅者的两条中等级别意见在 31dbb18 上还没修；
@@ -149,12 +149,14 @@ P5 = `repair/P5` fa66a1a（PR #14）；P6 = `repair/P6` 84f87a9；P9 = `repair/P
 3. 主代理调用一次 AskUserQuestion，参数如下：
    - `questions` 逐字取自题目文件，即每题的 question、header、multiSelect、options；
    - `metadata.source = "requirement-round:<task>:r1"`。
-4. PostToolUse hook 读 CLI 的 `tool_response`。只要里面有用户内容（answers、response、annotations 任一非空），就写 `docs/dev/requirement-answers-<task>-r1.json`（§2.5）。Skip、超时、拒绝什么也不写。
+4. PostToolUse hook 读 CLI 的 `tool_input` 和 `tool_response`。这次调用的题目与题目文件一致（§2.6 的第三条），并且有用户内容（answers、response、annotations 任一非空）时，就写 `docs/dev/requirement-answers-<task>-r1.json`（§2.5）。题目被改过的调用、Skip、超时、拒绝什么也不写。
 5. 主代理派发 **BA analysis**，输入是答案文件的路径（或者"无答案"）。
    - BA 写 context、ticket、acceptance-criteria。
    - 每个已回答的问题都要映射进 `context.requirement.contract_refs`，即 `{answer_ref: "r1.q2", criterion_ids: [...]}`。
    - 每个没回答的问题，按它的 `assume` 选项写进 `assumptions`。G2 在 BA analysis 停下时检查这两项都齐。
 6. 如果答案引出了新的、无法用默认值解决的问题，BA analysis 不写分析产物，而是写 `requirement-round-<task>-r2.json`，回到第 3 步。轮数上限见 §2.9。
+   - 这和今天的 producer question 一样：G2 接受一个新鲜、合格的 r<n+1> 来顶替该派发声明的产物，写门也允许该派发写它（P5:hooks/subagentstop-artifact-contract-enforce.py:453-457；P5:hooks/pretool-tool-policy.py:14-15）。
+   - 否则 BA analysis 要么写不了 r2，要么在停下时因缺少声明的产物被拦。
 7. 之后的 dev 和 QA 照旧。QA 按验收标准核对；验收标准经由 contract_refs 连回用户原话。
 
 ### 2.3 /spec
@@ -173,9 +175,8 @@ P5 = `repair/P5` fa66a1a（PR #14）；P6 = `repair/P6` 84f87a9；P9 = `repair/P
 {
   "task_id": "20261108-101500",
   "round": 1,
-  "spec_ref": null,
   "questions": [
-    {"id": "q1", "dimension": "intent", "header": "Goal",
+    {"id": "q1", "dimension": "intent", "header": "Goal", "spec_ref": null,
      "question": "What should change for you when this is done?",
      "multiSelect": false,
      "options": [{"label": "...", "description": "..."}],
@@ -188,7 +189,7 @@ G2 在 BA 停下时检查以下几项：
 - `task_id` 等于 obligation 的 task；`round` 是下一轮，即前一轮已经问过。
 - 题目 1-4 个，每题 2-4 个选项；`header` 不超过 12 个字符；`assume` 必须是该题某个选项的标签。这些都是 AskUserQuestion 的硬约束。
 - **没有 spec 时，r1 必须恰好 4 题，分别覆盖 `intent`、`scope`、`edge_cases`、`acceptance`。** 这样"刨根问底"变成可以机器检查的规则。
-- 有 spec 时（/dev 从一个 /spec 出发），至少 1 题，每题的 `spec_ref` 指向 spec 中没写清楚的那一节。这是 owner 选择 Q2 的推荐项。
+- 有 spec 时（/dev 从一个 /spec 出发），至少 1 题，每题的 `spec_ref` 指向 spec 中没写清楚的那一节。这是 owner 选择 Q2 的推荐项。`spec_ref` 是每题的字段（没有 spec 时为 null），不放在顶层。
 - **D18 检查（真实强度：lint，只能抓代码痕迹）**：
   - `dimension` 只能取上面四个值，没有 `technical`；
   - 题干和选项里不得出现代码标记：反引号、带扩展名的路径、`()`、`::`；
@@ -207,24 +208,27 @@ G2 在 BA 停下时检查以下几项：
   ```
 
 - **Skip、超时自动结束（`afkTimeoutMs`）、拒绝、出错：什么也不写**（D9b）。BA analysis 看到"没有答案文件"，就按 `assume` 继续，并把它写进 assumptions。
-- **producer question 用同一条规则。** source 为 `producer-question:<task>:<role>`，答案写到 `docs/dev/producer-answer-<task>-<role>.json`。今天这类答案只活在再派发的提示词里（§1.2）；改过之后，每个 owner 的回答都是原话产物。
+- **只有和题目文件一致的那次提问才写契约。** 题目被改过或换过的调用不写，因此 owner 对主代理自拟题目的回答不会成为契约。之后派发门要求按原题再问（§2.6）。每个文件以第一次一致的提问为准。
+- **producer question 用同一条规则。** source 为 `producer-question:<task>:<role>`，答案写到 `docs/dev/producer-answer-<task>-<role>-<q8>.json`。q8 是问题文件 sha256 的前 8 位，所以同一个角色在一个任务里先后提的几个问题各有各的答案文件。producer-question.v1 的形状和 AskUserQuestion 不同，所以这里只要求 source 匹配。今天这类答案只活在再派发的提示词里（§1.2）；改过之后，每个 owner 的回答都是原话产物。
 - **谁能写。**
   - 没有任何派发会声明这些路径，所以 P1b 的派生写权限会拒绝子代理写它们。
   - 主代理要另加一条：写门（tool-policy）把 hook 自有的路径列为任何 agent 都不能写，Write、Edit、Bash 重定向都算。这些路径是 `docs/dev/requirement-answers-*`、`docs/dev/producer-answer-*` 和评分日志。
-- **消费者。** BA analysis（必读，G2 检查 contract_refs）；QA（验收标准连回答案）；spec agent 的 Finalize；/commit 的白名单把它和任务的其它产物一起提交。
+- **消费者。** BA analysis（必读，G2 检查 contract_refs）；QA（验收标准连回答案）；spec agent 的 Finalize；P13-1 把题目和答案文件加进 resolver 的 `commit_whitelist_artifacts`，/commit 的白名单把它和任务的其它产物一起提交。
 - **为什么不只用 transcript。** transcript 才是最强的原话来源，但它会被清理，而且是会话级的，/close 和 /commit 常在另一个会话里跑（P4 "Out of scope, found"）。所以契约要落在项目的 docs/dev 里。
 
 ### 2.6 hook 怎么强制"问过"
 
-**判定（一个函数，和评分的判定共用）。** `asked(span, source, questions)` 为真，当且仅当区间内有一次主代理的 AskUserQuestion tool_use 满足以下三条：
+**判定（一个函数，和评分的判定共用）。** `asked(span, source, file)` 为真，当且仅当区间内有一次主代理的 AskUserQuestion tool_use 满足以下三条（第三条只对 requirement-round 文件）：
 - `input.metadata.source == source`；
 - 有一个 tool_result，内容不限，`is_error` 也算；
-- `input.questions` 去掉 id、dimension、assume 之后的规范 JSON，等于题目文件里同样处理后的内容。
+- `input.questions` 的规范 JSON，等于题目文件里去掉 id、dimension、assume、spec_ref 之后的内容。
 
-第三条保证主代理不能改写题目、替换题目或混进技术选择。这个函数放在 hooks/lib，读 transcript 的方式与 P4 的 `close_rating.rating_asked` 相同；P13-3 让 `rating_asked` 改为调用它，评分和提问从此共用一个判定。
+producer question 只看前两条：它的 schema 只有一个决定加 default，转问时 default 还会被标成推荐项，内容本来就对不上。
+
+第三条保证主代理不能改写题目、替换题目或混进技术选择。这个函数放在 hooks/lib，读 transcript 的方式与 P4 的 `close_rating.rating_asked` 相同；P13-1 让 `rating_asked` 改为调用它，评分和提问从此共用一个判定。
 
 **规则（放在派发门，与 G1 同一个 PreToolUse Agent 门）。**
-1. **先问后派。** 在一个 /spec、/dev、/redev、/dev-command 区间里，如果某次派发声明的题目文件（requirement-round 或 producer-question）已经存在且新鲜，但还没满足 `asked`，就拒绝同一任务的任何下一次派发。拒绝信息是：
+1. **先问后派。** 在一个 /spec、/dev、/redev、/dev-command 区间里，只看本区间的任务（不管 overnight 家族的问题文件，D20）。如果一个题目文件（requirement-round 或 producer-question）满足 schema，且声明它的那次派发正常返回，但还没满足 `asked`，就拒绝该任务的其它派发。声明同一个文件的再派发（用来修它）永远放行，所以写坏的或被中断的 intake 可以重做。拒绝信息是：
    `ASK_FIRST: ask <file> with one AskUserQuestion, metadata.source "<source>", questions exactly as written; then dispatch.`
    这顺带补上了 producer question 转问没人强制的缺口（§1.2）。
 2. **没有 r1 就不开工。** 在同样的区间里，一次声明了"除 requirement-round r1 以外任何产物"的派发（BA analysis、dev、QA、specialists、spec Finalize），在 `asked(..., r1)` 之前一律拒绝。
@@ -273,7 +277,7 @@ G2 在 BA 停下时检查以下几项：
 |---|---|---|
 | `docs/dev/requirement-round-<task>-r<n>.json` | BA（intake 或 analysis 派发声明它） | 主代理照抄去问；派发门的 `asked` 比对；答案 hook 记它的 sha256 |
 | `docs/dev/requirement-answers-<task>-r<n>.json` | PostToolUse AskUserQuestion hook | BA analysis（G2 检查 contract_refs）、QA、spec Finalize、/commit 白名单 |
-| `docs/dev/producer-answer-<task>-<role>.json` | 同一个 hook | 被再派发的生产者 |
+| `docs/dev/producer-answer-<task>-<role>-<q8>.json` | 同一个 hook | 被再派发的生产者 |
 | `context.requirement.contract_refs` 与 `assumptions` | BA（已有产物里的新字段） | G2、QA |
 
 ---
@@ -291,7 +295,7 @@ G2 在 BA 停下时检查以下几项：
 
 ### 3.2 事件：哪个事实给哪个 agent 记分
 
-所有事件都由同一个观察者 hook 写出。它注册在 PostToolUse，matcher 是 `Agent|AskUserQuestion`，只记录、从不拦。
+所有事件都由同一个观察者 hook 写出：P13-1 推广后的 AskUserQuestion hook，P13-2 给它加上 matcher `Agent`，所以注册是 PostToolUse `AskUserQuestion|Agent`。它只记录、从不拦，是评分日志和答案文件唯一的写进程。
 - 在 PostToolUse(Agent) 这一刻，所有 SubagentStop 门都已放行，obligation、subagent_type 和最终回复同时可见（研究通道 F）。这是最好的观察点。
 - 观察者不重算 G2 的结论，否则 G2 的判决会有第二个生产者。它只读已经落地的产物和 CLI 记录。
 
@@ -299,9 +303,9 @@ G2 在 BA 停下时检查以下几项：
 |---|---|---|---|---|
 | `qa_first_pass` | lane QA 第一轮 `qa.status = pass` | 该 lane 的 dev +2，ba +1 | | QA 派发的 tool_use_id |
 | `qa_fail` | lane QA `fail`，看 `primary_cause` | `dev_implementation` 记 dev -4；`ba_spec` 记 ba -4；`qa_oversight` 和 `environment` 不记 | | 同上 |
-| `qa_catch` | 一次 QA 失败之后，同一 lane 改了文件并通过 | qa +1，每个任务最多 +2 | | 通过那次的 tool_use_id |
+| `qa_catch` | 一次 QA 失败之后，dev 的再派发改动了失败项 `location` 指名的文件，随后同一 lane 通过 | qa +1，每个任务最多 +2 | | 通过那次的 tool_use_id |
 | `escaped` | close-QA 给出 `CLOSE_FINDINGS`，而 lane QA 已通过；finding 引用的产物用 `declaring_dispatch` 找到角色 | 该角色 -5；该 lane 的 qa -3 | | tool_use_id 加 finding 序号 |
-| `close_clean` | close-QA 第一轮就落地 `CLOSE: YES*` | qa +2 | | tool_use_id |
+| `close_catch` | 上一行的 finding 被引用产物的生产者在后一轮修好，close 随后落地 | close-qa +1 | | finding 的去重键 |
 | `rerun_gap` | 同一 (task, lane, role, 声明路径) 的第 k 次派发（k ≥ 2），起因是缺失或不合格的产物；起因是 QA 失败、close finding、澄清或瞬时 API 错误的不算 | 该角色每次 -2 | | 重派的 tool_use_id |
 | `stop_blocked` | G2、e2e、codex 拦下该派发的停止；**只在 transcript 里能测到时才启用**（§5） | 该角色每次 -1，每次派发最多 -3 | | agent_id 加门代码 |
 | `main_refused` | 区间里主代理的一次工具调用被门拒绝：tool_result 出错，内容带门代码（ASK_FIRST、G1、写门等） | main 每次 -1，每个区间最多 -5 | | 记录的 uuid |
@@ -311,12 +315,14 @@ G2 在 BA 停下时检查以下几项：
 
 - 分值按事件给，角色从事实里得出：派发记录、`declaring_dispatch`、`primary_cause`。没有"文件名到角色"的表（D21）。
 - 规则：一次重派只记一个原因。QA 失败已经在 `qa_fail` 记过，close finding 已经在 `escaped` 记过，都不再记 `rerun_gap`。
-- 主代理的事件，由观察者在下一次 Agent 回来时，回扫从上一个观察点到现在的区间片段。区间末尾、之后再没有派发的那一段，会在评分时补扫；补扫不到的就丢掉，诚实地写进 "Out of scope, found"。
+- 主代理的事件，由观察者在下一次 Agent 回来时，回扫从上一个观察点到现在的区间片段。区间末尾、之后再没有派发的那一段扫不到，这是已知的缺口，写进 "Out of scope, found"。
+- **记分身份**取 obligation 的 role，只有一个例外：pipeline 为 close 的 qa 记为 `close-qa`。close-QA 和 lane QA 是同一个 agent 定义；如果合在一起记分，close-QA 找到问题会让"qa"自己扣分（`escaped`），它就有动机什么都不找。分开之后，lane QA 为漏掉的问题负责，close-QA 为找到并被修好的问题得分。
+- 不设"close 干净就给分"的事件，原因相同：那会奖励 close-QA 少找问题。
 
 ### 3.3 分数怎么算（纯函数）
 
-`score(role, project, as_of)` 的算法：
-- 取 `project` 相同、`ts < as_of` 的事件行和评分折算行，在属于该角色的行里找最近 10 个不同的 task_id。
+`score(identity, project, as_of)` 的算法（identity 即 §3.2 的记分身份）：
+- 取 `project` 相同、`ts < as_of` 的事件行和评分折算行，在属于该身份的行里找最近 10 个不同的 task_id。
 - `raw` 是这些行的分值之和，`score = clamp(60 + raw, 0, 100)`。
 - 没有任何行的角色记为"新"，派发时只显示一句"no record yet"。
 - `trend = score(as_of) - score(窗口往回挪 5 个任务)`。
@@ -327,23 +333,25 @@ G2 在 BA 停下时检查以下几项：
 
 ### 3.4 派发时 agent 看到什么
 
-由 SubagentStart hook 注入 `additionalContext`（官方文档写明的通道），一律英文，不超过 3 行、400 B。示例：
+由 SubagentStart hook 注入 `additionalContext`（官方文档写明的通道），一律英文，不超过 3 行、400 B。/close、/commit、/merge、/push 区间里的派发不注入：那里的 QA、inspector 和 changelog-analyst 不受分数影响（§3.6）。示例：
 
 ```
 Your record (dev, this project, last 10 tasks): 58/100, trend -9, tier probation.
 Most frequent miss: QA failed your work for "edge case not tested" (3 of last 5 tasks).
-This dispatch: your report must carry self_review (one entry per acceptance criterion); your stop is checked for it.
+This dispatch: your report must carry self_review (one entry per acceptance criterion; also whenever your lane already failed QA in this command); your stop checks it.
 ```
+
+SubagentStart 收不到提示词，所以在扇出里分不清同类型 agent 的不同 lane。"本 lane 已被 QA 判过失败"只能在这里说成一条通用规则，由 G2 在停止时按 obligation 精确执行（§3.6 第 2 条）。
 
 - good 档只给一行：`Your record (qa): 82/100, trend +4. Last miss: close QA found "<finding, 80 chars>".`
 - 原因用的是事件的 `why`：QA 失败的 `issue`，或 finding 那一行，截到 80 字符。不用 task id，task id 对 agent 没有可操作的信息（H-scoring §2.4）。
-- 主代理在命令开头，由 UserPromptSubmit 的 additionalContext 收到一行：
+- 主代理在 /spec 和 /dev 系列命令开头，由 UserPromptSubmit 的 additionalContext 收到一行：
   `Your record (main): 74/100. Most frequent miss: dispatch refused ASK_FIRST (2 of last 5 tasks).`
-- 这些取代：`score-inject.sh` 每次约 1.2 KB 的输出、主代理三次 Bash 注入调用（它们还会撞上 5 次 Bash 的上限）、三份回显合同。而且覆盖所有流水线，包括 /dev-command、overnight、/close 和 /commit 里的 QA，不再只有 /dev。
+- 这些取代：`score-inject.sh` 每次约 1.2 KB 的输出、主代理三次 Bash 注入调用（它们还会撞上 5 次 Bash 的上限）、三份回显合同。而且覆盖 /dev、/redev、/dev-command 和 overnight 的所有派发，不再只有 /dev。
 
 ### 3.5 /close 之后 owner 看到什么
 
-由 AskUserQuestion 观察者处理 `close-rating:` 来源时给出。首选 `systemMessage`（显示给用户，要先测，§5）；后备是 additionalContext，让主代理原样贴出。不超过 5 行：
+由 AskUserQuestion 观察者处理 `close-rating:` 来源时给出。首选 `systemMessage`（显示给用户，要先测，§5）。后备是 additionalContext，让主代理原样贴出：主代理只转贴 hook 写好的文字，不算、不改、不写任何东西，这是 D28 唯一允许的转贴（§6.2）。不超过 5 行：
 
 ```
 Scores (this project, last 10 tasks): ba 77 (+2) | dev 58 (-9, probation) | qa 66 (-4) | main 90 (0)
@@ -357,20 +365,19 @@ Worst: dev. QA failed its work in 3 of the last 5 tasks; its next dispatches mus
   3. 被点名的 agent 下一次派发就看到原因和要做的事。
 - 如果 PostToolUse 在 Skip 时也触发（要测），照样显示分数，只是没有本次评分那一行。
 - `--auto` 下有多个父任务时，每次评分各显示一次。
-- /close 本身不读日志、不算分、不加任何步骤（P4 的 DO NOT 和 C2 都保留）。摘要来自 hook，不来自 /close 的文字。
+- /close 本身不读日志、不算分、不加任何步骤。close.md、commit.md、changelog-analyst.md 和它们调用的脚本都不碰评分日志。摘要来自 hook，不来自 /close 的文字。
 
 ### 3.6 低分的后果（hook 执行，位置在生产者自己的停止）
 
-1. **probation 时**（档位按 §3.3 在本命令开头算）：
+1. **probation 时**（档位按 §3.3 在本命令开头算）。**只约束 pipeline 为 dev、redev、dev-command、dev-overnight 的 ba、dev 和 lane qa 的 obligation。** close 和 commit 流水线里的 close-QA、inspector、commit-QA 和 changelog-analyst 一概不受约束：它们的产物多是 Markdown 或回复块，没有地方放这些字段，约束它们就等于在 /close、/commit 加检查，还会造成死路。
 
    | 角色 | 报告里必须有 | G2 检查什么 |
    |---|---|---|
    | dev | `self_review: [{criterion_id, test, result}]` | 覆盖 acceptance-criteria 里的每个 `ac_uid`；`test` 指向工作树里真实存在的测试 |
    | ba | 每条验收标准带 `contract_ref` 或 `source_phrase` | 每条标准都能追到用户原话（答案文件或 Section 5） |
-   | qa | 每条验收标准有 `evidence[]`（命令加观察到的输出摘录），并有 `adversarial[]`，至少 3 个尝试过的反例 | 覆盖并且非空 |
-   | 其它生产者 | `self_review[]`，每个声明的产物至少一条 | 非空，并引用声明的路径 |
+   | lane qa | 每条验收标准有 `evidence[]`（命令加观察到的输出摘录），并有 `adversarial[]`，至少 3 个尝试过的反例 | 覆盖并且非空 |
 
-2. **本命令内升级。** 同一 (task, lane, role) 在本区间里已经被 QA 判过一次失败，再派发时不论档位都必须交 `self_review`："第二次交付要证明你检查过"。
+2. **本命令内升级。** 同一 (task, lane, role) 在本区间里已经被 QA 判过一次失败，再派发时不论档位都必须交 `self_review`："第二次交付要证明你检查过"。范围同第 1 条。
 3. **更严的下游检查。** 本区间的 dev 处于 probation 时，lane QA 的 SubagentStart 行会说明这一点，QA 报告必须带 `adversarial[]`，G2 检查。这是 QA 变严，不是 /close 加检查。
 4. **回升。** 窗口滚动，分数回到 50 以上就自动解除。没有人工放行，也没有状态。
 5. **没有死路。** 每个要求都能由生产者写出对应字段来满足。P1c 的 dead-end 检查会把这些新的阻塞点列进去。
@@ -381,10 +388,14 @@ Worst: dev. QA failed its work in 3 of the last 5 tasks; its next dispatches mus
 - **一个库，一个写函数。** `hooks/lib/score_log.py` 合并现有的读者（T:scripts/lib/score_log.py）和 P4 的 `close_rating.append_row`，提供：
   - `read_lines`、`append`（调用方持锁，首写胜，按 key 去重）；
   - `score`、`tier`、`render_dispatch_line`、`render_owner_summary`。
-- **一个写进程。** 只有 PostToolUse `Agent|AskUserQuestion` 观察者调用 `append`。`score-update.sh` 的写入模式随它的最后一个调用者（dev.md Step 14）一起删掉，`permissions.allow` 里的条目也删掉。写门把日志路径列为 hook 自有。这样 P4 留下的"一个函数、两个进程"问题和"任何 agent 都能写分"问题一起解决。
+- **一个写进程。** 只有 PostToolUse `Agent|AskUserQuestion` 观察者调用 `append`。
+  - `score-update.sh` 随它的最后一个调用者（dev.md Step 14）在 P13-3 一起删掉，`permissions.allow` 里的条目也删掉。
+  - 在那之前，旧的 `scripts/lib/score_log.py` 留一行转出，`close_rating.append_row` 留作原样写行的委托，让 dev.md 里仍在跑的 score-inject 和 score-update 不坏。它们写出的旧格式行不计分。
+  - 写门把日志路径列为 hook 自有。
+  - 这样 P4 留下的"一个函数、两个进程"问题和"任何 agent 都能写分"问题一起解决。
 - **行格式。** 在现有日志里加 `kind`：
   - `{"kind": "event", "ts", "project", "task_id", "role", "event", "points", "key", "why", "ref"}`
-  - `{"kind": "rating", "ts", "project", "task_id", "rating", "blame"?, "tool_use_id"}`
+  - `{"kind": "rating", "ts", "project", "task_id", "rating", "blame"?, "roles", "tool_use_id"}`：`roles` 在写入时从任务的派发记录读出，读分数时就不必跨会话扫描
 - **评分去重。** 只在 `kind == "rating"` 的行之间按规范化 task id 去重，修掉 §1.3 的第 2 条。
 - **并发。** 沿用 flock。扇出的多个 lane 并行回来时，20 个并发 append 得到 20 行，互不交错。
 - **耗时。** 观察者要读 transcript 和 obligation，放在 PostToolUse 观察 hook 里，不放进安全门；设短超时并实测（hooks-audit §7.3 "超时预算"）。
@@ -393,7 +404,7 @@ Worst: dev. QA failed its work in 3 of the last 5 tasks; its next dispatches mus
 
 - 被评者写不到事实：父 transcript 由 CLI 写；QA 报告的派生写权限只给 QA；close-QA 由别人派发；owner 评分只认 CLI 的 tool_response。
 - 日志、答案文件只能由 hook 写，写门拒绝所有 agent 写它们。
-- QA 用 `primary_cause` 归咎是一面之词。对冲办法：`escaped` 会同时罚 QA；QA 自己的加分 `qa_catch` 只在"改了文件之后通过"时给，所以 QA 乱判失败拿不到分。
+- QA 用 `primary_cause` 归咎是一面之词。对冲办法有两个：`escaped` 会同时罚 lane qa；`qa_catch` 只在 dev 的再派发改动了失败项 `location` 指名的文件之后才给，所以 QA 乱判一次失败、dev 随便改一个文件，QA 拿不到分。这挡不住 QA 把 dev 冤枉成 `dev_implementation`，剩下的风险由 owner 评分和第二问兜底。
 - 自评字段不是"我检查过了"这种空话。G2 核对它覆盖了每个 `ac_uid`、引用的测试真实存在、反例非空。
 
 ### 3.9 旧代码的去留
@@ -402,15 +413,15 @@ D28：评分系统重新设计，不移除。P9 不删任何评分代码。P13 �
 
 | 现有部分 | 去向 | 子阶段 |
 |---|---|---|
-| `scripts/lib/score_log.py` | 搬到 `hooks/lib/score_log.py`，并入 append 和计分 | P13-2 |
-| `close_rating.py` | 保留评分逻辑和 `rating_asked`；写入改调 score_log；去重修好；加第二问和摘要 | P13-2 |
+| `scripts/lib/score_log.py` | 搬到 `hooks/lib/score_log.py`，并入 append 和计分；原处留一行转出，P13-3 删除 | P13-2 |
+| `close_rating.py` | `rating_asked` 改调共用的 `asked`（P13-1）；写入改调 score_log，`append_row` 留作委托到 P13-3；去重修好；加第二问和摘要（P13-2） | P13-1、P13-2 |
 | `score-update.sh` | 删除：它的调用者（dev.md Step 14）同时删掉；agent 不该能写分 | P13-3 |
 | `score-inject.sh` | 删除：SubagentStart 注入器取代它 | P13-3 |
 | `close-scoring-decide.py` | 删除：P4 起已无调用者；close_* 在 D7 下是常量 | P13-2 |
 | agent front matter `score:` | 删除：分值按事件放在 score_log 里，一个归处 | P13-3 |
 | 三份回显合同 INJECTION_PROOF | 删除：换成可度量的 self_review / evidence / contract_ref | P13-3 |
 | dev.md 注入块、占位符、Step 14 评分、"Mascot Score Changes" 表、:93 的批处理理由 | 删除 | P13-3 |
-| 两个评分 shell 测试 | 换成 pytest（在 CI 里） | P13-2 |
+| 两个评分 shell 测试 | 和它们测的两个脚本一起删除，覆盖由 pytest 接替（在 CI 里） | P13-3 |
 | `logs/lifecycle.jsonl` 里的旧行 | 保留，不计分 | — |
 | prompt-purity 的 OPTIONS_XML 分类 | 这是提问执法，不是评分；P9 删除它可以保留 | P9 |
 
@@ -470,7 +481,7 @@ PR 标题、正文第 14、25、43、73 行要随之更改。
 
 - D28 第 2 条已满足，不需要为 D28 再改。
 - 合并前修掉审阅意见 1 和 2。这是 D7 和 D25 的问题，与 D28 无关。
-- P4 的 DO NOT"让主代理……echo a rating, score"在 D28 下仍然成立：P13 的摘要来自 hook，不来自主代理。
+- P4 的 DO NOT"让主代理……echo a rating, score"在 D28 下基本成立：主代理不算、不写、不解析分数。唯一的松动是 §3.5 的后备：如果 systemMessage 显示不出来，主代理原样转贴 hook 写好的摘要。
 
 ### 6.3 PR #10（P2）、PR #14（P5）、P12
 
@@ -548,5 +559,4 @@ PR 标题、正文第 14、25、43、73 行要随之更改。
 
 见 `phase-prompt.md`：P13-1 需求提问轮；P13-2 评分事件和 owner 视图；P13-3 派发视图和后果。每个约一天，交给不同的账号（D26）。
 
-- P13-1 和 P13-2 可以并行。它们只共用 AskUserQuestion hook 这一个文件：P13-2 只改其中 close-rating 那一支。后合并的那个先合入 origin/master，保留双方的行为（FAST-TRACK 的合并规则）。
-- P13-3 在两者都合并之后开始。
+三个子阶段按顺序进行：它们共用 AskUserQuestion hook、close_rating、回放驱动（dev、dev_command、spec、close 和子代理模拟器）以及 ENFORCEMENT-LEDGER，并行只会制造冲突。
