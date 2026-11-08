@@ -241,17 +241,14 @@ def locate(session_id, payload=None):
 def window_open(payload):
     """The time-lock's window for a hook payload: the payload's session owns a
     record whose end_time is ahead (`before_end`) and no human-typed /stop
-    follows its /dev-overnight (stop_contract.timelock_released). No state
-    field (status, terminal_status, current_phase) and no token decides it."""
+    follows its /dev-overnight (command_span.timelock_released, the one
+    transcript reader's rule, which stop_contract re-exports). No state field
+    (status, terminal_status, current_phase) and no token decides it."""
     try:
         _sf, record = locate(payload.get('session_id'), payload)
         if record is None or not state_verdicts(record).before_end:
             return False
-        try:
-            from . import stop_contract
-        except ImportError:  # hooks/lib itself is on sys.path
-            import stop_contract
-        return not stop_contract.timelock_released(payload.get('transcript_path'))
+        return not _command_span().timelock_released(payload.get('transcript_path'))
     except Exception:
         return False
 
@@ -259,10 +256,10 @@ def window_open(payload):
 def closeout_gaps(state, working_root):
     """What the session's closeout lacks on disk, one fact per gap: a PM
     retrospective (retro-report-cycle*.json under
-    <working root>/docs/dev/overnight/<sid>/) and an overnight summary
+    <working root>/docs/dev/overnight/<sid>/) and Step 21's overnight summary
     (overnight-summary-*.md under <working root>/docs/dev/) written at or after
-    start_time (any, when start_time is unreadable) and not empty (P1c). No tree
-    or checkpoint term."""
+    start_time (any, when start_time is unreadable) and not empty: the summary
+    is opened, so its read is the Stop's own. No tree or checkpoint term."""
     state = state if isinstance(state, dict) else {}
     docs = Path(working_root) / 'docs' / 'dev'
     retro = docs / 'overnight' / str(state.get('session_id') or 'unknown')
@@ -272,7 +269,7 @@ def closeout_gaps(state, working_root):
     def written(path):
         try:
             return path.stat().st_mtime >= since and bool(path.read_text(errors='replace').strip())
-        except OSError:
+        except (OSError, ValueError):
             return False
 
     gaps = []
