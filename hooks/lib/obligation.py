@@ -1437,36 +1437,6 @@ def declaring_dispatch(
     return _writer(records, wanted, project_dir)
 
 
-def first_declared_at(
-    task_id: Any,
-    role: Any,
-    path: str,
-    project_dir: str | Path,
-    roots: Iterable[str | Path] | None = None,
-) -> datetime | None:
-    """The earliest ``dispatched_at`` among the task's dispatch records (every
-    session of the project, as :func:`declaring_dispatch` reads them) whose
-    obligation names ``role`` and declares ``path``: when the producer's
-    first round of that artifact began. A re-dispatch of the same template (a
-    clarification answer, a QA-rejected retry, a lane re-dispatch, a re-split)
-    declares the path again; a file it had nothing to change in keeps the
-    mtime of the round that wrote it, which is no earlier than this. None when
-    no record of the task declares it (a null task_id included). Read-only."""
-    if not isinstance(path, str) or not path:
-        return None
-    wanted = Path(path).as_posix()
-    times = [
-        parse_iso8601(r["obligation"].get("dispatched_at"))
-        for r in _task_records(task_id, project_dir, roots)
-        if r["obligation"].get("role") == role
-        and any(isinstance(a, Mapping) and isinstance(a.get("path"), str)
-                and Path(a["path"]).as_posix() == wanted
-                for a in r["obligation"].get("artifacts") or [])
-    ]
-    times = [t for t in times if t is not None and t.tzinfo is not None]
-    return min(times, default=None)
-
-
 def _main(argv: list[str]) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="obligation.py")
