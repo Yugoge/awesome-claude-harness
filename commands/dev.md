@@ -172,7 +172,7 @@ The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) started this cycle and 
 **When those lines are not in your context** (a compaction removed the hook output, or the hook failed and printed none), run the hook's own start function in this session with this command's text exactly as typed, and read the same lines from what it prints:
 
 ```bash
-python3 "<HARNESS_ROOT>/hooks/prompt-workflow.py" start <<'CMDEOF'
+python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/prompt-workflow.py" start <<'CMDEOF'
 <the command exactly as typed: /dev or /redev, then $ARGUMENTS>
 CMDEOF
 ```
