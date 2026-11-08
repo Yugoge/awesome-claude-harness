@@ -725,6 +725,35 @@ def test_ac11_late_repair_flag_is_the_only_behavior_switch(tmp_path: Path) -> No
     assert rc1 == 0
 
 
+def test_route_select_cli_passes_only_a_pass_chain_and_loads_a_legacy_needs_review_report(tmp_path: Path) -> None:
+    # /close Step 0's arguments; a dev-report older code left as needs_review
+    # with a status_rationale is a failing chain: exit 2 with the JSON.
+    for task_id, legacy, expected_rc, expected_status in (
+        ("20260101-000520", False, 0, "pass"),
+        ("20260101-000521", True, 2, "fail"),
+    ):
+        root = tmp_path / task_id
+        paths = fx.build_complete(root, task_id)
+        if legacy:
+            report = json.loads(paths["dev_report"].read_text(encoding="utf-8"))
+            report["dev"]["status"] = "needs_review"
+            report["dev"]["status_rationale"] = {
+                "classification": "other_disclosed_handoff",
+                "blocked_by": "a lane could not finish",
+                "forbidden_action": "see the lane dev-report",
+            }
+            paths["dev_report"].write_text(json.dumps(report), encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(ROUTE_SELECT_PATH), "--task-id", task_id, "--project-dir", str(root)],
+            capture_output=True, text=True, check=False,
+        )
+        assert proc.returncode == expected_rc, proc.stderr
+        assert "Traceback" not in proc.stderr
+        payload = json.loads(proc.stdout)
+        assert payload["outcome"] == "not_selected"
+        assert payload["artifact_chain"]["status"] == expected_status
+
+
 def test_ac11_static_grep_confirms_close_md_uses_close_route_select(tmp_path: Path) -> None:
     # Routing invariant: /close reaches the late-repair controller only through
     # the route selector, so the controller is not named before the R4 section.

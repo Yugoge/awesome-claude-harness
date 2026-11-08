@@ -198,3 +198,42 @@ def test_a_dispatch_carrying_no_block_is_read_in_its_command_span(tmp_path):
     project, agent_id, transcript = _setup(tmp_path / "graphify", "graphify", graphify)
     _with_parent(transcript, graphify, "graphify", "/dev --codex harden add")
     assert _stop(tmp_path / "graphify", project, agent_id, transcript).returncode == 0
+
+
+def _asked_by(command: str, profile: str, role: str = "qa") -> str:
+    """A dispatch made from commands/<command>.md's QA template with its own
+    `codex_required: true` line, as /close --codex and /commit --codex pass it."""
+    return _template_prompt(command, "qa", profile, line=True).replace('"role": "qa"', f'"role": "{role}"') \
+        + "\ncodex_required: true"
+
+
+@pytest.mark.parametrize("command,profile", [("close", "final_verification"), ("commit", "commit-qa")])
+def test_close_and_commit_dispatches_are_not_bound_by_the_dev_codex_flag(tmp_path, command, profile):
+    """R11: the /dev --codex flag in the task's registry binds the /dev cycle's
+    own dispatches; a close-QA or commit-QA stop whose own obligation names its
+    pipeline is let through (before: exit 2, CODEX_ENFORCE_BLOCKED)."""
+    project, agent_id, transcript = _setup(tmp_path, "qa", _asked_by(command, profile))
+    proc = _stop(tmp_path, project, agent_id, transcript)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == ""
+
+
+def test_a_dev_pipeline_qa_is_still_bound(tmp_path):
+    project, agent_id, transcript = _setup(tmp_path, "qa", _asked_by("dev", "final_verification"))
+    proc = _stop(tmp_path, project, agent_id, transcript)
+    assert proc.returncode == 2, proc.stderr
+    assert f"CODEX_ENFORCE_BLOCKED: agent {agent_id} (type=qa)" in proc.stderr
+
+
+@pytest.mark.parametrize("unresolved", ["invalid_obligation", "role_mismatch"])
+def test_an_unresolved_close_obligation_is_judged_as_before(tmp_path, unresolved):
+    """An obligation G2 would not resolve as this agent's own (a block failing
+    the grammar, or one naming another role than the agent registered as)
+    exempts nothing: its `codex_required: true` line binds it as before R11."""
+    prompt = _asked_by("close", "final_verification", role="dev" if unresolved == "role_mismatch" else "qa")
+    if unresolved == "invalid_obligation":
+        prompt = re.sub(r'"dispatched_at": "[^"]*", ', "", prompt)
+    project, agent_id, transcript = _setup(tmp_path, "qa", prompt)
+    proc = _stop(tmp_path, project, agent_id, transcript)
+    assert proc.returncode == 2, proc.stderr
+    assert f"CODEX_ENFORCE_BLOCKED: agent {agent_id} (type=qa)" in proc.stderr

@@ -30,6 +30,7 @@ from _dev_lifecycle_fixtures import (  # noqa: E402
     init_git_repo,
     make_project,
     qa_report,
+    ticket_md,
     write_json,
     write_text,
     write_ticket_fixture,
@@ -359,3 +360,60 @@ def test_list_actionable_commit_selects_without_the_chain(tmp_path):
     assert row["invoke_resolver"] is False
     assert "artifact_chain" not in row
     assert _list_actionable(project, "commit") == [task_id]
+
+
+# --------------------------------------------------------------------------
+# Records older code wrote still load: the chain fails on them (strict pass),
+# and neither CLI entry point crashes on them.
+# --------------------------------------------------------------------------
+
+
+def _legacy_records(project):
+    """A canonical aggregate older code wrote as `blocked` on a shard mismatch,
+    and a singular dev-report older code left as `needs_review` with a
+    status_rationale; returns their task-ids."""
+    dd = dev_dir(project)
+    fanout = "20260101-000021"
+    write_text(dd / f"ticket-{fanout}.md", ticket_md(fanout))
+    for worker, sha in (("a", "1" * 40), ("b", "2" * 40)):
+        lane = f"{fanout}-{worker}"
+        write_ticket_fixture(project, lane)
+        write_json(dd / f"dev-report-{lane}.json", dev_report(lane, baseline_head_sha=sha))
+        write_json(dd / f"qa-report-{lane}.json", qa_report(lane))
+    canonical = dev_report(fanout, parallel_workers=["a", "b"], baseline_head_sha="1" * 40)
+    canonical["dev"]["status"] = "blocked"
+    canonical["blocking_issues"] = ["shard 'b': baseline_head_sha differs from shard 'a'"]
+    write_json(dd / f"dev-report-{fanout}.json", canonical)
+
+    singular = "20260101-000022"
+    _passing_singular(project, singular)
+    report = dev_report(singular, status="needs_review")
+    report["dev"]["status_rationale"] = {
+        "classification": "other_disclosed_handoff",
+        "blocked_by": "a lane could not finish",
+        "forbidden_action": "see the lane dev-report",
+    }
+    write_json(dd / f"dev-report-{singular}.json", report)
+    return fanout, singular
+
+
+def test_scan_and_list_actionable_load_legacy_blocked_and_needs_review_records(tmp_path):
+    project = make_project(tmp_path)
+    fanout, singular = _legacy_records(project)
+    passing = "20260101-000023"
+    _passing_singular(project, passing)
+    script = str(REPO_ROOT / "scripts" / "dev-lifecycle.py")
+
+    for argv in (["scan", "--project-dir", str(project)],
+                 ["scan", "--format", "json", "--project-dir", str(project)],
+                 ["list-actionable", "--next-action", "close", "--project-dir", str(project)]):
+        done = subprocess.run([sys.executable, script, *argv], capture_output=True, text=True, timeout=120)
+        assert done.returncode == 0, done.stderr
+        assert "Traceback" not in done.stderr
+
+    rows = {row["task_id"]: row for row in dlc.scan(project)}
+    for task_id in (fanout, singular):
+        row = rows[task_id]
+        assert (row["state"], row["next_action"], row["blocker"]) == ("blocked", "inspect", "RESOLVER_FAIL")
+        assert row["artifact_chain"]["status"] == "fail"
+    assert [line.split(" ", 1)[0] for line in _list_actionable(project, "close")] == [passing]
