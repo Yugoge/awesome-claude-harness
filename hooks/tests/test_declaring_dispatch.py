@@ -165,6 +165,26 @@ def test_close_late_repair_step_0_owns_finalize_s_effective_report(tmp_path):
     assert answer["subagent_call"] is None and answer["template"] is None
 
 
+def test_another_command_s_step_label_never_names_the_owner(tmp_path):
+    """BA's template sits under /dev's "Step 4"; a /close span with a dev
+    dispatch but no /dev span left must not bind it to /close's own step of
+    that label (the rating step, which runs no dispatch): no owner, so the
+    gap goes to the Request question, never to the orchestrator's own hand."""
+    store = Store(tmp_path)
+    store.session("s-close", [
+        _typed(f"/close {TASK}"),
+        _dispatch("toolu_dev", "dev", _obligation(TASK, "dev", [_json(f"docs/dev/dev-report-{TASK}.json",
+                                                                         "dev-report.v2")])),
+    ])
+    for path in (f"docs/dev/ticket-{TASK}.md", f"docs/dev/context-{TASK}.json",
+                 f"docs/dev/acceptance-criteria-{TASK}.json"):
+        assert obligation._canonical_step(TASK, path, [("close", "")], ["dev"]) is None, path
+        assert store.ask(path) is None, path
+    # The same template still binds through a step whose dispatch names its role.
+    answer = obligation._canonical_step(TASK, f"docs/dev/qa-report-{TASK}.json", [("close", "")], ["dev"])
+    assert (answer["command"], answer["subagent_call"]["subagent_type"]) == ("close", "qa")
+
+
 def test_a_product_file_goes_to_the_dispatch_whose_tool_calls_wrote_it(tmp_path):
     store = Store(tmp_path)
     _fanout_dev_session(store)
