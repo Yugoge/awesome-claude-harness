@@ -59,6 +59,19 @@ so they are importable by other hooks via lib.git_command_classifier.
 #   unless the variable cannot load code (_SAFE_ENV_VARS), and a run-time `-c`
 #   value the outer shell built by running code (`bash -c "y=$(echo $X | sh)"`)
 #   is one.  echo/printf/grep and the data commands keep their run-time word.
+#
+# Closing the data-only gaps (2026-11-08, train 2 review): the data-only list had
+#   admitted programs that fail the safe-to-add test.  docker/podman/kubectl are
+#   exec-style launchers (`run`/`exec` take a command, `build` runs a Dockerfile),
+#   so `docker $X`, `docker run img $X` and `kubectl exec p -- $X` are residuals;
+#   only a static data sub-command keeps the word (`docker push $IMAGE`,
+#   _launcher_runs_runtime).  curl loads code through `--engine` and `-K`/`--config`,
+#   so a run-time value in those option positions is a residual (_curl_runs_runtime)
+#   while a bare URL operand stays data.  HOME loads code (user site `.pth` files,
+#   `~/.node_modules`, `~/.ssh/config` ProxyCommand) and left _SAFE_ENV_VARS.  And
+#   a bare run-time assignment to an unsafe name (`NODE_OPTIONS=$X; node x.js`)
+#   reaches a later command through `set -a`, a later `export`, or an already
+#   exported name, so it is a residual too (_bare_runtime_assignment_reaches_command).
 
 CLI usage:
   printf 'command text\\n' | python3 hooks/lib/git_command_classifier.py
@@ -607,10 +620,15 @@ def _is_obfuscation_candidate(tok):
 # while `echo $X | sh` alone keeps its plain-text decision (P9-31).  Because a
 # list of dangerous programs can never be complete, the rule fails closed: a
 # program it does not model, given a run-time word, runs it (so the layer is a
-# residual) unless the program keeps its words as data (_DATA_ONLY_COMMANDS); a
+# residual) unless the program keeps its words as data (_DATA_ONLY_COMMANDS); an
+# exec-style launcher (docker/podman/kubectl) runs a run-time word unless its
+# sub-command is a static data one (_launcher_runs_runtime); curl loads code
+# through a run-time `--engine`/`-K`/`--config` value (_curl_runs_runtime); a
 # run-time environment assignment to a command may load code unless the variable
-# cannot (_SAFE_ENV_VARS); and a run-time `-c` value the outer shell built by
-# running code (`bash -c "y=$(echo $X | sh)"`) is a residual too.
+# cannot (_SAFE_ENV_VARS), and a bare one to an unsafe name reaches a later
+# command the same way (_bare_runtime_assignment_reaches_command); and a run-time
+# `-c` value the outer shell built by running code (`bash -c "y=$(echo $X | sh)"`)
+# is a residual too.
 
 _MAX_SHELL_DEPTH = 4
 # A shell is known by the SHAPE of its name (bash, sh, dash, zsh, ksh93, rbash,
@@ -646,12 +664,25 @@ _RUNTIME_ARG_COMMANDS = frozenset({
 # programs known to keep their words (and input) as data — a filename, a URL, a
 # host, a number, a target — never a command or code to execute.  Anything not
 # listed and not modelled elsewhere (a shell, an interpreter, source/`.`, the
-# _RUNTIME_ARG_COMMANDS, a launcher naming a shell) is refused on a run-time word.
+# _RUNTIME_ARG_COMMANDS, the exec-style launchers, a launcher naming a shell) is
+# refused on a run-time word.
 # Membership is the safe-to-add test: a program belongs here only when NO option
 # or operand of it runs a command or loads code.  So `tar` (--to-command/`-I`),
 # `rsync`/`nc`/`scp` (their command options), `find` (-exec), `sort`
 # (--compress-program), `wget` (--use-askpass), and every interpreter and
 # launcher are deliberately absent; a run-time word to any of them stays refused.
+#
+# Removed from this list (2026-11-08, train 2 review), because each FAILS the
+# safe-to-add test — an option or sub-command of it runs a command or loads code:
+#   docker, podman, kubectl — exec-style launchers.  `run`/`exec` take a command,
+#     `build` runs a Dockerfile, and a run-time sub-command can be any of these.
+#     Modelled by _launcher_runs_runtime: a run-time word is data only with a
+#     static DATA sub-command (`docker push $IMAGE`).
+#   curl — `--engine` loads a crypto engine (a shared library) and `-K`/`--config`
+#     reads a config file that can set any option, `--engine` among them, so an
+#     unquoted run-time word in an option-value position loads code.  Modelled by
+#     _curl_runs_runtime: a bare operand run-time word (a URL) stays data, a
+#     run-time value of a code-loading option is refused.
 _DATA_ONLY_COMMANDS = frozenset({
     # the file, text and information utilities whose operands are data
     'cat', 'tee', 'cd', 'pwd', 'ls', 'head', 'tail', 'wc', 'uniq', 'cut',
@@ -661,19 +692,48 @@ _DATA_ONLY_COMMANDS = frozenset({
     'date', 'seq', 'true', 'false', 'test', 'sleep', 'diff', 'cmp', 'base64', 'cksum',
     'md5sum', 'sha1sum', 'sha256sum', 'od', 'hexdump', 'xxd', 'strings',
     # network fetch and lookups whose operands are a URL or a host, not a command
-    'curl', 'ping', 'host', 'dig', 'nslookup',
-    # a container client: its sub-command is data (`docker push $IMAGE`); a shell it
-    # is told to run (`docker exec c bash -c $X`) is caught by the launcher scan.
-    'docker', 'podman', 'kubectl',
+    'ping', 'host', 'dig', 'nslookup',
 })
+# Exec-style container/cluster launchers: `run`/`exec` take a command, `build`
+# runs a Dockerfile, so a run-time sub-command or a run-time word under one of
+# those is a command.  _launcher_runs_runtime keeps a run-time word as data ONLY
+# when the sub-command is static and one of _LAUNCHER_DATA_SUBCOMMANDS, whose
+# operands are image/container/resource names or files — never a command or code.
+# `docker exec c bash -c $X` is caught by the embedded-shell launcher scan before
+# this; `docker $X` (run-time sub-command) and `docker run img $X` are refused.
+_EXEC_LAUNCHERS = frozenset({'docker', 'podman', 'kubectl'})
+# Sub-commands of an exec-style launcher whose remaining words are data — image,
+# container, resource or file names — and that run no command and load no code:
+# image/registry transfer (push/pull/tag/save/load), and read-only reporting.
+# Deliberately absent: run, exec, attach, build, create, cp, apply, edit, debug,
+# port-forward, proxy and every sub-command that takes or runs a command.
+_LAUNCHER_DATA_SUBCOMMANDS = frozenset({
+    'push', 'pull', 'tag', 'save', 'load', 'images', 'ps', 'inspect', 'logs',
+    'version', 'info', 'login', 'logout', 'history', 'port', 'top',
+    'get', 'describe', 'cluster-info', 'api-resources', 'api-versions',
+})
+# curl options that load code when given a run-time value: `--engine` loads a
+# crypto engine shared library; `-K`/`--config` reads a config file that can set
+# any curl option, `--engine` among them.  A run-time value bound to one of these
+# is refused; a bare operand (a URL/host) stays data (_curl_runs_runtime).
+_CURL_CODE_LONG_OPTS = frozenset({'--config', '--engine'})
+_CURL_CODE_SHORT_OPTS = frozenset({'K'})
 # Variables whose run-time value, assigned to a command's environment, cannot load
 # code.  The inverse of _DATA_ONLY_COMMANDS: a run-time environment assignment is
 # refused unless the variable is listed, because BASH_ENV, ENV, NODE_OPTIONS,
 # PERL5OPT, PYTHONSTARTUP, RUBYOPT, LD_PRELOAD and their kind each turn a run-time
 # value into code the next command runs, and such a list can never be complete.
+# HOME was removed (2026-11-08, train 2 review): a run-time HOME loads code — the
+# Python user-site directory and its `.pth` files, `~/.node_modules`, and
+# `~/.ssh/config`'s ProxyCommand all live under it.  The rest were re-checked the
+# same way and kept: the locale/charset names (LANG, LANGUAGE, LC_*) select a
+# compiled locale, not a code path (GCONV_PATH/LOCPATH, which do, are absent);
+# TZ/TERM name a tzfile/terminfo entry read as data; COLUMNS/LINES are numbers;
+# PWD/OLDPWD/USER/LOGNAME/HOSTNAME/TMPDIR/DISPLAY are plain strings a program
+# reads, not a module/script path it loads; the color flags are booleans.
 _SAFE_ENV_VARS = frozenset({
     'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES',
-    'LC_NUMERIC', 'LC_TIME', 'TZ', 'TERM', 'COLUMNS', 'LINES', 'HOME', 'PWD',
+    'LC_NUMERIC', 'LC_TIME', 'TZ', 'TERM', 'COLUMNS', 'LINES', 'PWD',
     'OLDPWD', 'USER', 'LOGNAME', 'HOSTNAME', 'TMPDIR', 'DISPLAY', 'NO_COLOR',
     'FORCE_COLOR', 'CLICOLOR', 'CLICOLOR_FORCE',
 })
@@ -1224,8 +1284,40 @@ def _runs_runtime_code(text, fed=False, depth=0):
     if any(_command_runs_runtime_code(words, fed or bool(feeds))
            for words, feeds in zip(cmds, info['feeds'])):
         return True
+    if _bare_runtime_assignment_reaches_command(cmds):
+        return True
     return any(_runs_runtime_code(body, fed or body_fed, depth + 1)
                for body, body_fed in zip(bodies, info['body_fed']))
+
+
+def _bare_runtime_assignment_reaches_command(cmds):
+    """True iff a bare run-time assignment to an unsafe name reaches a later command.
+
+    A bare assignment (`NODE_OPTIONS=$X` as a command of its own, not a prefix to
+    one) sets no environment by itself, but its value reaches a later command's
+    environment through `set -a`, through a later `export NAME`, or because NAME
+    is already exported.  So once such an assignment to a name outside
+    _SAFE_ENV_VARS has appeared, a later command that is not data-only (it runs a
+    program — `node x.js`, `export NODE_OPTIONS`) may load that value as code.
+    `NODE_OPTIONS=$X node x.js` (a prefix on one command) is handled directly in
+    _command_runs_runtime_code; this is the cross-command residual it cannot see.
+    """
+    pending = False
+    for words in cmds:
+        words = _without_redirections(words)
+        values = [value for value, _runtime in words]
+        idx = _command_token_index(values)
+        if idx is None:
+            for value, runtime in words:
+                if runtime and _ENV_ASSIGN_RE.match(value) and (
+                        value.split('=', 1)[0].rstrip('+').split('[', 1)[0]
+                        not in _SAFE_ENV_VARS):
+                    pending = True
+        elif pending:
+            name = _basename(values[idx])
+            if name not in _TEXT_ONLY_COMMANDS and name not in _DATA_ONLY_COMMANDS:
+                return True
+    return False
 
 
 def _command_runs_runtime_code(words, fed):
@@ -1281,12 +1373,67 @@ def _command_runs_runtime_code(words, fed):
     if any(_runner_runs_runtime(_basename(value), words[p + 1:], fed, embedded=True)
            for p, (value, runtime) in enumerate(words) if p > idx and not runtime):
         return True
+    # An exec-style launcher (docker/podman/kubectl): a run-time word is a command
+    # unless the sub-command is a static data one (`docker push $IMAGE`).
+    if name in _EXEC_LAUNCHERS:
+        return _launcher_runs_runtime(name, args)
+    # curl loads code through `--engine` and `-K`/`--config`; a bare operand
+    # (a URL/host) stays data.
+    if name == 'curl':
+        return _curl_runs_runtime(args)
     # Fail closed on a program the scan does not otherwise model: a run-time word
     # of its own may be a command or code it runs (octave --eval, chroot, strace,
     # find -exec, ...).  The _DATA_ONLY_COMMANDS keep such a word as data.
     if name in _DATA_ONLY_COMMANDS:
         return False
     return any(runtime for _v, runtime in args)
+
+
+def _launcher_runs_runtime(name, args):
+    """True iff an exec-style launcher (docker/podman/kubectl) given args runs a run-time word.
+
+    The first word that is neither an option nor a run-time value is the
+    sub-command.  A static data sub-command (_LAUNCHER_DATA_SUBCOMMANDS) keeps
+    the words after it as data (`docker push $IMAGE`); a run-time sub-command
+    (`docker $X`), or a command-bearing one given a run-time word
+    (`docker run img $X`, `kubectl exec p -- $X`, `docker build $X`), runs it.
+    """
+    for i, (value, runtime) in enumerate(args):
+        if runtime:
+            return True  # the sub-command (or a preceding option's value) is run-time
+        if value.startswith('-'):
+            continue
+        if value in _LAUNCHER_DATA_SUBCOMMANDS:
+            return False
+        return any(rt for _v, rt in args[i + 1:])
+    return False  # no sub-command word: no run-time word to run as a command
+
+
+def _curl_runs_runtime(args):
+    """True iff curl given args is handed a run-time value that loads code.
+
+    `--engine <v>` loads a crypto engine shared library and `-K`/`--config <v>`
+    reads a config file that can set any option (`--engine` among them), so a
+    run-time value in one of those positions is refused — attached (`--engine=$X`,
+    `-K$X`) or as the next word (`--engine $X`, `-K $X`).  A bare operand
+    run-time word (a URL/host) and a run-time value of any other option stay data.
+    """
+    for i, (value, _runtime) in enumerate(args):
+        if value.startswith('--'):
+            name = value.split('=', 1)[0]
+            if name in _CURL_CODE_LONG_OPTS:
+                if '=' in value:
+                    if _RUNTIME in value:  # `--engine=$X`
+                        return True
+                elif i + 1 < len(args) and args[i + 1][1]:  # `--engine $X`
+                    return True
+        elif value.startswith('-') and len(value) > 1:
+            if any(ch in _CURL_CODE_SHORT_OPTS for ch in value[1:]):
+                if _RUNTIME in value:  # `-K$X`, a run-time value attached
+                    return True
+                if i + 1 < len(args) and args[i + 1][1]:  # `-K $X`
+                    return True
+    return False
 
 
 def _without_redirections(words):

@@ -535,3 +535,182 @@ def test_the_cli_marks_an_invocation_inside_a_shell_string(sandbox):
     # The stripped view bash-safety feeds has lost the string's end; the raw text holds it.
     assert cli("bash -c -- ", raw='bash -c -- "git push --force"') == [
         {"subcommand": "push", "args": ["--force"], "path_qualified": False, "nested": True}]
+
+
+# ── Train 2 review: the -c layer fail-closed rule, extended ───────────────────
+# d1b244f0 inverted to a data-only allowlist but left gaps the reviewer measured:
+# docker/podman/kubectl were in the allowlist though `run`/`exec` take a command
+# and `build` runs a Dockerfile; curl was in it though `--engine`/`-K`/`--config`
+# load code; HOME was a "safe" env var though it loads code (user-site `.pth`,
+# `~/.node_modules`, `~/.ssh/config` ProxyCommand); and a bare run-time assignment
+# to an unsafe name reaches a later command (`set -a`, a later `export`, an
+# already-exported name).  Each of the sixteen below exited 0 at every hook on
+# d1b244f0 and runs or loads run-time code; each is a residual again, over the
+# privilege guard, bash-safety and the branch hook, for the main agent and for a
+# subagent.  (`podman run img $X` is one string listed twice by the reviewer.)
+FAIL_CLOSED_LAUNCHER = [
+    'bash -c "docker run --rm -v /:/h alpine $X"',
+    'bash -c "docker $X"',
+    'bash -c "docker build $X"',
+    'bash -c "podman run img $X"',
+    'bash -c "kubectl exec pod -- $X"',
+    'bash -c "docker run img $X"',
+    'bash -c "kubectl exec p -- $X"',
+]
+FAIL_CLOSED_CURL = [
+    'bash -c "curl --engine $X https://example.com"',
+    'bash -c "curl -K $X https://example.com"',
+]
+FAIL_CLOSED_ENV = [
+    'bash -c "HOME=$X python3 x.py"',
+    'bash -c "HOME=$X node x.js"',
+    'bash -c "HOME=$X ssh host true"',
+    'bash -c "set -a; NODE_OPTIONS=$X; node x.js"',
+    'bash -c "NODE_OPTIONS=$X; export NODE_OPTIONS; node x.js"',
+    'bash -c "NODE_OPTIONS=$X; node x.js"',
+]
+FAIL_CLOSED_REVIEW = FAIL_CLOSED_LAUNCHER + FAIL_CLOSED_CURL + FAIL_CLOSED_ENV
+# More ways each extended rule fires in a layer: a run-time launcher sub-command,
+# an attached code-loading curl option value, another code-loading env var, a
+# bare unsafe assignment that reaches a command through a later export.
+FAIL_CLOSED_REVIEW_VARIANTS = [
+    'bash -c "docker create img $X"', 'bash -c "podman $X"', 'bash -c "kubectl run p --image i -- $X"',
+    'bash -c "docker build -t t $X"', 'bash -c "docker attach $X"',
+    'bash -c "curl --engine=$X https://x"', 'bash -c "curl -K$X https://x"',
+    'bash -c "curl --config $X https://x"',
+    'bash -c "PYTHONPATH=$X python3 a.py"', 'bash -c "GIT_SSH_COMMAND=$C ssh host true"',
+    'bash -c "LD_LIBRARY_PATH=$L ls"',
+    'bash -c "A=$X; export A; node x.js"', 'bash -c "set -a; FOO=$X; node x.js"',
+    'bash -c "BAR=$X; perl y.pl"',
+]
+# (the extended-rule layer the rule refuses, a data twin it keeps).  The twin uses
+# a static data sub-command (`docker push`), a bare URL operand (`curl $X`), an
+# env var that cannot load code (TZ/LANG), or a later data-only command.
+REVIEW_TWINS = [
+    ('bash -c "docker run img $X"', 'bash -c "docker push $IMAGE"'),
+    ('bash -c "docker build $X"', 'bash -c "docker pull $IMAGE"'),
+    ('bash -c "podman run img $X"', 'bash -c "podman tag $A $B"'),
+    ('bash -c "kubectl exec p -- $X"', 'bash -c "kubectl get pods $NS"'),
+    ('bash -c "curl --engine $X https://example.com"', 'bash -c "curl $X"'),
+    ('bash -c "curl -K $X https://example.com"', 'bash -c "curl -s localhost:$PORT"'),
+    ('bash -c "HOME=$X python3 x.py"', 'bash -c "TZ=$Z python3 x.py"'),
+    ('bash -c "HOME=$X node x.js"', 'bash -c "LANG=$L node x.js"'),
+    ('bash -c "NODE_OPTIONS=$X; node x.js"', 'bash -c "NODE_OPTIONS=$X; cd $DIR"'),
+    ('bash -c "set -a; NODE_OPTIONS=$X; node x.js"', 'bash -c "set -a; TZ=$Z; date"'),
+]
+# Data forms the extended rule keeps allowed: a static data sub-command of a
+# launcher given a run-time operand, a bare run-time URL to curl, a curl run-time
+# operand after a non-code option, a safe env var, a bare safe/unsafe assignment
+# followed only by data commands, a fully static launcher command.
+REVIEW_DATA_ALLOWED = [
+    'bash -c "docker push $IMAGE"', 'bash -c "docker pull $IMAGE"', 'bash -c "docker tag $A $B"',
+    'bash -c "docker save $IMAGE"', 'bash -c "docker login $REG"', 'bash -c "docker logs $C"',
+    'bash -c "podman push $IMAGE"', 'bash -c "kubectl get pods $NS"', 'bash -c "kubectl describe pod $P"',
+    'bash -c "curl $X"', 'bash -c "curl -s localhost:$PORT"', 'bash -c "curl -o out.html $X"',
+    'bash -c "curl -fsSL $URL"', 'bash -c "TZ=$Z date"', 'bash -c "LANG=$L node x.js"',
+    'bash -c "NODE_OPTIONS=$X; cd $DIR"', 'bash -c "TZ=$Z; date"', 'bash -c "docker run img sh"',
+]
+# The two run-time-word forms the generic "never more permissive than top level"
+# test gives every data-only program: a bare operand, and an exec-style operand.
+# `$X` makes docker/podman fail on d1b244f0 (their plain form is refused by
+# bash-safety while the layer is allowed); `exec c -- $X` makes kubectl fail.
+GENERIC_FORMS = ["$X", "exec c -- $X"]
+
+
+def _data_only_programs():
+    return sorted(git_command_classifier._DATA_ONLY_COMMANDS)
+
+
+@pytest.fixture(scope="module")
+def review_verdicts(sandbox):
+    """Hook verdicts for the extended fail-closed cases and the generic sweep.
+
+    Run with the analyzer given time (ANALYZER_TIME), so bash-safety's degraded
+    mode — which refuses any `$` and would make a layer and its plain text differ
+    by timing — does not fire; the "never more permissive" comparison is then
+    deterministic.
+    """
+    runs = set()
+    runs.update((hook, cmd, actor) for cmd in FAIL_CLOSED_REVIEW
+                for hook in LAYER_HOOKS for actor in (False, True))
+    for prog in _data_only_programs():
+        for form in GENERIC_FORMS:
+            plain = "%s %s" % (prog, form)
+            layer = 'bash -c "%s %s"' % (prog, form)
+            for cmd in (plain, layer):
+                for hook in LAYER_HOOKS:
+                    for actor in (False, True):
+                        runs.add((hook, cmd, actor))
+    runs = sorted(runs)
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        codes = list(ex.map(lambda r: _hook(sandbox, *r, env=ANALYZER_TIME).returncode, runs))
+    return dict(zip(runs, codes))
+
+
+@pytest.mark.parametrize("command", FAIL_CLOSED_REVIEW, ids=FAIL_CLOSED_REVIEW)
+@pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
+def test_a_review_fail_closed_layer_exits_2_over_the_guard_and_every_hook(
+        review_verdicts, command, subagent):
+    # The guard first: on a loaded host bash-safety's analyzer can time out and
+    # its degraded mode refuses any `$`, which says nothing about the classifier.
+    assert review_verdicts[(PRIVILEGE, command, subagent)] == 2, command
+    assert max(review_verdicts[(hook, command, subagent)] for hook in LAYER_HOOKS) == 2, command
+
+
+@pytest.mark.parametrize("command", FAIL_CLOSED_REVIEW + FAIL_CLOSED_REVIEW_VARIANTS)
+def test_a_review_fail_closed_layer_is_a_residual(command):
+    kinds = [kind for kind, _seg in classify_git_command(command)[1]]
+    assert "unresolved_shell_string" in kinds, command
+
+
+@pytest.mark.parametrize("refused,twin", REVIEW_TWINS, ids=[r for r, _t in REVIEW_TWINS])
+def test_the_review_rule_keeps_each_refused_shape_a_data_twin(refused, twin):
+    kinds = [kind for kind, _seg in classify_git_command(refused)[1]]
+    assert "unresolved_shell_string" in kinds, refused
+    assert classify_git_command(twin) == ([], []), twin
+
+
+@pytest.mark.parametrize("command", REVIEW_DATA_ALLOWED)
+def test_a_review_data_form_in_a_layer_is_allowed(command):
+    assert classify_git_command(command) == ([], []), command
+
+
+# Generic test #2 — a layer is never more permissive than the same command at top
+# level.  For every program left in _DATA_ONLY_COMMANDS, given a run-time word, the
+# layer form's exit over the three hooks is never below the plain form's, for the
+# main agent and for a subagent.  On d1b244f0 this FAILS for docker and podman
+# (`<prog> $X` is refused plainly by bash-safety but allowed in a layer) and for
+# kubectl (`<prog> exec c -- $X`), because those launchers were still data-only.
+@pytest.mark.parametrize("prog", _data_only_programs())
+@pytest.mark.parametrize("form", GENERIC_FORMS)
+@pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
+def test_a_data_only_entry_in_a_layer_is_never_more_permissive_than_at_top_level(
+        review_verdicts, prog, form, subagent):
+    plain = "%s %s" % (prog, form)
+    layer = 'bash -c "%s %s"' % (prog, form)
+    plain_max = max(review_verdicts[(hook, plain, subagent)] for hook in LAYER_HOOKS)
+    layer_max = max(review_verdicts[(hook, layer, subagent)] for hook in LAYER_HOOKS)
+    assert layer_max >= plain_max, (layer, layer_max, plain, plain_max)
+
+
+# Generic test #3 — the admission rule: no option or operand of a remaining
+# data-only entry runs a command or loads code, as far as the scan can check it.
+# Each remaining entry, given a run-time word (bare, or after a would-be
+# sub-command word), is admitted as data; and every program that FAILED this
+# audit was removed or restricted, so its code-loading forms (FAIL_CLOSED_REVIEW)
+# are residuals.  On d1b244f0 this FAILS: docker/podman/kubectl and curl were
+# still admitted, so their code-loading forms were allowed, not residuals.
+def test_no_remaining_data_only_entry_admits_a_code_loading_run_time_word():
+    for prog in _data_only_programs():
+        assert classify_git_command('bash -c "%s $X"' % prog) == ([], []), prog
+        assert classify_git_command('bash -c "%s run $X"' % prog) == ([], []), prog
+    for command in FAIL_CLOSED_REVIEW:
+        kinds = [kind for kind, _seg in classify_git_command(command)[1]]
+        assert "unresolved_shell_string" in kinds, command
+
+
+def test_the_removed_and_restricted_programs_are_out_of_the_data_only_list():
+    # The audit's removals, named so a later edit that re-adds one trips a test.
+    assert git_command_classifier._DATA_ONLY_COMMANDS.isdisjoint(
+        {"docker", "podman", "kubectl", "curl"})
+    assert "HOME" not in git_command_classifier._SAFE_ENV_VARS
