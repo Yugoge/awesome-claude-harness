@@ -120,6 +120,21 @@ def test_writer(tier_key: str = "complexity_tier", risk_key: str = "risk_level")
 
 # ---------------------------------------------------------------- dev
 
+def _lane(brief) -> tuple:
+    """The task and lane a dev dispatch works for, as G2 matches its earlier rounds: the obligation's
+    task id with the minted dev- prefix dropped (lib/obligation canonical_task_id), and its lane."""
+    ob = brief.obligation or {}
+    return re.sub(r"^dev-(?:command-)?(?=\d{8}-\d{6})", "", str(ob.get("task_id") or "")), ob.get("lane")
+
+
+def _rounds(rp) -> dict:
+    """The files each dev dispatch of the replay declared, in the list it put them in, and its adoption
+    provenance, by task and lane (_lane): a later dispatch's earlier rounds."""
+    if getattr(rp, "dev_rounds", None) is None:
+        rp.dev_rounds = {}
+    return rp.dev_rounds
+
+
 def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None = None, creates: list | None = None,
         produced: list | None = None, tools: list | None = None):
     """Apply `edits` [(rel, old, new)] (Read, then Edit), write each new file of `creates`
@@ -133,8 +148,9 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
     that did not exist before the cycle, dev.files_modified the existing ones it changed. A file a
     Bash command made that the command does not name is first named with the rule's own example
     command; a tool's files (those `git status` shows changed after it and not before, outside the
-    pipeline's own trees) are declared unnamed; a re-dispatch keeps the files its earlier round's
-    report lists that still exist."""
+    pipeline's own trees) are declared unnamed; a re-dispatch keeps the files its earlier rounds
+    wrote that still exist: those its earlier round's report lists, or, that report gone, those the
+    lane's earlier rounds of the replay declared."""
 
     def work(sub, brief, player):
         project, prompt = brief.project, brief.prompt
@@ -222,9 +238,11 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
                         new |= {rel} if code == "??" else set()
         for rel in fresh:  # a file this dispatch created: one Write of its final content in the ledger
             owned[rel] = [{"old": "", "new": peek(sub.rp, sub.role, os.path.join(project, rel))}]
-        # A re-dispatch of the task and lane: the files its earlier round's report (the artifact
-        # this dispatch declares, already on disk) lists that still exist, in the list it put them in.
-        prior, prior_prov = {"files_created": set(), "files_modified": set()}, {}
+        # A re-dispatch of the task and lane keeps the files earlier rounds of the cycle wrote that
+        # still exist (the agent text's file-list rule), in the list they put them in: those its earlier
+        # round's report (the artifact this dispatch declares, already on disk) lists; with that report
+        # gone (removed after its round), those the lane's earlier rounds of this replay declared.
+        prior, prior_prov, reported = {"files_created": set(), "files_modified": set()}, {}, False
         for art in (brief.obligation or {}).get("artifacts") or []:
             path = os.path.join(project, art.get("path") or "")
             if art.get("kind") != "json" or not os.path.isfile(path):
@@ -234,10 +252,16 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
                 doc = json.loads(peek(sub.rp, sub.role, path))
             except ValueError:
                 continue
+            reported = True
             for key in prior:
                 prior[key] |= {p for p in ((doc.get("dev") or {}).get(key) or [])
                                if isinstance(p, str) and os.path.exists(os.path.join(project, p))}
             prior_prov.update(doc.get("untracked_modified_provenance") or {})
+        lane = _lane(brief)
+        for earlier in [] if reported or not lane[0] else _rounds(sub.rp).get(lane, []):
+            for key in prior:
+                prior[key] |= {p for p in earlier[key] if os.path.exists(os.path.join(project, p))}
+            prior_prov.update(earlier["provenance"])
         created = prior["files_created"] | new
         modified = (prior["files_modified"] | set(touched)) - created
         # Adoption cell: an existing file untracked at baseline (the dispatch's baseline_dirty_snapshot,
@@ -257,6 +281,8 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
             elif rel in prior_prov and rel not in touched:  # adopted in an earlier round, unchanged since
                 provenance[rel] = prior_prov[rel]
         dev_part = {"files_modified": sorted(modified), "files_created": sorted(created)}
+        if lane[0]:
+            _rounds(sub.rp).setdefault(lane, []).append(dict(dev_part, provenance=dict(provenance)))
         out = {"owned_edits": owned, "pre_edit_snapshots": snapshots, "dev": dev_part}
         if provenance:
             out["untracked_modified_provenance"] = provenance
