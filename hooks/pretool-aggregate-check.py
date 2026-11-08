@@ -321,8 +321,6 @@ CANONICAL_PRODUCER = (
     "hooks/posttool-lane-completeness-watch.py, which runs the aggregator "
     "whenever a lane report of the task is written"
 )
-# P3 row 12(b): a block while the barrier is armed (P2), a warning otherwise.
-CANONICAL_CHECK_EXIT = 2
 
 
 def _project_relative(path, dev_dir):
@@ -359,17 +357,19 @@ def _emit_block(violations, dev_dir):
 
 
 def _emit_canonical_findings(findings, armed, dev_dir):
-    """Report row 12(b)'s findings: a block while the barrier is armed, else a warning."""
+    """Report row 12(b)'s findings: a block while the barrier is armed (P2), else a warning.
+    Each header is a literal of its own, so the dead-end check maps a block to this site."""
     if not findings:
         return
-    blocking = CANONICAL_CHECK_EXIT if armed else 0
-    verdict = "BLOCKED Agent dispatch (qa)" if blocking else "WARNING (not blocking yet)"
-    lines = ["", f"{verdict}: a fan-out's canonical aggregate does not match its lanes."]
-    lines += [f"  [{code}] {path}: {problem} | producer: {CANONICAL_PRODUCER}{_reached_by(via, dev_dir)}"
-              for code, path, problem, via in findings]
-    sys.stderr.write("\n".join(lines) + "\n\n")
-    if blocking:
-        sys.exit(blocking)
+    items = [f"  [{code}] {path}: {problem} | producer: {CANONICAL_PRODUCER}{_reached_by(via, dev_dir)}"
+             for code, path, problem, via in findings]
+    if not armed:
+        lines = ["", "WARNING (not blocking yet): a fan-out's canonical aggregate does not match its lanes."]
+        sys.stderr.write("\n".join(lines + items) + "\n\n")
+        return
+    lines = ["", "BLOCKED Agent dispatch (qa): a fan-out's canonical aggregate does not match its lanes."]
+    sys.stderr.write("\n".join(lines + items) + "\n\n")
+    sys.exit(2)
 
 
 def _resolve_dev_dir():

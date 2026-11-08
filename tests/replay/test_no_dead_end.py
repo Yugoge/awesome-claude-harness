@@ -70,8 +70,8 @@ FAULTS = {
     "dev report spoiled before QA": (DEV, "armed", f"plant@{QA_DISPATCH}=docs/dev/dev-report-{{task}}.json:junk"),
     "canonical aggregate missing before QA": (FANOUT, "shipped",
                                               "plant@Step 13 [[]l1] Agent(qa)=docs/dev/dev-report-{task}.json:absent"),
-    "canonical aggregate of another task before QA": (FANOUT, "armed", "plant@Step 13 [[]l1] Agent(qa)="
-                                                      "docs/dev/dev-report-{task}.json:foreign-identity"),
+    "canonical aggregate schema-invalid before QA": (FANOUT, "armed", "plant@Step 13 [[]l1] Agent(qa)="
+                                                     "docs/dev/dev-report-{task}.json:schema-invalid"),
     "qa dispatched before its dev returned": (QA_EARLY, "armed", ""),
     "merge grant invalid": (MERGE, "shipped", "invalid@agent:merge-analyst Write grant=nonce:0000"),
     # test_faults.py's F7 (shipped): a lane dispatched from the pre-P1 template, its report needs_review
