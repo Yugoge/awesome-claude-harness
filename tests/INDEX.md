@@ -60,6 +60,10 @@ tests/
 │   ├── `sandbox.py` - One scratch root holds everything a replay touches:
 │   ├── `schemagen.py` - A simulated subagent writes each JSON artifact its obligation declares from the
 │   └── `trace.py` - The replay runs under `strace -f --seccomp-bpf -z -y` tracing opens (with
+├── score-inject-contract/
+│   └── `test-inject-branches.sh` - Description: Verify scripts/score-inject.sh emits INJECTION_PROOF block with
+├── score-lifecycle-contract/
+│   └── `test-lifecycle-cas.sh` - Description: Verify CAS and append-only invariants for scripts/score-update.sh and
 ├── scripts/
 │   ├── `validate-checklist-completeness.py` - Validator: validate-checklist-completeness
 │   ├── `validate-chinese-content.py` - Validator: validate-chinese-content
@@ -125,6 +129,7 @@ tests/
 ├── `test_resolve_dev_artifact_chain.py` - Focused tests for the read-only /dev artifact-chain resolver.
 ├── `test_resolve_spec_artifacts.py` - resolver) + the static centralization lint (AC-B4 cases 1-12, task 20260530-092123)
 ├── `test_restart_command.py` - End-to-end unit coverage for the human-only /restart recovery protocol.
+├── `test_score_log.py` - scripts/score-update.sh and scripts/score-inject.sh both call read_lines in place
 ├── `test_settings_filter.py` - applied layers, the machine-form renderer, the doctor and pre-commit checks, and the owner
 ├── `test_settings_load.py` - take its verdict which no other test runs: the claude_home probes, installer.py's plan, and the two
 ├── `test_spec_check_agent_id_guard.py` - Lane b of task 20260921-134709. Self-contained and subprocess based: one scratch

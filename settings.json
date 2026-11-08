@@ -48,6 +48,8 @@
       "Bash(~/.claude/scripts/overnight-git-env.sh:*)",
       "Bash(~/.claude/scripts/overnight-git-selftest.sh:*)",
       "Bash(~/.claude/scripts/scan-project.sh:*)",
+      "Bash(~/.claude/scripts/score-inject.sh:*)",
+      "Bash(~/.claude/scripts/score-update.sh:*)",
       "Bash(~/.claude/scripts/write-qa-mode.sh:*)",
       "Bash(/tmp/*-venv/bin/python*)",
       "Bash(awk:*)",

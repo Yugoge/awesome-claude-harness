@@ -54,7 +54,7 @@ each step does is read from the tree's own text at run time:
   names on an artifact it wrote, fixed in one Edit, as the orchestrator gate allows one Edit per
   turn). Once a re-run of an entry's source_check passes, the later entries of that check are
   closed with it. Step 0 never proceeds on a failing chain (the driver stops after its rounds).
-* Step 3: the verdict echo; the Session Summary (its QA sources read)
+* Step 3: the verdict echo; the scoring helper and its score-update calls; the Session Summary
   and the rating block (no rating is chosen: the turn ends there); the workflow update the text
   names (/spec-update --temp where the base text asks for it, played as spec-update.md's
   Temp-note mode); Stop.
@@ -1416,10 +1416,24 @@ class CloseRun:
         o.s.say(last)
         if not last.startswith("CLOSE: YES"):
             return
+        ever = False
         for item in (self.chain.get("qa_inputs") or []) if not self.do_report else []:
             rel = item if isinstance(item, str) else (item.get("path") or item.get("qa_report") or "")
             if rel and os.path.isfile(os.path.join(o.project, rel)):
                 self.read(rel, self.label(f"Step 3 Read {rel}"))
+        decide = o.block("Step 3", anchor="close-scoring-decide.py").strip()
+        c = self.run_text(decide, self.label("Step 3 Bash close-scoring-decide"), "Which close_success event",
+                          rules=[(r"^true\|false$", "true" if ever else "false")])
+        try:
+            events = json.loads((c.response.get("stdout") or "").strip().splitlines()[-1]).get("events") or [] if c.ok else []
+        except (ValueError, IndexError):
+            events = []
+        example = o.block("Step 3", anchor="score-update.sh --agent dev")
+        ex_event = re.search(r"--event (\w+)", example).group(1)
+        for ev in events:
+            for k, line in enumerate(l for l in example.split("\n") if l.strip()):
+                self.run_text(line.replace(ex_event, ev), self.label(f"Step 3 Bash score-update {ev} {k + 1}"),
+                              "Mascot score update")
         o.s.say("## Session Summary\n- Accomplished: toy.add validates its arguments.\n- Not accomplished: none.\n"
                 "- User needs satisfied: non-numbers raise TypeError naming the argument.\n"
                 "- User needs not satisfied: none.\n- Bugs encountered: none.\n- Improvement opportunities: none.")

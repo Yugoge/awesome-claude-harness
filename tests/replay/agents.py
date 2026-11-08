@@ -19,9 +19,9 @@ call):
 5. one Write per artifact its obligation declares, generated from the schema the
    obligation names (schemagen) with the identity the obligation declares, the
    identity fields the role's agent text names for every artifact JSON, the
-   values the prompt passes for schema fields (`name: value` lines); markdown
-   artifacts from the agent file's template for that path, carrying the identity
-   anchor; or, instead of all of
+   values the prompt passes for schema fields (`name: value` lines) and the score
+   header's INJECTION_PROOF fields; markdown artifacts from the agent file's
+   template for that path, carrying the identity anchor; or, instead of all of
    them, the producer question artifact its agent text names (Act.question). An
    artifact that already exists (a re-dispatch) is Read and edited in place, as
    the harness refuses a wholesale Write over an existing file;
@@ -398,9 +398,33 @@ class Player:
         for k in ("lane", "lane_set"):
             if k in props and k in (self.b.obligation or {}):
                 content.setdefault(k, self.b.obligation[k])
+        jsons = [a for a in (self.b.obligation or {}).get("artifacts") or [] if a.get("kind") == "json"]
+        if open_ and jsons and jsons[0] is art:
+            content.update(self._injection_echo())
         doc = schemagen.instance(schema, content, seed=rel)
         self._apply_verdict(sid, schema, doc)
         return doc
+
+    def _injection_echo(self) -> dict:
+        """The fields an injected score header's INJECTION_PROOF clause asks the primary artifact to
+        carry: copied values, the digest recomputed over the header's Recent events text, and an
+        action line citing the injected rank."""
+        p = self.b.prompt
+        i = p.find("INJECTION_PROOF:")
+        if i < 0:
+            return {}
+        out = {}
+        for k, v in re.findall(r'^\s*"(\w+)":\s*"(.*)"\s*$', p[i:], re.M):
+            out[k] = v
+        events = re.search(r"Recent events:[ \t]*(.*)$", p, re.M)
+        for k in list(out):
+            if "digest" in k and events:
+                import hashlib
+                out[k] = hashlib.sha256(events.group(1).strip().encode()).hexdigest()[:8]
+            elif out[k].startswith("<"):
+                rank = next((v for kk, v in out.items() if "rank" in kk), "the injected rank")
+                out[k] = f"Rank {rank} noted: kept the change to the one file the requirement names"
+        return out
 
     def _prompt_fields(self, props: dict) -> dict:
         """`name: value` lines of the prompt whose name is a top-level schema property (values the

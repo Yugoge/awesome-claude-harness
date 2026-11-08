@@ -37,7 +37,7 @@ orchestrator runs none and marks the step completed. Step 17 indexes every lane'
 canonical. When Step 17's resolver postcondition does not pass (a failed or refused call), the
 Stop text reports the cycle not complete, as the step says. The framework's dispatch is synchronous, so a stage's "single parallel batch" is
 played as consecutive dispatches, lane by lane, each lane's own pre-dispatch block (the base's
-qa_mode flip) right before its dispatch.
+qa_mode flip) right before its dispatch; a stage's score header is computed once per stage.
 
 Driver arguments (cli.py --arg K=V):
   variant=plain        BA ready, BA-QA pass, dev, QA pass (default)
@@ -354,6 +354,7 @@ class DevCycle:
                  session=None):
         self.rp, self.variant, self.tier = rp, variant, tier
         self.spec_id = ""
+        self.score: dict = {}
         self.answers: list = []
         self.objections: list = []
         self.iteration = 0
@@ -387,6 +388,7 @@ class DevCycle:
             (r"^baseline_head_sha captured", lambda m: self.o.values.get("baseline_head_sha", "")),
             (r"^baseline_dirty_snapshot captured",
              lambda m: json.dumps(self.o.values.get("baseline_dirty_snapshot", ""))),
+            (r"^(\w+)_SCORE_HEADER prepended here", lambda m: self.score.get(m.group(1).lower(), "")),
             (r"^N$", lambda m: str(len(self.answers))),
             (r"JSON array of \{question, answer\} pairs", lambda m: json.dumps(self.answers)),
             (r"^accumulated hints$", lambda m: self.sc.rel),
@@ -415,6 +417,11 @@ class DevCycle:
         """Advance the checklist until Step n is in_progress (one completion per TodoWrite)."""
         while not self.o.at_step(n):
             self.o.advance()
+
+    def score_header(self, step: int, agent: str) -> None:
+        cmd = self.o.inline(f"Step {step}", "score-inject.sh", startswith="bash ")
+        call = self.o.run(cmd, f"Mascot score header for {agent}", f"Step {step} Bash score-inject {agent}")
+        self.score[agent] = call.response.get("stdout", "").rstrip("\n") if call.ok else ""
 
     def step_role(self, step: int):
         """The subagent_type the canonical checklist's item for Step <step> names (its subagent_call)."""
@@ -539,6 +546,7 @@ class DevCycle:
         return m.group(1)
 
     def step4_pre(self) -> None:
+        self.score_header(4, "ba")
         self.ba_type = self.step_role(4)
 
     def step4_lane(self) -> None:
@@ -646,7 +654,8 @@ class DevCycle:
                 self.read(rel, self.L(f"Step 10 Read {rel}"))
 
     def step10_pre(self) -> None:
-        """Step 10's pre-dispatch baseline capture."""
+        """Step 10's score header and its pre-dispatch baseline capture."""
+        self.score_header(10, "dev")
         self.o.run_step_blocks(10, capture=("baseline_head_sha", "baseline_dirty_snapshot"))
 
     def step10_dev(self) -> None:
@@ -700,12 +709,27 @@ class DevCycle:
 
     def step13(self, label: str = "Step 13", verdict: str = "pass") -> None:
         self.step13_blocks(label)
+        self.score_header(13, "qa")
         self.step13_dispatch(label, verdict)
 
     def step14(self, label: str = "Step 14") -> str:
+        o = self.o
         rel = self.qa_report_rel = self.text_paths(14, "Read QA report")[0]
         self.read(rel, f"{label} Read {rel}")
-        return (self.load(rel).get("qa") or {}).get("status")
+        status = (self.load(rel).get("qa") or {}).get("status")
+        sec = o.section("Step 14")
+        first = next(c for c in re.findall(r"`([^`\n]+)`", sec) if c.startswith("bash ") and "score-update.sh" in c)
+        script = first.split(" --", 1)[0]
+        if status == "pass":
+            item = "Second-or-later-round PASS" if self.iteration else "First-round PASS"
+            codes = cmdtext.inline_codes(o.text, "Step 14", item)
+            cmds = [c if c.startswith("bash ") else f"{script} {c}" for c in codes if "--agent" in c]
+        else:
+            codes = cmdtext.inline_codes(o.text, "Step 14", '`primary_cause = "dev_implementation"`')
+            cmds = [c if c.startswith("bash ") else "bash ~/.claude/scripts/" + c for c in codes if "--agent" in c]
+        for k, cmd in enumerate(cmds, 1):
+            o.run(o.bind(cmd), "Mascot score update", f"{label} Bash score-update {k}")
+        return status
 
     def step15(self, label: str = "Step 15") -> None:
         o = self.o
@@ -1033,13 +1057,15 @@ class FanoutCycle(DevCycle):
         self.to(11); self.step11()
         self.to(12); self.each(lambda: self.step12(self.L("Step 12")))
         self.to(13)
+        self.score_header(13, "qa")
         def qa():
             self.step13_blocks(self.L("Step 13"))
             self.step13_dispatch(self.L("Step 13"), "fail" if self.variant == "fanout-qa-fail" and self.fails_first()
                                  else "pass")
         self.each(qa)
         self.to(14)
-        status = self.each(lambda: self.step14(self.L("Step 14")))
+        with self.one_call(14, "Mascot score updates, every lane"):
+            status = self.each(lambda: self.step14(self.L("Step 14")))
         self.to(15)
         with self.one_call(15, "Apply the validated permissions, every passing lane"):
             self.each(lambda: self.step15(self.L("Step 15")), [l for l in self.lanes if status[l.name] == "pass"])
