@@ -154,8 +154,11 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
 
     def work(sub, brief, player):
         project, prompt = brief.project, brief.prompt
-        # The rule's paragraph, located through the extractor: a renamed or removed rule fails here.
-        name_cmd = next(c for c in cmdtext.inline_codes(player.tree.agent_text(player.role), "Output Format",
+        def name_cmd():
+            # The rule's paragraph, located through the extractor when a produced file needs naming: a
+            # renamed or removed rule fails there. Read no sooner, so a text from before the rule (a
+            # landing replay's base) plays every dispatch that names nothing.
+            return next(c for c in cmdtext.inline_codes(player.tree.agent_text(player.role), "Output Format",
                                                         "List exactly the files you wrote") if "<path>" in c)
         owned, snapshots, touched = {}, {}, []
         fresh = set()   # generated tests this dispatch wrote from the manifest's skeletons
@@ -193,7 +196,7 @@ def dev(edits: list, test_bodies: dict | None = None, report_extra: dict | None 
                     or not os.path.exists(path):
                 continue
             if rel not in command and path not in command:  # the producing command does not name it
-                sub.bash(name_cmd.replace("<path>", shlex.quote(rel)), f"Name {rel}", label=f"{sub.role} Bash name {rel}")
+                sub.bash(name_cmd().replace("<path>", shlex.quote(rel)), f"Name {rel}", label=f"{sub.role} Bash name {rel}")
             touched.append(rel)
             if not existed:
                 new.add(rel)
