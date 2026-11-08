@@ -424,6 +424,9 @@ def test_a10_fanout_lanes_each_against_their_own_writes(tmp_path, warning):
                     lane="l1", lane_set=roster)
     lb = c.dispatch("session-f", "agent-lane2", [("Write", {"file_path": c.path("src/b.py"), "content": "b\n"}, True)],
                     lane="l2", lane_set=roster)
+    # The canonical aggregate the lane-completeness watch writes once both lanes report: without it,
+    # P2's C5 returns the fan-out's newest lane at its stop (canonical_missing), whatever its lists.
+    base._write(c.project / "docs" / "dev" / f"dev-report-{TASK}.json", {"task_id": TASK, "parallel_workers": roster})
     for hook in (None, warning):
         _clean(c.stop(la, [], ["src/a.py"], hook))
         _clean(c.stop(lb, [], ["src/b.py"], hook))

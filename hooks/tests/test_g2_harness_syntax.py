@@ -58,9 +58,10 @@ def _agent(tmp_path, role: str):
     """A registered dev or test-writer whose dispatch obligation declares one
     report, written schema-valid, so its stop reaches G2's wires."""
     report = f"docs/dev/{role}-report-{TASK}.json"
-    schema = {"dev": "dev-report.v1", "test-writer": "test-writer-report.v1"}[role]
+    schema = {"dev": "dev-report.v2", "test-writer": "test-writer-report.v1"}[role]
     s = base._g2_setup(tmp_path, role, [base._g2_json(report, schema)])
-    base._write(s.project / report, base._valid_dev_report_v1(TASK) if role == "dev" else {
+    base._git_init_project(s.project)  # the v2 report's /commit trial plan reads it
+    base._write(s.project / report, base._valid_dev_report_v2(TASK) if role == "dev" else {
         "task_id": TASK, "timestamp": datetime.now(timezone.utc).isoformat(),
         "manifest_path": f"tests/generated/{TASK}/manifest.json",
         "trigger_gate": {"complexity_tier": "STANDARD", "risk_level": "low", "fired": True},
@@ -155,6 +156,10 @@ def test_product_repository_and_a_harness_copy_outside_the_home_are_not_checked(
     for sub in ("hooks", "policies", "scripts"):
         (copy / sub).mkdir(parents=True)
     (copy / "settings.json").write_text("{}\n", encoding="utf-8")
+    # The v2 report's project is a git work tree, so A3.a holds the dev to the product file it wrote.
+    report = base._valid_dev_report_v2(TASK)
+    report["dev"]["files_created"] = ["hooks/x.py"]
+    base._write(s.project / f"docs/dev/dev-report-{TASK}.json", report)
     calls = [_write(s.project / "hooks" / "x.py", BROKEN_PY), _write(copy / "hooks" / "x.py", BROKEN_PY),
              _write(copy / "scripts" / "x.sh", BROKEN_SH)]
     for warning in (False, True):
