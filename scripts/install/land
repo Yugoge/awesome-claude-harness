@@ -12,7 +12,8 @@
 # $HOME; the home's own daemon in its git work makes the landing wait), render-settings land
 # (repair the index a conflicted pull left, migrate, seed the private-literal list), then init
 # steps 3-5; each step is idempotent, and the whole stays under 15 s. A landed home whose later
-# pull conflicted on settings.json or on lines doc-sync writes gets render-settings land --repair,
+# pull conflicted on settings.json or on lines doc-sync writes, or whose overlay names a harness
+# script in a hook command (R2: HEAD may have retired it), gets render-settings land --repair,
 # and one with a stale daemon (left running before, or older than a later pull) restarts it; a
 # settings.json that a CLI write left stat-dirty gets its index stat re-recorded (review N1).
 set -u
@@ -209,6 +210,10 @@ if [ "$STATE" = landed ]; then  # a later pull's conflicted stash pop (its entry
         && git update-index -q --refresh
     else touch -r settings.json "$ck"; fi
   fi >/dev/null 2>&1
+  # R2: an overlay hook command naming a harness script is checked against HEAD (land --repair)
+  # once HEAD moved since the overlay was written or last checked, which is when HEAD can retire it.
+  [ "$COMMON/logs/HEAD" -nt settings.machine.json ] && grep -qsE '"command": ".*/(hooks|scripts)/' \
+    settings.machine.json && REPAIR="${REPAIR:-overlay}"
   [ -n "$REPAIR" ] || stale || exit 0
 fi
 mkdir -p logs 2>/dev/null
@@ -225,7 +230,7 @@ GD="$(git rev-parse --absolute-git-dir 2>/dev/null)"
 for op in rebase-merge:rebase rebase-apply:rebase MERGE_HEAD:merge CHERRY_PICK_HEAD:cherry-pick REVERT_HEAD:revert \
   "SQUASH_MSG:squash merge"; do  # (git merge --squash stops without a MERGE_HEAD)
   [ -e "$GD/${op%%:*}" ] || continue  # R2 S4: a stopped integration holds the owner's commits
-  [ "$STATE" != landed ] || [ -n "$REPAIR" ] || break
+  [ "$STATE" != landed ] || [ -n "${REPAIR#overlay}" ] || { REPAIR=""; break; }
   n="$(git ls-files -u | cut -f2 | sort -u | wc -l)"
   log "state=$STATE stopped=${op#*:} conflicted=$n"
   [ "$STATE" = upgraded ] || finish "waits-${op#*:}" "${NOTE:+Harness landing: ${NOTE#; }.}"
@@ -237,6 +242,7 @@ if [ "$STATE" = landed ]; then
   res=repaired  # render-settings exits 1 for a path git refused to repair (a lock) or a failed run
   [ -z "$REPAIR" ] || { settings --repair || { res=repair-refused; [ "${out:-settings}" != settings ] || res=repair-failed \
     out="the settings repair failed (see logs/landing.log); it runs again at the next turn end"; }; NOTE="${out:+; $out}$NOTE"; }
+  [ "$REPAIR${out:-}" != overlay ] || REPAIR=""  # the overlay held nothing to drop: no log line
   [ -n "$REPAIR$NOTE" ] || exit 0  # only daemons it could not restart yet: no log line, no notice
   finish "$res" "${NOTE:+Harness landing: ${NOTE#; }.}"
 fi
