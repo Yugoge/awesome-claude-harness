@@ -1421,19 +1421,25 @@ class CloseRun:
             rel = item if isinstance(item, str) else (item.get("path") or item.get("qa_report") or "")
             if rel and os.path.isfile(os.path.join(o.project, rel)):
                 self.read(rel, self.label(f"Step 3 Read {rel}"))
-        decide = o.block("Step 3", anchor="close-scoring-decide.py").strip()
-        c = self.run_text(decide, self.label("Step 3 Bash close-scoring-decide"), "Which close_success event",
-                          rules=[(r"^true\|false$", "true" if ever else "false")])
+        # The scoring helper runs where the text names it; a close.md without the
+        # scoring section (moved to P4, design.md section 6.1) runs none.
         try:
-            events = json.loads((c.response.get("stdout") or "").strip().splitlines()[-1]).get("events") or [] if c.ok else []
-        except (ValueError, IndexError):
-            events = []
-        example = o.block("Step 3", anchor="score-update.sh --agent dev")
-        ex_event = re.search(r"--event (\w+)", example).group(1)
-        for ev in events:
-            for k, line in enumerate(l for l in example.split("\n") if l.strip()):
-                self.run_text(line.replace(ex_event, ev), self.label(f"Step 3 Bash score-update {ev} {k + 1}"),
-                              "Mascot score update")
+            decide = o.block("Step 3", anchor="close-scoring-decide.py").strip()
+        except cmdtext.TextNotFound:
+            decide = ""
+        if decide:
+            c = self.run_text(decide, self.label("Step 3 Bash close-scoring-decide"), "Which close_success event",
+                              rules=[(r"^true\|false$", "true" if ever else "false")])
+            try:
+                events = json.loads((c.response.get("stdout") or "").strip().splitlines()[-1]).get("events") or [] if c.ok else []
+            except (ValueError, IndexError):
+                events = []
+            example = o.block("Step 3", anchor="score-update.sh --agent dev")
+            ex_event = re.search(r"--event (\w+)", example).group(1)
+            for ev in events:
+                for k, line in enumerate(l for l in example.split("\n") if l.strip()):
+                    self.run_text(line.replace(ex_event, ev), self.label(f"Step 3 Bash score-update {ev} {k + 1}"),
+                                  "Mascot score update")
         o.s.say("## Session Summary\n- Accomplished: toy.add validates its arguments.\n- Not accomplished: none.\n"
                 "- User needs satisfied: non-numbers raise TypeError naming the argument.\n"
                 "- User needs not satisfied: none.\n- Bugs encountered: none.\n- Improvement opportunities: none.")
