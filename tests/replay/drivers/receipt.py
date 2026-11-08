@@ -77,6 +77,12 @@ def prepare(project: str, git) -> None:
     os.makedirs(os.path.join(project, ".claude"), exist_ok=True)
     with open(os.path.join(project, "summary.md"), "w") as fh:
         fh.write("done\n")
+    # Step 21's summary, where dev-overnight.md writes it (docs/dev/overnight-summary-<date>.md): the
+    # closeout the time-lock decides on after end_time reads that file (P1c X5, overnight.closeout_gaps).
+    os.makedirs(os.path.join(project, "docs", "dev"), exist_ok=True)
+    day = datetime.now(timezone.utc).strftime("%Y%m%d")
+    with open(os.path.join(project, "docs", "dev", f"overnight-summary-{day}.md"), "w") as fh:
+        fh.write("# Overnight summary\n\ndone\n")
     end = datetime.now(timezone.utc) + timedelta(seconds=LOCK_S)
     with open(os.path.join(project, ".claude", f"overnight-state-{SID}.json"), "w") as fh:
         json.dump(state(end), fh)

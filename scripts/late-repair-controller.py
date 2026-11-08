@@ -15,7 +15,10 @@ Owns the run-record lifecycle for the deliberately-invoked ``/close
                      declared it (obligation.declaring_dispatch).  It reads
                      and writes nothing in the report: each report has one
                      producer, its stage's role, and G2 checks it at that
-                     producer's stop.
+                     producer's stop.  It records each dispatch once: a
+                     stage dispatched again records its new report in place
+                     of the earlier one, and the dev report recorded again
+                     clears finalize's outcome.
   finalize          Runs the drift-detection + per-file routing phase
                      (scripts/check-late-repair-provenance.py) and decides
                      finalized_pending_verification / honest_refuse /
@@ -98,6 +101,12 @@ def _sha256_file(path: Path) -> str:
 
 def _run_record_path(root: Path, task_id: str) -> Path:
     return root / "docs" / "dev" / f"late-repair-run-{task_id}.json"
+
+
+def _finalize_paths(root: Path, task_id: str) -> tuple[Path, Path]:
+    """The dev report finalize reads and the effective report it writes."""
+    dev_dir = root / "docs" / "dev"
+    return dev_dir / f"dev-report-{task_id}.json", dev_dir / f"dev-report-{task_id}.effective.json"
 
 
 def _write_json(path: Path, doc: dict[str, Any]) -> None:
@@ -318,12 +327,24 @@ def cmd_record_stage(ns: argparse.Namespace) -> int:
             f"no {ns.stage} dispatch of this task declares it (declared by: {owner_role!r})",
             3,
         )
+    # One record per dispatch: a stage dispatched again (to repair its report
+    # after the record, at /close or /commit) is recorded again; the dispatch
+    # already recorded never is.
+    prior, dispatch = record["stages"].get(ns.stage), owner.get("tool_use_id")
+    if prior is not None and (not dispatch or prior.get("tool_use_id") in (None, dispatch)):
+        return _refuse(f"stage {ns.stage!r} already recorded for this repair_run_id", 3)
 
     root_rel = report_path.relative_to(root).as_posix()
     record["stages"][ns.stage] = {
         "report_path": root_rel,
         "recorded_at": _now_iso(),
+        "tool_use_id": dispatch,
     }
+    if root_rel == _rel(_finalize_paths(root, ns.task_id)[0], root):
+        # finalize decided on the earlier bytes of the report it reads: the
+        # chain is no longer finalized until finalize runs again.
+        record.update(outcome=None, effective_report=None)
+        record.pop("drift_detected", None)
     _write_json(_run_record_path(root, ns.task_id), record)
     _emit({"outcome": "recorded", "stage": ns.stage})
     return 0
@@ -344,7 +365,7 @@ def cmd_finalize(ns: argparse.Namespace) -> int:
             return _refuse(f"stage {stage!r} not yet recorded", 3)
 
     run_record_path = _run_record_path(root, ns.task_id)
-    dev_report_path = root / "docs" / "dev" / f"dev-report-{ns.task_id}.json"
+    dev_report_path, effective_path = _finalize_paths(root, ns.task_id)
     if not dev_report_path.is_file():
         if record.get("original_cycle_at") is None:
             record["outcome"] = "fail_closed"
@@ -383,7 +404,6 @@ def cmd_finalize(ns: argparse.Namespace) -> int:
     # Written afresh from the task's dev report on every run, never refused
     # as a second run: running finalize again is how a file removed or broken
     # after an earlier run is repaired.
-    effective_path = root / "docs" / "dev" / f"dev-report-{ns.task_id}.effective.json"
     effective_rel = _rel(effective_path, root)
     doc = json.loads(dev_report_path.read_text(encoding="utf-8"))
     final_hashes = dict(doc.get("final_source_hashes") or {})
@@ -468,12 +488,14 @@ def resolve_effective_report_state(project_dir: Path, task_id: str) -> tuple[str
     effective report's path: the path finalize recorded, which finalize
     checked when it wrote the file; a file removed or broken since is a gap
     its first use names (the repository plan), repaired by running finalize
-    again.  Returns ("invalid", run record) otherwise (State C -- callers
-    MUST fail closed here, never fall back to stale canonical provenance):
-    the record holds neither of finalize's two outcomes (finalize_outcome,
-    the test verify-disclosure takes).  No stage report is read: a stage
-    report removed or broken after its producer's stop is a gap Step 5's
-    chain call names.
+    again.  Returns ("invalid", path) otherwise (State C -- callers MUST fail
+    closed here, never fall back to stale canonical provenance): the record
+    holds neither of finalize's two outcomes (finalize_outcome, the test
+    verify-disclosure takes).  path is the effective report finalize writes
+    when finalize has recorded no outcome (it has not run, or record-stage
+    recorded the dev report again since), so the finding routes to finalize;
+    else the run record.  No stage report is read: a stage report removed or
+    broken after its producer's stop is a gap Step 5's chain call names.
 
     A null effective_report does NOT by itself mean "no drift": finalize
     leaves it null in every terminal state it can reach except the
@@ -488,8 +510,14 @@ def resolve_effective_report_state(project_dir: Path, task_id: str) -> tuple[str
     run_record_path = _run_record_path(root, task_id)
     if not run_record_path.is_file():
         return "none", None
-    outcome = finalize_outcome(_load_active_record(root, task_id))
+    record = _load_active_record(root, task_id)
+    outcome = finalize_outcome(record)
     if outcome is None:
+        if record is not None and record.get("outcome") is None:
+            # Not finalized (not yet, or the report it reads recorded again
+            # since): the artifact finalize writes, whose owner is finalize's
+            # own step.
+            return "invalid", _finalize_paths(root, task_id)[1]
         return "invalid", run_record_path
     state, rel = outcome
     return state, (root / rel if rel else None)

@@ -823,6 +823,10 @@ def test_projected_qa_is_accepted_by_permission_and_e2e_readers(
             "agent_type": "qa",
         },
     )
+    # The QA is judged on the report its own dispatch declares (R10).
+    declared = {"role": "qa", "task_id": "20260101-120000-projection", "artifacts": [
+        {"kind": "json", "schema": "qa-report.v2", "path": str(report_path.relative_to(tmp_path))}]}
+    monkeypatch.setattr(e2e_reader, "_own_dispatch", lambda *_a: (declared, None))
     with pytest.raises(SystemExit) as exc:
         e2e_reader.main()
     assert exc.value.code == 0

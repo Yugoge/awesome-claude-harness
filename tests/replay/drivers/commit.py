@@ -18,9 +18,11 @@ tree's text spells each one, read at run time:
   dev report is gone is diagnosed as that missing dev report and its producer dispatched again),
   the owner dispatched again under the same task id, and the block re-run (at most three rounds).
   A reader call a hook refuses, or a `null` answer outside a QA round, is the text's defined wait:
-  the turn ends with its `AWAITING_INPUT:` line. Then the attribution-log slice block; the dispatch-snapshot
+  the turn ends with its `AWAITING_INPUT:` line. Then the attribution-log slice block (where it is not the
+  plan block's own tail); the dispatch-snapshot
   manifest (the state dir and session id read in Bash, each plan entry's `git status
-  --porcelain=v1`, then a Write of the fields the text lists); one grant per plan entry with the
+  --porcelain=v1`: the attribution block's own output where the text prints them there, else a call of
+  their own; then a Write of the fields the text lists); one grant per plan entry with the
   writer block of the step.
 * Step 6: the planning dispatch (changelog-analyst with Step 7's prompt, DRYRUN=true), the
   pre-commit QA dispatch from the step's prompt block, the decision read of the
@@ -45,8 +47,8 @@ staging; in a real run the message written with the Write tool at the path the t
 (Phase 8 step 1's `MSGFILE=` path, its placeholders bound), then one Bash process holding the Phase 3 lock block
 (lock and session-index init as written) that runs Phase 4's pre-staged check, Phase 5's
 individual `git add -- <path>`, the Phase 8 drift re-check and commit block and the SHA/branch
-reads, printing the descriptor; then Phase 10 as the tree spells it (the token writer's call; or,
-on a text that writes the token with the Write tool, the descriptor values computed in Bash, the
+reads, then the shared-index sync step as Phase 3's text spells it, printing the descriptor; then
+Phase 10 as the tree spells it (the token writer's call; or, on a text that writes the token with the Write tool, the descriptor values computed in Bash, the
 pre-write HEAD check, the Write, the post-write HEAD check). Driver resolution of one textual
 conflict: the text asks the MSGFILE Write to happen while the fd-9 lock is held by the staging
 Bash process, which a tool call cannot do; the driver stages and commits in one process after
@@ -59,15 +61,21 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
   after=dev|dev-command   the cycle committed (default dev; /do is drivers/do.py)
   variant=plain|route|append   the /close before it (drivers/close.py's variants)
   variant=auto            /dev, then `/close --auto`, then `/commit --auto`
-  variant=commit-route    /close lands, then the lane dev report is removed and /commit is typed in
-                          a later session: Step 5's chain call names the report, its owner is
-                          dispatched again, the same call re-run (acceptance 7's fourth case)
+  variant=commit-route    /close lands, then the lane dev report (a fan-out cycle's first lane's) is
+                          removed and /commit is typed in a later session: Step 5's chain call
+                          names the report, its owner is dispatched again, the same call re-run
+                          (acceptance 7's fourth case; F8c)
+  cycle_variant=V         drivers/dev.py's variant of the cycle (default plain; fanout, lanes=N)
+  removed=lane|aggregate  with variant=commit-route and a fan-out cycle, the report removed after
+                          /close: the first lane's dev report (lane, the default; F8c) or the canonical
+                          aggregate (aggregate; acceptance 7's fan-out commit-route case)
   variant=full            route, append and commit-route in one cycle: the lane QA report removed
                           after /dev, /close in a later session (Step 0's routing round, then a
                           close-QA finding on the product file, dev again, the appended round), the
                           lane dev report removed after CLOSE: YES, /commit in a later session
-  cycle_variant=V         the /dev variant (drivers/dev.py): with variant=commit-route and a fan-out
-                          cycle (fanout), the report removed after /close is the canonical aggregate
+  session=same|later      /close and /commit typed in the cycle's session or a later one
+                          (default same for plain, later for every routing variant and auto, as
+                          acceptance 7 types them)
 
 Acceptance 7's late-repair cases, run by name (`--arg variant=<name>`); the artifact check's job list
 (tests/artifact_graph/runtime.py drivers(): the `variant=` lines above) leaves them out:
@@ -76,16 +84,15 @@ Acceptance 7's late-repair cases, run by name (`--arg variant=<name>`); the arti
                           session: Step 5's resolve-effective-report and chain call as the text has
                           them
   late-repair-qa          the same to CLOSE: YES, then the task's QA report removed and /commit typed
-                          in a later session; each Step 5 loop stops after three rounds (a round: one
-                          routed finding and the re-run of its check)
+                          in a later session (F8r): Step 5's chain call names the report, its QA
+                          dispatch runs again and, where the routing loop has the step, its report is
+                          recorded (record-stage); each Step 5 loop stops after three rounds (a round:
+                          one routed finding and the re-run of its check)
   kit=base                the replay of the base kit's text: commit-route, full, late-repair and
                           late-repair-qa may stop short of `committed` there; on the branch's text
                           each one that does fails the replay (acceptance 7)
-  session=same|later     /close and /commit typed in the cycle's session or a later one
-                          (default same for plain, later for every routing variant and auto, as
-                          acceptance 7 types them)
 
-Respellings: RESPELLINGS below (base-text paths, row 7). Deviations: DEVIATIONS below.
+Respellings: RESPELLINGS below (base-text paths, row 7). Deviations: none (DEVIATIONS stays empty).
 """
 from __future__ import annotations
 
@@ -96,8 +103,10 @@ import shlex
 
 from .. import agents, cmdtext
 from ..pipeline import Deviations, Orchestrator, Respelling, utc_now
-from ..replay import Deviation
 from . import close as closedrv
+
+# /commit's success outcomes (Step 7's commit_status, as the --auto walk counts them).
+COMMITTED = ("committed", "nothing_to_commit", "push_gate_reconciled", "nothing_to_commit_precommitted")
 
 PIPELINE = "commit"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -120,53 +129,13 @@ RESPELLINGS = [
                "python3 ~/.claude/scripts/resolve-dev-report.py", "agents/changelog-analyst.md Phase 2 (:399 at 2acc29b)"),
 ]
 
-DEVIATIONS = Deviations([
-    # DEVIATION: "[Orchestrator Gate] BLOCKED: Bash used consecutively beyond limit (6/5)."
-    # The command's own run of Bash blocks between two dispatches outnumbers the gate's cap of 5.
-    ("*Bash*", Deviation("hooks/pretool-orchestrator-gate.py", "Bash used consecutively beyond limit",
-                         "the command's own run of Bash blocks between dispatches")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote"
-    # pretool-bash-safety.sh refuses the analyst's Phase 3 lock block as its agent text spells it (the
-    # apostrophe of "the repo's .git/" in its comment).
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED unproven_boundary_with_removal_reference:mkdir:"
-    # pretool-bash-safety.sh refuses the base text's Phase 10 descriptor step (its `mkdir -p
-    # "/tmp/agentic-commit/push/..."`, the form that text calls the accepted one).
-    ("agent:changelog-analyst Bash token descriptor *", Deviation(
-        "hooks/pretool-bash-safety.sh", "unproven_boundary_with_removal_reference:mkdir",
-        "Phase 10 steps 1-5 as the base agent text spells them")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED dynamic_command_head:dev-report*"
-    # pretool-bash-safety.sh refuses the base text's artifact_role table as written (its case patterns).
-    ("/commit * Bash artifact_role", Deviation(
-        "hooks/pretool-bash-safety.sh", "BLOCKED: removal-policy — UNRESOLVED",
-        "the role table as the text defines it")),
-    # (hookrun keeps the last 4000 characters of a hook's output: for this long block the quote is its REASON line)
-    ("agent:changelog-analyst Bash stage and commit *", Deviation(
-        "hooks/pretool-bash-safety.sh", "every execution boundary must be provably inert",
-        "Phase 3's lock block as the agent text spells it")),
-    # DEVIATION: "BLOCKED: agent git commit - the -C argument '${GIT_ROOT}' looks like an unresolved shell
-    # variable reference, not a concrete path."
-    # pretool-git-privilege-guard.py refuses Phase 8's commit line as the agent text spells it
-    # (`git -C "${GIT_ROOT}" commit -F "<msgfile>"`, CP-2's permitted form).
-    # DEVIATION: "BLOCKED: removal-policy — FORBIDDEN_REMOVAL filesystem_removal:rm"
-    # pretool-bash-safety.sh refuses Phase 8's cleanup of the message file (`rm -f "${MSGFILE}"`).
-    ("agent:changelog-analyst Bash rm MSGFILE *", Deviation(
-        "hooks/pretool-bash-safety.sh", "FORBIDDEN_REMOVAL filesystem_removal:rm",
-        "Phase 8's separate cleanup step as the agent text spells it")),
-    ("agent:changelog-analyst Bash stage and commit *", Deviation(
-        "hooks/pretool-git-privilege-guard.py", "looks like an unresolved shell variable reference",
-        "Phase 8's commit line as the agent text spells it")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED dynamic_command_head:ARTIFACT_CHAIN="$(python3
-    # ~/.claude/scripts/resolve-dev-artifact-chain.py ..."
-    # pretool-bash-safety.sh refuses Step 5's block as the text spells it (its `until
-    # ARTIFACT_CHAIN="$(...)"; do` chain-recheck loop), in both kits.
-    ("/commit Step 5 Bash plan *", Deviation(
-        "hooks/pretool-bash-safety.sh", "every execution boundary must be provably inert",
-        "Step 5's block as the text spells it")),
-])
+# Blocks the replays meet: none (a compliant run needs no deviation).
+DEVIATIONS = Deviations([])
 
-# (the stand-in also prints the late-repair answer the block holds when it is called, for the report)
+# (the stand-in also prints the late-repair answer the block holds when it is called, for the report, and the
+# values the block has set by then, which the main agent holds when it routes the finding: `{caps}`)
 STAND_IN = ('route_finding() { printf "ROUTE_FINDING\\t%s\\t%s\\t%s\\t%s\\n" "$1" "$2" "$3" "${LATE_REPAIR_JSON:-}" >&2; '
-            'exit 3; }\n')
+            'declare -p {caps} 2>/dev/null; exit 3; }\n')
 STATUS_BEGIN, STATUS_END = "--- CHANGELOG-ANALYST-STATUS-BEGIN ---", "--- CHANGELOG-ANALYST-STATUS-END ---"
 
 
@@ -258,9 +227,9 @@ class CommitRun:
         block = o.block("Step 5", anchor="LATE_REPAIR_JSON")
         caps = ("CONTROL_ROOT", "NESTED_REPO", "TASK_DOCS_ROOT", "TASK_PROJECT_ROOT", "LATE_REPAIR_JSON",
                 "LATE_REPAIR_STATE", "TASK_REPORT", "ARTIFACT_CHAIN", "FANOUT_MODE", "CANONICAL_DEV_REPORT",
-                "REPOSITORY_PLAN")
+                "REPOSITORY_PLAN", "ATTRIBUTION_LOG")
         for k in range(rounds + 1):
-            c = self.run_text(STAND_IN + block, self.label(f"Step 5 Bash plan {k}"),
+            c = self.run_text(STAND_IN.replace("{caps}", " ".join(caps)) + block, self.label(f"Step 5 Bash plan {k}"),
                               "Step 5: late-repair state, artifact chain and repository plan", capture=caps)
             err = (c.error or "") if not c.ok else (c.response.get("stderr") or "")
             found = [l.split("\t") for l in err.split("\n") if l.startswith("ROUTE_FINDING\t")]
@@ -274,6 +243,8 @@ class CommitRun:
             if not found or k == rounds:
                 return False
             _, path, detail, check = (found[0] + ["", "", "", ""])[:4]
+            closedrv.fact(self.rp, "routing entry", {"label": f"Step 5 round {k + 1}",
+                                                     "entry": {"path": path, "detail": detail, "source_check": check}})
             if self.route_step5(path, detail, k + 1, check) == "awaiting":
                 return False
         try:
@@ -313,7 +284,13 @@ class CommitRun:
                 self.awaiting = line  # the single awaiting-input line ends the turn
                 closedrv.fact(self.rp, "commit awaiting input", {"label": lab, "path": path, "line": line})
                 return "awaiting"
-            closedrv.dispatch_answer(self, ans, path, detail, lab)
+            d, role = closedrv.dispatch_answer(self, ans, path, detail, lab)
+            if d is not None and getattr(d, "agent_id", ""):
+                closedrv.fact(self.rp, "routed dispatch", {"label": lab, "path": path, "role": role,
+                                                           "lane": ans.get("lane") if isinstance(ans, dict) else None,
+                                                           "agent_id": d.agent_id, "tool_use_id": d.tool_use_id})
+                if check.startswith("late-repair-controller.py"):
+                    self.record_stage(role, path, lab)
             return None
         table = closedrv.role_function(defs)
         c = self.run_text(f"{defs}\n{table} {shlex.quote(path)}", self.label(f"{lab} Bash {table}"),
@@ -326,6 +303,22 @@ class CommitRun:
         if self.producer is None or not role:
             raise RuntimeError(f"Step 5 finding on {path} routes to {role!r}, which this driver cannot play")
         self.producer.dispatch(role, o.s, self.devs, self.label(f"{lab} Agent({role})"), note=f"{path}: {detail}")
+
+    def record_stage(self, role: str, path: str, lab: str) -> None:
+        """The loop's late-repair stage record, where the text has one: after a dispatch on the late-repair site
+        returns, the report it wrote recorded with the text's record-stage call, its role and the entry's path."""
+        try:
+            sec = self.o.section("Required-action dispatch-and-recheck loop")
+        except cmdtext.TextNotFound:
+            return
+        code = next((c for c in re.findall(r"`([^`]+)`", sec) if "late-repair-controller.py record-stage" in c), None)
+        if code is None:
+            return
+        code = code.replace("<role>", role).replace("<path>", shlex.quote(path))
+        c = self.run_text(code, self.label(f"{lab} Bash record-stage {role}"), f"Record the {role} stage's report")
+        closedrv.fact(self.rp, "late-repair record-stage", {"label": f"{lab} record-stage {role}", "ok": c.ok,
+                                                           "result": closedrv.last_json(c.response.get("stdout") or "")
+                                                           if c.ok else c.error})
 
     def do_task(self) -> bool:
         return isinstance(self.producer, closedrv.DoProducer)
@@ -342,18 +335,28 @@ class CommitRun:
                 .replace("<human|orchestrator>", "human"))
 
     def attribution(self) -> None:
+        """The attribution slice, where the text gives it a block of its own (else the plan block built it);
+        a block that also prints the manifest's inputs is the call manifest() reads them from."""
         o = self.o
-        self.run_text(o.block("Step 5", anchor="ATTRIBUTION_FILES=()"), self.label("Step 5 Bash attribution slice"),
-                      "Attribution-log slice", capture=("ATTRIBUTION_LOG",))
+        block = o.block("Step 5", anchor="ATTRIBUTION_FILES=()")
+        self.snapshot = None
+        if "REPOSITORY_PLAN=" not in block:
+            c = self.run_text(block, self.label("Step 5 Bash attribution slice"), "Attribution-log slice",
+                              capture=("ATTRIBUTION_LOG",))
+            if "status --porcelain" in block:
+                self.snapshot = c
 
     def manifest(self) -> None:
         o = self.o
-        repos = [e["repo_root"] for e in self.plan.get("repositories") or []]
-        cmd = (". ~/.claude/hooks/lib/harness_state_dir.sh\nharness_state_dir\n"
-               'echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"\n'
-               + "\n".join(f"echo '--- {r}'; git -C {shlex.quote(r)} status --porcelain=v1" for r in repos))
-        c = o.run(cmd, "State dir, session id and status per plan entry", self.label("Step 5 Bash manifest inputs"))
-        out = (c.response.get("stdout") or "").split("\n") if c.ok else []
+        c = self.snapshot
+        if c is None:  # a text whose attribution block prints no manifest input: the inputs in a call of their own
+            repos = [e["repo_root"] for e in self.plan.get("repositories") or []]
+            cmd = (". ~/.claude/hooks/lib/harness_state_dir.sh\nharness_state_dir\n"
+                   'echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"\n'
+                   + "\n".join(f"echo '--- {r}'; git -C {shlex.quote(r)} status --porcelain=v1" for r in repos))
+            c = o.run(cmd, "State dir, session id and status per plan entry", self.label("Step 5 Bash manifest inputs"))
+        # (the values the snapshot call kept follow its output as `declare -p` lines)
+        out = (c.response.get("stdout") or "").split("\ndeclare -")[0].split("\n") if c.ok else []
         state, sid = (out + ["", ""])[:2]
         files, cur = {}, None
         for line in out[2:]:
@@ -586,13 +589,18 @@ class CommitRun:
                       if "commit -F" in b.text)
         reads = next(b.text for b in cmdtext.blocks(self.analyst_text, "Phase 8: Execute commit", "bash")
                      if "COMMIT_SHA=" in b.text)
+        # After each group's commit, the shared-index sync as Phase 3's text spells it (inline code).
+        sync = re.search(r"`(python3 [^`]*session-index\.py\"? sync-shared [^`]*)`",
+                         cmdtext.section(self.analyst_text, "Phase 3: Serialization"))
+        sync = " ".join(sync.group(1).split()) + "\n" if sync else ""
         staged = "\n".join(cands)
         script = (f"GIT_ROOT={q}\n" + lock.rstrip("\n") + "\n"
                   f"git -C \"${{GIT_ROOT}}\" diff --cached --name-only\n"
                   + "\n".join(f'git -C "${{GIT_ROOT}}" add -- {shlex.quote(p)}' for p in cands) + "\n"
                   f"ACTUALLY_STAGED_PATHS=\"$(git -C \"${{GIT_ROOT}}\" diff --cached --name-only)\"\n"
-                  + commit.replace(tpl, msgfile).replace("<msgfile>", msgfile).replace("${MSGFILE}", msgfile).rstrip("\n") + "\n"
-                  + reads.rstrip("\n") + "\n"
+                  + commit.replace(tpl, msgfile).replace("<msgfile>", msgfile).replace("${MSGFILE}", msgfile)
+                  .replace("<GIT_ROOT>", root).rstrip("\n") + "\n"
+                  + reads.rstrip("\n") + "\n" + sync
                   + 'printf \'{"repo_root": "%s", "branch": "%s", "commit_sha": "%s"}\\n\' "$GIT_ROOT" "$BRANCH" "$COMMIT_SHA"\n')
         c = sub.bash(script, "Phases 3-8: lock, stage, drift check, commit, descriptor",
                      label=f"{sub.role} Bash stage and commit {order}")
@@ -732,6 +740,7 @@ class CommitRun:
                             tokens.append(f)
                     except (OSError, ValueError):
                         pass
+        self.tokens = tokens
         closedrv.fact(self.rp, "commit", {"commit_status": cs, "landed": [(r, s) for r, s in self.landed],
                                           "push_gate_tokens": tokens,
                                           "subject": self.git_log()})
@@ -751,8 +760,27 @@ class CommitRun:
         self.o.slash(self.tid, label=self.label("typed"))
         out = self.walk()
         text = self.awaiting if isinstance(self.awaiting, str) else f"/commit {self.tid}: {out}"
-        self.o.s.stop(text, label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        ev = self.o.s.stop(text, label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        self.rp.terminal("commit", out in COMMITTED and self.clean(), ev, task=self.tid, outcome=out)
         return out
+
+    def clean(self) -> bool:
+        """The terminal's git half: each landed commit on its repository's HEAD, a push-gate token for it,
+        and none of its paths left in `git status --porcelain`."""
+        import subprocess
+        def git(root, *args):
+            return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+        if not self.landed or len(getattr(self, "tokens", [])) < len(self.landed):
+            return False
+        with self.rp.acting("driver"):
+            for root, sha in self.landed:
+                if git(root, "merge-base", "--is-ancestor", sha, "HEAD").returncode:
+                    return False
+                paths = set(git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", sha).stdout.split())
+                left = {l[3:].split(" -> ")[-1] for l in git(root, "status", "--porcelain").stdout.splitlines()}
+                if paths & left:
+                    return False
+        return True
 
     def lifecycle_row(self) -> None:
         """Driver diagnostics, no agent call: the task's lifecycle row when discovery listed no parent."""
@@ -783,13 +811,14 @@ class CommitRun:
             self.tid = line.split()[0]
             self.rp.task(self.tid)
             out = self.walk()
-            results.append((self.tid, "success" if out in ("committed", "nothing_to_commit", "push_gate_reconciled",
-                                                           "nothing_to_commit_precommitted") else out))
+            results.append((self.tid, "success" if out in COMMITTED else out))
         if not parents:
             self.lifecycle_row()
         o.s.say("\n".join(f"{t}: {r}" for t, r in results) or "no commit_pending parent")
         self.outcome = "; ".join(f"{t}: {r}" for t, r in results)
-        o.s.stop(f"/commit --auto: {self.outcome}", label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        ev = o.s.stop(f"/commit --auto: {self.outcome}", label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        self.rp.terminal("commit", bool(results) and all(r == "success" for _, r in results) and self.clean(), ev,
+                         outcome=self.outcome)
         return results
 
 
@@ -804,7 +833,7 @@ def run(rp) -> None:
                    + ("/later" if session_kind == "later" else ""))
     producer, tid, s, cyc = closedrv.dev_cycle(rp, after)
     close_variant = {"commit-route": "plain", "full": "append", "late-repair-qa": "late-repair"}.get(variant, variant)
-    closedrv.remove(rp, [p for p in closedrv.removed_after_cycle("route" if variant == "full" else close_variant, tid)
+    closedrv.remove(rp, [p for p in closedrv.removed_after_cycle("route" if variant == "full" else close_variant, cyc)
                          if os.path.exists(os.path.join(rp.layout.project, p))])
     session = rp.later_session(s) if session_kind == "later" else s
     cr = closedrv.CloseRun(rp, session, tid, producer=producer, variant=close_variant, auto=variant == "auto")
@@ -814,9 +843,10 @@ def run(rp) -> None:
         return
     cr.run()
     if variant in ("commit-route", "full"):
-        # The lane dev report (in a fan-out cycle the canonical aggregate) removed after /close landed
-        # (acceptance 7): Step 5's chain call names it.
-        closedrv.remove(rp, [f"docs/dev/dev-report-{tid}.json"])
+        # The lane dev report (a fan-out cycle's first lane's; with removed=aggregate its canonical aggregate)
+        # removed after /close landed (acceptance 7, F8c): Step 5's chain call names it.
+        closedrv.remove(rp, [f"docs/dev/dev-report-{tid}.json" if rp.args.get("removed") == "aggregate"
+                             else closedrv.lane_report(cyc, "dev")])
         session = rp.later_session(session)
     elif variant == "late-repair-qa":
         # The task's QA report removed after /close --late-repair landed (acceptance 7).

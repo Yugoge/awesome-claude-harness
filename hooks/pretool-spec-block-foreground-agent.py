@@ -79,12 +79,10 @@ def _emit_block_message(done: int, total: int) -> None:
     sys.stderr.write(
         "SPEC INTERVIEW IN PROGRESS\n"
         f"A /spec interview is currently active ({done}/{total} steps complete).\n"
-        "Foreground Agent calls are blocked until the interview finishes.\n"
+        "Foreground Agent calls other than the spec and qa subagents are blocked until the interview finishes.\n"
         "To unblock:\n"
-        f"  - Continue the interview and complete all {total} steps\n"
-        "  - OR mark all todos completed via TodoWrite\n"
-        "Background agents (run_in_background: true) are always allowed "
-        "during the interview.\n"
+        "  - an Explore agent: send the same call with run_in_background: true (Step 3's exploration)\n"
+        f"  - anything else: continue the interview and complete all {total} steps, one per TodoWrite\n"
     )
 
 

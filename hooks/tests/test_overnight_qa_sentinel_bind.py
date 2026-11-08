@@ -202,8 +202,8 @@ def test_e2e_no_actor_can_rewrite_the_sentinel(lab, kind, payload):
 
 @requires_bwrap
 def test_e2e_sibling_enforcement_flag_stays_non_removable(lab):
-    """A writable session DIRECTORY would make this pass-through;
-    subagentstop-e2e-enforce.py fails OPEN on an absent flag."""
+    """A writable session DIRECTORY would make this pass-through: a gate
+    that reads a flag there (codex-enforce.json) fails OPEN on an absent one."""
     _write_state(lab, "fresh_clone_checkout")
     flag = lab["sess"] / "e2e-enforce.json"
     for cmd in (f"python3 -c \"import os;os.unlink('{flag}')\"",

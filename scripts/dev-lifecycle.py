@@ -274,12 +274,12 @@ def commit_detection(
         dirty = _porcelain_dirty(root, owned)
         if has_trailer and not dirty:
             per_repo.append("committed")
-        elif not has_trailer and not dirty:
+        elif not has_trailer:
+            # nothing of the task committed: its owned content still waits
+            # for /commit, dirty (the usual state after /close) or not.
             per_repo.append("no_evidence")
         else:
-            # trailer present but dirty owned content -- NEVER a false
-            # `committed`; also covers "trailer absent but dirty" as a
-            # genuine partial/ambiguous state.
+            # trailer present but dirty owned content: NEVER a false `committed`.
             per_repo.append("mismatch")
 
     return _combine_commit_repo_statuses(per_repo)

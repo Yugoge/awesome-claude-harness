@@ -160,13 +160,21 @@ def test_ac8_eligible_chain_no_drift_requires_separate_verify_disclosure_step(tm
     assert dev_stage.returncode == 0
 
     # A stage recorded again (its producer's next round) replaces its entry:
-    # row 6 drops the duplicate refusal, which only kept a stored hash.
-    again = _run_controller(
+    # row 6 drops the duplicate refusal, which only kept a stored hash. The
+    # record is kept once per dispatch (P1c review 1): the dispatch already
+    # recorded is refused, and the next round's fresh dispatch is recorded.
+    record_dev = (
         "record-stage", "--task-id", task_id, "--project-dir", str(root),
         "--stage", "dev", "--report-path", str(dev_dir / f"dev-report-{task_id}.json"),
         "--repair-run-id", run_id,
     )
+    same = _run_controller(*record_dev)
+    assert same.returncode == 3 and "already recorded" in _last_json(same)["reason"]
+    _dispatch_again(root, task_id, "dev")
+    again = _run_controller(*record_dev)
     assert again.returncode == 0, again.stdout
+    entry = json.loads(_run_record_path(root, task_id).read_text(encoding="utf-8"))["stages"]["dev"]
+    assert entry["tool_use_id"] == f"toolu_dev_again_{task_id}"
 
     qa_stage = _run_controller(
         "record-stage", "--task-id", task_id, "--project-dir", str(root),
@@ -1266,6 +1274,101 @@ def test_a_removed_stage_report_is_named_by_the_chain_call_at_commit(tmp_path: P
     assert qa_path.read_bytes() != qa_bytes
     assert resolver.resolve_chain(root, task_id)["errors"] == []
     assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
+
+
+def _dispatch_again(root: Path, task_id: str, role: str) -> None:
+    """The stage's dispatch run again: its record in the task's transcript, a fresh
+    dispatched_at and its own tool_use id (toolu_<role>_again_<task>)."""
+    import os
+    store = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects" / str(root.resolve()).replace("/", "-")
+    transcript = store / f"late-repair-{task_id}.jsonl"
+    records = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
+    first = next(r for r in records if r["type"] == "assistant"
+                 and r["message"]["content"][0]["input"]["subagent_type"] == role)
+    again = json.loads(json.dumps(first).replace("2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"))
+    again["message"]["content"][0]["id"] = f"toolu_{role}_again_{task_id}"
+    with transcript.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(again) + "\n")
+
+
+def test_a_stage_dispatched_again_is_recorded_again_and_admitted(tmp_path: Path) -> None:
+    """/commit's late-repair-qa case: the recorded QA report removed after CLOSE: YES, and the QA
+    dispatch that declared it run again, which writes the report afresh (its own timestamp). The
+    late-repair state compares no stage report (P1b row 6: Step 5's chain call names the removed
+    one), so it stays none throughout; a second record of the dispatch already recorded is refused,
+    and the fresh dispatch's report is recorded once, under its own tool_use id and with no hash,
+    keeping finalize's outcome: the run stays admitted."""
+    task_id = "20260101-000920"
+    root = tmp_path
+    fx.build_beyond_qa_clean(root, task_id)
+    run_id = _init_and_record_all_stages(root, task_id)
+    _run_controller("finalize", "--task-id", task_id, "--project-dir", str(root), "--repair-run-id", run_id)
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
+    qa_path = root / "docs" / "dev" / f"qa-report-{task_id}.json"
+    qa_path.unlink()
+    qa_path.write_text(json.dumps(dict(fx._qa_document(task_id), timestamp="2026-01-02T00:00:00Z")), encoding="utf-8")
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
+    record_qa = ("record-stage", "--task-id", task_id, "--project-dir", str(root), "--stage", "qa",
+                 "--report-path", str(qa_path), "--repair-run-id", run_id)
+    same = _run_controller(*record_qa)  # no dispatch ran since the record: the same dispatch's report
+    assert same.returncode == 3 and "already recorded" in _last_json(same)["reason"]
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
+
+    _dispatch_again(root, task_id, "qa")
+    recorded = _run_controller(*record_qa)
+    assert recorded.returncode == 0, recorded.stdout
+    record = json.loads(_run_record_path(root, task_id).read_text(encoding="utf-8"))
+    entry = record["stages"]["qa"]
+    assert entry["report_path"] == f"docs/dev/qa-report-{task_id}.json" and "sha256" not in entry, entry
+    assert entry["tool_use_id"] == f"toolu_qa_again_{task_id}"
+    assert record["outcome"] == "finalized_pending_verification" and record["drift_detected"] == {}, record
+    verify = _run_controller("verify-disclosure", "--task-id", task_id, "--project-dir", str(root))
+    assert verify.returncode == 0 and _last_json(verify)["outcome"] == "admitted", verify.stdout
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
+    assert _run_controller(*record_qa).returncode == 3
+
+
+def test_a_dev_report_recorded_again_after_finalize_routes_to_finalize(tmp_path: Path) -> None:
+    """finalize decides on the dev report. Its stage dispatched again after finalize ran and
+    recorded again: the record clears finalize's outcome, so verify-disclosure (which reads that
+    outcome, P1b row 6) refuses, naming the run record, and the effective-report resolution no
+    longer takes finalize's earlier outcome. It names the effective report, whose owner is
+    /close --late-repair's Step 0 (finalize, the main agent's own step); finalize run again under
+    the run record's repair_run_id finalizes the chain, and verify-disclosure admits it."""
+    sys.path.insert(0, str(REPO_ROOT))
+    from hooks.lib.obligation import declaring_dispatch
+    task_id = "20260101-000930"
+    root = tmp_path
+    fx.build_beyond_qa_clean(root, task_id)
+    run_id = _init_and_record_all_stages(root, task_id)
+    finalize = ("finalize", "--task-id", task_id, "--project-dir", str(root), "--repair-run-id", run_id)
+    assert _last_json(_run_controller(*finalize))["outcome"] == "finalized_pending_verification"
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
+
+    dev_path = root / "docs" / "dev" / f"dev-report-{task_id}.json"
+    doc = json.loads(dev_path.read_text(encoding="utf-8"))
+    doc["dev"]["tasks_completed"].append("dispatched again")
+    dev_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    _dispatch_again(root, task_id, "dev")
+    recorded = _run_controller("record-stage", "--task-id", task_id, "--project-dir", str(root), "--stage", "dev",
+                               "--report-path", str(dev_path), "--repair-run-id", run_id)
+    assert recorded.returncode == 0, recorded.stdout
+    record = json.loads(_run_record_path(root, task_id).read_text(encoding="utf-8"))
+    assert (record["outcome"], record["effective_report"], "drift_detected" in record) == (None, None, False), record
+    verify = _run_controller("verify-disclosure", "--task-id", task_id, "--project-dir", str(root))
+    assert verify.returncode == 3, verify.stdout
+    assert _last_json(verify)["path"] == f"docs/dev/late-repair-run-{task_id}.json"
+
+    state, path = CONTROLLER.resolve_effective_report_state(root, task_id)
+    assert (state, path) == ("invalid", _effective_path(root, task_id))
+    owner = declaring_dispatch(task_id, path, root)
+    assert owner["source"] == "todo_step" and owner["step"].startswith("Step 0:"), owner
+    assert (owner["command"], owner["subagent_call"], owner["template"]) == ("close", None, None), owner
+
+    assert _last_json(_run_controller(*finalize))["outcome"] == "finalized_pending_verification"
+    assert CONTROLLER.resolve_effective_report_state(root, task_id) == ("none", None)
+    verify = _run_controller("verify-disclosure", "--task-id", task_id, "--project-dir", str(root))
+    assert verify.returncode == 0 and _last_json(verify)["outcome"] == "admitted", verify.stdout
 
 
 def test_verify_disclosure_takes_no_reading_of_the_effective_report(tmp_path: Path) -> None:

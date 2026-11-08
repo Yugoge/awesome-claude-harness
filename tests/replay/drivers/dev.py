@@ -63,6 +63,9 @@ Driver arguments (cli.py --arg K=V):
                        turn is interrupted after Step 12, before Step 13's QA dispatch: the lane QA is
                        never dispatched, Step 17 never runs, and no Stop event fires (an interrupted
                        turn runs no Stop hook); drivers/close.py's qa-never case closes it
+  variant=qa-early     (the dead-end check's G1 fault, not in VARIANTS) while Step 10's dev still runs,
+                       the orchestrator sends Step 13's QA; G1 (armed) refuses it, the dev returns and the
+                       cycle goes on as plain
   kept=<JSON>          [[hook, step, normalised text], ...]: the blocks the base kit's replay of the
                        same variant and settings recorded. Given, a declared deviation passes only a
                        block in that list (a kept base block); without it every declared deviation
@@ -85,9 +88,8 @@ the old form; each application is recorded in blocks.json "respellings":
 Not respelled (row 7): BA's and QA's blast-radius tool calls (ba.md:789, qa.md:1155) run as
 written and fail; the replay goes on.
 
-Deviations: DEVIATIONS below, one entry per block the base tree's (2acc29b) replay meets, each
-with a comment quoting the hook's text; nothing else passes a block. On another tree an entry
-whose block no longer occurs is a no-op.
+Deviations: none (DEVIATIONS is empty since P1c fixed each block at its cause): every block a
+replay meets stays blocked and is reported; P1c's suite (tests/replay/test_pipelines.py) fails on it.
 """
 from __future__ import annotations
 
@@ -123,35 +125,11 @@ RESPELLINGS = [
 
 # Blocks the base tree's replay meets, each passed by a deviation at the step it occurs on: the
 # refused call is applied as if allowed, so every later step runs and is traced.
-DEVIATIONS = Deviations([
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED option_value_removal_reference:date:-d=..."
-    # pretool-bash-safety.sh refuses Step 1's auto-detect block (its `date -d` option value).
-    ("Step 1 Bash SESSION_TS", Deviation(
-        "hooks/pretool-bash-safety.sh", "UNRESOLVED option_value_removal_reference:date:-d",
-        "Step 1's auto-detect block as the text spells it")),
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote"
-    # pretool-bash-safety.sh refuses Step 1's SPEC_ID block (the apostrophe in its comment).
-    ("Step 1 Bash SPEC_ID", Deviation(
-        "hooks/pretool-bash-safety.sh", "UNRESOLVED census_fatal:unbalanced:single_quote",
-        "Step 1's SPEC_ID block as the text spells it")),
-    # DEVIATION: "[Orchestrator Gate] BLOCKED: Bash used consecutively beyond limit (6/5)."
-    # The text's Bash blocks between two dispatches outnumber the gate's cap of 5 (only an Agent
-    # dispatch resets the count): Steps 1-4 before BA, Steps 14-17 after the last QA.
-    ("*Bash*", Deviation(
-        "hooks/pretool-orchestrator-gate.py", "Bash used consecutively beyond limit",
-        "the command's own run of Bash blocks between dispatches")),
-    # DEVIATION: "BLOCKED: Cannot complete Step 8 (\"Step 9: Graphify enrichment: dispatch graphify
-    # subagent (advisory)\"). This step requires a subagent call (graphify) that has not been made."
-    # Step 9 tells the orchestrator not to dispatch graphify when its sentinel is absent.
-    ("TodoWrite Step 9 done, Step 10 in_progress", Deviation(
-        "hooks/pretool-todo-validate.py", "This step requires a subagent call (graphify) that has not been made",
-        "Step 9 skipped as the text says (graphify sentinel absent)")),
-    # DEVIATION: "[Write Guard] BLOCKED: File already exists: /var/tmp/claude-scratch/update-<rand>.md"
-    # /spec-update --temp (which Step 17 runs) creates the note with mktemp, reads it, then writes it.
-    ("Step 17 Write update note", Deviation(
-        "hooks/pretool-write-guard.sh", "[Write Guard] BLOCKED: File already exists",
-        "the temp note mktemp created, written as /spec-update --temp says")),
-])
+# P1c removed each block these passed at its cause (commands/dev.md: Step 1's resolver and SPEC_ID
+# blocks are one Bash call with no comment the bash-safety census misreads; Step 2's query and
+# auto-init are one call, so Steps 1-4 stay within the orchestrator gate's 5-Bash streak; the base
+# tree's Step 1 `date -d`, Step 9 graphify and Step 17 temp-note blocks were gone already).
+DEVIATIONS = Deviations([])
 
 
 class _KeptDeviation:
@@ -656,7 +634,7 @@ class DevCycle:
         sc = self.sc
         self.dispatch_dev(self.L("Step 10 Agent(dev)"),
                           sc.partial if self.variant in ("qa-fail", "fanout-qa-fail") and self.fails_first() else sc.final,
-                          sc.old)
+                          sc.old, early_qa=self.variant == "qa-early")
 
     def fails_first(self) -> bool:
         """Whether this lane's first final-verification QA fails (a qa-fail run)."""
@@ -668,7 +646,7 @@ class DevCycle:
         self.step10_dev()
 
     def dispatch_dev(self, label: str, new_code: str, old_code: str, context_rel: str | None = None,
-                     add_lines=()):
+                     add_lines=(), early_qa: bool = False):
         o, sc = self.o, self.sc
         tpl = next(t for t in self.templates(10)
                    if (t.get("subagent_type") or agents.registry_role(t["prompt"])) == self.step_role(10))
@@ -677,6 +655,13 @@ class DevCycle:
                     "baseline_dirty_snapshot": o.values.get("baseline_dirty_snapshot", "")}
         work = roles.dev([(sc.rel, old_code, new_code)], test_bodies={"*": sc.test_body} if self.tw_expected
                          else None)
+        if early_qa:  # variant=qa-early: Step 13's QA is sent while this dev still runs (G1's order, R17)
+            def work(sub, brief, player, _work=work):
+                d = self._dispatch(with_lines(self.o.template("Step 13"), self.graph_lines),
+                                   agents.Act(verdict="pass", summary="QA pass"), self.L("Step 13 (early) Agent(qa)"))
+                if not d.blocked:
+                    raise AssertionError("a QA dispatched before its dev returned was not refused")
+                return _work(sub, brief, player)
         act = agents.Act(work=work, content={"*": baseline}, summary=sc.dev_summary)
         return self._dispatch(fields, act, label, subagent_type=self.step_role(10))
 
@@ -764,9 +749,6 @@ class DevCycle:
             if "Fan-out cycle" in l or "Per lane `<lane>`" in l or "Aggregate Dev Report" in l:
                 continue
             out.append(l)
-            if l.startswith("- Context:"):  # the five-artifact contract Step 17 states includes the ticket
-                ticket = next(p for p in self.ba_outputs if p.endswith(".md"))
-                out.insert(len(out) - 1, f"- Ticket: `{ticket}`")
         return out
 
     def step17(self, prefix: str = "") -> None:
@@ -791,10 +773,14 @@ class DevCycle:
         c = o.run(mk, "Create the temp update note", f"{lab}Step 17 Bash mktemp update note")
         path = c.response.get("stdout", "").strip() if c.ok else ""
         if path:
-            m = re.search(r"update-([A-Za-z0-9]+)\.md$", path)
+            m = re.search(r"update-([A-Za-z0-9]+)(?:\.md)?$", path)
             if m:
                 self.rp.rand(m.group(1))
-            o.s.read(path, label=f"{lab}Step 17 Read update note", deviation=o.devs.at(f"{lab}Step 17 Read update note"))
+            if " -d " in f" {mk} ":  # the text's private directory: the note is the new file update.md in it
+                path = os.path.join(path, "update.md")
+            else:  # the earlier text: the empty file mktemp made, Read before it is written
+                o.s.read(path, label=f"{lab}Step 17 Read update note",
+                         deviation=o.devs.at(f"{lab}Step 17 Read update note"))
             note = su.block("Temp-note mode", anchor="# Update")
             note = su.bind(note, [(r"^ISO-8601$", utc_now()), (r'id or "unknown"', self.tid),
                                   (r"^spec\|dev\|close", "dev"), (r"exact next command", f"/close {self.tid}"),
@@ -812,7 +798,8 @@ class DevCycle:
         o = self.o
         text = (f"/{o.typed} {self.tid} complete: {self.sc.dev_summary}; QA passed. Next: /close {self.tid}"
                 if getattr(self, "chain_ok", True) else self.not_complete())
-        o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        ev = o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        self.rp.terminal(o.typed, getattr(self, "chain_ok", False), ev, task=self.tid)
 
     # ------------------------------------------------------------ the whole cycle
     def run(self) -> None:
@@ -1021,7 +1008,8 @@ class FanoutCycle(DevCycle):
         text = (f"/{o.typed} {self.tid} complete: " + "; ".join(
             f"lane {l.name}: {l.sc.dev_summary}" for l in self.lanes) + "; every lane's QA passed. "
             f"Next: /close {self.tid}") if getattr(self, "chain_ok", True) else self.not_complete()
-        o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        ev = o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        self.rp.terminal(o.typed, getattr(self, "chain_ok", False), ev, task=self.tid, lanes=len(self.lanes))
 
     def run(self) -> None:
         o = self.o
@@ -1075,7 +1063,7 @@ VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-f
 
 def run(rp) -> None:
     variant = rp.args.get("variant", "plain")
-    if variant not in VARIANTS + ("qa-never",):
+    if variant not in VARIANTS + ("qa-never", "qa-early"):
         raise ValueError(f"unknown variant {variant!r}")
     tier = rp.args.get("tier", "STANDARD")
     if variant.startswith("fanout"):

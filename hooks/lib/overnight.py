@@ -130,6 +130,50 @@ def state_path(session_id, project_dir=None):
     return root / '.claude' / f'overnight-state-{session_id}.json'
 
 
+# The session's wake (commands/dev-overnight.md Step 0): the prompt of its one recurring CronCreate,
+# from launch to the session's end, which resumes a usage-limit cut with no human (P1c X8, D20).
+WAKE_PROMPT = ('[awesome-claude-harness/overnight-wake-v1] Scheduled wake of this /dev-overnight session: '
+               "resume what a usage limit cut (commands/restart.md's recovery), then carry on with the "
+               'checklist step in progress.')
+
+
+def _command_span():
+    try:  # lib.overnight (hooks) or hooks.lib.overnight (tests); a script run alone never asks
+        from . import command_span
+    except ImportError:
+        import command_span
+    return command_span
+
+
+def is_wake(use):
+    """``use`` (a command_span.Use) is an ok recurring CronCreate of the wake's prompt."""
+    return (use.name == 'CronCreate' and use.ok and use.input.get('prompt') == WAKE_PROMPT
+            and use.input.get('recurring', True) is not False)
+
+
+def wake_fired(prompt, transcript_path):
+    """``prompt`` is the wake's text and the transcript's active span (the one the prompt
+    continues) is a /dev-overnight one: never after the owner's /stop opened its own."""
+    if not isinstance(prompt, str) or prompt.strip() != WAKE_PROMPT or not transcript_path:
+        return False
+    span = _command_span().active_span(str(transcript_path))
+    return span is not None and span.command == 'dev-overnight'
+
+
+def open_wakes(transcript_path):
+    """The job ids of the transcript's wake CronCreate calls (their recorded results') that no
+    later CronDelete names, whatever span is active; read through command_span."""
+    spans = _command_span()
+    found = []
+    for use in spans.transcript_span(transcript_path).uses('CronCreate', 'CronDelete'):
+        if use.name == 'CronDelete':
+            found = [job for job in found if job != use.input.get('id')]
+        elif is_wake(use):
+            job = spans.recorded_result(transcript_path, use).get('id')
+            found += [job] if isinstance(job, str) and job else []
+    return found
+
+
 def session_state(session_id, project_dir=None):
     """One session's record: its state file whose own session_id is
     `session_id` (no scan of other sessions' files), else None."""
@@ -198,6 +242,22 @@ def cycle_index(state, written=()):
         return n
     except (OSError, ValueError, TypeError):
         return 1
+
+
+def closeout_gaps(state):
+    """What the session's end needs and has not written, read from disk: `final_summary` until
+    Step 21's docs/dev/overnight-summary-*.md under the working root is written after start_time
+    (any, when start_time does not parse) and not empty. The main agent writes it, so its own Stop
+    decides on it; the PM retro report is decided at PM's stop (G2) and not re-checked here."""
+    try:
+        start = _parse_end_time(state.get('start_time'))
+        since = start.timestamp() if start else 0.0
+        for p in sorted((working_root(state) / 'docs' / 'dev').glob('overnight-summary-*.md')):
+            if p.stat().st_mtime > since and p.read_text(errors='replace').strip():
+                return []
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return ['final_summary']
 
 
 def candidate_project_dirs(project_dir=None):

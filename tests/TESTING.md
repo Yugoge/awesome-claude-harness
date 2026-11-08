@@ -157,3 +157,42 @@ strip comments from `hooks/*.sh` and assert AC behavior. Run individually:
 > **The green floor is S1 only.** If `scripts/test` is `1250 passed / 9 xpassed`, the repo is
 > green. The secondary surfaces are run on purpose (release smoke, `/dev` gates, contract
 > checks), not as part of the default gate.
+
+---
+
+## Replay suite (`tests/replay/`, D25 "never fail")
+
+The replay suite replays the harness's ten pipelines (/spec /dev /redev /dev-command
+/dev-overnight /do /close /commit /merge /push) the way the CLI records them, against the tree's
+own command and agent text, every registered hook running as `settings.json` registers it. It runs
+P1b's drivers (`tests/replay/drivers/`), each in a sandbox of its own: HOME, CLAUDE_CONFIG_DIR,
+CLAUDE_STATE_DIR, TMPDIR and a toy project with a local bare origin, in a mount namespace, with a
+proxy guard counting every connection.
+
+| File | Proves |
+|---|---|
+| `test_pipelines.py` | (1) a compliant run of each pipeline meets 0 gate blocks and 0 hook errors and reaches its terminal, shipped and armed |
+| `test_faults.py` | (2) each injected fault is returned to its own producer, named by artifact and failing check, and repaired at the next round with no human action beyond the owner's own commands |
+| `test_no_dead_end.py` | (3) every blocking site of the registered hooks is enumerated at test time, and an agent action clears each one, apart from the owner's /stop |
+| `test_regressions.py` | (4) each process failure fixed so far stays fixed (P1's fan-out wedge, E1, N1, V1-1/NV-1) |
+
+**How to run.** It needs a mount namespace (root, or passwordless sudo) and Python 3.10+ with the
+locked requirements. The whole suite:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/replay -q -p no:cacheprovider --ignore=tests/replay/test_run_to_run.py
+```
+
+One scenario, for example: `... tests/replay/test_pipelines.py -k '/dev singular'`. `REPLAY_WORK=<dir>`
+keeps every replay's records (blocks.json, hooks.jsonl, terminals.json, transcripts) for reading;
+`REPLAY_WORKERS` sets how many replays run side by side (default: up to 4). Without a namespace the
+suite fails with the reason; it never skips.
+
+**CI.** The `replay-suite` job of `.github/workflows/baseline.yml` runs it on every push and
+pull request, over 12 shards (`REPLAY_SHARD=i/12`; each replay whole in one shard, by its declared
+cost). The `baseline` job's pytest step leaves `tests/replay/` to it.
+
+**The merge rule.** From P1c on, a phase PR merges only with the whole replay suite green on its
+head, and it adds the fault replay for each process class it changes (a scenario in
+`test_faults.py` or `test_regressions.py` that reaches the changed code). A phase that changes a
+pipeline's shape updates that pipeline's scenarios in the same commit and keeps every assertion.

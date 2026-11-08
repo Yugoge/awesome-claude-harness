@@ -76,7 +76,7 @@ def run_gate(hook_path, prompt):
         [sys.executable, hook_path],
         input=payload, capture_output=True, text=True,
     )
-    return proc.returncode, proc.stderr.strip()
+    return proc.returncode, proc.stderr.strip().split('\n')[0]
 
 
 @pytest.fixture
@@ -230,6 +230,26 @@ def test_contract_mandated_deliverables_admitted(sandbox, name):
     prompt = 'Dev report file: %s\n' % rel
     rc, err = run_gate(sandbox_hook(sandbox), prompt)
     assert rc == 0, 'contract path %s still refused: %s' % (name, err)
+
+
+def test_a_refusal_names_the_report_and_its_producers_next_round(sandbox):
+    """P1c X6: the refusal names the report whose declared files git ignores, beside the paths, and
+    the round that clears it (the report's dev dispatched again), so its orchestrator can act on it."""
+    rel = write_report(sandbox, TS, created=['docs/dev/leaked.json'])
+    proc = subprocess.run([sys.executable, sandbox_hook(sandbox)], capture_output=True, text=True,
+                          input=json.dumps({'tool_name': 'Agent', 'tool_input': {
+                              'subagent_type': 'qa', 'prompt': 'Dev report file: %s\n' % rel}}))
+    assert proc.returncode == 2
+    first, second = proc.stderr.strip().split('\n')
+    assert first == 'BLOCKED: gitignored deliverables detected: docs/dev/leaked.json'
+    assert second.strip().startswith(rel + ': ') and 'Dispatch that report\'s dev again' in second
+
+
+def test_the_rule_reads_the_project_the_dispatch_works_in(sandbox):
+    """P1c X6: the reports and the .gitignore are the project's (CLAUDE_PROJECT_DIR), wherever the
+    gate's own file lies (a harness home serving another project)."""
+    gate = load_gate_module()
+    assert gate.get_repo_root() == os.environ['CLAUDE_PROJECT_DIR'] == str(sandbox)
 
 
 def test_an_undeclared_path_of_the_same_shape_is_refused(sandbox):
@@ -1229,11 +1249,14 @@ def test_e5_effective_report_belongs_to_the_task_resolve_verifies(landing_sandbo
 
 
 def test_e5_effective_report_state_is_the_controllers(tmp_path):
-    """_effective_report_state runs scripts/late-repair-controller.py's own
-    resolve_effective_report_state; a task with no run record is `none`."""
+    """_effective_report_state runs the harness's own scripts/late-repair-controller.py
+    resolve_effective_report_state on the project it is given; a task with no run record is
+    `none`, in the harness repository and in a product repository that has no scripts/ (P1c
+    self-check: the controller was loaded from the project, so a product repository's effective
+    report was never admitted)."""
     gate = load_gate_module()
     assert gate._effective_report_state(REPO_ROOT, LANDED) == ('none', None)
-    assert gate._effective_report_state(str(tmp_path), LANDED) == ('invalid', None)
+    assert gate._effective_report_state(str(tmp_path), LANDED) == ('none', None)
 
 
 def test_e1_e4_predicates_unchanged_when_e5_does_not_apply(sandbox):
@@ -1283,6 +1306,37 @@ def test_g3_applies_the_preflight_rule_only_when_armed(landing_sandbox):
     assert run_gate(sandbox_hook(landing_sandbox), refused)[0] == 2
     assert run_gate(sandbox_hook(landing_sandbox), admitted)[0] == 0
 
+
+# --------------------------------------------------------------------------
+# E6 (P1c X6): the report a dispatch's own obligation declares is its output.
+# The refusal above names the report's dev dispatched again as the round that
+# clears it; that dispatch's prompt names the report it rewrites, so refusing
+# it too left no way on (a dead end). A dispatch that only reads the report
+# (a QA dispatch citing it) is still refused.
+
+def dev_obligation(report_rel, task_id=LANDED, role='dev', schema='dev-report.v2'):
+    """The obligation block commands/dev.md's Step 10 dev (Step 13 qa) template carries."""
+    return '<obligation v="1">%s</obligation>\n' % json.dumps({
+        'task_id': task_id, 'role': role, 'pipeline': 'dev', 'profile': 'singular',
+        'dispatched_at': '2026-10-28T10:10:10Z',
+        'artifacts': [{'kind': 'json', 'path': report_rel, 'schema': schema,
+                       'identity': {'task_id': task_id}}],
+    })
+
+
+def test_e6_the_reports_own_dev_dispatched_again_is_admitted(landing_sandbox):
+    rel = write_report(landing_sandbox, LANDED, created=['docs/dev/leaked.json'])
+    prompt = 'Write your report to %s.\n%s' % (rel, dev_obligation(rel))
+    rc, err = run_gate(sandbox_hook(landing_sandbox), prompt)
+    assert rc == 0, 'the report\'s own producer, dispatched again, was refused: %s' % err
+
+
+def test_e6_a_dispatch_that_reads_the_report_is_still_refused(landing_sandbox):
+    rel = write_report(landing_sandbox, LANDED, created=['docs/dev/leaked.json'])
+    other = 'docs/dev/qa-report-%s.json' % LANDED
+    prompt = 'Dev report file: %s\n%s' % (rel, dev_obligation(other, role='qa', schema='qa-report.v2'))
+    rc, err = run_gate(sandbox_hook(landing_sandbox), prompt)
+    assert rc == 2 and err == 'BLOCKED: gitignored deliverables detected: docs/dev/leaked.json'
 
 @pytest.mark.parametrize('profile,role,pipeline', READING_PRODUCERS)
 def test_g3_and_the_preflight_admit_every_reading_producer(landing_sandbox, profile, role, pipeline):
