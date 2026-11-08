@@ -27,14 +27,13 @@ SEMANTICS (decision table, first match wins):
   2. caller is a subagent context (lib.subagent) ............. exit 0
   3. no active /do consent flag for this session ............. exit 0
   4. structured /allow grant for the Agent tool exists ....... exit 0
-     (human escape hatch — same read_grant("Agent", sid) lookup
+     (human escape hatch — same match_sentinel_grant_for_tool lookup
       pretool-subagent-enforce.py already uses)
   5. otherwise (main agent, /do active) ...................... exit 2
 
-  Active-/do detection reuses the EXACT same source of truth as the existing
-  consent bypasses: /tmp/claude-orchestrator-consent-<session_id>.flag exists
-  AND its content is the string "true" (mirrors _has_consent in
-  pretool-subagent-enforce.py). No new sentinel, no second convention.
+  Active-/do detection is the one decision every consent bypass takes:
+  lib.allowlist.has_do_consent, so the block window of this hook is exactly
+  the bypass window of the others. No new sentinel, no second convention.
 
 FAIL-OPEN, never-wedge:
   Malformed or empty stdin, unreadable flag, unexpected exceptions -> exit 0.
@@ -54,8 +53,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.subagent import is_subagent_context      # noqa: E402
-from lib.allowlist import read_grant              # noqa: E402
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
 
 
 def _parse_stdin() -> dict:
@@ -64,17 +62,6 @@ def _parse_stdin() -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
-
-
-def _has_consent(session_id: str) -> bool:
-    """Mirror of _has_consent in pretool-subagent-enforce.py — same flag path,
-    same content check. This MUST stay byte-equivalent in semantics so the
-    block window of this hook is exactly the bypass window of the others."""
-    try:
-        flag = Path(f'{harness_state_dir()}/claude-orchestrator-consent-{session_id}.flag')
-        return flag.exists() and flag.read_text().strip() == 'true'
-    except Exception:
-        return False
 
 
 def _emit_block(tool_name: str, session_id: str) -> None:
@@ -111,11 +98,11 @@ def _main() -> None:
         if is_subagent_context(stdin_data):
             sys.exit(0)
         session_id = stdin_data.get('session_id', 'default')
-        if not _has_consent(session_id):
+        if not has_do_consent(stdin_data):
             sys.exit(0)
         # Human escape hatch: an explicit /allow grant for the Agent tool
         # overrides the block (read-only; consumption stays in PostToolUse).
-        if read_grant('Agent', session_id):
+        if match_sentinel_grant_for_tool(session_id, 'Agent') is not None:
             sys.exit(0)
         _emit_block(stdin_data.get('tool_name'), session_id)
         sys.exit(2)

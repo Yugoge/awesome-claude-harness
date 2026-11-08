@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "specialist-report.v1",
+  "title": "Overnight specialist report",
+  "description": "The report a /dev-overnight Step 3 specialist writes, docs/dev/overnight/<session_id>/<specialist>-report.json, in the shape its own agent file declares; G2 checks it at the specialist's own stop. PM TRIAGE reads its findings: the issues array (agents/architect.md, product-owner.md, user.md), each issue carrying what triage merges and the pipelines carry, with no issue repeated; or the canonical finding channels of skills/ui-shared/report-schema.json (agents/ui-specialist.md). task_id is the identity the obligation names. Every other field is allowed.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["task_id"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "issues": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["description", "location", "severity", "category", "estimated_effort"]
+      }
+    }
+  },
+  "anyOf": [
+    {"required": ["issues"]},
+    {"required": ["automated_findings", "contextual_findings", "aesthetic_findings"]}
+  ]
+}

@@ -6,6 +6,25 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["commit_status"],
+  "allOf": [
+    {
+      "description": "commit_status committed means every repository this dispatch reports reached a terminal state, committed (with its commit SHA and the push-gate token written) or nothing_to_commit, and none remains: /commit Step 7 reads committed as exactly that (the rule its prose re-checked until P1b moved it here, to the analyst's own stop).",
+      "if": {"properties": {"commit_status": {"const": "committed"}}, "required": ["commit_status"]},
+      "then": {
+        "properties": {
+          "repository_results": {
+            "items": {
+              "anyOf": [
+                {"properties": {"status": {"const": "committed"}, "push_gate_written": {"const": true}}, "required": ["commit_sha"]},
+                {"properties": {"status": {"const": "nothing_to_commit"}}}
+              ]
+            }
+          },
+          "remaining_repos": {"maxItems": 0}
+        }
+      }
+    }
+  ],
   "properties": {
     "commit_status": {
       "type": "string",

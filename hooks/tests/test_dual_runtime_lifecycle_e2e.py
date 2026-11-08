@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -175,24 +176,43 @@ def make_configured_fixture(base: Path, runtime: str, name: str) -> dict:
     }
 
 
+def _transcript(fixture: dict) -> Path:
+    """The session's transcript (outside the snapshotted trees): every prompt
+    and TodoWrite the CLI records, which the checklist readers read."""
+    return fixture["home"] / "projects" / f"{fixture['sid']}.jsonl"
+
+
+def _record(fixture: dict, record: dict) -> None:
+    path = _transcript(fixture)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record) + "\n")
+
+
+def _canonical(root: Path) -> list:
+    """The canonical /dev checklist, from the todo script the hooks run."""
+    out = subprocess.run([sys.executable, str(root / "scripts" / "todo" / "dev.py")],
+                         capture_output=True, text=True, cwd=root, check=True)
+    return json.loads(out.stdout)
+
+
 def configured_payload(fixture: dict, event: str, *, prompt: str | None = None, frontier: int = 0) -> dict:
-    root, home, sid, runtime = (
-        fixture["root"], fixture["home"], fixture["sid"], fixture["runtime"]
-    )
-    payload: dict = {"session_id": sid, "cwd": str(root), "hook_event_name": event}
+    root, sid, runtime = fixture["root"], fixture["sid"], fixture["runtime"]
+    payload: dict = {"session_id": sid, "cwd": str(root), "hook_event_name": event,
+                     "transcript_path": str(_transcript(fixture))}
     if event == "UserPromptSubmit":
         selected_prompt = prompt or f"/dev configured {runtime}"
         event_id = "event-" + hashlib.sha256(selected_prompt.encode()).hexdigest()[:20]
         payload.update({"prompt": selected_prompt, "event_id": event_id})
     elif event in {"PreToolUse", "PostToolUse"}:
-        todos_path = home / ".claude" / "todos" / f"{sid}-agent-{sid}.json"
-        items = json.loads(todos_path.read_text(encoding="utf-8"))
+        items = _canonical(root)
         for index, item in enumerate(items):
             item["status"] = (
                 "completed" if index < frontier else
                 "in_progress" if index == frontier else "pending"
             )
-        payload.update({"tool_name": "TodoWrite", "tool_input": {"todos": items}})
+        payload.update({"tool_name": "TodoWrite", "tool_input": {"todos": items},
+                        "tool_use_id": f"toolu-{event}-{frontier}"})
     return payload
 
 
@@ -308,21 +328,38 @@ def _current_identity(fixture: dict) -> tuple[str, int]:
 
 
 def _frontier(fixture: dict) -> int:
-    path = fixture["home"] / ".claude" / "todos" / f"{fixture['sid']}-agent-{fixture['sid']}.json"
-    items = json.loads(path.read_text())
+    """Completed steps of the checklist the transcript records (its last ok TodoWrite)."""
+    sys.path.insert(0, str(SOURCE_ROOT))
+    from hooks.lib import command_span
+    items = command_span.active_span(_transcript(fixture)).last_todos()
     return sum(item.get("status") == "completed" for item in items)
 
 
 def _full_start(fixture: dict, prompt: str) -> dict:
-    return execute_configured_chain(
+    """UserPromptSubmit, then the command record the CLI writes after it."""
+    started = execute_configured_chain(
         fixture, "UserPromptSubmit", configured_payload(fixture, "UserPromptSubmit", prompt=prompt)
     )
+    name, _, args = prompt[1:].partition(" ")
+    _record(fixture, {"type": "user", "message": {"role": "user", "content": (
+        f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>\n"
+        f"<command-args>{args}</command-args>")}})
+    return started
 
 
 def _full_progress(fixture: dict, frontier: int) -> tuple[dict, dict]:
+    """One TodoWrite as the CLI records it: tool_use, PreToolUse, tool_result, PostToolUse."""
     pre_payload = configured_payload(fixture, "PreToolUse", frontier=frontier)
+    tool_use_id = f"toolu-{uuid.uuid4().hex[:12]}"
+    pre_payload["tool_use_id"] = tool_use_id
+    _record(fixture, {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": tool_use_id, "name": "TodoWrite", "input": pre_payload["tool_input"]}]}})
     pre = execute_configured_chain(fixture, "PreToolUse", pre_payload)
+    _record(fixture, {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tool_use_id, "content": "ok",
+         **({"is_error": True} if pre["aggregate"]["decision"] == "block" else {})}]}})
     post_payload = configured_payload(fixture, "PostToolUse", frontier=frontier)
+    post_payload["tool_use_id"] = tool_use_id
     post = execute_configured_chain(fixture, "PostToolUse", post_payload)
     return pre, post
 
@@ -343,8 +380,7 @@ def test_claude_root_real_entrypoint_stop_is_not_time_locked(tmp_path: Path, fro
     assert start.returncode == 0, start.stderr
     registry = root / ".claude" / "dev-registry"
     assert len(list(registry.iterdir())) == 1
-    todos_path = root / ".claude" / "todos" / f"{sid}-agent-{sid}.json"
-    todos = json.loads(todos_path.read_text())
+    todos = _canonical(root)
     for next_frontier in range(1, frontier + 1):
         updated = []
         for index, item in enumerate(todos):
@@ -390,6 +426,17 @@ def test_claude_root_bare_dev_replay_mints_new_id_after_terminal_dev_report(tmp_
     assert replay.returncode == 0 and replay.stdout == first.stdout, \
         "replay with a non-terminal (missing) dev-report must stay byte-identical"
     assert len(list(registry.iterdir())) == 1, "no new task_id while prior cycle is non-terminal"
+
+    # A dev.status outside the dev-report schema's terminal vocabulary (D2: one
+    # dev terminal, completed) is no terminal either: still a verbatim replay.
+    (root / "docs" / "dev" / f"dev-report-{first_task_id}.json").write_text(json.dumps({
+        "request_id": first_task_id, "task_id": first_task_id,
+        "dev": {"status": "blocked", "files_modified": [], "files_created": []},
+    }))
+    replay = _run(PROMPT, None, payload, env)
+    assert replay.returncode == 0 and replay.stdout == first.stdout, \
+        "replay with a blocked dev-report must stay byte-identical"
+    assert len(list(registry.iterdir())) == 1, "no new task_id for a blocked prior cycle"
 
     # Prior dev-report now reaches a terminal state.
     (root / "docs" / "dev" / f"dev-report-{first_task_id}.json").write_text(json.dumps({
@@ -492,10 +539,9 @@ def test_r03_immediate_same_clock_distinct_active_reentry_preserves_prior_family
     families = _task_families(fixture)
     assert set(families) == {first_task, second_task}
     assert families[first_task] == prior_bytes
-    history = fixture["root"] / ".claude" / "workflow-history" / fixture["sid"]
-    archived = list(history.glob(f"*-{first_task}/bookmark.json"))
-    assert len(archived) == 1
-    assert json.loads(archived[0].read_text())["task_id"] == first_task
+    # The prior family survives in its dev-registry directory; the start no
+    # longer copies the bookmark and checklist into a history directory.
+    assert not (fixture["root"] / ".claude" / "workflow-history").exists()
 
 
 @pytest.mark.parametrize("runtime", ["claude"])

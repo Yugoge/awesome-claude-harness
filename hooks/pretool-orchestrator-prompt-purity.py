@@ -45,8 +45,10 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import overnight  # noqa: E402
 
 
 # Rule-doc pointers are derived from THIS hook's own on-disk location
@@ -142,7 +144,7 @@ OPTIONS_XML_PATTERNS = (
 )
 OPTIONS_XML_HEADER = (
     "orchestrator must not dispatch <options> blocks during overnight; "
-    "choose autonomously or write a deadlock report and skip."
+    "pick one path and execute it."
 )
 OPTIONS_XML_LABEL = "options-xml block (overnight forbids)"
 
@@ -198,35 +200,17 @@ def _redact_exempt_regions(prompt: str) -> str:
     return redacted
 
 
-def _state_file_has_future_end_time(state_path: Path, now: datetime) -> bool:
-    try:
-        data = json.loads(state_path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return False
-    end_time_str = data.get("end_time")
-    if not end_time_str:
-        return False
-    try:
-        end_time = datetime.fromisoformat(end_time_str)
-    except (TypeError, ValueError):
-        return False
-    if end_time.tzinfo is not None:
-        end_time = end_time.replace(tzinfo=None)
-    return end_time > now
-
-
 def _overnight_active() -> bool:
-    """Return True iff any .claude/overnight-state-*.json exists with a
-    non-expired end_time. Fail-soft on any error.
+    """Return True iff any .claude/overnight-state-*.json holds a record whose
+    window is live (lib.overnight.state_verdicts). Fail-soft on any error.
     """
     try:
         project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
         claude_dir = project_dir / ".claude"
         if not claude_dir.is_dir():
             return False
-        now = datetime.now()
         return any(
-            _state_file_has_future_end_time(p, now)
+            overnight.state_verdicts(overnight.read_state(p)).window_live
             for p in claude_dir.glob("overnight-state-*.json")
         )
     except Exception:
@@ -285,10 +269,8 @@ def _scan_prompt(prompt: str):
 
 
 _OPTIONS_XML_REMEDY = (
-    "describe the work autonomously: pick one path,\n"
-    "            execute it, or write docs/dev/overnight-deadlock-<ts>.md\n"
-    "            and skip to the next pipeline. Defer all user-input\n"
-    "            questions to the end-of-overnight summary."
+    "describe the work autonomously: pick one path and\n"
+    "            execute it."
 )
 _GENERIC_REMEDY = (
     "describe the desired end-state (problem, constraints,\n"

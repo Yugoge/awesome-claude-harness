@@ -415,6 +415,8 @@ def test_ac4_agent_resolver_unmodified_by_this_fix():
         "_scan_cp_state_files",
         "_resolve_by_id",
         "resolve_agent_type",
+        # P1b row 8: the one cp-state running rule subagentstop-cp-enforce.py shares.
+        "cp_state_running",
     }
     assert top_level_funcs == baseline_funcs
 
@@ -477,6 +479,7 @@ def test_ac5_registered_unjustified_skip_message_unchanged(tmp_path):
         f"E2E_ENFORCE_BLOCKED: agent {agent_id} (type=qa) in session "
         f"{dev_session_id} has e2e_enforcement.status='skipped_without_justification'.\n"
         f"blocking_reason: (none provided)\n"
+        f"artifact: {report_path} (failing check: e2e_enforcement.status not a passing status)\n"
         f"E2E verification is required. Perform E2E testing and update "
         f"e2e_enforcement.status to 'performed', 'legitimately_skipped', "
         f"'blocked_app_unavailable', or 'ran' before stopping.\n"

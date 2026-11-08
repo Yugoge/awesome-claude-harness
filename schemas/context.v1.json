@@ -2,10 +2,17 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "context.v1",
   "title": "BA Context JSON",
-  "description": "BA-produced wave/task plan and root cause analysis. Read by dev subagents to understand implementation scope.",
+  "description": "BA's context (agents/ba.md, JSON Context): the requirement, root cause analysis and development approach dev and QA read, the tier and risk that decide the test-writer dispatch, and, for STANDARD and COMPLEX tiers, the contracts' evidence, scope and localization. Checked at BA's stop (G2) against the path BA's obligation declares.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["requirement", "root_cause_analysis", "waves"],
+  "required": [
+    "requirement",
+    "root_cause_analysis",
+    "development_approach",
+    "complexity_tier",
+    "risk_level",
+    "test_writer_expected"
+  ],
   "properties": {
     "requirement": {
       "oneOf": [
@@ -29,6 +36,7 @@
     "root_cause_analysis": {
       "type": "object",
       "additionalProperties": true,
+      "required": ["affected_files"],
       "properties": {
         "symptom": {"type": "string"},
         "root_cause": {"type": "string"},
@@ -36,61 +44,120 @@
         "why_introduced": {"type": "string"},
         "why_problematic": {"type": "string"},
         "timeline": {"type": "string"},
-        "affected_files": {"type": "array", "items": {"type": "string"}}
+        "affected_files": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "complaint_location_keywords": {"type": "array", "items": {"type": "string"}},
+        "located_source": {"type": ["string", "array"]},
+        "localization_blocked": {
+          "type": ["object", "null"],
+          "description": "Recorded only after the owner answered BA's localization question (agents/ba.md, Localization blocked).",
+          "properties": {
+            "reason": {"type": "string", "minLength": 1},
+            "what_would_unblock": {"type": "string", "minLength": 1}
+          }
+        }
       }
     },
-    "graph_context": {
+    "development_approach": {"type": "object", "additionalProperties": true},
+    "complexity_tier": {"type": "string", "enum": ["MICRO", "SMALL", "STANDARD", "COMPLEX"]},
+    "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+    "test_writer_expected": {
+      "type": "boolean",
+      "description": "Whether /dev dispatches the test-writer and QA runs Phase 5: (complexity_tier STANDARD or COMPLEX, or risk_level high) and no _test_writer_skip_reason; checked against those fields below."
+    },
+    "_test_writer_skip_reason": {
+      "type": "string",
+      "description": "BA's explicit skip of the test-writer on this cycle; a non-empty value makes test_writer_expected false."
+    },
+    "evidence": {"type": "object", "additionalProperties": true},
+    "scope_expansion": {"type": "object", "additionalProperties": true},
+    "reference_source": {
       "type": "object",
       "additionalProperties": true,
-      "description": "Graphify enrichment context patched in-place by graphify-enrich.py at Step 7.5. Present only when graphify subagent ran. Status: ok|degraded|failed|unavailable|skipped.",
-      "properties": {
-        "status": {"type": "string", "enum": ["ok", "degraded", "failed", "unavailable", "skipped"]},
-        "task_id": {"type": "string"},
-        "generated_at": {"type": "string", "format": "date-time"},
-        "summary": {"type": "object", "additionalProperties": true},
-        "focused_subgraph_path": {"type": "string"},
-        "graph_report_path": {"type": "string"},
-        "advisory": {"type": "boolean"}
-      }
+      "description": "Contract C: a reference the fix copies from is never tier_3_tainted.",
+      "if": {"properties": {"copy_allowed": {"const": true}}, "required": ["copy_allowed"]},
+      "then": {"properties": {"tier": {"not": {"const": "tier_3_tainted"}}}}
     },
-    "waves": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": true,
-        "required": ["wave_id", "tasks"],
+    "prior_attempts": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Contract D: a triggered reconciliation ships only a novel attempt; a non-novel one is BA's producer question instead of this context.",
+      "if": {"properties": {"triggered": {"const": true}}, "required": ["triggered"]},
+      "then": {
+        "required": ["novelty_check"],
         "properties": {
-          "wave_id": {"type": ["integer", "number"]},
-          "parallel": {"type": "boolean"},
-          "max_concurrent_dev_subagents": {"type": "integer"},
-          "depends_on_waves": {"type": "array"},
-          "rationale": {"type": "string"},
-          "tasks": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": true,
-              "required": ["task_id", "title"],
-              "properties": {
-                "task_id": {"type": "string", "minLength": 1},
-                "title": {"type": "string"},
-                "files_to_modify": {"type": "array", "items": {"type": "string"}},
-                "files_to_create": {"type": "array", "items": {"type": "string"}},
-                "depends_on": {"type": "array", "items": {"type": "string"}},
-                "implementation_notes": {"type": "string"},
-                "acceptance_criteria": {
-                  "oneOf": [
-                    {"type": "array"},
-                    {"type": "object"}
-                  ]
-                },
-                "estimated_loc": {"type": "integer"}
-              }
-            }
+          "novelty_check": {
+            "type": "object",
+            "required": ["differs_from_all_priors"],
+            "properties": {"differs_from_all_priors": {"const": true}}
           }
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"_test_writer_skip_reason": {"type": "string", "minLength": 1}},
+        "required": ["_test_writer_skip_reason"]
+      },
+      "then": {"properties": {"test_writer_expected": {"const": false}}},
+      "else": {
+        "if": {
+          "anyOf": [
+            {"properties": {"complexity_tier": {"enum": ["STANDARD", "COMPLEX"]}}, "required": ["complexity_tier"]},
+            {"properties": {"risk_level": {"const": "high"}}, "required": ["risk_level"]}
+          ]
+        },
+        "then": {"properties": {"test_writer_expected": {"const": true}}},
+        "else": {"properties": {"test_writer_expected": {"const": false}}}
+      }
+    },
+    {
+      "if": {"properties": {"complexity_tier": {"enum": ["STANDARD", "COMPLEX"]}}, "required": ["complexity_tier"]},
+      "then": {
+        "required": ["evidence", "scope_expansion"],
+        "properties": {
+          "evidence": {
+            "required": ["measured", "expected"],
+            "properties": {
+              "measured": {
+                "type": "object",
+                "required": ["value"],
+                "properties": {"value": {"not": {"enum": [null, ""]}}}
+              },
+              "expected": {
+                "type": "object",
+                "required": ["source"],
+                "properties": {"source": {"type": "string", "minLength": 1}}
+              }
+            }
+          },
+          "scope_expansion": {
+            "anyOf": [
+              {"required": ["all_occurrences"], "properties": {"all_occurrences": {"type": "array", "minItems": 1}}},
+              {
+                "required": ["not_applicable", "reason"],
+                "properties": {"not_applicable": {"const": true}, "reason": {"type": "string", "minLength": 1}}
+              }
+            ]
+          },
+          "root_cause_analysis": {
+            "anyOf": [
+              {
+                "required": ["complaint_location_keywords", "located_source"],
+                "properties": {
+                  "complaint_location_keywords": {"minItems": 1},
+                  "located_source": {"minLength": 1, "minItems": 1}
+                }
+              },
+              {
+                "required": ["localization_blocked"],
+                "properties": {"localization_blocked": {"type": "object", "required": ["reason", "what_would_unblock"]}}
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

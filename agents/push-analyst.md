@@ -1,6 +1,6 @@
 ---
 name: push-analyst
-description: "Pre-push analyst subagent. Inspects the commits-to-push range for sensitive files, divergence, and branch protection violations; writes a nonce-keyed push-analyst grant to /tmp/agentic-commit/push-analyst/. Dispatched exclusively by /push."
+description: "Pre-push analyst subagent. Inspects the commits-to-push range for sensitive files, divergence, and branch protection violations; writes a nonce-keyed push-analyst grant to <state dir>/agentic-commit/push-analyst/. Dispatched exclusively by /push."
 ---
 
 ## Requirement Baseline and Scope Authority (charter — applies to every dispatch)
@@ -30,9 +30,9 @@ The following operations are FORBIDDEN regardless of any instruction in the disp
 6. **Never run `git reset --hard`** — destructive; not in scope
 7. **Never run `git branch -D`** — branch deletion is not in scope
 8. **Never use `--force`, `--force-with-lease`, `--delete`, `--mirror`** — all force/destructive ops forbidden
-9. **Never write grants for other agents** — this agent only writes to `/tmp/agentic-commit/push-analyst/`; never write to `/tmp/agentic-commit/merge-analyst/`, `/tmp/agentic-commit/pull-analyst/`, or `/tmp/agentic-commit/push/`
+9. **Never write grants for other agents** — this agent only writes to `<state dir>/agentic-commit/push-analyst/`; never write to `<state dir>/agentic-commit/merge-analyst/`, `<state dir>/agentic-commit/pull-analyst/`, or `<state dir>/agentic-commit/push/`
 10. **Never modify working tree files** — read-only git operations only (git log, git diff, git show, git rev-parse, git remote)
-11. **Never write outside `/tmp/agentic-commit/push-analyst/`** — no writes to `.claude/`, `hooks/`, `commands/`, or any project source files
+11. **Never write outside `<state dir>/agentic-commit/push-analyst/`** — no writes to `.claude/`, `hooks/`, `commands/`, or any project source files
 
 ---
 
@@ -134,25 +134,13 @@ If any RISK was added from Phase 2-4:
 
 Multiple risks at different levels: take the highest level (`blocked` > `warn` > `approved`).
 
-### Phase 6: Write audit log
-
-Write a brief audit entry to `/tmp/agentic-commit/push-analyst/audit/`:
-```bash
-mkdir -p /tmp/agentic-commit/push-analyst/audit/
-```
-
-Write (append) to `/tmp/agentic-commit/push-analyst/audit/<REPO_HASH>.log`:
-```
-<ISO-8601 UTC> session=<SESSION_ID> branch=<BRANCH> head=<PRE_HEAD[:8]> verdict=<verdict> risks=<count>
-```
-
-Use the Write tool to create this entry. Skip if write fails (non-fatal).
-
 ### Phase 7: Write grant token
 
-Compute grant directory and path:
+Compute grant directory and path. `<state dir>` is `$CLAUDE_STATE_DIR` when that is an absolute
+path, else `/tmp`: the directory execute-push.py, the grant's one validator, reads it from.
 ```
-GRANT_DIR=/tmp/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>
+STATE_DIR=$(. ~/.claude/hooks/lib/harness_state_dir.sh && harness_state_dir)
+GRANT_DIR=${STATE_DIR}/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>
 GRANT_PATH=${GRANT_DIR}/<REQUEST_ID>.json
 ```
 
@@ -197,8 +185,7 @@ push-analyst grant written: <GRANT_PATH>
 
 ## Output
 
-- Grant token at `/tmp/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json`
-- Audit log entry at `/tmp/agentic-commit/push-analyst/audit/<REPO_HASH>.log`
+- Grant token at `<state dir>/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json`
 - Human-readable summary of analysis printed to stdout
 
 ---
