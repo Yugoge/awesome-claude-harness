@@ -342,7 +342,7 @@ def run_coordinator(
                 "phases": results,
                 "finalizer_called": False,
                 "_relay": "".join(relays) if phase.name == "completion" else f"failed_phase={phase.name}\n{stderr}",
-            }, 2
+            }, result["returncode"]  # the phase's own exit (2), relayed as stop-launch.py relays its child
         if phase.name != "completion":
             continue  # recorded in the result and allowed
         code, relay = fallback(payload, mode, result["failure"])
