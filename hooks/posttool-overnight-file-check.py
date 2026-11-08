@@ -124,7 +124,7 @@ def _run_check(data: dict) -> int:
             '  Mark the PM TRIAGE step in progress and re-dispatch PM TRIAGE: its return '
             'replaces the contract.\n\n')
         return 2
-    entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt, agent_type))
+    entry = _entry_for_dispatch(contract, agent_type, contract_runtime.detect_mode(prompt))
     if entry is None:
         return 0
     # G2's one rule: a fresh producer question stands in for every declared artifact when valid.

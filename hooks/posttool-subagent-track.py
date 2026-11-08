@@ -279,7 +279,7 @@ def _is_triage_dispatch(stdin_data: dict, steps: list) -> bool:
         return False
     role = ti.get('subagent_type')
     return (isinstance(role, str) and role.strip().lower() == triage.get('subagent_type')
-            and contract_runtime.detect_mode(ti.get('prompt', ''), role) == triage.get('mode'))
+            and contract_runtime.detect_mode(ti.get('prompt', '')) == triage.get('mode'))
 
 
 def _triage_report(state: dict, cycle_id: int, prompt: str) -> Path:

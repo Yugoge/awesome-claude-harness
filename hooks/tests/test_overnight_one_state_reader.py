@@ -260,10 +260,15 @@ def _todos(label: str | None, done: str = "") -> list:
     return out
 
 
-def _bookmark(project: Path, label: str, *cycles: list) -> None:
+def _bookmark(project: Path, label: str, *cycles: list, loaded: str | None = None) -> None:
     """The session transcript: /dev-overnight, then its TodoWrites (``cycles``
-    earlier lists first), ending with ``label`` in progress."""
-    records = [{"type": "user", "message": {"role": "user", "content": "/dev-overnight 2h"}}]
+    earlier lists first), ending with ``label`` in progress. With ``loaded``, the
+    command's text follows the opener as the CLI records it when the command is
+    typed (an isMeta record whose parentUuid is the opener's uuid)."""
+    records = [{"type": "user", "uuid": "u-open", "message": {"role": "user", "content": "/dev-overnight 2h"}}]
+    if loaded is not None:
+        records.append({"type": "user", "isMeta": True, "parentUuid": "u-open", "uuid": "u-text",
+                        "message": {"role": "user", "content": loaded}})
     for n, todos in enumerate([_todos(None), *cycles, _todos(label)]):
         records.append({"type": "assistant", "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": f"tw{n}", "name": "TodoWrite", "input": {"todos": todos}}]}})
@@ -308,16 +313,39 @@ def test_exploration_steps_pass_and_a_wrong_role_is_refused(session):
     assert before_triage.returncode == 2 and "Case A" in before_triage.stderr
 
 
-def test_a_pm_prompt_without_a_mode_is_plan_as_pm_md_reads_it(session):
-    """P1c A11: a session still running the base's Step 2 text dispatches PM PLAN with no PM_MODE line;
-    agents/pm.md reads a missing PM_MODE as PLAN, and so does the dispatch check. A mode the prompt
-    does carry is still compared, and only a PM prompt defaults."""
-    assert contract_runtime.detect_mode("You are the PM subagent.", "pm") == "PLAN"
-    assert contract_runtime.detect_mode("You are the PM subagent.", "architect") == ""
-    assert contract_runtime.detect_mode("PM_MODE: TRIAGE", "pm") == "TRIAGE"
-    _bookmark(session, "2")
+# origin/master's /dev-overnight text as the CLI records it (excerpt): its Step 2 template sets no
+# PM_MODE, its Step 4 template sets TRIAGE.
+BASE_PROSE = """#### Step 2: Launch PM Subagent
+- prompt: "
+  You are the PM subagent. Follow agents/pm.md instructions precisely.
+  Output test plan to: docs/dev/overnight/<session_id>/test-plan.json
+  "
+#### Step 4: Launch PM-Triage Subagent
+- prompt: "
+  PM_MODE: TRIAGE
+  You are the PM subagent in TRIAGE mode.
+  "
+"""
+
+
+def test_a_pm_prompt_without_a_mode_passes_where_the_loaded_text_sets_none(session):
+    """P1c A11, under P2's rule (G1: a step's mode binds only when the text the session loaded sets
+    it): a session still running the base's Step 2 text dispatches PM PLAN with no PM_MODE line, and
+    passes on that recorded text. The prompt's mode is read from the prompt alone, never from the
+    role; a mode the prompt does carry is still compared; a mode-less prompt of another role is
+    still held to Step 2's role."""
+    assert contract_runtime.detect_mode("You are the PM subagent.") == ""
+    assert contract_runtime.detect_mode("PM_MODE: TRIAGE") == "TRIAGE"
     base = "You are the PM subagent. Follow agents/pm.md instructions precisely.\nOutput test plan to: x"
-    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 0
+    _bookmark(session, "2", loaded=BASE_PROSE)
+    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 0, "base text"
+    other = _run("pretool-subagent-enforce.py", session, _agent("architect", base))
+    assert other.returncode == 2 and "role mismatch on step '2'" in other.stderr
+    _bookmark(session, "4", loaded=BASE_PROSE)
+    triage = _run("pretool-subagent-enforce.py", session, _agent("pm", base))
+    assert triage.returncode == 2 and "mode missing on step '4'" in triage.stderr
+    _bookmark(session, "2")  # no record of the text the session loaded: every step's mode binds
+    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 2
     refused = _run("pretool-subagent-enforce.py", session, _agent("pm", "PM_MODE: RETRO"))
     assert refused.returncode == 2 and "mode='RETRO'" in refused.stderr
 

@@ -14,7 +14,7 @@ Public surface:
     post_triage_steps(steps) -> [(label, subagent_call)]   # what the contract renders
     triage_call(steps) -> dict                # the PM TRIAGE step's subagent_call
     call_entry(label, subagent_call) -> dict  # a required_calls entry for one step
-    detect_mode(prompt, role) -> str
+    detect_mode(prompt) -> str
     type_strict_json_equal(left, right) -> bool
     validate(record, schema_name) -> Result
     validate_required_call(contract, role, pipeline_id, mode, step) -> Result
@@ -222,13 +222,13 @@ def call_entry(label: str, subagent_call: dict) -> dict:
     }
 
 
-def detect_mode(prompt: str, role: str = '') -> str:
-    """The mode keyword a dispatch prompt carries; a PM prompt carrying none is PLAN, as agents/pm.md
-    reads it ("If `PM_MODE:` is missing, default to `PLAN`."); else ''."""
+def detect_mode(prompt: str) -> str:
+    """The mode keyword a dispatch prompt carries ('' when none). A PM prompt
+    without one is compared as it is: whether a step's mode binds is decided by
+    the text the session loaded (exploration_calls), not by a default here."""
     if not isinstance(prompt, str):
         return ''
-    found = next((keyword for keyword in _MODE_KEYWORDS if keyword in prompt), '')
-    return found or (PLAN_MODE if str(role or '').strip().lower() == 'pm' else '')
+    return next((keyword for keyword in _MODE_KEYWORDS if keyword in prompt), '')
 
 
 # ---------------------------------------------------------------------------
