@@ -33,7 +33,7 @@ def step_line(command):
     lines = [ln for ln in text.splitlines() if "apply-permissions.sh" in ln
              and not ln.lstrip().startswith(("#", "-", "*", ">"))]
     assert len(lines) == 1, lines
-    return lines[0].replace("<timestamp>", TASK)
+    return lines[0].replace("<timestamp>", TASK).replace("<HARNESS_ROOT>", str(REPO))  # R1's printed root
 
 
 @pytest.fixture
