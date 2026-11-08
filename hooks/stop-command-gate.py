@@ -20,7 +20,9 @@ payload on stdin and decides, in order:
   (6) the gaps: the todo half and the command's predicate, each held to the
       command's text as the span loaded it (_loaded_lacks: a step or the
       close-rating question an update added or reworded after the session
-      loaded its text is not asked of it); an exception is the gap
+      loaded its text is not asked of it; a cycle whose loaded text names or
+      writes its artifacts otherwise than this tree's is asked as that text
+      does, COMPATIBILITY below); an exception is the gap
       `gate instrument failure: <type>: <message>`, never an allow;
   (7) no gap: allow; advisory: `would block` and the gaps on stderr, exit 0;
       else the block text on stderr, exit 2.
@@ -102,6 +104,18 @@ RATING_SOURCE = "close-rating:"
 _STEP_LABEL_RE = re.compile(r"Step ([0-9A-Za-z]+):")
 
 
+def _texts(span) -> tuple:
+    """(the text the span loaded, Span.body; the command's text on disk, commands/<command>.md,
+    with the span's arguments where the CLI fills them in, as the loaded text has them), each
+    None when there is none."""
+    try:
+        current = span.args.join(
+            (command_span.COMMANDS_DIR / f"{span.command}.md").read_text(encoding="utf-8").split("$ARGUMENTS"))
+    except OSError:
+        current = None
+    return span.body(), current
+
+
 def _loaded_lacks(span):
     """A test on a regex: the command's text on disk (commands/<command>.md) words a
     demand (the regex's first match there) that the text the span loaded (Span.body:
@@ -110,12 +124,7 @@ def _loaded_lacks(span):
     the session follows the text it loaded, which never makes it as the file now
     does (D15, D25), as a span keeps the list it started with. A span with no
     recorded text, or a demand the text on disk does not word, is held to it."""
-    loaded = span.body()
-    try:  # with the span's arguments where the CLI fills them in, as the loaded text has them
-        current = span.args.join(
-            (command_span.COMMANDS_DIR / f"{span.command}.md").read_text(encoding="utf-8").split("$ARGUMENTS"))
-    except OSError:
-        current = None
+    loaded, current = _texts(span)
     if loaded is None or current is None:
         return lambda pattern: False
 
@@ -130,6 +139,130 @@ def _step_heading(todo) -> str | None:
     "Step 3b: ..."), None for a step its content labels otherwise."""
     found = _STEP_LABEL_RE.match(str(todo.get("content") or ""))
     return rf"^#+[ \t]+Step[ \t]+{re.escape(found.group(1))}(?![0-9A-Za-z]).*$" if found else None
+
+
+# ---------------------------------------------------------------- COMPATIBILITY: a cycle its text names otherwise
+# COMPATIBILITY for the live landing (P1b acceptance 17; D15, D25), kept until no session predates the
+# landing: a session the owner started before this tree landed keeps the command text it loaded
+# (origin/master's, 2acc29b) while its hooks become this tree's. Two of the chain's demands are worded by
+# this tree's text alone, so a cycle run from a text that lacks them (_loaded_lacks) is held to the chain
+# as its own text names and writes it; a cycle on this tree's text, or with no recorded text, exactly as
+# before.
+#   naming    this tree's /dev and /dev-command name a cycle's artifacts with the id the hook prints as
+#             `Task id: …` (obligation.canonical_task_id); a text without that line names them with the id
+#             its dispatches carry (origin/master's /dev: DEV_SESSION_ID, dev-<ts>; its /dev-command: the
+#             bare <ts>), as its /close and /commit then type it: the chain is asked under that name at
+#             each of their Stops in the session (_cycle_names).
+#   template  this tree's completion template (COMPLETION_TEMPLATE: dev.md Step 17, dev-command.md Step
+#             16) words the completion's identity lines and its Files Generated references as the chain
+#             checks them. A completion gap whose demand that template words and the loaded text's template
+#             does not (origin/master's and P1b's: no Ticket line; master's /dev-command: `**Request ID**:
+#             dev-<timestamp>`) is one that text never writes, and its own closing resolver call refuses
+#             that completion on every kit: it is not asked at the cycle's /dev-family Stop (its /close
+#             routes it at Step 0, as on train 1); a demand both templates word is asked, and /close and
+#             /commit ask every one.
+NAMING = re.escape("`Task id: …`")
+COMPLETION_TEMPLATE = (r"^#+[ \t]+Development Completion Report\b[^\n]*\n[\s\S]*?"
+                       r"^\*\*Save report to\*\*:[ \t]*`docs/dev/completion-[^`\n]*`[^\n]*$")
+DEV_TEXTS = ("dev", "dev-command")  # the texts a /dev-family cycle runs; /redev runs the conversation's /dev text
+# P3's gap_line (plain tokens and message) and validate_completion's reference message
+_GAP_RE = re.compile(r"GAP artifact=(\S+) problem=(\S+): (.*) lane=\S+(?: step=.*)?$")
+REFERENCE_MESSAGE = "completion does not reference "
+_PLACEHOLDER = r"<[^<>\s`]+>"  # a template's placeholder: <timestamp>, <task-id>, <lane>, ...
+
+
+def _cycles(span) -> list[tuple[int, int | None, object]]:
+    """COMPATIBILITY: (opener line, next opener's line or None, text span) of each /dev-family span of
+    the span's session up to and including it; the text span is the one whose loaded text the cycle
+    runs: the span itself for /dev and /dev-command, for /redev the conversation's last /dev or
+    /dev-command (None when it holds none)."""
+    path, found, text = span.transcript_path, [], None
+    every = command_span.openers(path)
+    for k, (line, command, args) in enumerate(every):
+        if line > span.start_line:
+            break
+        if command in DEV_TEXTS:
+            text = command_span.Span(command, args, line, path)
+        elif command != "redev":
+            continue
+        found.append((line, every[k + 1][0] if k + 1 < len(every) else None, text))
+    return found
+
+
+def _cycle_names(span) -> dict:
+    """COMPATIBILITY (naming): {canonical task family: {name, ...}} for each cycle of the span's session
+    whose loaded text lacks this tree's NAMING line: the family as the cycle's own dispatches spell it
+    (their task_id, the lane suffix left out), the name its artifacts carry. {} when no cycle runs such
+    a text: every task is asked under its canonical id. The cycles' texts are read only when a dispatch
+    spells its task otherwise than canonically (a session on this tree's text reads none of them)."""
+    ob = importlib.import_module("lib.obligation")
+    spelled = []
+    for record in ob.dispatch_obligations(span.transcript_path):
+        raw = record["obligation"].get("task_id")
+        family = ob.task_family(raw)
+        if family:  # the prefix canonical_task_id strips kept, the lane suffix task_family strips left out
+            name = raw[:len(raw) - len(ob.canonical_task_id(raw)) + len(family)]
+            spelled.append((record.get("line") or 0, family, name))
+    if all(name == family for _at, family, name in spelled):
+        return {}
+    spans = [(lo, hi) for lo, hi, text in _cycles(span) if text is not None and _loaded_lacks(text)(NAMING)]
+    names: dict = {}
+    for at, family, name in spelled:
+        if any(lo < at and (hi is None or at < hi) for lo, hi in spans):
+            names.setdefault(family, set()).add(name)
+    return names
+
+
+def _names(names: dict, task: str) -> list[str]:
+    """The names the chain is asked under for ``task`` (canonical): its cycle's own (_cycle_names), else it."""
+    return sorted(names.get(task) or {task})
+
+
+def _templates(text) -> tuple | None:
+    """COMPATIBILITY (template): (this tree's completion template, the loaded text's; "" for none) of
+    a cycle's text span, None when either text is missing."""
+    loaded, current = _texts(text) if text is not None else (None, None)
+    if loaded is None or current is None:
+        return None
+    return tuple(found.group(0) if found else "" for found in
+                 (re.search(COMPLETION_TEMPLATE, t, re.M) for t in (current, loaded)))
+
+
+def _identities(template: str) -> list[str]:
+    """The identity lines a completion template writes, as the chain reads them (its IDENTITY_RE),
+    each placeholder as <>."""
+    identity = _script("scripts/resolve-dev-artifact-chain.py").IDENTITY_RE
+    # each line cleaned as the chain's validate_markdown_identity cleans it
+    lines = (re.sub(r"\*\*|`", "", line.strip()) for line in template.splitlines())
+    return sorted(re.sub(_PLACEHOLDER, "<>", line) for line in lines if identity.fullmatch(line))
+
+
+def _names_reference(template: str, reference: str, name: str) -> bool:
+    """Whether a completion template names ``reference`` (a path holding the cycle's ``name``): a
+    path it quotes is the reference with a placeholder for the name and one for each label after it
+    (a lane's)."""
+    head, found, tail = reference.partition(name)
+    stem, dot, suffix = tail.rpartition(".")
+    if not found or not dot or not re.fullmatch(r"(?:-[A-Za-z0-9]+)*", stem):
+        return False
+    pattern = re.escape(head) + _PLACEHOLDER + f"-{_PLACEHOLDER}" * stem.count("-") + re.escape("." + suffix)
+    return any(re.fullmatch(pattern, quoted) for quoted in re.findall(r"`([^`\n]+)`", template))
+
+
+def _unwritten(line: str, name: str, templates: tuple | None) -> bool:
+    """COMPATIBILITY (template): a gap line of the completion of ``name`` whose demand this tree's
+    template words and the loaded template does not: its identity lines differ (IDENTITY_MISMATCH,
+    MISSING_IDENTITY), or it names the missing reference and the loaded one does not
+    (MISSING_COMPLETION_REFERENCE)."""
+    found = _GAP_RE.match(line)
+    if templates is None or not found or found.group(1) != f"docs/dev/completion-{name}.md":
+        return False
+    current, loaded = templates
+    if found.group(2) in ("IDENTITY_MISMATCH", "MISSING_IDENTITY"):
+        return bool(_identities(current)) and _identities(current) != _identities(loaded)
+    reference = found.group(3)[len(REFERENCE_MESSAGE):] if found.group(3).startswith(REFERENCE_MESSAGE) else None
+    return found.group(2) == "MISSING_COMPLETION_REFERENCE" and reference is not None and _names_reference(
+        current, reference, name) and not _names_reference(loaded, reference, name)
 
 
 # ---------------------------------------------------------------- the todo half
@@ -217,13 +350,23 @@ def _resolves(root, arg: str, task: str) -> bool:
 
 def p_dev(span, root, payload) -> list[str]:
     """/dev, /redev, /dev-command: --stage dev chain_pass for each family the
-    span dispatched and the opener's hook-minted id (D22: one predicate)."""
+    span dispatched and the opener's hook-minted id (D22: one predicate). A
+    cycle on a text that predates this tree's (COMPATIBILITY, above) is asked
+    under the name its text gives it, and not for a completion identity or
+    reference its template never writes."""
     families = span.session_families()
     if not families:
         return ["no pipeline dispatched"]
     minted = importlib.import_module("lib.obligation").task_family(span.minted_id())
     families |= {minted} if minted else set()
-    return [g for family in sorted(families) for g in disposition(root, family, "dev")]
+    names = _cycle_names(span)
+    gaps = [(name, g) for family in sorted(families) for name in _names(names, family)
+            for g in disposition(root, name, "dev")]
+    if not any(f"GAP artifact=docs/dev/completion-{name}.md " in g for name, g in gaps):
+        return [g for _name, g in gaps]
+    cycles = _cycles(span)  # the span's own last: the text its cycle runs
+    templates = _templates(cycles[-1][2] if cycles else None)
+    return [g for name, g in gaps if not _unwritten(g, name, templates)]
 
 
 def p_do(span, root, payload) -> list[str]:
@@ -259,7 +402,8 @@ def p_overnight(span, root, payload) -> list[str]:
 
 
 def p_close(span, root, payload) -> list[str]:
-    """/close: --stage close per target, and the close-rating question asked
+    """/close: --stage close per target (under its cycle's own name,
+    _cycle_names), and the close-rating question asked
     (D9b: asked, not answered) where it is required and the span's loaded text
     asks it (a /close the session took up before the question was added to
     close.md never asks it: _loaded_lacks). A typed task that names no
@@ -277,9 +421,9 @@ def p_close(span, root, payload) -> list[str]:
         return ["close: no target task resolved"]
     close_rating = importlib.import_module("lib.close_rating")  # P4's
     asks = not _loaded_lacks(span)(re.escape(RATING_SOURCE))
-    gaps = []
+    names, gaps = _cycle_names(span), []
     for task in targets:
-        gaps += disposition(root, task, "close")
+        gaps += [g for name in _names(names, task) for g in disposition(root, name, "close")]
         if asks and close_rating.rating_required(span, task) and not close_rating.rating_asked(
                 span.transcript_path, task):
             gaps.append(f"close {task}: the close-rating question (AskUserQuestion) was not asked")
@@ -305,7 +449,8 @@ def _bulk_block(span):
 
 def p_commit(span, root, payload) -> list[str]:
     """/commit: --stage commit per target (a Task-id commit reachable from
-    HEAD in each plan repository); --bulk: the bulk status block reports a
+    HEAD in each plan repository; under its cycle's own name, _cycle_names);
+    --bulk: the bulk status block reports a
     landing; --dry-run: nothing beyond the todo half. Modes only if typed."""
     args = span.args.split()
     if "--dry-run" in args:
@@ -319,7 +464,8 @@ def p_commit(span, root, payload) -> list[str]:
     targets = _targets(span, root, "commit")
     if targets is None:
         return ["commit: no target task resolved"]
-    return [g for task in targets for g in disposition(root, task, "commit")]
+    names = _cycle_names(span)
+    return [g for task in targets for name in _names(names, task) for g in disposition(root, name, "commit")]
 
 
 # ---------------------------------------------------------------- git facts (merge, push)

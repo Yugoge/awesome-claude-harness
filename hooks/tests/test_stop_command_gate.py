@@ -1743,6 +1743,161 @@ def test_d15_the_rating_source_is_close_ratings_and_this_trees_close_md_asks_it(
     assert f'"source": "{gate.RATING_SOURCE}<task-id>"' in (REPO / "commands" / "close.md").read_text()
 
 
+# ---------------------------------------------------------------- A17: an in-flight cycle, asked as its text names and writes it
+# P1b acceptance 17 (the live landing): a session that loaded origin/master's text runs its /dev cycle, /close and
+# /commit on this tree's hooks. Master's /dev names the cycle's files with DEV_SESSION_ID (dev-<ts>) and its
+# /dev-command with the bare <ts>; neither template writes a Ticket line, and master's /dev-command writes
+# `**Request ID**: dev-<timestamp>` (the gate's COMPATIBILITY block).
+def completion_on_disk(root, task: str, identity: tuple = ("Request ID", "Task ID"), name: str | None = None,
+                       ticket: bool = True, qa: bool = True):
+    """docs/dev/completion-<task>.md as a completion template writes it: one metadata line per ``identity``
+    key naming ``name`` (default the task), and the single-lane Files Generated list, with or without its
+    Ticket and QA Report lines."""
+    refs = ([f"- Ticket: `docs/dev/ticket-{task}.md`"] if ticket else []) + [
+        f"- Context: `docs/dev/context-{task}.json`", f"- Dev Report: `docs/dev/dev-report-{task}.json`"] + (
+        [f"- QA Report: `docs/dev/qa-report-{task}.json`"] if qa else [])
+    (Path(root) / "docs" / "dev" / f"completion-{task}.md").write_text(
+        "# Development Completion Report\n\n" + "".join(f"**{key}**: {name or task}\n" for key in identity)
+        + "\n## Files Generated\n\n" + "\n".join(refs) + "\n", encoding="utf-8")
+
+
+def cycle_span(env, command: str, rev: str | None, name: str, minted: str = DEV_ID, args: str = "fix the build"):
+    """A /dev-family span on commands/<command>.md of ``rev`` (None: this tree's), with the hook's start lines,
+    every canonical step ticked, and its BA, QA and dev dispatches naming the cycle ``name``."""
+    steps = canonical(command)
+    env.tx.command(command, args, context=f"DEV_SESSION_ID pre-initialized by hook: {minted}\nTask id: {FAMILY}\n",
+                   body=loaded_text(command, args, rev))
+    env.tx.todos(steps, len(steps))
+    for role in ("ba", "qa", "dev"):
+        env.tx.dispatch(name, role=role)
+
+
+@pytest.mark.parametrize("command,minted,name,identity", [
+    ("dev", DEV_ID, DEV_ID, ("Request ID", "Task ID")),
+    ("dev-command", f"dev-command-{FAMILY}", FAMILY, ("Request ID",))], ids=["dev", "dev-command"])
+def test_a17_real_an_in_flight_cycle_meets_no_gap_its_text_never_produces(real, command, minted, name, identity):
+    """master's /dev names its files dev-<ts> and its /dev-command the bare <ts>; each writes its completion
+    from its template, with no Ticket line, master's /dev-command with `**Request ID**: dev-<ts>`. Its Stop
+    is asked the chain under the name its dispatches carry and not the completion identity or reference
+    that template never writes: allowed (P1b A17's in-flight /dev and /dev-command Stops)."""
+    chain_on_disk(real.project, task=name)
+    completion_on_disk(real.project, name, identity, name=f"dev-{FAMILY}", ticket=False)
+    cycle_span(real, command, MASTER, name, minted)
+    assert run(real) == (0, "")
+
+
+def test_a17_real_an_in_flight_redev_runs_the_dev_text_its_conversation_holds(real):
+    """(a) of the live landing: /redev after a /dev, both typed on master's text; the /redev cycle runs that
+    /dev text (its own text only says so), so it is asked under its own dev-<ts> name."""
+    old = "20261101-080000"
+    chain_on_disk(real.project, task=f"dev-{old}")
+    cycle_span(real, "dev", MASTER, f"dev-{old}", f"dev-{old}")
+    chain_on_disk(real.project, task=DEV_ID)
+    completion_on_disk(real.project, DEV_ID, ticket=False)
+    cycle_span(real, "redev", MASTER, DEV_ID)
+    assert run(real) == (0, "")
+
+
+def test_a17_real_an_in_flight_cycle_is_held_for_a_report_its_text_names(real):
+    """The in-flight cycle is asked the whole chain under its own name: its own dev report missing (or its QA
+    report failing) still holds its Stop, naming dev-report-dev-<ts>.json."""
+    chain_on_disk(real.project, task=DEV_ID)
+    (real.project / "docs" / "dev" / f"dev-report-{DEV_ID}.json").unlink()
+    cycle_span(real, "dev", MASTER, DEV_ID)
+    code, text = run(real)
+    assert code == 2 and f"GAP artifact=docs/dev/dev-report-{DEV_ID}.json problem=MISSING_ARTIFACT" in text, text
+    chain_on_disk(real.project, task=DEV_ID, qa="fail")
+    code, text = run(real)
+    assert code == 2 and f"artifact=docs/dev/qa-report-{DEV_ID}.json problem=INVALID_QA_STATUS" in text, text
+
+
+@pytest.mark.parametrize("rev,name,missing,held", [
+    (MASTER, DEV_ID, "ticket", False), (MASTER, DEV_ID, "qa-report", True), ("722ffdf", FAMILY, "ticket", True)],
+    ids=["master-ticket", "master-qa-report", "train-1-ticket"])
+def test_a17_real_an_in_flight_completion_is_asked_each_reference_its_template_writes(real, rev, name, missing, held):
+    """An in-flight completion is excused only what its own template never writes: master's names no
+    ticket, but names the QA report, and train 1's (722ffdf, a text differing from this tree's in other
+    words) names the ticket as this tree's does: a completion missing either still holds the Stop."""
+    chain_on_disk(real.project, task=name)
+    completion_on_disk(real.project, name, ticket=missing != "ticket", qa=missing != "qa-report")
+    cycle_span(real, "dev", rev, name)
+    code, text = run(real)
+    gap_line = (f"- GAP artifact=docs/dev/completion-{name}.md problem=MISSING_COMPLETION_REFERENCE: completion "
+                f"does not reference docs/dev/{missing}-{name}.{'md' if missing == 'ticket' else 'json'} lane=-")
+    assert (code, text.splitlines()[1:-1]) == ((2, [gap_line]) if held else (0, [])), text
+
+
+@pytest.mark.parametrize("named", [FAMILY, DEV_ID], ids=["named-task-id", "named-dev-session-id"])
+def test_a17_real_a_cycle_on_this_trees_text_missing_its_dev_report_is_held_as_before(real, named):
+    """This tree's /dev names a cycle's artifacts with its Task id: on that text the cycle is asked under the
+    canonical id whatever its dispatches carry. Its dev report missing holds the Stop, as before, and so
+    does a cycle that named its files dev-<ts> against that text."""
+    chain_on_disk(real.project, task=named)
+    completion_on_disk(real.project, named)
+    (real.project / "docs" / "dev" / f"dev-report-{named}.json").unlink(missing_ok=named == DEV_ID)
+    cycle_span(real, "dev", None, named)
+    code, text = run(real)
+    assert code == 2 and f"GAP artifact=docs/dev/dev-report-{FAMILY}.json problem=MISSING_ARTIFACT" in text, text
+
+
+@pytest.mark.parametrize("command,identity", [("dev", ("Request ID", "Task ID")), ("dev-command", ("Request ID",))])
+def test_a17_real_a_cycle_on_this_trees_text_is_held_for_its_completion_as_before(real, command, identity):
+    """On this tree's text, whose template writes the Ticket line and `**Request ID**: <timestamp>`, a
+    completion without them still holds the /dev-family Stop: the reference and the identity gaps."""
+    chain_on_disk(real.project)
+    completion_on_disk(real.project, FAMILY, identity, name=f"dev-{FAMILY}", ticket=False)
+    cycle_span(real, command, None, FAMILY, DEV_ID if command == "dev" else f"dev-command-{FAMILY}")
+    code, text = run(real)
+    completion = f"docs/dev/completion-{FAMILY}.md"
+    assert code == 2, text
+    assert f"GAP artifact={completion} problem=MISSING_COMPLETION_REFERENCE: completion does not reference " \
+           f"docs/dev/ticket-{FAMILY}.md" in text, text
+    assert f"GAP artifact={completion} problem=IDENTITY_MISMATCH" in text, text
+
+
+def test_a17_real_an_in_flight_close_and_commit_take_the_cycles_own_name(real, repo):
+    """/close dev-<ts> and /commit dev-<ts> after master's /dev, typed on master's text: the close report
+    master's /close writes (close-report-dev-<ts>.md) and the Task-id line its commit carries (dev-<ts>) are
+    the chain's under that name. /close still asks the completion's references (master's Step 0 routes
+    them: the /close Stop holds until the completion names its ticket), and a /commit with no such commit
+    is still held, naming it."""
+    chain_on_disk(repo, task=DEV_ID, close="CLOSE: YES")
+    completion_on_disk(repo, DEV_ID, ticket=False)
+    cycle_span(real, "dev", MASTER, DEV_ID)
+    real.tx.command("close", DEV_ID, body=loaded_text("close", DEV_ID, MASTER))
+    real.tx.todos(canonical("close", DEV_ID), len(canonical("close", DEV_ID)))
+    real.tx.dispatch(DEV_ID, role="qa", pipeline="close", result="Judged.\nCLOSE: YES")
+    code, text = run(real)
+    assert code == 2 and text.splitlines()[1] == (
+        f"- GAP artifact=docs/dev/completion-{DEV_ID}.md problem=MISSING_COMPLETION_REFERENCE: completion does not "
+        f"reference docs/dev/ticket-{DEV_ID}.md lane=-"), text
+    completion_on_disk(repo, DEV_ID)  # as Step 0's route leaves it
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "cycle artifacts")
+    assert run(real) == (0, "")
+    real.tx.command("commit", DEV_ID, body=loaded_text("commit", DEV_ID, MASTER))
+    code, text = run(real)
+    assert code == 2 and f"no commit reachable from HEAD carries the line 'Task-id: {DEV_ID}'" in text, text
+    (repo / "scripts" / "one.py").write_text("landed = True\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", f"land the change\n\nTask-id: {DEV_ID}")
+    assert run(real) == (0, "")
+
+
+def test_a17_the_two_demands_are_this_trees_text_and_not_masters():
+    """The COMPATIBILITY block's two demands, as this tree's /dev and /dev-command word them: each text on
+    disk words both; master's lacks both; P1b's (3f0b7a2) names by Task id and lacks this template."""
+    for command in gate.DEV_TEXTS:
+        current = (REPO / "commands" / f"{command}.md").read_text(encoding="utf-8")
+        for pattern in (gate.NAMING, gate.COMPLETION_TEMPLATE):
+            found = gate.re.search(pattern, current, gate.re.M)
+            assert found and found.group(0) in loaded_text(command, ""), (command, pattern)
+            assert found.group(0) not in loaded_text(command, "", MASTER), (command, pattern)
+        assert gate.re.search(gate.NAMING, current).group(0) in loaded_text(command, "", "3f0b7a2")
+        assert gate.re.search(gate.COMPLETION_TEMPLATE, current, gate.re.M).group(0) not in loaded_text(
+            command, "", "3f0b7a2")
+
+
 def test_a12_real_after_end_time_the_families_chain_at_the_working_root_and_the_closeout_decide(real, monkeypatch):
     """test_a12_after_end_time_the_families_and_closeout_decide on P3's real disposition: after
     end_time the /dev-overnight Stop holds while a family the span dispatched is not chain_pass at
