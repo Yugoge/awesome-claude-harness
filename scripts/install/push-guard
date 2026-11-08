@@ -1,28 +1,30 @@
 #!/usr/bin/env bash
 # push-guard — the pre-push guard (P11). The installed hooks/git-hooks/pre-push runs it from the top
-# of the working tree with git's pre-push input ("<local ref> <local oid> <remote ref> <remote oid>"
-# lines). Every object the push sends (rev-list --objects <local oids> --not <remote oids>: blobs,
-# trees with their path names, commits and annotated tags with author, committer, tagger and
-# message) enters, by its own id, the index of a scratch repository that borrows this one's objects;
-# P8's engine (scripts/check-public-core.sh --private-literals) scans it with this home's list. A
-# hit refuses the push naming "<type> <id>:<line>", never the value. A listed public address (a
-# no-reply form, or example, .invalid, .test, localhost) is left out of the copy it scans: P7b's
-# seeding lists git user.email whatever its shape. No list or an empty one: nothing is scanned.
-# It fails closed with one line naming the step and writes nothing into this repository.
-# Excluded are the remote values git passes only (D18): once the upstream history is rewritten,
-# the remote-tracking refs are stale, and a push of a branch name new to the remote sends it all.
+# of the working tree with git's arguments (<remote> <url>) and input ("<local ref> <local oid>
+# <remote ref> <remote oid>" lines). Every object the push sends (rev-list --objects <local oids>
+# --not <remote tips>: blobs, trees with their path names, commits and annotated tags with author,
+# committer, tagger and message) enters, by its own id, the index of a scratch repository that
+# borrows this one's objects; P8's engine (scripts/check-public-core.sh --private-literals) scans it
+# with this home's list. A hit refuses the push naming "<type> <id>:<line>", never the value. Only a
+# listed no-reply address is left out of the copy it scans (P7b's seeding lists git user.email).
+# No list or an empty one: nothing is scanned. It fails closed with one line naming the step and
+# writes nothing into this repository. Remote tips: the values git passes and, for a ref new to the
+# remote, the branches and tags <url> lists (D18: never the remote-tracking refs, stale after an
+# upstream rewrite); a tip this repository lacks excludes nothing, so stale history is still scanned.
 set -uo pipefail
 refuse() { echo "pre-push: push REFUSED by the private-literal guard: $*" >&2; exit 1; }
 engine="$(cd "${BASH_SOURCE[0]%/*}/.." 2>/dev/null && pwd)/check-public-core.sh"
 list="$(git rev-parse --path-format=absolute --git-common-dir)" || refuse "cannot find the git directory"
 list="${list%/*}/private-literals.txt"
 [ -s "$list" ] || exit 0
-tips=() not=()
+tips=() not=() new=
 while read -r _ lo _ ro; do  # all zeros: a deleted ref (it sends nothing), or a ref new to the remote
-  [ -z "${lo//0}" ] || tips+=("$lo"); [ -z "${ro//0}" ] || not+=("$ro")
+  [ -z "${lo//0}" ] || { tips+=("$lo"); [ -n "${ro//0}" ] || new=1; }; [ -z "${ro//0}" ] || not+=("$ro")
 done
 [ "${#tips[@]}" -gt 0 ] || exit 0
 [ -f "$engine" ] || refuse "scripts/check-public-core.sh is missing"
+[ -z "$new" ] || { heads="$(git ls-remote --refs "${2-}" 'refs/heads/*' 'refs/tags/*' 2>/dev/null)" \
+  || refuse "cannot read the remote's branches and tags"; not+=($(cut -f1 <<< "$heads")); }
 objects="$(git rev-parse --path-format=absolute --git-path objects)" && t="$(mktemp -d)" \
   || refuse "cannot create a scratch directory"
 trap 'rm -rf "$t"' EXIT
@@ -32,7 +34,7 @@ git rev-list --objects --no-object-names --ignore-missing "${tips[@]}" --not "${
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
 cd "$t" && git init -q . 2>/dev/null && printf '%s\n' "$objects" > .git/objects/info/alternates \
   && git update-index --index-info < sent || refuse "cannot index the objects this push sends"
-awk '{ print (tolower($0) ~ /^[[:space:]]*([^@[:space:]]+@([^@[:space:]]+\.)?(example(\.(com|net|org))?|invalid|test|localhost)|no-?reply@[^[:space:]]+|[^@[:space:]]+@users\.noreply\.github\.com)[[:space:]]*$/ ? "" : $0) }' \
+awk '{ print (tolower($0) ~ /^[[:space:]]*(no-?reply@[^[:space:]]+|[^@[:space:]]+@users\.noreply\.github\.com)[[:space:]]*$/ ? "" : $0) }' \
   "$list" > private-literals.txt || refuse "cannot read private-literals.txt"
 report="$(bash "$engine" --private-literals 2>&1)" \
   || { printf '%s\n' "$report" >&2; refuse "scripts/check-public-core.sh --private-literals failed (objects named above)"; }

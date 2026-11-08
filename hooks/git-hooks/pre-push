@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # claude-harness pre-push (installed by scripts/bootstrap)
-# This working tree's scripts/install/push-guard (fail-closed), then a displaced pre-push.local, same input.
+# This working tree's scripts/install/push-guard (fail-closed), then a displaced pre-push.local; same args, input.
 in="$(cat; echo .)" && in="${in%.}" && [ -f scripts/install/push-guard ] \
   || { echo "pre-push: push REFUSED: scripts/install/push-guard is missing" >&2; exit 1; }
-printf %s "$in" | bash scripts/install/push-guard || exit 1
+printf %s "$in" | bash scripts/install/push-guard "$@" || exit 1
 [ ! -x "${0%/*}/pre-push.local" ] || { printf %s "$in" | "${0%/*}/pre-push.local" "$@"; }
