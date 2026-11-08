@@ -148,6 +148,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         _has_shell_glob,
         _normalize_path,
         _path_matches_any,
+        _path_matches_entries,
         _path_under_any,
     )
 except ImportError:  # executed as a top-level script (no package context)
@@ -164,6 +165,7 @@ except ImportError:  # executed as a top-level script (no package context)
         _has_shell_glob,
         _normalize_path,
         _path_matches_any,
+        _path_matches_entries,
         _path_under_any,
     )
 
@@ -265,6 +267,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         _git_destructive_pathspecs,
         _git_effective_cwd,
         _git_is_destructive_invocation,
+        _git_location,
         _git_subcommand_index,
         _strip_git_pathspec_magic,
     )
@@ -275,6 +278,7 @@ except ImportError:  # executed as a top-level script (no package context)
         _git_destructive_pathspecs,
         _git_effective_cwd,
         _git_is_destructive_invocation,
+        _git_location,
         _git_subcommand_index,
         _strip_git_pathspec_magic,
     )
@@ -1329,7 +1333,8 @@ def _step0_mutation_anchor_hits(ctx: "Context", idx: int, sc: str,
     reconstructs each verb's OWN argv, extracts the write/metadata target(s),
     resolves each against the effective cwd (cd chain + wrapper chdir, seeded from
     the payload cwd_base so a relative data-file target under the config dir is
-    caught), and matches against the config-path variants. The redirect-target form
+    caught) and, for git's own subcommand, against git's `-C` chain too, and matches
+    against the config-path variants. The redirect-target form
     is handled separately by the caller. The config path is the hardcoded
     `DATA_FILE_PATH` (a generic path, not a project name), NOT loaded from the data
     file — the self-protection must not depend on the very file it protects, so this
@@ -1341,7 +1346,10 @@ def _step0_mutation_anchor_hits(ctx: "Context", idx: int, sc: str,
     inspect command carrying a mutation word as DATA (`grep cp <datafile>`) ALLOWS."""
     # the data file AND its protected ANCESTOR directories (a mutation/move/delete
     # of the parent config dir neuters the guard exactly like a delete of the file).
-    variants = list(_config_or_ancestor_variants())
+    # The ancestors are protected as entries only (`_path_matches_entries`).
+    files = list(_config_path_variants())
+    ancestors = list(_config_ancestor_dirs())
+    variants = files + ancestors
     exec_toks = _anchor_exec_tokens(tokens)
     cwd, cwd_det = _effective_cwd_after(ctx.simple_cmds, idx, ctx.cwd_base)
     cwd, cwd_det = _fold_wrapper_cwd(cwd, cwd_det, tokens)
@@ -1358,11 +1366,47 @@ def _step0_mutation_anchor_hits(ctx: "Context", idx: int, sc: str,
         if verb_base not in _STEP0_MUTATION_HEADS:
             continue
         verb_args = tokens[i + 1:]
+        located, places, git_hosted = _step0_verb_places(ctx, tokens, exec_toks, i, cwd, cwd_det)
         for tgt in _step0_mutation_targets(verb_base, verb_args):
-            for cand in _resolve_rel(tgt, cwd, cwd_det):
-                if _path_matches_any(cand, variants):
-                    return True
+            # `_resolve_rel` collapses a `..` logically where the kernel resolves it
+            # physically (after a symlink), and git reads a pathspec-magic operand
+            # (`:/*`) from the top of the work tree: neither place is proven.
+            st_tgt = _strip_quotes(tgt)
+            t_located = (located and ".." not in st_tgt.split("/")
+                         and not (git_hosted and st_tgt.startswith(":")))
+            for (pcwd, pdet) in places:
+                for cand in _resolve_rel(tgt, pcwd, pdet):
+                    if _path_matches_entries(cand, files, ancestors, t_located):
+                        return True
     return False
+
+
+def _step0_verb_places(ctx: "Context", tokens: list, exec_toks: list, verb_idx: int,
+                       cwd: Optional[str], cwd_det: bool):
+    """(located, places, git_hosted) for the STEP0 mutation verb at `verb_idx`:
+    the (cwd, determinate) pairs its relative operands are resolved against, and
+    whether that resolution is PROVEN. A verb that is git's subcommand (`git -C
+    <dir> rm`) runs where `_git_location` folds git's `-C` chain, so that place is
+    added to the cd/wrapper cwd. Not proven: a wrapper chdir or git `-C` value
+    with a `..` segment (chdir resolves it physically, the cwd fold logically),
+    another git global option first, a dynamic `-C` value, or a GIT_* variable
+    anywhere in the command (GIT_DIR / GIT_WORK_TREE move the work tree). Without
+    proof `_path_matches_entries` keeps the old container match for a glob."""
+    places = [(cwd, cwd_det)]
+    wdir, _wdet = _wrapper_cwd(tokens)
+    located = not (wdir and ".." in _strip_quotes(wdir).split("/"))
+    for gi, gst in exec_toks:
+        if gi >= verb_idx:
+            break
+        if (os.path.basename(_strip_quotes(gst)) != "git"
+                or _git_subcommand_index(tokens, gi)[1] != verb_idx):
+            continue
+        gcwd, gdet, proven = _git_location(tokens, gi, verb_idx, cwd, cwd_det)
+        if (gcwd, gdet) != (cwd, cwd_det):
+            places.append((gcwd, gdet))
+        located = located and proven and not any("GIT_" in sc for sc in ctx.simple_cmds)
+        return (located, places, True)
+    return (located, places, False)
 
 
 # find/fd actions that MUTATE the matched entries (destroy a protected file/dir).

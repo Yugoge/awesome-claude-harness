@@ -8,13 +8,15 @@ engine.
 Scope: `$HOME`/`~` expansion, logical path normalization, glob->segment-boundary
 regex translation, shell-glob detection / parent extraction, and the
 protected-glob intersection predicates (`_path_matches_any`, `_path_under_any`,
-the `_any_token_*` token scanners) -- the shared matching layer every downstream
+the entry-only `_path_matches_entries` with its filesystem walk, the
+`_any_token_*` token scanners) -- the shared matching layer every downstream
 destructive-command analyzer calls.
 ZERO project identifiers.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 from typing import Optional
@@ -231,14 +233,15 @@ def _dir_equal_or_under(child: str, ancestor: str) -> bool:
     return c.startswith(a + "/")
 
 
-def _path_matches_any(path: str, globs: list) -> bool:
+def _path_literal_matches_any(path: str, globs: list) -> bool:
+    """The literal half of `_path_matches_any`: `path` as written, normalized, or
+    as symlinks resolve it, segment-matches one of `globs`. A shell-glob token is
+    taken literally here."""
     norm = _normalize_path(path)
     candidates = {norm, path, _strip_quotes(path)}
-    real = None
     try:
         if os.path.exists(norm):
-            real = os.path.realpath(norm)
-            candidates.add(real)
+            candidates.add(os.path.realpath(norm))
     except OSError:
         pass
     for glob in globs:
@@ -246,6 +249,12 @@ def _path_matches_any(path: str, globs: list) -> bool:
         for cand in candidates:
             if rx.search(cand):
                 return True
+    return False
+
+
+def _path_matches_any(path: str, globs: list) -> bool:
+    if _path_literal_matches_any(path, globs):
+        return True
     # COMMAND-SIDE shell-glob token (`<dir>/*`, `<protectedfile-or-dir>/*`): a literal
     # match above fails (the `*` is normalized literally), but the shell would expand
     # the token to select entries under its glob-parent. Intersect the glob-parent
@@ -255,6 +264,98 @@ def _path_matches_any(path: str, globs: list) -> bool:
     if _has_shell_glob(_strip_quotes(path)) and _glob_token_selects_protected(path, globs):
         return True
     return False
+
+
+def _path_matches_entries(path: str, globs: list, entries: list, located: bool = True) -> bool:
+    """`_path_matches_any(path, globs + entries)`, except that a directory in
+    `entries` is protected as an ENTRY (moving, removing or re-moding it neuters
+    what it holds), not as a container of every path below it.
+
+    `_glob_token_selects_protected` counts a glob whose glob-parent lies anywhere
+    under a protected directory as a hit. That suits a container, but not an
+    entry: with the data file's ancestors as entries and $HOME below the /tmp stop
+    root (a session scratchpad holding both $HOME and $TMPDIR), every glob under
+    $TMPDIR was a "mutation of data file". Here a glob token names an entry only
+    when (1) its glob-parent, as written or as symlinks resolve it, is one of
+    `globs`/`entries` or holds one, or (2) `_glob_walk_reaches` cannot prove that no
+    path it expands to is, or resolves to, one of them. The container match stands
+    for a token with a `..` segment (the kernel resolves `..` after a symlink
+    physically, `_normalize_path` logically) and wherever the caller cannot prove
+    where the token is resolved (`located` False)."""
+    if _path_matches_any(path, globs):
+        return True
+    if not _path_matches_any(path, entries):
+        return False
+    parent = _glob_parent(path)
+    if (not located or parent is None or ".." in _strip_quotes(path).split("/")
+            or _path_literal_matches_any(path, entries)):
+        return True
+    targets = list(globs) + list(entries)
+    parents = {parent}
+    try:
+        if os.path.exists(parent):
+            parents.add(os.path.realpath(parent))
+    except OSError:
+        pass
+    for p in parents:
+        for t in targets:
+            tp = _glob_literal_prefix(t)
+            if tp is None or _dir_equal_or_under(tp, p):
+                return True
+    return _glob_walk_reaches(path, targets)
+
+
+# The most directory entries `_glob_walk_reaches` reads before it proves nothing.
+_GLOB_WALK_LIMIT = 4096
+
+
+def _glob_segment_may_match(name: str, seg: str) -> bool:
+    """Whether shell-glob segment `seg` can match directory entry `name`, erring
+    toward yes: `*` and `?` match as `fnmatch` does, ignoring case (`nocaseglob`)
+    and matching hidden entries (`dotglob`); any other glob syntax (a bracket, an
+    escape, an extglob group) matches every entry."""
+    if any(ch in seg for ch in "[]\\(|"):
+        return True
+    return fnmatch.fnmatchcase(name.lower(), seg.lower())
+
+
+def _glob_walk_reaches(tok: str, targets: list, limit: int = _GLOB_WALK_LIMIT) -> bool:
+    """True unless a walk of the filesystem PROVES that no path the shell can
+    expand the glob token `tok` to is, or resolves through a symlink to, a path
+    `_path_literal_matches_any` matches in `targets`.
+
+    The walk expands each glob segment over the entries `_glob_segment_may_match`
+    allows, so it finds every path any expansion can name, and some more. It
+    proves nothing for a token that is not absolute or carries `**` (globstar), a
+    brace or a `..` segment, nor when a directory cannot be read or the walk would
+    read more than `limit` entries."""
+    st = _strip_quotes(tok)
+    norm = _normalize_path(st)
+    if not os.path.isabs(norm) or "**" in st or "{" in st or ".." in st.split("/"):
+        return True
+    paths = ["/"]
+    budget = limit
+    for seg in norm.split("/"):
+        if not seg:
+            continue
+        if not _has_shell_glob(seg):
+            paths = [os.path.join(p, seg) for p in paths]
+            continue
+        nxt = []
+        for p in paths:
+            try:
+                names = os.listdir(p)
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError:
+                return True
+            budget -= len(names)
+            if budget < 0:
+                return True
+            nxt.extend(os.path.join(p, n) for n in names if _glob_segment_may_match(n, seg))
+        paths = nxt
+    return any(_path_literal_matches_any(p, targets)
+               or _path_literal_matches_any(os.path.realpath(p), targets) for p in paths)
 
 
 def _any_token_path_matches(tokens: list, globs: list) -> bool:

@@ -30,17 +30,22 @@ HOOK = os.path.join(os.path.dirname(__file__), "..", "pretool-bash-safety.sh")
 HOME_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
-def run_hook(command: str, hook: str = HOOK, cwd: str = HOME_DIR) -> int:
-    """Invoke the real hook with a Bash tool_input and return its exit code."""
+def run_hook_proc(command: str, hook: str = HOOK, cwd: str = HOME_DIR, env=None):
+    """Invoke the real hook with a Bash tool_input; `env` replaces the environment."""
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd})
-    proc = subprocess.run(
+    return subprocess.run(
         ["bash", hook],
         input=payload,
         text=True,
         capture_output=True,
         cwd=cwd,
+        env=env,
     )
-    return proc.returncode
+
+
+def run_hook(command: str, hook: str = HOOK, cwd: str = HOME_DIR) -> int:
+    """Invoke the real hook with a Bash tool_input and return its exit code."""
+    return run_hook_proc(command, hook, cwd).returncode
 
 
 BLOCK = 2
@@ -359,7 +364,11 @@ def _git(cwd, *args):
 @pytest.fixture
 def product_repo(tmp_path):
     """A product repository with clean files, a directory and a clean submodule."""
-    sub, repo = tmp_path / "sub-src", tmp_path / "repo"
+    return _make_product_repo(tmp_path)
+
+
+def _make_product_repo(root):
+    sub, repo = root / "sub-src", root / "repo"
     sub.mkdir()
     (sub / ".gitignore").write_text("data.log\n")
     (repo / "dir").mkdir(parents=True)
@@ -430,6 +439,62 @@ class TestRecoverableGitRm:
     def test_degraded_mode_denies_every_git_rm(self, product_repo, tmp_path, command):
         hook = TestGitResetExecutionClassification._fallback_hook(tmp_path)
         assert run_hook(command, hook, cwd=product_repo) == BLOCK, command
+
+
+# ── Recoverable git rm from a session scratchpad (train 2) ────────────────────
+# A session scratchpad holds both $HOME and $TMPDIR below the /tmp stop root, so
+# the guard's data file ($HOME/.config/claude/protected-runtime.json) has an
+# ancestor (the scratchpad) that also holds the product repository. The guard
+# protects that ancestor as an entry; a glob operand under it is not a mutation
+# of the data file.
+
+DATA_FILE_REL = os.path.join(".config", "claude", "protected-runtime.json")
+
+
+@pytest.fixture
+def scratch_session(tmp_path):
+    """$HOME and $TMPDIR as two directories of one scratchpad, a product repository
+    under $TMPDIR, and the guard's data file tracked in a git repository of its own."""
+    pad = tmp_path / "scratchpad"
+    home, tmpdir = pad / "home", pad / "tmp"
+    home.mkdir(parents=True)
+    tmpdir.mkdir()
+    cfgdir = home / os.path.dirname(DATA_FILE_REL)
+    cfgdir.mkdir(parents=True)
+    (cfgdir / "protected-runtime.json").write_text('{"schema_version": 1}\n')
+    for step in (("init", "-q"), ("add", "-A"), ("commit", "-qm", "init")):
+        assert _git(str(cfgdir), *step).returncode == 0, step
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROTECTED_RUNTIME_FILE"}
+    env.update(HOME=str(home), TMPDIR=str(tmpdir))
+    return {"repo": _make_product_repo(tmpdir), "home": str(home), "cfgdir": str(cfgdir), "env": env}
+
+
+class TestRecoverableGitRmFromAScratchpad:
+    @pytest.mark.parametrize("command", ("git -C {repo} rm 'dir/*.txt'", "git rm 'dir/*.txt'",
+                                         "git rm -r dir", "git rm clean.txt"))
+    def test_a_glob_under_the_shared_scratchpad_is_allowed(self, scratch_session, command):
+        s = scratch_session
+        proc = run_hook_proc(command.format(**s), cwd=s["repo"], env=s["env"])
+        assert proc.returncode == ALLOW, (command, proc.stderr)
+
+    @pytest.mark.parametrize("command,where", (
+        ("git rm {cfgdir}/protected-runtime.json", "repo"),
+        ("git rm protected-runtime.json", "cfgdir"),
+        ("git rm '*.json'", "cfgdir"),
+        ("git rm '{cfgdir}/*'", "repo"),
+        ("git -C {cfgdir} rm protected-runtime.json", "repo"),
+        ("git -C {cfgdir} rm '*.json'", "repo"),
+        ("git -C {home} -C .config/claude rm protected-runtime.json", "repo"),
+        ("git -C {home} rm -r '.config/*'", "repo"),
+        ("rm {cfgdir}/protected-runtime.json", "repo"),
+        ("rm -rf {cfgdir}", "repo"),
+    ))
+    def test_a_git_rm_of_the_data_file_is_still_refused(self, scratch_session, command, where):
+        s = scratch_session
+        proc = run_hook_proc(command.format(**s), cwd=s[where], env=s["env"])
+        assert proc.returncode == BLOCK, command
+        assert "config self-protection" in proc.stderr, (command, proc.stderr)
+        assert os.path.exists(os.path.join(s["home"], DATA_FILE_REL))
 
 
 # ── Layer 1.F false-positive regression: protected name in quoted arg ─────────
