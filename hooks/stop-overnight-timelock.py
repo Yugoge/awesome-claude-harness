@@ -113,10 +113,14 @@ def block_with_message(end_time: datetime, state: dict) -> None:
 def _publish_terminal_receipt(
     project_dir: Path, session_id: str, state: dict, terminal_status: str
 ) -> bool:
-    """Publish evidence only; this writer never finalizes or signals resources."""
+    """Publish evidence only; this writer never finalizes or signals resources.
+    Whether there is a receipt to publish is the coordinator's preflight verdict: one rule
+    (resolve_current_resource_session) decides on the session-resources pointer and session.json."""
     if session_resources is None:
         return False
     try:
+        if not session_resources.resolve_current_resource_session(project_dir, session_id):
+            return False
         result = session_resources.publish_overnight_receipt(
             project_dir,
             claude_session_id=session_id,

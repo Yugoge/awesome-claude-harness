@@ -91,6 +91,10 @@ def test_publish_terminal_receipt_invoked_on_cancelled_status(
 
     class _StubSessionResources:
         @staticmethod
+        def resolve_current_resource_session(project_dir, claude_session_id):
+            return {"claude_session_id": claude_session_id, "resource_session_id": "resource-cancel"}
+
+        @staticmethod
         def publish_overnight_receipt(project_dir, *, claude_session_id, state, terminal_status):
             calls.append(
                 {
@@ -129,6 +133,34 @@ def test_publish_terminal_receipt_degrades_gracefully_when_session_resources_una
         tmp_path, "session-x", {"session_id": "session-x"}, "completed_by_deadline"
     )
     assert published is False
+
+
+def test_publish_terminal_receipt_takes_the_coordinators_preflight_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One rule decides on the session-resources pointer and session.json: the
+    coordinator's preflight read, session_resources.resolve_current_resource_session.
+    The time-lock takes that verdict before it publishes; with no current resource
+    session for the Claude session it attempts no receipt."""
+    calls = []
+
+    class _StubSessionResources:
+        @staticmethod
+        def resolve_current_resource_session(project_dir, claude_session_id):
+            calls.append(("resolve", project_dir, claude_session_id))
+            raise ValueError("no current resource session")
+
+        @staticmethod
+        def publish_overnight_receipt(project_dir, *, claude_session_id, state, terminal_status):
+            calls.append(("publish", project_dir, claude_session_id))
+            return {"status": "pass"}
+
+    monkeypatch.setattr(timelock, "session_resources", _StubSessionResources)
+    published = timelock._publish_terminal_receipt(
+        tmp_path, "session-x", {"session_id": "session-x"}, "completed_by_deadline"
+    )
+    assert published is False
+    assert calls == [("resolve", tmp_path, "session-x")]
 
 
 # ---------------------------------------------------------------------------
