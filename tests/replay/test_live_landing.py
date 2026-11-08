@@ -82,6 +82,9 @@ P2_ENV = {"CLAUDE_OBLIGATION_GATE": "block", "CLAUDE_OBLIGATION_BARRIER": "block
 # P10 (R9): the clean settings form sets PYTHONDONTWRITEBYTECODE, so a session's hooks write no
 # bytecode into the tree; the base's settings.json has no such entry.
 P10_ENV = {"PYTHONDONTWRITEBYTECODE": "1"}
+# P9: settings.json's env arms subagentstop-cp-enforce.py as shipped (CP_ENFORCE_MODE=block); the
+# base's settings.json leaves it advisory.
+P9_ENV = {"CP_ENFORCE_MODE": "block"}
 P2_MATCHER = ("Write|Edit|MultiEdit|Bash", "Write|Edit|MultiEdit|Bash|AskUserQuestion")
 G2 = "hooks/subagentstop-artifact-contract-enforce.py"
 FORGED = "forged@agent:dev Write docs/dev/dev-report-*=dev.status:done,-dev.files_modified"
@@ -540,13 +543,13 @@ def test_your_settings_differs_only_where_a_replay_runs_it(name):
     """This tree's settings.json registers otherwise than the base's exactly at the registrations the
     scenarios below declare they run after the landing (EXERCISES), each checked in its replay, and at
     P2's and P4's own (ELSEWHERE); its environment differs by STOPGATE=block, P2's arming of G1 and
-    G3 (P2_ENV) and P10's PYTHONDONTWRITEBYTECODE (P10_ENV) alone."""
+    G3 (P2_ENV), P10's PYTHONDONTWRITEBYTECODE (P10_ENV) and P9's CP_ENFORCE_MODE (P9_ENV) alone."""
     differing = _differing(name)
     assert differing, "this tree registers as the base does: the replays with your settings.json are the replays"
     assert {k: differing.get(k) for k in ELSEWHERE} == ELSEWHERE, differing
     assert set(differing) - set(ELSEWHERE) == set().union(*EXERCISES.values()), differing
     head = _head_settings()
-    assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV | P10_ENV == \
+    assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV | P10_ENV | P9_ENV == \
         hookrun.settings_env(head) | ENV
 
 
