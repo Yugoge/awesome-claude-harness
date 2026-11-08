@@ -1000,6 +1000,7 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             _emit_block(role, check_tool, target, reason)
             if tool_name == "Bash" and idx > 0:
                 _note_bash_write_target(data, target)
+            _note_inflight_token_route(role, tool_name, target)
             sys.exit(2)
         if check_tool in WRITE_TOOLS and target not in message_file:
             allowed, reason = _check_scratch_actor_exactness(role, target, data)
@@ -1143,7 +1144,36 @@ def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data
         if what:
             _emit_block(_caller_label(role, data), "Write" if tool_name == "Bash" else tool_name, target,
                         f"{target} is {what}: no agent writes, deletes or renames it (D11/D12)")
+            _note_inflight_token_route(role, tool_name, target)
             sys.exit(2)
+
+
+# -- in-flight compatibility: the token Write's refusal names its route (train 2, A17)
+# COMPATIBILITY CODE, kept only until no running session predates train 2's
+# landing (D15); it goes with scripts/execute-push.py's Step 9b and
+# hooks/tests/test_inflight_push_route.py. 2acc29b's changelog-analyst text
+# (Phase 10) writes the push-gate token with the Write tool, at /tmp/agentic-
+# commit/push/<repo hash>/<session digest>/<branch>.json. That Write stays
+# refused (D18): by the protected stage above where the state dir is /tmp, by
+# the analyst's role row elsewhere. Its stderr names the route that still
+# reaches the push of the commit it names (D25): /push, whose Step 5 has the
+# token's one writer write the token for that commit (execute-push.py Step 9b,
+# on the CLI's record of this refusal).
+_INFLIGHT_TOKEN_RE = re.compile(r"/agentic-commit/push/[0-9a-f]{16}/[0-9a-f]{16}/[^/]+\.json\Z")
+_INFLIGHT_TOKEN_ROUTE = (
+    "tool-policy.v1 note (train 2, A17): this Write stays refused; no agent writes a push-gate token. The "
+    "commit it names reaches its push through /push (the harness home's commands/push.md, Steps 0-5): Step 3 "
+    "dispatches the push-analyst, whose own dispatch binds its grant, and Step 5's scripts/execute-push.py, "
+    "once that grant passes, has the token's one writer (scripts/write-push-gate-token.py) write the token for "
+    "that commit while it is HEAD and no token names an ancestor of HEAD. Report this refusal; do not write "
+    "the token any other way.")
+
+
+def _note_inflight_token_route(role, tool_name: str, target) -> None:
+    """The route of a changelog-analyst's refused Write of a push-gate token path."""
+    if role == "changelog-analyst" and tool_name == "Write" and _INFLIGHT_TOKEN_RE.search(
+            os.path.normpath(str(target))):
+        sys.stderr.write(_INFLIGHT_TOKEN_ROUTE + "\n")
 
 
 # -- scheduled prompts (P5 R5) ------------------------------------------------
