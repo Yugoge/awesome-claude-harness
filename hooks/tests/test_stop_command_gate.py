@@ -44,9 +44,10 @@ resolver = _load(REPO / "scripts" / "resolve-dev-artifact-chain.py", "resolver_u
 sys.path.insert(0, str(REPO))
 from hooks.lib import obligation as chain_obligation  # noqa: E402  (the module the chain's reader imports)
 command_span = gate.command_span
-obligation = gate._lib("obligation")
-REAL_OVERNIGHT = gate._lib("overnight")
-todo_canonical = gate._lib("todo_canonical")
+# the hooks/lib modules the gate imports by name (it puts hooks/ on sys.path)
+obligation = importlib.import_module("lib.obligation")
+REAL_OVERNIGHT = importlib.import_module("lib.overnight")
+todo_canonical = importlib.import_module("lib.todo_canonical")
 
 T0 = datetime(2026, 11, 1, 9, 0, 0, tzinfo=timezone.utc)
 SID = "11111111-2222-3333-4444-555555555555"
@@ -683,7 +684,7 @@ def branches(repo, *names):
 def write_grant(env, repo, branch):
     """The merge-analyst's grant for ``branch``, as agents/merge-analyst.md Phase 8 writes it, at
     git's clock: one hooks/lib/merge_grant.py's check passes, as at the PostToolUse of that Write."""
-    merge_grant, top = gate._lib("merge_grant"), os.path.realpath(repo)
+    merge_grant, top = importlib.import_module("lib.merge_grant"), os.path.realpath(repo)
     request = f"{int(GIT_CLOCK[0]):032x}"
     path = Path(merge_grant.grant_root(), hashlib.sha256(top.encode()).hexdigest()[:16], SID, f"{request}.json")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -761,7 +762,7 @@ def test_a6_a_grant_that_is_no_json_object_is_none_as_the_check_on_its_write_rem
     git(repo, "checkout", "-q", on)
     opener_now(env, "merge")
     write_grant(env, repo, "feature")
-    grant = next(Path(gate._lib("merge_grant").grant_root()).rglob("*.json"))
+    grant = next(Path(importlib.import_module("lib.merge_grant").grant_root()).rglob("*.json"))
     stamp = grant.stat().st_mtime
     grant.write_text(content)
     os.utime(grant, (stamp, stamp))
@@ -1737,7 +1738,7 @@ def test_d15_a_span_on_this_trees_own_text_is_asked_every_step(env, command, arg
 
 
 def test_d15_the_rating_source_is_close_ratings_and_this_trees_close_md_asks_it():
-    close_rating = gate._lib("close_rating")
+    close_rating = importlib.import_module("lib.close_rating")
     assert close_rating.SOURCE_RE.fullmatch(f"{gate.RATING_SOURCE}{FAMILY}")
     assert f'"source": "{gate.RATING_SOURCE}<task-id>"' in (REPO / "commands" / "close.md").read_text()
 

@@ -75,12 +75,6 @@ def _script(rel: str):
     return _SCRIPTS[rel]
 
 
-def _lib(name: str):
-    """A hooks/lib module, imported when a predicate first needs it."""
-    import importlib
-    return importlib.import_module(f"lib.{name}")
-
-
 def _git(root, *args: str) -> str | None:
     """git's stripped stdout in ``root``; None when it fails."""
     done = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=20)
@@ -150,7 +144,7 @@ def todo_gaps(span) -> list[str]:
     still holds every step before it."""
     if os.environ.get("CLAUDE_CODE_ENABLE_TODO_TOOLS") != "1":
         return ["todo tools disabled (CLAUDE_CODE_ENABLE_TODO_TOOLS)"]
-    todo_canonical = _lib("todo_canonical")
+    todo_canonical = importlib.import_module("lib.todo_canonical")
     script, _project = todo_canonical._find_todo_script(span.command)
     current = span.last_todos()
     if script is not None:
@@ -174,7 +168,7 @@ def todo_gaps(span) -> list[str]:
 
 # ---------------------------------------------------------------- predicates
 def _canonical(task: str) -> str:
-    return _lib("obligation").canonical_task_id(task) or task
+    return importlib.import_module("lib.obligation").canonical_task_id(task) or task
 
 
 def _path(arg: str) -> bool:
@@ -184,7 +178,7 @@ def _path(arg: str) -> bool:
 def _task_of(path: str) -> str:
     """The id a path names: its basename's, from the timestamp on."""
     name = os.path.basename(path).removesuffix(".md").removesuffix(".json")
-    return _canonical(name[name.find(_lib("obligation").task_stamp(name) or name):])
+    return _canonical(name[name.find(importlib.import_module("lib.obligation").task_stamp(name) or name):])
 
 
 def _typed(span) -> list[tuple[str, str]]:
@@ -217,7 +211,7 @@ def _resolves(root, arg: str, task: str) -> bool:
         names = os.listdir(Path(root) / "docs" / "dev")
     except OSError:
         return False
-    family = _lib("obligation").task_family
+    family = importlib.import_module("lib.obligation").task_family
     return any(task in (held, family(held)) for held in map(_task_of, names))
 
 
@@ -227,7 +221,7 @@ def p_dev(span, root, payload) -> list[str]:
     families = span.session_families()
     if not families:
         return ["no pipeline dispatched"]
-    minted = _lib("obligation").task_family(span.minted_id())
+    minted = importlib.import_module("lib.obligation").task_family(span.minted_id())
     families |= {minted} if minted else set()
     return [g for family in sorted(families) for g in disposition(root, family, "dev")]
 
@@ -244,7 +238,7 @@ def p_do(span, root, payload) -> list[str]:
     record, problem = do_report.load(Path(root) / rel)
     if record is None:
         return [f"{rel}: {problem}"]
-    status = [] if _lib("obligation").terminal_status("do-report.v1", record) else [
+    status = [] if importlib.import_module("lib.obligation").terminal_status("do-report.v1", record) else [
         f"{rel}: do.status is not a terminal status of schemas/do-report.v1.json"]
     chain = _script("scripts/resolve-dev-artifact-chain.py")
     return status + [f"{artifact}: {code}: {detail}" for code, artifact, detail in
@@ -255,7 +249,7 @@ def p_overnight(span, root, payload) -> list[str]:
     """/dev-overnight after its window: each family the span dispatched is
     chain_pass at the session's working root (P2's locator), the closeout is
     complete. An unanswered producer question is the disposition's gap."""
-    overnight = _lib("overnight")
+    overnight = importlib.import_module("lib.overnight")
     _state_file, record = overnight.locate(payload.get("session_id"), payload)
     if record is None:
         return [f"dev-overnight: no overnight state record for session {payload.get('session_id')}"]
@@ -281,7 +275,7 @@ def p_close(span, root, payload) -> list[str]:
     targets = sorted({t for a, t in typed if a not in held} | families) if held else _targets(span, root, "close")
     if targets is None:
         return ["close: no target task resolved"]
-    close_rating = _lib("close_rating")  # P4's
+    close_rating = importlib.import_module("lib.close_rating")  # P4's
     asks = not _loaded_lacks(span)(re.escape(RATING_SOURCE))
     gaps = []
     for task in targets:
@@ -398,7 +392,7 @@ def p_merge(span, root, payload) -> list[str]:
     default = (subprocess.run(["bash", str(HARNESS / "scripts" / "derive-default-branch.sh")], cwd=str(root),
                               capture_output=True, text=True, timeout=20).stdout.strip())
     base, named = _source_tips(root, f"refs/heads/{default}", since)[0], refs[0] if refs else _bare_pick(root, since)
-    grant = _lib("merge_grant").newest(_git(root, "rev-parse", "--show-toplevel") or str(root),
+    grant = importlib.import_module("lib.merge_grant").newest(_git(root, "rev-parse", "--show-toplevel") or str(root),
                                        payload.get("session_id"), since)
     own = [(named, *_source_tips(root, named, since))] if named else []
     granted = [(grant.get("branch"), grant.get("source_tip"), {grant.get("source_tip")})]
@@ -497,7 +491,7 @@ def _push_gaps(root, payload, typed, since, now, branch, opened) -> list[str]:
                 break
         else:
             continue  # Step 5: push.sh's exit 3, "run /commit first"
-        grant = _lib("merge_grant").newest(top, payload.get("session_id"), since, "push-analyst")
+        grant = importlib.import_module("lib.merge_grant").newest(top, payload.get("session_id"), since, "push-analyst")
         if (grant.get("verdict"), grant.get("branch"), grant.get("head_sha")) == ("blocked", branch, commit):
             continue  # Step 5: "push BLOCKED by push-analyst"
         fix = ("" if now == branch else f"; HEAD is not on it: check out {branch}") + (
@@ -518,7 +512,7 @@ PREDICATES = {
 def window_lock(payload, record):
     """(2, the block text with the time left, None) while the session's overnight
     window is open (P2's overnight.window_open), else None."""
-    overnight = _lib("overnight")
+    overnight = importlib.import_module("lib.overnight")
     if overnight.window_open(payload):
         end = overnight.parse_end_time(record.get("end_time"))
         left = max(0, int((end - datetime.now(timezone.utc)).total_seconds()) // 60) if end else 0
@@ -533,7 +527,7 @@ def wake_lock(transcript: str):
     (a CronCreate of overnight.WAKE_PROMPT) has no later CronDelete
     (overnight.open_wakes, P1c X8), else None: a wake left scheduled would
     fire into the ended session."""
-    jobs = _lib("overnight").open_wakes(transcript)
+    jobs = importlib.import_module("lib.overnight").open_wakes(transcript)
     if jobs:
         return (2, f"COMMAND_GATE time-lock: the session's wake, CronCreate job {', '.join(jobs)}, has no later "
                    "CronDelete; call CronDelete with that id, then end the session\n", None)
@@ -551,7 +545,7 @@ def time_lock(payload) -> tuple:
     none."""
     if os.environ.get("CLAUDE_COMPAT_RUNTIME") == "codex":
         return 0, "", None
-    overnight, transcript = _lib("overnight"), payload.get("transcript_path") or ""
+    overnight, transcript = importlib.import_module("lib.overnight"), payload.get("transcript_path") or ""
     # The session's own record, as P2's overnight.locate finds it (session_state_file from
     # CLAUDE_PROJECT_DIR, then the payload's cwd): a session with none meets no window rule.
     _state_file, record = overnight.session_state_file(
