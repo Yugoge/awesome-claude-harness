@@ -115,6 +115,14 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
     61-80, 81-100), and the reminder differs by tier. The self-review gate at the producer's stop and the stricter QA
     of design.md §3.6 are not what the owner chose.
 
+- **D30 P11 publishes a clean public copy instead of rewriting history (2026-11-08).** Asked after a safety check
+  stopped the history-rewrite script four times, the owner chose: "现在的仓库改成私有，用当前干净的代码新建一个公开仓库，只有一个提交"
+  [make the current repository private, and create a new public repository from the current clean code, with a single
+  commit]. No history rewrite, no force-push, no remote-ref deletion. This repository keeps its name and full history and
+  becomes private; the harness home keeps it as origin. A new public repository, named by the owner at P11's
+  confirmation, starts with one commit of the clean tree; each later publish adds one commit. The switch runs last, after
+  P13, with the owner's one confirmation.
+
 ## Owner ruling of 2026-11-01 (latest; for the work left after P1b it takes precedence over D26's one-day cap and over the planner's process; it changes no requirement of D18-D25)
 
 - **D27 Five days.** "5天必须完成" [It must be finished in five days], on hearing that the split sub-phases add up to
