@@ -2,10 +2,11 @@ Owner steps: none.
 
 # Phase P13: ask by AskUserQuestion in /spec and /dev; agent scores that drive the agents (D28)
 
-Effort: L in total, split into P13-1, P13-2 and P13-3, each M (about one day; D26). They run in that order, because they
-share the AskUserQuestion hook, close_rating, the replay drivers and the enforcement ledger. Each has its own branch
-(`repair/P13-<n>` from `origin/master`), PR, acceptance tests and merge. The hand-off header names the one you run, and
-consecutive ones go to different accounts. Place: after P12, before P11. Push after every commit.
+Effort: L in total, split into P13-1 and P13-2 (M, about one day each) and P13-3 (S, about half a day) (D26). They
+run in that order, because they share the AskUserQuestion hook, close_rating, the replay drivers and the enforcement
+ledger. Each has its own branch (`repair/P13-<n>` from `origin/master`), PR, acceptance tests and merge. The hand-off
+header names the one you run, and consecutive ones go to different accounts. Place: after P12, before P11. Push after
+every commit.
 Design, evidence and file:line facts: `harness-repair-plan/research/scoring-and-asking/design.md` (planning branch, in
 Chinese). Read prompts/_common.md; this file overrides it, and design.md, where they differ.
 
@@ -19,19 +20,21 @@ After `git fetch origin master`, check; on a failure stop and tell the reviewer 
 - The scoring code P9 was told to keep: a score-log reader, scripts/score-update.sh, scripts/score-inject.sh. If P9 deleted
   any of it, do not restore it: build on what is there and list the gap in the PR.
 - P1c's replay suite and the artifact check are green in origin/master's latest CI run.
-- Owner choices: the hand-off header gives the owner's answers to design.md §7 (Rounds, After /spec, Blame, Low score).
-  Where it gives none, use the recommended option. Never ask the owner.
+- The owner answered design.md §7 in D29 (DECISIONS.md), and design.md follows it. Never ask the owner.
 
 ## Goal
 1. Interactive /spec, /dev, /redev and /dev-command ask at least one AskUserQuestion round that digs into intent, scope,
    edge cases and acceptance. BA writes the questions. The owner's answers are kept verbatim as a project artifact. A
    hook, not prose, makes sure the round was asked (asked, not answered). Nothing is asked in plain text, and nothing is
    asked inside /dev-overnight.
-2. Agent scores come from facts that hooks record in the existing score log, and are computed on read. Each agent sees
-   its score at dispatch and the owner sees them after each rating. A low score makes the producer's own stop check more.
+2. Agent scores come from facts that hooks record in the existing score log, and are computed on read. At dispatch each
+   agent sees its score, its rank and a reminder that differs by rank (D29). The owner sees the scores after each rating.
 
 ## Owner rulings
 - D28: the two goals above. D9a's retirement is withdrawn. The rating stays a native AskUserQuestion (D9, D9b).
+- D29: rounds have no cap, until the task is completely clear. /dev after a finished /spec asks every point that needs
+  the owner, with at least one round. /close asks the rating only. A score changes the dispatch reminder and nothing else:
+  no gate at a producer's stop, and no stricter QA.
 - D3, D23: a question is a real, specific decision; asking is the pause. An answer never releases a gate or ends a command.
 - D9b: a gate needs the question asked, not answered. Skip, no answer, AFK or a denial blocks nothing, and hooks record
   nothing for them.
@@ -44,7 +47,7 @@ After `git fetch origin master`, check; on a failure stop and tell the reviewer 
 - D15, D17: scoring is redesigned, not retired. A script is deleted only in the sub-phase that removes its last caller,
   with its reachability proof.
 - Producer side: close.md, commit.md, changelog-analyst.md and the scripts they call gain no check and read no score log;
-  no new state file. Hooks may observe their dispatches, but no consequence check (C3) binds a close or commit pipeline.
+  no new state file. Hooks may observe their dispatches. No verdict anywhere depends on a score (D29).
 
 ## Names used below
 - Round file: `docs/dev/requirement-round-<task>-r<n>.json`, schema `schemas/requirement-round.v1.json`, written by BA.
@@ -62,6 +65,8 @@ After `git fetch origin master`, check; on a failure stop and tell the reviewer 
   reads the transcript the way `close_rating.rating_asked` does; from P13-1 on, `rating_asked` calls it.
 - Score log: the existing `${CLAUDE_CONFIG_DIR:-~/.claude}/logs/lifecycle.jsonl` and its lock.
 - Scored identity: the obligation's role. The one exception is role qa in pipeline close, which is scored as `close-qa`.
+- Rank: score-inject.sh's tiers: Disgraced below 0, Apprentice 0-20, Journeyman 21-40, Skilled Craftsman 41-60 (where
+  an identity with no rows sits), Senior Craftsman 61-80, Master 81-100.
 
 ## P13-1: the requirement round (M)
 Owns: schemas/requirement-round.v1.json (new); agents/ba.md (intake and contract sections, or P12's shared file);
@@ -74,20 +79,22 @@ spec and the subagent player (tests/replay roles and agents); the ledger rows; t
 R1. Schema: `{task_id, round, questions[1..4]}`. Each question is `{id, dimension, header, question, multiSelect,
     options[2..4]{label, description}, assume, spec_ref}`, with `dimension` one of intent, scope, edge_cases, acceptance,
     `header` at most 12 characters, `assume` one of its labels, and `spec_ref` the spec section a question probes (or
-    null). The highest round is 3 for "1 + up to 2 more", 1 for "Exactly 1", and unbounded for "No cap". G2 checks at
-    BA's stop:
+    null). Rounds have no cap (D29). G2 checks at BA's stop:
     - task_id equals the obligation's;
     - round is the next one, and the previous one was asked;
     - with no spec attached, r1 has exactly four questions, one per dimension;
-    - with a spec attached ("Only open points"), at least one question, each with a spec_ref;
+    - with a spec attached, the same rule (D29): at least one question, asking every point that needs the owner;
+    - no question repeats one already answered (same canonical question text) in an answer file of the task or of its
+      attached spec;
     - a code token (a backtick, a path with an extension, `()`, `::`) in a question or option fails. This lint catches
       only code tokens; state that strength in the enforcement ledger.
 R2. agents/ba.md has two modes:
     - intake writes only r1;
     - analysis reads every answer file of the task. It maps each answered question into
       `context.requirement.contract_refs` (`[{answer_ref: "r1.q2", criterion_ids}]`), and lists each unanswered question
-      under `assumptions` with its `assume` label. When an answer opened a point no default settles, it writes r<n+1>
-      instead of its declared artifacts (the stand-in above).
+      under `assumptions` with its `assume` label. While any point still needs the owner's decision, it writes r<n+1>
+      instead of its declared artifacts (the stand-in above), with no cap (D29). A skipped question is settled by its
+      `assume` and is not asked again.
 
     G2 at analysis' stop: the mapping covers every answered question, and the assumptions cover every unanswered one.
     Delete the technical-choice examples (dev.md "which API?", dev-command.md "which metrics?").
@@ -144,9 +151,11 @@ A4. dev `round-skip`, `round-decline` and `round-afk`: no answer file, no block,
 A5. dev `devquestion` (new): two producer questions in a row. Each re-dispatch before its ask is refused. Each ask writes
     its own producer answer file (two distinct q8), and BA proceeds.
 A6. spec `round`: BA intake runs inside /spec unblocked; Finalize before r1 is asked is refused, and passes after;
-    Section 5 holds the answer bytes verbatim. With a spec attached, a /dev round of one question with a spec_ref passes G2.
-A7. dev `round-r2`: BA analysis writes r2 instead of its artifacts; G2 accepts it; after r2 is asked, analysis lands.
-    r(max+1) is refused at G2. overnight `unattended`: 0 AskUserQuestion, no round file, no ASK_FIRST.
+    Section 5 holds the answer bytes verbatim. /dev after that /spec asks at least one question, and none the /spec
+    rounds already answered.
+A7. dev `round-many`: BA analysis writes r2, then r3 and r4, instead of its artifacts while it declares an open point;
+    G2 accepts each; after the last is asked, analysis lands. No round number is refused. A round that repeats an answered
+    question is refused at G2. overnight `unattended`: 0 AskUserQuestion, no round file, no ASK_FIRST.
 A8. dev and spec `text-question`: a turn ending "...?" is blocked with R7's text. The same text in a /close span is not.
 A9. G2 refuses: r1 with three questions or a repeated dimension (no spec); a backtick path in an option; an assume that
     is not one of its labels; an analysis that misses one answered id.
@@ -166,7 +175,7 @@ S1. One module, one writer function:
       `append`'s caller holds the lock, and the first row per `key` wins;
     - `close_rating.append_row` stays as a delegate that writes a row unchanged, until P13-3 deletes score-update.sh;
     - rows gain `kind`: `{kind: "event", ts, project, task_id, role, event, points, key, why, ref}` and `{kind: "rating",
-      ts, project, task_id, rating, blame?, roles, tool_use_id}`;
+      ts, project, task_id, rating, roles, tool_use_id}`;
     - `roles` is read from the task's dispatch records when the rating is written;
     - `project` is the first 12 hex digits of the sha256 of the git top-level's identity;
     - rating dedup compares rating rows only, by canonical task id;
@@ -187,21 +196,21 @@ S3. Experiment: do SubagentStop and Stop blocks leave a recognisable record in t
     they do, enable stop_blocked and main_stop_blocked from those records. If not, drop both and list them under "Out of
     scope, found".
 S4. Rating:
-    - close.md Step 4 asks P4's question alone, or (per the Blame choice) with a second question: header `Improve`,
-      options BA, dev, QA, No one;
-    - the handler writes one rating row (5, 4, 3, and "1-2" stored as 1; plus blame if picked);
-    - it returns the owner summary as `systemMessage`, at most 5 lines: each identity's score and trend, this cycle's
+    - close.md Step 4 keeps P4's one rating question; no second question (D29);
+    - the handler writes one rating row (5, 4, 3, and "1-2" stored as 1);
+    - it returns the owner summary as `systemMessage`, at most 5 lines: each identity's score, rank and trend, this cycle's
       points with reasons, and the worst identity and why;
     - experiment: is it shown to the user, and does the hook run on Skip? If it is not shown, return it as
       additionalContext asking for a verbatim relay (the one relay D28 allows; the main agent computes nothing);
     - close.md reads no log and computes nothing.
 S5. Score function:
     - window: the identity's last 10 tasks in the project before `as_of`;
-    - score = clamp(60 + sum, 0, 100); trend = the score minus the score 5 tasks earlier;
-    - tier: good at 70 or more; watch at 50-69; probation below 50, or when the same miss category appears in 2 of its
-      last 3 tasks.
+    - score = min(100, 50 + sum), with no lower bound, so Disgraced stays reachable; trend = the score minus the score
+      5 tasks earlier;
+    - tier: the rank (Names above); an identity with no rows sits at 50, Skilled Craftsman.
 
-    Fixture experiment: 2 QA fails in 3 tasks reach probation; 3 clean tasks after that leave it; 100 fails stay at 0.
+    Fixture experiment: 2 QA fails in 3 tasks drop dev one rank; 3 clean tasks after that bring it back; a run of
+    failing tasks reaches Disgraced and, once the window is full, falls no further.
 S6. Delete scripts/close-scoring-decide.py (no caller since P4), with its residue-allowlist and index rows.
 
 Acceptance:
@@ -211,42 +220,34 @@ B2. dev `qa-fail`, then close: the log gains qa_fail (dev, dev_implementation) a
     QA-driven re-dispatch. A QA fail whose fix touches no named file gives no qa_catch. Replaying again adds 0 rows.
 B3. close `findings` (a finding on a dev artifact after lane QA passed): escaped for dev and for lane qa, and close-qa +1
     once dev's fix lands. A clean close gives close-qa nothing.
-B4. Rating: "4 - Minor gaps" (plus "dev" when Blame is on) writes one rating row with its roles, and the hook output holds
+B4. Rating: the dialog has one question; "4 - Minor gaps" writes one rating row with its roles, and the hook output holds
     the summary naming the worst identity and why. Skip, free text, AFK and decline write no rating row. An event row
     with the same task_id does not stop the rating row (P4's dedup defect).
 B5. Unit tests of the score function over fixtures; rows with no kind are ignored; 20 parallel appends give 20 rows.
 B6. `grep -nE 'score_log|lifecycle\.jsonl|score-(inject|update)' commands/close.md commands/commit.md
     agents/changelog-analyst.md` prints nothing. `git grep close-scoring-decide` prints nothing outside history docs.
 
-## P13-3: what agents see at dispatch, and what a low score makes them do (M; after P13-2)
+## P13-3: what agents see at dispatch: score, rank and the rank's reminder (S; after P13-2)
 Owns:
-- the SubagentStart injector (one new registration); the UserPromptSubmit line; G2's consequence checks;
-- agents/ba.md, dev.md and qa.md (new fields and deletions); commands/dev.md and dev-command.md (deletions);
-- the dev, qa and context schemas (new optional fields);
+- the SubagentStart injector (one new registration); the UserPromptSubmit line;
+- agents/ba.md, dev.md and qa.md, commands/dev.md and dev-command.md (deletions only);
 - scripts/score-update.sh, scripts/score-inject.sh, the scripts/lib re-export and the two score shell-test directories
   (all deleted);
 - settings.json; the tests that pin any of these (including P4's test_close_rating); the ledger rows; the replay variants.
 
 C1. SubagentStart, outside spans of /close, /commit, /merge and /push: from agent_type, cwd and the active span, it
     outputs additionalContext of at most 3 lines and 400 bytes:
-    - the score, trend and tier;
+    - the score, rank and trend;
     - the top reason: an event's `why`, at most 80 characters, never a task id;
-    - this dispatch's required action;
-    - the rule "a lane that failed QA earlier in this command carries self_review".
+    - the rank's reminder: one line per rank, worded as in design.md §3.6, kept in score_log.
 
-    A role with no rows gets one line. `as_of` is the span opener's timestamp. Experiment: confirm the text reaches the
-    subagent (CLI bundle). If it does not, append the text to the dispatch prompt through the dispatch gate's
-    updatedInput, after every rule passes, and record which way was used.
-C2. UserPromptSubmit, in ask spans only: one line with the main agent's own score and top miss.
-C3. G2 applies the Low score choice. This covers ba, dev and qa obligations of pipelines dev, redev, dev-command and
-    dev-overnight, and never close or commit. It computes the same `tier(identity, project, as_of)`. On probation:
-    - dev needs `self_review [{criterion_id, test, result}]` covering every ac_uid, each with a test that exists in the tree;
-    - ba needs each acceptance criterion to carry a contract_ref or a source_phrase;
-    - lane qa needs `evidence[]` per criterion and `adversarial[]` with at least 3 entries.
-
-    Whatever the tier, the re-dispatch of a (task, lane, role) that QA failed earlier in the span needs self_review.
-    - "Self-review + stricter QA": lane qa whose dev is on probation also needs `adversarial[]`.
-    - "Warning only": C1 and C2 only, and no G2 change.
+    A role with no rows gets one line: no record yet, Skilled Craftsman, and that rank's reminder. `as_of` is the span
+    opener's timestamp. Experiment: confirm the text reaches the subagent (CLI bundle). If it does not, append the text
+    to the dispatch prompt through the dispatch gate's updatedInput, after every rule passes, and record which way was
+    used.
+C2. UserPromptSubmit, in ask spans only: one line with the main agent's own score, rank and top miss.
+C3. Nothing else follows from a score (D29): no producer's stop requires a field because of it, no gate reads the score
+    log, and QA is not made stricter by it.
 C4. Delete what the hooks now do, with a reachability proof for each deleted file:
     - in dev.md: the injection blocks, the placeholders, Step 14's scoring, "Mascot Score Changes" and the line-93 reason;
     - the INJECTION_PROOF echo contracts, and the agents' `score:` front matter (points live in score_log);
@@ -257,16 +258,13 @@ C4. Delete what the hooks now do, with a reachability proof for each deleted fil
 Acceptance:
 C-A1. pytest, CI, artifact check, P1c suite and dead-end check as in A1. Prompt bytes of commands/ and agents/ fall; report
       the figure.
-C-A2. The injector over fixture logs: each tier's output fits in 3 lines and 400 bytes, with the reason and no task id;
-      no rows gives one line; a /close span gives none. The experiment is recorded.
-C-A3. dev `probation` (a fixture log with dev on probation): dev's stop without self_review is blocked, naming the
-      field; with full coverage and real tests it passes; a test that does not exist is blocked. close `plain` in the same
-      fixture meets no new block.
-C-A4. dev `qa-fail`: dev's re-dispatch after the fail needs self_review at tier good.
-C-A5. Stricter option: lane QA without adversarial[] is blocked when dev is on probation. "Warning only" changes no G2
-      verdict.
-C-A6. Property test: the injector and G2 give the same tier for 200 random logs and span starts.
-C-A7. `git grep -nE 'score-inject|score-update|INJECTION_PROOF|rank_acknowledged|SCORE_HEADER' -- commands agents hooks
+C-A2. The injector over fixture logs: each of the six ranks gives its own reminder; scores -1, 0, 20, 21, 40, 41, 60,
+      61, 80, 81 and 100 land in the right rank; each output fits in 3 lines and 400 bytes, with the reason and no task
+      id; no rows gives one line; a /close span gives none. The experiment is recorded.
+C-A3. dev `plain` and dev `qa-fail` over fixture logs that put dev, ba and qa at each rank: every dispatch carries its
+      rank's reminder, and every G2 and Stop-gate verdict equals the one with an empty log. close `plain` under the same
+      fixtures gets no injection and no new block.
+C-A4. `git grep -nE 'score-inject|score-update|INJECTION_PROOF|rank_acknowledged|SCORE_HEADER' -- commands agents hooks
       scripts settings.json ':!hooks/tests'` prints nothing, and the replay drivers play no score calls.
 
 ## DO NOT (every sub-phase)
@@ -278,12 +276,13 @@ C-A7. `git grep -nE 'score-inject|score-update|INJECTION_PROOF|rank_acknowledged
 - Ask anything inside /dev-overnight, add an overnight exception to P2's deny, or ask for a technical choice in an example.
 - Ask the owner anything: no AskUserQuestion to measure outside the sandbox, no REQUEST, no machine step.
 - Inject more than 3 lines or 400 bytes per dispatch, or inject through orchestrator prose or a Bash call.
+- Make any stop, dispatch or QA verdict depend on a score, or add a second question to the /close rating (D29).
 - Recompute the verdict of G2, the Stop gate or close-QA in the observer, or attribute by a file-name-to-role table.
 - Block in the AskUserQuestion hook, or let it fail a tool call.
 - Delete a hook file in the same change that unregisters it (make it an exit-0 stub for one phase), or retire a feature.
 - Touch harness-repair-plan/ or P11's files. Put a personal value in a row, a fixture or the PR (the project key is a hash).
 - Exceed net code in hooks/, scripts/ and schemas/ (tests excluded): P13-1 at most +400, P13-2 at most +150, P13-3 at
-  most -300, so the phase total is at most +250. A file this prompt deletes that is already gone counts as deleted by the
+  most -400, so the phase total is at most +150. A file this prompt deletes that is already gone counts as deleted by the
   sub-phase that names it.
 
 ## Pull request (one per sub-phase)
