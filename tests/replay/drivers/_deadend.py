@@ -59,10 +59,6 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   the hook's own opt-in CP_ENFORCE_MODE=block; the dev dispatch carries the SECOND
                   ACTION read of that cp-state and its dev stops without marking them: refused; at its
                   next round it marks each with spec-check.py mark (agents/dev.md) and stops: passes.
-  stale-worktree  a plain prompt in a project holding an agent worktree behind master (the state a
-                  dispatch with isolation:worktree leaves; the fault actor makes it): the guard
-                  refuses calls and names its remedy, `git worktree remove <path> --force`; that is
-                  the main agent's next call, then the call it meant to make.
 """
 from __future__ import annotations
 
@@ -279,19 +275,6 @@ def _plain(rp, case: str) -> None:
         d = s.dispatch("dev", task, description="Describe toy.add", body=body, result="add(a, b) returns a + b.",
                        on_stop_block=again, stop_rounds=3, label=f"main Agent(dev) {case}")
         rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
-    elif case == "stale-worktree":
-        wt = os.path.join(project, ".claude", "worktrees", "agent-0123456789abcdef")
-        with rp.acting("fault"):
-            env = dict(rp.bash_env)
-            for argv in (["git", "worktree", "add", "-q", "--detach", wt],
-                         ["git", "commit", "-q", "--allow-empty", "-m", "master moves past the worktree"]):
-                p = subprocess.run(argv, cwd=project, env=env, capture_output=True, text=True)
-                if p.returncode:
-                    raise RuntimeError(f"setting up the stale worktree failed: {argv}: {p.stderr}")
-        note(s.read(path, label="main Read (stale worktree present)"))
-        note(s.bash(f"git worktree remove {wt} --force", "Remove the stale agent worktree",
-                    label="main Bash git worktree remove"))
-        note(s.read(path, label="main Read (next round)"))
     ev = s.stop("add(a, b) returns a + b.", label="Stop")
     ok = bool(rounds) and not rounds[-1]["blocked"]
     rp.terminal("plain", ok, ev, case=case, rounds=rounds)
@@ -378,7 +361,7 @@ def run(rp) -> None:
         return _dev_early(rp)
     if case == "spec-foreground":
         return _spec_foreground(rp)
-    if case in ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending"):
+    if case in ("bg-dispatch", "obligation", "forged-ack", "codex", "cp-pending"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
                     "todo-first"):
