@@ -35,7 +35,13 @@ so they are importable by other hooks via lib.git_command_classifier.
 # Shell `-c` strings (2026-11-07): `bash -c "git commit -m y"` runs git under
 #   the command token `bash`.  Each shell's `-c` string is resolved and
 #   classified as a command line of its own (see _shell_layers()); one the
-#   scan cannot resolve is the residual `unresolved_shell_string`.
+#   scan cannot clear is the residual `unresolved_shell_string`.
+#
+# Git-shaped `-c` strings only (2026-11-08, PR #15 review finding 1): that
+#   residual refused `bash -c "cd $DIR && npm test"`, text the scan could not
+#   lex and every here-document body.  A string holding a run-time value is a
+#   residual only when it is git-shaped (_may_run_git), and a here-document is
+#   shell text only when a shell may read it (_reads_as_shell).
 
 CLI usage:
   printf 'command text\\n' | python3 hooks/lib/git_command_classifier.py
@@ -558,11 +564,21 @@ def _is_obfuscation_candidate(tok):
 # below reads the command text with the shell's own quoting rules, finds each
 # shell in command position and its `-c` string, and returns that string as a
 # command line of its own; iter_git_invocations() and _residual_shapes() then
-# treat it exactly as they treat a plain command.  A string the scan cannot
-# know is a residual, never "no git": one holding an expansion or substitution
-# the OUTER shell performs (outside single quotes; the inner shell parses its
-# run-time value as commands), one whose quoting the scan cannot follow, and
-# one nested deeper than _MAX_SHELL_DEPTH.
+# treat it exactly as they treat a plain command.
+#
+# A string holding an expansion or substitution the OUTER shell performs
+# (outside single quotes; the inner shell parses its run-time value as
+# commands) is read the same way, each run-time value a placeholder.  It is the
+# residual `unresolved_shell_string` only when it is git-shaped
+# (_may_run_git): the narrow test the plain-text residual uses finds git in it,
+# or one of its command words is a run-time value with no static word after it
+# that clears it.  So `bash -c "git $SUB"` and `bash -c "$CMD"` are residuals,
+# and `bash -c "cd $DIR && npm test"` runs npm, as `cd $DIR && npm test` does.
+# Text whose quoting the scan cannot follow is a residual when what follows its
+# shell `-c` is git-shaped; a string nested deeper than _MAX_SHELL_DEPTH always
+# is.  A here-document is shell text only when a shell may read it
+# (_reads_as_shell); for any other reader it runs only the substitutions the
+# outer shell performs to expand it, and none when its delimiter is quoted.
 
 _MAX_SHELL_DEPTH = 4
 # A shell is known by the SHAPE of its name (bash, sh, dash, zsh, ksh93, rbash,
@@ -575,6 +591,13 @@ _SHELL_HINT_RE = re.compile(r'sh[0-9.]*["\']?\s')
 _SHELL_C_SHAPE_RE = re.compile(r'sh[0-9.]*["\']?\s+(?:[-+]\S*\s+(?:\w+\s+)?)*-[A-Za-z]*c')
 _REDIR_OP_RE = re.compile(r'&>>?|<<<|<<-|<<|>>|>&|<&|>\||<>|>|<')
 _RUNTIME = '\x00'  # stands for text the shell computes at run time
+# A run-time value as a layer's text shows it: an expansion no assignment pins.
+_RUNTIME_PLACEHOLDER = '${__runtime__}'
+_RUNTIME_PLACEHOLDER_RE = re.compile(re.escape(_RUNTIME_PLACEHOLDER))
+# Commands that hand their standard input to a shell, besides the shells.
+_STDIN_SHELL_COMMANDS = frozenset({
+    'ssh', 'su', 'runuser', 'source', '.', 'at', 'batch', 'parallel', 'script',
+})
 
 
 def _skip_backtick(text, i):
@@ -675,29 +698,34 @@ def _shell_words(text):
 
     Returns (commands, bodies).  A command is a list of (value, runtime) words:
     value is the word as the command receives it, quotes and escapes removed and
-    each expansion replaced by _RUNTIME; runtime is True when it holds one.
+    each expansion replaced by _RUNTIME; runtime is True when it holds one (text
+    already holding _RUNTIME keeps it run-time, whatever quotes it).
     bodies are texts that run as commands of their own: the bodies of $( ),
-    backtick and <( ) >( ) substitutions, and of here-documents.  Raises
-    ValueError on quoting the scan cannot follow.
+    backtick and <( ) >( ) substitutions, and what here-documents run
+    (_here_doc_texts).  Raises ValueError on quoting the scan cannot follow.
     """
-    cmds, words, bodies, heredocs = [], [], [], []
-    st = {'buf': [], 'runtime': False, 'inword': False, 'pending': None}
+    cmds, words, bodies, heredocs, docs = [], [], [], [], []
+    st = {'buf': [], 'runtime': False, 'inword': False, 'quoted': False,
+          'pending': None, 'sep': None}
 
-    def add(part, runtime=False):
+    def add(part, runtime=False, quoted=False):
         st['buf'].append(part)
         st['inword'] = True
-        st['runtime'] = st['runtime'] or runtime
+        st['runtime'] = st['runtime'] or runtime or _RUNTIME in part
+        st['quoted'] = st['quoted'] or quoted
+        st['sep'] = None
 
     def end_word():
         if st['inword']:
             value = ''.join(st['buf'])
             if st['pending']:
-                heredocs.append((value, st['pending'] == '<<-'))
+                # The command this word belongs to is cmds[len(cmds)] once it ends.
+                heredocs.append((value, st['pending'] == '<<-', st['quoted'], len(cmds)))
                 st['pending'] = None
             elif value.lstrip('0123456789') in ('<<', '<<-'):
                 st['pending'] = value.lstrip('0123456789')
             words.append((value, st['runtime']))
-        st.update(buf=[], runtime=False, inword=False)
+        st.update(buf=[], runtime=False, inword=False, quoted=False)
 
     def end_cmd():
         end_word()
@@ -721,16 +749,16 @@ def _shell_words(text):
         ch = text[i]
         if ch == '\\':
             if text[i + 1:i + 2] != '\n':  # a backslash-newline joins the lines
-                add(text[i + 1:i + 2])
+                add(text[i + 1:i + 2], quoted=True)
             i += 2
         elif ch == "'":
             j = text.find("'", i + 1)
             if j < 0:
                 raise ValueError('unterminated single quote')
-            add(text[i + 1:j])
+            add(text[i + 1:j], quoted=True)
             i = j + 1
         elif ch == '"':
-            add('')
+            add('', quoted=True)
             i += 1
             while text[i:i + 1] != '"':
                 if i >= n:
@@ -755,7 +783,9 @@ def _shell_words(text):
         elif ch == '\n':
             end_cmd()
             i += 1
-            for delim, tabs in heredocs:  # the body follows the line that opened it
+            # A line ending in `|`, `&&` or `||` goes on past the bodies below.
+            dangling = st['sep'] in ('|', '|&', '&&', '||')
+            for delim, tabs, quoted, owner in heredocs:  # the body follows the line that opened it
                 body = []
                 while i < n:
                     j = text.find('\n', i)
@@ -764,7 +794,7 @@ def _shell_words(text):
                     if (line.lstrip('\t') if tabs else line) == delim:
                         break
                     body.append(line)
-                bodies.append('\n'.join(body))
+                docs.append(('\n'.join(body), quoted, owner, len(cmds) + (1 if dangling else 0)))
             del heredocs[:]
         elif ch in '<>' and text[i + 1:i + 2] == '(':
             end = _skip_group(text, i + 2, ')')
@@ -780,12 +810,73 @@ def _shell_words(text):
             end_word()
         elif ch in ';&|()':
             end_cmd()
-            i += 1
+            op = text[i:i + 2] if text[i:i + 2] in ('&&', '||', '|&') else ch
+            st['sep'] = op
+            i += len(op)
         else:
             add(ch)
             i += 1
     end_cmd()
+    # A here-document's readers: the commands of the line that opened it, from
+    # its own on (a pipe or a group there may hand it on), and the command after
+    # the body when that line goes on past it.
+    for body, quoted, owner, stop in docs:
+        bodies.extend(_here_doc_texts(body, quoted, any(map(_reads_as_shell, cmds[owner:stop]))))
     return cmds, bodies
+
+
+def _reads_as_shell(words):
+    """True iff the simple command `words` may run its standard input as shell commands.
+
+    A shell (by the shape of its name), a command named at run time, a
+    command that hands its input to a shell (_STDIN_SHELL_COMMANDS), one that
+    names a shell among its words (`ssh host bash -s`, `docker exec -i c sh`),
+    and a wrapper with no command (`sudo -i`, `sudo -s`) may; `cat`, `tee`,
+    `python3` and `git commit -F -` read it as data.
+    """
+    values = [value for value, _runtime in words]
+    idx = _command_token_index(values)
+    if idx is None:
+        return any(_basename(value) in _WRAPPERS for value in values)
+    if words[idx][1]:
+        return True
+    names = [_basename(value) for value in values[idx:]]
+    return names[0] in _STDIN_SHELL_COMMANDS or any(_SHELL_NAME_RE.match(name) for name in names)
+
+
+def _here_doc_texts(body, quoted, shell_reads):
+    """The texts a here-document's body runs as commands.
+
+    With an unquoted delimiter the outer shell expands the body first, running
+    its substitutions whoever reads it; a shell reading it then parses the
+    expanded text, each expansion a run-time value.  A quoted delimiter leaves
+    the body as written.  A body whose expansions the scan cannot follow is
+    read as shell text, whoever reads it.
+    """
+    if quoted:
+        return [body] if shell_reads else []
+    out, subs, i = [], [], 0
+    try:
+        while i < len(body):
+            ch = body[i]
+            # In such a body `\` quotes only $, `, \ and a newline; quotes are text.
+            if ch == '\\' and body[i + 1:i + 2] in ('$', '`', '\\', '\n'):
+                out.append(body[i + 1].replace('\n', ''))
+                i += 2
+                continue
+            exp = _expansion(body, i, quoted=True) if ch in '$`' else None
+            if exp is None:
+                out.append(ch)
+                i += 1
+                continue
+            end, sub = exp
+            if sub is not None:
+                subs.append(sub)
+            out.append(_RUNTIME)
+            i = end
+    except ValueError:
+        return [body]
+    return subs + ([''.join(out)] if shell_reads else [])
 
 
 def _shell_c_operand(words, i):
@@ -814,14 +905,20 @@ def _shell_c_operand(words, i):
 
 
 def _shell_c_strings(text):
-    """Yield ('text', string) for each shell `-c` string in text, ('unresolved', text) for one it cannot know."""
+    """Yield (kind, string) for each shell `-c` string text runs.
+
+    kind 'text': a string the scan resolved.  'runtime': one holding a value the
+    outer shell computes at run time, each such value _RUNTIME in it.
+    'unlexable', with text itself: quoting the scan cannot follow, in text that
+    has a shell's `-c` shape.
+    """
     if not _SHELL_HINT_RE.search(text):
         return
     try:
         cmds, bodies = _shell_words(text)
     except Exception:  # quoting the scan cannot follow, or nesting past the interpreter's own limit
         if _SHELL_C_SHAPE_RE.search(text):
-            yield 'unresolved', text
+            yield 'unlexable', text
         return
     for words in cmds:
         values = [v for v, _runtime in words]
@@ -831,12 +928,47 @@ def _shell_c_strings(text):
         op = _shell_c_operand(words, idx + 1)
         if op is None:
             continue
-        if words[op][1]:
-            yield 'unresolved', ' '.join(values).replace(_RUNTIME, '$...')
-        else:
-            yield 'text', words[op][0]
+        value, runtime = words[op]
+        yield ('runtime' if runtime else 'text'), value
     for body in bodies:
         yield from _shell_c_strings(body)
+
+
+def _may_run_git(text, runtime_re=_RUNTIME_PLACEHOLDER_RE):
+    """True iff text, read as plain command lines, runs git or may: git-shaped.
+
+    The narrow test of the plain-text residual: a git invocation, or a command
+    token _segment_residual_shapes() reports (`$G push`).  A command word that
+    holds a run-time value (runtime_re) is git-shaped too unless a static word
+    that is neither a git verb nor git follows it: with nothing static after
+    it, the subcommand is part of the value (`$CMD`, `$X $Y`, `$SUDO git push`).
+    Segments opened inside a quote are text, as there.
+    """
+    if any(True for _ in _segment_invocations(text)) or any(True for _ in _segment_residual_shapes(text)):
+        return True
+    for seg, _kind, in_quote in _segments_with_kind(text):
+        toks = [] if in_quote else seg.split()
+        idx = _command_token_index(toks) if toks else None
+        if idx is None or not runtime_re.search(toks[idx]):
+            continue
+        nxt = toks[idx + 1] if idx + 1 < len(toks) else ''
+        if (not nxt or runtime_re.search(nxt) or nxt in _GIT_SUBCOMMANDS
+                or _basename(_unquote_token(nxt)) == 'git'):
+            return True
+    return False
+
+
+def _unlexable_may_run_git(text):
+    """True iff, in text the scan cannot lex, what follows a shell's `-c` is git-shaped.
+
+    That text is read as _may_run_git() reads a string, its quote characters
+    dropped and every expansion a run-time value.
+    """
+    for m in _SHELL_C_SHAPE_RE.finditer(text):
+        rest = re.sub(r'\A\S*', '', text[m.end():])  # past the rest of the option word
+        if _may_run_git(re.sub('[\'"]', '', rest), _EXPANSION_RE):
+            return True
+    return False
 
 
 @functools.lru_cache(maxsize=32)
@@ -844,24 +976,33 @@ def _shell_layers(command_text):
     """(texts, unresolved) for command_text.
 
     texts: command_text, then the text of every shell `-c` string it runs, in
-    the order they appear, resolved recursively up to _MAX_SHELL_DEPTH levels.
-    unresolved: the `-c` strings that could not be resolved, and those nested
-    past the limit.
+    the order they appear, resolved recursively up to _MAX_SHELL_DEPTH levels;
+    a value the outer shell computes at run time reads as _RUNTIME_PLACEHOLDER.
+    unresolved: the strings the scan cannot clear: a git-shaped string holding
+    a run-time value (_may_run_git() over it and every string it runs), text
+    it cannot lex whose `-c` string is git-shaped, and a string nested past the
+    limit.
     """
     texts, unresolved = [], []
 
     def visit(text, depth):
-        texts.append(text)
+        texts.append(text.replace(_RUNTIME, _RUNTIME_PLACEHOLDER))
         for kind, value in _shell_c_strings(text):
-            if kind == 'unresolved' or depth >= _MAX_SHELL_DEPTH:
-                unresolved.append(value)
+            if depth >= _MAX_SHELL_DEPTH:
+                unresolved.append(value.replace(_RUNTIME, _RUNTIME_PLACEHOLDER))
+            elif kind == 'unlexable':
+                if _unlexable_may_run_git(value):
+                    unresolved.append(value)
             else:
+                first = len(texts)
                 visit(value, depth + 1)
+                if kind == 'runtime' and any(map(_may_run_git, texts[first:])):
+                    unresolved.append(texts[first])
 
     try:
         visit(command_text, 0)
     except Exception:  # never let the scan cost the plain text its own checks
-        shaped = _SHELL_C_SHAPE_RE.search(command_text)
+        shaped = _unlexable_may_run_git(command_text)
         return (command_text,), ((command_text,) if shaped else ())
     return tuple(texts), tuple(unresolved)
 
@@ -875,7 +1016,7 @@ def _residual_shapes(command_text):
     """Yield (kind, segment) for command tokens that MIGHT be git but did not parse.
 
     Every shell `-c` string the text runs is examined like the text itself, and
-    one that cannot be resolved is the kind `unresolved_shell_string`.
+    one the scan cannot clear (_shell_layers) is the kind `unresolved_shell_string`.
     """
     texts, unresolved = _shell_layers(command_text)
     for text in texts:
