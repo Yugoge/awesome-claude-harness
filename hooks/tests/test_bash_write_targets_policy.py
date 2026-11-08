@@ -53,8 +53,11 @@ def test_projection_failure_fails_closed(monkeypatch):
 
 
 def test_projected_result_still_traverses_deny_before_allow(monkeypatch):
+    # The allowed side is a directory BA's own rows keep: no row names an
+    # artifact's file (a declared artifact's writer is derived from its
+    # dispatch record by pretool-tool-policy.py, not from these rows).
     policy_registry._reset_cache_for_tests()
-    safe = targets.extract_bash_write_paths(f'OUT={SAFE}; tee "$OUT"')[0]
+    safe = targets.extract_bash_write_paths('OUT=docs/research/x.md; tee "$OUT"')[0]
     protected = targets.extract_bash_write_paths(
         'OUT=.claude/hooks/escape.py; tee "$OUT"'
     )[0]

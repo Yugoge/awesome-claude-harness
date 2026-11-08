@@ -26,12 +26,12 @@ DEBOUNCE_DELAY=${FSWATCH_DEBOUNCE:-12}       # Debounce delay (seconds, ensures 
 AUTO_PULL_INTERVAL=${FSWATCH_PULL_INTERVAL:-300}  # Auto pull interval (seconds, default 5 minutes)
 MAX_RETRIES=${FSWATCH_MAX_RETRIES:-3}        # Maximum retry attempts
 LOG_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/logs/git-fswatch-${REPO_NAME}.log"
+HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd -P)"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
   || harness_state_dir() { printf '%s\n' /tmp; }
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/auto_push.sh" 2>/dev/null \
   || harness_auto_push() { return 1; }  # no reader, no push
 LOCK_FILE="$(harness_state_dir)/git-fswatch-${USER}-${REPO_NAME}.lock"
-STATE_FILE="$(harness_state_dir)/git-fswatch-state-${USER}-${REPO_NAME}.txt"
 
 # Runtime state
 COMMIT_TIMER_PID=""
@@ -89,9 +89,6 @@ cleanup() {
 
     # Remove lock file
     rm -f "$LOCK_FILE"
-
-    # Save state
-    echo "stopped" > "$STATE_FILE"
 
     log_info "Git file watcher stopped"
     exit 0
@@ -162,6 +159,9 @@ handle_git_lock() {
 # Check for uncommitted changes
 has_changes() {
     cd "$WATCH_PATH" || return 1
+    # The landing re-records a CLI-written settings.json's stat in the harness home (review N1, X9)
+    [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$HARNESS_HOME" ] \
+      && bash "$HARNESS_HOME/scripts/install/land" --settings-stat
 
     # Check for modified, staged, or untracked files
     if ! git diff --quiet || \
@@ -173,6 +173,9 @@ has_changes() {
     return 1
 }
 
+# A git step of safe_pull, logged: its status is git's own, never tee's
+logged_git() { git "$@" 2>&1 | tee -a "$LOG_FILE"; return "${PIPESTATUS[0]}"; }
+
 # Perform git pull with conflict detection
 safe_pull() {
     cd "$WATCH_PATH" || return 1
@@ -180,7 +183,7 @@ safe_pull() {
     log_info "Checking for remote changes..."
 
     # Fetch first
-    if ! git fetch origin 2>&1 | tee -a "$LOG_FILE"; then
+    if ! logged_git fetch origin; then
         log_error "Failed to fetch from remote"
         return 1
     fi
@@ -201,7 +204,7 @@ safe_pull() {
     if has_changes; then
         log_info "Stashing local changes..."
         before=$(git rev-parse -q --verify refs/stash)
-        if git stash push -m "fswatch auto-stash $(date +%s)" 2>&1 | tee -a "$LOG_FILE"; then
+        if logged_git stash push -m "fswatch auto-stash $(date +%s)"; then
             # Untracked files alone count as changes above, yet the push saves nothing for them:
             # pop only an entry this push made (an older one, a kept conflicted pop's, is not ours).
             if [ "$(git rev-parse -q --verify refs/stash)" = "$before" ]; then
@@ -217,14 +220,13 @@ safe_pull() {
     fi
 
     # Pull with rebase
-    if git pull --rebase origin "$branch" 2>&1 | tee -a "$LOG_FILE"; then
+    if logged_git pull --rebase origin "$branch"; then
         log_success "Pull successful"
 
         # Pop stash if we stashed
         if [ "$stashed" = "1" ]; then
             log_info "Restoring stashed changes..."
-            git stash pop 2>&1 | tee -a "$LOG_FILE"
-            if [ "${PIPESTATUS[0]}" -eq 0 ]; then  # the pop's own status, not tee's
+            if logged_git stash pop; then
                 log_success "Stashed changes restored"
             else
                 log_error "Failed to restore stash, conflicts may exist"
@@ -550,9 +552,6 @@ main() {
     log_info "Starting file watcher..."
     echo -e "${GREEN}✓${NC} Watching for changes (Press Ctrl+C to stop)"
     echo ""
-
-    # Save state
-    echo "running:$WATCH_PATH:$$" > "$STATE_FILE"
 
     # Initial sync
     log_info "Performing initial sync..."

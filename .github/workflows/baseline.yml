@@ -11,6 +11,8 @@ on:
   push:
     branches: [master, main]
   pull_request:
+    # ready_for_review starts the run a draft skipped (the jobs' `if:` below).
+    types: [opened, synchronize, reopened, ready_for_review]
   # Callable so the release pipeline can make these gates a REAL job-graph
   # dependency of publishing. A `needs:` cannot reference a job in another
   # workflow file, and a tag push matches neither trigger above, so without
@@ -23,11 +25,21 @@ on:
     - cron: "17 3 * * 1"
   workflow_dispatch:
 
+# A newer push to a pull request cancels its older run (P1c X10): the replay suite runs whole on
+# every push, and a run for a head nobody merges any more only delays the queue. Each pull request
+# has its own group; every other event (master pushes, the release call, the weekly run) is a group
+# of one run (run_id), so nothing else is ever cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   baseline:
     name: baseline checks
     # Supported OS: ubuntu-latest (the declared, tested platform). macOS/Windows
     # are not part of the supported matrix.
+    # A draft pull request runs nothing; marking it ready runs everything.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -109,7 +121,18 @@ jobs:
           rm -rf "$smoke_root"
 
       - name: Run tests
-        run: python3 -m pytest hooks/tests tests -q --ignore=tests/generated
+        # tests/test_artifact_graph.py replays every pipeline traced in a sandbox;
+        # the artifact-graph jobs below run it: shards with strace and a mount
+        # namespace, then the check over all of them, and its mutation tests
+        # (tests/artifact_graph/test_mutations.py) over the same replays.
+        # tests/replay/ is the replay suite's (the job replay-suite runs it, and the job
+        # artifact-graph-run-to-run its test_run_to_run.py).
+        # In parallel (pytest-xdist): one worker per CPU, each test file whole on one worker
+        # (--dist loadfile), so a file's module-level fixtures and ordering stay as they were.
+        run: >-
+          python3 -m pytest hooks/tests tests -q -n auto --dist loadfile
+          --ignore=tests/generated --ignore=tests/test_artifact_graph.py
+          --ignore=tests/artifact_graph/test_mutations.py --ignore=tests/replay
 
       - name: Shell tests (checkpoint privacy gate, push guards, fresh-clone smoke)
         # Shell suites pytest does not collect, run as the runner's non-root user like
@@ -200,9 +223,8 @@ jobs:
         run: bash scripts/check-public-core.sh
 
       - name: Verify headline claims (hero provenance + enforcement evidence)
-        # Runs as a step of the already-required `baseline` job so it gates merges by
-        # default (no branch-protection change needed). Runs the hero-provenance
-        # audits in --strict and the hero status/provenance and corpus checks.
+        # A step of the `baseline` job. Runs the hero-provenance audits in --strict
+        # and the hero status/provenance and corpus checks.
         # Also runs scripts/check-enforcement-evidence.py --ledger and --claims, which gate
         # docs/ENFORCEMENT-LEDGER.md against settings.json and against the guard sources.
         run: bash scripts/verify-claims.sh
@@ -247,3 +269,287 @@ jobs:
         # emitted / corpus case-ID sets disagree. A manifest that cannot
         # distinguish "exercised" from "asserted" does not show what ran.
         run: python3 scripts/check-enforcement-evidence.py --coverage
+
+  artifact-graph-plan:
+    # P1b row 19: the artifact check derives every write/read relation at test
+    # time from the code and from traced replays of each pipeline driver
+    # (tests/replay). On one runner its replays and E1's differential took 70
+    # minutes (b8e34f4), over E2's 1500 s, so they run in shards by pipeline
+    # (E2's remedy) and one job derives the check over all of them. This job
+    # plans the shards from the drivers present (tests/replay/drivers/) and the
+    # cost each declares (tests/artifact_graph/shards.py): the fewest shards
+    # whose expected critical path fits 90% of the budget, each pipeline whole
+    # in one, and E1's mode for the whole job. No driver is named here: a new
+    # one lands in a shard by itself.
+    name: artifact check plan
+    # A draft pull request runs nothing; marking it ready runs everything.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      count: ${{ steps.plan.outputs.count }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Plan the shards
+        id: plan
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 -m tests.artifact_graph.check --tree . --plan > "$RUNNER_TEMP/plan.json"
+          cat "$RUNNER_TEMP/plan.json"
+          echo "count=$(jq -r .count "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+          echo "matrix=$(jq -c .matrix "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+
+  artifact-graph-shard:
+    # One shard of the plan: its drivers' traced replays (strace, and a mount
+    # namespace through the runner's passwordless sudo) and E1's differential,
+    # in the mode the plan decided for the whole job. Its runs/ and its record
+    # go to the job below, which derives the check over every shard.
+    name: artifact check shard ${{ matrix.shard }}/${{ needs.artifact-graph-plan.outputs.count }}
+    needs: artifact-graph-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.artifact-graph-plan.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Install strace, bubblewrap and Python dependencies
+        # bubblewrap for the /dev-overnight replays, as in the job replay-suite.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y strace bubblewrap
+          python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Replays and differential of this shard
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python3 -m tests.artifact_graph.check --tree . --work "$RUNNER_TEMP/artifact-graph"
+          --shard "${{ matrix.shard }}/${{ needs.artifact-graph-plan.outputs.count }}"
+
+      - name: Upload this shard's replays
+        # if: always(): the merge reports a failed replay with the rest, and its
+        # record holds the shard's time per phase.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifact-check-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/artifact-graph/runs/
+            ${{ runner.temp }}/artifact-graph/shards/
+          if-no-files-found: error
+          retention-days: 7
+
+  artifact-graph-run-to-run:
+    # Row 19 rule (10) for the check's runtime half: two traced replays of the
+    # cheapest driver variant (by the COST each driver declares) on this tree,
+    # at the same time, reduce to the same relation events and give the same
+    # differential decisions, map and violations (tests/replay/test_run_to_run.py,
+    # about 100 s on a 4-CPU runner locally). It needs strace and a mount
+    # namespace, so it runs here and not in the baseline job's pytest step; as a
+    # job of its own beside the shards it adds nothing to the check's critical
+    # path (plan, slowest shard, merge).
+    name: artifact check run to run
+    # A draft pull request runs nothing; marking it ready runs everything.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Install strace and Python dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y strace
+          python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Two replays of one variant, compared
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m pytest tests/replay/test_run_to_run.py -q -p no:cacheprovider --durations=0
+
+  artifact-graph:
+    # The check over every shard's replays: the job keeps the name of the
+    # single job it replaces. tests/test_artifact_graph.py with
+    # ARTIFACT_GRAPH_REUSE=1 is the check's --reuse --no-differential path: it
+    # derives the map over the union of the shards' replays and asserts every
+    # replay exited 0 in both settings, no violation, and the static half's
+    # determinism; a shard that is missing or ran another plan fails it. It runs
+    # when a shard fails too, so that failure is reported with the rest. Then the
+    # check's mutation tests (acceptance 3) run over the same replays.
+    name: artifact check (traced replays)
+    needs: [artifact-graph-plan, artifact-graph-shard]
+    if: ${{ !cancelled() && needs.artifact-graph-plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Download every shard's replays
+        # Pinned to a full commit SHA like every other action here, resolved
+        # from the upstream repository's tag at implementation time.
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: artifact-check-shard-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/artifact-graph
+
+      - name: Artifact check
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          # check.json holds the time of each phase, each shard and each replay and
+          # differential (-s prints the same lines as the check runs).
+          ARTIFACT_GRAPH_WORK: ${{ runner.temp }}/artifact-graph
+          ARTIFACT_GRAPH_REUSE: "1"
+        run: python3 -m pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s
+
+      - name: Mutation tests (acceptance 3)
+        # Each test adds one file to a scratch copy of this tree (a second writer,
+        # a read nothing writes, a re-check outside the allowed positions, a role
+        # list, ...) and runs the check on the copy: the static half on the copy,
+        # the derivation over the replays above. Nothing in the tree runs the added
+        # file, so no pipeline's replay runs again. Each must make the check fail
+        # with a violation naming the artifact, the component and its file:line.
+        # It runs when the check above fails too, so both are reported.
+        # On 6367dba's 60 replays each mutation took 49-53 s of CPU (two thirds of
+        # it the static half; 50 s wall on a free CPU) and the unmutated check it
+        # compares with 54 s: 4 at a time on 4 CPUs, about 4 minutes (411 s on a
+        # 4-CPU machine shared at a load of 9), each worker holding the replays in
+        # about 1.7 GB. With 4 workers the hosted runner was shut down 2 minutes
+        # into this step (a4d3186), so it runs 2 at a time: about 5 minutes.
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          ARTIFACT_GRAPH_WORK: ${{ runner.temp }}/artifact-graph
+          ARTIFACT_GRAPH_JOBS: "2"
+        run: |
+          free -m
+          python3 -m pytest tests/artifact_graph/test_mutations.py -q -p no:cacheprovider -s
+
+      - name: Upload the check's timing and violations
+        # if: always(): a failing check's timing is the one the budget question needs.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: artifact-check
+          path: |
+            ${{ runner.temp }}/artifact-graph/check.json
+            ${{ runner.temp }}/artifact-graph/violations.txt
+          if-no-files-found: warn
+
+  replay-suite:
+    # P1c (D25, never fail): the pipeline replay suite, tests/replay/test_pipelines.py (each of the
+    # ten pipelines compliant: 0 gate blocks, 0 hook errors, its terminal reached),
+    # test_faults.py (each injected fault returned to its own producer and repaired at the next
+    # round), test_no_dead_end.py (every blocking site of the registered hooks has an agent action
+    # that clears it, apart from the owner's /stop) and test_regressions.py (P1's fan-out wedge,
+    # E1, N1, V1-1/NV-1), shipped and armed, untraced, each replay in a mount namespace through the
+    # runner's passwordless sudo, a proxy guard counting every connection. The replays are split
+    # over the matrix by the cost each scenario declares (tests/replay/conftest.py, REPLAY_SHARD);
+    # the tests that replay nothing (the runner's unit tests) run in shard 1. Six shards keep a
+    # run's jobs (3 baseline, the artifact check's plan, shards and check, run-to-run, these) within
+    # GitHub's 20 concurrent jobs, so no job of a run waits for another to finish. Every
+    # pull_request push runs it all, so a phase PR merges only with the whole suite green on its
+    # head (tests/TESTING.md, "Replay suite").
+    name: replay suite ${{ matrix.shard }}/6
+    # A draft pull request runs nothing; marking it ready runs everything.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install bubblewrap and Python dependencies
+        # bubblewrap: pretool-overnight-hook-guard.py re-execs each Bash call of a /dev-overnight
+        # actor inside its bwrap write boundary and refuses the call where bwrap is missing
+        # (OVERNIGHT WRITE-BOUNDARY FAIL-CLOSED); the replays run as the CLI does on a host with it.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Replay suite, shard ${{ matrix.shard }} of 6
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          REPLAY_SHARD: ${{ matrix.shard }}/6
+          REPLAY_WORK: ${{ runner.temp }}/replay
+        run: >-
+          python3 -m pytest tests/replay -q -p no:cacheprovider -rfE --durations=0
+          --ignore=tests/replay/test_run_to_run.py
+
+      - name: Upload this shard's replays
+        # The replays' own records (blocks, hook runs, terminals, transcripts) of a red shard.
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: replay-suite-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/replay/runs/
+          if-no-files-found: warn
+          retention-days: 7

@@ -3,7 +3,7 @@
 # Off by default. The repository's own git config decides first (git config --local
 # harness.autoPush true|false); unset, export GIT_AUTO_PUSH=1 enables it (unset, 0 or any
 # other value = no push). The harness's hooks/lib/auto_push.sh reads that rule, from
-# CLAUDE_HOME or ~/.claude; when it is not there, nothing is pushed (logged).
+# CLAUDE_HOME or ~/.claude; when it is not there, nothing is pushed (said on stderr).
 # Installation: cp ~/.claude/hooks/git-hooks/post-commit-auto-push .git/hooks/post-commit
 
 # Get current branch and commit
@@ -15,13 +15,11 @@ if [ -z "$BRANCH" ] || [ -z "$COMMIT_SHA" ]; then
   exit 0
 fi
 
-LOG_PATH="${CLAUDE_BACKUP_LOG:-${HOME}/.claude/logs/post-commit-auto-push.log}"
 READER="${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/auto_push.sh"
 
 # Push only when the per-repository switch says so (D1 as amended)
 if ! . "$READER" 2>/dev/null; then
-  [ "${GIT_AUTO_PUSH:-}" != "1" ] || { mkdir -p "$(dirname "$LOG_PATH")" \
-    && echo "no push: the switch's reader $READER is missing" >>"$LOG_PATH"; } 2>/dev/null
+  [ "${GIT_AUTO_PUSH:-}" != "1" ] || echo "post-commit: no backup push: the switch's reader $READER is missing" >&2
   exit 0
 fi
 harness_auto_push . || exit 0
@@ -31,9 +29,8 @@ SHORT_SHA="${COMMIT_SHA:0:12}"
 BACKUP_REF="refs/backups/claude/${BRANCH}/${SHORT_SHA}"
 REMOTE="${CLAUDE_BACKUP_REMOTE:-origin}"
 
-mkdir -p "$(dirname "$LOG_PATH")"
-git update-ref "$BACKUP_REF" "$COMMIT_SHA" 2>>"$LOG_PATH" || true
-nohup git push "$REMOTE" "${COMMIT_SHA}:${BACKUP_REF}" >>"$LOG_PATH" 2>&1 &
+git update-ref "$BACKUP_REF" "$COMMIT_SHA" 2>/dev/null || true
+nohup git push "$REMOTE" "${COMMIT_SHA}:${BACKUP_REF}" >/dev/null 2>&1 &
 
 # Don't wait for push to complete
 exit 0

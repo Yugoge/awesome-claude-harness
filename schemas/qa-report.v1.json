@@ -165,7 +165,6 @@
         "graphify_ran": {"type": "boolean"},
         "graph_context_status": {"type": "string", "enum": ["ok", "degraded", "failed", "unavailable", "skipped"]},
         "focused_subgraph_present": {"type": "boolean"},
-        "graph_report_present": {"type": "boolean"},
         "verification_note": {"type": "string", "description": "QA note on graph context quality"}
       }
     },

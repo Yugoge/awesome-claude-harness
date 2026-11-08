@@ -13,6 +13,9 @@ that cycle-contract.json's required_calls bookmark independently.
 
 # (label, content, activeForm, extra_meta) tuples for each step
 _STEPS = [
+    # The wake (P1c X8): one recurring CronCreate of the session's wake prompt
+    # (hooks/lib/overnight.py WAKE_PROMPT); its completion is gated on that call.
+    ("0", "Schedule the wake", "Scheduling the wake", {"wake_call": True}),
     ("1", "Create worktree (first run only)", "Creating worktree", None),
     (
         "2",
@@ -101,9 +104,10 @@ def _build_step(label, desc, active, meta):
 
 
 def get_todos():
-    """Return todo items for the dev-overnight workflow (21 integer steps + the
-    letter-suffix Step 11g graphify Dev-dispatch precondition; the letter-suffix
-    avoids cascading the integer Steps 12-21 and their contract step-ids)."""
+    """Return todo items for the dev-overnight workflow (Step 0, the wake, 21
+    integer steps and the letter-suffix Step 11g graphify Dev-dispatch
+    precondition; Step 0 and the letter-suffix avoid cascading the integer Steps
+    and their contract step-ids)."""
     return [
         _build_step(label, desc, active, meta)
         for label, desc, active, meta in _STEPS

@@ -526,22 +526,19 @@ def test_import_contract_imp_identity_regen_readme_regions_notice():
 def test_import_contract_imp_keep_stable_names():
     """The names other code and the existing tests rely on still exist."""
     expected = {
-        'regen_readme': ['RegenStatus', 'regen_readme', '_readme_needs_update', 'README_OPEN_MARKER',
-                         'README_CLOSE_MARKER', 'README_MARKER_ID', 'SKIP_NAMES', 'SKIP_PREFIXES',
+        'regen_readme': ['RegenStatus', 'regen_readme', 'README_MARKER_ID', 'SKIP_NAMES', 'SKIP_PREFIXES',
                          '_is_skipped', '_list_files', '_build_stats', '_skip_status'],
         'patch': ['_replace_section', 'patch_claude_md', 'datetime'],
         'main': ['main', 'patch_claude_md', '_maybe_regen_global', 'process_parent_dirs', '_regen_if_dir'],
         'notice': ['_readme_digest', 'write_state', 'STATE_ROOT_ENV', 'MAX_NOTICE_CHARS',
                    'STATE_FILE_TEMPLATE', 'emit_post_tool_notice'],
-        'regen_index': ['AUTO_START', 'AUTO_END', 'regen_index', '_index_needs_update', 'datetime'],
+        'regen_index': ['AUTO_START', 'AUTO_END', 'regen_index', 'datetime'],
     }
     for module_name, symbols in expected.items():
         module = importlib.import_module(f'hooks.doc_sync.{module_name}')
         missing = [symbol for symbol in symbols if not hasattr(module, symbol)]
         assert missing == [], (module_name, missing)
     regen_readme = load('regen_readme')
-    assert regen_readme.README_OPEN_MARKER == '<!-- AUTO:readme-stats -->'
-    assert regen_readme.README_CLOSE_MARKER == '<!-- /AUTO:readme-stats -->'
     assert regen_readme.README_MARKER_ID == 'readme-stats'
     assert load('regen_index').AUTO_START == '<!-- AUTO:index-stats -->'
     assert load('notice').STATE_ROOT_ENV == 'CLAUDE_DOC_SYNC_STATE_ROOT'
@@ -557,7 +554,7 @@ def load_bare_regen_readme():
 
 
 def test_import_contract_imp_bare_standalone_regen_readme_written(tmp_path):
-    """A bare-loaded regen_readme shares the RegenStatus class and writes a fresh and a managed README."""
+    """A bare-loaded regen_readme shares the RegenStatus class, creates no README and updates a managed one."""
     regions = load('regions')
     module = load_bare_regen_readme()
     assert not module.__package__
@@ -565,7 +562,9 @@ def test_import_contract_imp_bare_standalone_regen_readme_written(tmp_path):
     directory = tmp_path / 'folder'
     directory.mkdir()
     (directory / 'a.py').write_text('"""A."""\n')
-    assert module.regen_readme(directory, tmp_path) is regions.RegenStatus.WRITTEN
+    assert module.regen_readme(directory, tmp_path) is regions.RegenStatus.SKIPPED_ABSENT
+    assert not (directory / 'README.md').exists()
+    (directory / 'README.md').write_text(t(regions.marker_open('readme-stats'), regions.marker_close('readme-stats')))
     assert module.regen_readme(directory, tmp_path) is regions.RegenStatus.WRITTEN
 
 
@@ -641,11 +640,12 @@ def test_import_contract_imp_dag_consumers_import_regions():
     assert imported_roots(parse_module('regions')).isdisjoint({'hooks', 'doc_sync', 'patch', 'notice'})
 
 
-def test_import_contract_imp_regenstatus_five_members():
-    """RegenStatus keeps its four names and values and gains exactly SKIPPED_MALFORMED_MARKERS."""
+def test_import_contract_imp_regenstatus_six_members():
+    """RegenStatus keeps its four names and values and gains SKIPPED_ABSENT and SKIPPED_MALFORMED_MARKERS."""
     status = load('regions').RegenStatus
     assert [(member.name, member.value) for member in status] == [
         ('WRITTEN', 'WRITTEN'),
+        ('SKIPPED_ABSENT', 'SKIPPED_ABSENT'),
         ('SKIPPED_GITHUB_RESERVED', 'SKIPPED_GITHUB_RESERVED'),
         ('SKIPPED_NO_OPENING_MARKER', 'SKIPPED_NO_OPENING_MARKER'),
         ('SKIPPED_NO_CLOSING_MARKER', 'SKIPPED_NO_CLOSING_MARKER'),

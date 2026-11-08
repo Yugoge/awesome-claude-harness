@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Write one or more enforcement-flag sentinels into a dev-registry session dir.
 #
-# Merges the bodies of write-codex-enforce.sh and write-e2e-enforce.sh, which
-# were byte-for-byte identical apart from the output filename and the
-# enforced_agent_types list. Both remain as thin wrappers around this script
-# (commands/dev.md and commands/dev-command.md call them by name), so this is a
-# consolidation, not a rename.
+# Merges the body of write-codex-enforce.sh, which remains as a thin wrapper
+# around this script (command text written before this change calls it by
+# name), so this is a consolidation, not a rename. The E2E gate has no flag
+# (hooks/subagentstop-e2e-enforce.py judges every cycle's QA): its wrapper,
+# write-e2e-enforce.sh, writes nothing.
 #
-# --flag is repeatable, and that is the point: /dev-overnight needs BOTH flags
-# and used to pay two script invocations for them. One invocation writing N
-# sentinels is what actually reduces the call count; a single generic script
-# called twice would not.
+# --flag is repeatable, and that is the point: one invocation writes every flag
+# a cycle's registry needs (hooks/prompt-workflow.py _arm_registry). A flag
+# says only that its gate is armed for the session; which agents a gate applies
+# to is the gate's own decision, never a list here.
 #
-# Usage: write-enforce-flag.sh --source-command <dev|dev-overnight> \
+# Usage: write-enforce-flag.sh --source-command <dev|dev-command|redev|dev-overnight> \
 #                              --session-id <DEV_SESSION_ID> \
-#                              --flag <codex|e2e|artifact-contract> [--flag <...>]
+#                              --flag <codex|artifact-contract> [--flag <...>]
 # Exits 1 on failure; callers must abort if this script fails.
 set -euo pipefail
 
@@ -42,20 +42,11 @@ done
 REGISTRY_DIR="${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}/.claude/dev-registry/$SESSION_ID"
 CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-# Per-flag definitions: output filename + the agent types the gate applies to.
+# Per-flag output filename.
 flag_filename() {
   case "$1" in
     codex)             echo "codex-enforce.json" ;;
-    e2e)               echo "e2e-enforce.json" ;;
     artifact-contract) echo "artifact-contract-enforce.json" ;;
-    *)                 return 1 ;;
-  esac
-}
-flag_agent_types() {
-  case "$1" in
-    codex)             echo '["ba", "dev", "qa"]' ;;
-    e2e)               echo '["qa"]' ;;
-    artifact-contract) echo '["dev", "qa"]' ;;
     *)                 return 1 ;;
   esac
 }
@@ -65,7 +56,7 @@ flag_agent_types() {
 # bad: the first sentinel already on disk, the caller told to abort.
 for flag in "${FLAGS[@]}"; do
   flag_filename "$flag" >/dev/null || {
-    echo "ERROR: unknown --flag '$flag' (expected: codex, e2e, artifact-contract)" >&2; exit 1; }
+    echo "ERROR: unknown --flag '$flag' (expected: codex, artifact-contract)" >&2; exit 1; }
 done
 
 mkdir -p "$REGISTRY_DIR" \
@@ -73,7 +64,6 @@ mkdir -p "$REGISTRY_DIR" \
 
 for flag in "${FLAGS[@]}"; do
   filename="$(flag_filename "$flag")"
-  agent_types="$(flag_agent_types "$flag")"
   target="$REGISTRY_DIR/$filename"
   # A symlinked target redirects the write out of the registry entirely; the
   # sentinel would then read as "enforcement active" while living elsewhere.
@@ -86,9 +76,8 @@ for flag in "${FLAGS[@]}"; do
   "source_command": "%s",
   "dev_session_id": "%s",
   "claude_session_id": "%s",
-  "enforced_agent_types": %s,
   "created_at": "%s"
-}\n' "$SOURCE_CMD" "$SESSION_ID" "${CLAUDE_SESSION_ID:-unknown}" "$agent_types" "$CREATED_AT" \
+}\n' "$SOURCE_CMD" "$SESSION_ID" "${CLAUDE_SESSION_ID:-unknown}" "$CREATED_AT" \
     > "$target" \
     || { echo "ERROR: Failed to write $filename at $target — aborting." >&2; exit 1; }
 
@@ -96,7 +85,6 @@ for flag in "${FLAGS[@]}"; do
   # and transcripts grep for these strings.
   case "$flag" in
     codex)             echo "Codex enforcement active: $target" ;;
-    e2e)               echo "E2E enforcement active: $target" ;;
     artifact-contract) echo "Artifact-contract enforcement active: $target" ;;
   esac
 done

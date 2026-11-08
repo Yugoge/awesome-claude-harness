@@ -187,7 +187,8 @@ def test_post_commit_hook_push_follows_the_repository_switch(background_runs, pa
 @pytest.mark.parametrize("where", ("claude-home", "missing"))
 def test_post_commit_hook_reads_the_switch_from_the_harness_home(tmp_path, where):
     """The reader is found under CLAUDE_HOME when it is not under ~/.claude; found nowhere, the
-    hook pushes nothing even with GIT_AUTO_PUSH "1", and its log says why."""
+    hook pushes nothing even with GIT_AUTO_PUSH "1" and says why on stderr, which git shows the
+    committer (no log file: P1b removed the hook's log as written and never read)."""
     switch = Switch(where, "1", None, where == "claude-home")
     env = _env(tmp_path, switch)
     (Path(env["HOME"]) / ".claude" / "hooks" / "lib" / "auto_push.sh").unlink()
@@ -199,9 +200,8 @@ def test_post_commit_hook_reads_the_switch_from_the_harness_home(tmp_path, where
     run = _commit_with_hook(tmp_path, env, switch, "post_commit")
     assert run.returncode == 0, run.output
     _judge(run, switch.pushes)
-    log = Path(env["CLAUDE_BACKUP_LOG"])
-    text = log.read_text(errors="replace") if log.exists() else ""
-    assert ("no push: the switch's reader" in text) == (where == "missing"), text
+    assert ("no backup push: the switch's reader" in run.output) == (where == "missing"), run.output
+    assert not (Path(env["HOME"]) / ".claude" / "logs" / "post-commit-auto-push.log").exists()
 
 
 # --------------------------------------------------------------------------- git-fswatch
