@@ -59,6 +59,10 @@ from tests.replay import hookrun, landing, suite
 TRANSITIONS = {"master": "2acc29b0c8149c32d8e424e58c6af55d073eac20",
                "p1b": "3f0b7a23ee9145c573678775dc67b0a230c228f4"}
 ENV = {"CLAUDE_OBLIGATION_STOPGATE": "block"}
+# P2 arms G1 and G3 beside P1b's STOPGATE, and the overnight guard's matcher gains AskUserQuestion (its
+# unattended deny); a landed replay loads the base's settings.json, which has neither.
+P2_ENV = {"CLAUDE_OBLIGATION_GATE": "block", "CLAUDE_OBLIGATION_BARRIER": "block"}
+P2_MATCHER = ("Write|Edit|MultiEdit|Bash", "Write|Edit|MultiEdit|Bash|AskUserQuestion")
 G2 = "hooks/subagentstop-artifact-contract-enforce.py"
 FORGED = "forged@agent:dev Write docs/dev/dev-report-*=dev.status:done,-dev.files_modified"
 
@@ -260,12 +264,20 @@ def _base_settings(name: str) -> dict:
 def test_this_trees_settings_replay_as_the_base_settings(name):
     """The landed replays load the base's settings.json; this tree's registers the same hooks with the
     same environment once STOPGATE=block is set, so a replay with it is the same replay (A11's "again with
-    your settings.json")."""
+    your settings.json"), apart from P2's two changes: G1 and G3 armed, and the overnight guard also on
+    AskUserQuestion (P2_ENV, P2_MATCHER)."""
     base = _base_settings(name)
     with open(os.path.join(suite.REPO, "settings.json")) as fh:
         head = json.load(fh)
-    assert base.get("hooks") == head.get("hooks")
-    assert hookrun.settings_env(base) | ENV == hookrun.settings_env(head) | ENV
+    guard = [g for g in head["hooks"]["PreToolUse"]
+             if any("pretool-overnight-hook-guard.py" in h.get("command", "") for h in g.get("hooks", []))]
+    assert [g.get("matcher") for g in guard] == [P2_MATCHER[1]]
+    hooks = json.loads(json.dumps(head.get("hooks")))
+    for g in hooks["PreToolUse"]:
+        if g.get("matcher") == P2_MATCHER[1]:
+            g["matcher"] = P2_MATCHER[0]
+    assert base.get("hooks") == hooks
+    assert hookrun.settings_env(base) | ENV | P2_ENV == hookrun.settings_env(head) | ENV
 
 
 @pytest.mark.parametrize("name", sorted(TRANSITIONS))

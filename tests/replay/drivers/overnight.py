@@ -2125,6 +2125,8 @@ class Night:
         fixed = len(self.pipes)
         return [(r"^actual_end$", utc_now()), (r"^hours$", str(mins // 60)), (r"^minutes$", str(mins % 60)),
                 (r"^cycle index - 1$", str(self.n)), (r"^issues_found$", str(len(self.triage.get("issues") or []))),
+                # the base text's (origin/master's, P1b's) Step 21 template: an in-flight session parks nothing
+                (r"^cycle_count$", str(self.n)), (r"^issues_parked$", "0"),
                 (r"^issues_fixed$", str(fixed)),
                 (r"^issues_triage_deferred$", str(len(self.triage.get("skipped_issues") or []))),
                 (r"^percentage$", str(round(100 * fixed / max(1, len(self.pipes))))),
