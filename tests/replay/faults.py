@@ -60,7 +60,9 @@ which hooks; nothing repairs it, and the pipeline goes on with its own step.
 Before the step whose label matches, the fault (actor "fault") writes `path` (project-relative;
 `{task}` is the cycle's task id, the shortest task id the run learned) with `content kind`:
 `qa-report.v1` (a stale schema-v1 QA report: F3b), `junk`, `schema-invalid` (the file as written, its
-required owned_edits removed), or `absent` (the file removed). A path
+required owned_edits removed), `ignored` (a dev report as written, a path the toy project's .gitignore
+matches added to its dev.files_created: the report the gitignore rule of the next dispatch naming it
+reads, after its dev's own stop passed), or `absent` (the file removed). A path
 nothing in the pipeline produced is no producer's to repair; the pipeline must reach its terminal past
 it. One a producer wrote before is that producer's artifact, spoiled: a gate that refuses the next
 dispatch naming it returns it to its producer (_collection_round).
@@ -93,6 +95,7 @@ import threading
 import time
 
 _FORGED = "ESCALATION_ACK 0123456789abcdef0123456789abcdef"
+IGNORED = "toy/__pycache__/__init__.cpython-312.pyc"  # a path the toy project's .gitignore matches (sandbox.py)
 _BLOCK = re.compile(r'<obligation\s+v="1"\s*>\s*(\{.*?\})\s*</obligation>', re.S)
 
 
@@ -405,6 +408,12 @@ def _plant(rp, glob: str, what: str) -> callable:
             with rp.acting("fault"):
                 doc = json.loads(open(full).read())
             doc.pop("owned_edits", None)
+            text = json.dumps(doc, indent=2) + "\n"
+        if content == "ignored":  # the dev report as written, listing a file the toy's .gitignore matches
+            with rp.acting("fault"), open(full) as fh:
+                doc = json.load(fh)
+            dev = doc.setdefault("dev", {})
+            dev["files_created"] = list(dev.get("files_created") or []) + [IGNORED]
             text = json.dumps(doc, indent=2) + "\n"
         rec = {"kind": "plant", "label": step["label"], "path": rel, "content": content}
         with rp.acting("fault"):

@@ -65,8 +65,13 @@ FAULTS = {
     "qa e2e unjustified skip": (DEV, "shipped", f"invalid@{QA_WRITE}={SKIP}"),
     "qa report missing, no obligation": (DEV, "shipped", f"noblock@{QA_DISPATCH};missing@{QA_WRITE}"),
     "qa e2e unjustified skip, no obligation": (DEV, "shipped", f"noblock@{QA_DISPATCH};invalid@{QA_WRITE}={SKIP}"),
+    # The dev's own Write of the listing: P6's G2 file-list check refuses it at the dev's own stop.
     "dev report lists an ignored file": (DEV, "armed", "invalid@agent:dev Write docs/dev/dev-report-*="
                                          'dev.files_created:["toy/__pycache__/__init__.cpython-312.pyc"]'),
+    # The listing planted after the dev's stop passed: G3's gitignore rule (pretool-aggregate-check.py and
+    # pretool-gitignore-preflight.py) refuses Step 13's QA dispatch naming the report.
+    "dev report lists an ignored file before QA": (DEV, "armed",
+                                                   f"plant@{QA_DISPATCH}=docs/dev/dev-report-{{task}}.json:ignored"),
     "dev report spoiled before QA": (DEV, "armed", f"plant@{QA_DISPATCH}=docs/dev/dev-report-{{task}}.json:junk"),
     "canonical aggregate missing before QA": (FANOUT, "shipped",
                                               "plant@Step 13 [[]l1] Agent(qa)=docs/dev/dev-report-{task}.json:absent"),
