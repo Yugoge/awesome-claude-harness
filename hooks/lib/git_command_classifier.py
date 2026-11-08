@@ -380,6 +380,14 @@ GIT_GLOBAL_FLAGS = frozenset({
     '--no-lazy-fetch', '--no-advice', '--html-path', '--man-path', '--info-path',
     '-v', '--version', '-h', '--help', '--exec-path', '--list-cmds',
 })
+# The value options' name before the table split, for the code that still imports
+# it (the privilege guard's commit reads and the branch hook on another stream):
+# every lookup is "does this option take the next word?", which the table answers.
+# The old set differed: it held --exec-path, whose value git takes only as
+# `--exec-path=<dir>` (a bare one prints the path and exits, running no
+# subcommand), and lacked --attr-source and --shallow-file, so it read
+# `git --attr-source HEAD commit` as the subcommand `HEAD`.
+_GIT_GLOBAL_VALUE = GIT_GLOBAL_VALUE_OPTS
 
 
 def _git_subcommand(args):

@@ -158,6 +158,12 @@ Revision history:
 Exit codes:
   0: Allow tool use
   2: Block tool use
+
+An error the guard does not expect, an import that fails at module load
+included, refuses a Bash call that may run git (exit 2, naming the error); it
+is not a policy refusal, and no grant or /do consent lifts it. Another tool,
+and a command that cannot run git (_may_run_git), still exit 0. Unreadable
+input (not a JSON object) is judged on its raw text the same way.
 """
 
 import glob
@@ -170,6 +176,89 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+# Fail closed. The code from here to the first hooks/lib import uses the standard
+# library alone, so it still decides when a lib module fails to load or anything
+# later raises; Python's own exit 1 there is a non-blocking hook error, and the
+# harness would run the command unjudged.
+_STDIN = None
+_MAY_RUN_GIT_RE = re.compile(r'git|[$`]|[<>]\(', re.IGNORECASE)
+
+
+def _read_stdin():
+    """The raw hook payload, read once, by main or by the load-failure hook."""
+    global _STDIN
+    if _STDIN is None:
+        try:
+            stream = getattr(sys.stdin, 'buffer', None)
+            _STDIN = stream.read().decode('utf-8', 'replace') if stream else sys.stdin.read()
+        except Exception:
+            _STDIN = ''
+    return _STDIN
+
+
+def _may_run_git(text):
+    """False only when text cannot run git as this guard reads a command.
+
+    The guard refuses only what classify_git_command finds: a command word that
+    names git, one that spells it with quotes or backslashes (`g\\it`, `gi""t`),
+    or one built at run time (`$GIT`, `$(which git)`, a backquote, `<(...)`). With
+    quotes, backslashes and line continuations removed, text holding no `git` in
+    any letter case, no `$`, no backquote and no `<(` or `>(` has none of them.
+    """
+    flat = text.replace('\\\n', '')
+    for ch in '\\\'"':
+        flat = flat.replace(ch, '')
+    return bool(_MAY_RUN_GIT_RE.search(flat))
+
+
+def _judged_text(raw):
+    """What an error is judged on: None for another tool's call, a Bash call's
+    command, and the raw payload when it does not read as a tool call."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return raw
+    if not isinstance(data, dict):
+        return raw
+    if data.get('tool_name', '') != 'Bash':
+        return None
+    tool_input = data.get('tool_input')
+    command = tool_input.get('command') if isinstance(tool_input, dict) else None
+    return command if isinstance(command, str) else raw
+
+
+def _internal_error_exit(exc, what='internal error'):
+    """2, naming exc on stderr, when the call may run git; else 0."""
+    text = _judged_text(_read_stdin())
+    if text is None or not _may_run_git(text):
+        return 0
+    sys.stderr.write(
+        '\nBLOCKED: git-privilege guard %s, not a policy refusal: %s: %s\n'
+        % (what, type(exc).__name__, str(exc)[:300])
+        + 'The guard could not judge this command, which may run git, so it refuses '
+        'it; no /allow grant or /do consent lifts this. Report it.\n')
+    return 2
+
+
+def _refuse_on_load_failure(exc_type, exc, tb):
+    """sys.excepthook while this file runs as the hook: an exception escaping the
+    module (a hooks/lib import that fails, any module-level error) exits through
+    _internal_error_exit instead of Python's exit 1."""
+    try:
+        code = _internal_error_exit(exc)
+    except BaseException:
+        code = 2
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(code)
+
+
+if __name__ == '__main__':
+    sys.excepthook = _refuse_on_load_failure
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command  # noqa: E402
@@ -1871,9 +1960,11 @@ def _evaluate_command(command, data, do_consent=False):
 
 def main():
     try:
-        data = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+        data = json.loads(_read_stdin())
+    except ValueError as exc:
+        # No tool or command to read: 0 as before, unless the raw text may run git
+        # (the hook is registered for Bash calls alone).
+        sys.exit(_internal_error_exit(exc, 'could not read its input'))
     try:
         if data.get('tool_name', '') != 'Bash':
             sys.exit(0)
@@ -1894,8 +1985,9 @@ def main():
             raise
     except SystemExit:
         raise
-    except Exception:
-        sys.exit(0)
+    except Exception as exc:
+        # An error is no verdict: refuse what may run git (_internal_error_exit).
+        sys.exit(_internal_error_exit(exc))
     sys.exit(0)
 
 
