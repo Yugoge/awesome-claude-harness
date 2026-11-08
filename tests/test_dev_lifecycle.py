@@ -47,6 +47,7 @@ def _chain(project, task_id):
 
 def _passing_singular(project, task_id):
     write_ticket_fixture(project, task_id)
+    write_json(dev_dir(project) / f"ba-qa-report-{task_id}.json", ba_qa_report(task_id, top_verdict="pass"))
     write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id))
     write_json(dev_dir(project) / f"qa-report-{task_id}.json", qa_report(task_id))
     write_text(dev_dir(project) / f"completion-{task_id}.md", completion_md(task_id))
