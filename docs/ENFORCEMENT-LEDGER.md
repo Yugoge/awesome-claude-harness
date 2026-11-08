@@ -178,7 +178,7 @@ Ids H-060 – H-063 are retired and not reused: those four scripts
 are not direct `Stop` entries in `settings.json` — they run as phases inside
 `stop-workflow-coordinator.py` (row H-084) — so they are recorded in section 4 as S-004 – S-007.
 Id H-081 is retired as well: `stop-completion-gate.py` lost its `Stop` entry in P1 and is an
-exit-0 stub until P10.
+exit-0 stub that stays tracked.
 
 **The authoring rule `behavior` follows** — applied by hand, and checked only for closed-set
 membership, not recomputed from the event class: events that can deny a pending action

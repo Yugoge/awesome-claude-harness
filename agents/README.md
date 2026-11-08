@@ -2,6 +2,8 @@
 
 Organization and usage documentation for `agents/`.
 
+Agents remove tracked files with a non-forced `git rm`, recoverable from history; bash-safety refuses a forced or wrapped `git rm`, `rm`, `unlink`, and a `git rm` that removes a file in the harness home.
+
 <!-- AUTO:readme-stats -->
 ## Overview
 - **Total files**: 23

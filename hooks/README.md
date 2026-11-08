@@ -1,5 +1,7 @@
 # hooks
 
+Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landing drops an overlay's registration of a stub or a deleted hook at the first Stop after HEAD moves (see the root README's hook events).
+
 <!-- AUTO:readme-stats -->
 ## Overview
 - **Total files**: 120
