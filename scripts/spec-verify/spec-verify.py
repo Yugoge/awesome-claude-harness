@@ -38,7 +38,7 @@ from spec_verify_mandate import (  # noqa: F401 -- re-exports
     is_strict_guide_mode, run_mandate_check,
 )
 from spec_verify_gated import (  # noqa: F401 -- re-exports
-    run_utility_check, run_ambiguous_check, run_meta_rule_check,
+    run_utility_check, run_ambiguous_check, run_meta_rule_check, run_split_check,
 )
 
 
@@ -52,6 +52,8 @@ def _add_io_args(p):
         help="Minimum coverage percentage required (default: 100.0)")
     p.add_argument("--show-uncovered", action="store_true", default=False,
         help="Print uncovered line numbers and first 80 chars")
+    p.add_argument("--project-dir", default=None,
+        help="Project root: also check the split's manifest as /dev's resolver does (G2 passes it)")
 
 
 def _add_check_args(p):
@@ -766,7 +768,7 @@ def _gather_check_results(args):
     mandate, utility, ambiguous, meta_rule = _run_gated_checks(args)
     return [
         coverage, structural, fabrication, overlap, uniqueness,
-        mandate, utility, ambiguous, meta_rule,
+        mandate, utility, ambiguous, meta_rule, run_split_check(args),
     ]
 
 

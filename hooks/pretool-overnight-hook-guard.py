@@ -1403,8 +1403,8 @@ def _scan_script_files_for_main_git(command: str, main_real: str) -> bool:
     # already covers it; here we focus on file operands.
     home = os.environ.get('CLAUDE_HOME') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for tok in command.split():
-        # `~/x.py` names the script bash runs (tilde expansion), so it is read, not "unreadable";
-        # so does a script named through the CLAUDE_HOME channel.
+        # `~/x.py` names the script bash runs (tilde expansion), so it is read, not "unreadable"; a
+        # channel-spelled operand is read at the path the shell expands it to (P2 R6).
         t = os.path.expanduser(_CHANNEL_RE.sub(lambda _m: home, tok.strip('\'"')))
         if not t or t.startswith('-'):
             continue

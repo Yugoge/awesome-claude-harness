@@ -129,7 +129,7 @@ The `UserPromptSubmit` hook (`hooks/prompt-workflow.py`) has already, for this c
 1. Minted the cycle's ids: `DEV_SESSION_ID pre-initialized by hook: …` (the registry directory's name, `dev-command-<timestamp>`) and `Task id: …` (the id this cycle's artifacts are named with, `<timestamp>` and `<TASK_ID>` below)
 2. Created `.claude/dev-registry/<DEV_SESSION_ID>/` with one sentinel file per agent role (each `agents/*.md` with front matter)
 3. Written `docs/dev/user-requirement-<DEV_SESSION_ID>.md` with the verbatim user requirement (`User requirement document: …`)
-4. Armed the enforcement flags: Codex when `--codex` was passed (the E2E gate needs no flag)
+4. Armed the enforcement flags: Codex when `--codex` was passed
 
 **Read `DEV_SESSION_ID` and `TASK_ID` from the hook output above.** Store them for use in every Agent launch prompt below.
 
@@ -143,9 +143,9 @@ CMDEOF
 
 It prints what the hook printed at this command's start, found through this session's bookmark (`$CLAUDE_CODE_SESSION_ID`); when the hook recorded no start of this command, it starts the cycle there exactly as the hook does, under a task id of its own. Never mint an id, pick a registry by name or age, or write a registry, requirement or flag file yourself.
 
-```bash
-REGISTRY_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/dev-registry/$DEV_SESSION_ID"
-```
+Its output also holds the `Spec:` line and the checklist, so it is the first Bash call of this command, before the views block above; make it after the Read of the command-development patterns document (Command Development Best Practices). While the checklist is not started, `hooks/pretool-workflow-gate.py` refuses that Read with the exact todos array: pass it to TodoWrite, then Read again. `hooks/pretool-orchestrator-gate.py` refuses a sixth Bash call in a row, and only an Agent dispatch clears the count; this order keeps the start function at five with this step's views and cp-state blocks, Step 2's hydrator and Step 4's retry-signal query, before Step 4's BA dispatch.
+
+`$REGISTRY_DIR` below is `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/dev-registry/$DEV_SESSION_ID`, spelled out in the call that uses it: it is not a Bash call of its own, since a Bash call keeps no variable for the next one.
 
 Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
 
@@ -670,7 +670,7 @@ ELIF qa.status == "warning" or "fail":
 ```
 
 ```bash
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/aggregate-permissions.py" docs/dev/qa-report-<timestamp>.json | bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json
+python3 "<HARNESS_ROOT>/scripts/aggregate-permissions.py" docs/dev/qa-report-<timestamp>.json | bash "<HARNESS_ROOT>/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json
 ```
 
 The aggregator reads the validated list from the QA report; the applier merges each entry into `.permissions.<section>` (allow/ask/deny), skipping patterns already present. A missing `.claude/settings.json` is an empty object to the merge, so the applier creates it when it adds an entry; a file it cannot parse fails the merge (non-zero exit) and stays unchanged.
@@ -824,6 +824,8 @@ Development completed successfully!
 ```
 
 **Save report to**: `docs/dev/completion-<timestamp>.md`
+
+The report's identity is the task id as given (`<timestamp>`, no `dev-` prefix), and its Files Generated list names every artifact of the chain (ticket, context, dev report, QA report): the postcondition below reads both, and a prefixed id or a missing reference fails it.
 
 **Codex-native artifact postcondition (hard check before completion)** — mirrors `commands/dev.md` Step 17's postcondition. The resolver builds the file names it reads from the task id as given (for example `dev-report-<task_id>.json`), and this command's artifacts are named `<timestamp>`, so it receives `<TASK_ID>`, the hook's `Task id:` (only the registry directory and the user-requirement document carry `$DEV_SESSION_ID`).
 

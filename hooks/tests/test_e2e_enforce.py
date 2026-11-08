@@ -469,6 +469,9 @@ def test_r10_registered_qa_judged_on_the_report_it_wrote_not_a_siblings(tmp_path
     assert proc.returncode == 2
     assert str(project / own) in proc.stderr and sibling not in proc.stderr
     assert "e2e_enforcement.status='skipped_without_justification'" in proc.stderr
+    # the block names its artifact and the failing check (P1b, acceptance 15)
+    assert (f"artifact: {project / own} (failing check: e2e_enforcement.status not a passing status)\n"
+            in proc.stderr)
 
 
 def test_r10_declared_path_beside_a_stale_unsuffixed_report(tmp_path):
@@ -531,25 +534,24 @@ def test_r10_a_non_qa_stop_is_never_judged(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-def test_p4_r8_force_sentinel_changes_nothing(tmp_path, monkeypatch):
-    """P4 R8 (A12): a /close --force sentinel (claude-close-force-<session>.flag,
-    where the earlier hook looked for it) skips nothing: a registered QA's
-    declared report with an unjustified skip still blocks."""
-    session, agent_id, task = "harness-p4-force", "agent-qa-p4-force", "20260606-000000"
-    declared = f"docs/dev/qa-report-{task}.json"
+def test_p4_a12_force_sentinel_changes_nothing(tmp_path, monkeypatch):
+    """P4 A12: a /close --force sentinel (claude-close-force-<session>.flag,
+    where an earlier hook looked for it) skips nothing: the unjustified skip
+    the QA's obligation declares still blocks."""
+    session, agent_id, task = "harness-p4-force", "agent-qa-p4-force", "20260505-000000"
     project, home = _project_home(tmp_path)
-    _register_agent(project, agent_id, f"dev-{task}", "qa")
+    _register_agent(project, agent_id, "dev-20260505-000000", "qa")
     _write_obligation_transcript(home, project, session, agent_id,
-                                 _obligation_block(task, declared, "qa-report.v2"))
-    _write(project / declared, _qa_report(task, status="skipped_without_justification"))
-    for name, root in (("CLAUDE_STATE_DIR", tmp_path / "state"), ("TMPDIR", tmp_path / "tmp")):
-        _write(root / f"claude-close-force-dev-{task}.flag", "")
+                                 _obligation_block(task, f"docs/dev/qa-report-{task}.json", "qa-report.v2"))
+    _write(project / "docs" / "dev" / f"qa-report-{task}.json",
+           _qa_report(task, status="skipped_without_justification"))
+    for name in ("CLAUDE_STATE_DIR", "TMPDIR"):
+        root = tmp_path / name.lower()
         monkeypatch.setenv(name, str(root))
-
+        for sid in (session, "dev-20260505-000000"):
+            _write(root / f"claude-close-force-{sid}.flag", "")
     proc = _run_hook(project, home, agent_id, session_id=session)
-
-    assert proc.returncode == 2
-    assert "E2E_ENFORCE_BLOCKED" in proc.stderr
+    assert proc.returncode == 2 and "E2E_ENFORCE_BLOCKED" in proc.stderr, proc.stderr
 
 
 def test_write_e2e_enforce_is_an_exit_0_stub_that_writes_nothing(tmp_path):

@@ -105,8 +105,7 @@ def _view_entry_path(val, role):
 
 def _manifest_problem(manifest, abs_spec, project_dir, project_real):
     """(manifest data, None) when views/manifest.json is a usable manifest of THIS monolith, else
-    (None, the failed predicate). One of the split's own predicates: classify() and the producer's
-    stop (G2, hooks/subagentstop-artifact-contract-enforce.py, through split_problem) apply it."""
+    (None, the failed predicate). One of the split's own predicates (split_problem)."""
     # manifest must be a regular file. os.path.isfile() returns False for a
     # broken symlink, a directory, or a wrong-type path, so it doubles as the
     # PRESENT-BUT-INVALID guard here (evidence present but not a usable manifest).
@@ -184,58 +183,25 @@ def _views_problem(data, spec_dir, specs_root, views_dir):
     return None
 
 
-def split_problem(spec_dir, abs_spec, project_dir):
-    """The split's own predicates (the manifest and the views it references) as the spec subagent
-    leaves them at its stop: None when they hold, else the failed predicate. The split marker and
-    its freshness, which the /spec orchestrator writes after the split QA loop, are classify()'s."""
+def split_problem(spec_dir, abs_spec, project_dir, marker_due=False):
+    """The split's own predicates (its manifest of this monolith, the marker, the split's freshness
+    and the views the manifest references): None when they hold, else the failed predicate.
+    classify() applies them to every candidate with split evidence, the marker due. The producer's
+    stop (G2, hooks/subagentstop-artifact-contract-enforce.py, through spec-verify.py --project-dir)
+    applies them to the split the spec subagent's dispatch declares, before the /spec orchestrator
+    writes the marker after the split QA loop: there the marker's presence and mtime are not yet
+    due (P1b E4)."""
     project_dir = os.path.abspath(project_dir)
     views_dir = os.path.join(spec_dir, "views")
+    split_marker = os.path.join(spec_dir, ".split-complete")
     data, problem = _manifest_problem(os.path.join(views_dir, "manifest.json"), abs_spec, project_dir,
                                       _real(project_dir))
-    return problem or _views_problem(data, spec_dir, os.path.dirname(spec_dir), views_dir)
-
-
-def classify(candidate, abs_spec, project_dir, project_real):
-    """Classify one candidate id into (state, detail-dict)."""
-    specs_root = os.path.join(project_dir, "docs", "dev", "specs")
-    spec_dir = os.path.join(specs_root, candidate)
-    views_dir = os.path.join(spec_dir, "views")
-    manifest = os.path.join(views_dir, "manifest.json")
-    split_marker = os.path.join(spec_dir, ".split-complete")
-    cp_dir = os.path.join(project_dir, ".claude", "specs", candidate)
-
-    detail = {
-        "candidate": candidate,
-        "views_dir": views_dir,
-        "manifest_path": manifest,
-        "split_marker": split_marker,
-        "cp_dir": cp_dir,
-        "reason": None,
-    }
-
-    # Evidence detection MUST use lexists/lstat (NOT exists) so a DANGLING SYMLINK
-    # at any of these paths counts as evidence -> reaches PRESENT-BUT-INVALID
-    # instead of falsely classifying ABSENT and silently degrading to monolith mode.
-    has_evidence = (
-        os.path.lexists(views_dir)
-        or os.path.lexists(manifest)
-        or os.path.lexists(split_marker)
-    )
-    if not has_evidence:
-        detail["reason"] = "no artifact evidence (no views dir / manifest / split-complete)"
-        return ABSENT, detail
-
-    def invalid(reason):
-        detail["reason"] = reason
-        return PRESENT_BUT_INVALID, detail
-
-    data, problem = _manifest_problem(manifest, abs_spec, project_dir, project_real)
     if problem:
-        return invalid(problem)
+        return problem
 
     # split marker must exist as a regular file (broken symlink / dir / missing -> invalid)
-    if not os.path.isfile(split_marker):
-        return invalid(".split-complete missing or not a regular file while manifest present")
+    if marker_due and not os.path.isfile(split_marker):
+        return ".split-complete missing or not a regular file while manifest present"
 
     # Staleness guard. The split is fresh iff the monolith content has not changed
     # since the split was written. We STRENGTHEN (never weaken) the pre-existing
@@ -266,31 +232,60 @@ def classify(candidate, abs_spec, project_dir, project_real):
         try:
             actual_hash = _sha256_file(abs_spec)
         except OSError as exc:
-            return invalid("could not hash monolith for staleness check: %s" % exc)
+            return "could not hash monolith for staleness check: %s" % exc
         for field, val in recorded_hashes:
             if not (isinstance(val, str) and len(val) == 64 and all(ch in "0123456789abcdefABCDEF" for ch in val)):
-                return invalid("manifest.%s is present but not a 64-hex sha256 (got %r) — cannot validate freshness" % (field, val))
+                return "manifest.%s is present but not a 64-hex sha256 (got %r) — cannot validate freshness" % (field, val)
             if val.lower() != actual_hash.lower():
-                return invalid("split is stale (monolith content changed since split: manifest %s != monolith hash)" % field)
+                return "split is stale (monolith content changed since split: manifest %s != monolith hash)" % field
         # ALL present hashes match -> fresh; skip the mtime check (mtime drift is a no-op artifact)
-    else:
+    elif marker_due:
         try:
             if os.path.getmtime(abs_spec) > os.path.getmtime(split_marker):
-                return invalid("split is stale (monolith newer than .split-complete)")
+                return "split is stale (monolith newer than .split-complete)"
         except OSError as exc:
-            return invalid("could not stat for staleness check: %s" % exc)
+            return "could not stat for staleness check: %s" % exc
 
-    problem = _views_problem(data, spec_dir, specs_root, views_dir)
-    if problem:
-        return invalid(problem)
+    return _views_problem(data, spec_dir, os.path.dirname(spec_dir), views_dir)
 
-    detail["reason"] = "valid"
-    return PRESENT_AND_VALID, detail
+
+def classify(candidate, abs_spec, project_dir):
+    """Classify one candidate id into (state, detail-dict)."""
+    specs_root = os.path.join(project_dir, "docs", "dev", "specs")
+    spec_dir = os.path.join(specs_root, candidate)
+    views_dir = os.path.join(spec_dir, "views")
+    manifest = os.path.join(views_dir, "manifest.json")
+    split_marker = os.path.join(spec_dir, ".split-complete")
+    cp_dir = os.path.join(project_dir, ".claude", "specs", candidate)
+
+    detail = {
+        "candidate": candidate,
+        "views_dir": views_dir,
+        "manifest_path": manifest,
+        "split_marker": split_marker,
+        "cp_dir": cp_dir,
+        "reason": None,
+    }
+
+    # Evidence detection MUST use lexists/lstat (NOT exists) so a DANGLING SYMLINK
+    # at any of these paths counts as evidence -> reaches PRESENT-BUT-INVALID
+    # instead of falsely classifying ABSENT and silently degrading to monolith mode.
+    has_evidence = (
+        os.path.lexists(views_dir)
+        or os.path.lexists(manifest)
+        or os.path.lexists(split_marker)
+    )
+    if not has_evidence:
+        detail["reason"] = "no artifact evidence (no views dir / manifest / split-complete)"
+        return ABSENT, detail
+
+    problem = split_problem(spec_dir, abs_spec, project_dir, marker_due=True)
+    detail["reason"] = problem or "valid"
+    return (PRESENT_BUT_INVALID if problem else PRESENT_AND_VALID), detail
 
 
 def resolve(spec_path, project_dir):
     project_dir = os.path.abspath(project_dir)
-    project_real = _real(project_dir)
 
     # Anchor relative spec_path to project_dir but DO NOT realpath-resolve before
     # deriving the id: the candidate id must match the filename the caller invoked
@@ -313,7 +308,7 @@ def resolve(spec_path, project_dir):
     state_per_candidate = {}
     details = {}
     for c in candidates:
-        st, detail = classify(c, abs_spec, project_dir, project_real)
+        st, detail = classify(c, abs_spec, project_dir)
         state_per_candidate[c] = st
         details[c] = detail
 

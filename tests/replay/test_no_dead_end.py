@@ -41,7 +41,8 @@ from tests.replay import sites, suite
 
 DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
             "checklist-lock")
-PLAIN_CASES = ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending")
+PLAIN_CASES = ("bg-dispatch", "stale-worktree", "obligation", "forged-ack", "codex", "cp-pending",
+               "report-schema")
 CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
 CASES["dev-early"] = suite.Scenario("dead end: dev-early", "_deadend", (("case", "dev-early"),), ("dev",), 100)
@@ -73,6 +74,10 @@ FAULTS = {
     # test_faults.py's F7 (shipped): a lane dispatched from the pre-P1 template, its report needs_review
     "lane from the pre-P1 template": (FANOUT, "shipped", "pretemplate@Step 10 [[]l1] Agent(dev);"
                                       "invalid@agent:dev Write docs/dev/dev-report-*-l1.json=dev.status:needs_review"),
+    # test_faults.py's F9 (shipped): the newest lane's report reaches disk by a shell redirection, so the
+    # canonical aggregate is missing at that lane's stop (G2's canonical wire, C5)
+    "last lane report written by a shell redirection": (FANOUT, "shipped",
+                                                        "bash@agent:dev Write docs/dev/dev-report-*-l2.json"),
 }
 FORGED = re.compile(r"^ESCALATION_ACK [0-9a-f]+\s*$", re.M)
 

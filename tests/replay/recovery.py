@@ -244,7 +244,7 @@ def restart_turn(rp, s, cuts: Cuts) -> None:
         s.read(m.group(1), label="wake Read restart.md")  # the procedure below is that file's text
     cmds = {}
     for b in cmdtext.blocks(o.text, "Mandatory procedure", "text"):
-        m = re.search(r"restart-subagents\.py\"?\s+(\w+)", b.text)  # the venv form, or the quoted CLAUDE_HOME channel
+        m = re.search(r"restart-subagents\.py\"?\s+(\w+)", b.text)  # P2 quotes the channel-spelled path
         if m:
             cmds[m.group(1)] = b.text.strip()
 

@@ -179,7 +179,7 @@ CMDEOF
 
 It prints what the hook printed at this command's start, found through this session's bookmark (`$CLAUDE_CODE_SESSION_ID`); when the hook recorded no start of this command, it starts the cycle there exactly as the hook does, under a task id of its own (ids, registry, requirement document and flags). Never mint an id, pick a registry by name or age, or write a registry, requirement or flag file yourself.
 
-`$REGISTRY_DIR` below stands for `<PROJECT_ROOT>/.claude/dev-registry/$DEV_SESSION_ID`.
+`$REGISTRY_DIR` below stands for `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/dev-registry/$DEV_SESSION_ID`.
 
 Every Agent launch prompt MUST begin with a `FIRST ACTION` line instructing the subagent to `Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/<agent>.json` (`$REGISTRY_DIR/<agent>.json`) before any other tool call. Without that Read, the enforcement hook will fail open for that subagent.
 
@@ -373,7 +373,7 @@ If dev changed L1 when spec called for L3, treat as failed implementation.
 
 **Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
 
-Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/score-inject.sh" --agent ba` and capture stdout into a variable `BA_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the BA dispatch — i.e. right between "You are the BA subagent." and the "Requirement:" / task body. The injection shows the rank+range (NOT exact score) and last 3 events.
+Run `bash "<HARNESS_ROOT>/scripts/score-inject.sh" --agent ba` and capture stdout into a variable `BA_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the BA dispatch — i.e. right between "You are the BA subagent." and the "Requirement:" / task body. The injection shows the rank+range (NOT exact score) and last 3 events.
 
 **Use Task tool to invoke BA subagent for requirements analysis and context building**:
 
@@ -712,7 +712,7 @@ After test-writer completes (or is skipped), the manifest path is passed onward 
 
 **Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
 
-Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/score-inject.sh" --agent dev` and capture stdout into a variable `DEV_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the Dev dispatch.
+Run `bash "<HARNESS_ROOT>/scripts/score-inject.sh" --agent dev` and capture stdout into a variable `DEV_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the Dev dispatch.
 
 **Pre-dispatch baseline capture** (run BEFORE invoking the dev subagent):
 
@@ -794,7 +794,7 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 
 **Pre-dispatch (Mascot scoring injection, spec-20260518-225715 §5.1)**:
 
-Run `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/score-inject.sh" --agent qa` and capture stdout into a variable `QA_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the QA dispatch.
+Run `bash "<HARNESS_ROOT>/scripts/score-inject.sh" --agent qa` and capture stdout into a variable `QA_SCORE_HEADER`. Per spec 5.1 line 113, this injection text is inserted AFTER the role declaration and BEFORE the task instructions for the QA dispatch.
 
 **Use Task tool to invoke QA subagent with file paths only**:
 
@@ -853,7 +853,7 @@ This post-decision-tree pass applies the canonical score-update events for this 
 
 After the verdict is known, apply score-update events based on QA outcome and iteration count:
 
-- First-round PASS (iteration 0 + qa.status=pass) → `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/score-update.sh" --agent dev --event qa_first_pass --note "<task_id>"` AND `--agent ba --event qa_first_pass`. (dev 0, ba 0, qa 0 — Path A rebalance task 20260524-205206 M1; per-iteration nudge collapsed into close events.)
+- First-round PASS (iteration 0 + qa.status=pass) → `bash "<HARNESS_ROOT>/scripts/score-update.sh" --agent dev --event qa_first_pass --note "<task_id>"` AND `--agent ba --event qa_first_pass`. (dev 0, ba 0, qa 0 — Path A rebalance task 20260524-205206 M1; per-iteration nudge collapsed into close events.)
 - Second-or-later-round PASS (iteration ≥1 + qa.status=pass) → `--agent dev --event qa_second_pass --note "<task_id>"`. (dev 0 — Path A rebalance task 20260524-205206 M1.)
 - FAIL (qa.status=fail) — read `qa.failures[].primary_cause` to attribute the rejection:
   - Any failure with `primary_cause = "dev_implementation"` → `score-update.sh --agent dev --event qa_reject_dev --note "<task_id>"`. (dev -12.)
@@ -877,7 +877,7 @@ Each score-update call is independent; failures are non-blocking (a failed score
 ```
 
 ```bash
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/aggregate-permissions.py" docs/dev/qa-report-<timestamp>.json | bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json
+python3 "<HARNESS_ROOT>/scripts/aggregate-permissions.py" docs/dev/qa-report-<timestamp>.json | bash "<HARNESS_ROOT>/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json
 ```
 
 The aggregator reads the validated list from the QA report; the applier merges each entry into `.permissions.<section>` (allow/ask/deny), skipping patterns already present. A missing `.claude/settings.json` is an empty object to the merge, so the applier creates it when it adds an entry; a file it cannot parse fails the merge (non-zero exit) and stays unchanged.

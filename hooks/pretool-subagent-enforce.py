@@ -140,6 +140,9 @@ def _extract_agent_fields(stdin_data: dict) -> tuple[str, str, str]:
     ti = stdin_data.get('tool_input', {}) or {}
     role = (ti.get('subagent_type') or '').strip().lower()
     prompt = ti.get('prompt', '') if isinstance(ti, dict) else ''
+    # The mode the prompt carries, with no PM default: whether a step's mode binds is the text the
+    # session loaded (exploration_calls), so a base-text Step 2 PM dispatch passes through that text
+    # and a dispatch of a text that sets PM_MODE: PLAN is refused without it (P2 A15).
     mode = contract_runtime.detect_mode(prompt)
     pipeline_id = _resolve_pipeline_id(ti, prompt)
     return role, mode, pipeline_id

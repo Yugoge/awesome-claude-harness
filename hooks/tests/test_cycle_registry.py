@@ -125,8 +125,7 @@ def test_start_arms_the_registry_and_names_the_task_id(env, command, prefix):
     # no role sentinel at the start: each is created when its dispatch reads it
     assert not [p for p in registry.glob("*.json") if not p.name.endswith("-enforce.json")]
     flags = sorted(p.name for p in registry.glob("*-enforce.json"))
-    # P4 R8: no artifact-contract-enforce.json (G2 reads no flag); P1c: no e2e-enforce.json
-    # (the E2E gate has no flag).
+    # P4 R8: no artifact-contract-enforce.json; P1c: the E2E gate has no flag.
     assert flags == ["codex-enforce.json"]
     for flag in flags:
         data = json.loads((registry / flag).read_text())

@@ -204,3 +204,30 @@ def test_a_pretool_input_rewrite_is_what_the_tool_runs(tmp_path, kit):
         uses = [c for r in map(json.loads, fh) for c in (r.get("message") or {}).get("content") or []
                 if isinstance(c, dict) and c.get("type") == "tool_use"]
     assert uses[-1]["input"]["command"] == "echo original > original.txt"
+
+
+def test_the_orchestrator_gate_count_is_a_run_counter():
+    """The gate's "(n/1)" counts the turn's earlier calls of the tool: the overnight driver's kept
+    comparison reads it as a run counter, and still needs the same hook, step, tool and limit."""
+    gate = "hooks/pretool-orchestrator-gate.py"
+    step = "C1 Step 5 Write spec-pipeline-1"
+    line = "[Orchestrator Gate] BLOCKED: {} used consecutively beyond limit ({}/1)."
+    devs = Deviations([("*Write*", replay.Deviation(gate, "used consecutively beyond limit", "test"))])
+
+    class Rp:
+        @staticmethod
+        def norm_text(s):
+            return s
+
+    kept = NormKeptOnly(devs, [[gate, step, line.format("Write", 3)]], Rp())
+    d, = kept.at(step)
+    assert d.covers(gate, "", line.format("Write", 2))                      # another count: kept
+    assert not d.covers(gate, "", line.format("Edit", 2))                   # another tool: new
+    assert not d.covers(gate, "", line.format("Write", 2).replace("/1)", "/2)"))   # another limit: new
+    other, = kept.at("C1 Step 19 Write cycle log")
+    assert not other.covers(gate, "", line.format("Write", 3))              # another step: new
+    # every other hook's line is compared as recorded
+    hook = "hooks/refuse.py"
+    plain = NormKeptOnly(Deviations([("*Write*", replay.Deviation(hook, "beyond", "t"))]),
+                         [[hook, step, line.format("Write", 3)]], Rp())
+    assert not plain.at(step)[0].covers(hook, "", line.format("Write", 2))

@@ -212,10 +212,10 @@ def _ended(night, summary=True):
     start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 7200))
     (night.project / ".claude" / f"overnight-state-{night.sid}.json").write_text(json.dumps(
         {"session_id": night.sid, "start_time": start, "end_time": past, "current_phase": "exploring"}))
-    if summary:
-        retro = night.project / "docs" / "dev" / "overnight" / night.sid / "retro-report-cycle1.json"
-        retro.parent.mkdir(parents=True, exist_ok=True)
-        retro.write_text("{}")
+    if summary:  # the closeout P2's time-lock reads (lib/overnight closeout_gaps): retro and summary
+        retro = night.project / "docs" / "dev" / "overnight" / night.sid
+        retro.mkdir(parents=True, exist_ok=True)
+        (retro / "retro-report-cycle1.json").write_text("{}\n")
         (night.project / "docs" / "dev" / "overnight-summary-2099-01-01.md").write_text("# Summary\n")
 
 

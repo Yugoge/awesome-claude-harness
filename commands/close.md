@@ -1,5 +1,5 @@
 ---
-description: Close the current dev cycle (agent infers task-id from conversation). Step 0 resolves the cycle's disposition and completes an unfinished cycle; QA evaluates the Workflow Integrity bullets and returns CLOSE YES; Step 4 asks the user to rate the cycle. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Pass --auto to close every close_pending parent (see `--auto mode` below). --force is accepted and ignored.
+description: Close the current dev cycle (agent infers task-id from conversation). Step 0 resolves the cycle's disposition and completes an unfinished cycle; QA evaluates the Workflow Integrity bullets and returns CLOSE YES; Step 3b asks the user to rate the cycle. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Pass --auto to close every close_pending parent (see `--auto mode` below). --force is accepted and ignored.
 argument-hint: "[--codex | --auto | --late-repair] [<task-id>|<path>]"
 disable-model-invocation: true
 ---
@@ -78,9 +78,9 @@ A deliberately-invoked, never-automatic route: without `--late-repair`, nothing 
 - With `LATE_REPAIR=true`, Step 0 first runs `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/late-repair-controller.py" init --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>"` once. It re-derives `late_repair_eligible` from the resolver's own output (this section never recomputes it) and:
   - **declines** (`outcome: refuse`, reason `not a beyond-QA gap; use R1's route`; zero run records, zero dispatch) when the chain is not late-repair eligible. That is no verdict: record the reason, set `LATE_REPAIR=false` and run Step 0's disposition call (the ordinary route);
   - otherwise **creates or reuses the controller-owned run record** (`docs/dev/late-repair-run-<task-id>.json`: `repair_run_id`, the live eligibility snapshot, pre-route file hashes, `original_cycle_at`, `repair_started_at`) before any dispatch.
-- On an eligible chain, dispatch BA, then Dev, then QA against the CURRENT state of the work (a measured no-change Dev result is acceptable; being skipped is not). After each stage completes, run `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/late-repair-controller.py" record-stage --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>" --stage <ba|dev|qa> --report-path <path> --repair-run-id <id>`: it recomputes the artifact's hash from its bytes and records it in the run record (it writes nothing into the artifact). Stage order (ba → dev → qa) is enforced; an out-of-order call, or a second call for the dispatch already recorded, is refused. A stage dispatched again to repair its report (here or at `/commit`) is recorded again the same way when it returns; the dev report recorded again clears finalize's outcome, so the next check names finalize's effective report and Step 0's finalize runs again.
+- On an eligible chain, dispatch BA, then Dev, then QA against the CURRENT state of the work (a measured no-change Dev result is acceptable; being skipped is not). After each stage completes, run `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/late-repair-controller.py" record-stage --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>" --stage <ba|dev|qa> --report-path <path> --repair-run-id <id>`: it records the stage, its report's path and the dispatch that declared it in the run record; it reads and writes nothing in the artifact, which G2 checked at its producer's stop. Stage order (ba → dev → qa) is enforced; an out-of-order call, or a second call for the dispatch already recorded, is refused. A stage dispatched again to repair its report (here or at `/commit`) is recorded again the same way when it returns; the dev report recorded again clears finalize's outcome, so Step 0's finalize runs again.
 - After the three stages, Step 0 itself (the main agent's own step, whose todo item under `--late-repair` declares the effective report) runs `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/late-repair-controller.py" finalize --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>" --repair-run-id <id>`: drift detection over each declared file's recorded provenance, then a non-destructive `docs/dev/dev-report-<task-id>.effective.json` written afresh on every run (never overwriting the dev-report) when reconcilable, or a refusal when not; it checks the file it wrote before recording its outcome and path. `finalized_pending_verification` is provisional.
-- Only `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/late-repair-controller.py" verify-disclosure --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>"` returning `outcome: admitted` makes the chain eligible toward `/commit` (which runs the same verification through `resolve-effective-report`). It compares each recorded stage report with the run record's path and hash; each refusal names the artifact's `path`. A chain lawful on this route needs a run record created while the resolver reported the eligible shape, never a label added afterwards.
+- Only `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/late-repair-controller.py" verify-disclosure --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>"` returning `outcome: admitted` makes the chain eligible toward `/commit` (which runs the same verification through `resolve-effective-report`). It admits the run once finalize has recorded its outcome and compares no stage report: no matching run record, or no outcome finalize recorded, is refused, naming the run record's `path`. A chain lawful on this route needs a run record created while the resolver reported the eligible shape, never a label added afterwards.
 - `admitted`: run Step 0's disposition call and go on as Step 0 says, as the ordinary route does: its `CHAIN=` line binds `ARTIFACT_CHAIN`, the data Steps 1-3 use, and `chain_pass` goes to Step 1. A refusal of `verify-disclosure` or `finalize` (or unreconcilable drift) names an artifact: route it (Routes; finalize's own step runs again under the run record's `repair_run_id`), then run `verify-disclosure` again. The attempt stays on this route until admitted; it never reports a negative verdict.
 
 ### Step 0: Resolve the disposition; complete the cycle when incomplete
@@ -176,8 +176,8 @@ Input artifacts (read them first):
   qa_report, plus canonical_dev_report and completion; never invent a parent
   ticket/context/QA-report>
 - do-report: <do-report-<ts>.json for /do work, with dev-report-<ts>.json when dev wrote one, otherwise omit>
-- Completed repairs: <one line per repair routing completed in this /close (Step 0, a
-  preflight, an earlier round), in the `## Disclosures` format; [] when none>
+- Completed repairs: <one line per repair Routes completed in this /close (Step 0, an
+  earlier round), in the `## Disclosures` format; [] when none>
 
 Treat the `lanes[]` array as a lane matrix for one parent close decision, not as
 a bundled implementation-verification prompt. In fan-out mode read every row and
@@ -315,7 +315,7 @@ Overwrite policy: if `docs/dev/close-report-<task-id>.md` already exists with a 
   (activates the venv first). The helper performs an atomic, verified append and never mutates a byte of the file's existing content — see its own module docstring for the full read-append-readback-verification and atomicity design. Branch explicitly on its exit code:
   - **exit 0**: stdout is one line of JSON `{"status":"ok","report_path":...,"verdict_line":...}` — validate `status == "ok"`, then use `verdict_line` (NOT the raw JSON) as QA's own Return-value line.
   - **exit non-zero**: stdout is exactly the sentinel line below; propagate that exact line as QA's own Return-value output. Any other stdout shape (missing/malformed JSON on exit 0, or a non-sentinel line on exit non-zero) is a bug in the invocation itself — treat it as a verification failure and fail closed rather than guessing a verdict.
-  Such a failure is NEVER a basis for falling back to treating the prior closure's verdict as authoritative for this new attempt: print the single non-`CLOSE:`-prefixed line `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` as this attempt's not-landed signal; the pre-existing report's prior verdict is never reused as this attempt's result, and `/close` runs no Step 3 or Step 4 for it. A defective section text is a finding on `docs/dev/close-report-<task-id>.md`: this QA dispatch runs again (Routes) and the next round appends afresh. A cause in the environment that persists (no space left, a read-only filesystem) is one owner question naming it (header `Append`), whose options are the remedies for that cause, each followed by the next round.
+  Such a failure is NEVER a basis for falling back to treating the prior closure's verdict as authoritative for this new attempt: print the single non-`CLOSE:`-prefixed line `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` as this attempt's not-landed signal; the pre-existing report's prior verdict is never reused as this attempt's result, and `/close` runs no Step 3 or Step 3b for it. A defective section text is a finding on `docs/dev/close-report-<task-id>.md`: this QA dispatch runs again (Routes) and the next round appends afresh. A cause in the environment that persists (no space left, a read-only filesystem) is one owner question naming it (header `Append`), whose options are the remedies for that cause, each followed by the next round.
 
 Return value: print to stdout, as the final line of your response, the verdict line your verdict branch names — a landed `CLOSE: YES` form, or the round-open line `CLOSE_FINDINGS: <n> items` (NON-LANDING: findings are open and routed; nothing is granted); your obligation's `terminal_line_regex` declares the legal set — or the `CLOSE_REPORT_APPEND_ERROR: <read|append|readback|verification>: <error detail>` line of the Overwrite policy above. Every reader classifies the last non-empty line through `hooks/lib/close-verdict.py`: a landed form reads `yes`, the round-open line `no`, anything else `unknown` (fail closed).
 ```
@@ -325,11 +325,11 @@ Return value: print to stdout, as the final line of your response, the verdict l
 Take the final line QA returned and echo it in the orchestrator's text message to the user. The close-report itself is written by QA inside Step 2; this step echoes it and makes sure `docs/dev/close-report-<task-id>.md` exists.
 
 - **Round-open** (`CLOSE_FINDINGS: <n> items`, or a `CLOSE_REPORT_APPEND_ERROR:` line): route each finding (Routes), run Step 0's call again, then a fresh close-QA round (Step 2). Nothing below runs for a round-open echo.
-- **Landed** (`CLOSE: YES*`, any suffix): the Session Summary, the next step, then Step 4.
+- **Landed** (`CLOSE: YES*`, any suffix): the Session Summary, the next step, then Step 3b.
 
 **Two distinct final-line contracts — DO NOT confuse**:
 - **Close-report FILE** (`docs/dev/close-report-<task-id>.md`): the LAST non-empty line of the FILE must be EXACTLY the verdict line Step 2's Return value names. This is the runtime-parser contract consumed by `hooks/lib/close-verdict.py` and `/commit`'s admission check, enforced INSIDE the file QA wrote in Step 2; nothing in Step 3 alters it.
-- **Orchestrator's text message to the user**: the `CLOSE:` verdict echo, then (landed only) the Session Summary and the next step. Step 4's rating question follows it as a tool call, in no output channel of the close-report.
+- **Orchestrator's text message to the user**: the `CLOSE:` verdict echo, then (landed only) the Session Summary and the next step. Step 3b's rating question follows it as a tool call, in no output channel of the close-report.
 
 **Session Summary — landed verdict only, before the rating question**:
 
@@ -344,7 +344,7 @@ Take the final line QA returned and echo it in the orchestrator's text message t
 
 **Next step**: `/commit <task-id> -m "<real session summary>"`.
 
-### Step 4: Ask the user to rate each landed cycle
+### Step 3b: Ask the user to rate each landed cycle
 
 After a landed `CLOSE: YES*` (any suffix), its Session Summary and its next step, make one AskUserQuestion call:
 
@@ -365,11 +365,11 @@ After a landed `CLOSE: YES*` (any suffix), its Session Summary and its next step
 }
 ```
 
-The dialog adds its own Skip control and free-text box; no other option is added. The question is asked, not answered: Skip, no answer or a denial is a complete Step 4. The orchestrator does nothing with the answer — no parse, no echo, no score, log or script call; the PostToolUse hook that sees the call records it. One question per landed cycle (under `--auto`, one per landed parent, each with its own source). A round-open or `OPERATION_STALLED:` run asks nothing.
+The dialog adds its own Skip control and free-text box; no other option is added. The question is asked, not answered: Skip, no answer or a denial is a complete Step 3b. The orchestrator does nothing with the answer — no parse, no echo, no score, log or script call; the PostToolUse hook that sees the call records it. One question per landed cycle (under `--auto`, one per landed parent, each with its own source). A round-open or `OPERATION_STALLED:` run asks nothing.
 
 ## `--auto` mode: close every close_pending parent
 
-`--auto` closes every `close_pending` PARENT through the same unmodified Step 0 → Step 4 an explicit `/close <task-id>` runs. It is structurally distinct from the human-only `--bulk` of `commands/commit.md`: it walks every parent THROUGH the close gate, never around it.
+`--auto` closes every `close_pending` PARENT through the same unmodified Step 0 → Step 3b an explicit `/close <task-id>` runs. It is structurally distinct from the human-only `--bulk` of `commands/commit.md`: it walks every parent THROUGH the close gate, never around it.
 
 1. **Discover** the parents once, at the start (a parent discovered later is not added to the running batch):
 
@@ -377,13 +377,13 @@ The dialog adds its own Skip control and free-text box; no other option is added
    mapfile -t CLOSE_PENDING_PARENTS < <(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action close --project-dir "<PROJECT_ROOT>")
    ```
 
-   Each line's first word is a parent's task-id (sorted; lane rows and spec rows never appear); the rest of the line is not used here.
+   Each line's first word is a parent's task-id (sorted; lane rows and spec rows never appear); the rest of the line is not used here. A task with a gap no dispatch record or todo step owes is not listed (`/close <task-id>` takes it): its `<task-id>: skipped: <reason>` line is on stderr.
 
-2. **Walk the steps over the parents.** Each TodoStep runs for every parent, in list order, before it is marked completed: Step 0 completes each parent's cycle (`TASK_ID` bound to that parent as Task-id resolution binds a timestamp argument, a `/do` parent's `DO_REPORT` included, then its own disposition call), Step 1 dispatches each parent's inspectors, Step 2 runs each parent's close debate until it lands, Step 3 echoes each verdict with its Session Summary and next step, and Step 4 asks one rating question per landed parent. No two dispatches run at once; `codex_required` is shared by the batch.
+2. **Walk the steps over the parents.** Each TodoStep runs for every parent, in list order, before it is marked completed: Step 0 completes each parent's cycle (`TASK_ID` bound to that parent as Task-id resolution binds a timestamp argument, a `/do` parent's `DO_REPORT` included, then its own disposition call), Step 1 dispatches each parent's inspectors, Step 2 runs each parent's close debate until it lands, Step 3 echoes each verdict with its Session Summary and next step, and Step 3b asks one rating question per landed parent. No two dispatches run at once; `codex_required` is shared by the batch.
 
 3. **An owner decision** a parent meets — a hook rejection (CLAUDE.md Subagent Hook Discipline: the rejected operation is never retried, disguised or worked around) or a genuine choice — is one owner question naming the parent and the decision (header `Authorize` for a hook rejection: the rejected operation, the exact command the human may authorize, and declining it under Hook Discipline #4). The parent then goes on to its landed verdict; no parent is recorded and passed over.
 
-4. **Batch line**: after Step 3, one line per parent (`<task-id>: <its landed CLOSE: line>`).
+4. **Batch line**: after Step 3, one line per parent (`<task-id>: <its landed CLOSE: line>`), then each `skipped:` line of the discovery, verbatim.
 
 ## Constraints
 

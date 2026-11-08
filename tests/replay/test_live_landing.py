@@ -76,6 +76,10 @@ from tests.replay import hookrun, landing, suite
 TRANSITIONS = {"master": "2acc29b0c8149c32d8e424e58c6af55d073eac20",
                "p1b": "3f0b7a23ee9145c573678775dc67b0a230c228f4"}
 ENV = {"CLAUDE_OBLIGATION_STOPGATE": "block"}
+# P2 arms G1 and G3 beside P1b's STOPGATE, and the overnight guard's matcher gains AskUserQuestion (its
+# unattended deny); a landed replay loads the base's settings.json, which has neither.
+P2_ENV = {"CLAUDE_OBLIGATION_GATE": "block", "CLAUDE_OBLIGATION_BARRIER": "block"}
+P2_MATCHER = ("Write|Edit|MultiEdit|Bash", "Write|Edit|MultiEdit|Bash|AskUserQuestion")
 G2 = "hooks/subagentstop-artifact-contract-enforce.py"
 FORGED = "forged@agent:dev Write docs/dev/dev-report-*=dev.status:done,-dev.files_modified"
 

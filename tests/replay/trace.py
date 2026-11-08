@@ -19,7 +19,10 @@ pattern):
   directory the run created, the pid of the creating process or one of its
   ancestors replaced by <pid> and the random part a temp-name generator minted
   (an O_RDWR|O_EXCL create with mode 0600, a mkdir with mode 0700: mkstemp, mkdtemp,
-  mktemp) replaced by <rand>.
+  mktemp) replaced by <rand>. A name the harness's own code spells (a private
+  directory it creates with mode 0700 under a name of its own:
+  `.claude/session-resources`) and a replay id the driver registered are not a
+  generator's random part.
 
 Folding (row 19 rule 1): a file created in the run and renamed onto another
 path is a same-run temporary and its events count for the destination; a lock
@@ -227,12 +230,45 @@ def _index_tree(path: str, cwd: str | None) -> str | None:
     return cwd if base == "index" and cwd else None
 
 
-def _rand_name(base: str, window: norm.Window) -> str | None:
-    """A generator-minted basename with its random run (the last run of 6+ word characters) as <rand>."""
+def _rand_name(base: str, window: norm.Window, keep=()) -> str | None:
+    """A generator-minted basename with its random run (the last run of 6+ word characters) as <rand>;
+    a run inside one of the `keep` spans (a replay id the driver registered) is not random."""
     for m in reversed(list(re.finditer(r"[A-Za-z0-9_]{6,}", base))):
-        if not window.holds_ts(m.group(0)):
-            return base[:m.start()] + "<rand>" + base[m.end():]
+        if window.holds_ts(m.group(0)) or any(a < m.end() and m.start() < b for a, b in keep):
+            continue
+        return base[:m.start()] + "<rand>" + base[m.end():]
     return None
+
+
+class _CodeNames:
+    """Whether the harness's code (hooks/, scripts/ of the sandbox's harness copy) spells a name as a
+    whole token: a name code chooses is no temp-name generator's, whatever mode creates it."""
+
+    def __init__(self, root: str | None):
+        self.root, self._text = root, None
+        self._seen: dict[str, bool] = {}
+
+    def text(self) -> str:
+        if self._text is None:
+            parts = []
+            for top in ("hooks", "scripts"):
+                for dp, dns, fns in os.walk(os.path.join(self.root, top)) if self.root else ():
+                    dns[:] = [d for d in dns if d not in ("tests", "__pycache__")]
+                    for fn in sorted(fns):
+                        if fn.endswith((".py", ".sh")) or "." not in fn:
+                            try:
+                                with open(os.path.join(dp, fn), encoding="utf-8", errors="replace") as fh:
+                                    parts.append(fh.read())
+                            except OSError:
+                                pass
+            self._text = "\n".join(parts)
+        return self._text
+
+    def __contains__(self, name: str) -> bool:
+        if name not in self._seen:
+            rx = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(name) + r"(?![A-Za-z0-9_-])")
+            self._seen[name] = bool(self.root) and rx.search(self.text()) is not None
+        return self._seen[name]
 
 
 # ---------------------------------------------------------------- parse
@@ -260,7 +296,7 @@ class _Proc:
 
 
 class _Reducer:
-    def __init__(self, out_dir: str):
+    def __init__(self, out_dir: str, code_root: str | None = None):
         with open(os.path.join(out_dir, "ids.json")) as fh:
             meta = json.load(fh)
         lay = self.lay = meta["layout"]
@@ -294,6 +330,7 @@ class _Reducer:
         self.inst_of: dict[str, int] = {}
         self.insts = []     # {"path", "owner", "created", "end"}
         self.minted: dict[str, str] = {}
+        self.code_names = _CodeNames(code_root)
         self.dirs = {r.rstrip("/") for r in [lay["home"], lay["state"], lay["sb"]] + lay["temp_dirs"]}
         self.listed: dict[tuple, set] = {}  # (pid, fork) -> directories that process opened for listing
         self.indexed: dict[tuple, set] = {}  # (pid, fork) -> work trees whose git index that process read
@@ -367,7 +404,11 @@ class _Reducer:
         """Name parts the run minted, taken by value from the creating call: a temp-name
         generator's random run, and the pid of the creating process or of one of its ancestors."""
         base = os.path.basename(path)
-        new = (_rand_name(base, self.window) if temp else None) or base
+        if temp and base in self.code_names:
+            temp = False
+        keep = [m.span() for v in self.ids.values if len(v) >= 6
+                for m in re.finditer(r"(?<![0-9A-Za-z])%s(?![0-9A-Za-z])" % re.escape(v), base)] if temp else []
+        new = (_rand_name(base, self.window, keep) if temp else None) or base
         anc, pid = set(), p.pid
         while pid is not None and pid not in anc and len(anc) < 64:
             anc.add(pid)
@@ -623,10 +664,11 @@ class _Reducer:
         return out
 
 
-def parse(raw_path: str, out_dir: str) -> dict:
+def parse(raw_path: str, out_dir: str, code_root: str | None = None) -> dict:
     """Reduce `raw_path` using the run's out_dir files (ids.json, markers.jsonl, start-manifest.txt);
-    writes relations.tsv, relation-steps.tsv, outside-writes.txt and trace-stats.json there."""
-    r = _Reducer(out_dir)
+    writes relations.tsv, relation-steps.tsv, outside-writes.txt and trace-stats.json there.
+    `code_root`: the harness copy the replay ran, as this process sees it (the names its code spells)."""
+    r = _Reducer(out_dir, code_root)
     recs = list(_records(raw_path))
     for pid, name, _a, ret, _t, _start in recs:
         if name in _FORKS and ret > 0:

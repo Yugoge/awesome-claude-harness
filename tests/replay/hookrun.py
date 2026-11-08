@@ -16,9 +16,9 @@ characters, never cutting its first line), taken from the uncut output: the
 tail of a long refusal can be its echoed command alone, while the first line
 names the block (refusal_first). An allowing hook's hookSpecificOutput.updatedInput
 (a PreToolUse rewrite of the tool's input) is kept whole as "updated_input", for
-the same reason. What the hook receives and returns is the same. What a run that
-did not block hands the model is context(): a driver acting as the model reads
-that, never a hook's raw stdout.
+the same reason. What the hook receives and returns is the same.
+What a run that did not block hands the model is context(): a driver acting as the
+model reads that, never a hook's raw stdout.
 """
 from __future__ import annotations
 

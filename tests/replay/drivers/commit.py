@@ -57,9 +57,13 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
   after=dev|dev-command   the cycle committed (default dev; /do is drivers/do.py)
   variant=plain|route|append   the /close before it (drivers/close.py's variants)
   variant=auto            /dev, then `/close --auto`, then `/commit --auto`
-  variant=commit-route    /close lands, then the lane dev report is removed and /commit is typed in
-                          a later session: Step 3's call names the report, its owner is dispatched
-                          again, the same call re-run (acceptance 7's fourth case)
+  variant=commit-route    /close lands, then the lane dev report (a fan-out cycle's first lane's) is
+                          removed and /commit is typed in a later session: Step 3's call names the
+                          report, its owner is dispatched again, the same call re-run (acceptance 7's
+                          fourth case; F8c)
+  removed=lane|aggregate  with variant=commit-route and a fan-out cycle, the report removed after
+                          /close: the first lane's dev report (lane, the default; F8c) or the canonical
+                          aggregate (aggregate)
   variant=full            route, append and commit-route in one cycle: the lane QA report removed
                           after /dev, /close in a later session (Step 0's routing round, then a
                           close-QA finding on the product file, dev again, the appended round), the
@@ -87,8 +91,10 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
                           the plan from the report it names, the commit (P4 acceptance 14's landing)
   variant=late-repair-drift   the same with drivers/close.py's late-repair-drift route: finalize writes the
                           effective report, Step 5's state is verified and the plan comes from that report
-  cycle_variant=V         the /dev variant (drivers/dev.py): with variant=commit-route and a fan-out
-                          cycle (fanout), the report removed after /close is the canonical aggregate
+  variant=late-repair-qa  the late-repair case to CLOSE: YES, then the task's QA report removed and
+                          /commit typed in a later session (F8r): Step 3's call names the report, its
+                          QA dispatch runs again, the commit lands
+  cycle_variant=V         the /dev variant (drivers/dev.py; fanout runs the fan-out cycle)
   session=same|later      /close and /commit typed in the cycle's session or a later one
                           (default same for plain, later for every other variant)
 
@@ -164,6 +170,8 @@ DEVIATIONS = Deviations([
 ])
 
 STATUS_BEGIN, STATUS_END = "--- CHANGELOG-ANALYST-STATUS-BEGIN ---", "--- CHANGELOG-ANALYST-STATUS-END ---"
+# /commit's success outcomes (Step 7's commit_status, as the --auto walk counts them).
+COMMITTED = ("committed", "nothing_to_commit", "push_gate_reconciled", "nothing_to_commit_precommitted")
 GAP_RE = re.compile(r'^GAP artifact=("(?:[^"\\]|\\.)*"|\S+) problem=("(?:[^"\\]|\\.)*"|\S+): (.*) lane=(\S+)$')
 
 
@@ -355,18 +363,25 @@ class CommitRun:
         return bool(self.plan.get("repositories"))
 
     def attribution(self) -> None:
+        """The attribution slice's block; one that also prints the manifest's inputs is the call manifest()
+        reads them from."""
         o = self.o
-        self.run_text(o.block("Step 5", anchor="ATTRIBUTION_FILES=()"), self.label("Step 5 Bash attribution slice"),
-                      "Attribution-log slice", capture=("ATTRIBUTION_LOG",))
+        block = o.block("Step 5", anchor="ATTRIBUTION_FILES=()")
+        c = self.run_text(block, self.label("Step 5 Bash attribution slice"), "Attribution-log slice",
+                          capture=("ATTRIBUTION_LOG",))
+        self.snapshot = c if "status --porcelain" in block else None
 
     def manifest(self) -> None:
         o = self.o
-        repos = [e["repo_root"] for e in self.plan.get("repositories") or []]
-        cmd = (". ~/.claude/hooks/lib/harness_state_dir.sh\nharness_state_dir\n"
-               'echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"\n'
-               + "\n".join(f"echo '--- {r}'; git -C {shlex.quote(r)} status --porcelain=v1" for r in repos))
-        c = o.run(cmd, "State dir, session id and status per plan entry", self.label("Step 5 Bash manifest inputs"))
-        out = (c.response.get("stdout") or "").split("\n") if c.ok else []
+        c = getattr(self, "snapshot", None)
+        if c is None:  # a text whose attribution block prints no manifest input: the inputs in a call of their own
+            repos = [e["repo_root"] for e in self.plan.get("repositories") or []]
+            cmd = (". ~/.claude/hooks/lib/harness_state_dir.sh\nharness_state_dir\n"
+                   'echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"\n'
+                   + "\n".join(f"echo '--- {r}'; git -C {shlex.quote(r)} status --porcelain=v1" for r in repos))
+            c = o.run(cmd, "State dir, session id and status per plan entry", self.label("Step 5 Bash manifest inputs"))
+        # (the values the snapshot call kept follow its output as `declare -p` lines)
+        out = (c.response.get("stdout") or "").split("\ndeclare -")[0].split("\n") if c.ok else []
         state, sid = (out + ["", ""])[:2]
         files, cur = {}, None
         for line in out[2:]:
@@ -400,6 +415,10 @@ class CommitRun:
         o = self.o
         tpl = next(b.text for b in cmdtext.blocks(o.section("Step 7")) if "CONTROL_ROOT=<" in b.text)
         tpl = re.sub(r'<"([^"]*)" when BULK=false, else [^>]*>', lambda m: json.dumps(m.group(1).replace("$TASK_ID", self.tid)), tpl)
+        # The obligation's plan roots, where the text declares them: the plan's repo_root values in order.
+        roots = [e["repo_root"] for e in self.plan.get("repositories") or []]
+        tpl = re.sub(r"<the JSON array of REPOSITORY_PLAN\.repositories\[\]\.repo_root\b[^>]*>",
+                     lambda m: json.dumps(roots), tpl)
         values = {"CONTROL_ROOT": o.values.get("CONTROL_ROOT", ""), "NESTED_REPO": o.values.get("NESTED_REPO", ""),
                   "REPOSITORY_PLAN": json.dumps(self.plan), "ARTIFACT_CHAIN": json.dumps(self.chain) if self.chain else "",
                   "ATTRIBUTION_LOG": o.values.get("ATTRIBUTION_LOG", ""), "TASK_ID": self.tid, "BULK": "false",
@@ -606,13 +625,18 @@ class CommitRun:
                       if "commit -F" in b.text)
         reads = next(b.text for b in cmdtext.blocks(self.analyst_text, "Phase 8: Execute commit", "bash")
                      if "COMMIT_SHA=" in b.text)
+        # After each group's commit, the shared-index sync as Phase 3's text spells it (inline code).
+        sync = re.search(r"`(python3 [^`]*session-index\.py\"? sync-shared [^`]*)`",
+                         cmdtext.section(self.analyst_text, "Phase 3: Serialization"))
+        sync = " ".join(sync.group(1).split()) + "\n" if sync else ""
         staged = "\n".join(cands)
         script = (f"GIT_ROOT={q}\n" + lock.rstrip("\n") + "\n"
                   f"git -C \"${{GIT_ROOT}}\" diff --cached --name-only\n"
                   + "\n".join(f'git -C "${{GIT_ROOT}}" add -- {shlex.quote(p)}' for p in cands) + "\n"
                   f"ACTUALLY_STAGED_PATHS=\"$(git -C \"${{GIT_ROOT}}\" diff --cached --name-only)\"\n"
-                  + commit.replace(tpl, msgfile).replace("<msgfile>", msgfile).replace("${MSGFILE}", msgfile).rstrip("\n") + "\n"
-                  + reads.rstrip("\n") + "\n"
+                  + commit.replace(tpl, msgfile).replace("<msgfile>", msgfile).replace("${MSGFILE}", msgfile)
+                  .replace("<GIT_ROOT>", root).rstrip("\n") + "\n"
+                  + reads.rstrip("\n") + "\n" + sync
                   + 'printf \'{"repo_root": "%s", "branch": "%s", "commit_sha": "%s"}\\n\' "$GIT_ROOT" "$BRANCH" "$COMMIT_SHA"\n')
         lab = f"{sub.role} Bash stage and commit {order}"
         devs = [d for d in self.devs.at(lab) if d is not PRIVILEGE_DEVIATION[1]] if self.refuse_commit else None
@@ -835,6 +859,7 @@ class CommitRun:
                             tokens.append(f)
                     except (OSError, ValueError):
                         pass
+        self.tokens = tokens
         closedrv.fact(self.rp, "commit", {"commit_status": cs, "landed": [(r, s) for r, s in self.landed],
                                           "push_gate_tokens": tokens,
                                           "subject": self.git_log(), "task_id_trailer": self.trailer()})
@@ -862,8 +887,27 @@ class CommitRun:
         self.o.slash(self.tid if typed is None else typed, label=self.label("typed"))
         out = self.walk()
         text = self.stalled or f"/commit {self.tid}: {out}"
-        self.o.s.stop(text, label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        ev = self.o.s.stop(text, label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        self.rp.terminal("commit", out in COMMITTED and self.clean(), ev, task=self.tid, outcome=out)
         return out
+
+    def clean(self) -> bool:
+        """The terminal's git half (P1c's suite): each landed commit on its repository's HEAD, a push-gate token
+        for it, and none of its paths left in `git status --porcelain`."""
+        import subprocess
+        def git(root, *args):
+            return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+        if not self.landed or len(getattr(self, "tokens", [])) < len(self.landed):
+            return False
+        with self.rp.acting("driver"):
+            for root, sha in self.landed:
+                if git(root, "merge-base", "--is-ancestor", sha, "HEAD").returncode:
+                    return False
+                paths = set(git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", sha).stdout.split())
+                left = {l[3:].split(" -> ")[-1] for l in git(root, "status", "--porcelain").stdout.splitlines()}
+                if paths & left:
+                    return False
+        return True
 
     def lifecycle_row(self) -> None:
         """Driver diagnostics, no agent call: the task's lifecycle row when discovery listed no parent."""
@@ -901,7 +945,9 @@ class CommitRun:
             self.lifecycle_row()
         o.s.say("\n".join(f"{t}: {r}" for t, r in results) or "no commit_pending parent")
         self.outcome = "; ".join(f"{t}: {r}" for t, r in results)
-        o.s.stop(f"/commit --auto: {self.outcome}", label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        ev = o.s.stop(f"/commit --auto: {self.outcome}", label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+        self.rp.terminal("commit", bool(results) and all(r in COMMITTED for _, r in results) and self.clean(), ev,
+                         outcome=self.outcome)
         return results
 
     # ------------------------------------------------------------ the waits
@@ -945,7 +991,7 @@ def fanout_dev(rp):
 
 
 VARIANT_NAMES = ("plain", "route", "append", "auto", "commit-route", "full", "unclosed", "laneqa", "aggregate",
-                 "reject", "waits", "late-repair", "late-repair-drift")
+                 "reject", "waits", "late-repair", "late-repair-drift", "late-repair-qa")
 
 
 def run(rp) -> None:
@@ -963,13 +1009,14 @@ def run(rp) -> None:
         producer, tid, s, cyc = fanout_dev(rp)
     else:
         producer, tid, s, cyc = closedrv.dev_cycle(rp, after)
-    if variant in ("route", "full", "late-repair", "late-repair-drift"):
-        closedrv.remove(rp, [p for p in closedrv.removed_after_cycle("route" if variant == "full" else variant, tid)
+    if variant in ("route", "full", "late-repair", "late-repair-drift", "late-repair-qa"):
+        removed = {"full": "route", "late-repair-qa": "late-repair"}.get(variant, variant)
+        closedrv.remove(rp, [p for p in closedrv.removed_after_cycle(removed, cyc)
                              if os.path.exists(os.path.join(rp.layout.project, p))])
     session = rp.later_session(s) if session_kind == "later" else s
     if variant not in ("unclosed", "laneqa", "waits"):
         close_variant = {"commit-route": "plain", "full": "append", "aggregate": "plain",
-                         "reject": "plain"}.get(variant, variant)
+                         "reject": "plain", "late-repair-qa": "late-repair"}.get(variant, variant)
         cr = closedrv.CloseRun(rp, session, tid, producer=producer, variant=close_variant, auto=variant == "auto")
         if variant == "auto":
             cr.run_auto()
@@ -977,13 +1024,17 @@ def run(rp) -> None:
             return
         cr.run()
     if variant in ("commit-route", "full"):
-        # The lane dev report (in a fan-out cycle the canonical aggregate) removed after /close landed
-        # (acceptance 7): Step 3's call names it.
-        closedrv.remove(rp, [f"docs/dev/dev-report-{tid}.json"])
+        # The lane dev report (a fan-out cycle's first lane's; with removed=aggregate its canonical aggregate)
+        # removed after /close landed (acceptance 7, F8c): Step 3's call names it.
+        closedrv.remove(rp, [f"docs/dev/dev-report-{tid}.json" if rp.args.get("removed") == "aggregate"
+                             else closedrv.lane_report(cyc, "dev")])
+    if variant == "late-repair-qa":
+        # The task's QA report removed after /close --late-repair landed (acceptance 7, F8r).
+        closedrv.remove(rp, [f"docs/dev/qa-report-{tid}.json"])
     if variant == "aggregate":
         closedrv.remove(rp, [f"docs/dev/dev-report-{tid}.json"])  # the canonical aggregate
-    if (variant in ("commit-route", "full", "aggregate", "waits", "late-repair", "late-repair-drift")
-            and session_kind == "later"):
+    if (variant in ("commit-route", "full", "aggregate", "waits", "late-repair", "late-repair-drift",
+                    "late-repair-qa") and session_kind == "later"):
         session = rp.later_session(session)
     run_ = CommitRun(rp, session, tid, producer=producer, variant=variant)
     if variant == "waits":

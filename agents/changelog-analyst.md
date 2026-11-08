@@ -1954,7 +1954,8 @@ No other content may appear between the delimiters.
 
 Consumers locate the block by scanning for the exact string
 `--- CHANGELOG-ANALYST-STATUS-BEGIN ---`. The block is the response block your
-dispatch's obligation declares: if it is absent or fails `changelog-status.v1`,
+dispatch's obligation declares: if it is absent, fails `changelog-status.v1`, or
+its `repository_results[]` do not name the obligation's `repo_roots` in `order`,
 the producer-stop gate (G2) returns your stop to you, naming the failing check,
 before `/commit` reads it.
 

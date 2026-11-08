@@ -10,7 +10,7 @@ Snapshot current progress to a `refs/checkpoints/<branch>` safety ref — the br
 ## Usage
 
 ```bash
-bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/checkpoint.sh"
+bash "<HARNESS_ROOT>/hooks/checkpoint.sh"
 ```
 
 This command will:
@@ -36,7 +36,7 @@ This command will:
 
 ```bash
 # Quick checkpoint
-bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/checkpoint.sh"
+bash "<HARNESS_ROOT>/hooks/checkpoint.sh"
 
 # With custom message
 GIT_CHECKPOINT_MESSAGE="Before refactoring" bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/checkpoint.sh"

@@ -475,6 +475,11 @@ def _validate_artifact_entry(
             return Rejection(
                 reason="unknown_enum_value", field=f"{label}.format", detail=repr(fmt)
             )
+        roots = entry.get("repo_roots")
+        if roots is not None and (
+            not isinstance(roots, list) or any(not isinstance(r, str) or not r for r in roots)
+        ):
+            return Rejection(reason="bad_repo_roots", field=f"{label}.repo_roots")
     return None
 
 
@@ -1283,8 +1288,10 @@ def _canonical_step(family: str, path: str, spans: list[tuple[str, str]],
     a step that declares it itself (the main agent's own, as /close's
     late-repair Step 0 declares finalize's effective report), else the step
     whose dispatch template declares it (the step under whose heading the
-    template sits, else the step whose subagent_call names the template's
-    role). Each step is returned with what its entry names."""
+    template sits, when the template is in that command's own file, else the
+    step whose subagent_call names the template's role: a label never binds
+    across files, where "Step 4" may be another command's unrelated step).
+    Each step is returned with what its entry names."""
     todo_canonical = _lib_module("todo_canonical")
     for command, args in spans:
         steps = todo_canonical.run_todo_script(command, args) or []
@@ -1301,7 +1308,8 @@ def _canonical_step(family: str, path: str, spans: list[tuple[str, str]],
                                                  path, family)
                     if values is None:
                         continue
-                    owner = next((s for s in steps if _step_label(s) == template["step"]), None)
+                    owner = next((s for s in steps if source == command
+                                  and _step_label(s) == template["step"]), None)
                     call = owner.get("subagent_call") if owner else None
                     if owner is None or (call and call.get("subagent_type") != template["role"]):
                         owner = next((s for s in steps if (s.get("subagent_call") or {}).get("subagent_type")

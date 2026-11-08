@@ -36,7 +36,7 @@ dot-claude/
 │   ├── `allow.md` - Single-use break-glass for a declared grant-aware safety hook; it never overrides a settings DENY. Forms — /allow <command...> (literal, upgraded to regex only when it contains true regex metacharacters), /allow --tool <literal> (always literal, regex off), or /allow re:<anchored-regex> (explicit regex, must be anchored). Bare /allow with no argument is the owner-authorized match-all selector, still single-use and TTL-bounded; every explicit selector is refuse-by-default when no narrow command is derivable. A literal selector matches as a POSITIONAL PREFIX of the argument tokens, not a substring. When the head token is git, repo-retargeting global options (-C, --git-dir, --work-tree, --namespace) are skipped so a short selector reaches the canonical `git -C <dir> <verb>` shape; -c / --config-env / --exec-path are never skipped and fail closed. Trailing tokens become a comment the grant notice echoes. Sentinel TTL 300s, consumed on any terminal result.
 │   ├── `checkpoint.md` - Checkpoint Command
 │   ├── `clean.md` - Aggressive project cleanup - normalize docs structure, archive everything, delete one-time scripts/tests. Pass --codex to enable adversarial codex consultation on cleanliness-inspector and style-inspector; default is self-review only.
-│   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). Step 0 resolves the cycle's disposition and completes an unfinished cycle; QA evaluates the Workflow Integrity bullets and returns CLOSE YES; Step 4 asks the user to rate the cycle. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Pass --auto to close every close_pending parent (see `--auto mode` below). --force is accepted and ignored.
+│   ├── `close.md` - Close the current dev cycle (agent infers task-id from conversation). Step 0 resolves the cycle's disposition and completes an unfinished cycle; QA evaluates the Workflow Integrity bullets and returns CLOSE YES; Step 3b asks the user to rate the cycle. Pass --codex to enable multi-round QA-codex debate; default is QA-only single-round assessment. Pass --auto to close every close_pending parent (see `--auto mode` below). --force is accepted and ignored.
 │   ├── `codex.md` - Delegate a task to OpenAI Codex CLI (gpt-5.6-sol, xhigh reasoning) for a second opinion or parallel coding
 │   ├── `commit.md` - Commit session changes via changelog-analyst subagent
 │   ├── `dev-command.md` - Enhanced development workflow with BA subagent delegation, command development best practices, Three-Party Architecture, and comprehensive automation patterns
@@ -121,7 +121,7 @@ dot-claude/
 │   │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   │   ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
-│   │   ├── `close_rating.py` - Stop gate imports. The /close Step 4 question (source ``close-rating:<task-id>``) is required ask...
+│   │   ├── `close_rating.py` - Stop gate imports. The /close Step 3b question (source ``close-rating:<task-id>``) is required ask...
 │   │   ├── `closeout.py` - CLI:
 │   │   ├── `command_span.py` - The span is the records after the latest human-typed harness command outside
 │   │   ├── `commit_journal.py` - WHY THIS EXISTS

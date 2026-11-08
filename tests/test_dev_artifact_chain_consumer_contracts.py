@@ -187,7 +187,7 @@ def test_spec_update_consumes_lane_matrix_without_fake_parent_context() -> None:
     ]
     flat = _squash(section)
 
-    assert FIXED_ENTRYPOINT_RUN in section
+    assert FIXED_ENTRYPOINT_RUN.replace("${CLAUDE_HOME:-$HOME/.claude}", "<HARNESS_ROOT>") in section
     assert "`artifact_paths`, `report_paths`, `qa_inputs`, and" in section
     assert "`lanes[]`" in section
     assert "every lane ticket/context/dev/QA" in flat

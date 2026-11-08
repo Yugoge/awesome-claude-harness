@@ -251,9 +251,45 @@ def _wire_ledger_judgment(report: dict, project_dir: str, task_id: str, deadline
     return findings
 
 
+AGGREGATE_CHECK = Path(__file__).resolve().parent / "pretool-aggregate-check.py"
+
+
+def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
+    """C5 for G3's canonical_missing: the canonical aggregate's one producer,
+    the lane-completeness watch, runs on a lane report's Write or Edit. While
+    G3's own rule (pretool-aggregate-check.py _find_violations) finds the
+    canonical missing, the lane whose report is its fan-out's newest is
+    returned at its own stop: that report reached disk another way (a shell
+    redirection), and its Edit runs the producer. A sibling's later report is
+    the sibling's own (its watch may still be running)."""
+    try:
+        spec = importlib.util.spec_from_file_location("pretool_aggregate_check", AGGREGATE_CHECK)
+        g3 = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(g3)
+        dev_dir = Path(project_dir) / "docs" / "dev"
+        lane_reports, canonicals = g3._scan_dev_dir(dev_dir)
+        own = (Path(project_dir) / report_rel).resolve()
+        findings = []
+        for family, reports in lane_reports.items():
+            stamps = {path.resolve(): path.stat().st_mtime_ns for path in reports.values()}
+            if stamps.get(own) != max(stamps.values()):
+                continue
+            for code, path, problem, *_ in g3._find_violations({family: reports}, canonicals, dev_dir, task_id):
+                if code == "canonical_missing":
+                    findings.append({"path": report_rel, "reason": code, "errors": [
+                        f"{os.path.relpath(path, project_dir)}: {problem}. Its producer, "
+                        "hooks/posttool-lane-completeness-watch.py, runs on a lane report's Write or Edit, "
+                        "and this report, the fan-out's newest, reached disk another way: Read it, save it "
+                        "again with Edit (its timestamp), then stop again."]})
+        return findings
+    except Exception:
+        return []  # a wire that cannot run judges nothing
+
+
 def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> list:
-    """The dev report's wires (ledger judgment and /commit's trial plan).
-    Returns findings. Another producer's artifact is never judged at this
+    """The dev report's wires (ledger judgment, /commit's trial plan and, for a
+    fan-out lane, the canonical aggregate its report completes). Returns
+    findings. Another producer's artifact is otherwise never judged at this
     stop: G3 decides on it at the next dispatch."""
     findings = []
     if ob.get("role") != "dev":
@@ -275,6 +311,8 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list) -> l
         findings += _wire_ledger_judgment(_read_json(report_full), project_dir, task_id, deadline)
         if not shard:
             findings += _wire_trial_plan(report_full, report_rel, project_dir, task_id)
+        else:
+            findings += _wire_canonical(project_dir, report_rel, task_id)
     return findings
 
 
@@ -300,8 +338,11 @@ def _spec_views_failure(project_dir: str, art: dict):
     """P1b row 8 (moved from stop-spec-coverage-enforce.py): a split's own
     properties at its producer's stop, `spec-verify.py --strict` on the declared
     views against the declared monolith (coverage 100%, pairwise overlap and
-    per-view uniqueness thresholds). A missing verifier checks nothing, as the
-    Stop hook it replaces did."""
+    per-view uniqueness thresholds) and, with --project-dir, its manifest of this
+    monolith, the monolith hash it records and the views it references, by the
+    resolver every /dev* consumer runs (P1b E4: /spec's finalize guard ran it after
+    this stop), but for the marker /spec writes after this stop. A missing verifier
+    checks nothing, as the Stop hook it replaces did."""
     verifier = SCRIPTS_DIR / "spec-verify" / "spec-verify.py"
     if not verifier.is_file():
         return None
@@ -310,19 +351,10 @@ def _spec_views_failure(project_dir: str, art: dict):
     if not monolith.is_file() or not views.is_dir():
         return {"path": art["path"], "reason": "spec_views_missing",
                 "errors": [f"monolith {art['monolith']} or views directory {art['path']} does not exist"]}
-    # The split's own manifest and the views it references, by the predicates every /dev* consumer's
-    # resolver applies (resolve-spec-artifacts.py split_problem; P1b E4: /spec's finalize guard ran
-    # them in the orchestrator's call after this stop). A resolver that will not load checks nothing.
-    try:
-        problem = _load_script_module("resolve-spec-artifacts.py").split_problem(
-            str(views.parent), str(monolith.resolve()), project_dir)
-    except Exception:
-        problem = None
-    if problem:
-        return {"path": f"{art['path']}/manifest.json", "reason": "spec_manifest_invalid", "errors": [problem]}
     try:
         run = subprocess.run(
-            [sys.executable, str(verifier), "--monolith", str(monolith), "--views-dir", str(views), "--strict"],
+            [sys.executable, str(verifier), "--monolith", str(monolith), "--views-dir", str(views), "--strict",
+             "--project-dir", project_dir],
             capture_output=True, text=True, timeout=WIRE_FILE_TIMEOUT_S, cwd=project_dir,
         )
     except subprocess.TimeoutExpired:
@@ -559,7 +591,8 @@ def main() -> None:
                     # jsonschema call path (see
                     # contract_runtime.validate_response_block_for_obligation).
                     result = contract_runtime.validate_response_block_for_obligation(
-                        last_assistant_message, art.get("begin"), art.get("end"), art["schema"]
+                        last_assistant_message, art.get("begin"), art.get("end"), art["schema"],
+                        repo_roots=art.get("repo_roots"),
                     )
                     if result.get("status") == "skip":
                         continue

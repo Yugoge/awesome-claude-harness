@@ -3,7 +3,7 @@
 that driver exists).
 
 The main agent types `/close <task-id>` (or `/close --auto`), passes the checklist the hook hands
-it (scripts/todo/close.py: Step 0 to Step 4) to its first TodoWrite and completes one step per
+it (scripts/todo/close.py: Step 0 to Step 3b) to its first TodoWrite and completes one step per
 TodoWrite call. What each step does is read from the tree's own text at run time:
 
 * Task-id resolution: the timestamp argument binds TASK_ID; on the /do path the do-report is
@@ -29,7 +29,7 @@ TodoWrite call. What each step does is read from the tree's own text at run time
   chain or the do-report). QA writes the close-report: a first report with the Player, a later
   round's section appended through the append helper the Overwrite policy names. A round-open
   return is echoed and routed (Routes), Step 0's call runs again, then a fresh round.
-* Step 3: the verdict echo, the Session Summary and the next step. Step 4: the step's
+* Step 3: the verdict echo, the Session Summary and the next step. Step 3b: the step's
   AskUserQuestion (its JSON block, the task id bound), answered as the `rating` argument says; the
   orchestrator does nothing with the answer. Stop.
 * `--auto`: the discovery block, then each step walked over every parent before it is completed;
@@ -66,10 +66,20 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   variant=late-repair-declined   the qa-report is removed after the cycle's terminal and
                           `/close --late-repair <task-id>` is typed: init declines (a QA-only gap), the
                           reason is recorded and Step 0's disposition call runs (the ordinary route)
+  variant=break           the product file the cycle's last lane's dev wrote is put back to an incomplete
+                          fix after the cycle's terminal; close QA's first round names it, its writer runs
+                          again and restores its fix, a fresh round lands (F8p)
+  variant=auto-skip       `/close --auto` over the cycle and an old task docs/dev holds (a completed dev-report,
+                          no ticket, context or QA report, no dispatch record in the store): the discovery
+                          passes the old task over, its `skipped:` line on stderr and in the batch line, and
+                          the cycle lands (review finding 2)
+  variant=noba            route's /close, then the /dev session gone from the store and BA's ticket removed,
+                          and /close typed again: the reader names no owner for the ticket (never /close's own
+                          rating step), Routes asks the owner (header Request), the turn ends there (finding 1)
   parents=1|2             --auto: the number of /dev cycles closed
   cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
                           fan-out cycle with `lanes` lanes)
-  rating=label|4|skip|afk|decline|free[,...]   Step 4's answer, per landed task in order (default label:
+  rating=label|4|skip|afk|decline|free[,...]   Step 3b's answer, per landed task in order (default label:
                           the dialog's first option)
   session=same|later      /close typed in the /dev's session or a later one (default same for plain,
                           later otherwise)
@@ -251,11 +261,13 @@ def summarize_answer(ans, session=None):
     was made in an earlier session than the one asking (the reader keys records by task id, never by session)."""
     if not isinstance(ans, dict):
         return ans
-    out = {k: ans.get(k) for k in ("source", "role", "subagent_type", "lane", "step", "command") if k in ans}
+    out = {k: ans.get(k) for k in ("source", "role", "subagent_type", "lane", "step", "command", "subagent_call",
+                                   "tool_use_id") if k in ans}
     if session is not None and ans.get("session_id"):
         out["dispatched_in"] = "this session" if ans["session_id"] == getattr(session, "sid", None) else "an earlier session"
     if isinstance(ans.get("template"), dict):
         out["template_role"] = ans["template"].get("role")
+        out["template"] = {k: ans["template"].get(k) for k in ("role", "pipeline", "artifacts")}
     return out
 
 
@@ -275,6 +287,15 @@ def act_for(run, role: str, edits=None):
 
 
 def dispatch_answer(run, ans, path: str, detail: str, label: str, edits=None):
+    """_dispatch_answer, its dispatch recorded (P1c's suite reads the `routed dispatch` facts)."""
+    d, role = _dispatch_answer(run, ans, path, detail, label, edits=edits)
+    if d is not None and getattr(d, "tool_use_id", ""):
+        fact(run.rp, "routed dispatch", {"label": label, "path": path, "role": role,
+                                         "agent_id": getattr(d, "agent_id", ""), "tool_use_id": d.tool_use_id})
+    return d, role
+
+
+def _dispatch_answer(run, ans, path: str, detail: str, label: str, edits=None):
     """The reader's answer acted on as the routing text says: a declaring, lane or writing dispatch runs again
     (the same subagent_type and obligation, a fresh dispatched_at, scoped to the finding); a canonical todo
     step with a template is a fresh dispatch of its role from the cycle's template. (dispatch, role)."""
@@ -291,9 +312,13 @@ def dispatch_answer(run, ans, path: str, detail: str, label: str, edits=None):
         return d, role
     call = (ans or {}).get("subagent_call") if isinstance(ans, dict) else None
     if isinstance(ans, dict) and ans.get("source") == "todo_step" and (call or {}).get("subagent_type"):
+        # "a fresh dispatch of that role under the same task id, from the template": the id the template's
+        # artifacts carry (a lane's, in a fan-out cycle)
         role = call["subagent_type"]
+        tid = next((a.get("identity", {}).get("task_id") for a in (ans.get("template") or {}).get("artifacts") or []
+                    if isinstance(a, dict) and a.get("identity", {}).get("task_id")), None)
         return run.producer.dispatch(role, o.s, run.devs, run.label(f"{label} Agent({role})"),
-                                     note=f"{path}: {detail}", edits=edits), role
+                                     note=f"{path}: {detail}", edits=edits, task_id=tid), role
     if isinstance(ans, dict) and ans.get("source") == "todo_step" and not call and not ans.get("template"):
         # "with none, the step is the main agent's own: run it yourself under the same task id"
         if ans.get("command") != run.o.typed and getattr(run.producer, "plays_step", lambda a: False)(ans):
@@ -457,12 +482,23 @@ class DevProducer:
             return found[0]
         raise cmdtext.TextNotFound(f"Step {n} has no template dispatching {role!r}")
 
-    def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None, hashes: bool = False):
+    @contextlib.contextmanager
+    def lane(self, task_id: str | None):
+        """Work on the lane whose id is `task_id` (a fan-out cycle's), else on the cycle itself."""
+        lane = next((l for l in getattr(self.cyc, "lanes", None) or [] if l.tid == task_id), None)
+        if lane is None:
+            yield
+            return
+        with self.cyc.on(lane):
+            yield
+
+    def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None, hashes: bool = False,
+                 task_id=None):
         """`hashes`: dev's report also carries the ledger's final_source_hashes (owned-edits-ledger.v1) of
-        each file it owns, as they stand when it reports."""
+        each file it owns, as they stand when it reports; `task_id`: the lane of a fan-out cycle it works on."""
         from . import dev as devdrv
         cyc = self.cyc
-        with self.on(session, devs) as o:
+        with self.on(session, devs) as o, self.lane(task_id):
             extra = [f"Close routing finding: {note}"] if note else []
             if role == "ba" and hasattr(cyc, "dispatch_ba"):
                 return cyc.dispatch_ba(f"Step {self.step_of('ba')}", label)
@@ -478,14 +514,14 @@ class DevProducer:
                                 guard_respell=o.respell)
                 act = agents.Act(verdict="pass", work=work, summary="QA pass", respell=o.respell,
                                  text_calls=[("Phase 6: Blast-Radius Phase 2 Verification", {})])
-                return o.dispatch(fields, act, label, self.tid, subagent_type="qa")
+                return o.dispatch(fields, act, label, cyc.tid, subagent_type="qa")  # the lane's id on a lane
             if role == "dev":
                 baseline = {"baseline_head_sha": o.values.get("baseline_head_sha", ""),
                             "baseline_dirty_snapshot": o.values.get("baseline_dirty_snapshot", "")}
                 act = agents.Act(work=with_final_hashes(roles.dev(list(edits or []))) if hashes else
                                  roles.dev(list(edits or [])), content={"*": baseline},
                                  summary="the close finding is fixed" if edits else "no change: the work is in place")
-                return o.dispatch(fields, act, label, self.tid, subagent_type="dev")
+                return o.dispatch(fields, act, label, cyc.tid, subagent_type="dev")  # the lane's id on a lane
         raise NotImplementedError(f"no cycle template for role {role!r}")
 
     @staticmethod
@@ -514,7 +550,7 @@ class DoProducer:
         self.turn = turn
         self.tid = turn.tid
 
-    def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None):
+    def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None, task_id=None):
         raise NotImplementedError(f"/do has no dispatch template for role {role!r} ({note})")
 
     def pending_edits(self) -> list:
@@ -535,7 +571,7 @@ class DoProducer:
 PER_TASK = ("tid", "do_report", "producer", "chain", "spec_id", "session_id", "files", "inspector_reports",
             "round", "repairs", "routed", "verdicts", "outcome", "landed")
 
-# The rating answers the owner may give (Step 4's question), as the dialog returns them.
+# The rating answers the owner may give (Step 3b's question), as the dialog returns them.
 RATINGS = ("label", "4", "skip", "afk", "decline", "free")
 
 
@@ -686,8 +722,10 @@ class CloseRun:
             by_artifact: dict = {}
             for g in out["gaps"]:  # each artifact the GAP lines name, with all of its problems at once
                 by_artifact.setdefault(g["artifact"], []).append(f"{g['problem']}: {g['message']}")
+            n = len(self.routed)
             for art, problems in by_artifact.items():
                 self.route_path(art, "; ".join(problems), f"Step 0 round {k}")
+            self.repairs.extend(self.routed[n:])  # a repair Routes completed: a `## Disclosures` line
             out = self.disposition(f"{label} round {k} re-run")
 
     def cp_state(self) -> None:
@@ -1017,6 +1055,9 @@ class CloseRun:
                     value = ", ".join(p for p in (self.do_report, concluded) if p) or None
                 elif "parent ticket" in desc and chain.get("mode") == "singular" and not self.do_report:
                     value = json.dumps(chain.get("artifact_paths"))
+                elif name.strip() == "Completed repairs":  # what Routes completed in this /close so far
+                    value = json.dumps([f"{r['path']}: {r['problem']} | 归因: {r['role']} | 修复: dispatched again"
+                                        for r in self.repairs], ensure_ascii=False)
             if value is not None:
                 out.append(f"- {name.strip()}: {value}")
             elif "omit" not in desc:
@@ -1119,6 +1160,7 @@ class CloseRun:
         last = text.strip().splitlines()[-1] if text.strip() else ""
         self.verdicts.append((self.round, last))
         fact(self.rp, "close QA round", {"task": "<task>", "round": self.round, "verdict": last, "append": append,
+                                          "findings": [{k: finding.get(k) for k in ("path", "detail")}] if finding else [],
                                           "resolved_role": resolved_role(self.rp, d.agent_id) if d.agent_id else None,
                                           "stop_blocked": bool(d.stop and d.stop.still_blocked)})
         return last
@@ -1142,10 +1184,11 @@ class CloseRun:
         """Close QA rounds until one lands; a round-open return is echoed and routed (Routes), Step 0's call
         runs again, then a fresh round."""
         o = self.o
-        first = FIRSTS.get(self.variant)
+        first = getattr(self, "broken", None) or FIRSTS.get(self.variant)
         if first:
-            first = {"path": first["path"], "detail": first["detail"]}
-        last = self.close_round(CLOSE_FINDINGS_ONE if first else CLOSE_YES_PLAIN, first)
+            first = {"path": first["path"], "detail": first["detail"], "new": first.get("new")}
+        plain = f"CLOSE: YES - with disclosures: {len(self.repairs)} items" if self.repairs else CLOSE_YES_PLAIN
+        last = self.close_round(CLOSE_FINDINGS_ONE if first else plain, first)
         k = 0
         while last.startswith("CLOSE_FINDINGS") and k < 3:
             k += 1
@@ -1153,6 +1196,8 @@ class CloseRun:
             self.read(self.report_rel(), self.label(f"Step 2 Read close-report round {self.round}"))
             path = (first or {}).get("path") or self.report_rel()
             edits = [(FINDING["path"], self.current(FINDING["path"]), self.fixed(FINDING["path"]))]
+            if (first or {}).get("new") is not None:  # break: the writer puts its own fix back
+                edits = [(first["path"], self.current(first["path"]), first["new"])]
             n = len(self.routed)
             self.route_path(path, (first or FINDING)["detail"], f"Step 2 round {k}", edits=edits, close_finding=True)
             self.repairs.extend(self.routed[n:])
@@ -1183,13 +1228,13 @@ class CloseRun:
                 "- User needs not satisfied: none.\n- Bugs encountered: none.\n- Improvement opportunities: none.")
         o.s.say(f"Next: /commit {self.tid} -m \"toy.add validates its arguments\"")
 
-    # ------------------------------------------------------------ Step 4
+    # ------------------------------------------------------------ Step 3b
     def rating_input(self) -> dict:
-        block = next(b.text for b in cmdtext.blocks(self.o.section("Step 4")) if '"questions"' in b.text)
+        block = next(b.text for b in cmdtext.blocks(self.o.section("Step 3b")) if '"questions"' in b.text)
         return json.loads(block.replace("<task-id>", self.tid))
 
     def step4(self, answer: str = "label") -> None:
-        """Step 4's one AskUserQuestion (its JSON block, the task id bound), answered as `answer` says; the
+        """Step 3b's one AskUserQuestion (its JSON block, the task id bound), answered as `answer` says; the
         orchestrator does nothing with the answer."""
         tin = self.rating_input()
         q = tin["questions"][0]
@@ -1207,10 +1252,10 @@ class CloseRun:
                 return dict(base, answers={q["question"]: "it mostly worked"}, response="it mostly worked")
             pick = next((l for l in labels if l.startswith(answer + " ")), labels[0])
             return dict(base, answers={q["question"]: pick})
-        lab = self.label("Step 4 AskUserQuestion")
+        lab = self.label("Step 3b AskUserQuestion")
         c = self.o.s.tool("AskUserQuestion", tin, perform=perform, label=lab, deviation=self.devs.at(lab))
         self.asked.append((self.tid, answer))
-        fact(self.rp, "close Step 4", {"task": "<task>", "header": q.get("header"), "labels": labels,
+        fact(self.rp, "close Step 3b", {"task": "<task>", "header": q.get("header"), "labels": labels,
                                         "multiSelect": q.get("multiSelect"), "source": (tin.get("metadata") or {}).get("source"),
                                         "answer": answer, "ok": c.ok, "blocked": c.blocked})
 
@@ -1229,10 +1274,10 @@ class CloseRun:
             return ""
         o.advance(label=self.label("TodoWrite Step 2 done, Step 3 in_progress"))
         self.step3(last)
-        o.advance(label=self.label("TodoWrite Step 3 done, Step 4 in_progress"))
+        o.advance(label=self.label("TodoWrite Step 3 done, Step 3b in_progress"))
         if self.landed:
             self.step4(self.ratings[0])
-        o.advance(label=self.label("TodoWrite Step 4 done"))
+        o.advance(label=self.label("TodoWrite Step 3b done"))
         return last
 
     def steps_1_2(self) -> str:
@@ -1245,8 +1290,61 @@ class CloseRun:
         self.start(f"--late-repair {self.tid}" if self.late else self.tid)
         last = self.body()
         self.outcome = last or ("stalled at Step 0 (the line above)" if self.stalled else "")
-        self.o.s.stop(f"/close {self.tid}: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
+        ev = self.o.s.stop(f"/close {self.tid}: {self.outcome}", label="/close Stop",
+                           deviation=self.devs.at("/close Stop"))
+        report_last, n = self.report_form()
+        # /close's terminal form (P1c's suite): the report's last non-empty line is the disclosures form when
+        # routing completed a repair (<n> its `## Disclosures` lines), else the plain form.
+        form = f"CLOSE: YES - with disclosures: {len(self.repairs)} items" if self.repairs else CLOSE_YES_PLAIN
+        ok = report_last == form and n == len(self.repairs)
+        self.rp.terminal("close", (last or "").startswith("CLOSE: YES") and ok, ev, task=self.tid,
+                         last_line=last, report_last_line=report_last, disclosures=n, repairs=len(self.routed))
         return last
+
+    def report_form(self) -> tuple:
+        """The close report's last non-empty line and the line count of its last `## Disclosures` section."""
+        with self.rp.acting("driver"):
+            try:
+                with open(os.path.join(self.o.project, self.report_rel())) as fh:
+                    text = fh.read()
+            except OSError:
+                return "", 0
+        lines = text.split("\n")
+        last = next((l for l in reversed(lines) if l.strip()), "")
+        at = max((k for k, l in enumerate(lines) if l.strip() == "## Disclosures"), default=None)
+        n = 0
+        while at is not None and at + 1 + n < len(lines) and lines[at + 1 + n].strip() \
+                and not lines[at + 1 + n].startswith(("#", "CLOSE")):
+            n += 1
+        return last, n
+
+    def run_noba(self) -> None:
+        """Finding 1 (D8): Step 0 names BA's missing ticket in a /close span whose task has dispatch records of
+        an earlier /close but no /dev span left. Each gap goes to the reader as Routes says; one it names no
+        owner for is Routes' last bullet: one owner question (header Request), the owner's decision, where the
+        turn ends; nothing here writes BA's artifact."""
+        o = self.o
+        self.start(self.tid)
+        out = self.disposition("Step 0")
+        fact(self.rp, "close Step 0", {"label": "Step 0", "disposition": out["disposition"],
+                                        "gaps": [(g["artifact"], g["problem"]) for g in out["gaps"]],
+                                        "mode": (out["chain"] or {}).get("mode")})
+        for art in dict.fromkeys(g["artifact"] for g in out["gaps"]):
+            if self.reader(art, "Step 0 round 1") is not None:
+                self.route_path(art, "the artifact Step 0 names", "Step 0 round 1 routed")
+                continue
+            q = {"question": f"Task {self.tid}: no dispatch or request exists to re-run for {art}. "
+                             "What should the cycle deliver?",
+                 "header": "Request", "multiSelect": False,
+                 "options": [{"label": "The user requirement",
+                              "description": "the request the task's user-requirement file states"},
+                             {"label": "/close --auto", "description": "the other close_pending tasks"}]}
+            lab = self.label("Step 0 AskUserQuestion Request")
+            c = o.s.tool("AskUserQuestion", {"questions": [q]}, label=lab, deviation=self.devs.at(lab))
+            fact(self.rp, "close Request question", {"artifact": art.replace(self.tid, "<task>"), "header": "Request",
+                                                      "ok": c.ok, "blocked": c.blocked})
+            o.s.end("other", label="/close interrupted at the Request question")
+            return
 
     # ------------------------------------------------------------ --auto
     def mode_question(self, extra: str) -> str:
@@ -1268,8 +1366,11 @@ class CloseRun:
         if extra:
             self.mode_question(extra)
         disc = o.block("`--auto` mode", lang="bash", index=0)
-        self.run_text(disc, "/close --auto Bash discovery", "Discover the close_pending parents",
-                      capture=("CLOSE_PENDING_PARENTS",))
+        c = self.run_text(disc, "/close --auto Bash discovery", "Discover the close_pending parents",
+                          capture=("CLOSE_PENDING_PARENTS",))
+        skipped = [l for l in ((c.response.get("stderr") or "") if c.ok else (c.error or "")).splitlines()
+                   if ": skipped: " in l]
+        fact(self.rp, "close --auto skipped", skipped)
         lines = o.values.get("CLOSE_PENDING_PARENTS") or []
         if isinstance(lines, str):
             lines = [lines] if lines else []
@@ -1302,13 +1403,15 @@ class CloseRun:
         each(lambda k: lasts.__setitem__(k, self.step2()))
         o.advance(label="/close --auto TodoWrite Step 2 done, Step 3 in_progress")
         each(lambda k: self.step3(lasts[k]))
-        o.s.say("\n".join(f"{st['tid']}: {st['outcome']}" for st in states) or "no close_pending parent")
-        o.advance(label="/close --auto TodoWrite Step 3 done, Step 4 in_progress")
+        o.s.say("\n".join([f"{st['tid']}: {st['outcome']}" for st in states] + skipped) or "no close_pending parent")
+        o.advance(label="/close --auto TodoWrite Step 3 done, Step 3b in_progress")
         each(lambda k: self.step4(self.ratings[k % len(self.ratings)]) if self.landed else None)
-        o.advance(label="/close --auto TodoWrite Step 4 done")
+        o.advance(label="/close --auto TodoWrite Step 3b done")
         results = [(st["tid"], st["outcome"]) for st in states]
         self.outcome = "; ".join(f"{t}: {oc}" for t, oc in results)
-        o.s.stop(f"/close --auto: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
+        ev = o.s.stop(f"/close --auto: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))
+        self.rp.terminal("close", bool(results) and all(oc.startswith("CLOSE: YES") for _, oc in results), ev,
+                         outcome=self.outcome)
         return results
 
 
@@ -1366,7 +1469,11 @@ def dev_cycle(rp, after: str, scenario=None, stop_before: int | None = None):
         except _Interrupted:
             fact(rp, "/dev interrupted", {"before": f"Step {stop_before}"})
     else:
-        cyc.run()
+        from ..recovery import SessionCut
+        try:
+            cyc.run()
+        except SessionCut:  # F8q: the cycle's session cut (fault cut@<a main-agent step>); the owner types /close
+            cyc.cut = True
     return DevProducer(cyc), cyc.tid, cyc.o.s, cyc
 
 
@@ -1380,10 +1487,48 @@ def kept_only(rp, devs: Deviations) -> Deviations:
 
 
 def remove(rp, rels) -> None:
-    """Driver setup between commands: an artifact removed after the cycle reached its terminal."""
-    with rp.acting("driver"):
+    """The fault between commands (D25 (2) F8, F8c): an artifact removed after the command before reached
+    its terminal; recorded in faults.json."""
+    from ..faults import _record
+    with rp.acting("fault"):
         for rel in rels:
             os.remove(os.path.join(rp.layout.project, rel))
+    for rel in rels:
+        _record(rp, {"kind": "remove", "path": rel, "after": rp.terminals[-1]["pipeline"] if rp.terminals else None,
+                     "events_before": rp.n_events})
+
+
+def damage(rp, cyc) -> dict:
+    """The fault between commands (D25 (2) F8p): the product file one lane's dev wrote (a fan-out cycle's last
+    lane's, else the cycle's own) put back to an incomplete fix that fails its acceptance criterion; recorded in
+    faults.json. Returns close QA's finding on it, with the text its writer restores."""
+    from ..faults import _record
+    sc = (getattr(cyc, "lanes", None) or [cyc])[-1].sc
+    with rp.acting("fault"):
+        with open(os.path.join(rp.layout.project, sc.rel), "w") as fh:
+            fh.write(sc.partial)
+    _record(rp, {"kind": "break", "path": sc.rel, "after": rp.terminals[-1]["pipeline"] if rp.terminals else None,
+                 "events_before": rp.n_events})
+    return {"path": sc.rel, "detail": f"AC-01 fails: {sc.ac['then']} ({sc.rel} holds an incomplete fix)",
+            "new": sc.final}
+
+
+def plant_old_task(rp, tid: str) -> None:
+    """Driver setup (finding 2): an old task docs/dev holds, its dev-report the cycle's with the old id, and no
+    ticket, context, QA report or dispatch record."""
+    with rp.acting("driver"):
+        with open(os.path.join(rp.layout.project, f"docs/dev/dev-report-{tid}.json")) as fh:
+            text = fh.read().replace(tid, OLD_TASK)
+        with open(os.path.join(rp.layout.project, f"docs/dev/dev-report-{OLD_TASK}.json"), "w") as fh:
+            fh.write(text)
+
+
+def forget_session(rp, s) -> None:
+    """Driver setup (finding 1): a session's transcript and its agents' gone from the project's store."""
+    import shutil
+    with rp.acting("driver"):
+        os.remove(s.tpath)
+        shutil.rmtree(os.path.join(s.tdir, s.sid), ignore_errors=True)
 
 
 def break_resolver(rp) -> None:
@@ -1397,16 +1542,26 @@ def break_resolver(rp) -> None:
 # acceptance variants of P4 run on demand only (`--arg variant=...`).
 VARIANTS = ("plain", "route", "append", "auto")
 ACCEPTANCE_VARIANTS = ("auto-task", "lane-qa", "stray", "noart", "stalled", "late-repair", "late-repair-drift",
-                       "late-repair-declined")
+                       "late-repair-declined", "auto-skip", "noba", "break")
+OLD_TASK = "20250101-000001"  # auto-skip's old task: older than any session the store holds
 # P1b's acceptance 7 names of three of those cases.
 ALIASES = {"qa-never": "lane-qa", "noartifact": "noart", "unwritten": "stray"}
 
 
-def removed_after_cycle(variant: str, tid: str) -> list:
-    """The artifacts a variant removes after the cycle reached its terminal: the qa-report (route; and the
-    QA-only gap late-repair init declines); BA's whole stage, its ticket, context and acceptance criteria (the
-    stage gaps late-repair init admits; BA, dispatched again, writes each of its declared artifacts afresh)."""
-    return {"route": [f"docs/dev/qa-report-{tid}.json"],
+def lane_report(cyc, kind: str) -> str:
+    """The report of `kind` (dev, qa) one lane of the cycle wrote: a fan-out cycle's first lane's, else the
+    cycle's own (the singular cycle is one implicit lane)."""
+    lanes = getattr(cyc, "lanes", None)
+    return f"docs/dev/{kind}-report-{lanes[0].tid if lanes else cyc.tid}.json"
+
+
+def removed_after_cycle(variant: str, cyc) -> list:
+    """The artifacts a variant removes after the cycle reached its terminal: the lane qa-report (route, F8:
+    a fan-out cycle's first lane's, lane_report; and the QA-only gap late-repair init declines); BA's whole
+    stage, its ticket, context and acceptance criteria (the stage gaps late-repair init admits; BA, dispatched
+    again, writes each of its declared artifacts afresh)."""
+    tid = cyc.tid
+    return {"route": [lane_report(cyc, "qa")],
             "late-repair-declined": [f"docs/dev/qa-report-{tid}.json"],
             "late-repair": [f"docs/dev/ticket-{tid}.md", f"docs/dev/context-{tid}.json",
                             f"docs/dev/acceptance-criteria-{tid}.json"]}.get(variant.replace("-drift", ""), [])
@@ -1428,18 +1583,33 @@ def run(rp) -> None:
     rp.pipeline = (pipeline_name(after, rp) + "+close" + (f"/{variant}" if variant != "plain" else "")
                    + ("/later" if session_kind == "later" else ""))
     producer, tid, s, cyc = dev_cycle(rp, after, stop_before=13 if variant == "lane-qa" else None)
+    end = "prompt_input_exit"
+    if getattr(cyc, "cut", False):  # F8q: /close is typed in a later session, in place of /restart
+        session_kind, end = "later", "other"
     producers = {tid: producer}
     if variant == "auto" and int(rp.args.get("parents", "1")) > 1:
         from . import dev as devdrv
         p2, tid2, s, _cyc2 = dev_cycle(rp, after, scenario=devdrv.SCENARIO_SUB)
         producers[tid2] = p2
-    remove(rp, [p for p in removed_after_cycle(variant, tid) if os.path.exists(os.path.join(rp.layout.project, p))])
+    remove(rp, [p for p in removed_after_cycle(variant, cyc) if os.path.exists(os.path.join(rp.layout.project, p))])
     if variant == "stalled":
         break_resolver(rp)
-    session = rp.later_session(s) if session_kind == "later" else s
+    if variant == "auto-skip":
+        plant_old_task(rp, tid)
+    broken = damage(rp, cyc) if variant == "break" else None
+    if variant == "noba":  # /close once along route: its QA dispatched again from /close's own span
+        remove(rp, removed_after_cycle("route", cyc))
+        first = CloseRun(rp, rp.later_session(s, end), tid, producer=producer, variant="route")
+        first.run()
+        forget_session(rp, s)  # the /dev session gone from the store (cleaned up, or another account's)
+        remove(rp, [f"docs/dev/ticket-{tid}.md"])
+        CloseRun(rp, rp.later_session(first.o.s), tid, producer=producer, variant="noba").run_noba()
+        return
+    session = rp.later_session(s, end) if session_kind == "later" else s
     cr = CloseRun(rp, session, tid, producer=producer, variant=variant, auto=variant.startswith("auto"),
                   producers=producers)
-    if variant == "auto":
+    cr.broken = broken
+    if variant in ("auto", "auto-skip"):
         cr.run_auto()
     elif variant == "auto-task":
         cr.run_auto(extra=tid)

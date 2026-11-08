@@ -313,39 +313,38 @@ def test_exploration_steps_pass_and_a_wrong_role_is_refused(session):
     assert before_triage.returncode == 2 and "Case A" in before_triage.stderr
 
 
-# origin/master's /dev-overnight text as the CLI records it (excerpt): its Step 2 template sets no
-# PM_MODE, its Step 4 template sets TRIAGE.
-BASE_PROSE = """#### Step 2: Launch PM Subagent
+# The base's /dev-overnight as far as its PM dispatch templates go: Step 2 sets no mode, Steps 4 and 20 set theirs.
+BASE_PM_TEXT = """#### Step 2: Launch PM Subagent
 - prompt: "
   You are the PM subagent. Follow agents/pm.md instructions precisely.
-  Output test plan to: docs/dev/overnight/<session_id>/test-plan.json
   "
 #### Step 4: Launch PM-Triage Subagent
 - prompt: "
   PM_MODE: TRIAGE
-  You are the PM subagent in TRIAGE mode.
+  "
+### Step 20: PM Retrospective
+- prompt: "
+  PM_MODE: RETRO
   "
 """
 
 
-def test_a_pm_prompt_without_a_mode_passes_where_the_loaded_text_sets_none(session):
-    """P1c A11, under P2's rule (G1: a step's mode binds only when the text the session loaded sets
-    it): a session still running the base's Step 2 text dispatches PM PLAN with no PM_MODE line, and
-    passes on that recorded text. The prompt's mode is read from the prompt alone, never from the
-    role; a mode the prompt does carry is still compared; a mode-less prompt of another role is
-    still held to Step 2's role."""
-    assert contract_runtime.detect_mode("You are the PM subagent.") == ""
-    assert contract_runtime.detect_mode("PM_MODE: TRIAGE") == "TRIAGE"
+def test_a_pm_prompt_without_a_mode_is_plan_as_pm_md_reads_it(session):
+    """P1c A11: a session still running the base's Step 2 text dispatches PM PLAN with no PM_MODE line;
+    agents/pm.md reads a missing PM_MODE as PLAN (detect_mode with the role), and only a PM prompt
+    defaults. The dispatch check follows P2's rule: the base-text dispatch passes through the text the
+    session loaded, which sets no mode at Step 2; where Step 2's mode binds (a session with no record of
+    its text), the same dispatch is refused for the missing mode and a mode the prompt does carry is
+    still compared."""
+    assert contract_runtime.detect_mode("You are the PM subagent.", "pm") == "PLAN"
+    assert contract_runtime.detect_mode("You are the PM subagent.", "architect") == ""
+    assert contract_runtime.detect_mode("PM_MODE: TRIAGE", "pm") == "TRIAGE"
     base = "You are the PM subagent. Follow agents/pm.md instructions precisely.\nOutput test plan to: x"
-    _bookmark(session, "2", loaded=BASE_PROSE)
-    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 0, "base text"
-    other = _run("pretool-subagent-enforce.py", session, _agent("architect", base))
-    assert other.returncode == 2 and "role mismatch on step '2'" in other.stderr
-    _bookmark(session, "4", loaded=BASE_PROSE)
-    triage = _run("pretool-subagent-enforce.py", session, _agent("pm", base))
-    assert triage.returncode == 2 and "mode missing on step '4'" in triage.stderr
-    _bookmark(session, "2")  # no record of the text the session loaded: every step's mode binds
-    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 2
+    _bookmark(session, "2", loaded=BASE_PM_TEXT)
+    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 0
+    _bookmark(session, "2")
+    missing = _run("pretool-subagent-enforce.py", session, _agent("pm", base))
+    assert missing.returncode == 2 and "mode missing on step '2'" in missing.stderr
     refused = _run("pretool-subagent-enforce.py", session, _agent("pm", "PM_MODE: RETRO"))
     assert refused.returncode == 2 and "mode='RETRO'" in refused.stderr
 

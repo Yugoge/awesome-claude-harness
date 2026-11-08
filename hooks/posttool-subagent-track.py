@@ -279,7 +279,7 @@ def _is_triage_dispatch(stdin_data: dict, steps: list) -> bool:
         return False
     role = ti.get('subagent_type')
     return (isinstance(role, str) and role.strip().lower() == triage.get('subagent_type')
-            and contract_runtime.detect_mode(ti.get('prompt', '')) == triage.get('mode'))
+            and contract_runtime.detect_mode(ti.get('prompt', ''), role) == triage.get('mode'))
 
 
 def _triage_report(state: dict, cycle_id: int, prompt: str) -> Path:
@@ -288,19 +288,20 @@ def _triage_report(state: dict, cycle_id: int, prompt: str) -> Path:
     origin/master's Step 4, held by a session started before the pull: that prose
     numbers the cycle by the record's cycle_count, which no hook advances any
     more, so from its second cycle on its report is the one its own "Write triage
-    report to:" line names."""
+    report to:" line names, else the last one its prompt names (P1c)."""
     base = overnight.session_dir(state)
     triage = base / f'triage-report-cycle{cycle_id}.json'
     if triage.is_file() or not isinstance(obligation.extract_obligation_block(prompt), obligation.NoBlock):
         return triage
     named = re.search(r'^\s*Write triage report to:.*?\b(triage-report-cycle\d+\.json)', prompt, re.M)
-    return base / named.group(1) if named else triage
+    anywhere = re.findall(r'triage-report-cycle\d+\.json', prompt)
+    return base / (named.group(1) if named else anywhere[-1]) if (named or anywhere) else triage
 
 
-def _pipeline_count(state: dict, cycle_id: int, prompt: str) -> int | None:
+def _pipeline_count(state: dict, cycle_id: int, prompt: str = '') -> int | None:
     """How many pipelines this cycle's triage report creates, counted by the
     Step-6 builder itself so the count and the pipelines cannot disagree."""
-    triage = _triage_report(state, cycle_id, prompt)
+    triage = _triage_report(state, cycle_id, prompt if isinstance(prompt, str) else '')
     if not triage.is_file():
         return None
     try:

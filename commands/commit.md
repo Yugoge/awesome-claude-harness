@@ -122,10 +122,6 @@ session is found. Act on its JSON answer:
   user-requirement file) and up to two parents `dev-lifecycle.py list-actionable
   --next-action commit` lists (`Commit <task-id> instead`); then dispatch dev under the
   same task id for the answer.
-- A dispatch of one of a late repair's stages (a role `record-stage` takes): the run record
-  holds each stage's report by hash, so when the dispatch returns, record the report it wrote
-  as `/close --late-repair` records each stage (`<role>` its role, `<path>` the path):
-  `python3 ~/.claude/scripts/late-repair-controller.py record-stage --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT" --stage <role> --report-path <path> --repair-run-id "$(jq -r .repair_run_id "$TASK_PROJECT_ROOT/docs/dev/late-repair-run-$TASK_ID.json")"`
 
 There is no default role. Once the dispatch returns, run again the one check that named the
 path; a gap or finding it names again is routed the same way, with no round cap.
@@ -239,11 +235,11 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   cross-check alongside) the dev-report's self-reported ledger fields. An exit code of 2
   (no journaled events for any requested path — e.g. the path pre-dates the journal's
   rollout) is an ordinary, expected outcome, not a finding, and nothing in this call
-  decides: its output is what the manifest below records. The same call prints
-  the manifest's other inputs: the state dir, the session id and each plan
-  entry's `git status --porcelain=v1`. (The orchestrator gate allows five Bash
-  calls in a row; with `--auto`'s discovery, Step 3 and the plan this is the
-  fourth, a one-repository plan's grant writer the fifth.)
+  decides: its output is what the manifest below records. The same call prints the
+  manifest's other inputs: the state dir, the session id and each plan entry's
+  `git status --porcelain=v1`. (The orchestrator gate allows five Bash calls in a row;
+  with `--auto`'s discovery, Step 3 and the plan this is the fourth, a one-repository
+  plan's grant writer the fifth.)
 
   ```bash
   ATTRIBUTION_FILES=()
@@ -252,7 +248,7 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   done < <(jq -r '.repositories[] | .repo_root as $root | (.owned_paths[]? // empty) | $root + "/" + .' <<<"$REPOSITORY_PLAN")
   ATTRIBUTION_LOG="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/verify-attribution-chain.py" --json "${ATTRIBUTION_FILES[@]}" 2>/dev/null)"
   ATTRIBUTION_LOG="${ATTRIBUTION_LOG:-{\"results\":[],\"no_events\":[],\"discarded_lines\":[]}}"
-  . ~/.claude/hooks/lib/harness_state_dir.sh
+  . "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"
   harness_state_dir
   echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"
   while IFS= read -r PLAN_ROOT; do
@@ -491,7 +487,8 @@ QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo — 
       "begin": "--- CHANGELOG-ANALYST-STATUS-BEGIN ---",
       "end": "--- CHANGELOG-ANALYST-STATUS-END ---",
       "format": "json",
-      "schema": "changelog-status.v1"
+      "schema": "changelog-status.v1",
+      "repo_roots": <the JSON array of REPOSITORY_PLAN.repositories[].repo_root, in order, when BULK=false, else null>
     }
   ]
 }
@@ -540,13 +537,11 @@ Wait for changelog-analyst to complete. Echo its final status to the user.
 #### Changelog-analyst result handling and retry protocol
 
 Read changelog-analyst's structured status block verbatim (see `agents/changelog-analyst.md`
-§Structured Final Status Output): the producer-stop gate (G2) validated it against
-`changelog-status.v1` at the analyst's own stop. It carries `commit_status`,
+§Structured Final Status Output): the producer-stop gate (G2) validated it at the analyst's
+own stop, against `changelog-status.v1` and, in normal mode, its repository roots and
+order against the obligation's `repo_roots`. It carries `commit_status`,
 `repository_results[]`, and, when applicable, `failure_code`, `failure_reason`, and
-`auto_bulk_commits[]`. In normal mode a result whose repository roots/order do not
-exactly equal `REPOSITORY_PLAN` is not accepted as a landing (the schema does not
-hold the plan): it names no file, so the changelog-analyst dispatch whose status block
-it is runs again (Routes) and its status is read again.
+`auto_bulk_commits[]`.
 
 **Handle each commit_status value:**
 

@@ -624,11 +624,6 @@ def test_projected_qa_is_accepted_by_permission_and_e2e_readers(
     with pytest.raises(SystemExit) as exc:
         e2e_reader.main()
     assert exc.value.code == 0
-    report["qa"]["e2e_enforcement"]["status"] = "skipped_without_justification"
-    report_path.write_text(json.dumps(report), encoding="utf-8")
-    with pytest.raises(SystemExit) as exc:
-        e2e_reader.main()
-    assert exc.value.code == 2
 
 
 HISTORICAL_QA_ARTIFACTS = {

@@ -1,12 +1,12 @@
 """D25 (2) F8, F8q, F8p, F8c, F8r: an unfinished cycle the owner's /close or /commit meets (CC4/D7).
 
-No hook blocks here: the gap is what /close's chain call (Step 0), its close-QA round, or /commit's
-chain call (Step 5) finds, recorded as the routing loop's entry, and the loop dispatches again what
-P1b's E3 reader (hooks/lib/obligation.py declaring_dispatch) returns for the entry's path. Everything
-is read from the run's own files: faults.json (the injection), facts.json (the driver's record of
-each routing entry as the text's own call recorded it, the reader's answer, the dispatch made, each
-close-QA round), invocations.jsonl (every Agent tool_use with its obligation, every typed prompt),
-the agent transcripts and their `.meta.json` (who wrote what), terminals.json.
+No hook blocks here: the gap is what /close's disposition call (Step 0) or /commit's (Step 3) prints
+as a GAP line (the artifact and the failing check, no role: D21), or what a close-QA round finds, and
+Routes dispatches again what P1b's E3 reader (hooks/lib/obligation.py declaring_dispatch) returns for
+that path. Everything is read from the run's own files: faults.json (the injection), facts.json (the
+driver's record of each disposition call's gaps, the reader's answer, the dispatch made, each close-QA
+round), invocations.jsonl (every Agent tool_use with its obligation, every typed prompt), the agent
+transcripts and their `.meta.json` (who wrote what), terminals.json.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import re
 
 from .suite import _json, _jsonl
 
-ENTRY_KEYS = {"path", "detail", "source_check"}
+PROBLEM = r"[A-Za-z_][\w:.-]*"   # a GAP line's problem: the failing check's code
 
 
 def obligation(prompt: str) -> dict:
@@ -80,13 +80,17 @@ def facts(r, path: str | None = None) -> dict:
         if e["event"] == "UserPromptSubmit":
             human.append(p.get("prompt"))
         elif e["event"] == "PreToolUse" and p.get("tool_name") == "AskUserQuestion":
-            human.append("AskUserQuestion")
+            source = ((p.get("tool_input") or {}).get("metadata") or {}).get("source") or ""
+            if not source.startswith("close-rating:"):  # the landed /close's own rating question (D9)
+                human.append("AskUserQuestion")
     return {"injection": inj, "human": human,
-            "entries": [f["value"] for f in r.facts if f["key"] == "routing entry"],
+            "gaps": [(c["label"] if "label" in c else f"Step 3 round {c.get('round')}", g)
+                     for c in (f["value"] for f in r.facts if f["key"] in ("close Step 0", "commit Step 3"))
+                     for g in c.get("gaps") or []],
             "owing": [f["value"] for f in r.facts if f["key"] == "owing dispatch"],
             "routed": [f["value"] for f in r.facts if f["key"] == "routed dispatch"],
             "rounds": [f["value"] for f in r.facts if f["key"] == "close QA round"],
-            "chain": [f["value"] for f in r.facts if f["key"] == "close Step 0"],
+            "chain": [f["value"] for f in r.facts if f["key"] in ("close Step 0", "commit Step 3")],
             "dispatches": dispatches(rd), "writes": agent_writes(rd), "main_writes": main_writes(rd),
             "own": [f["value"] for f in r.facts if f["key"] == "own step"]}
 
@@ -102,8 +106,9 @@ CODE_AND_MESSAGE = r"\b[A-Z][A-Z0-9_]+[A-Z0-9]: \S"   # a chain check's error: i
 def assert_routed(r, *, typed: str, source: str, check: str, path: str | None = None,
                   names: str = CODE_AND_MESSAGE) -> dict:
     """The F8 assertions on suite.Result `r`: `typed` the owner's command after the injection (HX), `source` the
-    E3 reader's answer kind for the gap's path (`path`, default the injected one), `check` the source_check
-    that found it, `names` what the gap's detail says of the failing check. Returns the facts."""
+    E3 reader's answer kind for the gap's path (`path`, default the injected one), `check` what found it (the
+    disposition call, or `close QA round`), `names` what a close-QA finding says of the failing check. Returns
+    the facts."""
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     assert not r.blocks, "an F8 fault met a gate block (it has none to meet):\n" + r.explain()
     assert not r.hook_errors, "an F8 fault met a hook error:\n" + r.explain()
@@ -113,14 +118,16 @@ def assert_routed(r, *, typed: str, source: str, check: str, path: str | None = 
 
     def named(p) -> bool:  # the path, or the project path a check printed for it
         return isinstance(p, str) and (p == path or p.endswith("/" + path))
-    # The gap: the routing loop's entry for the injected path, as the text's own call recorded it.
-    gaps = [e for e in f["entries"] if named(e["entry"].get("path"))]
-    assert gaps, f"no routing entry names {path}: {f['entries']}"
-    gap = gaps[0]["entry"]
-    assert set(gap) == ENTRY_KEYS, f"the gap carries more than path, detail and check (D21): {gap}"
-    assert gap["source_check"].startswith(check), f"the gap's check is not {check}: {gap}"
-    assert re.search(names, gap["detail"]), f"the gap does not name the failing check ({names}): {gap}"
-    assert not re.search(r"\b(producer|owner|role|fix)\b", gap["detail"], re.I), f"the gap names a role: {gap}"
+    if check == "close QA round":
+        # The gap: a close-QA round's finding on the path, naming the failing check.
+        found = [x for rd in f["rounds"] for x in rd.get("findings") or [] if named(x.get("path"))]
+        assert found, f"no close-QA round names {path}: {f['rounds']}"
+        assert re.search(names, found[0]["detail"]), f"the finding does not name the failing check ({names}): {found}"
+    else:
+        # The gap: a GAP line of the disposition call naming the path and its failing check, nothing else (D21).
+        gaps = [g for _label, g in f["gaps"] if named(g[0])]
+        assert gaps, f"no GAP line names {path}: {f['gaps']}"
+        assert len(gaps[0]) == 2 and re.fullmatch(PROBLEM, gaps[0][1]), f"the gap is not (artifact, problem): {gaps}"
     # The loop dispatched again what the reader returned for that path.
     owing = [o for o in f["owing"] if named(o["path"])]
     assert owing and isinstance(owing[0].get("answer"), dict), f"no reader answer for {path}: {f['owing']}"
