@@ -1530,8 +1530,30 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
         sys.stderr.write(error_output)
 
 
+def _roots_ahead_of(start, cmd_name: str, sid: str) -> None:
+    """Run ``start`` (an ordinary /dev, /dev-command or /redev start) with its
+    stdout held, then print the roots (print_roots) and what it printed, the
+    roots first as for every harness command. Its one SystemExit is
+    decide_spec_path's block of an unreadable --spec, which leaves stdout empty,
+    the roots too: the block's lines are stderr's alone."""
+    held, blocked = io.StringIO(), False
+    try:
+        with contextlib.redirect_stdout(held):
+            start()
+    except SystemExit:
+        blocked = True
+        raise
+    finally:
+        if not blocked:
+            print_roots(cmd_name, sid)
+            sys.stdout.write(held.getvalue())
+
+
 def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: str = '') -> None:
     """Phase A: slash command detected -- setup todos, state, emit checklist."""
+    if cmd_name in ('dev', 'dev-command', 'redev'):
+        _roots_ahead_of(lambda: _ordinary_dev_start(cmd_name, user_input, sid, envelope_digest), cmd_name, sid)
+        return
     if cmd_name != 'dev-overnight':
         print_roots(cmd_name, sid)
     if cmd_name == "push":
@@ -1540,9 +1562,6 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
         _write_userintent_sentinel(cmd_name, sid)
     if cmd_name == "do":
         handle_do_consent(sid)
-    if cmd_name in ('dev', 'dev-command', 'redev'):
-        _ordinary_dev_start(cmd_name, user_input, sid, envelope_digest)
-        return
     todos = run_todo_script(cmd_name, user_input)
     if not todos:
         return
@@ -1744,14 +1763,15 @@ def cli(argv: list) -> int:
             print('prompt-workflow.py start: needs CLAUDE_CODE_SESSION_ID and the '
                   '/dev, /dev-command or /redev command text on stdin', file=sys.stderr)
             return 2
-        print_roots(cmd_name, sid)
         recorded = _recorded_start(cmd_name, user_input, sid)
         if recorded:
+            print_roots(cmd_name, sid)
             sys.stdout.write(recorded)
             return 0
         printed = io.StringIO()
         with contextlib.redirect_stdout(printed):
             _ordinary_dev_start(cmd_name, user_input, sid, '')
+        print_roots(cmd_name, sid)  # once the start has decided its spec, as at the prompt (_roots_ahead_of)
         sys.stdout.write(printed.getvalue())
         return 0 if printed.getvalue() else 1
     if argv[:1] == ['arm-registry']:
