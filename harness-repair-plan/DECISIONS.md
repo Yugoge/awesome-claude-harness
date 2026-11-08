@@ -102,6 +102,19 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
     drive the agents, not removed. P9 deletes no scoring code. The design comes from research/scoring-and-asking/
     and lands as its own phase after P12, before P11.
 
+- **D29 The four D28 choices (2026-11-08, the owner's answers to `research/scoring-and-asking/design.md` §7).**
+  - Rounds: "/spec 和 /dev 开工前最多弹几轮问题：没有任何限制，直到整个任务彻底清楚" [no limit at all, until the whole
+    task is completely clear]. No round cap: BA keeps adding AskUserQuestion rounds while a point needs the owner.
+  - After /spec: "一样的，没有限制，只要是需要用户决定的" [the same, no limit, as long as it needs the user's decision].
+    /dev after a finished /spec follows the same rule: no cap, every point that needs the owner's decision is asked,
+    and at least one round runs (D28).
+  - Blame question at /close: "没有意义" [pointless]. The /close dialog asks for the rating only.
+  - Low score: "以前的设计，agent看得到自己的分数，不同的分数给agent不同的提醒hook" [the earlier design: an agent sees
+    its own score, and different scores give the agent different reminder hooks]. The consequence is the earlier one:
+    at dispatch a hook shows each agent its score and rank (`score-inject.sh`'s tiers: below 0, 0-20, 21-40, 41-60,
+    61-80, 81-100), and the reminder differs by tier. The self-review gate at the producer's stop and the stricter QA
+    of design.md §3.6 are not what the owner chose.
+
 ## Owner ruling of 2026-11-01 (latest; for the work left after P1b it takes precedence over D26's one-day cap and over the planner's process; it changes no requirement of D18-D25)
 
 - **D27 Five days.** "5天必须完成" [It must be finished in five days], on hearing that the split sub-phases add up to
