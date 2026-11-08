@@ -247,6 +247,60 @@ def test_no_receipt_without_a_terminal_line_or_without_a_resource_session(tmp_pa
     assert not (root / ".claude/session-resources").exists()
 
 
+@pytest.mark.parametrize("verdict", ["raises", "no_identity", "resolved", "unconfigured"])
+def test_the_receipt_publish_takes_the_preflights_verdict_on_the_session_resources_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verdict: str
+) -> None:
+    """P1c c0ad6d6 where P5 publishes the receipt: one rule decides on the session-resources
+    pointer and session.json, the coordinator's preflight read
+    (session_resources.resolve_current_resource_session). Its verdict comes before any receipt
+    call: with no current resource session for the Claude session (it raises, or resolves no
+    identity) no receipt is attempted; resolved, the receipt follows it once, for the same
+    session; with the trust authority unconfigured neither the read nor a receipt happens."""
+    root = tmp_path / "project"
+    root.mkdir()
+    sid = "claude-overnight"
+    _overnight_state(root, sid, _binding("overnight", command="dev-overnight", session=sid))
+    calls: list = []
+
+    def resolve(project_dir, claude_session_id, *, trust_environment):
+        calls.append(("resolve", Path(project_dir), claude_session_id))
+        if verdict == "raises":
+            raise ValueError("no current resource session")
+        return {"resource_session_id": "resource-x"} if verdict == "resolved" else {}
+
+    def publish(project_dir, *, claude_session_id, state, terminal_status):
+        calls.append(("publish", Path(project_dir), claude_session_id, terminal_status))
+        return {"status": "pass"}
+
+    def finalize(project_dir, *, claude_session_id, resource_session_id, trust_environment):
+        calls.append(("finalize", resource_session_id))
+        return {"status": "pass", "idempotent": False}
+
+    monkeypatch.setattr(coordinator.session_resources, "resolve_current_resource_session", resolve)
+    monkeypatch.setattr(coordinator.session_resources, "publish_overnight_receipt", publish)
+    monkeypatch.setattr(coordinator.session_resources, "finalize", finalize)
+    phase_list = _phases(root)
+    phase_list[coordinator.PHASE_ORDER.index("completion")] = _terminal_completion(root)
+    plain = {k: v for k, v in os.environ.items() if k not in coordinator.TRUST_ENVIRONMENT_KEYS}
+    trust = {} if verdict == "unconfigured" else {
+        session_resources.TRUST_KEY_ENV: "c7" * 32, session_resources.TRUST_ROOT_ENV: str(tmp_path / "trust")}
+    result, exit_code = coordinator.run_coordinator(
+        {"session_id": sid, "cwd": str(root)}, project_dir=root,
+        environment={**plain, **trust, "CLAUDE_PROJECT_DIR": str(root)}, phases=phase_list,
+    )
+    if verdict == "resolved":
+        assert exit_code == 0 and result["status"] == "pass", result
+        assert calls == [("resolve", root, sid), ("publish", root, sid, "completed_by_deadline"),
+                         ("finalize", "resource-x")]
+    elif verdict == "unconfigured":
+        assert exit_code == 0 and result["reason"] == "resource_broker_not_configured", result
+        assert calls == []
+    else:
+        assert exit_code == 2 and result["reason"] == "resource_preflight_contract_error", result
+        assert calls == [("resolve", root, sid)]
+
+
 def test_the_real_gate_hands_the_receipt_its_terminal_status_once_the_closeout_is_on_disk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
