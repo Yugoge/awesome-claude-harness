@@ -318,60 +318,6 @@ def build_completion_template(todos: list) -> str:
     return json.dumps(result, ensure_ascii=False, separators=(",", ": "))
 
 
-def build_sequence_fix_call(last_todos: list) -> str:
-    """For sequence violations: compute correct next state."""
-    if not last_todos:
-        return ''
-    try:
-        result = [t.copy() for t in last_todos]
-        idx = next(
-            (i for i, t in enumerate(result) if t.get('status') == 'in_progress'),
-            None,
-        )
-        if idx is not None:
-            result[idx]['status'] = 'completed'
-            _set_first_pending_ip(result[idx + 1:])
-        else:
-            _set_first_pending_ip(result)
-        return json.dumps(result, ensure_ascii=False, separators=(",", ": "))
-    except Exception:
-        return ''
-
-
-def format_count_mismatch(canonical: list) -> str:
-    """Format locked message for count mismatch violations."""
-    return '\n'.join([
-        'WORKFLOW LOCKED (count_mismatch): TodoWrite called with wrong step count.',
-        f'You MUST re-call TodoWrite with ALL {len(canonical)} canonical steps.',
-        'Call TodoWrite with this exact todos array:', '',
-        build_next_todowrite_call(canonical, mark_first=False),
-    ])
-
-
-def _find_current_step(todos: list) -> str:
-    """Find the content of the current in_progress step."""
-    ip = next((t for t in todos if t.get('status') == 'in_progress'), None)
-    return ip["content"] if ip else "current step"
-
-
-def format_sequence_violation(todos: list, last_todos: list) -> str:
-    """Format locked message for sequence violations."""
-    if last_todos:
-        current = _find_current_step(last_todos)
-        fix_json = build_sequence_fix_call(last_todos)
-    else:
-        current = _find_current_step(todos)
-        fix_json = ''
-    lines = [
-        'WORKFLOW LOCKED (sequence_violation): Steps skipped or out of order.',
-        f'REQUIRED: complete "{current}" first, then advance ONE step.',
-        'Call TodoWrite to fix the sequence.',
-    ]
-    if fix_json:
-        lines += ['', 'Call TodoWrite with this exact todos array:', '', fix_json]
-    return '\n'.join(lines)
-
-
 def format_active_progress(todos: list, ack: bool) -> str:
     """Format progress message for active (non-locked) workflow."""
     total = len(todos)
@@ -395,18 +341,6 @@ def format_active_progress(todos: list, ack: bool) -> str:
         lines.append('Call TodoWrite NOW with this array (pass as array, NOT string):')
         lines.append(build_next_todowrite_call(todos, mark_first=False))
     return '\n'.join(lines)
-
-
-def format_progress(
-    todos: list, lock_reason: str = '', canonical: list = None,
-    todo_acknowledged: bool = False, last_todos: list = None,
-) -> str:
-    """Phase B: show current progress. Dispatches to formatters."""
-    if lock_reason == 'count_mismatch' and canonical:
-        return format_count_mismatch(canonical)
-    if lock_reason == 'sequence_violation':
-        return format_sequence_violation(todos, last_todos or [])
-    return format_active_progress(todos, todo_acknowledged)
 
 
 # --- Overnight helpers ---
@@ -1129,6 +1063,22 @@ def _checklist():
         return None
 
 
+def wake_recovery(user_input: str) -> str:
+    """What the /dev-overnight session's own wake starts when it fires inside the session's open
+    span: commands/restart.md's recovery, with no human (P1c X8, D20); '' for any other prompt."""
+    import overnight  # hooks/lib is on sys.path (see the WS1 block above)
+    if not overnight.wake_fired(user_input, CURRENT_TRANSCRIPT_PATH):
+        return ''
+    path = _resolve_command_spec('restart')[0] or 'commands/restart.md'
+    return '\n'.join([
+        "OVERNIGHT WAKE: this /dev-overnight session's scheduled wake fired inside its span, and the",
+        f'/restart capability is issued for it. Read {path} now and run its Mandatory procedure',
+        '(prepare; one SendMessage with its exact resume_message per pending candidate; status;',
+        'finalize). With 0 candidates nothing was cut: finalize. Then carry on with the /dev-overnight',
+        'checklist step in progress; never stop, ask or wait.',
+    ])
+
+
 def handle_phase_b(session_id: str) -> None:
     """Phase B: inject overnight continuation and/or workflow progress."""
     overnight_ctx = check_overnight_continuation(session_id)
@@ -1153,11 +1103,7 @@ def handle_phase_b(session_id: str) -> None:
     todos = state.todos if state.todos is not None else state.canonical
     if all(t.get('status') == 'completed' for t in todos):
         return
-    lock = state.lock if state.lock != 'not_started' else ''
-    print(format_progress(
-        todos, lock_reason=lock, canonical=state.canonical,
-        todo_acknowledged=not state.lock, last_todos=state.accepted or [],
-    ))
+    print(format_active_progress(todos, state.todos is not None))
 
 
 def checklist_message(cmd_name: str, todos: list) -> str:
@@ -1211,8 +1157,8 @@ def _mint_unique_do_taskid() -> str:
     /close + /commit task-id resolution compatible (no nonce suffix that /close's
     timestamp-pattern branch might reject). The flat /tmp marker is reachable by the
     maxdepth-1 /tmp sweep AND self-pruned here. The ONLY non-reserved return path is
-    an unwritable state dir (OSError) — but there the sidecar write fails too, so
-    the id never reaches the agent and a collision on it is moot."""
+    a state dir that refuses the marker (OSError): the id is then returned
+    unreserved, and the consent flag and the sidecar fail in that dir too."""
     base = datetime.now()
     # Opportunistic prune — a marker only matters for the ~1s it guards (mint
     # always scans forward from `now`), so markers older than 5 min are pure debris.
@@ -1237,12 +1183,10 @@ def _mint_unique_do_taskid() -> str:
         except FileExistsError:
             continue  # this second already reserved by another mint -> bump forward
         except OSError:
-            # State dir unwritable: the sidecar write will also fail, so an
-            # unreserved id here is moot (it never reaches the agent). Return it.
-            return ts
+            return ts  # the state dir refuses the marker: unreserved (see above)
     # 300 consecutive seconds all reserved — unreachable in practice. FAIL CLOSED
-    # rather than return an already-reserved (colliding) id: handle_do_consent's
-    # try/except then skips the sidecar, so no /do task-id is minted for this prompt.
+    # rather than return an already-reserved (colliding) id: handle_do_consent
+    # then prints no minted line and writes no sidecar for this prompt.
     raise RuntimeError("unable to reserve a unique /do task-id after 300 probes")
 
 
@@ -1257,21 +1201,27 @@ def handle_do_consent(sid: str) -> None:
     flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag")
     try:
         flag.write_text("true")
-        print(f"[/do] Consent granted. Main agent may now perform direct operations this session.")
+        print("[/do] Consent granted. Main agent may now perform direct operations this turn.")
     except Exception as e:
         sys.stderr.write(f"[/do] Failed to write consent flag: {e}\n")
     # Mint a unique task-id and expose it via a session-keyed sidecar. Kept
     # SEPARATE from the consent flag (the orchestrator-gate trust root, whose
     # content stays "true" so every existence-checking reader is unaffected).
+    # The minted line is printed first: the Stop gate reads the task id from
+    # this hook's output in the transcript, not from the sidecar (TC-26), so a
+    # failed sidecar write leaves the id named all the same.
     try:
         task_id = _mint_unique_do_taskid()
-        sidecar = Path(f"{harness_state_dir()}/claude-do-task-{sid}.json")
-        sidecar.write_text(json.dumps({
+    except Exception as e:
+        sys.stderr.write(f"[/do] Failed to mint a task-id: {e}\n")
+        return
+    print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → {harness_state_dir()}/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
+    try:
+        Path(f"{harness_state_dir()}/claude-do-task-{sid}.json").write_text(json.dumps({
             "task_id": task_id,
             "session_id": sid,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }))
-        print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → {harness_state_dir()}/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
     except Exception as e:
         sys.stderr.write(f"[/do] Failed to write task sidecar: {e}\n")
 
@@ -1350,7 +1300,7 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
     ``write`` is _write_new_file for a registry reserved just now and
     _atomic_write_bytes for an overnight one, which a relaunch in the same
     session writes again. Returns the flag writer's error output, '' when it
-    succeeded."""
+    succeeded (or no flag was asked for)."""
     import roster  # hooks/lib is on sys.path (see the WS1 block above)
     if not roster.roles():
         # With no roster the sentinel hook registers no subagent, and every
@@ -1358,6 +1308,8 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
         # instead, naming the missing input.
         raise RuntimeError(f'no agent roster under {roster.AGENTS_DIR}')
     write(project_dir / 'docs' / 'dev' / f'user-requirement-{name}.md', requirement)
+    if not flags:
+        return ''
     command = [str(Path(__file__).resolve().parent.parent / 'scripts' / 'write-enforce-flag.sh'),
                '--source-command', cmd_name, '--session-id', name]
     for flag in flags:
@@ -1374,9 +1326,10 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
 
 def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, project_dir: Path) -> str:
     """Reserve a /dev, /dev-command or /redev task id and arm its registry
-    (_arm_registry) with the cleaned requirement and the E2E flag, plus codex
-    under --codex. A flag that cannot be written is reported and the start
-    goes on (fail-open). Returns the task id."""
+    (_arm_registry) with the cleaned requirement, plus the codex flag under
+    --codex (the E2E gate needs no flag: it judges every cycle's QA). A flag
+    that cannot be written is reported and the start goes on (fail-open).
+    Returns the task id."""
     # Reserving the directory with mkdir(exist_ok=False) is the allocation
     # linearization point shared by concurrent sessions.  No existing family is
     # opened for replacement, even when the wall clock has only second precision.
@@ -1399,7 +1352,7 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     # Also strip inline --spec=<path> form
     clean_requirement = re.sub(r'(?:--|[–—])spec\s+\S+', '', ' '.join(clean_tokens)).strip()
 
-    flags = ['e2e'] + (['codex'] if '--codex' in tokens else [])
+    flags = ['codex'] if '--codex' in tokens else []
     error = _arm_registry(cmd_name, dev_session_id, clean_requirement.encode('utf-8'),
                           claude_session_id, project_dir, flags, _write_new_file)
     if error:
@@ -1703,6 +1656,9 @@ def main():
         _clear_turn_state(session_id, cmd_name)
         if not cmd_name:
             handle_phase_b(session_id)
+            recovery = wake_recovery(user_input)
+            if recovery:
+                print(recovery)
         else:
             handle_phase_a(cmd_name, user_input, session_id, hashlib.sha256(raw).hexdigest())
     except SystemExit:

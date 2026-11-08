@@ -4,7 +4,11 @@ window_open, closeout_gaps, stop_contract.timelock_released and the /stop helper
 Acceptance 6 (time-lock in any timezone, the locator per isolation kind),
 8 (a forged token releases nothing; a human-typed /stop does) and 10 (the
 closeout on disk) at unit level and through the real hooks as subprocesses,
-on throwaway git repositories.
+on throwaway git repositories. Since P5 the time-lock is the Stop gate's step 4
+(hooks/stop-command-gate.py; stop-overnight-timelock.py is an exit-0 stub) and
+the closeout after end_time is a gap of the /dev-overnight span's predicate, so
+these cases run the gate: a session's Stop inside the window in any span, and a
+/dev-overnight Stop after end_time whose checklist is complete.
 
 Run: python3 -m pytest hooks/tests/test_overnight_window.py -q
 """
@@ -25,7 +29,7 @@ HOOKS = REPO / "hooks"
 sys.path.insert(0, str(HOOKS))
 from lib import overnight, stop_contract  # noqa: E402
 
-TIMELOCK = HOOKS / "stop-overnight-timelock.py"
+GATE = HOOKS / "stop-command-gate.py"  # the time-lock: its step 4 (P5 R7, R11)
 LOOP = HOOKS / "posttool-overnight-loop.py"
 BREAK_LOCK = REPO / "scripts" / "break-overnight-lock.py"
 SID = "6f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b"
@@ -74,12 +78,32 @@ def _git(*args: str, cwd: Path) -> None:
 
 
 def _run(hook: Path, payload: dict, env: dict | None = None, project: Path | None = None):
-    environment = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+    environment = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PROJECT_DIR", "CLAUDE_COMMAND_GATE")}
+    environment["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1"
     if project is not None:
         environment["CLAUDE_PROJECT_DIR"] = str(project)
     environment.update(env or {})
     return subprocess.run([sys.executable, str(hook)], input=json.dumps(payload), capture_output=True,
                           text=True, env=environment, timeout=30)
+
+
+def _night(path: Path, *later: dict, done: bool = True) -> Path:
+    """The main transcript of a /dev-overnight session: the human's /dev-overnight, then its
+    canonical checklist (scripts/todo/dev-overnight.py) in one TodoWrite, every step completed
+    (``done``) or none, then ``later`` records."""
+    from lib import todo_canonical
+    todos = [dict(t, status="completed" if done else "pending") for t in todo_canonical.run_todo_script(
+        "dev-overnight", "8h")]
+    write = [{"type": "assistant", "message": {"role": "assistant", "content": [
+                 {"type": "tool_use", "id": "toolu_todo", "name": "TodoWrite", "input": {"todos": todos}}]}},
+             {"type": "user", "message": {"role": "user", "content": [
+                 {"type": "tool_result", "tool_use_id": "toolu_todo", "content": "ok"}]}}]
+    return _transcript(path, _command("dev-overnight", "8h"), *write, *later)
+
+
+def _terminal(result) -> str | None:
+    """The terminal time-lock status the gate prints on an allowed Stop after the window."""
+    return json.loads(result.stdout).get("timelock_terminal") if result.stdout.strip() else None
 
 
 def _said(result) -> str:
@@ -138,43 +162,46 @@ def test_a_passed_or_unreadable_end_time_closes_the_window(end_time):
 def test_the_lock_holds_about_an_hour_in_any_timezone(tmp_path, tz, form):
     end = _z(1) if form == "z" else _utc(1).replace(tzinfo=None).isoformat()
     _state(tmp_path, end_time=end)
-    result = _run(TIMELOCK, {"session_id": SID}, {"TZ": tz}, project=tmp_path)
+    result = _run(GATE, {"session_id": SID}, {"TZ": tz}, project=tmp_path)
     assert result.returncode == 2, result.stderr
-    assert "TIME-LOCK ACTIVE" in result.stderr and "Time remaining: 0h 59m" in result.stderr
+    assert "COMMAND_GATE time-lock: overnight window open" in result.stderr and "0h 59m left" in result.stderr
 
 
 def test_a_human_spec_inside_the_window_still_blocks(tmp_path):
     _state(tmp_path)
     transcript = _transcript(tmp_path / "t.jsonl", _command("dev-overnight", "8h"), _command("spec", "x"),
                              _record("and keep going"))
-    result = _run(TIMELOCK, {"session_id": SID, "transcript_path": str(transcript)}, project=tmp_path)
-    assert result.returncode == 2 and "TIME-LOCK ACTIVE" in result.stderr
+    result = _run(GATE, {"session_id": SID, "transcript_path": str(transcript)}, project=tmp_path)
+    assert result.returncode == 2 and "COMMAND_GATE time-lock: overnight window open" in result.stderr
 
 
 def test_after_end_time_the_closeout_gaps_are_named_on_stderr(tmp_path):
     _state(tmp_path, end_time=_z(-0.1), current_phase="completed", status="done")
-    result = _run(TIMELOCK, {"session_id": SID}, project=tmp_path)
-    assert result.returncode == 2
+    night = _night(tmp_path / "t.jsonl")
+    result = _run(GATE, {"session_id": SID, "transcript_path": str(night)}, project=tmp_path)
+    assert result.returncode == 2 and result.stderr.startswith("COMMAND_GATE /dev-overnight: not complete")
     gaps = overnight.closeout_gaps(json.loads((tmp_path / ".claude" / f"overnight-state-{SID}.json")
                                               .read_text()), tmp_path)
     assert len(gaps) == 2 and all(gap in result.stderr for gap in gaps)
 
 
 def test_stop_hook_active_frees_nothing(tmp_path):
+    night = str(_night(tmp_path / "t.jsonl"))
     _state(tmp_path)
-    assert _run(TIMELOCK, {"session_id": SID, "stop_hook_active": True}, project=tmp_path).returncode == 2
+    assert _run(GATE, {"session_id": SID, "stop_hook_active": True}, project=tmp_path).returncode == 2
     _state(tmp_path, end_time=_z(-0.1))
-    assert _run(TIMELOCK, {"session_id": SID, "stop_hook_active": True}, project=tmp_path).returncode == 2
+    held = _run(GATE, {"session_id": SID, "transcript_path": night, "stop_hook_active": True}, project=tmp_path)
+    assert held.returncode == 2 and "no PM retrospective report" in held.stderr
 
 
 def test_another_sessions_state_is_never_used(tmp_path):
     _state(tmp_path, sid="other-session")
     assert overnight.locate(SID, {"cwd": str(tmp_path)}) == (None, None)
-    result = _run(TIMELOCK, {"session_id": SID, "cwd": str(tmp_path)}, project=tmp_path)
+    result = _run(GATE, {"session_id": SID, "cwd": str(tmp_path)}, project=tmp_path)
     assert result.returncode == 0 and result.stderr == ""
     path = _state(tmp_path, sid=SID)
     path.write_text(json.dumps({"session_id": "other-session", "end_time": _z(1)}))
-    assert _run(TIMELOCK, {"session_id": SID}, project=tmp_path).returncode == 0
+    assert _run(GATE, {"session_id": SID}, project=tmp_path).returncode == 0
 
 
 @pytest.fixture
@@ -223,9 +250,9 @@ def test_the_locator_finds_the_main_roots_state(isolation, kind, channel, monkey
 
 def test_a_session_whose_project_dir_is_the_worktree_is_locked(isolation):
     main, starts = isolation
-    result = _run(TIMELOCK, {"session_id": SID, "cwd": str(starts["linked worktree"])},
+    result = _run(GATE, {"session_id": SID, "cwd": str(starts["linked worktree"])},
                   project=starts["linked worktree"])
-    assert result.returncode == 2 and "TIME-LOCK ACTIVE" in result.stderr
+    assert result.returncode == 2 and "COMMAND_GATE time-lock: overnight window open" in result.stderr
 
 
 # ---------------------------------------- acceptance 8: what releases the lock
@@ -268,8 +295,8 @@ def test_a_forged_token_and_the_helper_release_nothing_a_typed_stop_does(tmp_pat
     assert after["end_time"] == end_time and after["current_phase"] == "completed"
     session = _transcript(tmp_path / "t.jsonl", _command("dev-overnight", "8h"))
     payload = {"session_id": SID, "transcript_path": str(session)}
-    held = _run(TIMELOCK, payload, project=tmp_path)
-    assert held.returncode == 2 and "TIME-LOCK ACTIVE" in held.stderr
+    held = _run(GATE, payload, project=tmp_path)
+    assert held.returncode == 2 and "COMMAND_GATE time-lock: overnight window open" in held.stderr
     todos = {**payload, "tool_name": "TodoWrite",
              "tool_input": {"todos": [{"content": "a", "status": "completed", "activeForm": "a"}]}}
     assert "OVERNIGHT LOOP" in _said(_run(LOOP, todos, project=tmp_path))
@@ -277,11 +304,13 @@ def test_a_forged_token_and_the_helper_release_nothing_a_typed_stop_does(tmp_pat
     _transcript(session, _command("dev-overnight", "8h"), _command("stop", isMeta=True),
                 _command("stop", isMeta=True, sourceToolUseID="toolu_01"),
                 _command("stop", origin={"kind": "scheduled"}))
-    assert _run(TIMELOCK, payload, project=tmp_path).returncode == 2
-    # The human types /stop: released with no closeout check (none is on disk).
+    assert _run(GATE, payload, project=tmp_path).returncode == 2
+    # The human types /stop: released with no closeout check (none is on disk), the
+    # cancelled_by_user status handed to the coordinator's receipt call.
     _transcript(session, _command("dev-overnight", "8h"), _command("stop"))
-    released = _run(TIMELOCK, payload, project=tmp_path)
-    assert released.returncode == 0 and "CLOSEOUT" not in released.stderr, released.stderr
+    released = _run(GATE, payload, project=tmp_path)
+    assert released.returncode == 0 and released.stderr == "", released.stderr
+    assert _terminal(released) == "cancelled_by_user"
     loop = _said(_run(LOOP, todos, project=tmp_path))
     assert "OVERNIGHT LOOP" not in loop and "OVERNIGHT SESSION COMPLETE" in loop
 
@@ -294,9 +323,13 @@ def test_closeout_on_disk_allows_with_a_dirty_tree(isolation):
     worktree = starts["linked worktree"]
     _state(main, end_time=_z(-0.1), start_time=_z(-2), worktree_path=str(worktree))
     (worktree / "README.md").write_text("uncommitted change\n")
+    payload = {"session_id": SID, "cwd": str(worktree), "transcript_path": str(_night(main.parent / "t.jsonl"))}
+    held = _run(GATE, payload, project=worktree)
+    assert held.returncode == 2 and "no PM retrospective report" in held.stderr, held.stderr
     _closeout(worktree)
-    result = _run(TIMELOCK, {"session_id": SID, "cwd": str(worktree)}, project=worktree)
+    result = _run(GATE, payload, project=worktree)
     assert result.returncode == 0, result.stderr
+    assert _terminal(result) == "completed_by_deadline"
 
 
 def test_closeout_gaps_name_a_missing_retro_and_a_stale_summary(tmp_path):
@@ -308,13 +341,18 @@ def test_closeout_gaps_name_a_missing_retro_and_a_stale_summary(tmp_path):
     _closeout(tmp_path, summary_mtime=_utc(-3).timestamp())  # written before this session started
     gaps = overnight.closeout_gaps(state, tmp_path)
     assert len(gaps) == 1 and "overnight-summary-*.md" in gaps[0]
-    result = _run(TIMELOCK, {"session_id": SID}, project=tmp_path)
+    payload = {"session_id": SID, "transcript_path": str(_night(tmp_path / "t.jsonl"))}
+    result = _run(GATE, payload, project=tmp_path)
     assert result.returncode == 2 and gaps[0] in result.stderr
     (tmp_path / "docs" / "dev" / "overnight" / SID / "retro-report-cycle1.json").unlink()
     _closeout(tmp_path)
     (tmp_path / "docs" / "dev" / "overnight" / SID / "retro-report-cycle1.json").unlink()
-    result = _run(TIMELOCK, {"session_id": SID}, project=tmp_path)
+    result = _run(GATE, payload, project=tmp_path)
     assert result.returncode == 2 and "retro-report-cycle*.json: no PM retrospective report" in result.stderr
     _closeout(tmp_path)
     assert overnight.closeout_gaps(state, tmp_path) == []
-    assert _run(TIMELOCK, {"session_id": SID}, project=tmp_path).returncode == 0
+    result = _run(GATE, payload, project=tmp_path)
+    assert result.returncode == 0 and _terminal(result) == "completed_by_deadline", result.stderr
+    # Step 21's summary is opened: an empty one is no summary (P1c).
+    (tmp_path / "docs" / "dev" / "overnight-summary-2026-11-01.md").write_text("")
+    assert [g for g in overnight.closeout_gaps(state, tmp_path) if "overnight-summary-*.md" in g]

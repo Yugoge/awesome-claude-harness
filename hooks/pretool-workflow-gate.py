@@ -3,10 +3,11 @@
 PreToolUse Hook: Require TodoWrite/TodoRead acknowledgment before other tools.
 
 If an active workflow exists (the transcript's active span was opened by a
-command with a canonical checklist) and the agent has NOT yet called TodoWrite,
-or its last TodoWrite broke the count or the first-call step rule, block any
-other tool. The checklist state is read from the transcript
-(lib.todo_canonical.checklist, P1b E7): nothing is written.
+command with a canonical checklist) and the agent has NOT yet made an ok
+TodoWrite in it, block any other tool. The checklist state is read from the
+transcript (lib.todo_canonical.checklist, P1b E7): nothing is written. Every
+other TodoWrite rule is decided by pretool-todo-validate.py before the call
+runs, so an ok TodoWrite already passed them.
 
 This prevents agents from ignoring the workflow checklist while still using
 other tools freely.
@@ -14,7 +15,7 @@ other tools freely.
 Logic:
   1. If tool is TodoWrite or TodoRead → allow
   2. No checklist command in the active span → allow (no active workflow)
-  3. An ok TodoWrite that broke no rule is the last one → allow
+  3. An ok TodoWrite in the span → allow
   4. Otherwise → block
 
 The Codex compatibility runtime (CLAUDE_COMPAT_RUNTIME=codex) keeps its own
@@ -40,60 +41,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 CODEX_PLAN_TOOLS = {'update_plan', 'UpdatePlan', 'functions.update_plan'}
 CODEX_RUNTIME_ENV = 'CLAUDE_COMPAT_RUNTIME'
 
-# /restart is documented as an orthogonal control operation that must never
-# touch another command's TodoWrite checklist (commands/restart.md). If the
-# invoking session also happens to hold its own unstarted checklist (e.g.
-# a /dev cycle was invoked and interrupted before its first TodoWrite), that
-# checklist must not be able to block /restart's own recovery script — doing
-# so would force a choice between two contradictory NON-NEGOTIABLE rules.
-# Matched structurally against the documented invocations only (no
-# --session-id: commands/restart.md never passes it, so admitting it would
-# only widen attack surface for zero functional benefit), with shell
-# metacharacters rejected so this can never become a chaining bypass.
-# The two optional groups are positional, not bound to a subcommand: this
-# pattern admits either flag after any of the three subcommands, a
-# permissive superset of what the CLI accepts. argparse registers each flag
-# on its own subparser, so a combination this pattern admits but the CLI
-# does not (e.g. finalize --cross-account) exits non-zero there rather than
-# running. Enforcing the pairing here too would duplicate that authority in
-# a second place that could drift from it.
-_HARNESS_HOME = str(Path(os.path.abspath(__file__)).parent.parent)  # install location
-_RESTART_HELPER_COMMAND_RE = re.compile(  # the venv form, or commands/restart.md's quoted CLAUDE_HOME channel
-    r'^(?:(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
-    r'/venv/bin/python3?\s+'
-    r'(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
-    r'/scripts/restart-subagents\.py|python3\s+"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/restart-subagents\.py")\s+'
-    r'(?:prepare|status|finalize)'
-    r'(?:\s+--cross-account)?'
-    r'(?:\s+--wait-seconds\s+\d+)?'
-    r'\s*$'
-)
-_SHELL_METACHAR_RE = re.compile(r'[;&|`\n<>]|\$\(')
-_HOME_UNSAFE_RE = re.compile(r'[\s;&|`\n<>$]')
-
-
 def is_restart_helper_bash_command(data: dict) -> bool:
-    """True only for the exact, unchained /restart helper invocation.
-
-    The pattern's literal-$HOME alternative is only trustworthy if $HOME
-    itself expands to a single clean word when Bash actually runs the
-    command; a HOME value containing whitespace or shell metacharacters
-    would let that expansion smuggle in extra words or operators the regex
-    never saw. Fail closed (no bypass, ordinary gate enforcement applies)
-    whenever the resolved home directory looks unsafe.
-    """
-    if data.get('tool_name') != 'Bash':
+    """The exact, unchained /restart helper invocation (lib/subagent_restart.py's
+    one rule, shared with the overnight write boundary); /restart is an
+    orthogonal control operation no checklist may block (commands/restart.md)."""
+    if 'restart-subagents.py' not in str(data.get('tool_input')):
         return False
-    tool_input = data.get('tool_input') if isinstance(data.get('tool_input'), dict) else {}
-    command = tool_input.get('command')
-    if not isinstance(command, str):
-        return False
-    command = command.strip()
-    if not command or _SHELL_METACHAR_RE.search(command):
-        return False
-    if _HOME_UNSAFE_RE.search(str(Path.home())) or _HOME_UNSAFE_RE.search(_HARNESS_HOME):
-        return False
-    return bool(_RESTART_HELPER_COMMAND_RE.match(command))
+    from lib.subagent_restart import is_helper_invocation
+    return is_helper_invocation(data)
 
 
 def official_todos_path(session_id: str) -> Path:
@@ -286,15 +241,21 @@ def codex_plan_matches_canonical(plan: list, canonical: list) -> bool:
     return completed == 0 and (not in_progress or in_progress == [0])
 
 
-def codex_plan_to_todos(plan: list, canonical: list) -> tuple[list, list]:
-    """Convert a Codex update_plan payload to canonical TodoWrite-shaped todos."""
+def codex_plan_to_todos(plan: list, canonical: list, last: list | None = None) -> tuple[list, list]:
+    """Convert a Codex update_plan payload to canonical TodoWrite-shaped todos: the whole
+    list against the canonical one for a first plan or a length change, else each item
+    paired with the canonical step of its own text, never of its index (P1c row 17)."""
     violations = []
     todos = []
     if not canonical:
         return [], ['Canonical workflow definition is unavailable']
     if not isinstance(plan, list):
         return [], ['Codex plan payload is not a list']
-    if len(plan) != len(canonical):
+    if isinstance(last, list) and len(last) == len(plan):
+        texts = {normalize_step_text(str(c.get(k, ''))): c for c in canonical for k in ('content', 'activeForm')}
+        canonical = [texts.get(normalize_step_text(str(item.get('step') or item.get('content') or item.get('title')
+                                                       or '')) if isinstance(item, dict) else '', {}) for item in plan]
+    elif len(plan) != len(canonical):
         return [], [f'Expected {len(canonical)} steps, got {len(plan)}']
     for idx, (item, expected) in enumerate(zip(plan, canonical)):
         if not isinstance(item, dict):
@@ -989,7 +950,7 @@ def acknowledge_codex_plan(data: dict, session_id: str, bookmark_path: Path, pro
 
     cmd_name = state.get('command', '')
     canonical = run_canonical_todos(cmd_name, project_dir, state.get('arguments', ''))
-    todos, violations = codex_plan_to_todos(plan, canonical)
+    todos, violations = codex_plan_to_todos(plan, canonical, state.get('last_todos'))
     if violations:
         emit_codex_plan_block(cmd_name, violations, state.get('last_todos') or [])
 
@@ -1138,7 +1099,7 @@ def main():
         if acknowledge_codex_plan(data, session_id, bookmark_path, project_dir):
             sys.exit(0)
 
-    # TodoWrite → allow: the TodoWrite validators decide on it, and the
+    # TodoWrite → allow: pretool-todo-validate.py decides on it, and the
     # checklist state below is read back from the record it leaves.
     # Note: type errors (todos as string instead of array) are caught by Claude Code's schema
     # validation BEFORE PreToolUse hooks run — no need to duplicate that check here.
@@ -1155,12 +1116,7 @@ def main():
         if not lock_reason:
             sys.exit(0)
         cmd_name = state.command
-        if lock_reason == 'sequence_violation':
-            # Hint from the list the step rules accepted last (none yet, when
-            # the first one broke them), not from the violating one.
-            next_json = build_sequence_fix_call(state.accepted) if state.accepted else ''
-        else:
-            next_json = next_todowrite_call(state.canonical)
+        next_json = next_todowrite_call(state.canonical)
 
     codex_runtime = is_codex_runtime(data)
     if codex_runtime:
@@ -1178,18 +1134,11 @@ def main():
         )
         action = 'Call TodoWrite'
 
-    if lock_reason == 'sequence_violation':
+    if lock_reason == 'sequence_violation':  # the Codex plan's lock (_codex_lock) only
         sys.stderr.write(
             f'\n🚫 STEP SKIPPING DETECTED: /{cmd_name} workflow is locked.\n'
             f'You attempted to skip or reorder steps.\n'
             f'{action} to fix the sequence — complete steps one at a time, in order.\n'
-            + json_hint
-        )
-    elif lock_reason == 'count_mismatch':
-        sys.stderr.write(
-            f'\n🚫 STEP COUNT VIOLATION: /{cmd_name} workflow is locked.\n'
-            f'TodoWrite was called with the wrong number of steps.\n'
-            f'{action} with the complete canonical step list.\n'
             + json_hint
         )
     else:

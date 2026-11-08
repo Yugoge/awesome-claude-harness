@@ -2,13 +2,15 @@
 """
 PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark.
 
-Bookkeeping (every workflow): locate the in_progress canonical todo via
-array-index (not label) and set
+Bookkeeping (the Codex plan's bookmark only): locate the in_progress todo of
+the bookmark's last_todos and set
     bookmark.subagent_calls[str(ip_index)] = True
 in the workflow bookmark as lib.todo_canonical.write_bookmark, its one writer,
-reads it at the write. This unblocks pretool-todo-validate.py at line 238 which
-reads `state.get('subagent_calls', {}).get(str(i), False)` where `i` is the
-canonical enumerate-index. Whether the dispatch produced its artifact is
+reads it at the write; validate_codex_transition in pretool-workflow-gate.py
+reads that marker. Only the Codex plan path (persist_codex_initialization)
+writes last_todos, so a Claude session's bookmark has none and this writes
+nothing there: its Gate 4 reads the Agent calls from the transcript
+(pretool-todo-validate.py). Whether the dispatch produced its artifact is
 decided by posttool-overnight-file-check.py at the same PostToolUse (G3) and
 by the producer's own stop (G2), not here.
 
@@ -48,7 +50,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.todo_canonical import run_todo_script, write_bookmark
+from lib.todo_canonical import by_content, run_todo_script, write_bookmark
 from lib import contract_runtime
 from lib import obligation
 from lib import overnight
@@ -110,8 +112,8 @@ def _content_to_step(content: str) -> str:
 def _current_in_progress_index(state: dict) -> int | None:
     """Return the 0-indexed array position of the in_progress todo in last_todos.
 
-    The validator at pretool-todo-validate.py around line 238 keys
-    `subagent_calls` on the canonical enumerate-index string form, so this
+    validate_codex_transition (pretool-workflow-gate.py) keys
+    `subagent_calls` on the plan's enumerate-index string form, so this
     writer must conform to the same indexing scheme (NOT the step label).
 
     Multi-in_progress guard (cycle 20260519-211515 Item H, OBJ-5 BLOCKER
@@ -189,8 +191,8 @@ def _find_earliest_unflipped_matching_step(
         if call_meta is None:
             continue
         # Normalize: subagent_call may be a dict (single subagent) or a list
-        # of dicts (multiple alternative subagents — supported by the
-        # validator's _format_subagent_names at pretool-todo-validate.py:244-248).
+        # of dicts (multiple alternative subagents — supported by
+        # pretool-todo-validate.py's _format_subagent_names).
         if isinstance(call_meta, dict):
             entries = [call_meta]
         elif isinstance(call_meta, list):
@@ -327,7 +329,7 @@ def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
     if contract_runtime._iter_required_calls(contract_runtime.load_contract(session_id, cycle_id, state)):
         print(f'CYCLE CONTRACT KEPT: cycle {cycle_id} already has one: {path}')
         return
-    count = _pipeline_count(state, cycle_id, str(stdin_data['tool_input'].get('prompt') or ''))
+    count = _pipeline_count(state, cycle_id, str((stdin_data.get('tool_input') or {}).get('prompt') or ''))
     if count is None:
         sys.stderr.write(
             f'CYCLE CONTRACT NOT WRITTEN: cycle {cycle_id} has no readable triage '
@@ -382,7 +384,8 @@ def _resolve_base_context(session_id: str):
     last_todos = state.get('last_todos')
     if not cmd_name or not last_todos:
         return None
-    canonical = run_todo_script(cmd_name, state.get('arguments', '')) or []
+    # Each todo's canonical step is the one of its content, never of its index (P1c row 17).
+    canonical = by_content(run_todo_script(cmd_name, state.get('arguments', '')) or [], last_todos)
     ip_index = _current_in_progress_index(state)
     return state, last_todos, canonical, ip_index, bm_path
 

@@ -51,9 +51,8 @@ old form; each application is recorded in blocks.json "respellings":
 Not respelled (row 7): BA's and QA's blast-radius tool calls (ba.md Step 9, qa.md Phase 6) run as
 written and fail; the replay goes on.
 
-Deviations: DEVIATIONS below, one entry per block the base tree's (2acc29b) replay meets, each with
-a comment quoting the hook's text; nothing else passes a block. On another tree an entry whose
-block no longer occurs is a no-op. The subagents' own calls reach them through rp.deviation_at.
+Deviations: none (DEVIATIONS is empty since P1c fixed each block at its cause): every block a
+replay meets stays blocked and is reported; P1c's suite (tests/replay/test_pipelines.py) fails on it.
 """
 from __future__ import annotations
 
@@ -63,7 +62,6 @@ import re
 
 from .. import agents, cmdtext, roles
 from ..pipeline import DROP, DROP_NEXT, Deviations, Orchestrator, Respelling, utc_now
-from ..replay import Deviation
 from .dev import with_lines
 
 PIPELINE = "dev-command"
@@ -86,27 +84,11 @@ RESPELLINGS = [
                "commands/dev-command.md Steps 7, 12"),
 ]
 
-# Blocks the base tree's replay meets, each passed by a deviation at the step it occurs on: the
-# refused call is applied as if allowed, so every later step runs and is traced.
-DEVIATIONS = Deviations([
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote"
-    # pretool-bash-safety.sh refuses Step 1's cp-state block (the apostrophe in its comment "resolver's").
-    ("Step 1 Bash SPEC_ID", Deviation(
-        "hooks/pretool-bash-safety.sh", "UNRESOLVED census_fatal:unbalanced:single_quote",
-        "Step 1's cp-state block as the text spells it")),
-    # DEVIATION: "[Write Guard] BLOCKED: File already exists: /var/tmp/claude-scratch/update-<rand>.md"
-    # /spec-update --temp (which Step 16 runs) creates the note with mktemp, reads it, then writes it.
-    ("Step 16 Write update note", Deviation(
-        "hooks/pretool-write-guard.sh", "[Write Guard] BLOCKED: File already exists",
-        "the temp note mktemp created, written as /spec-update --temp says")),
-    # DEVIATION: "BLOCKED: claude config guard: agent Write to .claude/commands/ is forbidden outside an
-    # explicit refactor session." pretool-claude-config-guard.py refuses dev's Write (and, on the
-    # qa-fail iteration, its Edit) of the command file the request asks for, which the command's text
-    # lists as its first development type; the guard's sentinel is one "the user creates by hand".
-    ("agent:dev * .claude/commands/*", Deviation(
-        "hooks/pretool-claude-config-guard.py", "BLOCKED: claude config guard",
-        "dev writes the command file the request asks for")),
-])
+# P1c removed each block these passed at its cause: Step 1's resolver and SPEC_ID blocks are one Bash
+# call with no comment the bash-safety census misreads (commands/dev-command.md), and
+# pretool-claude-config-guard.py lets the dev of a human-typed /dev-command write the project command
+# file it develops (<project>/.claude/commands/<name>.md, X4 (b)); Step 16's temp note was gone already.
+DEVIATIONS = Deviations([])
 
 # ---------------------------------------------------------------- the scenario
 
@@ -506,7 +488,8 @@ class DevCommandCycle:
         else:  # the postcondition blocks completion; the block's `|| exit 2` printed no errors[]
             text = (f"/dev-command {self.tid}: QA passed and {CMD_REL} runs the toy package tests, but the "
                     "artifact-chain postcondition (Step 16) exited 2, so the cycle is not complete.")
-        o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        ev = o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
+        self.rp.terminal("dev-command", self.chain_ok, ev, task=self.tid)
 
 
 def run(rp) -> None:

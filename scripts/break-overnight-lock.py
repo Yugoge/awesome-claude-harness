@@ -2,8 +2,8 @@
 """Record the human's /stop in the stopping session's own overnight state.
 
 The time-lock is released by the human-typed /stop record itself
-(hooks/lib/stop_contract.py timelock_released, which
-hooks/stop-overnight-timelock.py reads), never by anything this script writes:
+(hooks/lib/command_span.py timelock_released, which the Stop gate's time-lock,
+hooks/stop-command-gate.py, reads), never by anything this script writes:
 it writes no end_time. It records current_phase=completed in the stopping
 session's record, found by hooks/lib/overnight.py's locator (no other
 session's record is touched), which closes that record's share of the

@@ -122,6 +122,10 @@ session is found. Act on its JSON answer:
   user-requirement file) and up to two parents `dev-lifecycle.py list-actionable
   --next-action commit` lists (`Commit <task-id> instead`); then dispatch dev under the
   same task id for the answer.
+- A dispatch of one of a late repair's stages (a role `record-stage` takes): the run record
+  holds each stage's report by hash, so when the dispatch returns, record the report it wrote
+  as `/close --late-repair` records each stage (`<role>` its role, `<path>` the path):
+  `python3 ~/.claude/scripts/late-repair-controller.py record-stage --task-id "$TASK_ID" --project-dir "$TASK_PROJECT_ROOT" --stage <role> --report-path <path> --repair-run-id "$(jq -r .repair_run_id "$TASK_PROJECT_ROOT/docs/dev/late-repair-run-$TASK_ID.json")"`
 
 There is no default role. Once the dispatch returns, run again the one check that named the
 path; a gap or finding it names again is routed the same way, with no round cap.
@@ -226,14 +230,20 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
     finding on `TASK_REPORT`, the plan's one source. It is never an empty plan or "nothing
     to commit"; no grant is issued and nothing is staged while it holds.
 
-  **Attribution-log slice (ground-truth attribution, additive to the plan above).**
-  Immediately after `REPOSITORY_PLAN` resolves, build `ATTRIBUTION_LOG` — a slice of
+  **Attribution-log slice (ground-truth attribution, additive to the plan above),
+  with the dispatch snapshot's inputs.** Once `REPOSITORY_PLAN` resolves, the next
+  Bash call (the block below) builds `ATTRIBUTION_LOG` — a slice of
   the write-time attribution journal (`hooks/lib/attribution_journal.py`) scoped to
   exactly this plan's owned paths. This is the fact-based attribution source
   `agents/changelog-analyst.md`'s staging decision reads instead of (or as a
   cross-check alongside) the dev-report's self-reported ledger fields. An exit code of 2
   (no journaled events for any requested path — e.g. the path pre-dates the journal's
-  rollout) is an ordinary, expected outcome, not a finding:
+  rollout) is an ordinary, expected outcome, not a finding, and nothing in this call
+  decides: its output is what the manifest below records. The same call prints
+  the manifest's other inputs: the state dir, the session id and each plan
+  entry's `git status --porcelain=v1`. (The orchestrator gate allows five Bash
+  calls in a row; with `--auto`'s discovery, Step 3 and the plan this is the
+  fourth, a one-repository plan's grant writer the fifth.)
 
   ```bash
   ATTRIBUTION_FILES=()
@@ -242,6 +252,13 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   done < <(jq -r '.repositories[] | .repo_root as $root | (.owned_paths[]? // empty) | $root + "/" + .' <<<"$REPOSITORY_PLAN")
   ATTRIBUTION_LOG="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/verify-attribution-chain.py" --json "${ATTRIBUTION_FILES[@]}" 2>/dev/null)"
   ATTRIBUTION_LOG="${ATTRIBUTION_LOG:-{\"results\":[],\"no_events\":[],\"discarded_lines\":[]}}"
+  . ~/.claude/hooks/lib/harness_state_dir.sh
+  harness_state_dir
+  echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"
+  while IFS= read -r PLAN_ROOT; do
+      echo "--- $PLAN_ROOT"
+      git -C "$PLAN_ROOT" status --porcelain=v1
+  done < <(jq -r '.repositories[].repo_root' <<<"$REPOSITORY_PLAN")
   ```
 
   `ATTRIBUTION_LOG.results[]` carries, per owned path, its folded write-event
@@ -253,8 +270,9 @@ Before dispatching changelog-analyst, write the appropriate authorization token:
   investigative path applies, never a block.
 
   **Write the dispatch-snapshot manifest FIRST — before minting any grant** (non-bulk
-  mode only; ordering is load-bearing since 2026-10-06, see below). Capture
-  `git status --porcelain=v1` independently for every admitted plan entry, then write
+  mode only; ordering is load-bearing since 2026-10-06, see below). From the
+  snapshot call above (each admitted plan entry's own `git status --porcelain=v1`,
+  the state dir and the session id it printed), write
   `manifest_path = <state-dir>/claude-commit-manifest-{sid}.json` — where `<state-dir>`
   is `CLAUDE_STATE_DIR` when set to an absolute path and `/tmp` otherwise, resolved by
   `hooks/lib/harness_state_dir`, which is the SAME resolver the manifest's readers use;

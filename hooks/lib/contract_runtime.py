@@ -223,7 +223,9 @@ def call_entry(label: str, subagent_call: dict) -> dict:
 
 
 def detect_mode(prompt: str) -> str:
-    """The mode keyword a dispatch prompt carries ('' when none)."""
+    """The mode keyword a dispatch prompt carries ('' when none). A PM prompt
+    without one is compared as it is: whether a step's mode binds is decided by
+    the text the session loaded (exploration_calls), not by a default here."""
     if not isinstance(prompt, str):
         return ''
     return next((keyword for keyword in _MODE_KEYWORDS if keyword in prompt), '')

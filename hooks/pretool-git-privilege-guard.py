@@ -474,7 +474,7 @@ def _extract_dash_c_from_span(options_span, command_excerpt):
     """Resolve the single `-C <dir>` value from a commit invocation's
     global-options span, or '' when no explicit `-C` is present.
 
-    changelog-analyst's canonical commit form is `git -C "${GIT_ROOT}" commit
+    changelog-analyst's canonical commit form is `git -C "<GIT_ROOT>" commit
     -F <msgfile>` (agents/changelog-analyst.md) for BOTH the root repo and
     the nested ~/.claude repo -- it never `cd`s, only ever passes `-C`. The
     guard's own CWD is therefore CONTROL_ROOT for the entire session, even
@@ -908,6 +908,137 @@ def _commit_file_operand(args):
     return ''
 
 
+# Commit options whose value is the next word when it is not attached.
+_COMMIT_VALUE_OPTS = {'-C', '-c', '-t', '--author', '--date', '--cleanup', '--fixup', '--squash',
+                      '--reuse-message', '--reedit-message', '--template', '--trailer',
+                      '--pathspec-from-file'}
+
+
+def _simple_commands(command):
+    """The command's simple commands as lists of shell-unquoted words, split at
+    unquoted ; & | ( ) < > and newlines, with `#` comments dropped; None when a
+    quote is left open."""
+    cmds, words, word, i, n = [], [], None, 0, len(command)
+    while i < n:
+        ch = command[i]
+        if command.startswith('\\\n', i):
+            i += 2
+            continue
+        if ch in ' \t\r;&|()<>\n' or (ch == '#' and word is None):
+            if word is not None:
+                words.append(''.join(word))
+                word = None
+            if ch == '#':
+                i = command.find('\n', i)
+                i = n if i < 0 else i
+                continue
+            if ch not in ' \t\r' and words:
+                cmds.append(words)
+                words = []
+            i += 1
+            continue
+        word = [] if word is None else word
+        if ch in '\'"':
+            j = i + 1
+            while j < n and command[j] != ch:
+                if ch == '"' and command[j] == '\\' and command[j + 1:j + 2] in ('"', '\\', '$', '`'):
+                    j += 1
+                word.append(command[j])
+                j += 1
+            if j >= n:
+                return None
+            i = j + 1
+        elif ch == '\\' and i + 1 < n:
+            word.append(command[i + 1])
+            i += 2
+        else:
+            word.append(ch)
+            i += 1
+    if word is not None:
+        words.append(''.join(word))
+    return cmds + [words] if words else cmds
+
+
+def _commit_message_text(command, cwd):
+    """The whole message of the command's commit: its -m/--message values as git
+    joins them, or the whole -F/--file regular file. None when the hook cannot
+    read it: an open quote, no message option, stdin or a file it cannot read,
+    or -m with -F (git refuses that combination)."""
+    texts, path = [], None
+    for words in _simple_commands(command) or []:
+        idx = _cmd_token_index(words)
+        if idx is None or os.path.basename(words[idx]) != 'git':
+            continue
+        base, i = cwd, idx + 1
+        while i < len(words) and words[i].startswith('-'):
+            if words[i] in _GIT_GLOBAL_VALUE:
+                base = os.path.join(base, words[i + 1]) if words[i] == '-C' and i + 1 < len(words) else base
+                i += 1
+            i += 1
+        if words[i:i + 1] != ['commit']:
+            continue
+        args, j = words[i + 1:], 0
+        while j < len(args) and args[j] != '--':
+            a, nxt = args[j], (args[j + 1] if j + 1 < len(args) else None)
+            if a in ('-m', '--message', '-F', '--file'):
+                opt, value, j = a, nxt, j + 2
+            elif a.startswith(('--message=', '--file=')):
+                (opt, value), j = a.split('=', 1), j + 1
+            elif a in _COMMIT_VALUE_OPTS or not a.startswith('-') or a.startswith('--'):
+                j += 2 if a in _COMMIT_VALUE_OPTS else 1
+                continue
+            else:
+                # A short-option cluster (`-am msg`): the first value-taking letter takes the
+                # rest of the word, else the next word; -u/-S take only an attached value.
+                k = next((k for k in range(1, len(a)) if a[k] in 'mFCctuS'), None)
+                if k is None or a[k] in 'uS':
+                    j += 1
+                    continue
+                opt, value, j = '-' + a[k], a[k + 1:] or nxt, j + (1 if a[k + 1:] else 2)
+                if opt[1] in 'Cct':
+                    continue
+            if value is None or (opt in ('-F', '--file') and value == '-'):
+                return None
+            if opt in ('-m', '--message'):
+                texts.append(value)
+            else:
+                path = os.path.join(base, value)
+    if bool(texts) == bool(path):
+        return None
+    if path is None:
+        return '\n\n'.join(texts)
+    try:
+        if not os.path.isfile(path):
+            return None
+        with open(path, encoding='utf-8', errors='replace') as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _task_id_refusal(grant, grant_path, command, data):
+    """Why this grant may not authorize this commit's message, or '' when it may.
+
+    A grant naming a task authorizes only a commit whose whole message carries
+    that task's `Task-id: <task_id>` line -- the line /commit's completion and
+    scripts/dev-lifecycle.py read back from history. A message the hook cannot
+    read is refused rather than guessed."""
+    if grant.get('task_id') is None:
+        return ''
+    line = f"Task-id: {grant['task_id']}"
+    message = _commit_message_text(command, str(data.get('cwd') or '') or os.getcwd())
+    if message is not None and any(row.strip() == line for row in message.splitlines()):
+        return ''
+    return (
+        f'\nBLOCKED: a commit under a /commit grant must carry the line `{line}` in its message.\n'
+        f'  grant: {grant_path}\n'
+        '  message: ' + ('lacks that line' if message is not None else
+                         'unreadable (one readable -F/--file regular file or -m/--message values)')
+        + '\nWrite the whole message, that line included, to the message file and commit it with '
+        '`git commit -F <msgfile>` (agents/changelog-analyst.md, Phase 8).\n'
+    )
+
+
 def _extract_reset_target(invocation):
     """Extract the target ref from a reset --hard GitInvocation.
 
@@ -1206,7 +1337,8 @@ def _evaluate_commit(command, data):
             # appears later in a nondeterministic glob order. If nothing
             # authorizes the commit, the FIRST refusal is what gets reported
             # below -- it is the precise reason, where default-deny is not.
-            refusal = _grant_provenance_refusal(grant, grant_path, data)
+            refusal = (_grant_provenance_refusal(grant, grant_path, data)
+                       or _task_id_refusal(grant, grant_path, command, data))
             if refusal:
                 provenance_refusal = provenance_refusal or refusal
                 continue

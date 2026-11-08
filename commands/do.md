@@ -45,16 +45,13 @@ State what changed, which files were modified, and (if Step 3 ran) whether codex
 
 ### Step 5: Write do-report
 
-Every `/do` invocation MUST end with a terminal do-report at `docs/dev/do-report-<TASK_ID>.json` — this is no longer deferred to "before /close". You write the whole report (the template below; no hook pre-writes it), with `do.status` set to a terminal state:
+End every `/do` with a do-report at `docs/dev/do-report-<TASK_ID>.json`. You write it whole (the template below; no hook pre-writes it): `do.status` `"completed"`, `do.summary` saying what was done, `do.files_modified`/`do.files_created` filled. NEVER report unfinished work as completed: when the task cannot be finished as asked, ask the user in this turn how to go on (below).
 
-- `"completed"` — normal finish. Fill `do.summary` and `do.files_modified`/`do.files_created`.
-- `"blocked"` — honest terminal state when the task could not be finished (user abandoned it, an operation stayed unauthorized). Fill `do.summary` with what blocked it. NEVER report abandoned work as completed.
+The gate: the Stop gate (`hooks/stop-command-gate.py`) holds this `/do` until the report validates against `schemas/do-report.v1.json`, `do.status` is `"completed"` and its file lists are exact (below). It writes and deletes nothing: only finishing the report releases it. A decision only the user can make is asked in this turn with AskUserQuestion; the answer releases no gate.
 
-Enforcement: `hooks/stop-do-report-gate.py` (Stop hook) checks this report against `schemas/do-report.v1.json` plus terminal-status/summary shape at session stop. In block mode an absent, non-terminal or malformed report blocks the stop (deadlock-guarded); in advisory mode violations are allowed. The gate checks shape only — it never derives `files_modified` from git, and it never writes the report for you.
-
-**Resolve `TASK_ID` deterministically for the CURRENT session** — do NOT list the newest `claude-orchestrator-consent-*.flag` in the state dir (that returns the globally-newest flag, so two concurrent `/do` sessions alias onto ONE id and silently overwrite each other's do-reports — the cross-task data-loss bug this resolution exists to prevent). Instead:
+**`TASK_ID`** is the id in the hook's `[/do] task-id minted: <id>` line: a reserved `YYYYMMDD-HHMMSS` timestamp. The hook is the only mint: never mint one, and never take the newest `claude-orchestrator-consent-*.flag` in the state dir (two concurrent `/do` sessions would alias onto one id and overwrite each other's do-reports). To read it back for the CURRENT session (after a compaction):
 1. `SID = $CLAUDE_CODE_SESSION_ID` (fallback `$CLAUDE_SESSION_ID`).
-2. Read the session-keyed sidecar `claude-do-task-$SID.json` in the state dir, the path the `/do` consent hook in `hooks/prompt-workflow.py` printed when it minted it (the state dir is `$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`: `. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"; harness_state_dir`) and use its `task_id` field — a globally-unique, reservation-backed `YYYYMMDD-HHMMSS` timestamp. The hook is the only mint: it writes the sidecar in the same step as the consent flag, so never mint an id yourself.
+2. Read `task_id` from the session-keyed sidecar `claude-do-task-$SID.json` in the state dir (`$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`: `. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"; harness_state_dir`), the path the minted line printed.
 
 Use this `TASK_ID` for the do-report filename AND every downstream `/close $TASK_ID` / `/commit $TASK_ID`.
 
@@ -76,10 +73,8 @@ Use this `TASK_ID` for the do-report filename AND every downstream `/close $TASK
 }
 ```
 
-`report_version: 1` declares `schemas/do-report.v1.json`; the stop gate validates against it (keep the field — an unversioned report skips schema validation but still fails the stop gate's shape check if malformed). Keep `expected_absent` too: it is how the close QA's e2e gate (`hooks/subagentstop-e2e-enforce.py`) knows a /do task has no qa-report.
+`report_version: 1` declares the schema the gate validates; keep it, and keep `expected_absent`: it is how the close QA's e2e gate (`hooks/subagentstop-e2e-enforce.py`) knows a /do task has no qa-report.
 
-`files_modified` and `files_created` MUST be filled by the agent from its own knowledge of what it changed — NOT derived from `git diff` (git diff is session-unaware and breaks under parallel /do sessions).
-
-**Important**: `/close` uses `files_modified` as the cycle-diff file list for inspector dispatch. Newly created files that need inspector coverage MUST also appear in `files_modified` (in addition to `files_created`). Omitting a new file from `files_modified` means it will not be inspected.
+`files_modified` and `files_created` list exactly the project files you changed after the `/do` prompt, with an edit tool or a Bash command naming them (outside `docs/dev/`, `.claude/dev-registry/` and `.claude/scratch/`). The gate compares them with the transcript's record of your calls; never derive them from `git diff` (session-unaware, wrong under parallel `/do` sessions). A created file goes in `files_modified` too: `/close` inspects only the files listed there.
 
 Then: `/close <TASK_ID>` runs the normal QA path using the do-report as the source artifact. `--force` is no longer required.

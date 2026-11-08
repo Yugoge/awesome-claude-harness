@@ -17,7 +17,7 @@ No arguments. Acts on this session's own overnight state only.
 
 ## What it does
 
-1. Typing `/stop` releases this session's time-lock; the next stop attempt succeeds.
+1. The human-typed `/stop` opens a span no Stop gate holds: it ends any gated command (`/dev`, `/do`, `/close`, `/commit`, ..., even one whose gate is broken), and after `/dev-overnight` it releases this session's time-lock. After it, and the wake's `CronDelete` below, the next stop attempt succeeds.
 2. The wrapper records `current_phase: completed` in this session's overnight state (found from the main checkout, a worktree or a fresh clone) and releases its isolation fields. It leaves `end_time` as it was.
 
 ## What it does NOT do
@@ -33,6 +33,8 @@ The orchestrator calls the wrapper exactly once:
 ```bash
 bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/stop.sh"
 ```
+
+Then, as the last step, where this session scheduled the overnight wake (dev-overnight.md Step 0), call `CronDelete` with the job id that wake's `CronCreate` returned: a wake left scheduled would fire into the stopped session, and the time-lock refuses the session's Stop until it is deleted.
 
 The wrapper invokes `<HARNESS_ROOT>/scripts/break-overnight-lock.py`. Sentinel enforcement (written at `<state dir>/claude-stop-userintent-<sid>.flag` by `prompt-workflow.py` on user-typed `/stop`; consumed by the PreToolUse hook before the wrapper runs) prevents agent self-invocation.
 

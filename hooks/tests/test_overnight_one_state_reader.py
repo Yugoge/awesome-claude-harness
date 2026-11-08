@@ -260,10 +260,15 @@ def _todos(label: str | None, done: str = "") -> list:
     return out
 
 
-def _bookmark(project: Path, label: str, *cycles: list) -> None:
+def _bookmark(project: Path, label: str, *cycles: list, loaded: str | None = None) -> None:
     """The session transcript: /dev-overnight, then its TodoWrites (``cycles``
-    earlier lists first), ending with ``label`` in progress."""
-    records = [{"type": "user", "message": {"role": "user", "content": "/dev-overnight 2h"}}]
+    earlier lists first), ending with ``label`` in progress. With ``loaded``, the
+    command's text follows the opener as the CLI records it when the command is
+    typed (an isMeta record whose parentUuid is the opener's uuid)."""
+    records = [{"type": "user", "uuid": "u-open", "message": {"role": "user", "content": "/dev-overnight 2h"}}]
+    if loaded is not None:
+        records.append({"type": "user", "isMeta": True, "parentUuid": "u-open", "uuid": "u-text",
+                        "message": {"role": "user", "content": loaded}})
     for n, todos in enumerate([_todos(None), *cycles, _todos(label)]):
         records.append({"type": "assistant", "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": f"tw{n}", "name": "TodoWrite", "input": {"todos": todos}}]}})
@@ -308,6 +313,43 @@ def test_exploration_steps_pass_and_a_wrong_role_is_refused(session):
     assert before_triage.returncode == 2 and "Case A" in before_triage.stderr
 
 
+# origin/master's /dev-overnight text as the CLI records it (excerpt): its Step 2 template sets no
+# PM_MODE, its Step 4 template sets TRIAGE.
+BASE_PROSE = """#### Step 2: Launch PM Subagent
+- prompt: "
+  You are the PM subagent. Follow agents/pm.md instructions precisely.
+  Output test plan to: docs/dev/overnight/<session_id>/test-plan.json
+  "
+#### Step 4: Launch PM-Triage Subagent
+- prompt: "
+  PM_MODE: TRIAGE
+  You are the PM subagent in TRIAGE mode.
+  "
+"""
+
+
+def test_a_pm_prompt_without_a_mode_passes_where_the_loaded_text_sets_none(session):
+    """P1c A11, under P2's rule (G1: a step's mode binds only when the text the session loaded sets
+    it): a session still running the base's Step 2 text dispatches PM PLAN with no PM_MODE line, and
+    passes on that recorded text. The prompt's mode is read from the prompt alone, never from the
+    role; a mode the prompt does carry is still compared; a mode-less prompt of another role is
+    still held to Step 2's role."""
+    assert contract_runtime.detect_mode("You are the PM subagent.") == ""
+    assert contract_runtime.detect_mode("PM_MODE: TRIAGE") == "TRIAGE"
+    base = "You are the PM subagent. Follow agents/pm.md instructions precisely.\nOutput test plan to: x"
+    _bookmark(session, "2", loaded=BASE_PROSE)
+    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 0, "base text"
+    other = _run("pretool-subagent-enforce.py", session, _agent("architect", base))
+    assert other.returncode == 2 and "role mismatch on step '2'" in other.stderr
+    _bookmark(session, "4", loaded=BASE_PROSE)
+    triage = _run("pretool-subagent-enforce.py", session, _agent("pm", base))
+    assert triage.returncode == 2 and "mode missing on step '4'" in triage.stderr
+    _bookmark(session, "2")  # no record of the text the session loaded: every step's mode binds
+    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 2
+    refused = _run("pretool-subagent-enforce.py", session, _agent("pm", "PM_MODE: RETRO"))
+    assert refused.returncode == 2 and "mode='RETRO'" in refused.stderr
+
+
 def test_a_wrong_role_is_refused_in_the_second_cycle_too(session):
     """The cycle-1 checklist all completed, then reset for cycle 2: the step
     is still read, so the dispatch check keeps refusing a wrong role."""
@@ -348,6 +390,23 @@ def test_triage_handler_writes_the_contract_and_the_dispatch_hook_reads_it(sessi
     assert not path.exists()
 
 
+def test_triage_handler_reads_the_report_its_dispatch_names(session):
+    """P1c A11: a session still running the base's text numbers its cycle by the record's cycle_count,
+    which no hook advances since P1b; in cycle 2 its TRIAGE is told to write triage-report-cycle1.json.
+    The contract of the cycle in progress (2) is rendered from the report that dispatch names, so the
+    cycle's dispatches find their entries."""
+    out = session / "docs" / "dev" / "overnight" / SID
+    out.mkdir(parents=True)
+    (out / "retro-report-cycle1.json").write_text("{}")
+    _triage_report(session, 1, fixes=1)
+    prompt = f"PM_MODE: TRIAGE\nCycle number: 1\nWrite triage report to: docs/dev/overnight/{SID}/triage-report-cycle1.json"
+    written = _run("posttool-subagent-track.py", session, _agent("pm", prompt))
+    assert written.returncode == 0 and "cycle 2, 1 pipeline(s)" in written.stdout, written.stdout + written.stderr
+    assert (out / "cycle-2" / "cycle-contract.json").is_file()
+    _bookmark(session, "8", _todos(None, done="all"))
+    assert _run("pretool-subagent-enforce.py", session, _agent("ba", "analyse")).returncode == 0
+
+
 def test_triage_handler_writes_nothing_without_a_triage_report(session):
     result = _run("posttool-subagent-track.py", session, _agent("pm", "PM_MODE: TRIAGE"))
     assert result.returncode == 0
@@ -381,6 +440,72 @@ def test_collection_checks_the_dispatch_obligation(session):
     assert invalid.returncode == 2 and "dev-report" in invalid.stderr
     # A dispatch that carries no obligation declares nothing to check.
     assert _run("posttool-overnight-file-check.py", session, _agent("dev", "x")).returncode == 0
+
+
+def _v2_dev_report(task_id: str) -> dict:
+    """The report dev-report.v2 asks for, as the dispatch's obligation declares it."""
+    return {"report_version": 2, "request_id": task_id, "task_id": task_id,
+            "timestamp": "2026-10-28T01:01:01Z", "baseline_head_sha": "",
+            "baseline_dirty_snapshot": "", "owned_edits": {}, "pre_edit_snapshots": {},
+            "dev": {"status": "completed", "files_modified": ["toy/__init__.py"],
+                    "files_created": []}}
+
+
+def test_collection_reads_the_schema_from_the_obligation_and_names_artifact_and_check(session):
+    """E1 (R13): the contract entry declares no schema, so the check takes the one the
+    dispatch's obligation declares: the report that schema asks for passes, a report in
+    the retired v1 shape is refused. The refusal names the artifact, the check (the
+    obligation's schema id) and the declaring dispatch's next round, and offers no escalation."""
+    task_id = "20261028-010101-0"
+    dispatch = _dev_dispatch(task_id)
+    _triage_report(session, 1, fixes=1)
+    _run("posttool-subagent-track.py", session, _agent("pm", "PM_MODE: TRIAGE"))
+    contract = json.loads((session / "docs" / "dev" / "overnight" / SID / "cycle-1"
+                           / "cycle-contract.json").read_text())
+    assert all(set(e) == {"step", "role", "mode", "pipeline_id"} for e in contract["required_calls"])
+    rel = f"docs/dev/dev-report-{task_id}.json"
+    report = session / rel
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"report_version": 1, "task_id": task_id, "status": "completed",
+                                  "files_modified": [], "files_created": [],
+                                  "root_cause_addressed": "x", "ac_status": {}}))
+    old = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert old.returncode == 2
+    assert f"{rel} (schema dev-report.v2): <root>: 'dev' is a required property" in old.stderr
+    assert "Dispatch dev again with the same obligation template and a fresh dispatched_at" in old.stderr
+    assert "escalat" not in old.stderr.lower()
+    report.unlink()
+    missing = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert missing.returncode == 2 and f"{rel} (schema dev-report.v2): expected artifact missing" \
+        in missing.stderr and "escalat" not in missing.stderr.lower()
+    report.write_text(json.dumps(_v2_dev_report(task_id)))
+    valid = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert valid.returncode == 0, valid.stderr
+    assert "dev obligation artifacts valid (step=12)" in valid.stdout
+
+
+def test_collection_names_a_markdown_artifact_by_its_failing_check(session):
+    """A markdown artifact (BA's ticket) is named with the check its validator failed."""
+    task_id = "20261028-030303-0"
+    obligation = {
+        "task_id": task_id, "lane": None, "lane_set": None, "role": "ba",
+        "pipeline": "dev-overnight", "profile": "overnight", "dispatched_at": _iso(0),
+        "artifacts": [{"kind": "markdown", "path": f"docs/dev/ticket-{task_id}.md",
+                       "identity_anchor": task_id}],
+    }
+    dispatch = _agent("ba", f'analyse\n<obligation v="1">{json.dumps(obligation)}</obligation>')
+    _triage_report(session, 1, fixes=1)
+    _run("posttool-subagent-track.py", session, _agent("pm", "PM_MODE: TRIAGE"))
+    ticket = session / "docs" / "dev" / f"ticket-{task_id}.md"
+    ticket.parent.mkdir(parents=True, exist_ok=True)
+    ticket.write_text("# a ticket for another task\n")
+    refused = _run("posttool-overnight-file-check.py", session, dispatch)
+    assert refused.returncode == 2
+    assert f"docs/dev/ticket-{task_id}.md (identity_anchor_missing): identity_anchor substring " \
+        "not found" in refused.stderr
+    assert "Dispatch ba again" in refused.stderr and "escalat" not in refused.stderr.lower()
+    ticket.write_text(f"# Ticket {task_id}\n")
+    assert _run("posttool-overnight-file-check.py", session, dispatch).returncode == 0
 
 
 def _retro_dispatch(cycle: int) -> dict:

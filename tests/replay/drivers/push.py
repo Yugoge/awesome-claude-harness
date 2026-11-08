@@ -15,8 +15,9 @@ the tree's "Agentic dispatch protocol" says, read at run time:
   `commit_sha` tested with the `git merge-base --is-ancestor` the step names; no candidate passing
   ends the turn with the step's instruction to run /commit first. Where the text says the step
   reads nothing (push.sh is the token's one decider), no call.
-* Step 2: the step's block, its variables kept; an empty SESSION_ID ends the turn with the text's
-  message.
+* Step 2: the step's block, its variables kept; a detached HEAD (BRANCH is HEAD) or an empty
+  SESSION_ID is a refusal, asked as the text's Refusals rule says (merge.ask_refusal; the owner picks
+  the recommended action; "re-run the snapshot now" re-runs the block once).
 * Step 3: the dispatch the step names (`Dispatch the `<role>` subagent`) with the step's context block
   as its prompt, placeholders bound to Step 2's values and the obligation, where the block has one,
   instantiated (dispatched_at the current UTC time).
@@ -35,7 +36,8 @@ the tree's "Agentic dispatch protocol" says, read at run time:
   --auto`), its variables bound: execute-push.py validates and spends the grant, writes the chain-B
   sentinel and execs hooks/push.sh, which decides the push-gate token, pushes to the toy's local bare
   origin and deletes the token. The outcome (the origin's branch against HEAD, the token, grant and
-  sentinel left) is recorded in facts.json; Stop.
+  sentinel left) is recorded in facts.json; a refusal the step names (a blocked verdict, exit 3) asked
+  as in Step 2; Stop.
 
 Driver arguments (cli.py --arg K=V):
   after=do|dev|dev-command   the cycle /close and /commit follow (default do, the shortest)
@@ -44,6 +46,7 @@ Driver arguments (cli.py --arg K=V):
                              the working tree's push.sh refuses (exit 3) after execute-push.py spent the
                              grant. Not a variant: its relations are a subset of the plain push's.
   session=same|later         /push typed in /commit's session (default) or a later one
+  detached=1                 the owner detaches HEAD in their terminal before typing /push
   remote=<name>, auto=1      the typed arguments of /push
   statedir=respelled|strict  how Step 5 runs on a text whose sentinel path is a literal directory
                              (see "State dir" below; default respelled)
@@ -69,14 +72,9 @@ does.
 
 Respellings (row 7): none of the /push text's harness-script calls needs one (Step 5's `python3
 ~/.claude/scripts/execute-push.py` already names the harness copy). Step 2's session-id line already
-falls back to CLAUDE_CODE_SESSION_ID (the binding drivers/merge.py borrows for merge.md:87).
+falls back to CLAUDE_CODE_SESSION_ID, the variable the CLI's Bash exports.
 
-Deviations: DEVIATIONS below, one entry per block the base tree's replay meets, each with a comment
-quoting the hook's text; nothing else passes a block. On 2acc29b: bash-safety on the analyst's Phase 1
-range block and Phase 4 divergence block (kept: the working tree records them too, on lines no row
-changes), and the base's push-analyst grant guard on Step 5's call (base only: row 12 and E11 leave
-execute-push.py the grant's one validator). The base text's Step 1 scan, as the text spells its `find`,
-meets no block. A block no declared deviation passes pauses the agent that met it (Subagent Hook
+Deviations: none (DEVIATIONS stays empty). A block pauses the agent that met it (Subagent Hook
 Discipline): the main agent ends its turn reporting the hook and its text; a paused push-analyst writes
 no grant, so Step 5's execute-push.py finds none.
 
@@ -96,7 +94,6 @@ from datetime import datetime, timezone
 
 from .. import agents, cmdtext
 from ..pipeline import _ASSIGN_RE, Deviations, Orchestrator, Respelling
-from ..replay import Deviation
 from . import close as closedrv
 from . import merge as mergedrv
 
@@ -105,29 +102,8 @@ PIPELINE = "push"
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 COST = 381
 
-# Blocks the base tree's replay meets, each passed by a deviation at the step it occurs on: the
-# refused call is applied as if allowed, so every later step runs and is traced.
-DEVIATIONS = Deviations([
-    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED unproven_boundary_with_removal_reference:git rev-parse:"
-    # pretool-bash-safety.sh refuses the push-analyst's Phase 1 range block and Phase 4 divergence block as
-    # its agent text spells them (`if git rev-parse "refs/remotes/${REMOTE_NAME}/${BRANCH}" >/dev/null 2>&1;
-    # then`, the prompt's values bound as shell variables), in both kits; the same test with the values
-    # written literally passes.
-    ("agent:push-analyst Bash Phase 1 #2", Deviation(
-        "hooks/pretool-bash-safety.sh", "unproven_boundary_with_removal_reference:git rev-parse:",
-        "Phase 1's range block as the agent text spells it")),
-    ("agent:push-analyst Bash Phase 4", Deviation(
-        "hooks/pretool-bash-safety.sh", "unproven_boundary_with_removal_reference:git rev-parse:",
-        "Phase 4's divergence block as the agent text spells it")),
-    # DEVIATION: "BLOCKED: push-analyst grant guard: no push-analyst grant found at
-    # <state>/agentic-commit/push-analyst/<hex>/<sid>/${REQUEST_ID}.json."
-    # The base's pretool-push-analyst-grant-guard.py, the grant's second validator (E11), refuses Step 5's
-    # call as the text spells it: it looks the grant up under the hook's state dir, where the base text's
-    # analyst does not write it, by the unexpanded `"${REQUEST_ID}"` of the command text.
-    ("/push Step 5 Bash execute-push", Deviation(
-        "hooks/pretool-push-analyst-grant-guard.py", "BLOCKED: push-analyst grant guard: no push-analyst grant found at",
-        "Step 5's execute-push.py call as the text spells it")),
-])
+# Blocks the replays meet: none (a compliant run needs no deviation).
+DEVIATIONS = Deviations([])
 
 _STEP_RE = re.compile(r"^\*\*(Step \d+)\b[^\n]*\*\*[ \t]*$", re.M)
 _LEVELS = ("approved", "warn", "blocked")
@@ -253,7 +229,14 @@ class PushRun:
 
     def say_stop(self, text: str) -> None:
         self.outcome = text
-        self.o.s.stop(text, label=self.label("Stop"), deviation=self.devs.at(self.label("Stop")))
+        self.stop_ev = self.o.s.stop(text, label=self.label("Stop"), deviation=self.devs.at(self.label("Stop")))
+
+    def refuse(self, heading: str, anchor: str, facts: str = "") -> bool:
+        """The refusal asked once (merge.ask_refusal); True when the owner picked its named action."""
+        lab = self.label(f"{heading} AskUserQuestion")
+        action, answer = mergedrv.ask_refusal(self.o, self.devs, lab, self.step(heading), anchor, facts)
+        closedrv.fact(self.rp, "push refusal", {"step": heading, "action": action, "answer": answer})
+        return answer == action
 
     def check(self, call):
         """A call a hook refused that no declared deviation passed: pause (the turn ends)."""
@@ -326,10 +309,16 @@ class PushRun:
         names = tuple(dict.fromkeys(_ASSIGN_RE.findall(block)))
         self.captured(block, self.label("Step 2 Bash snapshot"), "Step 2: pre-push snapshot", names)
         self.rp.rand(self.o.values.get("REQUEST_ID"))
-        if not self.o.values.get("SESSION_ID"):
-            m = re.search(r'abort immediately with:\s*"([^"]+)"', self.step("Step 2"))
-            self.say_stop(m.group(1) if m else "Cannot dispatch the push-analyst: no session id")
+        if self.o.values.get("BRANCH") == "HEAD":
+            self.refuse("Step 2", "If `BRANCH` is `HEAD`")
+            self.say_stop("/push: HEAD is detached; nothing pushed until the branch to push is checked out.")
             return False
+        if not self.o.values.get("SESSION_ID"):
+            if self.refuse("Step 2", "If `SESSION_ID` is"):
+                self.captured(block, self.label("Step 2 Bash snapshot again"), "Step 2: pre-push snapshot", names)
+            if not self.o.values.get("SESSION_ID"):
+                self.say_stop("/push: still no session id after your answer; nothing pushed.")
+                return False
         return True
 
     # ------------------------------------------------------------ Step 3 and the analyst
@@ -405,6 +394,10 @@ class PushRun:
             text = f"Pushed {v.get('BRANCH')} to {v.get('RESOLVED_REMOTE')}.\n" + "\n".join(
                 l for l in out.split("\n") if l.strip().startswith(("•", "Remote URL")))
         else:
+            if rc == 3:
+                self.refuse("Step 5", "exit 3, no push-gate token", out[-800:])
+            elif "push BLOCKED by push-analyst" in out:
+                self.refuse("Step 5", "Its refusals:", out[-800:])
             meaning = {1: "detached HEAD, missing remote, a refused grant or sentinel, or a failed push",
                        2: "a blocked option or an infrastructure failure",
                        3: "no push-gate token names an ancestor of HEAD: run /commit (in any session) first"}
@@ -575,6 +568,14 @@ def owner_commit(rp) -> None:
         mergedrv._owner_git(p, "commit", "-qam", "docs: say what toy does", date="2026-01-01T00:02:00+0000")
 
 
+def _facts(rp) -> list:
+    try:
+        with open(os.path.join(rp.layout.out, "facts.json")) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return []
+
+
 def run(rp) -> None:
     after = rp.args.get("after", "do")
     if after not in ("do", "dev", "dev-command", "none"):
@@ -596,5 +597,11 @@ def run(rp) -> None:
         closedrv.fact(rp, "before /push", {"commit_status": cm.status.get("commit_status"),
                                            "landed": [(rp.norm_text(r), sha) for r, sha in cm.landed],
                                            "toy": origin_state(rp), "left": leftovers(rp)})
+    if rp.args.get("detached"):
+        with rp.acting("owner"):
+            mergedrv._owner_git(rp.layout.project, "checkout", "-q", "--detach")
     session = rp.later_session(s) if session_kind == "later" else s
-    PushRun(rp, session, args=typed, state_mode=state_mode).run()
+    pr = PushRun(rp, session, args=typed, state_mode=state_mode)
+    pr.run()
+    pushed = [f["value"] for f in _facts(rp) if f.get("key") == "push"]
+    rp.terminal("push", bool(pushed) and bool(pushed[-1].get("pushed")), getattr(pr, "stop_ev", None))

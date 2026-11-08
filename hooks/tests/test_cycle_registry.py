@@ -125,8 +125,9 @@ def test_start_arms_the_registry_and_names_the_task_id(env, command, prefix):
     # no role sentinel at the start: each is created when its dispatch reads it
     assert not [p for p in registry.glob("*.json") if not p.name.endswith("-enforce.json")]
     flags = sorted(p.name for p in registry.glob("*-enforce.json"))
-    # P4 R8: no artifact-contract-enforce.json; G2 reads no flag.
-    assert flags == ["codex-enforce.json", "e2e-enforce.json"]
+    # P4 R8: no artifact-contract-enforce.json (G2 reads no flag); P1c: no e2e-enforce.json
+    # (the E2E gate has no flag).
+    assert flags == ["codex-enforce.json"]
     for flag in flags:
         data = json.loads((registry / flag).read_text())
         assert data["enabled"] is True and data["dev_session_id"] == name
@@ -197,20 +198,19 @@ def test_arm_registry_writes_the_handed_requirement_and_rearms_a_relaunch(env):
     project, values = env
     text = "focus line é\r\n\nUser spec path: docs/x.md\n".encode("utf-8")
     args = ["arm-registry", "--name", "sess-over", "--source-command", "dev-overnight",
-            "--project-dir", str(project), "--flag", "e2e", "--flag", "codex"]
+            "--project-dir", str(project), "--flag", "codex"]
     armed = _cli(project, values, args, text)
     assert armed.returncode == 0, armed.stderr
     registry = project / ".claude" / "dev-registry" / "sess-over"
     assert not [p for p in registry.glob("*.json") if not p.name.endswith("-enforce.json")]
     requirement = project / "docs" / "dev" / "user-requirement-sess-over.md"
     assert requirement.read_bytes() == text
-    assert sorted(p.name for p in registry.glob("*-enforce.json")) == [
-        "codex-enforce.json", "e2e-enforce.json"]
-    assert json.loads((registry / "e2e-enforce.json").read_text())["source_command"] == "dev-overnight"
-    # A relaunch in the same session without --codex leaves no codex flag armed.
+    assert sorted(p.name for p in registry.glob("*-enforce.json")) == ["codex-enforce.json"]
+    assert json.loads((registry / "codex-enforce.json").read_text())["source_command"] == "dev-overnight"
+    # A relaunch in the same session without --codex leaves no flag armed.
     rearmed = _cli(project, values, args[:-2], b"second focus\n")
     assert rearmed.returncode == 0, rearmed.stderr
-    assert sorted(p.name for p in registry.glob("*-enforce.json")) == ["e2e-enforce.json"]
+    assert sorted(p.name for p in registry.glob("*-enforce.json")) == []
     assert requirement.read_bytes() == b"second focus\n"
 
 
@@ -222,7 +222,7 @@ def test_arm_registry_refuses_a_symlinked_registry(env, tmp_path):
     (project / ".claude" / "dev-registry" / "sess-link").symlink_to(elsewhere)
     refused = _cli(project, values, ["arm-registry", "--name", "sess-link", "--source-command",
                                      "dev-overnight", "--project-dir", str(project),
-                                     "--flag", "e2e"], b"x\n")
+                                     "--flag", "codex"], b"x\n")
     assert refused.returncode == 1
     assert list(elsewhere.iterdir()) == []
 
@@ -244,8 +244,7 @@ def test_overnight_init_hands_the_record_to_the_registry_producer(env, tmp_path)
     assert f"REGISTRY_DIR={project.resolve()}/.claude/dev-registry/sess-o" in init.stdout
     registry = project / ".claude" / "dev-registry" / "sess-o"
     assert not [p for p in registry.glob("*.json") if not p.name.endswith("-enforce.json")]
-    assert sorted(p.name for p in registry.glob("*-enforce.json")) == [
-        "codex-enforce.json", "e2e-enforce.json"]
+    assert sorted(p.name for p in registry.glob("*-enforce.json")) == ["codex-enforce.json"]
     assert (project / "docs" / "dev" / "user-requirement-sess-o.md").read_text() == "harden the parser\n"
 
 

@@ -459,7 +459,10 @@ def test_obligations_are_the_ok_dispatches_well_formed_blocks(tmp_path):
     found = span.obligations()
     assert [(call.id, doc["task_id"], doc["role"]) for call, doc in found] == [
         (first, "dev-20261019-120000", "qa"), (lane, "20261019-140000-l1", "dev")]
-    assert span.session_families() == {"20261019-120000", "20261019-140000-l1"}
+    # Each pair's call is the dispatch's Call, its result's line included (P4's close rating
+    # orders the rating question after it); the families drop a fan-out lane's suffix.
+    assert all(type(call) is command_span.Call and call.result_line > call.line for call, _doc in found)
+    assert span.session_families() == {"20261019-120000", "20261019-140000"}
 
 
 def test_body_is_the_text_the_cli_recorded_for_the_typed_command(tmp_path):

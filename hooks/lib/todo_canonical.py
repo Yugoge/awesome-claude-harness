@@ -1,8 +1,8 @@
 """
 Shared canonical todo validation utilities.
 
-Used by both pretool-todo-validate.py and posttool-todo-sequence.py
-to avoid code duplication.
+Used by pretool-todo-validate.py, the TodoWrite rules' one decider, and
+by the readers of a command's checklist.
 
 AF1 fix: the todo script runs in a process of its own, never in the hook's: a
 new interpreter (subprocess.run), or for the harness's own scripts a fork of
@@ -221,6 +221,14 @@ def validate_against_canonical(cmd_name, new_todos, prompt=''):
     return violations
 
 
+def by_content(steps, todos):
+    """Each of ``todos`` paired with the step of ``steps`` of the same content ({} when none): past
+    a command's first list and with its length unchanged, a hook comparing todo lists pairs them
+    so, never by index (P1c row 17: a session keeps the list it started with)."""
+    found = {s.get('content'): s for s in steps if isinstance(s, dict)}
+    return [found.get(t.get('content'), {}) for t in todos]
+
+
 def initial_status_violations(todos):
     """First-call rule: no completed step, at most 1 in_progress, at Step 0."""
     violations = []
@@ -239,26 +247,12 @@ def initial_status_violations(todos):
     return violations
 
 
-def _ok_lists(calls, before=None):
-    """(call, todos) of each ok TodoWrite of ``calls`` whose todos is a list of
-    steps, up to the call ``before``."""
+def _ok_lists(calls):
+    """(call, todos) of each ok TodoWrite of ``calls`` whose todos is a list of steps."""
     for call in calls:
-        if before and call.id == before:
-            break
         new = call.input.get('todos')
         if call.ok and isinstance(new, list) and all(isinstance(t, dict) for t in new):
             yield call, new
-
-
-def _accepted_writes(lists):
-    """(the last list, the calls the step rules accepted) of ``lists``, in
-    order: from the first list initial_status_violations passes on."""
-    todos, writes = None, []
-    for call, new in lists:
-        todos = new
-        if writes or not initial_status_violations(new):
-            writes.append(call)
-    return todos, tuple(writes)
 
 
 _UNREAD = object()
@@ -268,43 +262,24 @@ class Checklist:
     """The active command's checklist as the transcript records it. A plain
     class: importing dataclasses would cost the workflow gate, which reads the
     checklist at every tool call, more than the rest of its reading."""
-    __slots__ = ('span', 'canonical', '_todos', '_accepted', '_writes', '_before')
+    __slots__ = ('span', 'canonical', '_todos')
 
-    def __init__(self, span, canonical, todos, accepted, writes=None, before=None):
+    def __init__(self, span, canonical, todos=_UNREAD):
         self.span = span              # command_span.Span of the command
         self.canonical = canonical    # its canonical steps (scripts/todo/<command>.py)
         self._todos = todos           # todos, once read (_UNREAD before)
-        self._accepted = accepted     # the step rules accepted an ok TodoWrite of the span
-        self._writes = writes         # writes, once read
-        self._before = before         # the tool use the checklist stops ahead of, if any
 
     @property
     def todos(self):
-        """The last ok TodoWrite's list: the checklist the CLI holds; None
-        before the first. Read from the end of the span when first asked: the
-        readers that need only the command and its canonical steps (the count
-        and progress hooks) leave it unread. No step rule runs on it, so
-        reading it later raises nothing checklist() would have raised."""
+        """The last ok TodoWrite's list (command_span's last_todos, read from
+        the end of the span): the checklist the CLI holds, and the list the
+        next TodoWrite is checked against; None before the first. Read when
+        first asked: the readers that need only the command and its canonical
+        steps leave it unread."""
         if self._todos is _UNREAD:
             self._todos = next((new for _call, new in _ok_lists(
-                self.span.uses('TodoWrite', newest_first=True, before=self._before))), None)
+                self.span.uses('TodoWrite', newest_first=True))), None)
         return self._todos
-
-    @property
-    def writes(self):
-        """The ok TodoWrite calls the step rules accepted, in order (a tuple).
-        Read when first asked: only the subagent completion guard needs every
-        one, so the other readers leave a long span's lists undecoded."""
-        if self._writes is None:
-            self._writes = _accepted_writes(_ok_lists(self.span.calls('TodoWrite'), self._before))[1]
-        return self._writes
-
-    @property
-    def write_uses(self):
-        """writes as command_span.Use records (results by offset, no line
-        numbers), for a reader that only orders them: a span read from the end
-        of a long transcript then never counts the lines before it."""
-        return _accepted_writes(_ok_lists(self.span.uses('TodoWrite'), self._before))[1]
 
     @property
     def command(self):
@@ -315,38 +290,18 @@ class Checklist:
         return self.span.args
 
     @property
-    def accepted(self):
-        """The list the next TodoWrite is checked against, or None."""
-        return self.todos if self._accepted else None
-
-    @property
     def lock(self):
-        """Why the workflow gate holds other tools back, or '' when it does not."""
-        if self.todos is None:
-            return 'not_started'
-        if len(self.todos) < len(self.canonical):
-            return 'count_mismatch'
-        if not self._accepted:
-            return 'sequence_violation'
-        return ''
+        """'not_started' while the span holds no ok TodoWrite, the workflow
+        gate's one hold on other tools; else ''. pretool-todo-validate.py
+        refuses a list that breaks a step rule before it runs, so an ok list is
+        an accepted one."""
+        return 'not_started' if self.todos is None else ''
 
 
-def checklist(transcript_path, before=None):
+def checklist(transcript_path):
     """The checklist of the command that opened the active span, or None when
-    no harness command with a canonical checklist did. ``before`` (a tool use
-    id) leaves out that call and every later one.
-
-    Every ok TodoWrite already passed pretool-todo-validate.py against the
-    accepted list before it, so the step rules accept it too, except the first
-    rule only posttool-todo-sequence.py applies: a first list that breaks
-    initial_status_violations is not accepted, and the next is a first call
-    again.
-
-    Only the lists that decide are decoded: from the start the lists up to
-    the first the step rules accept, and, when a reader asks for it, the
-    newest ok list from the end (with ``before``, back from the call that has
-    that id). Every later ok list is accepted too, so the last accepted list
-    is the newest and needs no reading of its own."""
+    no harness command with a canonical checklist did. A PreToolUse reader's
+    own call has no tool_result yet, so its list is not among the ok ones."""
     try:  # imported as hooks.lib.todo_canonical (tests) or lib.todo_canonical (hooks)
         from . import command_span
     except ImportError:  # loaded by path, with hooks/ or hooks/lib on sys.path
@@ -360,12 +315,7 @@ def checklist(transcript_path, before=None):
     canonical = run_todo_script(span.command, span.args)
     if not canonical:
         return None
-    # Read here, not when asked: the step rules may raise on a list, and a
-    # caller that guards checklist() must see that inside the call. With no ok
-    # list the rules run on nothing, as when the newest list is None.
-    accepted = any(
-        not initial_status_violations(new) for _call, new in _ok_lists(span.uses('TodoWrite', before=before)))
-    return Checklist(span, canonical, _UNREAD, accepted, before=before)
+    return Checklist(span, canonical)
 
 
 def _bookmark_text(path, encoding):

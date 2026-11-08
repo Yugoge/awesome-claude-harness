@@ -23,6 +23,13 @@ on:
     - cron: "17 3 * * 1"
   workflow_dispatch:
 
+# A newer push to a pull request cancels its older run (P1c X10): the replay suite runs whole on
+# every push, and a run for a head nobody merges any more only delays the queue. Other events
+# (master pushes, the release call, the weekly run) are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   baseline:
     name: baseline checks
@@ -131,11 +138,11 @@ jobs:
         # the artifact-graph jobs below run it: shards with strace and a mount
         # namespace, then the check over all of them, and its mutation tests
         # (tests/artifact_graph/test_mutations.py) over the same replays.
-        # tests/replay/test_run_to_run.py replays one variant twice traced; the job
-        # artifact-graph-run-to-run runs it.
+        # tests/replay/ is the replay suite's (the job replay-suite runs it, and the job
+        # artifact-graph-run-to-run its test_run_to_run.py).
         run: >-
           python3 -m pytest hooks/tests tests -q --ignore=tests/generated --ignore=tests/test_artifact_graph.py
-          --ignore=tests/artifact_graph/test_mutations.py --ignore=tests/replay/test_run_to_run.py
+          --ignore=tests/artifact_graph/test_mutations.py --ignore=tests/replay
 
       - name: Shell tests (checkpoint privacy gate, push guards, fresh-clone smoke)
         # Shell suites pytest does not collect, run as the runner's non-root user like
@@ -226,9 +233,8 @@ jobs:
         run: bash scripts/check-public-core.sh
 
       - name: Verify headline claims (hero provenance + enforcement evidence)
-        # Runs as a step of the already-required `baseline` job so it gates merges by
-        # default (no branch-protection change needed). Runs the hero-provenance
-        # audits in --strict and the hero status/provenance and corpus checks.
+        # A step of the `baseline` job. Runs the hero-provenance audits in --strict
+        # and the hero status/provenance and corpus checks.
         # Also runs scripts/check-enforcement-evidence.py --ledger and --claims, which gate
         # docs/ENFORCEMENT-LEDGER.md against settings.json and against the guard sources.
         run: bash scripts/verify-claims.sh
@@ -343,11 +349,12 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install strace and Python dependencies
+      - name: Install strace, bubblewrap and Python dependencies
+        # bubblewrap for the /dev-overnight replays, as in the job replay-suite.
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y strace
+          sudo apt-get install -y strace bubblewrap
           python3 -m pip install --require-hashes -r requirements/py312.txt
 
       - name: Replays and differential of this shard
@@ -489,3 +496,62 @@ jobs:
             ${{ runner.temp }}/artifact-graph/check.json
             ${{ runner.temp }}/artifact-graph/violations.txt
           if-no-files-found: warn
+
+  replay-suite:
+    # P1c (D25, never fail): the pipeline replay suite, tests/replay/test_pipelines.py (each of the
+    # ten pipelines compliant: 0 gate blocks, 0 hook errors, its terminal reached),
+    # test_faults.py (each injected fault returned to its own producer and repaired at the next
+    # round), test_no_dead_end.py (every blocking site of the registered hooks has an agent action
+    # that clears it, apart from the owner's /stop) and test_regressions.py (P1's fan-out wedge,
+    # E1, N1, V1-1/NV-1), shipped and armed, untraced, each replay in a mount namespace through the
+    # runner's passwordless sudo, a proxy guard counting every connection. The replays are split
+    # over the matrix by the cost each scenario declares (tests/replay/conftest.py, REPLAY_SHARD);
+    # the tests that replay nothing (the runner's unit tests) run in shard 1. Every
+    # pull_request push runs it all, so a phase PR merges only with the whole suite green on its
+    # head (tests/TESTING.md, "Replay suite").
+    name: replay suite ${{ matrix.shard }}/12
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install bubblewrap and Python dependencies
+        # bubblewrap: pretool-overnight-hook-guard.py re-execs each Bash call of a /dev-overnight
+        # actor inside its bwrap write boundary and refuses the call where bwrap is missing
+        # (OVERNIGHT WRITE-BOUNDARY FAIL-CLOSED); the replays run as the CLI does on a host with it.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          python3 -m pip install --require-hashes -r requirements/py312.txt
+
+      - name: Replay suite, shard ${{ matrix.shard }} of 12
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          REPLAY_SHARD: ${{ matrix.shard }}/12
+          REPLAY_WORK: ${{ runner.temp }}/replay
+        run: >-
+          python3 -m pytest tests/replay -q -p no:cacheprovider -rfE --durations=0
+          --ignore=tests/replay/test_run_to_run.py
+
+      - name: Upload this shard's replays
+        # The replays' own records (blocks, hook runs, terminals, transcripts) of a red shard.
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: replay-suite-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/replay/runs/
+          if-no-files-found: warn
+          retention-days: 7

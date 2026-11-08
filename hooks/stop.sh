@@ -2,11 +2,13 @@
 # stop.sh - wrapper for /stop slash command
 #
 # The human-typed /stop record in the session's transcript is what releases the
-# /dev-overnight time-lock (stop-overnight-timelock.py, through
-# lib/stop_contract.py timelock_released); this wrapper releases nothing. It runs
-# break-overnight-lock.py, which records current_phase=completed in the stopping
-# session's own overnight state and, with the /stop helper-auth token, releases
-# its isolation fields. It never writes end_time.
+# /dev-overnight time-lock (the Stop gate's step 4, hooks/stop-command-gate.py,
+# through lib/command_span.py timelock_released) and opens the span no Stop gate
+# holds; this wrapper releases nothing. It runs break-overnight-lock.py, which
+# records current_phase=completed in the stopping session's own overnight state
+# and, with the /stop helper-auth token, releases its isolation fields. It never
+# writes end_time, and the session's todo list is the CLI's own record, which
+# nothing here writes.
 #
 # Sentinel guard: pretool-wrapper-userintent.py
 # enforces that this script is only invocable via /stop slash command.

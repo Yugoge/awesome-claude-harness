@@ -45,6 +45,7 @@ tests/
 ├── `test_contract_runtime_declared_vocab.py` - schema that declares them (P1b row 19 rule 7): the QA statuses the v1
 ├── `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
 ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+├── `test_cp_enforce_own_slot.py` - subagentstop-cp-enforce.py (CP_ENFORCE_MODE=block): a stopping agent is held only on its
 ├── `test_cycle_registry.py` - hooks/prompt-workflow.py mints the task id at UserPromptSubmit and arms the
 ├── `test_declaring_dispatch.py` - of who owes an artifact of a task, from the task's dispatch records in every
 ├── `test_dispatch_template.py` - A dispatch's template is the fence of its command's file that names its
@@ -84,6 +85,7 @@ tests/
 ├── `test_overnight_trace_yield.py` - (P1b row 18)
 ├── `test_overwrite_guard.py` - The overwrite guard was never registered and was deleted with its route
 ├── `test_pol_generative_sweeps.py` - AC-R02-10 .. AC-R02-16 (revision 2). Every deny-side population here is
+├── `test_posttool_checkpoint_refusal.py` - Drives hooks/posttool-git-checkpoint.sh as settings.json registers it (PostToolUse on
 ├── `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
 ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
 ├── `test_prompt_workflow_turn_state.py` - hooks/prompt-workflow.py ``_clear_turn_state`` runs at every UserPromptSubmit: it removes

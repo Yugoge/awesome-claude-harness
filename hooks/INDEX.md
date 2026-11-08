@@ -118,6 +118,7 @@ hooks/
 │   ├── `test_contract_runtime_declared_vocab.py` - schema that declares them (P1b row 19 rule 7): the QA statuses the v1
 │   ├── `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
 │   ├── `test_cp_checkin.py` - of ba-spec-20260427-194324.md (P1 view-trigger removal + P2 generation field)
+│   ├── `test_cp_enforce_own_slot.py` - subagentstop-cp-enforce.py (CP_ENFORCE_MODE=block): a stopping agent is held only on its
 │   ├── `test_cycle_registry.py` - hooks/prompt-workflow.py mints the task id at UserPromptSubmit and arms the
 │   ├── `test_declaring_dispatch.py` - of who owes an artifact of a task, from the task's dispatch records in every
 │   ├── `test_dispatch_template.py` - A dispatch's template is the fence of its command's file that names its
@@ -221,8 +222,8 @@ hooks/
 ├── `posttool-restart-sendmessage.py` - PostToolUse: record successful validated restart SendMessage calls.
 ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
 ├── `posttool-subagent-track.py` - PostToolUse:Agent Hook: Track subagent invocations in workflow bookmark
-├── `posttool-todo-count.py` - PostToolUse Hook: Enforce canonical todo count immediately after TodoWrite
-├── `posttool-todo-sequence.py` - PostToolUse Hook: Enforce one-step-at-a-time progression in workflow checklists
+├── `posttool-todo-count.py` - PostToolUse hook (TodoWrite step count), retired to a no-op.
+├── `posttool-todo-sequence.py` - PostToolUse hook (TodoWrite step sequence), retired to a no-op.
 ├── `posttool-todo-tracker.py` - PostToolUse Hook: Output checklist progress after every TodoWrite call
 ├── `pre-commit-check.sh` - pre-commit-check.sh - Detect untracked files before commit
 ├── `pretool-aggregate-check.py` - existence before allowing the orchestrator to dispatch the QA subagent in
@@ -278,11 +279,12 @@ hooks/
 ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
 ├── `stop-completion-gate.py` - blocked compliant /dev Stops with GATE_ERROR and its only release was a
-├── `stop-do-report-gate.py` - A /do session mints a task-id sidecar (<state dir>/claude-do-task-<sid>.json) at
-├── `stop-obligation-gate.py` - It re-validated, at the orchestrating session's Stop, the json artifacts its
-├── `stop-overnight-timelock.py` - Stop Hook: Block conversation termination until overnight end-time
+├── `stop-do-report-gate.py` - Stop hook (the /do do-report's shape at session stop), retired to a no-op.
+├── `stop-launch.py` - The registered Stop hook (P5 R10): run the Stop coordinator, relay its exit 0 or 2, stdout and
+├── `stop-obligation-gate.py` - Stop hook (G4, session-terminal obligation gate), retired to a no-op.
+├── `stop-overnight-timelock.py` - Stop hook (the /dev-overnight time-lock), retired to a no-op.
 ├── `stop-spec-coverage-enforce.py` - It ran spec-verify.py on the views of the spec the /spec session last wrote, at
-├── `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7: the registered Stop hook, running the four former Stop
+├── `stop-workflow-coordinator.py` - Serialize Stop phases and call the sole receipt-gated resource finalizer.
 ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh

@@ -150,9 +150,11 @@ Next: /dev --spec <spec_path>
 
 ## Temp-note mode (`--temp`)
 
-Create the path with `mktemp -t update-XXXXXX.md`. Read the newly created empty
-file before writing to it. Do not write temp updates into the repo unless the
-user explicitly passes `--path <path>`.
+Create a private directory with `mktemp -d -t update-XXXXXX` and write the note
+with Write as the new file `update.md` in it (Write creates files; the write
+guard refuses a Write over an existing one, even an empty file `mktemp` made).
+Do not write temp updates into the repo unless the user explicitly passes
+`--path <path>`.
 
 Required temp-note shape:
 

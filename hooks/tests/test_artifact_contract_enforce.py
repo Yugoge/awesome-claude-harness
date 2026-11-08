@@ -2639,5 +2639,63 @@ def test_a4_missing_dev_report_is_a_plain_block_every_round(tmp_path):
     assert proc.returncode == 0 and proc.stderr == "", proc.stderr
 
 
+# ---------------------------------------------------------------------------
+# R8 (P1c F7b): a lane whose dispatch carries no obligation block at all is
+# judged on the reports its own transcript shows it wrote, never on a
+# sibling's; with no block nothing else says which report is its own.
+# ---------------------------------------------------------------------------
+
+
+def _write_writing_transcript(home, project, session, agent_id, prompt, paths):
+    """The agent's transcript: its dispatch prompt, then one Write per path
+    with an ok tool_result (the record the CLI keeps of the agent's calls)."""
+    _write_obligation_transcript(home, project, session, agent_id, prompt)
+    tpath = home / ".claude" / "projects" / _project_slug(project) / session / "subagents" / f"agent-{agent_id}.jsonl"
+    with tpath.open("a", encoding="utf-8") as fh:
+        for k, rel in enumerate(paths):
+            use = f"toolu_r8_{agent_id}_{k}"
+            fh.write(json.dumps({"type": "assistant", "cwd": str(project), "message": {"content": [
+                {"type": "tool_use", "id": use, "name": "Write",
+                 "input": {"file_path": str(project / rel), "content": "{}"}}]}}) + "\n")
+            fh.write(json.dumps({"type": "user", "cwd": str(project), "message": {"content": [
+                {"type": "tool_result", "tool_use_id": use, "content": "ok"}]}}) + "\n")
+
+
+@pytest.mark.parametrize("stopgate", [None, "block"], ids=["switch_unset", "stopgate_block"])
+def test_r8_no_obligation_block_judges_only_the_reports_the_lane_wrote(tmp_path, stopgate):
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    home.mkdir()
+    _write_sentinel(project, SESSION, "dev")
+    tasks = {lane: f"{SESSION_TS}-{lane}" for lane in _FANOUT_LANES}
+    reports = {lane: f"docs/dev/dev-report-{task}.json" for lane, task in tasks.items()}
+    for lane, task in tasks.items():
+        agent = f"agent-dev-r8-{lane}"
+        _register_agent(project, agent, SESSION, "dev")
+        _write_writing_transcript(home, project, _FANOUT_HARNESS, agent,
+                                  "You are the dev subagent. Write your report.", [reports[lane]])
+    # l1 left a needs_review report (no longer a dev-report.v2 status); l2's is valid.
+    _write(project / reports["l1"], _l2_dev_report(tasks["l1"], status="needs_review", lane="l1",
+                                                   lane_set=list(_FANOUT_LANES)))
+    _write(project / reports["l2"], _l2_dev_report(tasks["l2"], lane="l2", lane_set=list(_FANOUT_LANES)))
+
+    sibling = _run_hook(project, home, "agent-dev-r8-l2", session_id=_FANOUT_HARNESS, stopgate_mode=stopgate)
+    assert sibling.returncode == 0, sibling.stderr
+    assert reports["l1"] not in sibling.stderr
+
+    own = _run_hook(project, home, "agent-dev-r8-l1", session_id=_FANOUT_HARNESS, stopgate_mode=stopgate)
+    assert own.returncode == 2, own.stderr
+    assert "ARTIFACT_CONTRACT_BLOCKED" in own.stderr
+    assert reports["l1"] in own.stderr and reports["l2"] not in own.stderr
+    assert "needs_review" in own.stderr  # the failing check: the status the schema refuses
+
+    # A lane that wrote no report owes none here (existence is the declaring obligation's, G2's
+    # obligation mode): nothing of a sibling's is judged at its stop.
+    _write_writing_transcript(home, project, _FANOUT_HARNESS, "agent-dev-r8-none", "You are the dev subagent.", [])
+    _register_agent(project, "agent-dev-r8-none", SESSION, "dev")
+    none = _run_hook(project, home, "agent-dev-r8-none", session_id=_FANOUT_HARNESS, stopgate_mode=stopgate)
+    assert none.returncode == 0, none.stderr
+
+
 if __name__ == "__main__":
     sys.exit(subprocess.run([sys.executable, "-m", "pytest", __file__, "-v"]).returncode)

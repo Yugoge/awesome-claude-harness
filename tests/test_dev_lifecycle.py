@@ -278,6 +278,35 @@ def test_derive_state_committed_end_to_end(tmp_path):
     assert row["next_action"] == "none"
 
 
+def test_derive_state_an_uncommitted_closed_task_is_commit_pending(tmp_path):
+    # After /close and before /commit the task's owned file is dirty and no commit carries its
+    # trailer: /commit --auto must find it (commit_pending), not report a partial commit.
+    project = make_project(tmp_path)
+    init_git_repo(project)
+    (project / "owned.txt").write_text("hello\n", encoding="utf-8")
+    git_commit_all(project, "chore: before the cycle\n")
+    (project / "owned.txt").write_text("hello, cycle\n", encoding="utf-8")
+    task_id = "20260101-000014"
+    write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id, files_modified=["owned.txt"]))
+    write_text(dev_dir(project) / f"close-report-{task_id}.md", close_report_text(task_id, "CLOSE: YES"))
+    row = dlc.derive_state(project, task_id)
+    assert (row["state"], row["next_action"]) == ("commit_pending", "commit")
+    assert _list_actionable(project, "commit") == [task_id]
+
+
+def test_derive_state_a_trailer_with_dirty_owned_content_is_a_partial_commit(tmp_path):
+    project = make_project(tmp_path)
+    init_git_repo(project)
+    (project / "owned.txt").write_text("hello\n", encoding="utf-8")
+    task_id = "20260101-000015"
+    write_json(dev_dir(project) / f"dev-report-{task_id}.json", dev_report(task_id, files_modified=["owned.txt"]))
+    write_text(dev_dir(project) / f"close-report-{task_id}.md", close_report_text(task_id, "CLOSE: YES"))
+    git_commit_all(project, f"chore: cycle\n\nTask-id: {task_id}\n")
+    (project / "owned.txt").write_text("hello, after the commit\n", encoding="utf-8")
+    row = dlc.derive_state(project, task_id)
+    assert (row["state"], row["next_action"], row["blocker"]) == ("blocked", "inspect", "PARTIAL_COMMIT")
+
+
 def _fanout(project, parent):
     dd = dev_dir(project)
     write_text(dd / f"ticket-{parent}.md", f"Task-id: {parent}\n")

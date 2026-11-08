@@ -1760,3 +1760,27 @@ def test_serialized_wave_fails_closed_when_a_head_does_not_resolve(
     )
     assert any("baseline_head_sha" in d for d in _shard_details(result))
     assert result["status"] == "fail"
+
+
+def test_r12_fanout_reads_no_undeclared_unsuffixed_parent_artifact(tmp_path: Path) -> None:
+    """P1c R12 (F3b): a fan-out cycle's chain is its lanes' artifacts and the
+    canonical. A stale schema-v1 QA report, ticket and context at the
+    unsuffixed parent paths (no dispatch of the cycle declares them) are read
+    by nothing: the chain passes and no error names them."""
+    parents, _ = _make_fanout(tmp_path)
+    stale = {
+        "qa": {"schema_version": "1.0", "task_id": TASK_ID, "status": "fail", "verdict": "fail"},
+        "ticket": "# an earlier ticket naming no task\n",
+        "context": {"request_id": "20200101-000000", "task_id": "20200101-000000"},
+    }
+    for key, value in stale.items():
+        _write(parents[key], value)
+
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+
+    assert result["mode"] == "fanout"
+    assert result["status"] == "pass", result["errors"]
+    named = json.dumps(result["errors"]) + json.dumps(result.get("disclosed_exceptions", []))
+    for key in stale:
+        assert parents[key].name not in named
+    assert _relative(tmp_path, parents["qa"]) not in result["report_paths"]

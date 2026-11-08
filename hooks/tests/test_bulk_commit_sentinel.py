@@ -688,7 +688,7 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
             g_other = self._write_grant(
                 gdir, sid, other["top"], other["branch"], other["head"], mtime=base
             )
-            cmd = f'git -C {root["top"]} commit -m "chore: root commit"'
+            cmd = f'git -C {root["top"]} commit -m "chore: root commit" -m "Task-id: grant-sel-test"'
             # Armed AFTER both grants exist: the attestation's dispatch time must
             # land at or after their created_at, since the pipeline mints first
             # and dispatches second.

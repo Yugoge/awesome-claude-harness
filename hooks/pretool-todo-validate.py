@@ -2,21 +2,28 @@
 """
 PreToolUse Hook: Validate TodoWrite input BEFORE execution.
 
-Prevents sequence violations by checking the proposed todos array against
-the last known state. This is the enforcement counterpart to
-posttool-todo-sequence.py (which can only warn after the fact).
+The TodoWrite rules' one decider: a list that breaks one never runs, so every
+ok TodoWrite in the record is an accepted one.
 
-State: the transcript records every TodoWrite and Agent call (P1b E7); the
-last accepted list and the dispatches come from lib.todo_canonical.checklist.
+State: the transcript records every TodoWrite and Agent call (P1b E7). The
+previous list is the span's last ok TodoWrite (lib.todo_canonical.checklist,
+command_span's reader); this call, already in the record, has no result yet.
 
 Rules enforced:
+  0. A span's first list, or a change of the list's length: the canonical
+     list (content, activeForm, count); a first list also starts at Step 0
+     with nothing completed
   1. Max 1 step completed per call
   2. Steps must pass through in_progress before completed
   3. Only 1 step can be in_progress at a time
   4. Content and activeForm are immutable (only status changes allowed)
   5. Steps must be completed in order (no skipping ahead)
-  6. Subagent completion guard (Gate 4): cannot complete a subagent step
-     without having called the Agent tool first
+  6. Subagent completion guard (Gate 4): completing a subagent step needs an
+     ok Agent call of its type after the TodoWrite that set it in_progress,
+     or a call of its type that /restart resumed there (P1c row 16)
+  7. The wake (/dev-overnight Step 0) completes only after a recurring
+     CronCreate of the wake's prompt in the span (P1c X8)
+Past a command's first list, lists of one length pair by content, never index.
 
 Exit codes:
   0: Valid, allow TodoWrite
@@ -24,12 +31,14 @@ Exit codes:
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
 # Import shared canonical validation
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.todo_canonical import checklist, validate_against_canonical, run_todo_script
+from lib.todo_canonical import (by_content, checklist, initial_status_violations, run_todo_script,
+                                validate_against_canonical)
 
 
 def _check_field_changed(old_val, new_val):
@@ -171,7 +180,7 @@ def emit_block(cmd, violations, last):
     json_hint = f'\nCall TodoWrite with:\n{correct}\n' if correct else ''
     numbered = '\n'.join(f'  [{j+1}] {v}' for j, v in enumerate(violations))
     sys.stderr.write(
-        f'\nBLOCKED TodoWrite for /{cmd}:\n' + numbered
+        f'\nBLOCKED TodoWrite for /{cmd} (STEP SEQUENCE VIOLATION):\n' + numbered
         + '\n\nRULES: (1) One completion per call '
         '(2) Must pass through in_progress '
         '(3) One in_progress at a time '
@@ -219,60 +228,57 @@ def _subagent_types(step):
     return {str(e.get('subagent_type') or '').strip().lower() for e in entries if isinstance(e, dict)}
 
 
-def _in_progress(todos):
-    """The one in_progress step's index, or None (none, or several)."""
-    found = [i for i, t in enumerate(todos) if t.get('status') == 'in_progress']
-    return found[0] if len(found) == 1 else None
+def _resumed(state, sid):
+    """(offset, call) of each Agent call of the span that never came back but
+    whose agent the /restart recovery resumed (the span's SendMessage to it,
+    placed there; offset: that resume's result), saw come back (its journal
+    record) and finalized (an ok finalize call of restart.md's helper after it
+    in the span): that call is its step's dispatch, with no replacement call
+    (commands/restart.md, Lesson 16)."""
+    from lib.subagent_restart import completed_resumes, is_helper_invocation
+    journal = completed_resumes(sid)
+    cut = {c.id: c for c in state.span.uses('Agent', 'Task') if not c.ok} if journal else {}
+    done = [b.result_at for b in state.span.uses('Bash') if b.ok and str(b.input.get('command')).split()[2:3]
+            == ['finalize'] and is_helper_invocation({'tool_name': 'Bash', 'tool_input': b.input})] if cut else []
+    return [(m.result_at, cut[journal[str(m.input.get('to'))]]) for m in state.span.uses('SendMessage')
+            if cut and m.ok and journal.get(str(m.input.get('to'))) in cut and any(t > m.result_at for t in done)]
 
 
-def _dispatched_steps(state, canonical):
-    """The subagent steps a dispatch has been made for, read from the record:
-    each Agent call that came back pairs with a step. With step ip in progress,
-    a typed call counts for the first step of ip..ip+2 that names its type and
-    has no call yet (the window covers a TodoWrite and its Agent sent
-    together), an untyped call for ip itself. A step set back to pending (a new
-    overnight cycle) needs a new call."""
-    # Ordered by where each result is recorded (the offset of its line, which
-    # orders as its line number does), so no line before the span is counted.
-    events = sorted([(w.result_at, 0, w) for w in state.write_uses]
-                    + [(c.result_at, 1, c) for c in state.span.uses('Agent', 'Task') if c.ok],
-                    key=lambda e: (e[0], e[1]))
-    current, counted = [], set()
-    for _, is_dispatch, call in events:
-        if not is_dispatch:
-            current = call.input['todos']
-            counted -= {i for i, t in enumerate(current) if t.get('status') == 'pending'}
+def _started_at(state, content):
+    """Where the result of the ok TodoWrite that set the step of ``content``
+    in_progress is recorded (the latest such call: a step set back to pending
+    and started again, as a new overnight cycle does, needs a new call)."""
+    start, was = None, None
+    for use in state.span.uses('TodoWrite'):
+        todos = use.input.get('todos')
+        if not use.ok or not isinstance(todos, list):
             continue
-        ip = _in_progress(current)
-        if ip is None:
-            continue
-        kind = str(call.input.get('subagent_type') or '').strip().lower()
-        window = range(ip, min(len(canonical), ip + 3)) if kind else [ip]
-        for i in window:
-            types = _subagent_types(canonical[i]) if i < len(canonical) else set()
-            if types and i not in counted and (not kind or kind in types):
-                counted.add(i)
-                break
-    return counted
+        now = next((t.get('status') for t in todos if isinstance(t, dict) and t.get('content') == content), None)
+        if now == 'in_progress' and was != 'in_progress':
+            start = use.result_at
+        was = now
+    return start
 
 
-def _find_completing_subagent_step(state, last, new_todos, canonical):
-    """Find a step transitioning to completed that needs subagent guard."""
-    dispatched = None
-    for i, (old, new) in enumerate(zip(last, new_todos)):
-        needs_guard = (
-            old.get('status') == 'in_progress'
-            and new.get('status') == 'completed'
-            and i < len(canonical)
-            and canonical[i].get('subagent_call')
-        )
-        if not needs_guard:
-            continue
-        if dispatched is None:
-            dispatched = _dispatched_steps(state, canonical)
-        if i not in dispatched:
-            return i, new, canonical[i].get('subagent_call')
-    return None, None, None
+def _dispatched(state, content, step, sid=''):
+    """Gate 4's fact: an ok Agent call of the step's subagent type, or one
+    /restart resumed (_resumed), came back after the TodoWrite that set the
+    step in_progress. Offsets of results order them, as the record does."""
+    start, types = _started_at(state, content), _subagent_types(step)
+    calls = [(c.result_at, c) for c in state.span.uses('Agent', 'Task') if c.ok] + _resumed(state, sid)
+    return start is not None and any(
+        at is not None and at > start and str(c.input.get('subagent_type') or '').strip().lower() in types
+        for at, c in calls)
+
+
+def _find_completing_subagent_step(state, last, new_todos, sid=''):
+    """The first step turning in_progress -> completed whose canonical step
+    names a subagent call that _dispatched does not find."""
+    for old, new, step in zip(last, new_todos, by_content(state.canonical, new_todos)):
+        if (old.get('status') == 'in_progress' and new.get('status') == 'completed'
+                and step.get('subagent_call') and not _dispatched(state, new.get('content'), step, sid)):
+            return new, step
+    return None, None
 
 
 def _format_subagent_names(subagent_call):
@@ -282,24 +288,45 @@ def _format_subagent_names(subagent_call):
     return subagent_call.get('subagent_type', '?')
 
 
-def check_subagent_completion_guard(state, last, new_todos, cmd):
+def _unreturned(state, types):
+    """'call <id>, declared artifacts: ...' of each Agent call of one of
+    ``types`` in the span that has not come back (its obligation's paths)."""
+    from lib.obligation import extract_obligation_block
+    return [f'call {c.id}, declared artifacts: ' + (', '.join(re.findall(r'"path":\s*"([^"]+)"', getattr(
+        extract_obligation_block(str(c.input.get('prompt') or '')), 'body', ''))) or 'none')
+        for c in state.span.uses('Agent', 'Task')
+        if not c.ok and str(c.input.get('subagent_type') or '').strip().lower() in types]
+
+
+def check_subagent_completion_guard(state, last, new_todos, cmd, sid=''):
     """Gate 4: block completing a subagent step without calling Agent."""
     if not last or not cmd:
         return
-    canonical = state.canonical
-    idx, step_todo, sa_call = _find_completing_subagent_step(
-        state, last, new_todos, canonical
-    )
-    if idx is not None:
-        agents = _format_subagent_names(sa_call)
-        sys.stderr.write(
-            f'\nBLOCKED: Cannot complete Step {idx} '
-            f'("{step_todo.get("content", "?")}").\n'
-            f'This step requires a subagent call ({agents}) '
-            f'that has not been made.\n'
-            f'Call the Agent tool first, then mark completed.\n\n'
-        )
+    step_todo, step = _find_completing_subagent_step(state, last, new_todos, sid)
+    if step is not None:
+        agents = _format_subagent_names(step.get('subagent_call'))
+        cut = _unreturned(state, _subagent_types(step))
+        why = (f'Its {agents} call has not come back ({"; ".join(cut)}). A subagent cut by an '
+               'interrupted session or a usage limit is resumed and finalized by the owner\'s /restart '
+               '(commands/restart.md), never replaced by a new call.\n\n' if cut else
+               f'This step requires a subagent call ({agents}) made after the step went in_progress, '
+               'and none has come back.\nCall the Agent tool first, then mark completed.\n\n')
+        sys.stderr.write(f'\nBLOCKED: Cannot complete "{step_todo.get("content", "?")}" '
+                         f'(subagent role {agents}).\n' + why)
         sys.exit(2)
+
+
+def check_wake_step(state, last, new_todos):
+    """Rule 7: the wake step completes only after an ok recurring CronCreate of
+    the wake's prompt in the span, the job the session's CronDelete ends."""
+    from lib import overnight
+    for old, new, step in zip(last, new_todos, by_content(state.canonical, new_todos)):
+        if (step.get('wake_call') and old.get('status') == 'in_progress' and new.get('status') == 'completed'
+                and not any(overnight.is_wake(u) for u in state.span.uses('CronCreate'))):
+            sys.stderr.write(f'\nBLOCKED: Cannot complete "{new.get("content")}": this /{state.command} span holds '
+                             "no ok recurring CronCreate of the wake's prompt. Call CronCreate as the command's "
+                             'text gives it (recurring, its prompt verbatim), then mark the step completed.\n')
+            sys.exit(2)
 
 
 def parse_stdin():
@@ -325,15 +352,26 @@ def main():
     state = checklist(data.get('transcript_path'))
     if not state:
         sys.exit(0)
-    last = state.accepted
+    last = state.todos
     cmd = state.command
     if last is None or len(last) != len(new_todos):
         validate_against_canonical_if_needed(cmd, new_todos, state.arguments)
+        if last is None and initial_status_violations(new_todos):
+            emit_block(cmd, initial_status_violations(new_todos), state.canonical)
         sys.exit(0)
-    violations = validate(last, new_todos)
+    # Past the first list and with its length unchanged, a session's list keeps the text and the
+    # order of the list it holds (content pairing is for the canonical list a length change
+    # compares against, P1c row 17): a step moved or reworded is refused here, before the step
+    # rules, which a reordered list would otherwise satisfy step by step.
+    if [t.get('content') for t in new_todos] != [t.get('content') for t in last]:
+        emit_block(cmd, ['Todo steps must keep the text and the order of the list the session holds; '
+                         're-send that list and change only statuses'], last)
+    paired = by_content(last, new_todos)
+    violations = validate(paired, new_todos)
     if violations:
         emit_block(cmd, violations, last)
-    check_subagent_completion_guard(state, last, new_todos, cmd)
+    check_wake_step(state, paired, new_todos)
+    check_subagent_completion_guard(state, paired, new_todos, cmd, str(data.get('session_id') or ''))
     sys.exit(0)
 
 

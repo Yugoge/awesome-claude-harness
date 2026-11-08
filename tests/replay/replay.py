@@ -105,6 +105,10 @@ class Dispatch(Call):
     agent_type: str = ""
     stop: Event | None = None
     actor: "Actor | None" = None
+    # A session cut while the subagent ran (faults.py `cut`, `limit`): its Agent call never comes
+    # back; the recovery resumes the same agent, whose response ends with `final_line`.
+    cut: bool = False
+    final_line: str = ""
 
 
 def now_iso() -> str:
@@ -162,14 +166,20 @@ class Replay:
         self.roots = norm.Roots([(layout.harness, "<harness>"), (layout.project, "<project>"),
                                  (layout.origin, "<origin>"), (layout.state, "<state>"),
                                  (layout.home, "<home>"), (layout.sb, "<sb>")])
-        self.env = self._env(env_extra or {})
+        self.env_extra = dict(env_extra or {})  # the replay's own --env: it overrides settings.json's env
+        self.env = self._env(self.env_extra)
         # E5: the CLI exports CLAUDE_PROJECT_DIR to hooks only; its Bash tool leaves it unset.
         self.bash_env = {k: v for k, v in self.env.items() if k != "CLAUDE_PROJECT_DIR"}
         self.args: dict = {}  # the driver's arguments (cli.py --arg K=V)
         self.respellings: list = []  # row 7 respellings a driver applied, one record per call
+        self.fault_records: list = []  # the injected faults (faults.py), written to faults.json
+        self.terminals: list = []  # what each typed command reached (terminal()), in order
         # Optional fn(step label) -> deviations, consulted for a tool call or dispatch whose caller passes
         # none (a subagent's own calls, made by agents.Player): a driver sets it to reach those steps.
         self.deviation_at = None
+        # Dispatches whose subagent's stop waits for the next dispatch to end (a parallel batch's
+        # interleaving, as a fault asks for it: tests/replay/faults.py `defer`).
+        self.deferred: list = []
         os.makedirs(layout.out, exist_ok=True)
         os.makedirs(layout.markers, exist_ok=True)
         self._log = open(os.path.join(layout.out, "hooks.jsonl"), "w")
@@ -227,6 +237,17 @@ class Replay:
         """A random name part the replay learned (a mktemp suffix a later step names)."""
         self.ids.add("rand", value)
 
+    def terminal(self, pipeline: str, reached: bool, stop=None, **detail) -> None:
+        """Record what the typed command `pipeline` reached (P1c's suite reads terminals.json): `reached`
+        is its own terminal condition, and `stop` the Event of the Stop that ended it, which must carry
+        no block at all (a block a deviation passed included)."""
+        blocked = [b["hook"] for b in getattr(stop, "blocks", [])] if stop is not None else []
+        rec = {"pipeline": pipeline, "reached": bool(reached) and stop is not None and not blocked,
+               "condition": bool(reached), "stop": "none" if stop is None else ("blocked" if blocked else "ok"),
+               "stop_blocks": blocked}
+        rec.update({k: v for k, v in detail.items()})
+        self.terminals.append(rec)
+
     def mark(self, kind: str, value: str) -> None:
         """A step or actor marker: a file the trace sees created, its value kept in markers.jsonl."""
         self._seq += 1
@@ -271,9 +292,12 @@ class Replay:
         # The event's own marker: the trace attributes each hook process's file operations to this
         # event, and invocations.jsonl keeps what re-running it needs (E1's differential).
         self.mark("event", str(self.n_events + 1))
+        # the transcripts as this event's hooks see them (the replay only appends to them after it)
+        sizes = {os.path.join(d, f): os.path.getsize(os.path.join(d, f)) for d, _s, fs in os.walk(session.tdir)
+                 for f in fs if f.endswith(".jsonl")}
         rec = hookrun.run_event(self.settings, event, payload, self.env, self.layout.project, self.parallel)
         self._inv.write(json.dumps({"seq": self.n_events + 1, "event": event, "label": label,
-                                    "payload": dict(payload, hook_event_name=event),
+                                    "payload": dict(payload, hook_event_name=event), "transcripts": sizes,
                                     "hooks": [{k: h[k] for k in ("hook", "command", "matcher", "timeout", "rc",
                                                                  "verdict", "how")} for h in rec["hooks"]]})
                         + "\n")
@@ -349,6 +373,8 @@ class Replay:
         with open(os.path.join(out, "blocks.json"), "w") as fh:
             json.dump({"blocks": self.blocks, "deviations": self.deviations, "hook_errors": self.hook_errors,
                        "failed_calls": self.failed_calls, "respellings": self.respellings}, fh, indent=1)
+        with open(os.path.join(out, "terminals.json"), "w") as fh:
+            json.dump(self.terminals, fh, indent=1, default=str)
         with open(os.path.join(out, "ids.json"), "w") as fh:
             json.dump({"ids": self.ids.to_json(), "window": [self.window.start, self.window.end],
                        "layout": self.layout.to_json()}, fh, indent=1)
@@ -552,6 +578,7 @@ class Actor:
             self._result(tid, f"PreToolUse:{name} hook error: {text}", error=True)
             self.rp.after(step, call)
             return call
+        tinput = updated_input(call.pre, tinput)
         perform = step["perform"] or _default_perform(self, name, tinput)
         try:
             with self.rp.acting(self.role):
@@ -614,7 +641,8 @@ class Actor:
             deviation = self.rp.deviation_at(label)
         step = self.rp.step("dispatch", label, {"subagent_type": subagent_type, "prompt": prompt,
                                                 "description": description, "body": body, "result": result,
-                                                "deviation": deviation, "extra_input": extra_input or {}})
+                                                "deviation": deviation, "extra_input": extra_input or {},
+                                                "actor": self})
         d = Dispatch(label, "Agent", agent_type=step["subagent_type"])
         if step.get("skip"):
             d.skipped = True
@@ -642,9 +670,40 @@ class Actor:
         meta = os.path.join(os.path.dirname(self.s.agent_tpath(aid)), f"agent-{aid}.meta.json")
         with open(meta, "w") as fh:
             json.dump({"agentType": atype, "description": agent_in["description"], "toolUseId": tid}, fh)
-        if step["body"]:
-            step["body"](sub)
-        final = step["result"](sub) if callable(step["result"]) else step["result"]
+
+        def rest(on_stop_block=on_stop_block, stop_rounds=stop_rounds):
+            if step["body"]:
+                step["body"](sub)
+            final = step["result"](sub) if callable(step["result"]) else step["result"]
+            if d.final_line:
+                final = final.rstrip("\n") + "\n\n" + d.final_line
+            sub.last_final = final
+            default = getattr(self.rp, "on_stop_block_default", None)
+            if default is not None:  # an injected fault's agent repairs at its next round (faults.py)
+                own = on_stop_block
+                on_stop_block = (lambda s, ev: (own and own(s, ev)) or default(s, ev))
+                stop_rounds = max(stop_rounds, 4)  # F2g: a forged round before the repair round
+
+            def finish():
+                self._finish_dispatch(step, d, sub, agent_in, prompt, final, on_stop_block, stop_rounds, t0)
+
+            if step.get("defer_stop"):  # its stop comes after the next dispatch's (one parallel batch)
+                self.rp.deferred.append(finish)
+                return
+            finish()
+            while self.rp.deferred:
+                self.rp.deferred.pop(0)()
+
+        cuts = getattr(self.rp, "cuts", None)
+        if cuts is None:
+            rest()
+        else:  # the subagent may be cut mid-run: it then goes on only when the recovery resumes it
+            cuts.run(d, sub, rest, agent_in)
+        return d
+
+    def _finish_dispatch(self, step, d, sub, agent_in, prompt, final, on_stop_block, stop_rounds, t0) -> None:
+        """The subagent's final text and stop rounds, the Agent tool_result and its PostToolUse."""
+        label, aid, atype, tid = d.label, d.agent_id, d.agent_type, d.tool_use_id
         active = False
         for _ in range(max(1, stop_rounds)):
             self.s.say(final, aid)
@@ -661,16 +720,29 @@ class Actor:
                       "content": [{"type": "text", "text": final}],
                       "totalDurationMs": int((time.monotonic() - t0) * 1000), "totalTokens": 0,
                       "totalToolUseCount": sub.calls, "usage": {"input_tokens": 0, "output_tokens": 0}}
-        self._result(tid, [{"type": "text", "text": final}], resp=d.response)
-        d.post = self.s.fire("PostToolUse", label, {"tool_name": "Agent", "tool_input": agent_in,
-                                                    "tool_response": d.response, "tool_use_id": tid}, self.agent)
-        self.rp.settle(d.post, label, step["deviation"])
+        if not d.cut:  # a call cut before it came back gets no result (recovery.py reports its end)
+            self._result(tid, [{"type": "text", "text": final}], resp=d.response)
+            d.post = self.s.fire("PostToolUse", label, {"tool_name": "Agent", "tool_input": agent_in,
+                                                        "tool_response": d.response, "tool_use_id": tid},
+                                 self.agent)
+            self.rp.settle(d.post, label, step["deviation"])
         d.ok = not d.stop.still_blocked
         self.rp.after(step, d)
-        return d
 
 
 # ---------------------------------------------------------------- tool effects
+
+def updated_input(pre: Event | None, tinput: dict) -> dict:
+    """The input the tool runs with: a PreToolUse hook that allows the call may print
+    hookSpecificOutput.updatedInput, whose fields replace the model's (the CLI's hooks reference,
+    PreToolUse decision control), and PostToolUse sees the input the tool ran with.
+    pretool-overnight-hook-guard.py rewrites an overnight actor's Bash command into its bubblewrap
+    re-exec this way (hookrun keeps it as "updated_input"). The transcript keeps the model's tool_use."""
+    for h in (pre.hooks if pre else []):
+        if h["verdict"] == "ok" and h.get("updated_input"):
+            tinput = dict(tinput, **h["updated_input"])
+    return tinput
+
 
 def _result_text(resp) -> str:
     if isinstance(resp, dict):
