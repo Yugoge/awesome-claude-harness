@@ -22,12 +22,12 @@ P5 = `repair/P5` fa66a1a（PR #14）；P6 = `repair/P6` 84f87a9；P9 = `repair/P
   - /dev-overnight 里结构上开不出 /spec 或 /dev 区间，P2 对 AskUserQuestion 的拒绝再兜一层（§2.8）。
 - **(b) 评分。**
   - 分数事件只由 hook 从事实中写出，追加进现有的 `logs/lifecycle.jsonl`，由一个写函数完成。
-  - 分数不存储：读的时候由纯函数现算，没有新的状态文件，也没有计数器。
+  - 分数和以前一样是累计的（D29）：本项目的每个事件都算，从 50 开始，封顶 100，没有下限。分数不存储，读的时候由纯函数现算，没有新的状态文件，也没有计数器。
   - agent 在 SubagentStart 时看到自己的分数和档位（score-inject.sh 的六档），以及随档位不同的提醒，不超过 3 行（D29）。
   - owner 打分之后，看到趋势、最差的 agent 和原因。/close 只问评分这一个问题（D29）。
   - 分数只改变派发时的提醒：不在生产者停下时设门，也不让 QA 变严（D29）。
   - /close 和 /commit 不加任何检查。
-- **(c) 新阶段 P13。** 排在 P12 之后、P11 之前，拆成 P13-1、P13-2（各约一天）和 P13-3（约半天），按顺序合并（`phase-prompt.md`）。
+- **(c) 新阶段 P13。** 排在 P12 之后、P11 之前，拆成 P13-1、P13-2（各约一天）和 P13-3（约半天）。P13-2 与 P12 并行，P13-1 在 P12 之后，P13-3 最后（FAST-TRACK.md；`phase-prompt.md`）。
 - **在途工作必须先改的地方**（§6）：
   - PR #16（P9）在快照提交 6c4c0d1 里删掉了全部评分代码，必须逐块恢复；
   - PR #12（P4）满足 D28 第 2 条，但审阅者的两条中等级别意见在 31dbb18 上还没修；
@@ -292,7 +292,7 @@ producer question 只看前两条：它的 schema 只有一个决定加 default�
 1. **只记事实，不记自评。** 事件由 hook 从别人产出的事实里得出：CLI 记录、别的 agent 的报告、代码的判决、owner 的回答。被评的 agent（包括主代理）不能写日志。
 2. **分数现算，不存。** 分数、档位、趋势都由读时的纯函数从只追加的日志算出。没有分数字段、计数器或放行标志，也没有新的状态文件。
 3. **按项目算。** 每行带 `project`，取 git 根身份的 sha256 前 12 位，不含个人值。这修掉了"项目 A 的评分改变项目 B 的提示词"这个缺陷（H-scoring §2.1）。
-4. **滚动窗口、能回升。** 窗口取最近 10 个任务。分数上限 100、没有下限，所以 score-inject.sh 的 Disgraced 档（低于 0）仍然够得着（D29）。但只看窗口里的任务，所以不会像旧系统那样一路累积、再也回不来。
+4. **累计，和以前一样（D29）。** 本项目所有任务的每个事件都算，按时间顺序累加：从 50 开始，每加一次封顶 100，没有下限（score-update.sh 的规则）。所以 Disgraced（低于 0）够得着。扣掉的分只能靠之后的加分事件补回来，时间本身不会让它恢复；旧提醒说低评分"不可逆"，说的就是这一点。
 5. **派发时说得短。** 不超过 3 行、400 B，由 hook 注入，不靠主代理的文字。
 6. **后果是提醒，不是门（D29）。** 分数只改变派发时 hook 给出的提醒，按档位不同。它不拦生产者的停止，不让 QA 变严，也不进 /close 或 /commit。
 
@@ -324,10 +324,9 @@ producer question 只看前两条：它的 schema 只有一个决定加 default�
 ### 3.3 分数怎么算（纯函数）
 
 `score(identity, project, as_of)` 的算法（identity 即 §3.2 的记分身份）：
-- 取 `project` 相同、`ts < as_of` 的事件行和评分折算行，在属于该身份的行里找最近 10 个不同的 task_id。
-- `raw` 是这些行的分值之和，`score = min(100, 50 + raw)`，没有下限。
+- 取 `project` 相同、`ts < as_of`、属于该身份的全部事件行和评分折算行，按时间顺序折算：先令 `s = 50`，每一行做 `s = min(100, s + points)`，没有下限。这和 score-update.sh 逐行封顶的规则相同（T:scripts/score-update.sh:282、:352-354）。
 - 没有任何行的身份记为"新"，分数 50，落在 Skilled Craftsman；派发时只显示一句"no record yet"加该档的提醒。
-- `trend = score(as_of) - score(窗口往回挪 5 个任务)`。
+- `trend` = 现在的分数，减去该身份最近 5 个任务开始之前的分数。
 - 档位就是 score-inject.sh 的六档（D29）：Disgraced（低于 0）、Apprentice（0-20）、Journeyman（21-40）、Skilled Craftsman（41-60）、Senior Craftsman（61-80）、Master（81-100）。档位的边界和名字搬进 score_log，一个归处。
 - `as_of` 取当前命令区间开头那条人类提示的时间。SubagentStart 注入器和主代理行用同一个 `as_of`、同一个函数，所以同一命令里看到的分数一致。当前命令里新发生的事件，影响的是下一个命令。
 - **旧行**（9 键、没有 `kind` 的行）照读不报错，但不计分。P4 留下的 4 键评分行没有 `project`，同样不计分。日志本身保留，作为历史。
@@ -337,7 +336,7 @@ producer question 只看前两条：它的 schema 只有一个决定加 default�
 由 SubagentStart hook 注入 `additionalContext`（官方文档写明的通道），一律英文，不超过 3 行、400 B。/close、/commit、/merge、/push 区间里的派发不注入，/close 和 /commit 保持不受评分影响。示例：
 
 ```
-Your record (dev, this project, last 10 tasks): 38 [Rank: Journeyman, 21-40], trend -9.
+Your record (dev, this project): 38 [Rank: Journeyman, 21-40], trend -9 over 5 tasks.
 Most frequent miss: QA failed your work for "edge case not tested" (3 of last 5 tasks).
 Reminder: your work failed review more than once lately; check the miss above against every criterion before you stop.
 ```
@@ -353,7 +352,7 @@ Reminder: your work failed review more than once lately; check the miss above ag
 由 AskUserQuestion 观察者处理 `close-rating:` 来源时给出。首选 `systemMessage`（显示给用户，要先测，§5）。后备是 additionalContext，让主代理原样贴出：主代理只转贴 hook 写好的文字，不算、不改、不写任何东西，这是 D28 唯一允许的转贴（§6.2）。不超过 5 行：
 
 ```
-Scores (this project, last 10 tasks): ba 67 Senior (+2) | dev 38 Journeyman (-9) | qa 56 Skilled (-4) | main 80 Senior (0)
+Scores (this project): ba 67 Senior (+2) | dev 38 Journeyman (-9) | qa 56 Skilled (-4) | main 80 Senior (0)
 This cycle 20261108-101500: dev -4 (QA fail: edge case not tested), qa +1 (caught it), your rating 4: +1 each
 Worst: dev (Journeyman). QA failed its work in 3 of the last 5 tasks; its next dispatches get the Journeyman reminder.
 ```
@@ -380,8 +379,8 @@ owner 选了以前的设计："agent 看得到自己的分数，不同的分数�
 | Master | 81-100 | `Reminder: an excellent record; do not cut corners to stay fast, one escaped defect costs more than a task earns.` |
 
 - **只是提醒（D29）。** 不要求任何字段，没有停止门，没有读分数的门，QA 也不因分数变严。原设计里"生产者停下时的 self-review 门"和"低分时更严的 QA"已撤回。
-- **措辞只说事实和下一步。** 不用威胁口吻；旧 score-inject.sh 里"惩罚远超任何其它事件，且不可逆"那类话不再用（H-scoring §4：威胁式措辞容易引出夸大的自报）。
-- **回升。** 窗口滚动，档位随分数自动变化。没有人工放行，也没有状态。
+- **措辞只说事实和下一步。** 提醒可以如实说明分数是累计的、扣分不会随时间消失，但不用威胁口吻（H-scoring §4：威胁式措辞容易引出夸大的自报）。
+- **回升。** 分数是累计的，只有之后的加分事件（QA 首轮通过、qa_catch、close_catch、高评分）能把它拉回来，时间本身不会。档位随分数自动变化，没有人工放行，也没有状态。
 - **没有死路。** 提醒不拦任何东西，P1c 的 dead-end 检查不会多出阻塞点。
 
 ### 3.7 单一生产者与存储
@@ -442,7 +441,7 @@ D28：评分系统重新设计，不移除。P9 不删任何评分代码。P13 �
 - **按"文件名到角色"的表归因**：D21 禁止。
 - **owner 摘要由 /close 读日志生成**：等于在 /close 加检查（producer-side 原则，P4 的 DO NOT）。
 - **用 PreToolUse `updatedInput` 改派发提示词注入分数**：文档没写 Agent 的规则，同事件并行时谁的 updatedInput 生效也不确定。只作 SubagentStart 测不通时的后备（§5）。
-- **按 owner 评分直接重罚**（旧表 1 星 dev -40）：会饱和，失去信息。改为滚动窗口。
+- **按 owner 评分直接重罚**（旧表 1 星 dev -40）：会饱和，失去信息。改为较小的分值，并加上加分事件，累计分数不再只降不升。
 - **生产者停下时的 self-review 门、低分时更严的 QA、评分时的第二问**：owner 在 D29 选了以前的设计，只按档位给提醒，对话框只问评分。
 
 ## 5. 风险，以及要做的实验（D18：每项做一次实验，记下结果后照结果执行）
@@ -454,7 +453,7 @@ D28：评分系统重新设计，不移除。P9 不删任何评分代码。P13 �
 | AskUserQuestion 在 Skip、拒绝、超时时是否触发 PostToolUse | 静态读加回放 | 摘要只在有答案时显示；契约和评分不受影响 |
 | 工具不可用时（headless、dontAsk），transcript 里是否仍有 tool_use 加出错的 tool_result | 静态读 | 加一个只读的 CLI 事实，例如 init 记录里的工具列表，满足时才要求提问；不能靠 agent 自称 |
 | SubagentStop 被拦时，子代理 transcript 里是否留下可识别的记录（`stop_blocked`），Stop 被拦时主 transcript 里是否留下记录（`main_stop_blocked`） | 静态读加回放 | 这两个事件不启用，写进 "Out of scope, found" |
-| 分值 | 用固定日志回放：dev 3 个任务里 QA 失败 2 次，应掉一档；接着连续 3 个干净任务，应回到原档；一串失败的任务能把分数压到 0 以下（Disgraced），窗口满了之后不再往下掉 | 调整分值，把选定的值和关键数字写进 PR |
+| 分值 | 用固定日志回放：同一串分值，新的折算与 score-update.sh 的逐行封顶得出相同的分数；dev 3 个任务里 QA 失败 2 次，应掉一档；之后只有加分事件能把它拉回；一串失败的任务能把分数压到 0 以下（Disgraced），没有下限；一长串好任务停在 100 | 调整分值，把选定的值和关键数字写进 PR |
 | 观察者耗时 | 在扇出回放中测 p95 | 把 transcript 扫描限制在本区间之内 |
 
 ## 6. 对在途工作的要求
@@ -505,7 +504,7 @@ PR 标题、正文第 14、25、43、73 行要随之更改。
 | Rounds：开工前最多问几轮 | 1 + 至多 2 轮 / 恰好 1 轮 / 不设上限 | "没有任何限制，直到整个任务彻底清楚" | §2.9：不设上限；已回答过的题不再问 |
 | After /spec：/dev 从完成的 /spec 出发时问什么 | 只问没写清楚的 / 四个维度全问 | "一样的，没有限制，只要是需要用户决定的" | §2.4：至少一轮，每个需要 owner 决定的点都问，不设上限 |
 | Blame：评分时是否问哪个 agent 最需要改进 | 可选的第二问 / 只问评分 | "没有意义" | §3.5：/close 只问评分 |
-| Low score：低分让 agent 做什么 | self-review 加更严的 QA / 只要 self-review / 只给提醒 | "以前的设计，agent 看得到自己的分数，不同的分数给 agent 不同的提醒 hook" | §3.4、§3.6：按 score-inject.sh 的六档给提醒；没有停止门，也没有更严的 QA |
+| Low score：低分让 agent 做什么 | self-review 加更严的 QA / 只要 self-review / 只给提醒 | "以前的设计，agent 看得到自己的分数，不同的分数给 agent 不同的提醒 hook" | §3.1、§3.3：分数和以前一样累计；§3.4、§3.6：按 score-inject.sh 的六档给提醒；没有停止门，也没有更严的 QA |
 
 **不问 owner、按规则决定的（D10、D18）**：
 - 出题人是 BA；
@@ -518,4 +517,9 @@ PR 标题、正文第 14、25、43、73 行要随之更改。
 
 见 `phase-prompt.md`：P13-1 需求提问轮；P13-2 评分事件和 owner 视图；P13-3 派发时的分数、档位和提醒。P13-1、P13-2 各约一天，P13-3 约半天，交给不同的账号（D26）。
 
-三个子阶段按顺序进行：它们共用 AskUserQuestion hook、close_rating、回放驱动（dev、dev_command、spec、close 和子代理模拟器）以及 ENFORCEMENT-LEDGER，并行只会制造冲突。
+顺序照 FAST-TRACK.md：
+- P13-2 与 P12 并行，从 P12 的基点（第二列车的头）开始；
+- P13-1 从合并后的 P12 开始；
+- P13-3 在 P13-1 和 P13-2 都合并之后开始。
+
+P13-1 和 P13-2 共用 AskUserQuestion hook、close_rating、dev 回放驱动、子代理模拟器和 ENFORCEMENT-LEDGER。各自的改动尽量放在自己的函数里，后合并的那个合入 origin/master，保留双方的行为。交接提示在 `prompts/handoff/P13-1.md`、`P13-2.md`、`P13-3.md`。

@@ -2,18 +2,21 @@ Owner steps: none.
 
 # Phase P13: ask by AskUserQuestion in /spec and /dev; agent scores that drive the agents (D28)
 
-Effort: L in total, split into P13-1 and P13-2 (M, about one day each) and P13-3 (S, about half a day) (D26). They
-run in that order, because they share the AskUserQuestion hook, close_rating, the replay drivers and the enforcement
-ledger. Each has its own branch (`repair/P13-<n>` from `origin/master`), PR, acceptance tests and merge. The hand-off
-header names the one you run, and consecutive ones go to different accounts. Place: after P12, before P11. Push after
-every commit.
+Effort: L in total, split into P13-1 and P13-2 (M, about one day each) and P13-3 (S, about half a day) (D26).
+Order (FAST-TRACK.md): P13-2 runs beside P12, from P12's base (the second train's head); P13-1 starts from the merged
+P12 head; P13-3 starts when P13-1 and P13-2 are merged. P13-1 and P13-2 share the AskUserQuestion hook, close_rating,
+the dev replay driver, the subagent player and the enforcement ledger. Keep each change in its own function. Whichever
+merges second merges `origin/master` and keeps both sides' behaviour. Each sub-phase has its own branch
+(`repair/P13-<n>`), PR, acceptance tests and merge, and its hand-off header (`prompts/handoff/P13-<n>.md`) names its
+base. Place: after P12, before P11. Push after every commit.
 Design, evidence and file:line facts: `harness-repair-plan/research/scoring-and-asking/design.md` (planning branch, in
 Chinese). Read prompts/_common.md; this file overrides it, and design.md, where they differ.
 
 ## Dependencies
 After `git fetch origin master`, check; on a failure stop and tell the reviewer in your session output (never the owner):
-- `git log --merges --format='%s%n%b' origin/master` shows the P12 lane merges `P12-L1` to `P12-L6`, P12's integration
-  merge, and every earlier P13 sub-phase. P11 has not run (no history rewrite, no deleted refs).
+- `git log --merges --format='%s%n%b' origin/master` shows the P12 lane merges `P12-L1` to `P12-L6` and P12's
+  integration merge. P13-2 starts before them, from P12's base, and checks them before its own merge. P13-3 also needs
+  P13-1 and P13-2. P11 has not run (D30: it publishes a clean public copy, after P13).
 - On origin/master (P12 may have merged or renamed hook files: find each by function, not by file name):
   `close_rating.rating_asked`; `command_span` with `minted_id`; the unified Stop gate with its `PREDICATES`; the overnight
   AskUserQuestion deny; schemas/producer-question.v1.json; the G1 dispatch gate; the producer stop gate G2.
@@ -162,7 +165,7 @@ A9. G2 refuses: r1 with three questions or a repeated dimension (no spec); a bac
 A10. R6: main-agent Write, Edit and `echo >>` on an answer file and on the score log are refused, while the hook's own
      writes land. R8 is recorded. A unit test feeds an error tool_result, and `asked` is true.
 
-## P13-2: score events and the owner's view (M; after P13-1)
+## P13-2: score events and the owner's view (M; beside P12 and P13-1)
 Owns:
 - hooks/lib/score_log.py, moved from scripts/lib; a one-line re-export stays there until P13-3;
 - hooks/lib/close_rating.py; commands/close.md Step 4;
@@ -203,14 +206,17 @@ S4. Rating:
     - experiment: is it shown to the user, and does the hook run on Skip? If it is not shown, return it as
       additionalContext asking for a verbatim relay (the one relay D28 allows; the main agent computes nothing);
     - close.md reads no log and computes nothing.
-S5. Score function:
-    - window: the identity's last 10 tasks in the project before `as_of`;
-    - score = min(100, 50 + sum), with no lower bound, so Disgraced stays reachable; trend = the score minus the score
-      5 tasks earlier;
+S5. Score function (D29, the earlier design: cumulative):
+    - fold, in ts order, every event row and rating-derived row of the identity in the project with `ts < as_of`;
+    - start at s = 50, then for each row set s = min(100, s + points), with no lower bound (score-update.sh's rule), so
+      Disgraced is reachable;
+    - trend = the score minus the score before the identity's 5 most recent tasks;
     - tier: the rank (Names above); an identity with no rows sits at 50, Skilled Craftsman.
 
-    Fixture experiment: 2 QA fails in 3 tasks drop dev one rank; 3 clean tasks after that bring it back; a run of
-    failing tasks reaches Disgraced and, once the window is full, falls no further.
+    Fixture experiment:
+    - on the same points, the fold equals score-update.sh's running new_score;
+    - 2 QA fails in 3 tasks drop dev one rank, and only later positive events raise it again;
+    - a run of failing tasks keeps falling below 0; a long good run stops at 100.
 S6. Delete scripts/close-scoring-decide.py (no caller since P4), with its residue-allowlist and index rows.
 
 Acceptance:
