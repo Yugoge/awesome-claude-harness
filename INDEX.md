@@ -635,6 +635,7 @@ dot-claude/
 │   ├── `test_aggregate_dev_report_superseded_rounds.py` - aggregate dev-report's ownership-completeness check over a multi-lane,
 │   ├── `test_apply_permissions.py` - /dev and /dev-command apply the permissions QA validated with the line their permission step
 │   ├── `test_artifact_graph.py` - The check (tests/artifact_graph/check.py) replays every driver under
+│   ├── `test_auto_push_per_repo.py` - harness.autoPush, the per-repository push switch (D1 as amended on 2026-11-07).
 │   ├── `test_bash_write_targets_verb_narrowing.py` - The library used to read a word that merely begins `cp-`/`mv-` (a checkpoint id such as `cp-01`, a
 │   ├── `test_bootstrap_init.py` - Every case runs in its own temporary clone of this repository, synced to the
 │   ├── `test_candidate_tree.py` - Every test builds its own throwaway git repository. None of them reads this

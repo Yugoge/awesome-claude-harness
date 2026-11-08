@@ -5,7 +5,8 @@
 # Usage: bash ~/.claude/hooks/checkpoint.sh [<message>]
 #
 # The working branch HEAD is never moved. The checkpoint ref stays local unless
-# GIT_AUTO_PUSH=1, in which case the lib pushes it in the background (rate-limited, no -f).
+# lib/auto_push.sh allows the push (the repository's harness.autoPush, else GIT_AUTO_PUSH=1),
+# in which case the lib pushes it in the background (rate-limited, no -f).
 
 # Colors
 GREEN='\033[0;32m'
@@ -76,9 +77,11 @@ echo ""
 echo "Recover a file:"
 echo "  git checkout ${REF} -- <path>"
 echo ""
-if [ "${GIT_AUTO_PUSH:-}" = "1" ]; then
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/auto_push.sh" 2>/dev/null \
+  || harness_auto_push() { return 1; }  # the lib's push decides the same way (no reader, no push)
+if harness_auto_push .; then
   echo -e "${YELLOW}ℹ${NC}  Background push of ${REF} is rate-limited (1/30s)."
   echo "   See ~/.claude/logs/checkpoint-push.log for push errors."
 else
-  echo -e "${YELLOW}ℹ${NC}  ${REF} is local only: automatic push is off (enable with export GIT_AUTO_PUSH=1)."
+  echo -e "${YELLOW}ℹ${NC}  ${REF} is local only: automatic push is off for this repository (enable with git config harness.autoPush true, or export GIT_AUTO_PUSH=1)."
 fi

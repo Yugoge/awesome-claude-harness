@@ -10,6 +10,7 @@
 - `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 - `allowlist.py` - Single source of truth for the one /allow grant file and the one /do consent
 - `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
+- `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.
 - `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (spec-20260808-035658 LANE-POL, Must-2 "completeness
 - `bash_context_strip.py` - This is deliberately NOT a full shell parser.  It only computes a conservative
 - `bash_execution_boundary.py` - THE ALGEBRA (spec-20260808-035658 LANE-POL, Must-1).  Every execution-bearing

@@ -55,6 +55,7 @@ ROOT = Path(__file__).resolve().parent.parent
 HOOKS = ROOT / "hooks"
 CHECKPOINT_LIB = HOOKS / "lib" / "checkpoint-core.sh"
 STATE_DIR_LIB = HOOKS / "lib" / "harness_state_dir.sh"
+AUTO_PUSH_LIB = HOOKS / "lib" / "auto_push.sh"
 POST_COMMIT_HOOK = HOOKS / "git-hooks" / "post-commit-auto-push"
 INSTALLER = HOOKS / "install-protection-all.sh"
 FSWATCH = HOOKS / "git-fswatch.sh"
@@ -107,7 +108,8 @@ class Run:
 # ---------------------------------------------------------------------------
 
 
-def _scratch_env(base: Path, case: str) -> dict:
+def _scratch_env(base: Path, case: str, gitconfig: str = "") -> dict:
+    """gitconfig: the text of the scratch global git config (empty by default)."""
     home = base / "home"
     checkpoint_logs = base / "checkpoint-logs"
     state = base / "state"
@@ -116,8 +118,12 @@ def _scratch_env(base: Path, case: str) -> dict:
     # redirects plumbing stderr into CHECKPOINT_LOG_DIR, which must exist.
     for directory in (home / ".claude" / "logs", checkpoint_logs, state, tmp):
         directory.mkdir(parents=True, exist_ok=True)
+    # The post-commit hooks, copies with no path of their own, load the push
+    # switch's reader from ${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/.
+    (home / ".claude" / "hooks" / "lib").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(AUTO_PUSH_LIB, home / ".claude" / "hooks" / "lib" / "auto_push.sh")
     global_config = home / ".gitconfig"
-    global_config.write_text("")
+    global_config.write_text(gitconfig)
     env = {
         "PATH": os.environ.get("PATH") or os.defpath,
         "LANG": "C",
@@ -216,8 +222,9 @@ def _combined_hook_body() -> str:
 
 def _fswatch_functions(base: Path) -> Path:
     """git-fswatch.sh minus its final `main "$@"` line, so sourcing it defines
-    the functions without starting the watcher. Its sibling lib/ helper is
-    copied next to it so its state paths resolve into CLAUDE_STATE_DIR."""
+    the functions without starting the watcher. Its sibling lib/ helpers are
+    copied next to it so its state paths resolve into CLAUDE_STATE_DIR and its
+    push switch is read by lib/auto_push.sh (without it, nothing pushes)."""
     lines = FSWATCH.read_text(encoding="utf-8").splitlines(keepends=True)
     while lines and not lines[-1].strip():
         lines.pop()
@@ -226,6 +233,7 @@ def _fswatch_functions(base: Path) -> Path:
     hooks_dir = base / "fswatch-functions" / "hooks"
     (hooks_dir / "lib").mkdir(parents=True)
     shutil.copyfile(STATE_DIR_LIB, hooks_dir / "lib" / "harness_state_dir.sh")
+    shutil.copyfile(AUTO_PUSH_LIB, hooks_dir / "lib" / "auto_push.sh")
     functions = hooks_dir / "git-fswatch-functions.sh"
     functions.write_text("".join(lines[:-1]))
     return functions
@@ -416,7 +424,7 @@ def test_checkpoint_command_message_matches_the_switch(tmp_path, case):
     env = _scratch_env(tmp_path, case)
     # checkpoint.sh sources $HOME/.claude/hooks/lib/checkpoint-core.sh.
     lib = Path(env["HOME"]) / ".claude" / "hooks" / "lib"
-    lib.mkdir(parents=True)
+    lib.mkdir(parents=True, exist_ok=True)
     for source in (CHECKPOINT_LIB, STATE_DIR_LIB):
         shutil.copyfile(source, lib / source.name)
     repo, _origin = _new_repo(tmp_path, env)
@@ -466,11 +474,12 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _run_session_git_init(base: Path, push_case: str, create=None,
-                          create_fails: bool = False):
+                          create_fails: bool = False, gitconfig: str = ""):
     """Run the hook in a fresh non-git directory; return (output, gh calls
     that create a repository, refs of the stub's origin or None if gh never
-    created it). The hook exits 1 only when `gh repo create` fails."""
-    env = _scratch_env(base, push_case)
+    created it). The hook exits 1 only when `gh repo create` fails. gitconfig
+    is the scratch global git config's text."""
+    env = _scratch_env(base, push_case, gitconfig)
     stub_dir = base / "stub-bin"
     stub_dir.mkdir()
     stub = stub_dir / "gh"

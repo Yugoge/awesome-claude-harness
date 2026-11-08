@@ -2062,7 +2062,7 @@ def r7_home(tmp_path, settings_env, raw=None):
     """A minimal harness home (the structural sentinels) whose settings.json env is given."""
     home = tmp_path / "r7"
     for rel in ("hooks/lib/claude_home.py", "hooks/lib/checkpoint-core.sh",
-                "hooks/lib/harness_state_dir.sh"):
+                "hooks/lib/harness_state_dir.sh", "hooks/lib/auto_push.sh"):
         (home / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / rel, home / rel)
     (home / "policies").mkdir()

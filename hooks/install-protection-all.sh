@@ -50,9 +50,10 @@ if [ -z "$BRANCH" ]; then
   exit 0
 fi
 
-if [ "${GIT_AUTO_PUSH:-}" != "1" ]; then
-  exit 0
-fi
+# The repository's harness.autoPush decides first, else GIT_AUTO_PUSH=1 (D1 as amended);
+# the harness's reader is under CLAUDE_HOME or ~/.claude, and without it nothing is pushed.
+. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/auto_push.sh" 2>/dev/null || exit 0
+harness_auto_push . || exit 0
 
 nohup git push origin "$BRANCH" >/dev/null 2>&1 &
 
