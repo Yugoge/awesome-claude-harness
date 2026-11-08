@@ -34,12 +34,14 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   next call is the same dispatch in the background, as Step 3's text writes it; the
                   spec reaches its terminal.
   overnight       /dev-overnight (drivers/overnight.py, variant plain: one cycle, the Stop after
-                  end_time) with two departures. Step 12's first dev writes its producer question
-                  (agents/dev.md) in place of its report: its own stop passes (G2 admits a valid
-                  question) and the collection check refuses its return, naming the report; the
-                  orchestrator's next round is Hard Rule 5's, dev dispatched again (a fresh
-                  dispatched_at), which writes the report. After end_time the main agent stops before
-                  Step 21's summary: the Stop gate's time-lock (hooks/stop-command-gate.py step 4, P5)
+                  end_time) with two departures, G2 advisory in its environment
+                  (CLAUDE_OBLIGATION_STOPGATE=advisory). Step 12's first dev writes its report
+                  with dev.status needs_review, a value dev-report.v2 does not allow: its own stop
+                  passes (G2 advisory) and the collection check (posttool-overnight-file-check.py)
+                  refuses its return, naming the report; the orchestrator's next round is the one
+                  the refusal names, dev dispatched again (a fresh dispatched_at), which writes the
+                  report as its schema asks. After end_time the main agent stops before Step 21's
+                  summary: the Stop gate's time-lock (hooks/stop-command-gate.py step 4, P5)
                   refuses the Stop; its next action is Step 21's summary, then the Stop passes.
   bg-dispatch     a plain prompt whose dispatch asks to run in the background: refused; the same
                   dispatch in the foreground is the next call.
@@ -393,18 +395,29 @@ def _spec_foreground(rp) -> None:
 def _overnight(rp) -> None:
     from .. import agents
     from . import overnight
-    from .dev import QUESTION
+
+    # G2 advisory (the switch's own value), so the dev's invalid report passes its stop and the
+    # collection check at its return decides it, as cp-pending opts its hook in.
+    rp.env["CLAUDE_OBLIGATION_STOPGATE"] = "advisory"
 
     class Night(overnight.Night):
-        asked = stopped = False
+        spoiled = stopped = False
 
         def dispatch_dev(self, fields, p, old, new, label, attempt):
-            if self.asked:
+            if self.spoiled:
                 return super().dispatch_dev(fields, p, old, new, label, attempt)
-            self.asked = True
-            act = agents.Act(question=dict(QUESTION, schema="producer-question.v1"), summary="an owner decision")
-            self.dispatch(fields, act, label + " asks", p.sfx, atype="dev", pipe=p)
-            # Hard Rule 5: answered under Clause A (the question's default); dev dispatched again.
+            self.spoiled = True
+
+            def spoil(sub, b, pl):  # its report as the Player makes it, then dev.status needs_review
+                art = next(a for a in b.obligation["artifacts"] if a.get("schema") == "dev-report.v2")
+                doc = pl.json_doc(art, {})
+                doc["dev"]["status"] = "needs_review"  # dev-report.v2 allows only completed
+                agents.put(sub, os.path.join(b.project, art["path"]), json.dumps(doc, indent=2) + "\n",
+                           f"{sub.role} Write {art['path']}")
+                return {}
+            act = agents.Act(work=spoil, produced=["docs/dev/dev-report-*.json"], summary="toy.add rejects non-numbers")
+            self.dispatch(fields, act, label + " invalid report", p.sfx, atype="dev", pipe=p)
+            # The collection check's refusal names the report: dev dispatched again (a fresh dispatched_at).
             return super().dispatch_dev(fields, p, old, new, label + " (next round)", attempt)
 
         def session_end(self):
