@@ -345,7 +345,8 @@ def test_the_checklist_readers_never_number_a_line(tmp_path, monkeypatch, state)
     monkeypatch.setattr(command_span.Span, "start_line", property(lambda self: pytest.fail("a line was numbered")))
     got = todo_canonical.checklist(path)
     assert (got.todos, got.lock) == expected
-    assert guard._dispatched(got, ba["content"], ba) == reference
+    # the transcript is no session's: its returned calls hold no /restart resume
+    assert guard._dispatched(got, ba["content"], ba, guard._returned_calls(got, "")) == reference
 
 
 def _load_hook(name):

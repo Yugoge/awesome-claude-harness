@@ -238,9 +238,11 @@ def _resumed(state, sid):
     placed there; offset: that resume's result), saw come back (its journal
     record) and finalized (an ok finalize call of restart.md's helper after it
     in the span): that call is its step's dispatch, with no replacement call
-    (commands/restart.md, Lesson 16)."""
+    (commands/restart.md, Lesson 16). The journal is the session's own
+    restart state, so a call with no session id (a payload naming none)
+    reads none and has no resumed call."""
     from lib.subagent_restart import completed_resumes, is_helper_invocation
-    journal = completed_resumes(sid)
+    journal = completed_resumes(sid) if sid else {}
     cut = {c.id: c for c in state.span.uses('Agent', 'Task') if not c.ok} if journal else {}
     done = [b.result_at for b in state.span.uses('Bash') if b.ok and str(b.input.get('command')).split()[2:3]
             == ['finalize'] and is_helper_invocation({'tool_name': 'Bash', 'tool_input': b.input})] if cut else []
@@ -264,9 +266,9 @@ def _started_at(state, content):
     return start
 
 
-def _returned_calls(state, sid=''):
+def _returned_calls(state, sid):
     """(offset of its result, call) of each Agent call of the span that came
-    back, and of each one /restart resumed (_resumed)."""
+    back, and of each one session ``sid``'s /restart resumed (_resumed)."""
     return [(c.result_at, c) for c in state.span.uses('Agent', 'Task') if c.ok] + _resumed(state, sid)
 
 
@@ -274,13 +276,12 @@ def _call_type(call):
     return str(call.input.get('subagent_type') or '').strip().lower()
 
 
-def _dispatched(state, content, step, sid='', calls=None):
+def _dispatched(state, content, step, calls):
     """Gate 4's fact: an ok Agent call of the step's subagent type, or one
-    /restart resumed (``calls``: _returned_calls, read when not given), came
-    back after the TodoWrite that set the step in_progress. Offsets of
-    results order them, as the record does."""
+    /restart resumed (``calls``: _returned_calls of the session), came back
+    after the TodoWrite that set the step in_progress. Offsets of results
+    order them, as the record does."""
     start, types = _started_at(state, content), _subagent_types(step)
-    calls = _returned_calls(state, sid) if calls is None else calls
     return start is not None and any(at is not None and at > start and _call_type(c) in types for at, c in calls)
 
 
@@ -350,7 +351,7 @@ def _counted_in_flight(state, calls):
     return counted
 
 
-def _find_completing_subagent_step(state, last, new_todos, sid=''):
+def _find_completing_subagent_step(state, last, new_todos, sid):
     """(index, todo, canonical step, in flight) of the first step turning
     in_progress -> completed whose canonical step names a subagent call that
     _dispatched does not find, nor, in an in-flight span, _counted_in_flight;
@@ -361,7 +362,7 @@ def _find_completing_subagent_step(state, last, new_todos, sid=''):
             continue
         if calls is None:
             calls = _returned_calls(state, sid)
-        if _dispatched(state, new.get('content'), step, calls=calls):
+        if _dispatched(state, new.get('content'), step, calls):
             continue
         if flight is None:
             flight = _in_flight(state)
@@ -388,7 +389,7 @@ def _unreturned(state, types):
         if not c.ok and str(c.input.get('subagent_type') or '').strip().lower() in types]
 
 
-def check_subagent_completion_guard(state, last, new_todos, cmd, sid=''):
+def check_subagent_completion_guard(state, last, new_todos, cmd, sid):
     """Gate 4: block completing a subagent step without calling Agent."""
     if not last or not cmd:
         return
