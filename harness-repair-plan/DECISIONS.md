@@ -86,6 +86,22 @@ session transcript, record 1921, answering record 1895). Quoted verbatim; "…" 
   master's CLAUDE.md Hook Discipline #5 ("honest terminal branch") contradicts this and "诚实终态永远不允许"; P9 rewrites
   it under D20 and D23.
 
+## Owner ruling of 2026-11-08 (latest; it amends D9a and adds to D3/D23)
+
+- **D28 Ask by AskUserQuestion; rate by AskUserQuestion; scores that drive the agents.** "sepc或者dev的时候一定要用ask
+  question工具问用户一些问题刨根问题，但是不要文字询问 ... close之后让用户打分的option也改用ask question。最后不同agent的
+  分数系统应该有更好的互动性和鞭策性"
+  [In /spec or /dev, always use the AskUserQuestion tool to ask the user questions that get to the root, never ask in
+  plain text ... the rating options after /close also use AskUserQuestion. Finally, the scoring system of the different
+  agents should be more interactive and should push the agents harder.]
+  - Interactive /spec and /dev always run at least one AskUserQuestion round that digs into the requirement's intent,
+    scope and acceptance (D18 still holds: never a technical choice); no question is asked in plain text. Inside
+    /dev-overnight nobody is asked (D20).
+  - The /close rating is a native AskUserQuestion (D9, D9b unchanged).
+  - D9a's retirement of agent scoring is withdrawn: the agent scoring system is redesigned to be interactive and to
+    drive the agents, not removed. P9 deletes no scoring code. The design comes from research/scoring-and-asking/
+    and lands as its own phase after P12, before P11.
+
 ## Owner ruling of 2026-11-01 (latest; for the work left after P1b it takes precedence over D26's one-day cap and over the planner's process; it changes no requirement of D18-D25)
 
 - **D27 Five days.** "5天必须完成" [It must be finished in five days], on hearing that the split sub-phases add up to
