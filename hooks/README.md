@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 119
+- **Total files**: 120
 - **Subdirectories**: 5
 - **Naming convention**: kebab
 
@@ -27,6 +27,7 @@
 - `post_tool_use.sh` - PostToolUse Hook - Code quality hints after file modifications
 - `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 - `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
+- `posttool-close-rating.py` - main agent's (no agent_id) one close-rating question (metadata.source close-rating:<task-id>) ans...
 - `posttool-codex-skill-ledger.py` - Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
 - `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 - `posttool-doc-sync.py` - PostToolUse Hook: keep the marked INDEX.md, README.md and CLAUDE.md sections in sync
@@ -111,10 +112,10 @@
 - `stop.sh` - stop.sh - wrapper for /stop slash command
 - `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 - `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
-- `subagentstop-artifact-contract-enforce.py` - Ports the /close "Artifact schema gate" (commands/close.md §"Artifact schema gate" — the
+- `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 - `subagentstop-codex-enforce.py` - Activation logic:
 - `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
-- `subagentstop-e2e-enforce.py` - Activation logic:
+- `subagentstop-e2e-enforce.py` - What a QA owes is in its own dispatch obligation (P1b E7): the qa-report.v2
 - `subagentstop-restart-track.py` - SubagentStop: persist response evidence for a /restart-resumed agent.
 - `userprompt-bulk-commit-capability.py` - human prompt, NOT from an LLM-emitted Bash command
 - `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use

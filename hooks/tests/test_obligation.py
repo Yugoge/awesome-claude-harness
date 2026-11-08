@@ -336,6 +336,19 @@ def test_reject_unknown_format():
     _assert_rejected(_parse(doc), "unknown_enum_value", field="artifacts[2].format")
 
 
+def test_response_block_repo_roots_is_an_optional_list_of_roots():
+    # /commit's changelog-analyst obligation carries its plan's roots (or null
+    # in bulk mode); anything else is a malformed declaration.
+    for roots in (["/r/control", "/r/nested"], [], None):
+        doc = _example()
+        doc["artifacts"][2]["repo_roots"] = roots
+        assert not isinstance(_parse(doc), obligation.Rejection), roots
+    for roots in ("/r/control", [""], ["/r/control", 3], {"0": "/r/control"}):
+        doc = _example()
+        doc["artifacts"][2]["repo_roots"] = roots
+        _assert_rejected(_parse(doc), "bad_repo_roots", field="artifacts[2].repo_roots")
+
+
 def test_reject_unknown_consistency():
     doc = _example()
     doc["consistency"] = "strict"

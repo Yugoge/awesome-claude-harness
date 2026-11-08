@@ -31,7 +31,7 @@ No arguments. Acts on this session's own overnight state only.
 The orchestrator calls the wrapper exactly once:
 
 ```bash
-bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/stop.sh"
+bash "<HARNESS_ROOT>/hooks/stop.sh"
 ```
 
 Then, as the last step, where this session scheduled the overnight wake (dev-overnight.md Step 0), call `CronDelete` with the job id that wake's `CronCreate` returned: a wake left scheduled would fire into the stopped session, and the time-lock refuses the session's Stop until it is deleted.

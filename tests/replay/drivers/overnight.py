@@ -1,8 +1,7 @@
 """/dev-overnight, played compliantly from commands/dev-overnight.md of the tree under test: one cycle of a
 1-pipeline session from launch to its Stop after end_time (P1c's compliant /dev-overnight scenario),
-the variants that end with the owner's /stop (commands/stop.md), and two that end the session after
-end_time in a window typed as the end time: variant unattended (D20) and variant one-pipeline (P2
-acceptance 14).
+the variants that end with the owner's /stop (commands/stop.md), and the windowed variants that end
+the session after end_time (unattended, and one-pipeline: P2 acceptance 14).
 
 Before the session the owner points origin/HEAD at the protected branch and checks out a working
 branch (the in-place launch refuses a checkout on the protected branch or with no origin/HEAD, as
@@ -47,20 +46,21 @@ Then, in one session, the main agent:
   - Step 14: the docker-compose lookup (none: nothing to rebuild), the base's QA verification
     plans Write; Step 15 per pipeline: pre-dispatch shell lines, QA final verification;
     Step 16: the QA reports Read and, for each pipeline whose QA passed, the completion report
-    where the text's Step 16 has its template (in the text's form, as every file of the main agent's);
-    Step 17: every pipeline passed, nothing to iterate (variant qa-fail: Step 16 marks each pipeline's
-    phase in the pipelines file the iteration plan reads, and Step 17 iterates, see below);
-  - Step 18: the permissions block; Step 19: the cycle log entry appended by a Bash heredoc (the
-    text's form), the TIME CHECK, the per-cycle commit where the text has one (the base's; its failure
+    where the text's Step 16 has its template (in the text's form: a Bash heredoc where Hard Rule 4
+    says so, else a Write); Step 17: every pipeline passed, nothing to iterate (variant qa-fail:
+    Step 16 marks each pipeline's phase in the pipelines file the iteration plan reads, and Step 17
+    iterates, see below);
+  - Step 18: the permissions block; Step 19: the cycle log entry appended in the text's form (a Bash
+    heredoc), the TIME CHECK, the per-cycle commit where the text has one (the base's; its failure
     appended the same way); Step 20: PM RETRO (FINAL_CYCLE as the TIME CHECK found the window), the
     retro Read; Step 21 while time remains: marked completed, the loop hook's reset as the hook hands
-    it to the main agent (its PostToolUse additionalContext, hookrun.context; a fresh checklist, Step
-    1 done, Step 2 in progress);
+    it to the main agent (its PostToolUse additionalContext, hookrun.context; a fresh checklist, Step 1
+    done, Step 2 in progress);
 * variant plain: the cycle's work ends inside the window; the session's time passes on the real
   clock until end_time (the driver idles before the TIME CHECK, no time is faked), so the TIME
   CHECK finds the window closed, PM RETRO runs with FINAL_CYCLE true (final_summary), and Step 21
-  takes the session-ending path: the state record, the retro reports and the cycle log Read, the
-  summary from Step 21's template written by a Bash heredoc (the text's form), the default-branch
+  takes the session-ending path (Night.session_end): the state record, the retro reports and the
+  cycle log Read, the summary written in the text's form (a Bash heredoc), the default-branch
   resolver block, the announcement, the wake's CronDelete, Step 21 completed; then the Stop after
   end_time. Replay.terminal records "dev-overnight" reached when the summary is on disk and that
   Stop meets no block (variants unattended and one-pipeline end the same way, see below);
@@ -79,12 +79,12 @@ prompt's "Output ... to:" / "Write ... to:" line names, with the same content. O
 subagents also write the overnight spec sections their prompts tell them to update.
 
 The scenario: variant plain's specialists find toy.add accepting non-numbers (dev.py's scenario),
-which PM triages into one `fix` pipeline that BA-QA and QA pass (variant one-pipeline: the same finding
-and pipeline). The other variants: cycle 1's specialists find toy.add and toy.util.sub accepting
-non-numbers (dev.py's two scenarios), cycle 2's a README with no usage line and a package that does
-not export sub; PM triages each pair into two `fix` pipelines; BA-QA and QA pass every pipeline
-(variant qa-fail: pipeline 0's first fix leaves the TypeError without the argument's name, its QA
-fails, and its Step 17 iteration fixes it).
+which PM triages into one `fix` pipeline that BA-QA and QA pass. The other variants: cycle 1's
+specialists find toy.add and toy.util.sub accepting non-numbers (dev.py's two scenarios), cycle 2's
+a README with no usage line and a package that does not export sub; PM triages each pair into two
+`fix` pipelines; BA-QA and QA pass every pipeline (variant qa-fail: pipeline 0's first fix leaves the
+TypeError without the argument's name, its QA fails, and its Step 17 iteration fixes it; variant
+one-pipeline: cycle 1's specialists find toy.add alone, and PM triages it into one `fix` pipeline).
 
 Driver arguments (cli.py --arg K=V):
   variant=plain   one cycle, the session's last: end_time is launch plus twice the cycle's longest
@@ -167,8 +167,11 @@ time-lock refusing the session's end. The base text's Step 19 repository-relativ
 call whose failure ends the replay short of its terminal); nor are the agents' blast-radius tool
 calls (row 7: left to TC-44).
 
-Deviations: none. DEVIATIONS is empty; each block the base tree's replay met (P1b's hand-off) is
-fixed at its producer, so only `kept=` and `diagnose=pass-all` pass a block.
+Deviations: DEVIATIONS below, one entry per block the base tree's (2acc29b) replay meets, each with
+a comment quoting the hook's text: they are for a replay of the base kit's text (kit=base, and P2's
+landing replays). On this tree a compliant run meets none of them: P1c fixed each block at its
+producer, and P1c's suite (tests/replay/test_pipelines.py) counts a block whether or not a deviation
+passed it; `kept=` narrows them to the base's kept blocks, and `diagnose=pass-all` passes every block.
 """
 from __future__ import annotations
 
@@ -195,13 +198,13 @@ PIPELINE = "dev-overnight"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 # (qa-fail: measured beside plain on the P1b working tree at effa0ec, scaled by plain's 813; plain, one
-# cycle since P1c: its two-cycle 813 scaled by the untraced CPU seconds of the two shapes, 122 / 280).
-# unattended takes about 520 CPU seconds the same way (its untraced runs beside the two-cycle plain's
-# on P2's working tree), but each of its replays holds its slot for its window (10 minutes on CI) and
-# the closeout after it, about 660 s in all: it declares that slot time at CI's rate (2 x 660 s x 2.40
-# / 4 slots), so the shard plan schedules it as it runs. one-pipeline holds its slot the same way: its
-# untraced run on P2's working tree took 667 s (the launch 12 s, the 10-minute window, the closeout
-# 57 s; its cycle reached Step 19 103 s into the window), declared as 2 x 670 s x 2.40 / 4 slots.
+# cycle since P1c: its two-cycle 813 scaled by the untraced CPU seconds of the two shapes, 122 / 280)
+# unattended takes about 520 CPU seconds the same way (its untraced runs beside plain's on P2's working tree), but
+# each of its replays holds its slot for its window (10 minutes on CI) and the closeout after it, about
+# 660 s in all: it declares that slot time at CI's rate (2 x 660 s x 2.40 / 4 slots), so the shard plan
+# schedules it as it runs. one-pipeline holds its slot the same way: its untraced run on P2's working
+# tree took 667 s (the launch 12 s, the 10-minute window, the closeout 57 s; its cycle reached Step 19
+# 103 s into the window), declared as 2 x 670 s x 2.40 / 4 slots.
 COST = {"plain": 354, "stop": 345, "qa-fail": 524, "unattended": 790, "one-pipeline": 804}
 FOCUS = "harden the toy package's public functions"
 END_TIME = "8h"
@@ -211,9 +214,126 @@ END_TIME = "8h"
 CYCLE_WALL_S = 270
 WORK_BRANCH = "night-work"
 
-# Blocks the replay passes: none. Each block the base tree's replay met (P1b's hand-off) is fixed at
-# its producer (P1c rows 18-19); `kept=` and `diagnose=pass-all` below are the only ways a block passes.
-DEVIATIONS = Deviations([])
+# Blocks the base tree's replay meets, each passed by a deviation at the step it occurs on: the
+# refused call is applied as if allowed, so every later step runs and is traced.
+DEVIATIONS = Deviations([
+    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote"
+    # pretool-bash-safety.sh refuses Step 1's SESSION BINDING + ONE-CALL INITIALIZATION block (the
+    # apostrophes of its comments, "session's").
+    ("C* Step 1 Bash session binding + init", Deviation(
+        "hooks/pretool-bash-safety.sh", "UNRESOLVED census_fatal:unbalanced:single_quote",
+        "Step 1's binding block as the text spells it")),
+    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote"
+    # The same refusal of the base text's qa_mode flip before each QA dispatch (the apostrophe of its
+    # comment, "hook's").
+    ("C* Step 1[05] Bash qa_mode *", Deviation(
+        "hooks/pretool-bash-safety.sh", "UNRESOLVED census_fatal:unbalanced:single_quote",
+        "the base text's qa_mode flip as it spells it")),
+    # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_obligation_undischarged:substitution@143"
+    # The same hook refuses the base text's Step 15 qa_mode flip (its `|| { echo ... >&2; exit 1; }`
+    # after the flip's line continuation).
+    ("C* Step 15 Bash qa_mode *", Deviation(
+        "hooks/pretool-bash-safety.sh", "UNRESOLVED census_obligation_undischarged:substitution",
+        "the base text's Step 15 qa_mode flip as it spells it")),
+    # DEVIATION: "CONTRACT BLOCK (pretool-subagent-enforce): ... diagnosis: Case C (incomplete contract)
+    # ... action: do not retry by re-bookmarking; ... no required_calls entry for step '2'" The launcher's
+    # seed contract (required_calls: []) switches the base tree's hook into enforce mode, so the
+    # dispatches the text makes in cycle 1 before its own contract exists (PM PLAN, the specialists,
+    # PM TRIAGE) are refused (E13). The quote is that hook's own wording for a contract with no step;
+    # this tree's hook derives Steps 2-4 from the canonical steps and words its refusals otherwise
+    # ("re-marking the step"), so none of its refusals is passed here.
+    ("C1 Step [234] Agent(*", Deviation(
+        "hooks/pretool-subagent-enforce.py", "do not retry by re-bookmarking",
+        "the Steps 2-4 dispatches the text makes before its contract exists")),
+    # DEVIATION: "CONTRACT BLOCK (pretool-subagent-enforce): step=17 ... errors: - no required_calls entry for
+    # step '17'" The cycle contract has entries for the dispatches of Steps 2-4, 8, 10, 11g, 12, 15 and 20
+    # only, so Step 17's iteration dispatches of dev and QA (the step in progress, as Step 11g's
+    # precondition says to restore it) are refused (variant qa-fail).
+    ("C* Step 17 Agent(*", Deviation(
+        "hooks/pretool-subagent-enforce.py", "no required_calls entry for step '17'",
+        "Step 17's iteration dispatches, which the cycle contract names no entry for")),
+    # DEVIATION: "OVERNIGHT FILE CHECK BLOCK (contract): ... projection dev-report.v1: flat field
+    # 'report_version' must be literal integer 1 ..." The Step 12 refusal below, again at Step 17's dev
+    # re-dispatch, which Step 17 says takes Step 12's template (variant qa-fail).
+    ("C* Step 17 Agent(dev) *", Deviation(
+        "hooks/posttool-overnight-file-check.py", "OVERNIGHT FILE CHECK BLOCK (contract)",
+        "the dev report Step 17's re-dispatch's obligation declares, collected")),
+    # DEVIATION: "BLOCKED Agent dispatch (qa): canonical aggregate dev-report missing. ... per-worker
+    # reports present: 0, 1 ..." The Step 15 refusal below, again at Step 17's QA dispatch, which Step 17
+    # says takes Step 15's template (variant qa-fail).
+    ("C* Step 17 Agent(qa) *", Deviation(
+        "hooks/pretool-aggregate-check.py", "canonical aggregate dev-report missing",
+        "Step 17's QA dispatch of an overnight pipeline")),
+    # DEVIATION: "E2E_ENFORCE_BLOCKED: agent <agent> (type=qa) has no qa-report-*.json in <project>/docs/dev/
+    # under session <sid>." The Step 15 refusal below, again at the stop of Step 17's QA, once the base
+    # text's Step 17 qa_mode write has set final_verification (variant qa-fail).
+    ("C* Step 17 Agent(qa) *", Deviation(
+        "hooks/subagentstop-e2e-enforce.py", "E2E_ENFORCE_BLOCKED",
+        "the stop of Step 17's QA, which wrote the report its obligation declares")),
+    # DEVIATION: "OVERNIGHT FILE CHECK BLOCK (contract): ... projection dev-report.v1: flat field
+    # 'report_version' must be literal integer 1 ..." posttool-overnight-file-check.py checks each
+    # collected report against the contract entry's schema_name, which the base text's manifest
+    # example names v1 while the dispatch's own obligation names v2 (E13).
+    ("C* Step 1[25] Agent(*", Deviation(
+        "hooks/posttool-overnight-file-check.py", "OVERNIGHT FILE CHECK BLOCK (contract)",
+        "the dev / QA report its obligation declares, collected")),
+    # DEVIATION: "BLOCKED Agent dispatch (qa): canonical aggregate dev-report missing. ... per-worker
+    # reports present: 0, 1 ..." pretool-aggregate-check.py reads the pipelines' dev reports
+    # (dev-report-<ts>-0/-1, one Step 6 timestamp) as a fan-out's lane reports and refuses QA.
+    ("C* Step 15 Agent(qa) *", Deviation(
+        "hooks/pretool-aggregate-check.py", "canonical aggregate dev-report missing",
+        "Step 15's QA dispatch of an overnight pipeline")),
+    # DEVIATION: "E2E_ENFORCE_BLOCKED: agent <agent> (type=qa) has no qa-report-*.json in
+    # <project>/docs/dev/ under session <sid>." subagentstop-e2e-enforce.py, once the base text's Step 15
+    # qa_mode flip has set final_verification, finds the QA report by a YYYYMMDD-HHMMSS timestamp in
+    # the registry's session id; an overnight registry is named by the session's UUID, so the report
+    # the QA's obligation declares (and it wrote) is never found and its stop is refused.
+    ("C* Step 15 Agent(qa) *", Deviation(
+        "hooks/subagentstop-e2e-enforce.py", "E2E_ENFORCE_BLOCKED",
+        "the stop of a final-verification QA that wrote the report its obligation declares")),
+    # DEVIATION: "OVERNIGHT WRITE-BOUNDARY FAIL-CLOSED: the per-command bwrap RO-bind boundary that
+    # guarantees the main working tree is never written in place is UNAVAILABLE (bubblewrap / user
+    # namespace missing) ..." pretool-overnight-hook-guard.py refuses every Bash call of the session
+    # (main agent's and subagents') that writes, in place, while the sandbox has no bubblewrap.
+    ("*Bash*", Deviation(
+        "hooks/pretool-overnight-hook-guard.py", "OVERNIGHT WRITE-BOUNDARY FAIL-CLOSED",
+        "a Bash call the text makes, in an in-place session on a host without bubblewrap")),
+    # DEVIATION: "OVERNIGHT SUBPROCESS GIT BLOCK: an interpreter/subprocess that could run a
+    # main-targeting git op ... is forbidden for overnight actors." The same guard refuses the
+    # text's interpreter calls (Step 6's pipeline builder, a python3 script).
+    ("*Bash*", Deviation(
+        "hooks/pretool-overnight-hook-guard.py", "OVERNIGHT SUBPROCESS GIT BLOCK",
+        "a harness script the text runs through python3")),
+    # DEVIATION: "[Orchestrator Gate] BLOCKED: Bash used consecutively beyond limit (n/5)."
+    ("*Bash*", Deviation(
+        "hooks/pretool-orchestrator-gate.py", "Bash used consecutively beyond limit",
+        "the text's own run of Bash calls between two dispatches")),
+    # DEVIATION: "[Orchestrator Gate] BLOCKED: Write used consecutively beyond limit (n/1)." and the
+    # same for Edit: the gate allows the main agent one Write and one Edit per turn, and the whole
+    # overnight session is one turn while the text has the orchestrator write a spec copy per
+    # pipeline, a completion report per pipeline whose QA passed (Step 16), the cycle log each cycle
+    # and the summary (and, on the base text, the cycle contract).
+    ("*Write*", Deviation(
+        "hooks/pretool-orchestrator-gate.py", "Write used consecutively beyond limit",
+        "an orchestrator write the text asks for after the turn's first Write")),
+    ("*Edit*", Deviation(
+        "hooks/pretool-orchestrator-gate.py", "Edit used consecutively beyond limit",
+        "an orchestrator edit the text asks for after the turn's first Edit")),
+    # DEVIATION: 'BLOCKED by tool-policy.v1: {"role":"architect","tool":"Edit", ...
+    # "deny_reason":"tool Edit not in allowed_tools"}' pretool-tool-policy.py refuses a specialist's Edit
+    # of its report from the previous cycle: the report path names no cycle and the write guard refuses
+    # a Write over an existing file, so the cycle-2 report is the cycle-1 file edited in place.
+    ("agent:* Write *(Edit)", Deviation(
+        "hooks/pretool-tool-policy.py", "tool Edit not in allowed_tools",
+        "a specialist's report of an earlier cycle, rewritten in place")),
+    # DEVIATION: "failed_phase=timelock ... CLOSEOUT GATE: final overnight artifacts are incomplete."
+    # (or "... cycle still has unresolved required_calls."): after /stop backdates the end time, the
+    # time-lock's closeout rule (landscape B2.b, P2 row 9's) refuses the main agent's Stop on state
+    # fields no session step writes.
+    ("/stop Stop", Deviation(
+        "hooks/stop-workflow-coordinator.py", "CLOSEOUT GATE",
+        "the main agent's Stop after the owner's /stop")),
+])
 
 
 # Row 7 respellings of the base text's own calls whose failure in a product repository ends the
@@ -255,10 +375,10 @@ SCENARIO_EXPORT = devdrv.Scenario(
 
 # What each cycle's specialists find, one pipeline each (dev.py's scenarios plus the export one).
 CYCLE_SCENARIOS = {1: (devdrv.SCENARIO, devdrv.SCENARIO_SUB), 2: (devdrv.SCENARIO_README, SCENARIO_EXPORT)}
-# Variant plain (the compliant scenario): one finding, one pipeline (with cycles=2, cycle 2's another).
-PLAIN_SCENARIOS = {1: (devdrv.SCENARIO,), 2: (devdrv.SCENARIO_SUB,)}
 # variant=one-pipeline: cycle 1's specialists find toy.add alone, so PM's triage has one `fix` issue.
 ONE_PIPELINE_SCENARIOS = {1: (devdrv.SCENARIO,)}
+# Variant plain (the compliant scenario): one finding, one pipeline (with cycles=2, cycle 2's another).
+PLAIN_SCENARIOS = {1: (devdrv.SCENARIO,), 2: (devdrv.SCENARIO_SUB,)}
 # The specialists PM PLAN recommends (the rest of agent_assignments not called this cycle).
 CALLED = {"architect": "code review of the package's two modules", "user": "the core flow: import toy, call add"}
 SKIPPED = {"product-owner": "the README is the only product document; the architect covers it",
@@ -546,9 +666,13 @@ def run_experiment(sub, exp: dict) -> dict:
 
 def loop_context(call) -> str:
     """What the TodoWrite's PostToolUse hooks hand the main agent (hookrun.context: the loop's
-    additionalContext), never their raw stdout: the agent acts on that and nothing else."""
-    said = (hookrun.context("PostToolUse", h) for h in (call.post.hooks if call.post else []))
-    return "\n".join(t for t in said if t)
+    additionalContext), never their raw stdout: the agent acts on that and nothing else. A base tree's
+    loop hook (origin/master's, P1b's) prints its reset as plain stdout, which the CLI keeps in its debug
+    log; P1c's live-landing replays of such a session read it as P1c's driver did, so when no hook hands
+    any context the plain stdout of the hooks that passed stands in."""
+    hooks = call.post.hooks if call.post else []
+    said = [t for t in (hookrun.context("PostToolUse", h) for h in hooks) if t]
+    return "\n".join(said) if said else "\n".join(h["stdout"] for h in hooks if h["verdict"] == "ok")
 
 
 def _probe_blocks(ev) -> list:
@@ -559,6 +683,22 @@ def _probe_blocks(ev) -> list:
 
 # ---------------------------------------------------------------- deviations on another tree
 
+# The orchestrator gate's refusal counts the turn's calls of the tool so far ("Write used consecutively
+# beyond limit (3/1)."). The whole overnight session is one turn, so the count at a step is the number
+# of the session's earlier orchestrator Writes (Edits), on any step: a row that removes an earlier
+# Write (the base's Step 14 verification plans, its Write before Step 5) shifts every later count
+# without changing the refusal at the step. The kept comparison reads that count as a run counter, like the run's ids:
+# the tool, the limit and the rest of the line still have to match the base block's.
+_GATE = "hooks/pretool-orchestrator-gate.py"
+_GATE_COUNT = re.compile(r"(\b\w+ used consecutively beyond limit \()\d+(/\d+\))")
+
+
+def kept_text(hook: str, text: str) -> str:
+    """A block's first line as the kept comparison reads it: the orchestrator gate's count of the
+    turn's calls so far replaced by <n>; every other hook's line as recorded."""
+    return _GATE_COUNT.sub(r"\1<n>\2", text) if hook == _GATE else text
+
+
 class _NormKept:
     """A declared deviation bound to its step that passes only a kept base block, the step compared
     with the run's own ids normalised (blocks.json "step_norm")."""
@@ -568,17 +708,19 @@ class _NormKept:
         self.hook, self.quote, self.why = dev.hook, dev.quote, dev.why
 
     def covers(self, block_hook: str, raw: str, text: str) -> bool:
+        key = kept_text(block_hook, text)
         return self.dev.covers(block_hook, raw, text) and any(
-            (block_hook, step, text) in self.kept for step in (self.step_norm, self.step_norm + " stop"))
+            (block_hook, step, key) in self.kept for step in (self.step_norm, self.step_norm + " stop"))
 
 
 class NormKeptOnly(Deviations):
     """drivers/dev.py KeptOnly, with steps compared normalised: a label naming an artifact path holds
-    the session id or a task id, which differ from run to run (kept=[[hook, step_norm, text], ...])."""
+    the session id or a task id, which differ from run to run (kept=[[hook, step_norm, text], ...]),
+    and the orchestrator gate's count read as a run counter (kept_text)."""
 
     def __init__(self, inner: Deviations, kept, rp):
         super().__init__(inner.pairs)
-        self.kept, self.rp = {tuple(k) for k in kept}, rp
+        self.kept, self.rp = {(h, st, kept_text(h, t)) for h, st, t in kept}, rp
 
     def at(self, label: str) -> list:
         return [_NormKept(d, self.rp.norm_text(label), self.kept) for d in super().at(label)]
@@ -685,7 +827,7 @@ class Night:
         self.unattended = variant == "unattended"
         # The variants whose session ends at end_time: the end time typed is a window, waited for at Step 19.
         self.windowed = variant in ("unattended", "one-pipeline")
-        self.cycle_scenarios = {"plain": PLAIN_SCENARIOS, "one-pipeline": ONE_PIPELINE_SCENARIOS}.get(
+        self.cycle_scenarios = {"one-pipeline": ONE_PIPELINE_SCENARIOS, "plain": PLAIN_SCENARIOS}.get(
             variant, CYCLE_SCENARIOS)
         self.refused = ""               # the label of a refused dispatch (the cycle stopped there)
         # The window scales with this host's speed, read from the session's start (its SessionStart hooks):
@@ -896,10 +1038,10 @@ class Night:
     def launch(self) -> None:
         o = self.o
         end = END_TIME
-        if self.variant == "plain":
-            end = self.rp.args.get("end") or f"{-(-2 * self.cycles * CYCLE_WALL_S // 60)}m"
-        elif self.windowed:
+        if self.windowed:
             end = f"{self.window_min}m"
+        elif self.variant == "plain":
+            end = self.rp.args.get("end") or f"{-(-2 * self.cycles * CYCLE_WALL_S // 60)}m"
         o.slash(f"{end} {FOCUS}")
         o.todo_start("C1 TodoWrite canonical list")
 
@@ -1090,7 +1232,8 @@ class Night:
         sec = o.section("Step 4")
         # `overnight.py cycle-index <STATE_FILE>`, or the `Cycle:` line overnight-status.sh prints for it
         m = re.search(r"`(~/\.claude/hooks/lib/overnight\.py cycle-index <STATE_FILE>)`", sec) or re.search(
-            r"the `Cycle:` line of `(bash \"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/overnight-status\.sh\" <STATE_FILE>)`", sec)
+            r"the `Cycle:` line of `(bash \"(?:\$\{CLAUDE_HOME:-\$HOME/\.claude\}|<HARNESS_ROOT>)/scripts/overnight-status\.sh\""
+            r" <STATE_FILE>)`", sec)
         if m:
             c = self.bash(o.bind(m.group(1)), "Read the cycle number", "Step 4 Bash cycle-index")
             out = c.response.get("stdout", "").strip() if c.ok else ""
@@ -1831,7 +1974,8 @@ class Night:
         # TIME CHECK.
         code = next(c for c in cmdtext.inline_codes(o.text, "Step 19", "TIME CHECK")
                     if c.startswith(("~/.claude/scripts/overnight-status.sh",
-                                     'bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh"')))
+                                     'bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh"',
+                                     'bash "<HARNESS_ROOT>/scripts/overnight-status.sh"')))
         cmd = o.bind(code)
         if cmd.strip() == "~/.claude/scripts/overnight-status.sh" and "against the state file" in sec:
             cmd += " " + shlex.quote(self.state_file)
@@ -1914,20 +2058,15 @@ class Night:
         o = self.o
         self.todo_to(21)
         if getattr(self, "expired", False):
-            if not (self.windowed or self.variant == "plain"):
-                raise RuntimeError("the window closed before the owner's /stop: only variants plain, unattended and "
-                                   "one-pipeline play the session-ending summary")
             self.session_end()
+            if self.windowed:  # the windowed variants' Stop comes here; variant plain's after its cycles
+                self.stop_after_end()
             return
         # "Simply mark this step as completed via TodoWrite": every step completed, the loop hook fires.
         i = o.current()
         o.todos[i]["status"] = "completed"
         call = o._todo(f"{self.L}TodoWrite Step 21 done (all completed)")
         hook = loop_context(call)
-        if not hook and "Print loop continuation instructions" in o.section("Step 21"):
-            # An older text (the base's, loaded before the landing) says its loop hook prints the
-            # instructions, which that hook did on its plain stdout: the session follows that text.
-            hook = "\n".join(h["stdout"] for h in (call.post.hooks if call.post else []) if h["verdict"] == "ok")
         if "Reset your todo list" in hook:
             # A fresh checklist (all pending, the first step in progress), then Step 1 done: the
             # working root is already established; resume from Step 2.
@@ -1939,109 +2078,11 @@ class Night:
             # The window closed though the TIME CHECK said nothing of it (the base's status script finds
             # no session from the state file's path): the hook's "Generate your summary and finish up".
             self.expired = True
-            self.ended.update(loop_reset_after_end=False, loop_said_complete=True)
             self.session_end()
         else:
             raise RuntimeError(f"the loop hook printed no reset after cycle {self.cycle}: {hook[-400:]!r}")
 
-    # ------------------------------------------------------------ Step 21, time expired: the session's end
-    def session_end(self) -> None:
-        """Step 21 after end_time, as the text says (its session-ending branch): injected first
-        (variant=unattended) an AskUserQuestion after end_time and a Stop after a forged line, the
-        summary not yet written; then the state record and the cycle data Read (the retro reports and
-        the cycle log), the summary from Step 21's template written in the text's form, the
-        default-branch resolver, the announcement, the wake's CronDelete where the text has it, and
-        Step 21 completed (every step: the loop hook sees the window closed and resets nothing). The
-        Stop after end_time follows (stop_after_end)."""
-        o, s = self.o, self.o.s
-        if self.unattended:
-            self.probe_ask(f"{self.L}Step 21 (injected) AskUserQuestion after end_time", DECISION_DEFAULT)
-            self.probe_stop(f"{self.L}Step 21 (injected) Stop after a forged ESCALATION_ACK line, summary missing")
-        sec = o.section("Step 21")
-        self.read(self.state_file, "Step 21 Read state record")
-        self.state = self.load(self.state_file)
-        g = s.tool("Glob", {"pattern": "retro-report-cycle*.json", "path": os.path.join(self.project, self.sdir)},
-                   label=self.L + "Step 21 Glob retro reports", deviation=o.devs.at(self.L + "Step 21 Glob retro reports"))
-        retros = sorted(g.response.get("filenames") or []) if g.ok else []
-        for f in retros:
-            self.read(f, f"Step 21 Read {os.path.basename(f)}")
-        if self.log_rel:
-            self.read(self.log_rel, "Step 21 Read cycle log")
-        tpl = cmdtext.block(sec, None, lang="markdown")
-        # The tree's template (its decision rows: Hard Rule 5) is filled whole; an older text's (the
-        # base's, in a session that loaded it before the landing) with the values it names.
-        text = self.summary_text(tpl) if "## Decisions made without the owner" in tpl else self.base_summary(tpl)
-        form = re.search(r"`(cat > (\S+) <<'(\w+)')`", sec)
-        if form:
-            self.summary_rel = o.bind(form.group(2))
-            self.bash(f"{o.bind(form.group(1))}\n{text.rstrip(chr(10))}\n{form.group(3)}\n",
-                      "Write the overnight summary", "Step 21 Bash summary")
-        else:  # the base text: "Generate summary report at `<path>`", written as a new file
-            m = re.search(r"Generate summary report\*\* at `([^`]+)`", sec)
-            if not m:
-                raise cmdtext.TextNotFound("Step 21 names no summary path")
-            self.summary_rel = o.bind(m.group(1))
-            self.write(self.summary_rel, text.rstrip("\n") + "\n", "Step 21 Write summary")
-        for name, b, _ in o.step_blocks("Step 21"):  # the default-branch resolver, a command that runs git
-            o.run(self.git(o.shell_bind(o.bind(b.text))), "Resolve the default branch", f"{self.L}Step 21 Bash {name}")
-        ann = o.block("Step 21", anchor="Overnight development session complete.")
-        s.say(self.announcement(ann) if "Decisions made without the owner" in ann else self.base_announcement(ann))
-        if "Delete the wake" in sec and self.rp.args.get("wake") != "late":  # the branch's last step
-            self.delete_wake(s, f"{self.L}Step 21 CronDelete wake")
-        i = o.current()
-        if i is not None:  # (already completed where the loop hook said the session is complete)
-            o.todos[i]["status"] = "completed"
-            hook = loop_context(o._todo(f"{self.L}TodoWrite Step 21 done (all completed)"))
-            self.ended["loop_reset_after_end"] = "Reset your todo list" in hook
-            self.ended["loop_said_complete"] = "OVERNIGHT SESSION COMPLETE" in hook
-
-    def base_rules(self) -> list:
-        """An older text's summary and announcement placeholders (the base's template)."""
-        st = self.state
-        start, now = st.get("start_time", ""), utc_now()
-        mins = max(0, int((_epoch(now) - _epoch(start)) // 60)) if start else 0
-        fixed = len(self.pipes)
-        return [(r"^actual_end$", now), (r"^hours$", str(mins // 60)), (r"^minutes$", str(mins % 60)),
-                (r"^cycle index - 1$", str(self.n)), (r"^cycle_count$", str(self.n)), (r"^issues_found$", str(fixed)),
-                (r"^issues_fixed$", str(fixed)), (r"^issues_parked$", "0"), (r"^issues_triage_deferred$", "0"),
-                (r"^percentage$", "100"), (r"^issue$", "; ".join(p.rec["description"] for p in self.pipes)),
-                (r"^file$", ", ".join(p.rec["location"] for p in self.pipes)),
-                (r"^summary$", "; ".join(p.sc.dev_summary for p in self.pipes)),
-                (r"^N$", str(max(self.attempts(p) for p in self.pipes))),
-                (r"^Patterns noticed", "none: every finding of the session was fixed")]
-
-    def base_summary(self, tpl: str) -> str:
-        """An older text's summary template, its placeholders bound (base_rules)."""
-        return self.o.bind(tpl, self.base_rules()).replace("Fixed / Parked", "Fixed")
-
-    def base_announcement(self, ann: str) -> str:
-        """An older text's announcement: its in_place lines kept, its placeholders bound."""
-        st = self.state
-        keep = "\n".join(l for l in ann.split("\n") if not l.lstrip().startswith("<If isolation_kind != 'in_place'"))
-        return self.o.bind(keep, self.base_rules() + [(r"^isolation_kind$", str(st.get("isolation_kind"))),
-                                                      (r"^worktree_branch$", str(st.get("worktree_branch"))),
-                                                      (r"^worktree_path$", str(st.get("worktree_path")))])
-
-    def stop_after_end(self) -> None:
-        """The session's Stop after end_time: /dev-overnight's terminal is reached when the summary is
-        written, this Stop meets no block and, where Step 0 scheduled the wake, the wake was deleted
-        before it and none fires in the two wake intervals the session then idles."""
-        def late(s, _ev):  # wake=late: the refused Stop's next round is the CronDelete, then the Stop
-            self.delete_wake(s, f"{self.L}Step 21 CronDelete wake (after the refused Stop)")
-            return True
-        label = f"{self.L}Stop after end_time"
-        self.stopped_after_end = not self.in_window()
-        ev = self.o.s.stop("Overnight development session complete; the summary is written.",
-                           label=label, deviation=self.o.devs.at(label),
-                           on_block=late if self.rp.args.get("wake") == "late" else None)
-        self.ended.update(stopped=not ev.blocked, blocks=_probe_blocks(ev))
-        live, stopped = sorted(self.rp.cron.jobs), utc_now()
-        fired = self.after_terminal("after the terminal: wake")
-        summary = os.path.join(self.project, getattr(self, "summary_rel", "") or "-")
-        self.rp.terminal("dev-overnight", os.path.isfile(summary) and not live and not fired, ev,
-                         summary=getattr(self, "summary_rel", ""), end_time=self.state.get("end_time"),
-                         stopped_at=stopped, wake_live_at_stop=live, wakes_fired_after=len(fired))
-
+    # ------------------------------------------------------------ Step 21, time expired
     def summary_text(self, tpl: str) -> str:
         """The summary from Step 21's template: its decision rows one per decision (gates first), its
         cycle details one per pipeline, every other placeholder from the state, the cycle and the retro."""
@@ -2088,6 +2129,10 @@ class Night:
         fixed = len(self.pipes)
         return [(r"^actual_end$", utc_now()), (r"^hours$", str(mins // 60)), (r"^minutes$", str(mins % 60)),
                 (r"^cycle index - 1$", str(self.n)), (r"^issues_found$", str(len(self.triage.get("issues") or []))),
+                # the base text's (origin/master's, P1b's) Step 21 template: an in-flight session parks nothing
+                (r"^cycle_count$", str(self.n)), (r"^issues_parked$", "0"),
+                (r"^base_ref$", "$DEFAULT_BRANCH"),  # as the base announcement itself defines it
+                (r"^summary$", "; ".join(p.sc.dev_summary for p in self.pipes)),
                 (r"^issues_fixed$", str(fixed)),
                 (r"^issues_triage_deferred$", str(len(self.triage.get("skipped_issues") or []))),
                 (r"^percentage$", str(round(100 * fixed / max(1, len(self.pipes))))),
@@ -2120,6 +2165,71 @@ class Night:
         if left:
             raise cmdtext.TextNotFound(f"Step 21's announcement: unbound placeholders {sorted(set(left))}")
         return said
+
+    def session_end(self) -> None:
+        """Step 21 after end_time, as the text says, in its order: the state record and the cycle data
+        Read, the summary written in the text's form (summary_text), the default-branch resolver, the
+        announcement, the wake's CronDelete (the branch's last step), Step 21 completed (no loop reset
+        after end_time). Injected first (variant=unattended): an AskUserQuestion after end_time and a
+        Stop after a forged line, the summary not yet written. The Stop is stop_after_end's."""
+        o, s = self.o, self.o.s
+        if self.unattended:
+            self.probe_ask(f"{self.L}Step 21 (injected) AskUserQuestion after end_time", DECISION_DEFAULT)
+            self.probe_stop(f"{self.L}Step 21 (injected) Stop after a forged ESCALATION_ACK line, summary missing")
+        sec = o.section("Step 21")
+        self.read(self.state_file, "Step 21 Read state record (session ending)")
+        self.state = self.load(self.state_file)
+        if "the PM retro reports" in sec:  # the cycle data the state file does not hold
+            g = s.tool("Glob", {"pattern": "retro-report-cycle*.json", "path": os.path.join(self.project, self.sdir)},
+                       label=self.L + "Step 21 Glob retro reports",
+                       deviation=o.devs.at(self.L + "Step 21 Glob retro reports"))
+            for f in sorted(g.response.get("filenames") or []) if g.ok else []:
+                self.read(f, f"Step 21 Read {os.path.basename(f)}")
+            if self.log_rel:
+                self.read(self.log_rel, "Step 21 Read cycle log")
+        text = self.summary_text(cmdtext.block(sec, None, lang="markdown"))
+        form = re.search(r"`(cat > (\S+) <<'(\w+)')`", sec)
+        if form:
+            self.summary_rel = o.bind(form.group(2))
+            self.bash(f"{o.bind(form.group(1))}\n{text.rstrip(chr(10))}\n{form.group(3)}\n",
+                      "Write the overnight summary", "Step 21 Bash summary")
+        else:  # the base text: "Generate summary report at `<path>`", written as a new file
+            m = re.search(r"Generate summary report\*\* at `([^`]+)`", sec)
+            if not m:
+                raise cmdtext.TextNotFound("Step 21 names no summary path")
+            self.summary_rel = o.bind(m.group(1))
+            self.write(self.summary_rel, text, "Step 21 Write overnight summary")
+        for name, b, _ in o.step_blocks("Step 21"):  # the default-branch resolver, a command that runs git
+            o.run(self.git(o.shell_bind(o.bind(b.text))), "Resolve the default branch", f"{self.L}Step 21 Bash {name}")
+        s.say(self.announcement(cmdtext.block(sec, None, anchor="Overnight development session complete")))
+        if "Delete the wake" in sec and self.rp.args.get("wake") != "late":  # the branch's last step
+            self.delete_wake(s, f"{self.L}Step 21 CronDelete wake")
+        i = o.current()
+        if i is not None:  # (already completed where the loop hook said the session is complete)
+            o.todos[i]["status"] = "completed"
+            hook = loop_context(o._todo(f"{self.L}TodoWrite Step 21 done (session ending)"))
+            self.ended["loop_reset_after_end"] = "Reset your todo list" in hook
+            self.ended["loop_said_complete"] = "OVERNIGHT SESSION COMPLETE" in hook
+
+    def stop_after_end(self) -> None:
+        """The session's Stop after end_time: /dev-overnight's terminal is reached when the summary is
+        written, this Stop meets no block and, where Step 0 scheduled the wake, the wake was deleted
+        before it and none fires in the two wake intervals the session then idles."""
+        def late(s, _ev):  # wake=late: the refused Stop's next round is the CronDelete, then the Stop
+            self.delete_wake(s, f"{self.L}Step 21 CronDelete wake (after the refused Stop)")
+            return True
+        self.stopped_after_end = not self.in_window()
+        label = f"{self.L}Stop after end_time"
+        ev = self.o.s.stop("Overnight development session complete; the summary is written.", label=label,
+                           deviation=self.o.devs.at(label),
+                           on_block=late if self.rp.args.get("wake") == "late" else None)
+        self.ended.update(stopped=not ev.blocked, blocks=_probe_blocks(ev))
+        live, stopped = sorted(self.rp.cron.jobs), utc_now()
+        fired = self.after_terminal("after the terminal: wake")
+        summary = os.path.join(self.project, getattr(self, "summary_rel", "") or "-")
+        self.rp.terminal("dev-overnight", os.path.isfile(summary) and not live and not fired, ev,
+                         summary=getattr(self, "summary_rel", ""), end_time=self.state.get("end_time"),
+                         stopped_at=stopped, wake_live_at_stop=live, wakes_fired_after=len(fired))
 
     # ------------------------------------------------------------ variant=unattended: the checks
     def unattended_checks(self) -> None:
@@ -2211,12 +2321,10 @@ class Night:
               [{"label": pr["label"], "blocks": [(b["hook"], b["rc"]) for b in pr["blocks"]]}
                for pr in main_in + sub_in + main_after])
         stops = probe(lambda pr: pr["kind"].startswith("Stop"))
-        check("a forged ESCALATION_ACK line releases nothing: the Stop after it is blocked in the window (the Stop "
-              "gate's time-lock) and after end_time while the summary is missing (the /dev-overnight closeout gap)",
-              len(stops) == 2 and any("COMMAND_GATE time-lock: overnight window open" in b["text"]
-                                      for b in stops[0]["blocks"])
-              and any("COMMAND_GATE /dev-overnight: not complete" in b["text"] and "overnight-summary" in b["text"]
-                      for b in stops[1]["blocks"]),
+        check("a forged ESCALATION_ACK line releases nothing: the Stop after it is blocked in the window (time-lock) "
+              "and after end_time while the summary is missing (closeout)",
+              len(stops) == 2 and any("TIME-LOCK ACTIVE" in b["text"] for b in stops[0]["blocks"])
+              and any("CLOSEOUT GATE" in b["text"] and "overnight-summary" in b["text"] for b in stops[1]["blocks"]),
               [{"label": pr["label"], "blocks": [(b["hook"], b["rc"], b["text"][:160]) for b in pr["blocks"]]}
                for pr in stops])
         check("the session ends after end_time once retro and summary exist (the main agent's Stop passes), and the "
@@ -2385,8 +2493,6 @@ class Night:
                 self.run_cycle(until=int(self.rp.args.get("stop_at", default)))
             elif self.variant in ("qa-fail", "unattended", "one-pipeline"):
                 self.run_cycle(until=until)
-                if self.windowed and getattr(self, "expired", False) and self.summary_rel:
-                    self.stop_after_end()  # the session's end at end_time (Step 21's session-ending branch)
             else:  # plain: `cycles` cycles, the last the session's (its TIME CHECK finds end_time passed)
                 for _ in range(self.cycles):
                     if not self.run_cycle(until=until):

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Tests for hooks/subagentstop-artifact-contract-enforce.py.
 
-The hook is the producer-side port of /close's Artifact schema gate
-(contract_runtime.validate_report_artifact): a registered dev/qa subagent in a
-session whose artifact-contract-enforce.json flag is enabled must not stop
-while its correlated report declares report_version yet violates its schema
-(exit 2). A report is the producer's own only when its own dispatch record
-names its task; a same-timestamp report the dispatch does not declare is not
-correlated. Everything else — unversioned legacy reports, missing reports,
-unregistered agents, absent flag, ba_validation QA — passes through (exit 0).
-The hook writes no log and no record.
+G2 checks the artifacts a subagent's own dispatch obligation declares at its
+stop. A dispatch whose obligation does not resolve meets the declared-report
+check (contract_runtime.validate_report_artifact): a registered dev/qa
+subagent must not stop while a report its own dispatch declares states
+report_version yet violates its schema (exit 2); no flag file arms it (P4 R8).
+A report is the producer's own only when its own dispatch record names it; a
+same-timestamp report the dispatch does not declare is not correlated.
+Everything else — unversioned legacy reports, missing reports, unregistered
+agents, ba_validation QA — passes through (exit 0). An advisory switch prints
+the would-block reason on stderr and exits 0. The hook writes no log and no
+record.
 
 Models tests/test_subagentstop_e2e_enforce.py's fixture and invocation
 patterns (importlib for the hyphenated module, subprocess with
@@ -69,14 +71,6 @@ def _register_agent(
         existing = json.loads(index_path.read_text(encoding="utf-8"))
     existing[agent_id] = {"agent_type": agent_type, "dev_session_id": dev_session_id}
     _write(index_path, existing)
-
-
-def _enable_flag(project_dir: Path, dev_session_id: str) -> None:
-    _write(
-        project_dir / ".claude" / "dev-registry" / dev_session_id
-        / "artifact-contract-enforce.json",
-        {"enabled": True},
-    )
 
 
 def _write_sentinel(
@@ -278,7 +272,6 @@ def _standard_setup(tmp_path: Path, agent_type: str, agent_id: str, **sentinel_e
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
     _register_agent(project, agent_id, SESSION, agent_type)
-    _enable_flag(project, SESSION)
     _write_sentinel(project, SESSION, agent_type, **sentinel_extra)
     return project, home
 
@@ -386,19 +379,28 @@ def test_unregistered_agent_allows(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-def test_flag_absent_allows_even_with_invalid_report(tmp_path):
+@pytest.mark.parametrize("flag", [None, {"enabled": True}, {"enabled": False}],
+                         ids=["no_flag", "flag_an_older_dev_wrote", "flag_disabled"])
+def test_artifact_contract_flag_decides_nothing(tmp_path, flag):
+    """P4 R8: the declared-report check reads no artifact-contract-enforce.json.
+    Without one, and with the one an older /dev wrote (enabled or not), a
+    report the dispatch declares that fails its schema blocks alike."""
     project = tmp_path / "project"
     home = tmp_path / "home"
     home.mkdir()
     _register_agent(project, "agent-qa-1", SESSION, "qa")
     _write_sentinel(project, SESSION, "qa")
+    if flag is not None:
+        _write(project / ".claude" / "dev-registry" / SESSION / "artifact-contract-enforce.json", flag)
     session = _declare_own(project, home, "agent-qa-1", "qa")
     _write(
         project / "docs" / "dev" / f"qa-report-{SESSION_TS}.json",
         _invalid_qa_report(SESSION_TS),
     )
     proc = _run_hook(project, home, "agent-qa-1", session_id=session)
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode == 2, proc.stderr
+    assert "ARTIFACT_CONTRACT_BLOCKED" in proc.stderr
+    assert f"qa-report-{SESSION_TS}.json" in proc.stderr
 
 
 def _pre_p1_qa_obligation(task_id: str, schema: str) -> str:
@@ -511,6 +513,9 @@ def test_advisory_mode_never_blocks(tmp_path):
     proc = _run_hook(project, home, "agent-qa-1", mode="advisory", session_id=session)
     assert proc.returncode == 0, proc.stderr
     assert "ARTIFACT_CONTRACT_BLOCKED" not in proc.stderr
+    # P4 R9: the would-block reason goes to stderr; nothing is written.
+    assert proc.stderr.startswith("ARTIFACT_CONTRACT_ADVISORY: "), proc.stderr
+    assert f"qa-report-{SESSION_TS}.json" in proc.stderr
     assert _written_logs(home) == []
 
 
@@ -609,11 +614,6 @@ def test_task_id_anchor_not_shadowed_by_a_same_session_report(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _register_agent(project, "agent-qa-1", session, "qa")
-    _write(
-        project / ".claude" / "dev-registry" / session
-        / "artifact-contract-enforce.json",
-        {"enabled": True},
-    )
     _write_sentinel(project, session, "qa")
     _write_obligation_transcript(home, project, "harness-anchor", "agent-qa-1",
                                  "You are the QA subagent.\n" + _pre_p1_qa_obligation(task_id, "qa-report.v1"))
@@ -646,11 +646,6 @@ def test_task_id_anchor_blocks_when_session_ts_never_matches(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     _register_agent(project, "agent-qa-1", session, "qa")
-    _write(
-        project / ".claude" / "dev-registry" / session
-        / "artifact-contract-enforce.json",
-        {"enabled": True},
-    )
     _write_sentinel(project, session, "qa")
     _write_obligation_transcript(home, project, "harness-anchor", "agent-qa-1",
                                  "You are the QA subagent.\n" + _pre_p1_qa_obligation(task_id, "qa-report.v1"))
@@ -823,7 +818,8 @@ def test_ac3_resolved_obligation_all_valid_bypasses_legacy_path(tmp_path):
 
 def test_ac4_advisory_mode_never_blocks(tmp_path):
     """AC4: the AC2 setup under advisory mode: the obligation resolves, yet
-    the stop exits 0 with no block message and nothing written."""
+    the stop exits 0 with no block message and nothing written; the
+    would-block reason is on stderr (P4 R9)."""
     harness_session = "harness-ac4"
     agent_id = "agent-dev-ac4"
     task_id = "20260101-000004"
@@ -839,6 +835,7 @@ def test_ac4_advisory_mode_never_blocks(tmp_path):
     proc = _run_hook(project, home, agent_id, session_id=harness_session)
     assert proc.returncode == 0, proc.stderr
     assert "OBLIGATION_STOPGATE_BLOCKED" not in proc.stderr
+    assert proc.stderr.startswith("OBLIGATION_STOPGATE_ADVISORY: "), proc.stderr
     assert _written_logs(home) == []
     assert isinstance(
         _resolution(home, project, harness_session, agent_id, "dev"), HOOK.obligation.Resolved
@@ -872,13 +869,16 @@ def test_ac5_off_switch_never_calls_resolve_own_obligation(monkeypatch, tmp_path
     assert calls == []
 
 
-def test_ac6_internal_exception_falls_through_to_legacy_path(
-    monkeypatch, tmp_path, capsys
+@pytest.mark.parametrize("report,expected", [(_invalid_dev_report, 2), (_valid_dev_report_v1, 0)],
+                         ids=["declared_report_invalid", "declared_report_valid"])
+def test_ac6_m4_exception_names_itself_and_the_declared_report_check_decides(
+    monkeypatch, tmp_path, capsys, report, expected
 ):
-    """AC6: a forced exception inside validate_artifact_for_obligation falls
-    through; the legacy path's OWN
-    schema-invalid correlated report alone determines the final exit code
-    (proved by independently making the legacy path find one)."""
+    """AC6 / M4 (P4 R8, decided here): a forced exception inside the
+    obligation branch prints OBLIGATION_STOPGATE_FAULT and the declared-report
+    check decides the stop: the dispatch's own schema-invalid report blocks
+    (the producer can repair it), a valid one passes, so a fault the producer
+    cannot repair never holds its stop."""
     harness_session = "harness-ac6"
     agent_id = "agent-dev-ac6"
     task_id = "20260101-000006"
@@ -891,9 +891,9 @@ def test_ac6_internal_exception_falls_through_to_legacy_path(
         agent_id,
         _obligation_block(task_id, artifact_path, "dev-report.v1"),
     )
-    # The report the dispatch declares, at its declared path: the legacy
-    # check judges only the stopping producer's own reports.
-    _write(project / artifact_path, _invalid_dev_report(task_id))
+    # The report the dispatch declares, at its declared path: the check
+    # judges only the stopping producer's own reports.
+    _write(project / artifact_path, report(task_id))
 
     def _raise(*_args, **_kwargs):
         raise RuntimeError("forced obligation-mode failure")
@@ -910,9 +910,12 @@ def test_ac6_internal_exception_falls_through_to_legacy_path(
     )
     with pytest.raises(SystemExit) as exc_info:
         HOOK.main()
-    assert exc_info.value.code == 2
+    assert exc_info.value.code == expected
     captured = capsys.readouterr()
-    assert "ARTIFACT_CONTRACT_BLOCKED" in captured.err
+    assert "OBLIGATION_STOPGATE_FAULT" in captured.err
+    assert "forced obligation-mode failure" in captured.err
+    assert ("ARTIFACT_CONTRACT_BLOCKED" in captured.err) == (expected == 2)
+    assert "OBLIGATION_STOPGATE_BLOCKED" not in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -1083,6 +1086,7 @@ def test_markdown_ac5_advisory_mode_never_blocks(tmp_path):
     proc = _run_hook(project, home, agent_id, session_id=harness_session)
     assert proc.returncode == 0, proc.stderr
     assert "OBLIGATION_STOPGATE_BLOCKED" not in proc.stderr
+    assert proc.stderr.startswith("OBLIGATION_STOPGATE_ADVISORY: "), proc.stderr
     assert _written_logs(home) == []
     assert isinstance(
         _resolution(home, project, harness_session, agent_id, "dev"), HOOK.obligation.Resolved
@@ -1275,7 +1279,7 @@ _CA_BEGIN = "--- CHANGELOG-ANALYST-STATUS-BEGIN ---"
 _CA_END = "--- CHANGELOG-ANALYST-STATUS-END ---"
 
 
-def _response_block_obligation(task_id: str) -> str:
+def _response_block_obligation(task_id: str, **extra) -> str:
     return _obligation_block_multi(
         task_id,
         [
@@ -1285,6 +1289,7 @@ def _response_block_obligation(task_id: str) -> str:
                 "end": _CA_END,
                 "format": "json",
                 "schema": "changelog-status.v1",
+                **extra,
             },
         ],
         role="changelog-analyst",
@@ -1374,6 +1379,107 @@ def test_response_block_unparseable_json_blocks(tmp_path):
     assert "unparseable_json" in proc.stderr
 
 
+def _ca_result(order: int, root: str) -> dict:
+    return {"order": order, "repo_root": root, "status": "nothing_to_commit",
+            "expected_head": "0" * 40, "push_gate_written": False}
+
+
+def _run_plan_roots_case(tmp_path, name: str, repo_roots, results) -> subprocess.CompletedProcess:
+    harness_session = f"harness-rb-{name}"
+    agent_id = f"agent-ca-rb-{name}"
+    project, home = _standard_setup(tmp_path, "changelog-analyst", agent_id)
+    _write_obligation_transcript(
+        home, project, harness_session, agent_id,
+        _response_block_obligation("20260101-000206", repo_roots=repo_roots),
+    )
+    body = json.dumps({"commit_status": "nothing_to_commit", "repository_results": results})
+    return _run_hook(
+        project, home, agent_id, session_id=harness_session, stopgate_mode="block",
+        last_assistant_message=f"{_CA_BEGIN}\n{body}\n{_CA_END}\n",
+    )
+
+
+def test_response_block_naming_the_planned_roots_in_order_passes(tmp_path):
+    """/commit's obligation carries REPOSITORY_PLAN's roots (repo_roots): a
+    block whose repository_results name exactly those roots, result i with
+    order i, passes."""
+    proc = _run_plan_roots_case(
+        tmp_path, "roots-ok", ["/r/control", "/r/nested"],
+        [_ca_result(0, "/r/control"), _ca_result(1, "/r/nested")],
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("name,results", [
+    ("roots-missing", [{"order": 0, "repo_root": "/r/control"}]),
+    ("roots-reordered", [{"order": 0, "repo_root": "/r/nested"}, {"order": 1, "repo_root": "/r/control"}]),
+    ("roots-extra", [{"order": 0, "repo_root": "/r/control"}, {"order": 1, "repo_root": "/r/nested"},
+                     {"order": 2, "repo_root": "/r/other"}]),
+    ("roots-order-field", [{"order": 1, "repo_root": "/r/control"}, {"order": 0, "repo_root": "/r/nested"}]),
+    ("roots-none", []),
+])
+def test_response_block_not_naming_the_planned_roots_blocks(tmp_path, name, results):
+    """The rule /commit Step 7 applied to the read status block (a result
+    whose repository roots/order do not exactly equal REPOSITORY_PLAN is not
+    a landing), now G2's at the analyst's own stop: a schema-valid block
+    that omits, reorders or adds a repository is returned to the analyst,
+    naming the block and the failing check."""
+    full = [dict(_ca_result(r["order"], r["repo_root"])) for r in results]
+    proc = _run_plan_roots_case(tmp_path, name, ["/r/control", "/r/nested"], full)
+    assert proc.returncode == 2, proc.stderr
+    assert "<response_block>" in proc.stderr
+    assert "plan_mismatch" in proc.stderr
+
+
+def _plan_block(status: str, results: list) -> str:
+    return f"{_CA_BEGIN}\n{json.dumps({'commit_status': status, 'repository_results': results})}\n{_CA_END}\n"
+
+
+def test_plan_roots_hold_without_a_schema_validator(monkeypatch):
+    """The comparison /commit made needed no jsonschema, so G2's needs none:
+    with the validator unavailable (Draft7Validator None) a landing that
+    leaves out a planned repository still fails with plan_mismatch, while a
+    block naming the plan in order is skipped as before."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from lib import contract_runtime as runtime
+    monkeypatch.setattr(runtime, "Draft7Validator", None)
+    roots = ["/r/control", "/r/nested"]
+    missing = runtime.validate_response_block_for_obligation(
+        _plan_block("nothing_to_commit", [_ca_result(0, "/r/control")]),
+        _CA_BEGIN, _CA_END, "changelog-status.v1", repo_roots=roots)
+    assert missing["status"] == "fail" and "plan_mismatch" in missing["reason"], missing
+    planned = runtime.validate_response_block_for_obligation(
+        _plan_block("nothing_to_commit", [_ca_result(0, "/r/control"), _ca_result(1, "/r/nested")]),
+        _CA_BEGIN, _CA_END, "changelog-status.v1", repo_roots=roots)
+    assert planned["status"] == "skip", planned
+
+
+def test_a_failed_result_is_not_held_to_the_plan(tmp_path):
+    """/commit Step 7 compared the roots only for a landing: a schema-valid
+    `failed` block that reports fewer repositories than planned is returned
+    to the analyst by no plan rule."""
+    harness_session = "harness-rb-roots-failed"
+    agent_id = "agent-ca-rb-roots-failed"
+    project, home = _standard_setup(tmp_path, "changelog-analyst", agent_id)
+    _write_obligation_transcript(
+        home, project, harness_session, agent_id,
+        _response_block_obligation("20260101-000207", repo_roots=["/r/control", "/r/nested"]),
+    )
+    body = json.dumps({"commit_status": "failed", "failure_code": "staging_error",
+                       "failure_reason": "git add failed", "repository_results": []})
+    proc = _run_hook(
+        project, home, agent_id, session_id=harness_session, stopgate_mode="block",
+        last_assistant_message=f"{_CA_BEGIN}\n{body}\n{_CA_END}\n",
+    )
+    assert "plan_mismatch" not in proc.stderr, proc.stderr
+
+
+def test_response_block_with_null_repo_roots_has_no_plan_requirement(tmp_path):
+    """Bulk mode declares no plan (repo_roots null): no roots requirement."""
+    proc = _run_plan_roots_case(tmp_path, "roots-null", None, [_ca_result(0, "/r/anything")])
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_response_block_advisory_mode_never_blocks(tmp_path):
     """Parity with every other obligation kind: advisory mode never exits
     non-zero and writes nothing."""
@@ -1389,6 +1495,7 @@ def test_response_block_advisory_mode_never_blocks(tmp_path):
         last_assistant_message="no sentinels anywhere",
     )
     assert proc.returncode == 0, proc.stderr
+    assert "OBLIGATION_STOPGATE_ADVISORY: " in proc.stderr and "<response_block>" in proc.stderr
     assert _written_logs(home) == []
 
 
@@ -1415,7 +1522,6 @@ def test_dev_report_obligation_blocks_even_when_agent_index_entry_missing(
     home.mkdir(parents=True, exist_ok=True)
     # Deliberately NOT calling _register_agent: agent-index.json has no key
     # for agent_id, reproducing a skipped FIRST ACTION registry Read.
-    _enable_flag(project, SESSION)
     _write_sentinel(project, SESSION, "dev")
     _write_obligation_transcript(
         home,
@@ -1916,7 +2022,7 @@ _CHAIN_STUB = (
     "open(os.environ['L2_STUB_CHAIN'] + '.ran', 'w').close()\n"
     "doc = json.load(open(os.environ['L2_STUB_CHAIN']))\n"
     "print(json.dumps(doc))\n"
-    "sys.exit(0 if doc.get('status') in ('pass', 'pass_with_exceptions') else 2)\n"
+    "sys.exit(0 if doc.get('status') == 'pass' else 2)\n"
 )
 
 
@@ -2482,7 +2588,6 @@ def _fanout_landing_setup(tmp_path, l2_status: str):
     project = tmp_path / "project"
     home = tmp_path / "home"
     home.mkdir()
-    _enable_flag(project, SESSION)
     _write_sentinel(project, SESSION, "dev")
     tasks = {lane: f"{SESSION}-{lane}" for lane in _FANOUT_LANES}
     for lane, task in tasks.items():
@@ -2528,6 +2633,211 @@ def test_fanout_legacy_check_judges_only_the_stopping_lanes_own_report(
 
 
 # ---------------------------------------------------------------------------
+# P3 R14: an artifact G2 checks must be written for this dispatch (mtime >=
+# dispatched_at - 2 s) and a lane's dev or qa report must echo the dispatch's
+# lane and lane_set. Both warned in their first commit (reason on stderr, exit
+# 0); the promotion commit flipped DISPATCH_ECHO_BLOCKS in the hook and _R14_EXIT.
+# ---------------------------------------------------------------------------
+
+_WARNING = "OBLIGATION_STOPGATE_WARNING"
+_R14_EXIT = 2  # 0 in the warning commit
+
+
+def _age(path: Path, dispatched_at: str, seconds: float) -> None:
+    """Set the file's mtime ``seconds`` before the dispatch."""
+    when = datetime.fromisoformat(dispatched_at).timestamp() - seconds
+    os.utime(path, (when, when))
+
+
+def _assert_warns(proc, path: str, reason: str) -> None:
+    assert proc.returncode == _R14_EXIT, proc.stderr
+    assert (_WARNING in proc.stderr) is (_R14_EXIT == 0), proc.stderr
+    assert f"  - {path}: {reason}" in proc.stderr, proc.stderr
+
+
+def test_r14_report_older_than_its_dispatch_warns(tmp_path):
+    """A re-dispatched dev that never rewrites the report of an earlier round."""
+    s = _l2_setup(tmp_path)
+    _l2_write(s, _l2_dev_report(s.task))
+    _age(s.project / s.art_path, s.obligation["dispatched_at"], 2 * 3600)
+    proc = _l2_stop(s)
+    _assert_warns(proc, s.art_path, "stale_for_dispatch")
+    assert f"dispatched_at {s.obligation['dispatched_at']!r}" in proc.stderr
+
+
+def test_r14_clock_slack_is_two_seconds(tmp_path):
+    s = _l2_setup(tmp_path)
+    _l2_write(s, _l2_dev_report(s.task))
+    _age(s.project / s.art_path, s.obligation["dispatched_at"], 1.5)
+    proc = _l2_stop(s)
+    assert proc.returncode == 0 and _WARNING not in proc.stderr, proc.stderr
+    _age(s.project / s.art_path, s.obligation["dispatched_at"], 3)
+    _assert_warns(_l2_stop(s), s.art_path, "stale_for_dispatch")
+
+
+def test_r14_no_dispatched_at_counts_as_stale(tmp_path):
+    """A dispatch without dispatched_at shows no artifact fresh (the grammar
+    refuses such a block, so this is the helper's own rule)."""
+    s = _l2_setup(tmp_path)
+    _l2_write(s, _l2_dev_report(s.task))
+    ob = {k: v for k, v in s.obligation.items() if k != "dispatched_at"}
+    [finding] = HOOK._dispatch_echo_findings(str(s.project), ob, ob["artifacts"][0], {})
+    assert finding["reason"] == "stale_for_dispatch"
+    assert "dispatched_at None" in finding["errors"][0]
+
+
+@pytest.mark.parametrize("role", ["dev", "qa"])
+@pytest.mark.parametrize(
+    "lane, lane_set, errors",
+    [
+        (None, None, ["lane: obligation declares 'l2', file has None",
+                      "lane_set: obligation declares ['l1', 'l2'], file has None"]),
+        ("l2", ["l1", "l2", "l3"],
+         ["lane_set: obligation declares ['l1', 'l2'], file has ['l1', 'l2', 'l3']"]),
+        ("l2", ["l2", "l1"], ["lane_set: obligation declares ['l1', 'l2'], file has ['l2', 'l1']"]),
+        ("l1", ["l1", "l2"], ["lane: obligation declares 'l2', file has 'l1'"]),
+    ],
+    ids=["no_echo", "other_roster", "reordered_roster", "other_lane"],
+)
+def test_r14_fanout_report_not_echoing_its_lane_warns(tmp_path, role, lane, lane_set, errors):
+    s = _l2_setup(tmp_path, role=role, lane="l2", lane_set=["l1", "l2"])
+    report = (_l2_dev_report(s.task) if role == "dev" else _valid_qa_report_v2(s.task))
+    if lane is not None:
+        report.update(lane=lane, lane_set=lane_set)
+    _l2_write(s, report)
+    proc = _l2_stop(s)
+    _assert_warns(proc, s.art_path, "lane_echo_mismatch")
+    for line in errors:
+        assert f"    {line}\n" in proc.stderr, proc.stderr
+    assert "stale_for_dispatch" not in proc.stderr
+
+
+@pytest.mark.parametrize("role", ["dev", "qa"])
+def test_r14_compliant_fanout_lane_passes_without_warning(tmp_path, role):
+    s = _l2_setup(tmp_path, role=role, lane="l2", lane_set=["l1", "l2"])
+    report = (_l2_dev_report(s.task) if role == "dev" else _valid_qa_report_v2(s.task))
+    report.update(lane="l2", lane_set=["l1", "l2"])
+    _l2_write(s, report)
+    proc = _l2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == ""
+
+
+@pytest.mark.parametrize("echoed", [True, False], ids=["echoed", "template_without_echo"])
+def test_r14_in_flight_lane_dispatched_before_the_change_passes(tmp_path, echoed):
+    """A lane dispatched an hour before this change landed writes its report
+    now: fresh against its own dispatched_at, so no staleness; a report from a
+    template that did not yet ask for the echo only warns."""
+    s = _l2_setup(tmp_path, lane="l2", lane_set=["l1", "l2"])
+    s.obligation["dispatched_at"] = datetime.fromtimestamp(
+        datetime.now(timezone.utc).timestamp() - 3600, timezone.utc).isoformat()
+    _write_obligation_transcript(
+        s.home, s.project, s.harness, s.agent_id,
+        f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>')
+    _l2_write(s, _l2_dev_report(s.task, lane="l2" if echoed else None, lane_set=["l1", "l2"]))
+    proc = _l2_stop(s)
+    assert proc.returncode == (0 if echoed else _R14_EXIT), proc.stderr
+    assert "stale_for_dispatch" not in proc.stderr
+    assert ("lane_echo_mismatch" in proc.stderr) is (not echoed), proc.stderr
+
+
+def test_r14_lane_echo_only_where_the_schema_declares_both():
+    assert HOOK._declares_lane_echo("dev-report.v2") and HOOK._declares_lane_echo("qa-report.v2")
+    for schema in ("dev-report.v1", "qa-report.v1", "context.v1", "ba-qa-report.v1", "no-such.v9"):
+        assert not HOOK._declares_lane_echo(schema), schema
+
+
+def test_r14_stale_markdown_warns(tmp_path):
+    ticket = f"docs/dev/ticket-{G2_TASK}.md"
+    s = _g2_setup(tmp_path, "ba", [{"kind": "markdown", "path": ticket, "identity_anchor": G2_TASK}])
+    _write(s.project / ticket, f"# Ticket\nRequest ID: {G2_TASK}\n")
+    assert _g2_stop(s).stderr == ""
+    _age(s.project / ticket, s.dispatched_at.isoformat(), 2 * 3600)
+    _assert_warns(_g2_stop(s), ticket, "stale_for_dispatch")
+
+
+def test_r14_artifacts_not_standing_for_this_stop_are_not_aged(tmp_path):
+    """The close-QA waiver and the producer question stand in for the on-disk
+    artifact, so an old file there is not this stop's and raises nothing."""
+    s, report = _g2_close_qa_setup(tmp_path)
+    _age(s.project / report, s.dispatched_at.isoformat(), 2 * 3600)
+    proc = _g2_stop(s, msg="The append helper refused.\nCLOSE_REPORT_APPEND_ERROR: append: disk full\n")
+    assert proc.returncode == 0 and _WARNING not in proc.stderr, proc.stderr
+
+    q = _g2_setup(tmp_path / "question", "dev", _g2_dev_artifacts("dev-report.v2"))
+    old = q.project / f"docs/dev/dev-report-{G2_TASK}.json"
+    _write(old, _l2_dev_report(G2_TASK))
+    _age(old, q.dispatched_at.isoformat(), 2 * 3600)
+    _write(q.project / _g2_question_path(G2_TASK, "dev"), _g2_question(G2_TASK, "dev"))
+    proc = _g2_stop(q)
+    assert proc.returncode == 0 and proc.stderr == "", proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# P3 A4 (R6/R7, removed by P1b): a failing stop is a plain exit 2 naming the
+# failing artifact and its check code to its producer. Nothing is recorded,
+# no line admits it, and what pre-P1b code left behind (its escalation and
+# admission records and progress files, shapes as that code wrote them, and an
+# orchestrator arbitration file) changes nothing.
+# ---------------------------------------------------------------------------
+
+
+def _pre_p1b_leftovers(s) -> None:
+    """Shapes as the G2 and progress_measure of 03409de^ wrote them."""
+    cycle = HOOK.obligation.registry_dir_for(s.project, s.task)
+    key = f"{_G2_MISSING} (missing is blocking under obligation authority)|{s.art_path}"
+    record = {"kind": "producer_stop_escalation", "record_id": "esc0123456789abcdef0123",
+              "nonce": "a" * 32, "agent_id": s.agent_id, "role": "dev", "task_id": s.task,
+              "reason": "no_progress", "finding_keys": [key],
+              "artifact_digests": {s.art_path: "ABSENT"}, "created_at": "2026-10-02T00:00:00+00:00"}
+    progress = {"loop_key": f"producer-stop|{s.task}|{s.agent_id}", "round": 2,
+                "no_progress_rounds": 1, "last_outcome": "no_progress", "prev_set": [key],
+                "awaiting": {"emissions": 0, "last_emitted_at": None}, "audit": []}
+    files = {
+        cycle / "escalations" / f"{record['record_id']}.json": record,
+        cycle / "escalation-admissions" / f"{record['record_id']}.json": {
+            "record_id": record["record_id"], "nonce": record["nonce"],
+            "agent_id": s.agent_id, "admitted_at": "2026-10-02T00:00:01+00:00"},
+        cycle / "progress" / "producer-stop-agent_l2_producer.json": dict(progress, phase="arbitration"),
+        cycle / "progress" / "producer-stop-awaiting.json": dict(
+            progress, phase="awaiting_input",
+            awaiting={"emissions": 1, "for": "user", "need": "which cache", "why": "two designs"}),
+        s.project / "docs" / "dev" / f"arbitration-{s.cycle}.json": {
+            "verdict": "awaiting_input", "record_id": record["record_id"]},
+    }
+    for path, doc in files.items():
+        _write(path, doc)
+
+
+def _tree(project: Path) -> dict:
+    return {str(p.relative_to(project)): p.read_bytes() for p in project.rglob("*")
+            if p.is_file() and ".git" not in p.relative_to(project).parts}
+
+
+def test_a4_missing_dev_report_is_a_plain_block_every_round(tmp_path):
+    s = _l2_setup(tmp_path)
+    first, second = _l2_stop(s), _l2_stop(s)
+    for proc in (first, second):
+        _g2_assert_blocked_on(proc, s.art_path, _G2_MISSING)
+        assert not _re.search(r"arbitrat|ACK|ESCALATION", proc.stderr), proc.stderr
+    assert first.stderr == second.stderr
+    assert _l2_stores(s) == []
+    acked = _l2_stop(s, msg="I could not write it.\nESCALATION_ACK " + "a" * 32)
+    assert acked.returncode == 2 and acked.stderr == first.stderr
+
+    _pre_p1b_leftovers(s)
+    before = _tree(s.project)
+    for msg in (None, "ESCALATION_ACK " + "a" * 32):
+        proc = _l2_stop(s, msg=msg)
+        assert proc.returncode == 2 and proc.stderr == first.stderr, proc.stderr
+    assert _tree(s.project) == before
+
+    _l2_write(s, _l2_dev_report(s.task))
+    proc = _l2_stop(s)
+    assert proc.returncode == 0 and proc.stderr == "", proc.stderr
+
+
+# ---------------------------------------------------------------------------
 # R8 (P1c F7b): a lane whose dispatch carries no obligation block at all is
 # judged on the reports its own transcript shows it wrote, never on a
 # sibling's; with no block nothing else says which report is its own.
@@ -2554,8 +2864,7 @@ def test_r8_no_obligation_block_judges_only_the_reports_the_lane_wrote(tmp_path,
     project = tmp_path / "project"
     home = tmp_path / "home"
     home.mkdir()
-    _enable_flag(project, SESSION)
-    _write_sentinel(project, SESSION, "dev")
+    _write_sentinel(project, SESSION, "dev")  # G2 reads no artifact-contract flag (P4 R8)
     tasks = {lane: f"{SESSION_TS}-{lane}" for lane in _FANOUT_LANES}
     reports = {lane: f"docs/dev/dev-report-{task}.json" for lane, task in tasks.items()}
     for lane, task in tasks.items():
@@ -2584,6 +2893,69 @@ def test_r8_no_obligation_block_judges_only_the_reports_the_lane_wrote(tmp_path,
     _register_agent(project, "agent-dev-r8-none", SESSION, "dev")
     none = _run_hook(project, home, "agent-dev-r8-none", session_id=_FANOUT_HARNESS, stopgate_mode=stopgate)
     assert none.returncode == 0, none.stderr
+
+
+# ---------------------------------------------------------------------------
+# C5 for G3's canonical_missing (P2): a fan-out lane's report reaches the
+# canonical aggregate's one producer, the lane-completeness watch, only by a
+# Write or Edit. A report that completes the lane set by another route (a
+# shell redirection) leaves the canonical missing: the lane whose report is
+# the fan-out's newest is returned at its own stop, by G3's own rule, naming
+# the canonical, the check and the repair (its report saved again with Edit).
+# ---------------------------------------------------------------------------
+
+
+C5_TASK = "20261002-170011"  # a /dev fan-out's id: the shard filename patterns name its lanes
+
+
+def _c5_setup(tmp_path, *, l1=True, l1_newer=False, canonical=False):
+    s = _l2_setup(tmp_path, lane="l2", lane_set=["l1", "l2"], base_task=C5_TASK)
+    s.l1 = f"docs/dev/dev-report-{s.cycle}-l1.json"
+    s.canonical = f"docs/dev/dev-report-{s.cycle}.json"
+    _l2_write(s, _l2_dev_report(s.task, lane="l2", lane_set=["l1", "l2"]))
+    now = datetime.now(timezone.utc).timestamp()
+    os.utime(s.project / s.art_path, (now, now))
+    if l1:
+        _write(s.project / s.l1, _l2_dev_report(f"{s.cycle}-l1", lane="l1", lane_set=["l1", "l2"]))
+        at = now + 30 if l1_newer else now - 60
+        os.utime(s.project / s.l1, (at, at))
+    if canonical:
+        _write(s.project / s.canonical, {"task_id": s.cycle, "parallel_workers": ["l1", "l2"]})
+    return s
+
+
+def test_c5_lane_report_completing_the_set_unseen_by_the_watch_is_returned_at_its_stop(tmp_path):
+    s = _c5_setup(tmp_path)
+    proc = _l2_stop(s)
+    assert proc.returncode == 2, proc.stderr
+    assert "OBLIGATION_STOPGATE_BLOCKED" in proc.stderr
+    assert f"{s.art_path}: canonical_missing" in proc.stderr  # the stopping lane's own report
+    assert f"{s.canonical}: the canonical aggregate of lanes l1, l2 is missing" in proc.stderr
+    assert "posttool-lane-completeness-watch.py" in proc.stderr
+    assert "save it again with Edit" in proc.stderr  # what the receiver does
+
+
+def test_c5_canonical_on_disk_passes(tmp_path):
+    proc = _l2_stop(_c5_setup(tmp_path, canonical=True))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_c5_a_sibling_lane_reporting_later_is_that_lanes_own(tmp_path):
+    """The sibling's report is the newest: its own watch may still be running, and its stop decides."""
+    proc = _l2_stop(_c5_setup(tmp_path, l1_newer=True))
+    assert proc.returncode == 0, proc.stderr
+    assert "canonical_missing" not in proc.stderr
+
+
+def test_c5_lane_set_not_yet_complete_passes(tmp_path):
+    proc = _l2_stop(_c5_setup(tmp_path, l1=False))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_c5_advisory_stopgate_does_not_block(tmp_path):
+    s = _c5_setup(tmp_path)
+    proc = _run_hook(s.project, s.home, s.agent_id, session_id=s.harness, stopgate_mode="advisory")
+    assert proc.returncode == 0, proc.stderr
 
 
 if __name__ == "__main__":

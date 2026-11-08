@@ -779,6 +779,15 @@
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-codex-skill-ledger.py\""
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-close-rating.py\""
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [

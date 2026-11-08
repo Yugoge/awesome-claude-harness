@@ -42,11 +42,11 @@ Unfuddle; verbatim original preserved in that ticket file).
 | `analyzed` | a ticket or ba-spec with no dev-report, ba-qa-report or do-report yet | `develop` |
 | `ba_approved` | no dev-report; ba-qa-report verdict pass | `develop` |
 | `ba_rejected` | no dev-report; ba-qa-report verdict fail | `resume_ba` |
-| `close_pending` | no close-report yet, and either the dev-report's one chain call (`scripts/resolve-dev-artifact-chain.py`) passes (`pass` or `pass_with_exceptions`, its result carried whole as `artifact_chain`) or a do-report whose terminal status is `completed` | `close` |
+| `close_pending` | no close-report yet, and either a dev-report (its one chain call, `scripts/resolve-dev-artifact-chain.py`, passing or not, since `/close` routes an incomplete chain's gaps to their producers; its result carried whole as `artifact_chain`) or a do-report whose terminal status is `completed` | `close` |
 | `close_failed` | close-report's last-line verdict (`hooks/lib/close-verdict.py`) is `no`/`unknown` | `resume_close` |
 | `commit_pending` | close-report verdict `yes`; not every task-owned repo proven committed | `commit` |
 | `committed` | every task-owned repo has a HEAD-reachable `Task-id:` trailer and zero dirty owned content | `none` |
-| `blocked` | a failing chain call (`RESOLVER_FAIL`), a malformed or unreadable ba-qa-report, do-report or close-report (a do-report not `completed` included), a repository-plan error, `PARTIAL_COMMIT`, or a scan exception | `inspect` |
+| `blocked` | a chain instrument failure (a failing aggregator, reported as a scan exception), a malformed or unreadable ba-qa-report, do-report or close-report (a do-report not `completed` included), a repository-plan error, `PARTIAL_COMMIT`, or a scan exception | `inspect` |
 | `analysis_pending` | a spec row with no linked ticket | *(none)* |
 
 Row taxonomy: `kind ∈ {spec, ticket, lane}`. Lane rows (fan-out children) are

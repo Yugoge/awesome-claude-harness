@@ -204,24 +204,16 @@ NOT emit `multi_issue_fanout_requested` merely because `mode == "fanout"` or
 `lanes` has multiple rows.
 
 In that close-only mode:
-- require the supplied chain to have `status in {"pass", "pass_with_exceptions"}`
-  and consume its `mode`, `lanes`, `report_paths`, `artifact_paths`,
-  `commit_whitelist_artifacts`, `qa_inputs`, and `disclosed_exceptions` as one
-  authoritative snapshot;
+- require the prompt's `Disposition: chain_pass` (the resolver's one closeable
+  disposition, from the Step 0 run that printed this chain) and consume its `mode`,
+  `lanes`, `report_paths`, `artifact_paths`, `commit_whitelist_artifacts`, and
+  `qa_inputs` as one authoritative snapshot;
 - read every lane matrix row and QA input, and fail the parent close if the
   supplied artifacts contradict the passed resolver result;
 - for `mode == "fanout"`, evaluate lane ticket/context/dev/QA identity plus
   parent canonical dev-report/completion; parent ticket/context/QA are optional,
   and you MUST NOT request, create, or pretend that those optional parents
-  exist;
-- when `status == "pass_with_exceptions"` (i.e. `disclosed_exceptions` is
-  non-empty), independently re-verify and cite evidence for EVERY
-  `disclosed_exceptions[]` entry -- re-running at least the commands its
-  underlying qa-report/dev-report itself cites, not merely re-reading its
-  prose -- before treating that chain as closeable; an entry that cannot be
-  corroborated is a live dissent and the parent close must fail, mirroring
-  `commands/close.md`'s branch-10 disclosed-exceptions corroboration gate;
-  and
+  exist; and
 - record the lane matrix in the close report's input section and use it for
   Workflow Integrity. Normal N == 1 QA behavior is unchanged.
 
@@ -1395,6 +1387,8 @@ When the orchestrator prepends a score-inject block to your dispatch prompt, the
 **Task-ID Convention** (canonical from /redev5 onward): the `task-id` is a single literal string (e.g. `20260426-095000-wid`) that appears identically in (a) artifact filename suffix, (b) `request_id` field of every artifact JSON, (c) `task_id` field of every artifact JSON, (d) completion-report heading 1, (e) all artifact JSON files. No prefixed forms (`dev-`, `qa-`, `ba-`, `ui-`) are permitted in NEW artifacts. Past artifacts are not retroactively rewritten.
 
 **Status placement** (CRITICAL): place `pass` / `fail` / `warning` under `qa.status` ONLY (nested). Top-level `status` MUST NOT be emitted; `commit.sh` closure detection at lines 547-556 reads `data.get('qa', {}).get('status')` and ignores any top-level `status` key.
+
+**Lane echo**: when your dispatch's obligation block carries `lane` and `lane_set`, copy both verbatim (the same string, the same list in the same order) to the report's top level.
 
 Return verification report as JSON:
 

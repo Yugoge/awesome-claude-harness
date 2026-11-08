@@ -2,7 +2,7 @@
 
 <!-- AUTO:index-stats -->
 *Last updated: 2026-10-29T07:57:38Z*
-**Total entries**: 300
+**Total entries**: 303
 **Convention**: kebab
 
 ## Tree
@@ -50,6 +50,7 @@ hooks/
 │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
+│   ├── `close_rating.py` - Stop gate imports. The /close Step 3b question (source ``close-rating:<task-id>``) is required ask...
 │   ├── `closeout.py` - CLI:
 │   ├── `command_span.py` - The span is the records after the latest human-typed harness command outside
 │   ├── `commit_journal.py` - WHY THIS EXISTS
@@ -94,7 +95,7 @@ hooks/
 │   ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 │   ├── `test_allowlist_consolidation.py` - Covers AC8 IS_SUBAGENT firewall scenarios and matching semantics invariants
 │   ├── `test_allowlist_git_global_opts.py` - Regression cover for task 20260928-133915: `/allow git commit` could never match
-│   ├── `test_artifact_contract_enforce.py` - The hook is the producer-side port of /close's Artifact schema gate
+│   ├── `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
 │   ├── `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
 │   ├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
 │   ├── `test_baseline_snapshot_preflight.py` - agents/dev.md:535 declares that the orchestrator captures baseline_dirty_snapshot
@@ -109,6 +110,7 @@ hooks/
 │   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 │   ├── `test_checklist_record.py` - Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
 │   ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
+│   ├── `test_close_rating.py` - hooks/posttool-close-rating.py, the rating log's one writer
 │   ├── `test_close_verdict_round_open.py` - `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 │   ├── `test_command_span.py` - The span is the records after the latest human-typed harness command outside
 │   ├── `test_commit_artifact_rw_boundary.py` - WHY THIS FILE EXISTS
@@ -132,7 +134,7 @@ hooks/
 │   ├── `test_doc_sync_regen_readme_status.py` - Backlog #83: regen_readme() returned None on every path, so nobody could tell a skipped
 │   ├── `test_doc_sync_regions.py` - Backlog #85: four unrelated marker predicates (README first occurrence, INDEX substring
 │   ├── `test_dual_runtime_lifecycle_e2e.py` - Real-entrypoint regressions for single-owner ordinary dev lifecycle.
-│   ├── `test_e2e_enforce.py` - obligation fallback (ticket 20261001-161041-r06, M1)
+│   ├── `test_e2e_enforce.py` - report the QA's own obligation names
 │   ├── `test_env_configured_defaults.py` - or derived; such values come back only through the environment (normally the
 │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
@@ -213,6 +215,7 @@ hooks/
 ├── `post_tool_use.sh` - PostToolUse Hook - Code quality hints after file modifications
 ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 ├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
+├── `posttool-close-rating.py` - main agent's (no agent_id) one close-rating question (metadata.source close-rating:<task-id>) ans...
 ├── `posttool-codex-skill-ledger.py` - Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
 ├── `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 ├── `posttool-doc-sync.py` - PostToolUse Hook: keep the marked INDEX.md, README.md and CLAUDE.md sections in sync
@@ -299,10 +302,10 @@ hooks/
 ├── `stop.sh` - stop.sh - wrapper for /stop slash command
 ├── `subagent-stop-diff-check.sh` - SubagentStop hook: flag large diffs without minimum-diff justification
 ├── `subagent-stop-guard-integrity.sh` - subagent-stop-guard-integrity.sh
-├── `subagentstop-artifact-contract-enforce.py` - Ports the /close "Artifact schema gate" (commands/close.md §"Artifact schema gate" — the
+├── `subagentstop-artifact-contract-enforce.py` - The stopping subagent's own dispatch obligation (hooks/lib/obligation.py)
 ├── `subagentstop-codex-enforce.py` - Activation logic:
 ├── `subagentstop-cp-enforce.py` - Description: SubagentStop hook for spec checkpoint enforcement (W6).
-├── `subagentstop-e2e-enforce.py` - Activation logic:
+├── `subagentstop-e2e-enforce.py` - What a QA owes is in its own dispatch obligation (P1b E7): the qa-report.v2
 ├── `subagentstop-restart-track.py` - SubagentStop: persist response evidence for a /restart-resumed agent.
 ├── `userprompt-bulk-commit-capability.py` - human prompt, NOT from an LLM-emitted Bash command
 ├── `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: parse `/allow <pattern>` and write a single-use

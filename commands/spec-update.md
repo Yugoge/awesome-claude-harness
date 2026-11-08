@@ -65,7 +65,7 @@ python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-write.py" append --spec /abs
 ### Cycle <N>
 <content>
 SPEC_BLOCK
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-write.py" append --spec /abs/path/docs/dev/specs/spec-<ts>.md --section 3 <<'SPEC_BLOCK'
+python3 "<HARNESS_ROOT>/scripts/spec-write.py" append --spec /abs/path/docs/dev/specs/spec-<ts>.md --section 3 <<'SPEC_BLOCK'
 ### Cycle <N>
 <content>
 SPEC_BLOCK
@@ -75,7 +75,7 @@ Gather source artifacts from the active task-id when available. For `/dev`
 work, take the `ARTIFACT_CHAIN` the invoking command already holds from its
 one chain call (`/dev`'s and `/dev-command`'s end, `/close` Step 0, `/commit`
 Step 5), verbatim; only a `/spec-update` typed on its own runs
-`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-artifact-chain.py" --task-id <id> --project-dir <root>`.
+`python3 "<HARNESS_ROOT>/scripts/resolve-dev-artifact-chain.py" --task-id <id> --project-dir <root>`.
 Retain that JSON even when `status == "fail"`: a failed continuation is
 precisely where `errors[]` and the existing lane matrix are useful. Use the
 existing paths named by `artifact_paths`, `report_paths`, `qa_inputs`, and

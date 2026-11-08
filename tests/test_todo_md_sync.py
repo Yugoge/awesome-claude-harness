@@ -93,7 +93,7 @@ def test_duplicate_token_count_drift_is_reported_without_false_order_drift() -> 
 
 def test_repository_workflows_fixed_by_this_change_are_in_sync() -> None:
     """Both repository sources are non-empty and exactly token-identical."""
-    for command in ("clean", "dev-command", "dev-overnight"):
+    for command in ("clean", "close", "dev-command", "dev-overnight"):
         command_doc = REPO_ROOT / "commands" / f"{command}.md"
         todo_script = REPO_ROOT / "scripts" / "todo" / f"{command}.py"
         md_steps = CHECKER.extract_md_steps(command_doc)
@@ -104,3 +104,14 @@ def test_repository_workflows_fixed_by_this_change_are_in_sync() -> None:
         assert py_steps, f"{command}: Python extraction unexpectedly empty"
         assert md_steps == py_steps
         assert CHECKER.diff_steps(command, md_steps, py_steps) == []
+
+
+def test_close_checklist_is_steps_0_to_3b_under_every_prompt(monkeypatch) -> None:
+    """P4 R11: close.md's five "### Step N" headings, whatever /close was given; the
+    rating step is "Step 3b", a label no command's dispatch template sits under."""
+    todo_script = REPO_ROOT / "scripts" / "todo" / "close.py"
+    md_steps = CHECKER.extract_md_steps(REPO_ROOT / "commands" / "close.md")
+    assert md_steps == [f"Step {n}" for n in range(4)] + ["Step 3b"]
+    for prompt in ("", "--auto", "--force", "/close --codex 20260101-000000", "/close --late-repair 20260101-000000"):
+        monkeypatch.setenv("CLAUDE_TODO_PROMPT", prompt)
+        assert CHECKER.extract_py_steps(todo_script) == md_steps, prompt

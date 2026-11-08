@@ -32,7 +32,8 @@ preflight  /commit's Step 6 and Step 7 changelog-analyst dispatches through the 
            `texts=own,<path>`: another tree's commands/commit.md, a path under the sandbox root, for
            acceptance 17's in-flight form), each step (6: DRYRUN=true, QA_APPROVED_FILES empty; 7: DRYRUN=false,
            the plan's files) and with and without a grant line, the dispatch built from that text's Step 7
-           template (its obligation instantiated for the task), with the dev report named on a line of its
+           template (its obligation instantiated for the task; its plan roots, where the text declares them,
+           are the plan's repo_root values in order), with the dev report named on a line of its
            own (`Read the dev report yourself and classify files for staging: docs/dev/dev-report-<task>.json`,
            hooks/tests/test_gitignore_preflight_close_contract.py `commit_step7_prompt`) and, in the grant
            variant, `Commit grant: <the path the writer printed>` on another.
@@ -254,6 +255,10 @@ def _analyst_prompt(o, text: str, tid: str, plan: dict, dryrun: bool, approved: 
     tpl = next(b.text for b in cmdtext.blocks(cmdtext.section(text, "Step 7")) if "CONTROL_ROOT=<" in b.text)
     tpl = re.sub(r'<"([^"]*)" when BULK=false, else [^>]*>',
                  lambda m: json.dumps(m.group(1).replace("$TASK_ID", tid)), tpl)
+    # The obligation's plan roots, where the text declares them: the plan's repo_root values in order.
+    roots = [e["repo_root"] for e in plan.get("repositories") or []]
+    tpl = re.sub(r"<the JSON array of REPOSITORY_PLAN\.repositories\[\]\.repo_root\b[^>]*>",
+                 lambda m: json.dumps(roots), tpl)
     root = plan.get("control_root", "")
     values = {"CONTROL_ROOT": root, "NESTED_REPO": root, "REPOSITORY_PLAN": json.dumps(plan),
               "ARTIFACT_CHAIN": "", "ATTRIBUTION_LOG": json.dumps({"results": [], "no_events": [],

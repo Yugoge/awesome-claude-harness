@@ -174,7 +174,7 @@ codex_required: true
 The obligation declares the report this dispatch owes: the inspector's stop checks it (present, valid JSON of its schema, this request's id) and returns a missing or invalid report to the inspector.
 
 ```bash
-bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh" clean-inspect docs/clean/context-{REQUEST_ID}.json
+bash "<HARNESS_ROOT>/scripts/orchestrator.sh" clean-inspect docs/clean/context-{REQUEST_ID}.json
 ```
 
 Cleanliness inspector reads context, performs inspection, writes:
@@ -335,7 +335,7 @@ Coverage gate: every `commands/*.md` and `agents/*.md` file MUST appear in the r
 
 ### Step 11: Merge Inspection Reports
 
-Combine the cleanliness, style and prompt reports using orchestrator: `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh" clean-merge-reports docs/clean/context-{REQUEST_ID}.json`
+Combine the cleanliness, style and prompt reports using orchestrator: `bash "<HARNESS_ROOT>/scripts/orchestrator.sh" clean-merge-reports docs/clean/context-{REQUEST_ID}.json`
 
 Orchestrator reads `docs/clean/{cleanliness,style,prompt}-report-{REQUEST_ID}.json` and writes:
 - `docs/clean/combined-report-{REQUEST_ID}.json`
@@ -482,7 +482,7 @@ Before execution, create a safety checkpoint on `refs/checkpoints/<branch>`
 handles the no-changes case (exit 0) and uses an isolated temp index so
 your real staged area is untouched.
 
-Run `bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/checkpoint.sh" "Before /clean aggressive cleanup"`. Then read `refs/checkpoints/<branch>` and record the checkpoint commit via `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh" record-checkpoint docs/clean/context-{REQUEST_ID}.json "$CHECKPOINT_COMMIT"`, which prints the `checkpoint_commit` Step 16 carries into the cleaner's context.
+Run `bash "<HARNESS_ROOT>/hooks/checkpoint.sh" "Before /clean aggressive cleanup"`. Then read `refs/checkpoints/<branch>` and record the checkpoint commit via `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/orchestrator.sh" record-checkpoint docs/clean/context-{REQUEST_ID}.json "$CHECKPOINT_COMMIT"`, which prints the `checkpoint_commit` Step 16 carries into the cleaner's context.
 
 **Rollback**: The checkpoint lives on a detached ref, not as a HEAD
 ancestor. To recover individual files:
