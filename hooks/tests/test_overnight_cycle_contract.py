@@ -10,8 +10,9 @@
   typed sets no PM_MODE at Step 2) passes its Step 2 PM PLAN dispatch; one on
   the branch's prose keeps the mode check, and so does one with no record of
   its text.
-- A contract that holds no JSON object is Case M (exit 2) at dispatch and at
-  collection, the PM TRIAGE dispatch still passes and its return replaces it;
+- A contract that holds no JSON object is Case M (exit 2) at dispatch, its one
+  consumer; the PM TRIAGE dispatch still passes, its return is not refused at
+  collection, and the return replaces it;
   a contract that lists calls (an old-prose one) stays byte for byte.
 - A session rooted in a linked worktree or a fresh clone finds the main
   root's state and its own working root's contract.
@@ -201,6 +202,15 @@ def _dispatch(role: str, schema: str, report: str) -> dict:
     return _agent(role, f'You are the {role} subagent.\n<obligation v="1">{json.dumps(obligation)}</obligation>')
 
 
+def _triage_dispatch() -> dict:
+    """Step 4's PM TRIAGE dispatch, its obligation as the template declares it."""
+    obligation = {"task_id": TASK, "lane": None, "lane_set": None, "role": "pm", "pipeline": "dev-overnight",
+                  "profile": "overnight", "dispatched_at": _iso(0),
+                  "artifacts": [{"kind": "json", "path": f"docs/dev/overnight/{SID}/triage-report-cycle1.json",
+                                 "schema": "triage-report.v1", "identity": {"task_id": TASK}}]}
+    return _agent("pm", f'PM_MODE: TRIAGE\n<obligation v="1">{json.dumps(obligation)}</obligation>')
+
+
 DEV = ("dev", "dev-report.v2", f"docs/dev/dev-report-{TASK}.json")
 QA = ("qa", "qa-report.v2", f"docs/dev/qa-report-{TASK}.json")
 
@@ -213,10 +223,13 @@ def test_a_contract_that_holds_no_json_object_is_case_m(main_root, text):
     path.write_text(text)
     refused = _enforce(working, "8", "ba")
     assert refused.returncode == 2 and "Case M" in refused.stderr
-    collected = _run("posttool-overnight-file-check.py", working, _dispatch(*DEV))
-    assert collected.returncode == 2 and "Case M" in collected.stderr and str(path) in collected.stderr
     # The way out: PM TRIAGE passes, and its return replaces the file with a rendered contract.
-    assert _enforce(working, "4", "pm", "PM_MODE: TRIAGE").returncode == 0
+    # Case M has that one consumer, the dispatch hook: the collection check (registered before the
+    # PM TRIAGE handler) does not refuse that return while the file still holds no JSON object.
+    triage = _triage_dispatch()
+    assert _enforce(working, "4", "pm", triage["tool_input"]["prompt"]).returncode == 0
+    collected = _run("posttool-overnight-file-check.py", working, triage)
+    assert collected.returncode == 0 and "Case M" not in collected.stderr, collected.stderr
     assert _triage(working).returncode == 0
     assert json.loads(path.read_text())["required_calls"]
     assert _enforce(working, "8", "ba").returncode == 0
