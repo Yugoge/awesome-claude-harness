@@ -127,8 +127,11 @@ jobs:
         # (tests/artifact_graph/test_mutations.py) over the same replays.
         # tests/replay/ is the replay suite's (the job replay-suite runs it, and the job
         # artifact-graph-run-to-run its test_run_to_run.py).
+        # In parallel (pytest-xdist): one worker per CPU, each test file whole on one worker
+        # (--dist loadfile), so a file's module-level fixtures and ordering stay as they were.
         run: >-
-          python3 -m pytest hooks/tests tests -q --ignore=tests/generated --ignore=tests/test_artifact_graph.py
+          python3 -m pytest hooks/tests tests -q -n auto --dist loadfile
+          --ignore=tests/generated --ignore=tests/test_artifact_graph.py
           --ignore=tests/artifact_graph/test_mutations.py --ignore=tests/replay
 
       - name: Shell tests (checkpoint privacy gate, push guards, fresh-clone smoke)
@@ -497,18 +500,20 @@ jobs:
     # E1, N1, V1-1/NV-1), shipped and armed, untraced, each replay in a mount namespace through the
     # runner's passwordless sudo, a proxy guard counting every connection. The replays are split
     # over the matrix by the cost each scenario declares (tests/replay/conftest.py, REPLAY_SHARD);
-    # the tests that replay nothing (the runner's unit tests) run in shard 1. Every
+    # the tests that replay nothing (the runner's unit tests) run in shard 1. Six shards keep a
+    # run's jobs (3 baseline, the artifact check's plan, shards and check, run-to-run, these) within
+    # GitHub's 20 concurrent jobs, so no job of a run waits for another to finish. Every
     # pull_request push runs it all, so a phase PR merges only with the whole suite green on its
     # head (tests/TESTING.md, "Replay suite").
-    name: replay suite ${{ matrix.shard }}/12
+    name: replay suite ${{ matrix.shard }}/6
     # A draft pull request runs nothing; marking it ready runs everything.
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -530,10 +535,10 @@ jobs:
           sudo apt-get install -y bubblewrap
           python3 -m pip install --require-hashes -r requirements/py312.txt
 
-      - name: Replay suite, shard ${{ matrix.shard }} of 12
+      - name: Replay suite, shard ${{ matrix.shard }} of 6
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-          REPLAY_SHARD: ${{ matrix.shard }}/12
+          REPLAY_SHARD: ${{ matrix.shard }}/6
           REPLAY_WORK: ${{ runner.temp }}/replay
         run: >-
           python3 -m pytest tests/replay -q -p no:cacheprovider -rfE --durations=0
