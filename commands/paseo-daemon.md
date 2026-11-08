@@ -524,11 +524,12 @@ reliable nextEligibleAt auto-suspend without escalation.
   operation, the exact command and the hook output (the pause; it releases no
   gate; Subagent Hook Discipline). The answer authorizes no retry: the
   operation runs again only after the owner's `/allow` grant for it, typed as
-  his own prompt, where the refusing hook reads one (it lets the command
-  through once; a hook that reads no grant goes on refusing it), or the owner
-  runs it himself. If he declines, the same role resumes without it while
-  every acceptance criterion stays achievable without it (Hook Discipline #4);
-  a decline never ends the command.
+  their own prompt, where the refusing hook reads one (it lets the command
+  through once); a hook that reads no grant goes on refusing it, and the
+  operation is withdrawn. If the owner declines, or the operation is
+  withdrawn, the same role resumes without it while every acceptance
+  criterion stays achievable without it (Hook Discipline #4); a decline never
+  ends the command.
 - DO NOT substitute for human-only `/restart` — in-session subagent quota
   interrupts escalate as class 5.
 - DO NOT write into `.claude/paseo-daemon/` except through the ledger CLI

@@ -46,7 +46,7 @@ This command dispatches five subagent types:
 
 Every dispatch is an Agent call with `run_in_background: false`. The request's JSON files live in `docs/clean/` (`scripts/orchestrator.sh`'s default `clean_output_dir`). `hooks/pretool-tool-policy.py` lets a subagent write the paths its dispatch declares (the obligation blocks of Steps 5, 8, 10A and 16 declare the reports their subagents write) and, beside them, only its policy row's directories: its own scratch directories, `docs/dev/overnight/`, and `docs/codex/` for the cleanliness-, style- and prompt-inspector. It refuses (exit 2) every other write of these five roles, under docs/ or anywhere else in the project, and reads no `/allow` grant; the cleaner's moves and `fix_style` edits are such writes (Step 16).
 
-**Hook rejection (a process step, never a terminal):** a subagent whose operation a hook rejects never retries, disguises or circumvents it (no other tool, wrapper or script for the same write); it goes on with the rest of its work and reports the operation exactly as it ran and the hook's output. The orchestrator then asks the owner one AskUserQuestion inside the turn that names each refused action and its exact operation: that is the pause, and it releases no gate. The owner's answer decides each action. An operation `hooks/pretool-tool-policy.py` refused is not run again in this session (that hook reads no `/allow` grant): the owner runs it himself outside the session or withdraws the action. One refused by a hook that reads `/allow` grants (`hooks/pretool-git-privilege-guard.py`: the cleaner's `git commit`) runs again only after the owner's `/allow` grant for it (for example `/allow git commit`; an AskUserQuestion answer writes no grant), when the orchestrator re-dispatches the same role with the same template and a fresh dispatched_at; or the owner leaves it undone. Neither the orchestrator nor a subagent retries an operation without that grant, each answer is that action's outcome in Steps 17 and 18, and the command continues to completion.
+**Hook rejection (a process step, never a terminal):** a subagent whose operation a hook rejects never retries, disguises or circumvents it (no other tool, wrapper or script for the same write); it goes on with the rest of its work and reports the operation exactly as it ran and the hook's output. The orchestrator then asks the owner one AskUserQuestion inside the turn that names each refused action and its exact operation: that is the pause, and it releases no gate. The owner's answer decides each action refused by a hook that reads `/allow` grants. An operation `hooks/pretool-tool-policy.py` refused is not run again in this session (that hook reads no `/allow` grant and refuses the same write from the same role re-dispatched with the same template: paragraph above): the question states its outcome, the action withdrawn and recorded with the hook's output, and no later step of this command needs it, so no acceptance criterion is left for the owner to decide (Hook Discipline #4). One refused by a hook that reads `/allow` grants (`hooks/pretool-git-privilege-guard.py`: the cleaner's `git commit`) runs again only after the owner's `/allow` grant for it (for example `/allow git commit`; an AskUserQuestion answer writes no grant), when the orchestrator re-dispatches the same role with the same template and a fresh dispatched_at; or the owner leaves it undone. Neither the orchestrator nor a subagent retries an operation without that grant, each answer or withdrawal is that action's outcome in Steps 17 and 18, and the command continues to completion.
 
 ---
 
@@ -135,7 +135,7 @@ Run rule-inspector to update folder documentation with recent changes:
 3. Build rule-inspector context JSON at `docs/clean/rule-context-${REQUEST_ID}.json` including request_id, timestamp, project_root, folders, freshness data, and parameters `freshness_check: true`, `update_stale_readmes: true`
 4. Invoke: `~/.claude/scripts/orchestrator.sh rule-inspect "$RULE_CONTEXT"`, then dispatch the rule-inspector subagent with that context (Agent tool, `run_in_background: false`)
 5. Verify `docs/clean/rule-context-${REQUEST_ID}.json` exists; abort with error if not
-6. For each stale folder, verify the README was actually modified after the script start time; warn if not. The rule-inspector's `refused_operations` (its Step 6 edits of README.md and ARCHITECTURE.md, which `hooks/pretool-tool-policy.py` refuses) go to the owner by the hook-rejection rule (Workflow Overview)
+6. For each stale folder, verify the README was actually modified after the script start time; warn if not. The rule-inspector's `refused_operations` (its Step 6 edits of README.md and ARCHITECTURE.md, which `hooks/pretool-tool-policy.py` refuses) go to the owner by the hook-rejection rule (Workflow Overview), withdrawn and recorded with the hook's output
 
 **What this step does**:
 - Analyzes Git history for ALL folders (including root directory)
@@ -595,7 +595,7 @@ Present verification summary:
 # Cleanup Execution Results
 
 **Status**: <completed|partial>
-**Actions**: X successful, Y failed, Z skipped, R refused by a hook (each with the owner's answer)
+**Actions**: X successful, Y failed, Z skipped, R refused by a hook (each with the owner's answer, or withdrawn)
 
 ## Changes Made
 
@@ -680,7 +680,7 @@ Save to: `docs/clean/completion-{REQUEST_ID}.md`
 <list of skipped actions with reasons>
 
 ### Refused by a hook (R actions)
-<list of refused actions: exact operation, the hook's output, the owner's answer>
+<list of refused actions: exact operation, the hook's output, the owner's answer or withdrawn>
 
 ---
 
