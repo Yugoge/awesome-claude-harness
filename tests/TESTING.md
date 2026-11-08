@@ -26,7 +26,7 @@ its own runner — none of them run on `scripts/test`.
 ```mermaid
 graph TD
     R["tests under this repo"] --> S1["S1 · pytest AUTHORITATIVE<br/>hooks/tests + tests/test_*.py<br/>1250 pass · runner: scripts/test"]
-    R --> S2["S2 · tests/generated AC skeletons<br/>566 tracked files · --ignore'd<br/>runner: NONE by default"]
+    R --> S2["S2 · tests/generated AC skeletons<br/>git-ignored, none tracked · --ignore'd<br/>runner: NONE by default"]
     R --> S3["S3 · tests/*.sh smoke/integration<br/>4 scripts · runner: manual bash"]
     R --> S4["S4 · tests/scripts validate-*.py<br/>11 /dev quality gates · runner: agents"]
     R --> S5["S5 · score-*-contract *.sh<br/>3 shell contracts · runner: manual bash"]
@@ -41,7 +41,7 @@ graph TD
 | # | Surface | Location | Files | Runner | Runs on `scripts/test`? | Trust |
 |---|---|---|---:|---|:--:|---|
 | **S1** | Authoritative pytest suite | `hooks/tests/test_*.py` + `tests/test_*.py` | 11 + 6 | pytest (`scripts/test`) | ✅ collected | **AUTHORITATIVE** |
-| **S2** | Generated AC skeletons | `tests/generated/` | 566 tracked (449 `test_*.py`) | none by default | ❌ `--ignore`'d | Archival provenance |
+| **S2** | Generated AC skeletons | `tests/generated/` | none tracked (git-ignored) | none by default | ❌ `--ignore`'d | Archival provenance |
 | **S3** | Smoke / integration shell | `tests/*.sh` | 4 | manual `bash` | ❌ not collected | Real tests, manual runner |
 | **S4** | `/dev` quality-gate validators | `tests/scripts/validate-*.py` | 11 | agent-invoked | ❌ no `test_` prefix | Legitimate gates, orthogonal runner |
 | **S5** | Score-contract shell | `tests/score-*-contract/*.sh` | 3 | manual `bash` | ❌ not collected | Manual contract checks |
@@ -75,13 +75,11 @@ graph TD
 
 ## S2 — `tests/generated/` AC skeletons (IGNORED by default)
 
-`test-writer` emits one pytest skeleton per acceptance criterion. **566 tracked files
-(449 `test_*.py`)**; the tree is excluded from the default run via
+`test-writer` emits one pytest skeleton per acceptance criterion. **The tree is git-ignored
+and none of its files is tracked**; the tree is excluded from the default run via
 `--ignore=tests/generated` in both `pytest.ini` and `scripts/test`.
 
 - **What it is:** per-cycle acceptance-criteria provenance, not a runnable safety net today.
-- **Realization status (measured):** ≈393 of 449 have been realized into assertions;
-  the remainder still hard-stop via `pytest.fail("TEST_INCOMPLETE:…")`.
 - **Go-forward policy (ratified):** gate-behind-a-marker — realized+green skeletons become
   opt-in-runnable under a `generated` marker (`pytest -m generated`) while the default run
   stays green. **Mechanism lands in Phase 2/3, not yet wired.** Full detail + caveats:
