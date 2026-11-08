@@ -110,4 +110,5 @@ def test_every_lane_write_runs_the_aggregator_and_g3_checks_the_roster(tmp_path)
             assert gate.returncode == 2
             assert f"[lane_report_missing] {dev_dir / f'dev-report-{TASK}-l3.json'}" in gate.stderr
         else:
-            assert gate.returncode == 0, gate.stderr
+            # The aggregator's canonical passes row 12(b)'s content check too.
+            assert (gate.returncode, gate.stderr) == (0, "")

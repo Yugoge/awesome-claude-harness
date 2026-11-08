@@ -76,6 +76,10 @@ from tests.replay import hookrun, landing, suite
 TRANSITIONS = {"master": "2acc29b0c8149c32d8e424e58c6af55d073eac20",
                "p1b": "3f0b7a23ee9145c573678775dc67b0a230c228f4"}
 ENV = {"CLAUDE_OBLIGATION_STOPGATE": "block"}
+# P2 arms G1 and G3 beside P1b's STOPGATE, and the overnight guard's matcher gains AskUserQuestion (its
+# unattended deny); a landed replay loads the base's settings.json, which has neither.
+P2_ENV = {"CLAUDE_OBLIGATION_GATE": "block", "CLAUDE_OBLIGATION_BARRIER": "block"}
+P2_MATCHER = ("Write|Edit|MultiEdit|Bash", "Write|Edit|MultiEdit|Bash|AskUserQuestion")
 G2 = "hooks/subagentstop-artifact-contract-enforce.py"
 FORGED = "forged@agent:dev Write docs/dev/dev-report-*=dev.status:done,-dev.files_modified"
 
@@ -350,6 +354,14 @@ STOP, TODO = ("Stop", None), ("PostToolUse", "TodoWrite")
 # scenario's events after the landing reach (the harness-home session writes no todo list); together
 # they must be every one that differs (test_your_settings_differs_only_where_a_replay_runs_it).
 EXERCISES = {PRE.name: {STOP, TODO}, HOME.name: {STOP}, A.name: {STOP, TODO}, B.name: {STOP, TODO}}
+# The registrations two phases ahead of P5 change, which those phases name and no scenario here reaches
+# after the landing (none asks with AskUserQuestion after it): P2's overnight guard on AskUserQuestion
+# too (P2_MATCHER: its registration under the old matcher goes, the new one comes) and P4's close-rating
+# hook (PostToolUse AskUserQuestion). Each is held to exactly that change; a replay that reaches one
+# fails test_again_with_your_settings's `hooklist` part.
+ELSEWHERE = {("PreToolUse", P2_MATCHER[0]): (["hooks/pretool-overnight-hook-guard.py"], []),
+             ("PreToolUse", P2_MATCHER[1]): ([], ["hooks/pretool-overnight-hook-guard.py"]),
+             ("PostToolUse", "AskUserQuestion"): ([], ["hooks/posttool-close-rating.py"])}
 
 # Blocks a P5 row introduces by design in a compliant A11 replay: (row, hook, regex on the block's text).
 # None: P5's Arming has every change accept old state and transcripts, so a compliant session that
@@ -523,10 +535,15 @@ def _yours_params():
 @pytest.mark.parametrize("name", sorted(TRANSITIONS))
 def test_your_settings_differs_only_where_a_replay_runs_it(name):
     """This tree's settings.json registers otherwise than the base's exactly at the registrations the
-    scenarios below declare they run after the landing (EXERCISES), each checked in its replay."""
+    scenarios below declare they run after the landing (EXERCISES), each checked in its replay, and at
+    P2's and P4's own (ELSEWHERE); its environment differs by STOPGATE=block and P2's arming of G1 and
+    G3 alone (P2_ENV)."""
     differing = _differing(name)
     assert differing, "this tree registers as the base does: the replays with your settings.json are the replays"
-    assert set(differing) == set().union(*EXERCISES.values()), differing
+    assert {k: differing.get(k) for k in ELSEWHERE} == ELSEWHERE, differing
+    assert set(differing) - set(ELSEWHERE) == set().union(*EXERCISES.values()), differing
+    head = _head_settings()
+    assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV == hookrun.settings_env(head) | ENV
 
 
 @pytest.mark.parametrize("live,case,part", _yours_params(), indirect=["live"])

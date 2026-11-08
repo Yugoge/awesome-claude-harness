@@ -345,7 +345,8 @@ def test_a_pm_prompt_without_a_mode_passes_where_the_loaded_text_sets_none(sessi
     triage = _run("pretool-subagent-enforce.py", session, _agent("pm", base))
     assert triage.returncode == 2 and "mode missing on step '4'" in triage.stderr
     _bookmark(session, "2")  # no record of the text the session loaded: every step's mode binds
-    assert _run("pretool-subagent-enforce.py", session, _agent("pm", base)).returncode == 2
+    missing = _run("pretool-subagent-enforce.py", session, _agent("pm", base))
+    assert missing.returncode == 2 and "mode missing on step '2'" in missing.stderr
     refused = _run("pretool-subagent-enforce.py", session, _agent("pm", "PM_MODE: RETRO"))
     assert refused.returncode == 2 and "mode='RETRO'" in refused.stderr
 

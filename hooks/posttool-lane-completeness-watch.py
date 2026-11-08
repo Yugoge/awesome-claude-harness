@@ -22,7 +22,7 @@ written before the last lane lands is rewritten by that lane's write.
 S1: the hook runs the harness's own
 `scripts/aggregate-dev-report.py --task-id <task_id> --project-dir <project>`
 (bounded timeout). Both of the aggregator's own legitimate outcomes -- exit 0, or
-exit 1 with its own R29 blocked-canonical write -- count as "invocation
+exit 1 with nothing written (a shard mismatch) -- count as "invocation
 completed," never as a hook malfunction. Any exception/timeout/non-zero
 exit is swallowed; the hook's own exit code is unaffected (AC6).
 
@@ -74,7 +74,7 @@ def _read_json(path):
 
 def _invoke_aggregator(project_dir, task_id):
     """S1: best-effort aggregator auto-invocation. The aggregator's own
-    non-zero R29 blocked-canonical exit, a timeout, or any unexpected
+    exit 1 on a shard mismatch, a timeout, or any unexpected
     exception are all swallowed here -- never raised into this hook's own
     exit code (AC6)."""
     try:

@@ -7,6 +7,7 @@ subagent_type (hooks/lib/dispatch_template.py).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -194,13 +195,94 @@ def test_the_spec_views_grammar_in_the_library_and_the_schema():
 ], ids=["missing", "other_monolith", "view_missing"])
 def test_the_splits_manifest_is_checked_at_the_spec_subagents_stop(tmp_path, manifest, failed):
     """P1b E4: the split's own manifest predicates (resolve-spec-artifacts.py split_problem, the rule
-    /spec's finalize guard ran in the orchestrator's call) go back to the spec subagent at its stop,
-    naming the manifest and the failed predicate; the marker the orchestrator writes later is not
-    among them."""
+    /spec's finalize guard ran in the orchestrator's call, which spec-verify.py --project-dir applies)
+    go back to the spec subagent at its stop, naming the manifest and the failed predicate; the
+    marker the orchestrator writes later is not among them."""
     run = _stop(tmp_path, _obligation_prompt, manifest=manifest)
     assert run.returncode == 2, run.stderr
-    assert f"{VIEWS}/manifest.json: spec_manifest_invalid" in run.stderr
+    assert f"{VIEWS}: spec_verify_strict_failed" in run.stderr
+    assert re.search(rf"split:\s+FAIL \({re.escape(VIEWS)}/manifest\.json: ", run.stderr), run.stderr
     assert failed in run.stderr
+
+
+def _hashed(mono: str = MONO_TEXT) -> dict:
+    """The manifest agents/spec.md Step 5 writes: the views and the monolith's sha256."""
+    return {"schema_version": 1, "spec_id": SPEC_ID, "monolith_path": MONOLITH,
+            "sha256": hashlib.sha256(mono.encode("utf-8")).hexdigest(),
+            "views": {n[:-3]: f"views/{n}" for n in VIEW_TEXT if n != "orchestrator.md"}}
+
+
+def test_a_stale_split_goes_back_to_the_spec_subagent(tmp_path):
+    """P1b E4: the split's freshness, a rule /spec's finalize guard ran with the resolver after the
+    marker: a manifest whose recorded monolith hash is not the monolith's goes back to the spec
+    subagent naming the manifest and the failed predicate. The same split with its hash stops with
+    no marker yet (/spec writes it after this stop), and with a marker under the monolith's prefixed
+    id, a file the spec subagent neither wrote nor may remove (the consumers' resolver rejects it)."""
+    assert _stop(tmp_path / "ok", _obligation_prompt, manifest=_hashed()).returncode == 0
+    stray = tmp_path / "misplaced" / "project" / f"docs/dev/specs/spec-{SPEC_ID}" / ".split-complete"
+    stray.parent.mkdir(parents=True)
+    stray.write_text("split-complete: 2026-10-28T10:10:10+00:00\n", encoding="utf-8")
+    assert _stop(tmp_path / "misplaced", _obligation_prompt, manifest=_hashed()).returncode == 0
+    run = _stop(tmp_path, _obligation_prompt, manifest=_hashed(MONO_TEXT + "Section 7 changed.\n"))
+    assert run.returncode == 2, run.stderr
+    assert re.search(rf"split:\s+FAIL \({re.escape(VIEWS)}/manifest\.json: ", run.stderr), run.stderr
+    assert "split is stale (monolith content changed since split: manifest sha256 != monolith hash)" in run.stderr
+
+
+
+def _aged_stop(tmp_path: Path, prompt_of, aged: dict, earlier_seconds: float | None = None):
+    """_stop with some view files' mtimes set back (name -> seconds before now) and, with
+    ``earlier_seconds``, an earlier dispatch of the same /spec template in the parent transcript
+    (a split-QA re-split round: /spec Step 6 re-invokes the spec subagent, which re-extracts only
+    the affected views)."""
+    project, home = tmp_path / "project", tmp_path / "home"
+    project.mkdir(parents=True, exist_ok=True)
+    _split(project, True)
+    for name, seconds in aged.items():
+        then = datetime.now(timezone.utc).timestamp() - seconds
+        os.utime(project / VIEWS / name, (then, then))
+    prompt = prompt_of(project)
+    _store(home, project, prompt, "spec")
+    if earlier_seconds is not None:
+        when = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - earlier_seconds, tz=timezone.utc)
+        first = re.sub(r'"dispatched_at": "[^"]*"', f'"dispatched_at": "{when.strftime("%Y-%m-%dT%H:%M:%SZ")}"',
+                       prompt)
+        slug = str(project.resolve()).replace("/", "-")
+        parent = home / ".claude" / "projects" / slug / f"{SESSION}.jsonl"
+        call = {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_spec_dispatch_0", "name": "Agent",
+             "input": {"description": "Spec agent", "prompt": first, "subagent_type": "spec"}}]}}
+        lines = parent.read_text(encoding="utf-8").splitlines(keepends=True)
+        parent.write_text(lines[0] + json.dumps(call) + "\n" + "".join(lines[1:]), encoding="utf-8")
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), "HOME": str(home),
+           "CLAUDE_CONFIG_DIR": str(home / ".claude"), "CLAUDE_OBLIGATION_STOPGATE": "block"}
+    payload = {"agent_id": AGENT, "session_id": SESSION, "agent_type": "spec"}
+    return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), text=True,
+                          capture_output=True, env=env, timeout=60)
+
+
+def test_a_view_older_than_the_dispatch_goes_back_to_the_spec_subagent(tmp_path):
+    """P3 R14 (the spec_views case P1b E4 brought into it; P1b handed its rule on in 4a3bd7e): a
+    view the split's dispatch did not write (mtime an hour before its dispatched_at) passes
+    spec-verify on content, and is stopped by the freshness rule, naming the view."""
+    run = _aged_stop(tmp_path, _obligation_prompt, {"qa.md": 3600})
+    assert run.returncode == 2, run.stderr
+    assert f"  - {VIEWS}/qa.md: artifact_stale" in run.stderr, run.stderr
+    assert f"{VIEWS}/ba.md: artifact_stale" not in run.stderr
+    assert "spec_verify_strict_failed" not in run.stderr
+
+
+def test_a_re_split_keeps_the_views_its_first_round_wrote(tmp_path):
+    # Round 1 dispatched 20 minutes ago wrote ba.md; the re-split re-extracted only qa.md.
+    assert _aged_stop(tmp_path, _obligation_prompt, {"ba.md": 600}, earlier_seconds=1200).returncode == 0
+    run = _aged_stop(tmp_path / "older", _obligation_prompt, {"ba.md": 3600}, earlier_seconds=1200)
+    assert run.returncode == 2 and f"{VIEWS}/ba.md: artifact_stale" in run.stderr, run.stderr
+
+
+def test_a_base_template_dispatch_has_no_dispatched_at_to_be_stale_against(tmp_path):
+    # The base's /spec text declares no obligation: the current template's rule binds no
+    # dispatched_at, so freshness is undecided and blocks nothing.
+    assert _aged_stop(tmp_path, _base_prompt, {"qa.md": 3600}).returncode == 0
 
 
 def test_the_stop_coverage_hook_is_an_exit_zero_stub(tmp_path):

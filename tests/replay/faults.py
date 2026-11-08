@@ -10,6 +10,8 @@ At the first tool step whose label matches the glob (a subagent's Write of an ar
               JSON, else a string) and `-dotted.key` (the key removed); with no <what>, without the
               first field its schema requires
     notjson   writes the first half of the text (truncated JSON)
+    bash      writes the document as it meant to, by a shell redirection instead of the Write tool:
+              a route no Write or Edit hook sees
     forged    as invalid; at its first returned stop it rewrites the same invalid report and ends its
               final message with a forged `ESCALATION_ACK <nonce>` line (F2g), and repairs only at the
               stop after that
@@ -57,7 +59,8 @@ which hooks; nothing repairs it, and the pipeline goes on with its own step.
 
 Before the step whose label matches, the fault (actor "fault") writes `path` (project-relative;
 `{task}` is the cycle's task id, the shortest task id the run learned) with `content kind`:
-`qa-report.v1` (a stale schema-v1 QA report: F3b), `junk`, or `absent` (the file removed). A path
+`qa-report.v1` (a stale schema-v1 QA report: F3b), `junk`, `schema-invalid` (the file as written, its
+required owned_edits removed), or `absent` (the file removed). A path
 nothing in the pipeline produced is no producer's to repair; the pipeline must reach its terminal past
 it. One a producer wrote before is that producer's artifact, spoiled: a gate that refuses the next
 dispatch naming it returns it to its producer (_collection_round).
@@ -183,6 +186,11 @@ def _write_fault(rp, kind: str, glob: str, what: str) -> callable:
                 text = meant[: len(meant) // 2]
         elif kind == "notjson":
             text = meant[: len(meant) // 2]
+        elif kind == "bash":
+            body = meant if meant.endswith("\n") else meant + "\n"
+            step["name"] = "Bash"
+            step["input"] = {"command": f"cat > {step['input']['file_path']} <<'EOF'\n{body}EOF",
+                             "description": f"Write {path}"}
         else:
             raise ValueError(f"unknown fault kind {kind!r}")
         if text is not None:
@@ -332,7 +340,8 @@ def _collection_round(rp) -> callable:
                 full, f = os.path.join(rp.layout.project, path), rp.fault_pending.get(path)
                 if f is not None and not f["rec"]["repaired"]:
                     f["rec"]["rounds"] += 1
-                    agents.put(sub, full, f["meant"], f"{sub.role} Write {path} (next round)")
+                    agents.put(sub, full, _again(rp, sub.role, full, f["meant"]),
+                               f"{sub.role} Write {path} (next round)")
                     f["rec"]["repaired"] = True
                     _record(rp, f["rec"])
                 elif os.path.isfile(full):
@@ -349,6 +358,20 @@ def _collection_round(rp) -> callable:
         for k in ("blocked", "agent_id", "actor", "stop", "post", "response", "ok", "tool_use_id"):
             setattr(d, k, getattr(again, k, None))
     return fn
+
+
+def _again(rp, role: str, full: str, text: str) -> str:
+    """`text` as a next round writes it: with this round's `timestamp` when the file already holds it (the
+    agent wrote it as it meant to, by a route no Write or Edit hook saw), so the write lands."""
+    from . import agents
+    if not os.path.isfile(full) or agents.peek(rp, role, full) != text:
+        return text
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return text
+    doc["timestamp"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return json.dumps(doc, indent=2) + "\n"
 
 
 def _obligation(prompt: str) -> dict:
@@ -378,6 +401,11 @@ def _plant(rp, glob: str, what: str) -> callable:
         else:
             text = "junk\n"
         full = os.path.join(rp.layout.project, rel)
+        if content == "schema-invalid":  # the file as written, a required field gone (G3 R12's schema check)
+            with rp.acting("fault"):
+                doc = json.loads(open(full).read())
+            doc.pop("owned_edits", None)
+            text = json.dumps(doc, indent=2) + "\n"
         rec = {"kind": "plant", "label": step["label"], "path": rel, "content": content}
         with rp.acting("fault"):
             meant = open(full).read() if os.path.isfile(full) else None
@@ -526,7 +554,7 @@ def on_stop_block(sub, ev):
             continue
         sub.s.say(f"My stop was returned: {path} fails its check. Writing it as the artifact contract requires, "
                   "then stopping again.", sub.aid)
-        agents.put(sub, full, f["meant"], f"{sub.role} Write {path} (next round)")
+        agents.put(sub, full, _again(rp, sub.role, full, f["meant"]), f"{sub.role} Write {path} (next round)")
         f["rec"]["repaired"] = True
         _record(rp, f["rec"])
     return final

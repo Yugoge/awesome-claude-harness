@@ -1,11 +1,13 @@
 """Tests for hooks/stop-command-gate.py, P5 R7 and R8, and R10's move.
 
 The gate calls P3's disposition, P2's overnight locator and window, and P4's
-close rating; where those phases are not on this base the tests use fakes
-with their signatures (each such test says so), so the cases that rest on
-their behaviour are re-run once they merge. P2 is merged: the time-lock cases
-run P2's lib/overnight (locate, window_open, closeout_gaps) on the session's
-own state record (``real_overnight``). The rest runs the real readers:
+close rating. Most cases fake P3's disposition and P4's close rating with their
+signatures (each such test says so), to pin the gate's own logic; P2, P3 and
+P4 are merged, so the time-lock cases run P2's lib/overnight (locate,
+window_open, closeout_gaps) on the session's own state record
+(``real_overnight``), and the cases that rest on P3's and P4's behaviour run
+again on their real code at the end (the ``real`` fixture). The rest runs the
+real readers:
 command_span on CLI-shaped transcripts, git on local repositories, the
 do-branch write-set helper and dev-lifecycle's --auto target function.
 
@@ -340,7 +342,7 @@ def test_a2_no_bound_counter_release_token_or_write():
     ([gap(f"docs/dev/ba-qa-report-{FAMILY}.json", "INVALID_BA_QA_VERDICT", "verdict is 'fail'")], 2),
     ([], 0)])
 def test_a3_a_complete_checklist_still_needs_chain_pass(env, answer, code):
-    """Fake disposition (P3): re-run once P3 merges."""
+    """Fake disposition (P3); on the real one: test_a3_real_a_complete_checklist_still_needs_p3s_chain_pass."""
     steps = dev_span(env, done=0)
     env.tx.todos(steps, len(steps))
     env.fake.answers[(FAMILY, "dev")] = answer
@@ -521,8 +523,26 @@ def test_r8_a_versioned_report_failing_its_schema_is_a_gap(env):
     assert any("files_modified" in detail for _c, _a, detail in gaps)
 
 
-def test_r8_without_a_transcript_the_lists_stand(env):
+def test_r8_without_a_transcript_or_a_dev_report_the_lists_stand(env):
     path = do_report(env, modified=["src/never.py"])
+    assert resolver.do_report_gaps(env.project, DO_ID, path) == []
+
+
+def test_r8_without_a_transcript_the_lists_equal_dev_s_report(env):
+    """The route without a transcript (Q7, a /close or /commit stage; P3's do branch calls it at
+    P3's merge): where the task's dev-report concludes it, the do-report's lists must equal that
+    report's files, named exactly; no schema is asked of a do-report that route finds not
+    completed."""
+    path = do_report(env, modified=["src/a.py"])
+    dev = env.project / "docs" / "dev" / f"dev-report-{DO_ID}.json"
+    dev.write_text(json.dumps({"task_id": DO_ID, "dev": {"files_modified": ["src/a.py"], "files_created": ["src/b.py"]}}))
+    [(code, artifact, detail)] = resolver.do_report_gaps(env.project, DO_ID, path)
+    assert code == "FILES_NOT_DEV_REPORT" and artifact == f"docs/dev/do-report-{DO_ID}.json"
+    assert detail.endswith(json.dumps(["src/a.py", "src/b.py"]))
+    record = json.loads(path.read_text())
+    record["report_version"] = 1
+    record["do"].update(status="blocked", files_modified=["src/b.py"], files_created=[str(env.project / "src/a.py")])
+    path.write_text(json.dumps(record))
     assert resolver.do_report_gaps(env.project, DO_ID, path) == []
 
 
@@ -1046,7 +1066,8 @@ def test_a6_git_predicates_outside_a_repository_are_instrument_failures(env, com
 
 
 def test_a6_commit_modes_only_if_typed(env):
-    """Fake disposition (P3): --stage commit's Task-id check is P3's; re-run once it merges."""
+    """Fake disposition (P3): --stage commit's Task-id check is P3's; on the real one:
+    test_a6_real_commit_needs_p3s_task_id_commit_reachable_from_head."""
     env.tx.command("commit", FAMILY)
     env.fake.answers[(FAMILY, "commit")] = [gap(".", "MISSING_TASK_TRAILER", "no commit carries Task-id")]
     assert run(env)[0] == 2
@@ -1086,7 +1107,8 @@ def task_file(env, name=f"ticket-{FAMILY}.md"):
 
 @pytest.mark.parametrize("required,asked,code", [(True, False, 2), (True, True, 0), (False, False, 0)])
 def test_a8_close_needs_the_rating_question_asked_where_required(env, monkeypatch, required, asked, code):
-    """Fake close_rating (P4) and disposition (P3): re-run once they merge."""
+    """Fake close_rating (P4) and disposition (P3); on the real ones:
+    test_a8_real_close_needs_p4s_rating_question_after_the_landed_close_qa."""
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(required, asked))
     task_file(env)
     env.tx.command("close", FAMILY)
@@ -1127,6 +1149,25 @@ def test_a8_auto_targets_leave_out_a_task_registered_after_the_cut_off():
     cutoff = datetime(2026, 11, 1, 9, 0, 0).timestamp()  # the minting clock's local time
     assert lifecycle.auto_targets(Path("."), "close", cutoff, rows) == ["20261101-080000", "spec-like"]
     assert lifecycle.auto_targets(Path("."), "close", None, rows) == sorted(r["task_id"] for r in rows)
+
+
+def test_a8_close_auto_targets_pass_over_a_task_whose_gap_nobody_owes():
+    """P4 (review 2, D25), at its new place: /close --auto passes over a task the scan marks
+    auto_skip (a gap no dispatch record or todo step owes), saying why; the gate's --auto targets
+    are that same function's, so the run's Stop does not hold the task it passed over. A task past
+    the cut-off is no target and says nothing; /commit --auto still takes an auto_skip row."""
+    lifecycle = _load(REPO / "scripts" / "dev-lifecycle.py", "lifecycle_under_test")
+    why = "no dispatch record or todo step owes docs/dev/ticket-20261101-070000.md"
+    rows = [{"task_id": "20261101-080000", "kind": "ticket", "next_action": "close"},
+            {"task_id": "20261101-070000", "kind": "ticket", "next_action": "close", "auto_skip": why},
+            {"task_id": "20261101-100000", "kind": "ticket", "next_action": "close", "auto_skip": why},
+            {"task_id": "20261101-060000", "kind": "ticket", "next_action": "commit", "auto_skip": why}]
+    cutoff = datetime(2026, 11, 1, 9, 0, 0).timestamp()
+    skipped = []
+    assert lifecycle.auto_targets(Path("."), "close", cutoff, rows, skipped) == ["20261101-080000"]
+    assert skipped == [f"20261101-070000: skipped: {why}"]
+    assert lifecycle.auto_targets(Path("."), "close", cutoff, rows) == ["20261101-080000"]
+    assert lifecycle.auto_targets(Path("."), "commit", cutoff, rows) == ["20261101-060000"]
 
 
 # Self-check finding: an --auto run's targets were dev-lifecycle's list at the Stop, which no longer
@@ -1393,7 +1434,8 @@ def test_a12_only_the_wakes_cron_create_is_the_wake(env, monkeypatch):
 
 def test_a12_after_end_time_the_families_and_closeout_decide(env, monkeypatch):
     """P2's locator, window and closeout_gaps, real (the record's end_time past, its working
-    root tmp/wt); P3's disposition faked: re-run once it merges."""
+    root tmp/wt); P3's disposition faked; on the real one:
+    test_a12_real_after_end_time_the_families_chain_at_the_working_root_and_the_closeout_decide."""
     (env.tmp / "wt" / "docs" / "dev").mkdir(parents=True)
     real_overnight(env, monkeypatch, hours=-1, worktree_path=str(env.tmp / "wt"))
     overnight_session(env, wake=False)
@@ -1407,6 +1449,38 @@ def test_a12_after_end_time_the_families_and_closeout_decide(env, monkeypatch):
     assert "overnight-summary-*.md: no summary written since start_time" in text
     env.fake.answers.clear()
     closeout_on_disk(env.tmp / "wt")
+    assert gate.decision(env.payload) == (0, "", "completed_by_deadline")
+
+
+def test_a12_after_end_time_the_closeout_is_read_from_disk_and_named_by_path(env, monkeypatch):
+    """Moved from test_laneb_stop_overnight_timelock_scoping.py (P1c, P2 R7; the time-lock is a stub):
+    after end_time the /dev-overnight Stop is refused until Step 21's summary is on disk, naming it by
+    path. Self-declared state fields (final_summary_path, pm_retro_reports,
+    artifact_checkpoint_status) release nothing, a summary older than start_time is not this
+    session's, and an empty one is no summary; the summary alone still leaves Step 20's PM
+    retrospective named. P2's locator and closeout_gaps, real."""
+    wt = env.tmp / "wt"
+    (wt / "docs" / "dev").mkdir(parents=True)
+    start = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    real_overnight(env, monkeypatch, hours=-1, start_time=start, worktree_path=str(wt),
+                   final_summary_path=str(wt), pm_retro_reports=["retro-1"],
+                   artifact_checkpoint_status="checkpointed")
+    overnight_session(env, wake=False)
+    env.tx.todos(canonical("dev-overnight", "--hours 1"), len(canonical("dev-overnight", "--hours 1")))
+    old = wt / "docs" / "dev" / "overnight-summary-2020-01-01.md"
+    old.write_text("an earlier session's")
+    os.utime(old, (0, 0))
+    code, text = run(env)
+    assert code == 2 and text.startswith("COMMAND_GATE /dev-overnight: not complete\n")
+    assert f"{wt}/docs/dev/overnight-summary-*.md: no summary written since start_time {start}" in text
+    assert f"{wt}/docs/dev/overnight/{SID}/retro-report-cycle*.json: no PM retrospective report" in text
+    (wt / "docs" / "dev" / "overnight-summary-2026-01-02.md").write_text("")
+    code, text = run(env)
+    assert code == 2 and "overnight-summary-*.md: no summary written since start_time" in text
+    (wt / "docs" / "dev" / "overnight-summary-2026-01-03.md").write_text("# Overnight Development Summary\n")
+    code, text = run(env)
+    assert code == 2 and "retro-report-cycle*.json" in text and "overnight-summary-*.md" not in text
+    closeout_on_disk(wt)
     assert gate.decision(env.payload) == (0, "", "completed_by_deadline")
 
 
@@ -1487,3 +1561,120 @@ def test_the_gate_runs_as_a_script(env):
     done = subprocess.run([sys.executable, str(HOOKS / "stop-command-gate.py"), "--mode", "block"],
                           input=json.dumps({**env.payload, "agent_id": "x"}), capture_output=True, text=True)
     assert (done.returncode, done.stderr, done.stdout) == (0, "", "")
+
+
+# ---------------------------------------------------------------- P3's disposition and P4's close rating, real
+# P3 and P4 are merged: the A3, A6 (/commit) and A8 (close rating) cases above, which fake them, run
+# again on the real chain module (P3's disposition and gap_line through disposition_lines) and P4's
+# close-rating library, on the artifacts the chain reads from disk.
+REAL_CHAIN = {name: getattr(resolver, name) for name in ("disposition", "gap_line")}
+
+
+@pytest.fixture
+def real(env, monkeypatch):
+    """env with P3's disposition and gap_line, real; P4's close rating is the real module unless a
+    case fakes it."""
+    for name, function in REAL_CHAIN.items():
+        monkeypatch.setattr(resolver, name, function)
+    return env
+
+
+def chain_on_disk(root, qa="pass", verdict="pass", close=None, task=FAMILY):
+    """The /dev chain P3's disposition reads, in production order (each file newer than the one
+    before): ticket, context, BA-QA verdict, dev report, QA report, and with ``close`` a close-report
+    ending in that line."""
+    dev = Path(root) / "docs" / "dev"
+    (Path(root) / "scripts").mkdir(exist_ok=True)
+    (Path(root) / "scripts" / "one.py").write_text("one = 1\n")
+    rows = [(f"ticket-{task}.md", f"# Ticket\n\n**TASK-ID**: `{task}`\n"),
+            (f"context-{task}.json", {"request_id": task, "task_id": task}),
+            (f"ba-qa-report-{task}.json", {"task_id": task, "verdict": verdict, "objections": [], "summary": "s"}),
+            (f"dev-report-{task}.json", {
+                "request_id": task, "task_id": task, "baseline_head_sha": "0123456789abcdef",
+                "baseline_dirty_snapshot": "", "blocking_issues": [], "recommendations": [],
+                "dev": {"status": "completed", "tasks_completed": ["t"], "scripts_created": [],
+                        "permissions_to_add": [], "files_modified": ["scripts/one.py"], "files_created": [],
+                        "observed_preexisting": []}}),
+            (f"qa-report-{task}.json", {"request_id": task, "task_id": task, "qa": {"status": qa}})]
+    rows += [(f"close-report-{task}.md", f"# Close\n\n{close}\n")] if close else []
+    clock = datetime.now().timestamp() - 100_000
+    for name, value in rows:
+        path = dev / name
+        path.write_text(value if isinstance(value, str) else json.dumps(value), encoding="utf-8")
+        clock += 10
+        os.utime(path, (clock, clock))
+
+
+@pytest.mark.parametrize("qa,verdict,problem", [
+    ("fail", "pass", "INVALID_QA_STATUS: qa.status is 'fail'"),
+    ("warning", "pass", "INVALID_QA_STATUS: qa.status is 'warning'"),
+    ("pass", "fail", "INVALID_BA_QA_VERDICT: verdict is 'fail'"), ("pass", "pass", None)])
+def test_a3_real_a_complete_checklist_still_needs_p3s_chain_pass(real, qa, verdict, problem):
+    """test_a3_a_complete_checklist_still_needs_chain_pass on P3's real disposition: a QA fail or
+    warning and a BA-QA fail are each one gap naming the artifact and the failing check."""
+    steps = dev_span(real, done=0)
+    real.tx.todos(steps, len(steps))
+    chain_on_disk(real.project, qa=qa, verdict=verdict)
+    code, text = run(real)
+    if problem is None:
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and text.startswith("COMMAND_GATE /dev: not complete\n"), text
+        assert f"problem={problem}" in text and "owner" not in text, text
+
+
+def test_a6_real_commit_needs_p3s_task_id_commit_reachable_from_head(real, repo):
+    """test_a6_commit_modes_only_if_typed on P3's real --stage commit: a closed chain whose task has
+    no Task-id commit reachable from HEAD holds the /commit Stop, naming the repository; the landing
+    commit releases it; --dry-run asks nothing of the chain."""
+    chain_on_disk(repo, close="CLOSE: YES")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "cycle artifacts")
+    real.tx.command("commit", FAMILY)
+    code, text = run(real)
+    assert code == 2 and "problem=MISSING_TASK_TRAILER" in text, text
+    (repo / "scripts" / "one.py").write_text("landed = True\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", f"land the change\n\nTask-id: {FAMILY}")
+    assert run(real) == (0, "")
+    real.tx.command("commit", "--dry-run")
+    assert run(real) == (0, "")
+
+
+@pytest.mark.parametrize("qa_line,asked,code", [
+    ("CLOSE: YES", False, 2), ("CLOSE: YES", True, 0), ("CLOSE: NO", False, 0)],
+    ids=["landed-not-asked", "landed-asked", "not-landed"])
+def test_a8_real_close_needs_p4s_rating_question_after_the_landed_close_qa(real, qa_line, asked, code):
+    """test_a8_close_needs_the_rating_question_asked_where_required on P4's real close rating and P3's
+    real --stage close: the rating is required once the span's close QA landed the task, and asked
+    when the main agent's AskUserQuestion with source close-rating:<task> follows that result."""
+    chain_on_disk(real.project, close="CLOSE: YES")
+    real.tx.command("close", FAMILY)
+    real.tx.todos(canonical("close", FAMILY), len(canonical("close", FAMILY)))
+    real.tx.dispatch(FAMILY, role="qa", pipeline="close", result=f"Judged.\n{qa_line}")
+    if asked:
+        real.tx.tool("AskUserQuestion", {"questions": [{"question": "How well?", "header": "Rating",
+                                                        "options": [{"label": "5 - Fully met"}]}],
+                                         "metadata": {"source": f"close-rating:{FAMILY}"}}, result="Skip")
+    got, text = run(real)
+    assert got == code and (code == 0 and text == "" or "close-rating question" in text), text
+
+
+def test_a12_real_after_end_time_the_families_chain_at_the_working_root_and_the_closeout_decide(real, monkeypatch):
+    """test_a12_after_end_time_the_families_and_closeout_decide on P3's real disposition: after
+    end_time the /dev-overnight Stop holds while a family the span dispatched is not chain_pass at
+    the session's working root (P2's locator), and its terminal status follows once the chain and
+    the closeout are on disk there."""
+    wt = real.tmp / "wt"
+    (wt / "docs" / "dev").mkdir(parents=True)
+    real_overnight(real, monkeypatch, hours=-1, worktree_path=str(wt))
+    overnight_session(real, wake=False)
+    real.tx.todos(canonical("dev-overnight", "--hours 1"), len(canonical("dev-overnight", "--hours 1")))
+    real.tx.dispatch(FAMILY, pipeline="dev-overnight")
+    chain_on_disk(wt, qa="fail")
+    closeout_on_disk(wt)
+    code, text = run(real)
+    assert code == 2 and "problem=INVALID_QA_STATUS: qa.status is 'fail'" in text, text
+    assert not (real.project / "docs" / "dev" / f"qa-report-{FAMILY}.json").exists()
+    chain_on_disk(wt)
+    assert gate.decision(real.payload) == (0, "", "completed_by_deadline")

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """/stop's wrapper call, as commands/stop.md spells it, is a run the user-intent guard recognizes (P2 R6).
 
-commands/stop.md runs the release wrapper through the CLAUDE_HOME channel. hooks/pretool-wrapper-
+commands/stop.md runs the release wrapper through the printed harness root. hooks/pretool-wrapper-
 userintent.py lets that wrapper run only after a human-typed /stop and refuses an agent's run of it; it
 recognizes a run by the command's text, so the respelled call has to match its `stop` wrapper pattern.
 """
@@ -21,7 +21,7 @@ def _implementation_calls() -> list[str]:
 
 
 def test_stop_md_runs_the_wrapper_through_the_channel():
-    assert _implementation_calls() == ['bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/stop.sh"\n']
+    assert _implementation_calls() == ['bash "<HARNESS_ROOT>/hooks/stop.sh"\n']
 
 
 def test_the_userintent_guard_matches_the_stop_md_call():

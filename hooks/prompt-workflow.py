@@ -1347,12 +1347,10 @@ def _arm_registry(cmd_name: str, name: str, requirement: bytes,
 
 def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, project_dir: Path) -> str:
     """Reserve a /dev, /dev-command or /redev task id and arm its registry
-    (_arm_registry) with the cleaned requirement and the artifact-contract
-    flag, plus codex under --codex (the E2E gate needs no flag: it judges every
-    cycle's QA). The artifact-contract flag arms
-    hooks/subagentstop-artifact-contract-enforce.py, the producer-side
-    port of /close's Artifact schema gate. A flag that cannot be written is
-    reported and the start goes on (fail-open). Returns the task id."""
+    (_arm_registry) with the cleaned requirement, plus the codex flag under
+    --codex (the E2E gate needs no flag: it judges every cycle's QA). A flag
+    that cannot be written is reported and the start goes on (fail-open).
+    Returns the task id."""
     # Reserving the directory with mkdir(exist_ok=False) is the allocation
     # linearization point shared by concurrent sessions.  No existing family is
     # opened for replacement, even when the wall clock has only second precision.
@@ -1375,7 +1373,7 @@ def _init_dev_registry(cmd_name: str, user_input: str, claude_session_id: str, p
     # Also strip inline --spec=<path> form
     clean_requirement = re.sub(r'(?:--|[–—])spec\s+\S+', '', ' '.join(clean_tokens)).strip()
 
-    flags = ['artifact-contract'] + (['codex'] if '--codex' in tokens else [])
+    flags = ['codex'] if '--codex' in tokens else []
     error = _arm_registry(cmd_name, dev_session_id, clean_requirement.encode('utf-8'),
                           claude_session_id, project_dir, flags, _write_new_file)
     if error:
@@ -1426,22 +1424,6 @@ def _dev_replay_path(sid: str, envelope_digest: str) -> Path:
     return PROJECT_DIR / '.claude' / 'dev-start-replays' / sid / f'{envelope_digest}.json'
 
 
-def _dev_report_reached_terminal(task_id: str) -> bool:
-    """True iff docs/dev/dev-report-<task_id>.json exists and its dev.status
-    is a terminal value (obligation.terminal_status, the schema's vocabulary).
-    Fails OPEN to False (non-terminal) on any read/parse
-    error, missing file, wrong shape, or unrecognized status -- the fail-safe
-    direction here is to PRESERVE the current replay behavior, not to mint a
-    surprising new task_id."""
-    try:
-        from lib.obligation import terminal_status  # lazy: only a replay pays the import
-        path = PROJECT_DIR / 'docs' / 'dev' / f'dev-report-{task_id}.json'
-        record = json.loads(path.read_text(encoding='utf-8'))
-        return terminal_status('dev-report.v2', record) is not None
-    except Exception:
-        return False
-
-
 def decide_spec_path(explicit: str, sid: str) -> str:
     """E14 (PLAN-v2 P9 row 1): the one decision of a run's spec, made here at
     UserPromptSubmit and printed in the start output (`Spec: <path>`) or passed
@@ -1468,30 +1450,29 @@ def _start_identity(task_id: str) -> str:
 
 
 def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_digest: str) -> None:
-    """Commit one distinct Dev family or replay an exact envelope verbatim."""
+    """Commit one distinct Dev family or replay an exact envelope verbatim
+    while its replay record is younger than 60 s."""
     if not envelope_digest:
         envelope_digest = hashlib.sha256(
             f'{sid}\0{user_input}'.encode('utf-8')
         ).hexdigest()
     replay_path = _dev_replay_path(sid, envelope_digest)
     with _exclusive_lock(_dev_start_lock_path(sid)):
-        terminal_notice = ''
-        if replay_path.exists():
+        # The replay absorbs one envelope delivered again; the same text typed
+        # later (a bare /redev or /dev) is a new invocation and mints a fresh id.
+        try:
+            fresh = time.time() - replay_path.stat().st_mtime < 60
+        except OSError:
+            fresh = False
+        if fresh:
             replay = json.loads(replay_path.read_text(encoding='utf-8'))
             output = replay.get('stdout')
             error_output = replay.get('stderr', '')
             if not isinstance(output, str) or not isinstance(error_output, str):
                 raise RuntimeError('malformed Dev start replay record')
-            prior_task_id = replay.get('task_id', '')
-            if not (isinstance(prior_task_id, str) and prior_task_id
-                    and _dev_report_reached_terminal(prior_task_id)):
-                sys.stdout.write(output)
-                sys.stderr.write(error_output)
-                return
-            terminal_notice = (
-                f'[dev] Previous cycle {prior_task_id} already reached a '
-                'terminal state; starting a new one.\n'
-            )
+            sys.stdout.write(output)
+            sys.stderr.write(error_output)
+            return
 
         todos = run_todo_script(cmd_name, user_input)
         if not todos:
@@ -1543,7 +1524,6 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
         codex_active = '--codex' in user_input.split()
         spec = decide_spec_path(_strip_spec_arg(user_input)[1], sid)
         output = ''.join([
-            terminal_notice,
             diagnostics,
             _start_identity(task_id),
             f'Spec: {spec or "none"}\n',

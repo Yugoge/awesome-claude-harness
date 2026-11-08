@@ -82,7 +82,7 @@ resolve to the same commit, which Step 1 refuses as a self-merge before any disp
 ```bash
 RESOLVED_REF=<the-resolved-merge-source>
 SOURCE_TIP=$(git rev-parse --verify --quiet "${RESOLVED_REF}^{commit}" || echo "MISSING")
-DEFAULT_BRANCH=$(bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/derive-default-branch.sh")
+DEFAULT_BRANCH=$(bash "<HARNESS_ROOT>/scripts/derive-default-branch.sh")
 DEFAULT_TIP=$(git rev-parse --verify --quiet "refs/heads/${DEFAULT_BRANCH}^{commit}" || echo "MISSING")
 REPO_ROOT=$(realpath "$(git rev-parse --show-toplevel)")
 REPO_HASH=$(printf '%s' "$REPO_ROOT" | sha256sum | cut -c1-16)
@@ -163,7 +163,7 @@ changed since merge-analyst ran" (action "re-run the analysis now": Step 1's REQ
 The orchestrator calls the wrapper exactly once with the resolved ref:
 
 ```bash
-bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/merge.sh" "<resolved-ref>"
+bash "<HARNESS_ROOT>/hooks/merge.sh" "<resolved-ref>"
 ```
 
 Add `--no-commit` when the merge must be inspected before it becomes history: the wrapper applies

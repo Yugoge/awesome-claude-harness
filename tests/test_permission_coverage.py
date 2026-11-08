@@ -15,6 +15,16 @@ newlines and each part must be allowed). The cases model that prefix rule:
   while a command already in flight keeps the old text it loaded, so the old spelling of every
   rewritten command stays covered by this list too; RUNNING_SESSION_SPELLINGS are the old entries kept
   for that, each beside its successor, to be removed once no session predates the respelling.
+
+An entry is not the whole decision. The CLI parses the line first (measured on Claude Code 2.1.319 with its own
+permission check, the binary's embedded code run offline): a parameter expansion it cannot resolve, any `${...}`
+and any `$NAME` but `$HOME`, makes the whole line ask unless an allow entry is that whole line, so no prefix
+entry covers a channel-spelled line that takes arguments. A command text's line whose old spelling the CLI
+allowed therefore names the harness home through the root the harness command prints, `<HARNESS_ROOT>` (R1's
+`HARNESS_ROOT=` line, the hook's own install: CLAUDE_HOME or not, any repository), which the session writes as
+the literal path; the channel stays where the old spelling asked as well. `cli_allows` models that decision
+and the last case holds every command text to it. An agent's Bash keeps the channel (R6): no printed root
+reaches a subagent, so the agent lines the CLI allowed in the old spelling ask now and stay outside that case.
 """
 from __future__ import annotations
 
@@ -24,6 +34,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 CHANNEL = "${CLAUDE_HOME:-$HOME/.claude}"
+ROOT = "<HARNESS_ROOT>/"  # the printed root, which the session writes as the literal path
+RUN_ROOT = '"' + ROOT  # a command's operand spelled through it (a bare one is a Read path or a name in prose)
 OLD = "~/.claude/"
 PROGRAMS = {"python3", "python", "bash", "sh"}
 SHELL_LANGS = {"", "bash", "sh", "shell", "text", "console"}
@@ -77,9 +89,9 @@ def covering(rules: list[str], *cmds: str) -> str | None:
 
 # ------------------------------------------------------------------ the old spelling
 def tilde(text: str) -> str:
-    """The channel spelled back as `~/.claude/`."""
-    text = re.sub(r'"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/([^"]*)"', r"~/.claude/\1", text)
-    return text.replace(CHANNEL + "/", OLD)
+    """The channel, or the printed root, spelled back as `~/.claude/`."""
+    text = re.sub(r'"(?:\$\{CLAUDE_HOME:-\$HOME/\.claude\}|<HARNESS_ROOT>)/([^"]*)"', r"~/.claude/\1", text)
+    return text.replace(CHANNEL + "/", OLD).replace(ROOT, OLD)
 
 
 def old_rule(rule: str) -> str:
@@ -90,7 +102,7 @@ def old_rule(rule: str) -> str:
 def old_spellings(cmd: str) -> list[str]:
     """A rewritten command's two candidate old spellings: as written, and, for a script it now runs
     through an interpreter, run directly (both the same for a line still in the old spelling)."""
-    if CHANNEL not in cmd:
+    if CHANNEL not in cmd and RUN_ROOT not in cmd:
         return [cmd, cmd]
     text = tilde(cmd)
     bare = re.sub(r"^(?:bash|python3) (~/\.claude/scripts/\S+?\.(?:sh|py))(?=\s|$)", r"\1", text)
@@ -219,15 +231,43 @@ def _assignment_only(s: str) -> bool:
     return not s[i:].strip()
 
 
+def _names_home(text: str) -> bool:
+    return CHANNEL in text or RUN_ROOT in text or OLD in text
+
+
 def rewritten_commands():
     """(file:line, logical line, simple command) for each simple command naming the harness home."""
     for path in _texts():
         for n, line in shell_commands(path.read_text(encoding="utf-8")):
-            if CHANNEL not in line and OLD not in line:
+            if not _names_home(line):
                 continue
             for simple in simple_commands(line):
-                if CHANNEL in simple or OLD in simple:
+                if _names_home(simple):
                     yield f"{path.relative_to(REPO)}:{n}", line, simple
+
+
+# ------------------------------------------------------------------ the CLI's decision for a whole line
+# A parameter expansion the CLI cannot resolve before the command runs (it resolves `~` and `$HOME` only).
+UNCHECKABLE = re.compile(r"\$\{|\$(?!HOME\b)[A-Za-z_]")
+# Programs the CLI runs unasked on reads it allows (the harness home among them), no entry needed.
+READ_ONLY = {"cat", "ls", "head", "tail", "wc", "echo", "printf", "pwd", "true"}
+
+
+def filled(text: str) -> str:
+    """A line as the session writes it: the printed root as a literal path, any other `<placeholder>` a word."""
+    text = text.replace(ROOT, "/harness-root/")
+    return re.sub(r"<([A-Za-z_][^<>\n]*)>", lambda m: "ph" + re.sub(r"\W", "", m.group(1)), text)
+
+
+def cli_allows(rules: list[str], line: str) -> bool:
+    """The CLI's decision: an entry that is the whole line allows it; else a line with an expansion it cannot
+    resolve asks; else each simple command needs a covering entry or is a read-only program."""
+    line = filled(line)
+    if line.strip() in rules:
+        return True
+    if UNCHECKABLE.search(line):
+        return False
+    return all(covering(rules, s) is not None or s.split()[0] in READ_ONLY for s in simple_commands(line))
 
 
 def _allow() -> list[str]:
@@ -250,7 +290,7 @@ def test_every_harness_program_line_has_its_covering_entry():
     rules = bash_rules(_allow())
     seen, missing = 0, []
     for where, line, simple in rewritten_commands():
-        if CHANNEL not in simple or simple.split()[0] not in PROGRAMS:
+        if (CHANNEL not in simple and RUN_ROOT not in simple) or simple.split()[0] not in PROGRAMS:
             continue
         seen += 1
         if covering(rules, line, simple) is None:
@@ -302,6 +342,44 @@ def test_each_kept_old_spelling_covers_a_line_only_it_covers():
                   if rule_covers(entry[5:-1], old[0]) or rule_covers(entry[5:-1], old[1])
                   if covering(others, *old) is None]
         assert needed, f"{entry} covers no old spelling a running session holds"
+
+
+# The start-function fallback runs exactly when the hook output, and with it the HARNESS_ROOT= line,
+# is gone (a compaction removed it or the hook printed none), so no printed root can fill it: it keeps
+# the channel and asks rather than fail (P1c's dev_command ctx=compact and ctx=noid replays).
+NO_PRINTED_ROOT = ('python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/prompt-workflow.py" start',)
+
+
+def test_no_line_the_cli_allowed_in_its_old_spelling_asks_now():
+    """Each command text's harness line the CLI allowed in its old spelling under the old list, both as written and
+    with the script run directly (whichever the old text ran), is allowed by the CLI now: a `${...}` channel on it
+    would ask. Agent texts are outside: their Bash keeps the channel, as no printed root reaches a subagent; so is
+    the start-function fallback (NO_PRINTED_ROOT)."""
+    rules = bash_rules(_allow())
+    before = old_rules(rules)
+    asks = []
+    for where, line in dict.fromkeys((where, line) for where, line, _ in rewritten_commands()):
+        if not where.startswith("commands/") or line.startswith(NO_PRINTED_ROOT):
+            continue
+        if all(cli_allows(before, old) for old in old_spellings(line)) and not cli_allows(rules, line):
+            asks.append(f"{where}: {line}")
+    assert not asks, "\n".join(asks)
+
+
+def test_the_cli_decision_model():
+    """Cases measured with Claude Code 2.1.319's own permission check (P2's coverage experiment)."""
+    assert not cli_allows(["python3:*"], 'python3 "%s/scripts/x.py" --task-id t' % CHANNEL)
+    assert not cli_allows(['python3 "%s/scripts/x.py":*' % CHANNEL], 'python3 "%s/scripts/x.py" --a b' % CHANNEL)
+    assert cli_allows(['python3 "%s/scripts/x.py"' % CHANNEL], 'python3 "%s/scripts/x.py"' % CHANNEL)
+    assert cli_allows(["python3:*"], 'python3 "<HARNESS_ROOT>/scripts/x.py" --task-id <task_id>')
+    assert cli_allows(["python3:*"], 'python3 "$HOME/.claude/scripts/x.py"')
+    assert cli_allows(["python3:*"], "python3 ~/.claude/scripts/x.py --a b")
+    assert not cli_allows(["python3:*"], 'python3 ~/.claude/scripts/x.py "$TASK_ID"')
+    assert cli_allows([], 'cat "<HARNESS_ROOT>/scripts/orchestrator.sh"')
+    assert not cli_allows([], "npm install")
+    assert cli_allows(["bash:*"], 'DEFAULT_BRANCH=$(bash "<HARNESS_ROOT>/scripts/derive-default-branch.sh")')
+    assert old_spellings('bash "<HARNESS_ROOT>/scripts/x.sh" a') == ["bash ~/.claude/scripts/x.sh a",
+                                                                     "~/.claude/scripts/x.sh a"]
 
 
 def test_the_prefix_rule_model():

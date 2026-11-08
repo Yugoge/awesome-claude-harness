@@ -3,7 +3,8 @@
 Each case is a run-to-run difference two replays of one driver showed under load:
 a pipeline writer killed by SIGPIPE whose pid a later hook's shell got (the shell's
 writes went to the dead process's component), a pid inside a git object's name,
-and git reading a work-tree file only when the index's stat data could not vouch
+a private directory the harness creates with mode 0700 under a name of its own or a replay id (no
+temp-name generator's), and git reading a work-tree file only when the index's stat data could not vouch
 for it (racy git: a file written in the index's second). None needs strace.
 """
 from __future__ import annotations
@@ -21,16 +22,16 @@ LAYOUT = {"mode": "ns", "sb": ROOT + "/sb", "home": ROOT + "/hm", "harness": ROO
 H, P = LAYOUT["harness"], LAYOUT["project"]
 
 
-def reduce(tmp_path, lines: list[str], markers=()) -> tuple[list[dict], dict]:
+def reduce(tmp_path, lines: list[str], markers=(), ids=None, code_root=None) -> tuple[list[dict], dict]:
     """parse() over `lines` (strace -f -y output); the relation events as the check loads them, and the stats."""
     out = tmp_path / f"out{len(list(tmp_path.glob('out*')))}"
     out.mkdir()
-    (out / "ids.json").write_text(json.dumps({"ids": {}, "window": [0, 1], "layout": LAYOUT}))
+    (out / "ids.json").write_text(json.dumps({"ids": ids or {}, "window": [0, 1], "layout": LAYOUT}))
     (out / "markers.jsonl").write_text("".join(json.dumps({"seq": i, "kind": k, "value": v}) + "\n"
                                                for i, (k, v) in enumerate(markers, 1)))
     raw = out / "raw.txt"
     raw.write_text("".join(line + "\n" for line in lines))
-    stats = trace.parse(str(raw), str(out))
+    stats = trace.parse(str(raw), str(out), code_root=code_root)
     return differential.load_events(str(out)), stats
 
 
@@ -115,6 +116,31 @@ def test_a_pid_inside_a_git_object_name_is_not_minted(tmp_path):
     events, _stats = reduce(tmp_path, lines)
     pats = {e["pattern"] for e in events if "/objects/" in e["pattern"]}
     assert pats == {"<project>/.git/objects/<obj>"}, pats
+
+
+def test_a_private_directory_named_by_code_or_by_a_replay_id_is_not_minted(tmp_path):
+    """A 0700 mkdir is a temp-name generator's (mkdtemp, `mktemp -d`) unless the harness's code spells
+    the name (a private resource tree, `.claude/session-resources/`) or the name is a replay id the
+    driver registered (the resource session's own directory)."""
+    code = tmp_path / "harness"
+    (code / "hooks" / "lib").mkdir(parents=True)
+    (code / "hooks" / "lib" / "res.py").write_text('BASE = (".claude", "session-resources")\n')
+    res = f"{P}/.claude/session-resources/overnight-resource-3c9e1a7b5d20"
+    tmp = "/tmp/tmpq8vz3kwd"
+    lines = [run(100, "/usr/bin/python3", "python3", "-m", "replay.inner"),
+             "100 vfork() = 300", run(300, "/usr/bin/python3", "python3", f"{H}/scripts/res.py"),
+             f'300 mkdir("{P}/.claude", 0700) = 0', f'300 mkdir("{P}/.claude/session-resources", 0700) = 0',
+             f'300 mkdir("{res}", 0700) = 0', opn(300, f"{res}/session.json", "O_WRONLY|O_CREAT|O_EXCL, 0600"),
+             f'300 mkdir("{tmp}", 0700) = 0', opn(300, f"{tmp}/x.json", "O_WRONLY|O_CREAT|O_EXCL, 0600"),
+             "300 +++ exited with 0 +++", "100 +++ exited with 0 +++"]
+    ids = {"overnight-resource-3c9e1a7b5d20": "sid"}
+    events, _stats = reduce(tmp_path, lines, ids=ids, code_root=str(code))
+    pats = {e["pattern"] for e in events if e["raw"].endswith(".json")}
+    assert pats == {"<project>/.claude/session-resources/<sid>/session.json", "/tmp/<rand>/x.json"}, pats
+    # without the harness's code, every 0700 name with a run of six word characters is a generator's
+    events, _stats = reduce(tmp_path, lines, ids=ids)
+    pats = {e["pattern"] for e in events if e["raw"].endswith("session.json")}
+    assert pats == {"<project>/.<rand>/session-<rand>/<sid>/session.json"}, pats
 
 
 def test_git_reading_a_work_tree_against_its_index_is_not_its_callers_read(tmp_path):

@@ -16,6 +16,10 @@ faults.json; terminals.json), never from a list kept here:
   AskUserQuestion answer);
 * F2g: the stop that ends with the forged ESCALATION_ACK line is blocked like the one before it;
 * F3b (a stale report nothing in the pipeline produced): no block names it, the terminal is reached.
+* F9 (the last lane writes its report by a shell redirection, which the canonical aggregate's
+  producer, the lane-completeness watch on Write and Edit, never sees): the block lands on that
+  lane's own stop and names the canonical aggregate and `canonical_missing`; the lane's repair runs
+  the watch, so no QA dispatch is refused and none is sent again (C5 for G3's canonical).
 
 Interrupted session and resume after a usage limit (F5, F5f, F6; tests/replay/recovery.py): the
 session is cut while the dev subagent runs, after its Edit; the owner's /restart (HX) resumes that
@@ -29,11 +33,19 @@ removes, once and saying so, a lock no process holds that is older than the sync
 
 An unfinished cycle the owner's /close or /commit meets (F8, F8q, F8p, F8c, F8r; tests/replay/routing.py):
 the gap names the artifact's path and its check and no role (D21); /close's one chain call (Step 0),
-its close-QA round (F8p), /commit's chain call (Step 5, F8c) or its late-repair state (Step 5, F8r: the
-QA report of a `/close --late-repair` removed after CLOSE: YES) finds it; the routing loop dispatches
-again what P1b's E3 reader returns for that path (the same subagent_type, task id, lane and obligation
-template, a fresh dispatched_at), that dispatch's own agent writes the repair, and the typed /close or
-/commit (HX) is the only human event; /close ends in its Terminal form and F8c's and F8r's commits land.
+its close-QA round (F8p) or /commit's chain call (Step 5: F8c, and F8r, the QA report of a `/close
+--late-repair` removed after CLOSE: YES, which the late-repair state compares no longer) finds it; the
+routing loop dispatches again what P1b's E3 reader returns for that path (the same subagent_type, task
+id, lane and obligation template, a fresh dispatched_at), that dispatch's own agent writes the repair,
+and the typed /close or /commit (HX) is the only human event; /close ends in its Terminal form and
+F8c's and F8r's commits land.
+
+What /close does where no agent can produce a gap's artifact (P4's review, findings 1 and 2): F8n, BA's
+ticket missing in a /close whose task's /dev session is gone from the store while an earlier /close's
+re-dispatch survives: the reader names no owner for it (never /close's own rating step, which runs no
+dispatch, D8), Routes asks the owner (header Request), and nothing writes BA's artifact; F8a, `/close
+--auto` over the cycle and an old task docs/dev holds with no record of its dispatches: the discovery passes
+the old task over, its reason on stderr and in the batch line, and the cycle lands (D25).
 """
 from __future__ import annotations
 
@@ -61,6 +73,7 @@ FAULTS = {
     "F3b": f"plant@{L1_QA_DISPATCH}=docs/dev/qa-report-{{task}}.json:qa-report.v1",
     "F7": f"pretemplate@{L1_DEV_DISPATCH};invalid@{L1_DEV}=dev.status:needs_review",
     "F7b": f"noblock@{L1_DEV_DISPATCH};invalid@{L1_DEV}=dev.status:needs_review",
+    "F9": "bash@agent:dev Write docs/dev/dev-report-*-l2.json",
 }
 
 
@@ -70,6 +83,7 @@ CHECK = {
     "F2": r"files_modified|'done'", "F2g": r"files_modified|'done'",
     "F2j": r"JSON|[Pp]ars|[Dd]ecod|Expecting|Unterminated",
     "F7": r"needs_review|required_values", "F7b": r"needs_review|missing_block",
+    "F9": r"canonical_missing",
 }
 
 
@@ -256,6 +270,13 @@ def test_fault_returns_to_its_producer(replays, fault, settings):
         assert not r.blocks, "F3b: a block:\n" + r.explain()
     else:
         _returned_and_repaired(fault, r)
+    if fault == "F9":
+        lane = next(f["path"] for f in fault_records(r) if f.get("kind") == "bash")
+        canonical = re.sub(r"-l2\.json$", ".json", lane)
+        assert all(canonical in b["text"] for b in blocks(r)), f"F9: a block does not name {canonical}"
+        again = [ev["label"] for ev in invocations(r) if ev["event"] == "PreToolUse"
+                 and ev["payload"].get("tool_name") == "Agent" and "(next round)" in ev["label"]]
+        assert not again, f"F9: a dispatch was sent again: {again}"
     if fault == "F2g":
         f = next(f for f in fault_records(r) if f.get("kind") == "forged")
         forged = [s for s in stops(r, f["agent"]) if "ESCALATION_ACK" in s["message"]]
@@ -391,6 +412,7 @@ def _route_cases(scn: suite.Scenario, faults: tuple = ()) -> list:
 
 F8 = suite.Scenario("F8", "close", (("variant", "route"), ("cycle_variant", "fanout")), ("dev", "close"), 400)
 F8P = suite.Scenario("F8p", "close", (("variant", "break"), ("cycle_variant", "fanout")), ("dev", "close"), 420)
+CHAIN_CALL = "resolve-dev-artifact-chain.py"  # the disposition call: /close's Step 0, /commit's Step 3
 F8Q = suite.Scenario("F8q", "close", (("cycle_variant", "fanout"),), ("close",), 420)
 F8Q_CUT = (("fault", "cut@Step 13 [[]l2] Agent(qa)"),)
 F8C = suite.Scenario("F8c", "commit", (("variant", "commit-route"), ("cycle_variant", "fanout")),
@@ -400,10 +422,10 @@ F8C = suite.Scenario("F8c", "commit", (("variant", "commit-route"), ("cycle_vari
 @pytest.mark.parametrize("key", _route_cases(F8))
 def test_f8_lane_qa_report_removed_then_close(replays, key):
     r = replays.get(key)
-    f = routing.assert_routed(r, typed="close", source="dispatch", check="close-route-select.py")
-    assert f["chain"][0]["route_select_rc"] != 0 and [c for c in f["chain"][0]["errors"]
-                                                      if c[1] == f["injection"][0]["path"]], f["chain"]
-    assert f["chain"][-1]["route_select_rc"] == 0, f["chain"]
+    f = routing.assert_routed(r, typed="close", source="dispatch", check=CHAIN_CALL)
+    assert f["chain"][0]["disposition"] == "incomplete" and [g for g in f["chain"][0]["gaps"]
+                                                             if g[0] == f["injection"][0]["path"]], f["chain"]
+    assert f["chain"][-1]["disposition"] == "chain_pass", f["chain"]
     routing.assert_close_form(r)
 
 
@@ -412,15 +434,15 @@ def test_f8q_fanout_cut_before_a_lane_qa_then_close(replays, key):
     r = replays.get(key)
     assert r.terminal("dev") is None, "the cut /dev reached its own terminal"
     tid = r.terminal("close")["task"]
-    f = routing.assert_routed(r, typed="close", source="todo_step", check="close-route-select.py",
+    f = routing.assert_routed(r, typed="close", source="todo_step", check=CHAIN_CALL,
                               path=f"docs/dev/qa-report-{tid}-l2.json")
-    # Each step still lacking ran by its expected producer: the completion report, the main agent's own step.
+    # The lane's QA ran in /close's session, from /dev Step 13's template for that lane.
+    assert f["dispatches"][f["routed"][0]["tool_use_id"]]["session"] != f["dispatches"][next(iter(f["dispatches"]))]["session"]
+    # The disposition owes no completion report (P3's --disposition leaves the chain's completion out): the cut
+    # /dev's Step 17 is no gap of /close's (the reader's answer for that path: test_declaring_dispatch.py).
     done = f"docs/dev/completion-{tid}.md"
-    owing = [o["answer"] for o in f["owing"] if o["path"] == done]
-    assert owing and owing[0]["source"] == "todo_step" and owing[0]["subagent_call"] is None, f["owing"]
-    close_session = f["dispatches"][f["routed"][0]["tool_use_id"]]["session"]
-    assert any(sid == close_session and p.endswith("/" + done) for sid, p in f["main_writes"]), (f["own"], f["main_writes"])
-    assert f["chain"][-1]["route_select_rc"] == 0, f["chain"]
+    assert not [g for _label, g in f["gaps"] if g[0] == done], f["gaps"]
+    assert f["chain"][-1]["disposition"] == "chain_pass", f["chain"]
     routing.assert_close_form(r)
 
 
@@ -439,7 +461,7 @@ def test_f8p_lane_product_file_broken_then_close(replays, key):
 @pytest.mark.parametrize("key", _route_cases(F8C))
 def test_f8c_lane_dev_report_removed_then_commit(replays, key):
     r = replays.get(key)
-    f = routing.assert_routed(r, typed="commit", source="dispatch", check="resolve-dev-artifact-chain.py")
+    f = routing.assert_routed(r, typed="commit", source="dispatch", check=CHAIN_CALL)
     assert r.fact("commit")["commit_status"] == "committed", r.fact("commit")
 
 
@@ -449,14 +471,17 @@ F8R = suite.Scenario("F8r", "commit", (("variant", "late-repair-qa"),), ("dev", 
 @pytest.mark.parametrize("key", _route_cases(F8R))
 def test_f8r_late_repair_qa_report_removed_then_commit(replays, key):
     """Acceptance 7's late-repair-qa case: `/close --late-repair` lands CLOSE: YES, the task's QA report is removed
-    and /commit typed in a later session. Step 5's late-repair state is invalid on that report (State C); the QA
-    dispatch that declared it runs again and writes it, and the next round of the same check lets the commit land."""
+    and /commit typed in a later session. Step 3's disposition call names the removed report, the QA dispatch
+    that declared it runs again and writes it, the call run again passes, and Step 5's late-repair state, which
+    compares no stage report (P1b row 6), lets the commit land."""
     r = replays.get(key)
     tid = r.terminal("commit")["task"]
-    routing.assert_routed(r, typed="commit", source="dispatch", check="late-repair-controller.py resolve-effective-report",
-                          path=f"docs/dev/qa-report-{tid}.json", names=r"printed state invalid .*\(State C\)")
-    plans = [f["value"] for f in r.facts if f["key"] == "commit Step 5"]
-    assert [p["ok"] for p in plans] == [False, True] and plans[-1]["late_repair_state"] != "invalid", plans
+    f = routing.assert_routed(r, typed="commit", source="dispatch", check=CHAIN_CALL,
+                              path=f"docs/dev/qa-report-{tid}.json")
+    assert f["chain"][-1]["disposition"] == "chain_pass", f["chain"]
+    plans = [p["value"] for p in r.facts if p["key"] == "commit Step 5"]
+    assert plans and plans[-1]["ok"] and plans[-1]["late_repair_state"] != "invalid", plans
+    assert plans[-1]["late_repair_state"] == "none", plans
     assert r.fact("commit")["commit_status"] == "committed", r.fact("commit")
 
 
@@ -554,3 +579,37 @@ def test_a_wake_after_the_owners_stop_gets_no_capability(replays, key):
     assert late == {"fired": 1, "issued": False, "recovery": False}, late
     wake = r.fact("wake")
     assert wake["deleted"] == wake["created"] and len(wake["created"]) == 1 and len(wake["fired"]) == 1, wake
+
+
+# ---------------------------------------------------------------- F8n, F8a: a gap no agent can produce (P4 review 1, 2)
+F8N = suite.Scenario("F8n", "close", (("variant", "noba"),), ("dev", "close"), 190)
+F8A = suite.Scenario("F8a", "close", (("variant", "auto-skip"),), ("dev", "close"), 170)
+
+
+@pytest.mark.parametrize("key", _route_cases(F8N))
+def test_f8n_a_ticket_nobody_owes_goes_to_the_owner_never_to_the_rating_step(replays, key):
+    r = replays.get(key)
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    assert not r.blocks and not r.hook_errors, r.explain()
+    tid = r.terminal("close")["task"]
+    ticket = f"docs/dev/ticket-{tid}.md"
+    gaps = [g for f in r.facts if f["key"] == "close Step 0" for g in f["value"].get("gaps") or []]
+    assert [ticket, "MISSING_ARTIFACT"] in gaps, gaps
+    owing = [f["value"] for f in r.facts if f["key"] == "owing dispatch" and f["value"]["path"] == ticket]
+    assert owing and all(o["answer"] is None for o in owing), owing
+    asked = [f["value"] for f in r.facts if f["key"] == "close Request question"]
+    assert asked == [{"artifact": "docs/dev/ticket-<task>.md", "header": "Request", "ok": True, "blocked": False}], asked
+    assert not [p for _sid, p in routing.main_writes(r.run_dir) if p.endswith("/" + ticket)], \
+        "the /close orchestrator wrote BA's ticket"
+
+
+@pytest.mark.parametrize("key", _route_cases(F8A))
+def test_f8a_auto_passes_over_a_task_nobody_can_complete_and_lands_the_rest(replays, key):
+    r = replays.get(key)
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    assert not r.blocks and not r.hook_errors, r.explain()
+    skipped = r.fact("close --auto skipped")
+    assert len(skipped) == 1 and re.fullmatch(
+        r"20250101-000001: skipped: no dispatch record or todo step owes docs/dev/\S+", skipped[0]), skipped
+    assert r.fact("close --auto parents") == 1
+    assert r.reached(), "the cycle /close --auto walked did not land:\n" + r.explain()

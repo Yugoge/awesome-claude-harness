@@ -111,7 +111,9 @@ def test_a_mistyped_argument_corrected_in_the_turn_is_checked_on_the_corrected_v
     made = r.fact("close typed") or {}
     assert tid and made.get("answer") == tid and made.get("typed", "").startswith("docs/dev/ticket-"), (tid, made)
     typo = re.search(r"ticket-(.+)\.md$", made["typed"]).group(1)
-    assert typo != tid and asked == ["/close Task-id resolution AskUserQuestion"], (typo, asked)
+    # the one question of the correction; with P4's close rating in the tree, close.md's Step 3b asks the rating too
+    rating = ["/close Step 3b AskUserQuestion"] if WAITS["P4"][0]() else []
+    assert typo != tid and asked == ["/close Task-id resolution AskUserQuestion"] + rating, (typo, asked)
     assert set(stops) == {"/do Stop", "/close Stop"} and not _blocked(stops["/do Stop"]), r.explain()
     refused = {(b["step"], b["hook"]) for b in r.blocks} - {("/close Stop", "hooks/stop-launch.py")}
     assert not refused, r.explain()

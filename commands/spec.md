@@ -59,7 +59,7 @@ Adapted from `/dev` BA clarification pattern (dev.md Step 4 loop, max 3 rounds, 
 4. Write the spec through its one writer, `<HARNESS_ROOT>/scripts/spec-write.py`, naming it by its absolute path (the `UserPromptSubmit` hook of a later `/dev`, `/dev-command` or `/dev-overnight` in this session takes this session's last spec write as that run's spec, and reads the path from the line the writer prints). It creates `docs/dev/specs/` if needed and refuses an existing file:
 
    ```bash
-   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-write.py" create --spec <spec_path> <<'SPEC_TEXT'
+   python3 "<HARNESS_ROOT>/scripts/spec-write.py" create --spec <spec_path> <<'SPEC_TEXT'
    <the populated template>
    SPEC_TEXT
    ```
@@ -438,9 +438,10 @@ Only proceed to Step 6 when a STRONG signal fires.
 
    If the loop exited via round-3 exhaustion (sub-step 3), also append `"warning: unresolved split-QA issues (<N>); see split-qa-unresolved.json"` so reviewers see the warning inline with the marker.
 
-5. The split's own predicates (its manifest of this monolith and the views the manifest references)
-   were checked at the spec subagent's own stop (G2, with `resolve-spec-artifacts.py`'s own rule), which
-   returned a failing split to it; every `/dev*` consumer resolves the split with the same resolver.
+5. The split's own predicates (its manifest of this monolith, the monolith hash it records and the
+   views the manifest references) were checked at the spec subagent's own stop (G2, with
+   `resolve-spec-artifacts.py`'s own rule), which returned a failing split to it; every `/dev*` consumer
+   resolves the split, with the marker of sub-step 4, by the same resolver.
 
 6. **Centralization lint (advisory — surfaces inline spec-id re-derivation regressions)**: run `scripts/lint-spec-id-centralization.py` over the `/dev*`/`/spec` command files that consume the resolver. This is NON-BLOCKING here (a WARNING only) — finalize must not hard-fail on an unrelated command-file edit. The authoritative hard gate for this lint belongs at the `.claude`-repo commit boundary (a pre-commit check on staged `commands/*.md` / `scripts/*.sh`), the only place command-file edits actually land; this advisory is a safety-net that makes a regression visible at every finalize.
 
