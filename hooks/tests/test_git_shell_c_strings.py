@@ -19,6 +19,12 @@ could not lex, and every here-document body. Such a string is now a residual
 only when it is git-shaped, and a here-document is shell text only when a
 shell may read it (REVIEW_ROWS, GIT_SHAPED).
 
+That narrowing let a layer hand its run-time text to a shell, an interpreter
+or a sourced file inside it: `bash -c "echo $X | sh"` and six other rows exited
+2 before it and 0 after, and `bash -c "watch $X"` exited below `watch $X` run
+plainly. Such a layer is a residual again (RUNTIME_CODE); each shape's data
+twin stays allowed (RUNTIME_CODE_TWINS).
+
 Hook cases run the real hook files of this tree with a sandboxed HOME,
 CLAUDE_CONFIG_DIR, CLAUDE_STATE_DIR and git config, in a product repository.
 """
@@ -133,6 +139,58 @@ GIT_SHAPED = [
     'sh -c "git commit -m x',
 ]
 
+# Run-time text reaching a shell, an interpreter or a sourced file inside a -c
+# layer, and the same text run plainly. Each layer exited 2 at dfc90534 and 0
+# at 1c6ba6ce over the privilege guard, bash-safety and the branch hook, for
+# the main agent and for a subagent; `watch $X` exited 2 plainly on both heads.
+RUNTIME_CODE = [
+    ('bash -c "echo $X | sh"', 'echo $X | sh'),
+    ('bash -c "sh <<< $X"', 'sh <<< $X'),
+    ('bash -c "source $F"', 'source $F'),
+    ('bash -c ". $F"', '. $F'),
+    ('bash -c "bash $F"', 'bash $F'),
+    ('bash -c "python3 -c $P"', 'python3 -c $P'),
+    ('bash -c "watch $X"', 'watch $X'),
+]
+LAYER_HOOKS = (PRIVILEGE, SAFETY, BRANCH)
+# The same rule over the other ways a layer runs run-time text as shell or
+# code: a run-time value the layer's own shell expands, eval before one, trap,
+# su, ssh, the interpreters' code options, a run-time script or module, a pipe
+# into a group, input the layer itself is fed, a shell a launcher names.
+RUNTIME_CODE_VARIANTS = [
+    'bash -c "echo \\$X | sh; cd $DIR"', 'bash -c "eval echo $X"', 'bash -c "eval \\$X; cd $DIR"',
+    'bash -c "trap $X EXIT"', 'bash -c "su -c $X"', 'bash -c "ssh host $X"',
+    'bash -c "perl -e $X"', 'bash -c "ruby -e $X"', 'bash -c "node -e $X"', 'bash -c "php -r $X"',
+    'bash -c "awk $X file"', 'bash -c "python3 -c \\"print($X)\\""', 'bash -c "python3 $F"',
+    'bash -c "python3 -m $M"', "bash -c \"python3 - <<EOF\nx = '$X'\nEOF\"",
+    'bash -c "sh < $F"', 'bash -c "source <(echo $X)"', 'bash -c "echo $X | (cd /; sh)"',
+    'bash -c "echo $X | { cd /; sh; }"', 'bash -c "echo $X > >(sh)"', 'bash -c "sh <<EOF\ncd $DIR\nEOF"',
+    'echo $X | bash -c "cd $DIR; sh"', 'bash -c "find . -exec sh -c $X \\\\;"',
+    'bash -c "docker exec c bash -c $X"', 'bash -c "$PY -c $CODE"', 'bash -c "bash -x $F"',
+    "bash -c 'sh -c \"echo $X | sh\"'", 'bash -c "for f in $FILES; do python3 $f; done"',
+]
+# (layer the rule refuses, its data twin a layer keeps): a pipe into grep, a
+# here-string to cat, a static file sourced or run, a module, a static script
+# given a run-time argument, here-documents only cat and tee read, `push`.
+RUNTIME_CODE_TWINS = [
+    ('bash -c "echo $X | sh"', 'bash -c "echo $X | grep sh"'),
+    ('bash -c "sh <<< $X"', 'bash -c "cat <<< $X"'),
+    ('bash -c "source $F"', 'bash -c "source ./env.sh && cd $DIR"'),
+    ('bash -c ". $F"', 'bash -c ". ./env.sh && cd $DIR"'),
+    ('bash -c "bash $F"', 'bash -c "bash ./run.sh $ARG"'),
+    ('bash -c "python3 -c $P"', 'bash -c "python3 -m pytest -k $P"'),
+    ('bash -c "watch $X"', 'bash -c "watch -n 5 ls; cd $DIR"'),
+    ('bash -c "echo $X | python3"', 'bash -c "echo $X | python3 parse.py"'),
+    ("bash -c \"python3 - <<EOF\nx = '$X'\nEOF\"", "bash -c \"cat > notes.py <<EOF\nx = '$X'\nEOF\""),
+    ('bash -c "sh <<EOF\ncd $DIR\nEOF"', 'bash -c "tee notes.sh <<EOF\ncd $DIR\nEOF"'),
+    ('bash -c "awk $X file"', "bash -c \"awk -v d=$DIR '{print d}' file\""),
+    ('bash -c "trap $X EXIT"', "bash -c \"trap 'rm -f tmp' EXIT; cd $DIR\""),
+    ('bash -c "eval echo $X"', 'bash -c "echo $X"'),
+    ('bash -c "$PY -c $CODE"', 'bash -c "$PYTHON -m pytest"'),
+    ('bash -c "docker exec c bash -c $X"', 'bash -c "docker push $IMAGE"'),
+    ('echo $X | bash -c "cd $DIR; sh"', 'echo $X | bash -c "cd $DIR; cat"'),
+]
+
 
 def _nest(command, levels):
     for _ in range(levels):
@@ -181,6 +239,8 @@ def verdicts(sandbox):
     runs.update((PRIVILEGE, cmd, actor) for cmd in UNRESOLVED for actor in (False, True))
     runs.update((PRIVILEGE, cmd, actor) for cmd in [row for row, _code in REVIEW_ROWS] + GIT_SHAPED
                 for actor in (False, True))
+    runs.update((hook, cmd, actor) for pair in RUNTIME_CODE for cmd in pair
+                for hook in LAYER_HOOKS for actor in (False, True))
     runs = sorted(runs)
     with ThreadPoolExecutor(max_workers=8) as ex:
         codes = list(ex.map(lambda r: _run(sandbox, *r), runs))
@@ -292,6 +352,32 @@ def test_a_git_shaped_string_is_a_residual(command):
 ])
 def test_a_here_document_a_shell_may_read_is_shell_text(command):
     assert ("push", ()) in _calls(command), command
+
+
+@pytest.mark.parametrize("layer,plain", RUNTIME_CODE, ids=[layer for layer, _plain in RUNTIME_CODE])
+@pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
+def test_a_layer_running_run_time_text_as_code_exits_2_and_never_below_its_plain_text(
+        verdicts, layer, plain, subagent):
+    # The guard first: on a loaded host bash-safety's analyzer can time out and
+    # its degraded mode refuses any `$`, which says nothing about the classifier.
+    assert verdicts[(PRIVILEGE, layer, subagent)] == 2, layer
+    layer_code = max(verdicts[(hook, layer, subagent)] for hook in LAYER_HOOKS)
+    plain_code = max(verdicts[(hook, plain, subagent)] for hook in LAYER_HOOKS)
+    assert layer_code == 2, layer
+    assert layer_code >= plain_code, (layer, plain)
+
+
+@pytest.mark.parametrize("command", [layer for layer, _plain in RUNTIME_CODE] + RUNTIME_CODE_VARIANTS)
+def test_run_time_text_a_shell_or_an_interpreter_runs_in_a_layer_is_a_residual(command):
+    kinds = [kind for kind, _seg in classify_git_command(command)[1]]
+    assert "unresolved_shell_string" in kinds, command
+
+
+@pytest.mark.parametrize("refused,twin", RUNTIME_CODE_TWINS, ids=[r for r, _t in RUNTIME_CODE_TWINS])
+def test_a_layer_refuses_run_time_code_and_keeps_its_data_twin(refused, twin):
+    kinds = [kind for kind, _seg in classify_git_command(refused)[1]]
+    assert "unresolved_shell_string" in kinds, refused
+    assert classify_git_command(twin) == ([], []), twin
 
 
 def test_a_here_document_no_shell_reads_is_data():

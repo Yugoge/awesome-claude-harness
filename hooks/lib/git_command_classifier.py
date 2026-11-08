@@ -42,6 +42,12 @@ so they are importable by other hooks via lib.git_command_classifier.
 #   lex and every here-document body.  A string holding a run-time value is a
 #   residual only when it is git-shaped (_may_run_git), and a here-document is
 #   shell text only when a shell may read it (_reads_as_shell).
+#
+# Run-time code in a `-c` layer (2026-11-08, train 2): that narrowing let a
+#   layer hand its run-time text to a shell or an interpreter inside it
+#   (`bash -c "echo $X | sh"`, `bash -c "python3 -c $P"`, `bash -c "watch $X"`).
+#   Such a layer is also a residual when a command in it may run text computed
+#   at run time as shell or code (_runs_runtime_code).
 
 CLI usage:
   printf 'command text\\n' | python3 hooks/lib/git_command_classifier.py
@@ -579,6 +585,15 @@ def _is_obfuscation_candidate(tok):
 # is.  A here-document is shell text only when a shell may read it
 # (_reads_as_shell); for any other reader it runs only the substitutions the
 # outer shell performs to expand it, and none when its delimiter is quoted.
+#
+# A string holding a run-time value is also the residual when it, or a string
+# it runs, may run text computed at run time as shell or code
+# (_runs_runtime_code), as a run-time command word already is: a shell or an
+# interpreter fed that text through a pipe, a here-string, a here-document or a
+# file, or given it as its script or code; source and `.` given a run-time
+# file; eval, trap and the launchers that hand their arguments to a shell given
+# a run-time word.  `bash -c "echo $X | sh"` is a residual, as dfc90534 had it,
+# while `echo $X | sh` alone keeps its plain-text decision (P9-31).
 
 _MAX_SHELL_DEPTH = 4
 # A shell is known by the SHAPE of its name (bash, sh, dash, zsh, ksh93, rbash,
@@ -590,6 +605,7 @@ _SHELL_HINT_RE = re.compile(r'sh[0-9.]*["\']?\s')
 # text the scan cannot lex a residual rather than git-free.
 _SHELL_C_SHAPE_RE = re.compile(r'sh[0-9.]*["\']?\s+(?:[-+]\S*\s+(?:\w+\s+)?)*-[A-Za-z]*c')
 _REDIR_OP_RE = re.compile(r'&>>?|<<<|<<-|<<|>>|>&|<&|>\||<>|>|<')
+_REDIR_WORD_RE = re.compile(r'[0-9]*(?:%s)' % _REDIR_OP_RE.pattern)
 _RUNTIME = '\x00'  # stands for text the shell computes at run time
 # A run-time value as a layer's text shows it: an expansion no assignment pins.
 _RUNTIME_PLACEHOLDER = '${__runtime__}'
@@ -598,6 +614,78 @@ _RUNTIME_PLACEHOLDER_RE = re.compile(re.escape(_RUNTIME_PLACEHOLDER))
 _STDIN_SHELL_COMMANDS = frozenset({
     'ssh', 'su', 'runuser', 'source', '.', 'at', 'batch', 'parallel', 'script',
 })
+
+# _runs_runtime_code's tables.  Commands that run their arguments as shell text
+# or code, or hand them to a shell, in ways the scan does not model (builtins
+# that keep shell text for later, launchers, GNU sed's `e`, an editor's -c):
+# any run-time word among their arguments, and any input fed to them, may run.
+_RUNTIME_ARG_COMMANDS = frozenset({
+    'alias', 'trap', 'at', 'batch', 'parallel', 'runuser', 'screen', 'script',
+    'ssh', 'su', 'tmux', 'watch', 'sed', 'gsed', 'ex', 'nvim', 'vi', 'view', 'vim',
+})
+# A shell named among another command's words (`find -exec sh -c`, `docker exec
+# c bash`), by name: the shape _SHELL_NAME_RE reads also matches `push`.
+_EMBEDDED_SHELL_RE = re.compile(r'(?:ba|rba|da|a|z|k|mk|c|tc|fi|y|pw)?sh[0-9.]*\Z')
+# Interpreters whose option grammar the scan does not model: as above.
+_OPAQUE_INTERPRETERS = frozenset({
+    'bun', 'deno', 'elixir', 'expect', 'groovy', 'guile', 'irb', 'julia',
+    'osascript', 'powershell', 'racket', 'sbcl', 'scala', 'ts-node', 'tsx',
+})
+# Interpreters by the shape of their name, and how each is told its program
+# (_interpreter_runs_runtime).  program: short options whose value is the
+# program (inline code, or a file or module it runs); value: short options
+# whose value may load code, unless `data` names them; both take the rest of
+# their cluster, else the next word.  attached: short options whose value is
+# only the rest of their cluster.  long_program, long_value: the long forms,
+# `--opt=value` or `--opt value`.  stdin: with no program named it reads one
+# from standard input.  stop: an option naming the program ends the options.
+# The first operand is the program unless an option named one; the words after
+# the program are its arguments.  An option no table names takes no value.
+_Interpreter = collections.namedtuple(
+    '_Interpreter', 'program value attached long_program long_value data stdin stop')
+_NODE_VALUE_OPTIONS = frozenset({  # `node --help`, v22: the options shown with `=...`
+    '--allow-fs-read', '--allow-fs-write', '--build-snapshot-config', '--conditions',
+    '--cpu-prof-dir', '--cpu-prof-interval', '--cpu-prof-name', '--diagnostic-dir',
+    '--disable-proto', '--disable-warning', '--dns-result-order', '--env-file',
+    '--env-file-if-exists', '--experimental-config-file', '--experimental-default-type',
+    '--experimental-loader', '--experimental-sea-config', '--experimental-test-isolation',
+    '--heap-prof-dir', '--heap-prof-interval', '--heap-prof-name',
+    '--heapsnapshot-near-heap-limit', '--heapsnapshot-signal', '--icu-data-dir', '--import',
+    '--input-type', '--inspect-publish-uid', '--loader', '--localstorage-file',
+    '--max-http-header-size', '--max-old-space-size-percentage',
+    '--network-family-autoselection-attempt-timeout', '--openssl-config',
+    '--redirect-warnings', '--report-filename', '--report-signal', '--require',
+    '--secure-heap', '--secure-heap-min', '--snapshot-blob', '--test-concurrency',
+    '--test-coverage-branches', '--test-coverage-exclude', '--test-coverage-functions',
+    '--test-coverage-include', '--test-coverage-lines', '--test-name-pattern',
+    '--test-reporter', '--test-reporter-destination', '--test-shard', '--test-skip-pattern',
+    '--test-timeout', '--title', '--tls-cipher-list', '--tls-keylog',
+    '--trace-event-categories', '--trace-event-file-pattern', '--trace-require-module',
+    '--unhandled-rejections', '--use-largepages', '--v8-pool-size', '--watch-kill-signal',
+    '--watch-path',
+})
+_INTERPRETERS = (
+    (re.compile(r'(?:python|pypy)[0-9.]*\Z'),
+     _Interpreter('cm', 'QWX', '', (), ('--check-hash-based-pycs',), (), True, True)),
+    (re.compile(r'perl[0-9.]*\Z'),
+     _Interpreter('Ee', 'IMm', '0CDFVdilx', (), (), (), True, False)),
+    (re.compile(r'ruby[0-9.]*\Z'),
+     _Interpreter('e', 'CEIr', '0FKTWx', (), (), (), True, False)),
+    (re.compile(r'node(?:js)?[0-9.]*\Z'),
+     _Interpreter('ep', 'Cr', '', ('--eval', '--print', '--run'), _NODE_VALUE_OPTIONS, (), True, False)),
+    (re.compile(r'php[0-9.]*\Z'),
+     _Interpreter('FRfr', 'BEcdtSz', '', (), (), (), True, False)),
+    (re.compile(r'lua(?:jit)?[0-9.]*\Z'),
+     _Interpreter('', 'el', '', (), (), (), True, False)),
+    (re.compile(r'[gmn]?awk\Z'),
+     _Interpreter('Eef', 'FWilv', 'DLdop', ('--exec', '--file', '--source'),
+                  ('--assign', '--field-separator', '--include', '--load'),
+                  ('-F', '-v', '--assign', '--field-separator'), False, False)),
+    (re.compile(r'Rscript\Z'), _Interpreter('e', '', '', (), (), (), False, False)),
+)
+# Paths that name standard input as a program or script.
+_STDIN_PATHS = frozenset({'-', '/dev/stdin', '/dev/fd/0', '/proc/self/fd/0'})
+_MAX_CODE_DEPTH = 64
 
 
 def _skip_backtick(text, i):
@@ -693,7 +781,7 @@ def _expansion(text, i, quoted=False):
     return None
 
 
-def _shell_words(text):
+def _shell_words(text, info=None):
     """Split shell text into simple commands of words, with the shell's quoting.
 
     Returns (commands, bodies).  A command is a list of (value, runtime) words:
@@ -703,10 +791,21 @@ def _shell_words(text):
     bodies are texts that run as commands of their own: the bodies of $( ),
     backtick and <( ) >( ) substitutions, and what here-documents run
     (_here_doc_texts).  Raises ValueError on quoting the scan cannot follow.
+
+    info, a dict, receives what may feed run-time text to each command's
+    standard input: info['feeds'] holds a set per command, of 'pipe' (a pipe,
+    or a group a pipe feeds), 'here-document' (one whose body holds a run-time
+    value), 'here-string' and 'file' (a run-time word); info['body_fed'] holds
+    a flag per body, True when the body's commands may read such input (a
+    >( ) body, a substitution in a command a pipe feeds, what a shell runs
+    from a run-time here-document).
     """
     cmds, words, bodies, heredocs, docs = [], [], [], [], []
+    # The command each body belongs to (None: a >( ) body) and whether it is
+    # fed besides; whether a pipe feeds each command, and each open group.
+    owners, piped, groups = [], [], []
     st = {'buf': [], 'runtime': False, 'inword': False, 'quoted': False,
-          'pending': None, 'sep': None}
+          'pending': None, 'sep': None, 'opener': None}
 
     def add(part, runtime=False, quoted=False):
         st['buf'].append(part)
@@ -729,9 +828,17 @@ def _shell_words(text):
 
     def end_cmd():
         end_word()
-        if words:
-            cmds.append(list(words))
+        if not words:
+            return False
+        fed = st['opener'] in ('|', '|&') or any(groups)
+        cmds.append(list(words))
+        piped.append(fed)
+        if words[0][0] == '{':
+            groups.append(fed)
+        elif words[0][0] == '}' and groups:
+            groups.pop()
         del words[:]
+        return True
 
     def expand(i, quoted=False):
         exp = _expansion(text, i, quoted)
@@ -741,6 +848,7 @@ def _shell_words(text):
         end, body = exp
         if body is not None:
             bodies.append(body)
+            owners.append((len(cmds), False))
         add(_RUNTIME, runtime=True)
         return end
 
@@ -785,6 +893,8 @@ def _shell_words(text):
             i += 1
             # A line ending in `|`, `&&` or `||` goes on past the bodies below.
             dangling = st['sep'] in ('|', '|&', '&&', '||')
+            if not dangling:
+                st['opener'] = None
             for delim, tabs, quoted, owner in heredocs:  # the body follows the line that opened it
                 body = []
                 while i < n:
@@ -799,6 +909,7 @@ def _shell_words(text):
         elif ch in '<>' and text[i + 1:i + 2] == '(':
             end = _skip_group(text, i + 2, ')')
             bodies.append(text[i + 2:end - 1])
+            owners.append((None if ch == '>' else len(cmds), False))
             add(_RUNTIME, runtime=True)
             i = end
         elif ch in '<>' or text.startswith('&>', i):
@@ -809,9 +920,13 @@ def _shell_words(text):
             i = m.end()
             end_word()
         elif ch in ';&|()':
-            end_cmd()
+            ended = end_cmd()
             op = text[i:i + 2] if text[i:i + 2] in ('&&', '||', '|&') else ch
-            st['sep'] = op
+            if op == '(':  # a group opened where a pipe's reader starts is fed by it
+                groups.append(st['opener'] in ('|', '|&') and not ended)
+            elif op == ')' and groups:
+                groups.pop()
+            st['sep'] = st['opener'] = op
             i += len(op)
         else:
             add(ch)
@@ -820,8 +935,30 @@ def _shell_words(text):
     # A here-document's readers: the commands of the line that opened it, from
     # its own on (a pipe or a group there may hand it on), and the command after
     # the body when that line goes on past it.
+    doc_fed = [False] * len(cmds)
     for body, quoted, owner, stop in docs:
-        bodies.extend(_here_doc_texts(body, quoted, any(map(_reads_as_shell, cmds[owner:stop]))))
+        texts = _here_doc_texts(body, quoted, any(map(_reads_as_shell, cmds[owner:stop])))
+        bodies.extend(texts)
+        runtime = info is not None and _here_doc_is_runtime(body, quoted)
+        for k in range(owner, min(stop, len(cmds))):
+            doc_fed[k] = doc_fed[k] or runtime
+        owners.extend([(owner, runtime)] * len(texts))
+    if info is not None:
+        feeds = []
+        for k, cmd in enumerate(cmds):
+            kinds = {'pipe'} if piped[k] else set()
+            if doc_fed[k]:
+                kinds.add('here-document')
+            for (op, _runtime), (_target, runtime) in zip(cmd, cmd[1:]):
+                bare = op.lstrip('0123456789')
+                if runtime and bare == '<<<':
+                    kinds.add('here-string')
+                elif runtime and bare in ('<', '<>') and op[:len(op) - len(bare)] in ('', '0'):
+                    kinds.add('file')
+            feeds.append(kinds)
+        info['feeds'] = feeds
+        info['body_fed'] = [owner is None or extra or (owner < len(piped) and piped[owner])
+                            for owner, extra in owners]
     return cmds, bodies
 
 
@@ -855,28 +992,47 @@ def _here_doc_texts(body, quoted, shell_reads):
     """
     if quoted:
         return [body] if shell_reads else []
-    out, subs, i = [], [], 0
     try:
-        while i < len(body):
-            ch = body[i]
-            # In such a body `\` quotes only $, `, \ and a newline; quotes are text.
-            if ch == '\\' and body[i + 1:i + 2] in ('$', '`', '\\', '\n'):
-                out.append(body[i + 1].replace('\n', ''))
-                i += 2
-                continue
-            exp = _expansion(body, i, quoted=True) if ch in '$`' else None
-            if exp is None:
-                out.append(ch)
-                i += 1
-                continue
-            end, sub = exp
-            if sub is not None:
-                subs.append(sub)
-            out.append(_RUNTIME)
-            i = end
+        text, subs = _expand_here_doc(body)
     except ValueError:
         return [body]
-    return subs + ([''.join(out)] if shell_reads else [])
+    return subs + ([text] if shell_reads else [])
+
+
+def _expand_here_doc(body):
+    """(text, substitutions) of a here-document body the outer shell expands, each expansion _RUNTIME.
+
+    Raises ValueError on an expansion the scan cannot follow.
+    """
+    out, subs, i = [], [], 0
+    while i < len(body):
+        ch = body[i]
+        # In such a body `\` quotes only $, `, \ and a newline; quotes are text.
+        if ch == '\\' and body[i + 1:i + 2] in ('$', '`', '\\', '\n'):
+            out.append(body[i + 1].replace('\n', ''))
+            i += 2
+            continue
+        exp = _expansion(body, i, quoted=True) if ch in '$`' else None
+        if exp is None:
+            out.append(ch)
+            i += 1
+            continue
+        end, sub = exp
+        if sub is not None:
+            subs.append(sub)
+        out.append(_RUNTIME)
+        i = end
+    return ''.join(out), subs
+
+
+def _here_doc_is_runtime(body, quoted):
+    """True iff a here-document's text, as its reader gets it, may hold a value computed at run time."""
+    if quoted:
+        return _RUNTIME in body
+    try:
+        return _RUNTIME in _expand_here_doc(body)[0]
+    except ValueError:
+        return True
 
 
 def _shell_c_operand(words, i):
@@ -904,23 +1060,25 @@ def _shell_c_operand(words, i):
     return i if (seen_c or maybe_c) and i < len(words) else None
 
 
-def _shell_c_strings(text):
-    """Yield (kind, string) for each shell `-c` string text runs.
+def _shell_c_strings(text, fed=False):
+    """Yield (kind, string, fed) for each shell `-c` string text runs.
 
     kind 'text': a string the scan resolved.  'runtime': one holding a value the
     outer shell computes at run time, each such value _RUNTIME in it.
     'unlexable', with text itself: quoting the scan cannot follow, in text that
-    has a shell's `-c` shape.
+    has a shell's `-c` shape.  fed: the string's shell may read run-time text
+    on its standard input (_shell_words' feeds, or text that is fed itself).
     """
     if not _SHELL_HINT_RE.search(text):
         return
+    info = {}
     try:
-        cmds, bodies = _shell_words(text)
+        cmds, bodies = _shell_words(text, info)
     except Exception:  # quoting the scan cannot follow, or nesting past the interpreter's own limit
         if _SHELL_C_SHAPE_RE.search(text):
-            yield 'unlexable', text
+            yield 'unlexable', text, fed
         return
-    for words in cmds:
+    for words, feeds in zip(cmds, info['feeds']):
         values = [v for v, _runtime in words]
         idx = _command_token_index(values)
         if idx is None or words[idx][1] or not _SHELL_NAME_RE.match(_basename(values[idx])):
@@ -929,9 +1087,9 @@ def _shell_c_strings(text):
         if op is None:
             continue
         value, runtime = words[op]
-        yield ('runtime' if runtime else 'text'), value
-    for body in bodies:
-        yield from _shell_c_strings(body)
+        yield ('runtime' if runtime else 'text'), value, fed or bool(feeds)
+    for body, body_fed in zip(bodies, info['body_fed']):
+        yield from _shell_c_strings(body, fed or body_fed)
 
 
 def _may_run_git(text, runtime_re=_RUNTIME_PLACEHOLDER_RE):
@@ -971,6 +1129,202 @@ def _unlexable_may_run_git(text):
     return False
 
 
+def _runs_runtime_code(text, fed=False, depth=0):
+    """True iff text may run text computed at run time as shell commands or code.
+
+    text is a -c layer as its shell reads it (_RUNTIME for each value the outer
+    shell computes; the expansions the layer's own shell performs are run-time
+    too).  fed: its standard input may carry run-time text, which every command
+    in it inherits.  A command (_command_runs_runtime_code), or one in a
+    substitution or here-document it runs, that may run such text makes it
+    True; so does text the scan cannot lex even with its quotes dropped.
+    """
+    if depth > _MAX_CODE_DEPTH:
+        return True
+    info = {}
+    try:
+        cmds, bodies = _shell_words(text, info)
+    except Exception:
+        try:  # read as _unlexable_may_run_git() reads such text: quotes dropped
+            cmds, bodies = _shell_words(re.sub(r'[\'"\\]', '', text), info)
+        except Exception:
+            return True
+    if any(_command_runs_runtime_code(words, fed or bool(feeds))
+           for words, feeds in zip(cmds, info['feeds'])):
+        return True
+    return any(_runs_runtime_code(body, fed or body_fed, depth + 1)
+               for body, body_fed in zip(bodies, info['body_fed']))
+
+
+def _command_runs_runtime_code(words, fed):
+    """True iff the simple command `words` may run run-time text as shell or code.
+
+    fed: its standard input may carry run-time text.  It may when eval comes
+    before a run-time word; when its program is named at run time and is fed,
+    given a run-time word, or git-shaped as _may_run_git() reads it; when it is
+    source or `.` given a run-time file or fed; when it is one of
+    _RUNTIME_ARG_COMMANDS given a run-time word or fed; and when it is a shell
+    or an interpreter, or one is named among its words, that may run such text
+    (_runner_runs_runtime).  echo, printf and grep leave their words and input
+    unexecuted.  Any other command treats its words and input as data.
+    """
+    words = _without_redirections(words)  # _shell_words' feeds read those
+    values = [value for value, _runtime in words]
+    idx = _command_token_index(values)
+    # eval reads every word after it as shell text again, the command word too.
+    for j in range(len(values) if idx is None else idx):
+        if _basename(values[j]) == 'eval' and any(runtime for _v, runtime in words[j + 1:]):
+            return True
+    if idx is None:  # `sudo -i`, a bare xargs: a wrapper with no command reads its input
+        return fed and any(_basename(value) in _WRAPPERS for value in values)
+    args = words[idx + 1:]
+    if words[idx][1]:
+        nxt = args[0][0] if args else None
+        return bool(fed or nxt is None or any(runtime for _v, runtime in args)
+                    or nxt in _GIT_SUBCOMMANDS or _basename(nxt) == 'git')
+    name = _basename(values[idx])
+    if name in _TEXT_ONLY_COMMANDS:
+        return False
+    if name in ('source', '.'):
+        if args and args[0][0] == '--':
+            args = args[1:]
+        return bool(fed or (args and args[0][1]))
+    if name in _RUNTIME_ARG_COMMANDS:
+        return fed or any(runtime for _v, runtime in args)
+    runs = _runner_runs_runtime(name, args, fed)
+    if runs is not None:
+        return runs
+    # A launcher this module does not know: a shell or an interpreter among its words.
+    return any(_runner_runs_runtime(_basename(value), words[p + 1:], fed, embedded=True)
+               for p, (value, runtime) in enumerate(words) if p > idx and not runtime)
+
+
+def _without_redirections(words):
+    """words without its redirection operators (_shell_words' own words) and their targets."""
+    out, target = [], False
+    for value, runtime in words:
+        if target:
+            target = False
+        elif not runtime and _REDIR_WORD_RE.fullmatch(value):
+            target = True
+        else:
+            out.append((value, runtime))
+    return out
+
+
+def _runner_runs_runtime(name, args, fed, embedded=False):
+    """True iff the shell or interpreter `name`, given args, may run run-time text; None for any other name.
+
+    embedded: name is one of another command's words; a shell is then known by
+    name (_EMBEDDED_SHELL_RE) and its -c string is not a layer of its own.
+    """
+    if (_EMBEDDED_SHELL_RE if embedded else _SHELL_NAME_RE).match(name):
+        return fed or _shell_args_run_runtime(args, as_command=not embedded)
+    if name in _OPAQUE_INTERPRETERS:
+        return fed or any(runtime for _v, runtime in args)
+    for name_re, spec in _INTERPRETERS:
+        if name_re.match(name):
+            runtime, stdin = _interpreter_runs_runtime(spec, args)
+            return runtime or (fed and stdin)
+    return None
+
+
+def _shell_args_run_runtime(args, as_command):
+    """True iff a shell given args may run run-time text: as its script, its -c string or an option.
+
+    A run-time word where the shell reads an option may be -c, -s or a script;
+    --rcfile, --init-file, -o and -O take the next word.  as_command: the
+    shell is a command word, whose -c string _shell_layers() reads as a layer
+    of its own; otherwise a run-time -c string runs here.
+    """
+    i, seen_c, seen_s = 0, False, False
+    while i < len(args):
+        value, runtime = args[i]
+        if runtime:
+            return True
+        if value in ('--', '-'):
+            i += 1
+            break
+        if value.startswith('--'):
+            n = 1 if value in ('--rcfile', '--init-file') else 0
+        elif len(value) > 1 and value[0] in '-+':
+            seen_c = seen_c or 'c' in value[1:]
+            seen_s = seen_s or 's' in value[1:]
+            n = value[1:].count('o') + value[1:].count('O')
+        else:
+            break
+        if any(runtime for _v, runtime in args[i + 1:i + 1 + n]):
+            return True
+        i += 1 + n
+    if i >= len(args):
+        return False
+    if seen_c:
+        return not as_command and args[i][1]
+    return not seen_s and args[i][1]
+
+
+def _interpreter_runs_runtime(spec, args):
+    """(runtime, stdin) for an interpreter (_INTERPRETERS) given args.
+
+    runtime: a run-time value may be code it runs: a word where it reads an
+    option, the value of an option that names its program or may load code, or
+    its program operand.  The words after its program are the program's own.
+    stdin: it reads its program from standard input.
+    """
+    named = False  # an option named the program: the first operand is an argument
+    i = 0
+    while i < len(args):
+        value, runtime = args[i]
+        if runtime:
+            return True, False
+        if value == '--':
+            if named or i + 1 >= len(args):
+                return False, not named and spec.stdin
+            return args[i + 1][1], args[i + 1][0] in _STDIN_PATHS
+        if value == '-' or not value.startswith('-'):
+            return False, not named and value in _STDIN_PATHS
+        option, operand, program = value, None, False
+        if value.startswith('--'):
+            name, eq, attached = value.partition('=')
+            program = name in spec.long_program
+            if program or name in spec.long_value:
+                option = name
+                if eq:
+                    operand = (attached, False)
+                elif i + 1 < len(args):
+                    i += 1
+                    operand = args[i]
+                else:
+                    operand = ('', False)
+        else:
+            letters = value[1:]
+            for k, ch in enumerate(letters):
+                if ch in spec.attached:
+                    break
+                if ch in spec.program or ch in spec.value:
+                    option, program = '-' + ch, ch in spec.program
+                    if letters[k + 1:]:
+                        operand = (letters[k + 1:], False)
+                    elif i + 1 < len(args):
+                        i += 1
+                        operand = args[i]
+                    else:
+                        operand = ('', False)
+                    break
+        i += 1
+        if operand is None:
+            continue
+        if operand[1] and option not in spec.data:
+            return True, False
+        if program:
+            if operand[0] in _STDIN_PATHS:
+                return False, True
+            named = True
+            if spec.stop:
+                return False, False
+    return False, not named and spec.stdin
+
+
 @functools.lru_cache(maxsize=32)
 def _shell_layers(command_text):
     """(texts, unresolved) for command_text.
@@ -978,16 +1332,19 @@ def _shell_layers(command_text):
     texts: command_text, then the text of every shell `-c` string it runs, in
     the order they appear, resolved recursively up to _MAX_SHELL_DEPTH levels;
     a value the outer shell computes at run time reads as _RUNTIME_PLACEHOLDER.
-    unresolved: the strings the scan cannot clear: a git-shaped string holding
-    a run-time value (_may_run_git() over it and every string it runs), text
-    it cannot lex whose `-c` string is git-shaped, and a string nested past the
-    limit.
+    unresolved: the strings the scan cannot clear: a string holding a run-time
+    value that is git-shaped (_may_run_git() over it and every string it runs)
+    or may run run-time text as shell or code (_runs_runtime_code() over the
+    same), text it cannot lex whose `-c` string is git-shaped, and a string
+    nested past the limit.
     """
     texts, unresolved = [], []
+    codes = []  # each text as its shell reads it, and whether its input is fed
 
-    def visit(text, depth):
+    def visit(text, depth, fed=False):
         texts.append(text.replace(_RUNTIME, _RUNTIME_PLACEHOLDER))
-        for kind, value in _shell_c_strings(text):
+        codes.append((text, fed))
+        for kind, value, value_fed in _shell_c_strings(text, fed):
             if depth >= _MAX_SHELL_DEPTH:
                 unresolved.append(value.replace(_RUNTIME, _RUNTIME_PLACEHOLDER))
             elif kind == 'unlexable':
@@ -995,8 +1352,9 @@ def _shell_layers(command_text):
                     unresolved.append(value)
             else:
                 first = len(texts)
-                visit(value, depth + 1)
-                if kind == 'runtime' and any(map(_may_run_git, texts[first:])):
+                visit(value, depth + 1, value_fed)
+                if kind == 'runtime' and (any(map(_may_run_git, texts[first:]))
+                                          or any(_runs_runtime_code(*code) for code in codes[first:])):
                     unresolved.append(texts[first])
 
     try:
