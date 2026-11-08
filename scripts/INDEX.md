@@ -78,6 +78,7 @@ scripts/
 ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
 ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
+├── `close-route-select.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
 ├── `commit.sh` - Description: Kept, run by no command since P2 (D15: no feature is retired).
 ├── `create-overnight-state.sh` - create-overnight-state.sh — Create overnight state file (v7 schema)
 ├── `create-worktree.sh` - Create a git worktree from local HEAD (not origin/main).
