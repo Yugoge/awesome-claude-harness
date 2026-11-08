@@ -30,7 +30,8 @@
    - no state file has two writers;
    - hooks on the same event do not race;
    - nothing blocks the action that clears it.
-6. One PR per lane, titled `P12-L<n>: ...`. Push at most once every 30 minutes. Ask the owner nothing.
+6. **Follow-ups from P2 to P10.** The comment "Follow-ups after train 2" on the second train's PR lists, by lane, prose that those phases left in files your lane owns. Apply your lane's items as part of your slimming.
+7. One PR per lane, titled `P12-L<n>: ...`. Push at most once every 30 minutes. Ask the owner nothing.
 
 ## Lanes (disjoint files)
 

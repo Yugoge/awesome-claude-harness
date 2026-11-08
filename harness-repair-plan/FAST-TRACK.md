@@ -13,6 +13,7 @@ The owner's ruling D27 (2026-11-01, DECISIONS.md): "5天必须完成". The owner
 **Merge order across the streams:** P1b → P1c → P2 → P3 → P4 → P5 → P6 → P9 → P10 → P12 → P13 → P11.
 - P12 is `P12-SLIM.md`. P13 (D28) is `research/scoring-and-asking/phase-prompt.md`: P13-1 and P13-2 in parallel, then P13-3. Its four owner choices (`design.md` §7) are answered: D29 in DECISIONS.md. Where design.md or phase-prompt.md differ from D29, D29 wins.
 - Accounts (owner, 2026-11-08): the main account only finishes streams A, B, C and merge trains 1 and 2. From P12 on, every session runs on Max or Ultra, the merges and P12's integration lane included.
+- Train 2 follow-ups (`prompts/handoff/train2-followups.md`, on an Ultra account): what streams A, B and C left out of P2 to P10. The list is collected now; the code and tests start from the P12 base, beside P12.
 - To save time: P13-2 runs beside P12 from the same base (the second train's head); P13-1 and P13-3 follow P12. Whichever merges second merges `origin/master` and keeps both sides' behaviour. P11's rewrite and ref-deletion scripts are built now, in a new session, on synthetic data only; the real run stays last.
 - D28 withdraws P9's scoring retirement: before #16 merges, it restores the scoring code block by block, as `design.md` §6.1 lists.
 - Build in parallel now. Each phase is one PR, titled `<phase>: ...`.
