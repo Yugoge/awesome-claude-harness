@@ -10,7 +10,6 @@
 tests/
 ├── fixtures/
 │   ├── `adversarial_corpus.json` - json config
-│   ├── `overwrite_corpus.json` - JSON config: schema_version, task_id, guard, driver, documentation
 │   ├── `pol_benign_strictness_exceptions.json` - JSON config: schema, criterion, task_id, iteration, _doc
 │   ├── `pol_installed_program_allow_set.json` - JSON config: allowing, allowing_count, criterion, probe_shape, program_set_size
 │   ├── `pol_iteration5_qa_matrix.v1.json` - JSON config: schema, schema_descriptor, provenance_key, digests, counts
@@ -24,7 +23,6 @@ tests/
 ├── `test_artifact_contract_enforce.py` - G2 checks the artifacts a subagent's own dispatch obligation declares at its
 ├── `test_attribution_adjudicator.py` - canonical aggregate view (Phase C; purely additive artifacts, nothing switched)
 ├── `test_attribution_journal.py` - break detection, verify script verdicts, torn-tail handling, seal
-├── `test_baseline_snapshot_preflight.py` - agents/dev.md:535 declares that the orchestrator captures baseline_dirty_snapshot
 ├── `test_bash_execution_boundary.py` - These cover the properties the 436-case matrix cannot express on its own:
 ├── `test_bash_safety_context.py` - Tests strip_non_executable_contexts() in isolation, covering the main
 ├── `test_bash_safety_context_rules.py` - converted to COMMAND_CONTEXT_STRIPPED in hooks/pretool-bash-safety.sh
@@ -84,7 +82,7 @@ tests/
 ├── `test_overnight_state_file_write_guard.py` - overnight-state write-protection (ticket 20261001-161041-r10, AC4/AC5/AC6)
 ├── `test_overnight_trace_evidence.py` - (P1b E3). Which report is inspected and which of its fields are required is
 ├── `test_overnight_trace_yield.py` - (P1b row 18)
-├── `test_overwrite_guard.py` - Every assertion drives the REAL guard as a subprocess over a synthetic
+├── `test_overwrite_guard.py` - The overwrite guard was never registered and was deleted with its route
 ├── `test_pol_generative_sweeps.py` - AC-R02-10 .. AC-R02-16 (revision 2). Every deny-side population here is
 ├── `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
 ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
