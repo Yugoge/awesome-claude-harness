@@ -1743,7 +1743,7 @@ The state file is created by `create-overnight-state.sh` during session initiali
 - **pretool-overnight-hook-guard.py** (PreToolUse): Blocks Write/Edit/Bash targeting .claude/hooks/ during overnight sessions; denies AskUserQuestion to every caller in the session until the next human-typed prompt
 - **pretool-workflow-gate.py** (PreToolUse): Gates tools until TodoWrite is called
 - **pretool-todo-validate.py** (PreToolUse:TodoWrite): Enforces step count and ordering, the first list, and the subagent and wake steps
-- **codex_native_harness.py / stop-overnight-timelock.py** (Stop): Active Stop-chain workflow enforcement; do not cite absent legacy workflow-enforce hooks as active
+- **codex_native_harness.py** (Stop): Active Stop-chain workflow enforcement; do not cite absent legacy workflow-enforce hooks as active
 - **stop-launch.py** (Stop, the one Stop hook) runs `hooks/stop-command-gate.py`: its time-lock blocks stop until end_time (a human-typed `/stop` releases it), then while the wake has no `CronDelete`; the `/dev-overnight` span's closeout (a PM retrospective report and a summary written since `start_time`) is one of its gaps
 - **posttool-git-checkpoint.sh** (PostToolUse:Write|Edit): Snapshots each change to `refs/checkpoints/<branch>`; never advances HEAD
 
