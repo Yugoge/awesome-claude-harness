@@ -9,13 +9,14 @@ dispatching session's (/dev-overnight's), and agent-index.json only for a
 dispatch without an obligation. pretool-overnight-hook-guard.py binds a child
 to the session that dispatched it, reading an index entry only for a dispatch
 without an obligation. So a QA that Read dev.json is still judged as a QA, and
-codex enforcement, the e2e flag gate and the overnight child binding keep
+codex enforcement, the e2e gate and the overnight child binding keep
 working for agents no index names (acceptance A6).
 
 The cycle is set up as /dev sets it up: scripts/write-enforce-flag.sh arms
-.claude/dev-registry/dev-<ts>/, each dispatch has its transcript, its CLI meta
-file and its Agent call in the parent transcript, and payloads carry agent_id
-and agent_type.
+.claude/dev-registry/dev-<ts>/ with the one flag it still writes, codex (P1c's
+D24 retired the e2e flag, P10's R6 the artifact-contract one), each dispatch
+has its transcript, its CLI meta file and its Agent call in the parent
+transcript, and payloads carry agent_id and agent_type.
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ class Cycle:
     def arm(self, name: str = CYCLE, command: str = "dev") -> Path:
         """The registry's flags, written by the one writer /dev's start runs."""
         subprocess.run([str(REPO / "scripts" / "write-enforce-flag.sh"), "--source-command", command,
-                        "--session-id", name, "--flag", "e2e", "--flag", "artifact-contract", "--flag", "codex"],
+                        "--session-id", name, "--flag", "codex"],
                        check=True, capture_output=True, env=self.env, timeout=30)
         return self.project / ".claude" / "dev-registry" / name
 
@@ -231,6 +232,8 @@ def test_e2e_qa_is_judged_also_after_it_read_dev_json(tmp_path):
 
 
 def test_e2e_pre_pull_dispatch_without_obligation_resolves_its_cycle(tmp_path):
+    """Its index entry names the cycle; it is judged on the QA reports its own transcript shows it
+    wrote (P1c R10), and the one on disk is no write of this QA's."""
     cycle = Cycle(tmp_path)
     cycle.arm()
     transcript = cycle.dispatch("a-qa2", "qa", "Verify the cycle.")
@@ -239,15 +242,20 @@ def test_e2e_pre_pull_dispatch_without_obligation_resolves_its_cycle(tmp_path):
 
     proc = cycle.stop("subagentstop-e2e-enforce.py", "a-qa2", "qa", transcript)
     assert proc.returncode == 2, proc.stderr
-    assert f"(type=qa) in session {CYCLE} has e2e_enforcement.status='skipped_without_justification'" in proc.stderr
+    assert f"(type=qa) wrote no docs/dev/qa-report-*.json (in session {CYCLE})" in proc.stderr
 
 
 def test_e2e_flag_gate_holds_without_an_index_entry(tmp_path):
+    """The gate has no flag (P1c D24): a registry no flag writer armed, and no index entry, still
+    judge the report the QA's own obligation declares, in the cycle its task names (R10)."""
     cycle = Cycle(tmp_path)
     transcript = cycle.dispatch("a-qa3", "qa", _qa_prompt())
     _qa_report(cycle, "skipped_without_justification")
     (cycle.project / ".claude" / "dev-registry" / CYCLE).mkdir(parents=True)
-    assert cycle.stop("subagentstop-e2e-enforce.py", "a-qa3", "qa", transcript).returncode == 0
+    proc = cycle.stop("subagentstop-e2e-enforce.py", "a-qa3", "qa", transcript)
+    assert proc.returncode == 2, proc.stderr
+    assert f"E2E_ENFORCE_BLOCKED: agent a-qa3 (type=qa) in session {CYCLE} (task_id={TS}) has " \
+        "e2e_enforcement.status='skipped_without_justification'" in proc.stderr
 
 
 def test_another_cli_role_is_not_judged_as_qa(tmp_path):
