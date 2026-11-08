@@ -49,7 +49,8 @@ what the tree's template asks for.
 
 Before the step whose label matches, the fault (actor "fault") writes `path` (project-relative;
 `{task}` is the cycle's task id, the shortest task id the run learned) with `content kind`:
-`qa-report.v1` (a stale schema-v1 QA report: F3b), `junk`, or `absent` (the file removed). A path
+`qa-report.v1` (a stale schema-v1 QA report: F3b), `junk`, `foreign-identity` (the file as written,
+its task_id and request_id another task's), or `absent` (the file removed). A path
 nothing in the pipeline produced is no producer's to repair; the pipeline must reach its terminal past
 it. One a producer wrote before is that producer's artifact, spoiled: a gate that refuses the next
 dispatch naming it returns it to its producer (_collection_round).
@@ -344,6 +345,11 @@ def _plant(rp, glob: str, what: str) -> callable:
         else:
             text = "junk\n"
         full = os.path.join(rp.layout.project, rel)
+        if content == "foreign-identity":  # the file as written, its identity another task's (G3 R12)
+            with rp.acting("fault"):
+                doc = json.loads(open(full).read())
+            doc["task_id"] = doc["request_id"] = "20200101-000000"
+            text = json.dumps(doc, indent=2) + "\n"
         rec = {"kind": "plant", "label": step["label"], "path": rel, "content": content}
         with rp.acting("fault"):
             meant = open(full).read() if os.path.isfile(full) else None
