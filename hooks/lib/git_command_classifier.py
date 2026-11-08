@@ -54,11 +54,6 @@ import os
 import re
 import sys
 
-try:
-    from .bash_context_strip import strip_non_executable_contexts
-except ImportError:  # run as a script, or imported with hooks/lib on sys.path
-    from bash_context_strip import strip_non_executable_contexts
-
 # ---------------------------------------------------------------------------
 # Primitives (moved verbatim from pretool-block-branch-pr-worktree.py:115-219)
 # ---------------------------------------------------------------------------
@@ -625,46 +620,91 @@ def iter_git_invocations(command_text):
 
     The input is normalised here, so callers pass the command as written. The
     splitter is quote-blind, so a segment it opens inside a quote may be text
-    (`echo "tip; git commit -m x"`) or code (`bash -c "cd x; git push"`). In a
-    one-line command without command substitution, such a segment counts only
-    when bash_context_strip.strip_non_executable_contexts() keeps it in the
-    executable view of the command owning the quote, read from that command's
-    command token on (`timeout 5 bash -c "..."` is a shell payload). Elsewhere
-    (an unclosed quote, a quote across lines, a substitution, where a comment,
-    a heredoc or nested quoting can mislead a static reading) every segment
-    counts. Each invocation keeps its tokens as written: the view empties
-    quoted arguments such as `-F "<file>"`.
+    (`echo "tip; git commit -m x"`) or code (`bash -c "cd x; git push"`,
+    `python3 -c "os.system('cd x; git push')"`, `su -c "..."`). Such a segment
+    counts unless the command owning the quote is known to leave its arguments
+    unexecuted (_is_text_only: `echo`, `printf`, `grep`, `git commit`), the
+    command is one line without command substitution, and no `|` in it feeds a
+    command not known to leave its input unexecuted (`echo "..." | sh` runs the
+    text). Any other owner, a launcher this module does not know included,
+    fails closed. Elsewhere (an unclosed quote, a quote across lines, a
+    substitution, where a comment, a heredoc or nested quoting can mislead a
+    static reading) every segment counts. Each invocation keeps its tokens as
+    written.
     """
     # The appended ';' opens a last, empty segment that is in a quote exactly
     # when command_text ends inside one.
-    segments = _segments_with_kind(command_text + ';')
+    text = command_text + ';'
+    segments = _segments_with_kind(text)
     starts = [i for i, (_seg, _kind, in_quote) in enumerate(segments) if not in_quote]
-    one_line = not re.search(r'\n|\$\(|<\(|>\(|`', command_text)
+    droppable = (not re.search(r'\n|\$\(|<\(|>\(|`', command_text)
+                 and not _pipes_into_unknown(segments, text))
     for start, end in zip(starts, starts[1:] + [len(segments)]):
         yield from _owned_invocations([seg for seg, _kind, _q in segments[start:end]],
-                                      one_line and end < len(segments))
+                                      droppable and end < len(segments))
 
 
 def _owned_invocations(group, droppable):
-    """Invocations of a segment opened outside quotes and the in-quote ones after it."""
+    """Invocations of a segment opened outside quotes and the in-quote ones after it.
+
+    The in-quote ones are text, and dropped, only when `droppable` and the
+    segment's command is known to leave its arguments unexecuted.
+    """
     written = [_invocation(seg) for seg in group]
     if written[0]:
         yield written[0]
-    quoted = [inv for inv in written[1:] if inv]
-    if not (droppable and quoted):
-        yield from quoted
+    if droppable and _is_text_only(group[0]):
         return
-    words = list(re.finditer(r'\S+', group[0]))
-    idx = _command_token_index([w.group() for w in words])
-    owner = group[0][words[idx].start():] if idx is not None else group[0]
-    kept = collections.Counter(inv.subcommand for inv in map(
-        _invocation, _segments(strip_non_executable_contexts(';'.join([owner] + group[1:])))) if inv)
-    if written[0]:
-        kept[written[0].subcommand] -= 1
-    for inv in quoted:
-        if kept[inv.subcommand] > 0:
-            kept[inv.subcommand] -= 1
-            yield inv
+    yield from (inv for inv in written[1:] if inv)
+
+
+# Commands known to leave their arguments and their standard input unexecuted.
+# Measured over the P9 R6 corpus (the hooks' tests, adversarial-runs.md, the A6
+# strings): `echo` and `printf` are the only non-git commands there owning a
+# quoted git invocation that is text; `grep` reads its quoted pattern as text.
+# Every other command is unknown, so a launcher (`python3 -c`, `su -c`,
+# `find -exec`, `ssh`, `watch`, `xargs sh -c`) fails closed.
+_TEXT_ONLY_COMMANDS = frozenset({'echo', 'printf', 'grep'})
+# git subcommands whose quoted arguments are text (`git commit -m "a; git push"`).
+_TEXT_ONLY_GIT_SUBCOMMANDS = frozenset({'commit'})
+
+
+def _is_text_only(seg):
+    """True iff seg's command is known to leave its arguments and input unexecuted."""
+    toks = seg.split()
+    idx = _command_token_index(toks) if toks else None
+    if idx is None:
+        return False
+    # `eval echo "x; git push"` reads echo's quoted text again as shell code.
+    if any(_basename(_unquote_token(t)) == 'eval' for t in toks[:idx]):
+        return False
+    word = _basename(_unquote_token(toks[idx]))
+    if word != 'git':
+        return word in _TEXT_ONLY_COMMANDS
+    sub, rest = _git_subcommand(toks[idx + 1:])
+    options = toks[idx + 1:len(toks) - len(rest) - 1]
+    # A config value can name a program git runs (core.editor, an alias).
+    return (sub in _TEXT_ONLY_GIT_SUBCOMMANDS
+            and not any(o.startswith(('-c', '--config-env')) for o in options))
+
+
+def _pipes_into_unknown(segments, text):
+    """True iff a `|` outside quotes feeds a command that is not _is_text_only.
+
+    `text` is the one-line, substitution-free string `segments` was split from,
+    so the segments and the separators between them rebuild it exactly; a
+    separator that does not read back fails closed.
+    """
+    pos, sep = 0, ''
+    for seg, _kind, in_quote in segments:
+        if sep == '|' and not in_quote and not _is_text_only(seg):
+            return True
+        pos += len(seg)
+        sep = text[pos:pos + 2] if text[pos:pos + 2] in ('&&', '||') else text[pos:pos + 1]
+        if pos < len(text) and sep not in ('&&', '||', ';', '|', '&', '(', ')'):
+            return True
+        pos += len(sep)
+    return False
 
 
 def classify_git_command(command_text):

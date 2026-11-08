@@ -39,7 +39,10 @@ Run: python3 -m pytest hooks/tests/test_git_prefix_enumeration.py -q
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -465,3 +468,85 @@ def test_option_table_finds_the_subcommand(options):
 def test_guard_option_regex_is_built_from_the_table():
     match = GUARD.GIT_COMMIT_INVOCATION_RE.search("git --attr-source HEAD -C /o commit -m x")
     assert match and GUARD._extract_dash_c_from_span(match.group(1), "") == "/o"
+
+
+# ---------------------------------------------------------------------------
+# A quoted git invocation is text only under a command known to leave its
+# arguments unexecuted; a launcher's payload is code, and an unknown launcher
+# fails closed (P9, PR #16 review comment 6716077369, finding 1).
+# ---------------------------------------------------------------------------
+
+LAUNCHED = [
+    ("python3 -c \"import os; os.system('cd x; git push origin HEAD:main')\"", "push",
+     "agent git push"),
+    ('su -c "cd x; git commit -m y"', "commit", "agent git commit"),
+    ('echo "cd x; git commit -m y" | sh', "commit", "agent git commit"),
+    ("find . -exec sh -c 'cd x; git commit -m y' \\;", "commit", "agent git commit"),
+]
+QUOTED_TEXT = ['echo "tip; git commit -m x"', 'printf \'%s\\n\' "x; git commit -n"']
+
+
+@pytest.mark.parametrize("command,subcommand,_reason", LAUNCHED)
+def test_a_launched_payload_is_an_invocation(command, subcommand, _reason):
+    assert [inv.subcommand for inv in iter_git_invocations(command)] == [subcommand]
+
+
+@pytest.mark.parametrize("command,subcommands", [
+    ('eval echo "x; git commit -m y"', ["commit"]),
+    ('{ echo "x; git commit -m y"; } | sh', ["commit"]),
+    ('echo "x; git commit -m y" |& sh', ["commit"]),
+    ('echo "x; git commit -m y" | xargs -I{} sh -c {}', ["commit"]),
+    ('ssh host "cd x; git push origin main"', ["push"]),
+    ('xargs sh -c "cd x; git push origin main"', ["push"]),
+    ('git -c core.editor=vi commit -m "a; git push origin main"', ["commit", "push"]),
+    ('echo "x; git commit -m y" | grep x', []),
+    ('grep -e "a; git push" notes.md', []),
+    ('git -C "/r" commit -m "a; git push"', ["commit"]),
+])
+def test_only_a_known_text_command_makes_quoted_git_text(command, subcommands):
+    assert [inv.subcommand for inv in iter_git_invocations(command)] == subcommands
+
+
+@pytest.fixture(scope="module")
+def guard_env(tmp_path_factory):
+    """A scratch HOME, state dir and repository: the real ~/.claude is never read."""
+    base = tmp_path_factory.mktemp("guard-launch")
+    repo = base / "repo"
+    for path in (repo, base / "home", base / "state"):
+        path.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "GIT_"))}
+    env.update(HOME=str(base / "home"), CLAUDE_STATE_DIR=str(base / "state"),
+               CLAUDE_PROJECT_DIR=str(repo), PYTHONDONTWRITEBYTECODE="1")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                    "commit", "-q", "--allow-empty", "-m", "init"],
+                   cwd=repo, env=env, check=True)
+    transcript = base / "transcript.jsonl"
+    transcript.write_text("")
+    return repo, transcript, env
+
+
+def _run_guard(command, agent, guard_env):
+    repo, transcript, env = guard_env
+    payload = {"session_id": "p9-launch-test-0001", "cwd": str(repo),
+               "transcript_path": str(transcript), "hook_event_name": "PreToolUse",
+               "permission_mode": "default", "tool_name": "Bash",
+               "tool_input": {"command": command}}
+    if agent == "subagent":
+        payload.update(agent_id="agent-p9-launch-0001", agent_type="general-purpose")
+    return subprocess.run([sys.executable, str(GUARD_PATH)], input=json.dumps(payload),
+                          capture_output=True, text=True, cwd=repo, env=env, timeout=120)
+
+
+@pytest.mark.parametrize("agent", ["main", "subagent"])
+@pytest.mark.parametrize("command,_subcommand,reason", LAUNCHED)
+def test_the_guard_blocks_a_launched_git_command(command, _subcommand, reason, agent, guard_env):
+    proc = _run_guard(command, agent, guard_env)
+    assert proc.returncode == 2 and reason in proc.stderr, (proc.returncode, proc.stderr)
+
+
+@pytest.mark.parametrize("agent", ["main", "subagent"])
+@pytest.mark.parametrize("command", QUOTED_TEXT)
+def test_the_guard_passes_quoted_text(command, agent, guard_env):
+    proc = _run_guard(command, agent, guard_env)
+    assert proc.returncode == 0, (proc.returncode, proc.stderr)
