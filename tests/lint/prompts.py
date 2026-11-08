@@ -103,6 +103,8 @@ HOOK_MENTION = re.compile(r"(?<![\w.-])(?:[\w./${}:~-]*/)?([a-z0-9][a-z0-9_-]*\.
 _CLAIM = re.compile(r"\b(block|blocks|blocked|blocking|rejects?|rejected|rejecting|den(?:y|ies|ied)|refuses?|refused"
                     r"|exits?\s+(?:with\s+)?(?:code\s+)?2|exit\s+code\s+2|\(exit\s*2\))(?![\w-])", re.I)
 _NEGATION = re.compile(r"(?:\b(?:not|never|no|cannot|without|nothing|neither|nor)\b|n't\b|\bnon-)\W*(?:\w+\W+){0,3}$", re.I)
+# "it blocks nothing", "it blocks no Write": the negation follows the verb
+_NEGATED_OBJECT = re.compile(r"\s+(?:no|nothing|none|neither|never|not)\b", re.I)
 # "block" as a verb needs a modal or "to" in front of it; elsewhere it is the noun
 _VERB_LEAD = {"to", "will", "would", "can", "may", "might", "could", "should", "must", "does", "do", "then", "and", "or"}
 _NOUN_LEAD = {"obligation", "code", "fenced", "response", "bash", "json", "yaml", "markdown", "template", "shared",
@@ -117,7 +119,7 @@ def _claims(sent: str):
         before = sent[: m.start()]
         prev = re.findall(r"[\w-]+", before[-40:])
         lead = prev[-1].lower() if prev else ""
-        if _NEGATION.search(before[-60:]):
+        if _NEGATION.search(before[-60:]) or _NEGATED_OBJECT.match(sent[m.end():]):
             continue
         if word == "block" and lead not in _VERB_LEAD:
             continue

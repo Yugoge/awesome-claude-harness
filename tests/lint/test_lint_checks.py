@@ -106,6 +106,8 @@ STRENGTH_FILES = {
     ("`cp.py` blocks only under `CP_MODE=block`; by default it logs.", 0),
     ("`cp.py` never blocks; it only logs a pending checkpoint.", 0),
     ("`cp.py` is non-blocking.", 0),
+    ("`cp.py` prints a warning on stderr; it exits 0 and blocks nothing.", 0),
+    ("`cp.py` warns and exits 0: it blocks no Write or Edit.", 0),
     ("Write the obligation block before `cp.py` reads it.", 0),
     ("`blocker.py` blocks the call (exit 2).", 0),
     ("`guard.py` blocks the call.", 0),
