@@ -68,11 +68,12 @@ What each step does is taken from the tree's commands/clean.md:
   deviation passes it) is listed in `actions_refused` with the operation as run and the hook's first
   line, its files not staged, and never run again. Where the text's Step 16 names `actions_refused`
   (the hook-rejection rule; the base records a refusal as a failure), the orchestrator then Reads the
-  execution report and, when it lists refusals, asks one AskUserQuestion with one question naming each
+  execution report and, when it lists refusals, asks one AskUserQuestion whose question names each
   refused action and its exact operation: one the tool policy refused stated as the Workflow Overview's
-  rule says (withdrawn), the others decided by its options, the owner decisions that rule names for a
-  hook that reads grants (the owner picks the first, leaving them undone); the withdrawals and the answer
-  go into Steps 17 and 18.
+  rule says (withdrawn), with that rule's two options for it (the owner takes the recommended one), in a
+  question of its own beside the decision on the others, whose options are the owner decisions that rule
+  names for a hook that reads grants (the owner picks the first, leaving them undone); the outcomes go
+  into Steps 17 and 18.
 * Step 17: the git calls the step names (one it names after "when the execution report names a
   `cleanup_commit`" only with one); Step 18: the completion report from the step's template, Written at
   its `Save to:` path; the last TodoWrite; Stop.
@@ -954,34 +955,48 @@ class CleanRun:
                               r"output", rule)
         grant = re.search(r"runs again only after (the owner's `/allow` grant for it) \(.*?\), (when the orchestrator "
                           r"re-dispatches the same role)[^;]*; or the owner (leaves it undone)", rule)
-        named, outcomes, decide = [], [], []
+        choice = re.search(r'offers "([^"]+\(Recommended\))" or "([^"]+)"', rule[withdrawn.end():]) if withdrawn else None
+        named, policy, decide = [], [], []
         for r in refused:
             line = f"{r['action_id']} ({r.get('action')}): {r['operation']} was refused by {r.get('hook')}: " \
                    f"{r.get('hook_output')}"
             if r.get("hook", "").endswith("pretool-tool-policy.py"):
-                if not withdrawn:
+                if not (withdrawn and choice):
                     raise cmdtext.TextNotFound("Workflow Overview: no outcome for an operation the tool policy refused")
                 named.append(f"{line}; {withdrawn.group(1)} and recorded with the hook's output")
-                outcomes.append((r, withdrawn.group(1)))
+                policy.append(r)
             else:
                 if not grant:
                     raise cmdtext.TextNotFound("Workflow Overview: no owner decision for a refused operation")
                 named.append(f"{line}; the owner decides it")
                 decide.append(r)
-        # The owner leaves a refusal a grant could let through undone (the first option): the replay plays no
-        # /allow prompt and no re-dispatch.
-        opts = [grant.group(3), f"{grant.group(1)}, {grant.group(2)}"] if decide else []
-        question = "Refused by a hook: " + " | ".join(named) + (". How do you decide the ones you decide?" if decide
-                                                                else ".")
-        call = o.s.tool("AskUserQuestion", {"questions": [{
-            "question": question, "header": "Refused", "multiSelect": False,
-            "options": [{"label": t[:60], "description": t} for t in opts]}]},
-            label="Step 16 AskUserQuestion refused operations",
-            deviation=self.devs.at("Step 16 AskUserQuestion refused operations"))
-        answer = (call.response.get("answers") or {}).get(question, "")
-        outcomes += [(r, answer) for r in decide]
-        order = {id(r): i for i, r in enumerate(refused)}
-        self.refused_answers = sorted(outcomes, key=lambda p: order[id(p[0])])
+
+        def ask(text, header, opts):
+            return {"question": text, "header": header, "multiSelect": False,
+                    "options": [{"label": t[:60], "description": t} for t in opts]}
+
+        questions = []
+        if decide:
+            # The owner leaves a refusal a grant could let through undone (the first option): the replay plays no
+            # /allow prompt and no re-dispatch.
+            questions.append(ask("Refused by a hook: " + " | ".join(named) + ". How do you decide the ones you decide?",
+                                 "Refused", [grant.group(3), f"{grant.group(1)}, {grant.group(2)}"]))
+        if policy:
+            # the tool policy's refusals: a question of their own beside a grant decision; the owner takes the
+            # recommended option
+            text = ("Refused by a hook: " + " | ".join(named) if not decide else
+                    "Withdrawn: " + ", ".join(r["action_id"] for r in policy)) + ". How do you record them?"
+            questions.append(ask(text, "Withdrawn", [choice.group(1), choice.group(2)]))
+        call = o.s.tool("AskUserQuestion", {"questions": questions},
+                        label="Step 16 AskUserQuestion refused operations",
+                        deviation=self.devs.at("Step 16 AskUserQuestion refused operations"))
+        answers = call.response.get("answers") or {}
+        answer = answers.get(questions[0]["question"], "") if decide else ""
+        record = answers.get(questions[-1]["question"], "") if policy else ""
+        outcome = withdrawn.group(1) if not policy or record == choice.group(1)[:60] else \
+            f"{withdrawn.group(1)}, recorded as {choice.group(2).split(' as ', 1)[-1]}"
+        held = {id(r) for r in policy}
+        self.refused_answers = [(r, outcome if id(r) in held else answer) for r in refused]
 
     def cleaner_work(self, role: str, prompt: str):
         o = self.o
@@ -1158,7 +1173,7 @@ class CleanRun:
         text = text.replace("Checkpoint commit: <hash>", f"Checkpoint commit: {self.checkpoint}").replace(
             "Cleanup commit: <hash>", f"Cleanup commit: {g.get('cleanup_commit', '')}")
         decided = "\n".join(f"- {a['action_id']}: {a['operation']} ({a.get('hook')}: {a.get('hook_output')}); "
-                            + (ans if ans == "withdrawn" else f"the owner: {ans}")
+                            + (ans if ans.startswith("withdrawn") else f"the owner: {ans}")
                             for a, ans in getattr(self, "refused_answers", []))
         text = re.sub(r"<list of refused actions[^>]*>", lambda _m: decided or "none", text)
         text = re.sub(r"<the checkpoint, plus [^>]+>", "the checkpoint" + (" and the cleanup commit" if g.get(

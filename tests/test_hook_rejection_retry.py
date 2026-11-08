@@ -1,5 +1,6 @@
 """A hook-rejected operation is never retried on the owner's answer alone: only their /allow grant (dev, paseo-daemon, clean); an operation no grant can let through is withdrawn, never left to the owner's own run."""
 
+import json
 import re
 from pathlib import Path
 
@@ -66,6 +67,12 @@ def test_clean_names_every_refusal_and_withdraws_what_the_tool_policy_refused() 
     assert "The owner's answer decides each action refused by a hook that reads `/allow` grants" in rule
     assert re.search(r"`hooks/pretool-tool-policy\.py` refused is not run again in this session \([^)]*\): "
                      r"the question states its outcome, the action withdrawn and recorded with the hook's output", rule)
+    assert ('offers "Withdraw it (Recommended)" or "Record it as a follow-up for a /dev cycle" '
+            "(still withdrawn in this run;") in rule
+    assert "in a question of its own beside a grant decision" in rule
+    assert "a /dev cycle's dev role, whose row in `policies/tool-policy.v1.json` allows `*`, may write the path" in rule
+    policy = json.loads((ROOT / "policies/tool-policy.v1.json").read_text(encoding="utf-8"))
+    assert "*" in policy["roles"]["dev"]["allowed_write_path_prefixes"]
     assert "an AskUserQuestion answer writes no grant" in rule
     assert "each answer or withdrawal is that action's outcome in Steps 17 and 18" in rule
     assert OWNER_RUN.findall(rule) == []
