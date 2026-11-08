@@ -11,7 +11,7 @@ disable-model-invocation: true
 
 This command runs an unattended development loop: nobody is asked and nothing waits for the owner, inside the time-lock window or after `end_time`. Every decision a pipeline meets is made in the session and recorded (IMPORTANT RULES, Hard Rule 5). When `spec_mode == "user-provided"`, the orchestrator view's Hard Rule 10 user gates are decided the same way and listed first in the summary. You discover issues yourself by scanning the codebase, fix each one through a simplified dev cycle, and keep going until the specified end time in both modes. The session commits nothing: the owner lands its work after the session (Step 21, Post-loop flow).
 
-**Quick status utility**: Use `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh"` for instant session status (zero LLM cost). Use this instead of reading/parsing the state JSON manually. Optionally pass session_id as argument.
+**Quick status utility**: Use `bash "<HARNESS_ROOT>/scripts/overnight-status.sh"` for instant session status (zero LLM cost). Use this instead of reading/parsing the state JSON manually. Optionally pass session_id as argument.
 
 ---
 
@@ -693,7 +693,7 @@ whose value starts with `"RELEVANT"`. For specialists whose value starts with `"
 list them with their skip reason so PM understands why that perspective is absent and
 does NOT attempt to read a non-existent file.
 
-`<N>` is the cycle number: the `Cycle:` line of `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh" <STATE_FILE>`
+`<N>` is the cycle number: the `Cycle:` line of `bash "<HARNESS_ROOT>/scripts/overnight-status.sh" <STATE_FILE>`
 (see Cycle Contract below).
 
 ```
@@ -761,7 +761,7 @@ The cycle contract is a hook's output; the orchestrator never writes, copies, li
 
 `hooks/pretool-subagent-enforce.py` checks every dispatch against the step in progress: Steps 2-4 (PM PLAN, the specialists, PM TRIAGE) are allowed in every cycle as the canonical todo names them, and once the contract exists its entries are allowed too. A role or mode the in-progress step does not allow is an exit-2 block.
 
-`<N>` is the cycle number, read from the session's overnight directory: the `Cycle:` line of `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh" <STATE_FILE>` (a cycle ends with its PM retrospective, Step 20). The state file holds no cycle count.
+`<N>` is the cycle number, read from the session's overnight directory: the `Cycle:` line of `bash "<HARNESS_ROOT>/scripts/overnight-status.sh" <STATE_FILE>` (a cycle ends with its PM retrospective, Step 20). The state file holds no cycle count.
 
 ### Step 5: Create Overnight Spec Files
 
@@ -805,7 +805,7 @@ Read specialist reports. For each pipeline whose spec is your copy of the templa
 **Create pipeline definitions** -- one per PM-recommended `fix` issue, with zero-indexed suffix. Run:
 
 ```bash
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/build-pipelines-from-triage.py" <triage-report> <addressed-issues> <timestamp> <session_id> | tee docs/dev/overnight/<session_id>/pipelines.json
+python3 "<HARNESS_ROOT>/scripts/build-pipelines-from-triage.py" <triage-report> <addressed-issues> <timestamp> <session_id> | tee docs/dev/overnight/<session_id>/pipelines.json
 ```
 
 The script consumes the PM triage schema (`issues[]` keyed by `triage_index` + `pipeline_order[]` + `pipeline_recommendation` + `failed_attempts`). It iterates `pipeline_order`, keeps only `pipeline_recommendation == "fix"`, drops issues whose `<location>|<description>` key appears in addressed-issues, drops issues whose `failed_attempts[triage_index] >= 3`, and emits one pipeline object per remaining issue with: `index, triage_index, description, location, severity, category, agents_flagged, phase=pending, iteration=0, status=active, timestamp_suffix=<ts>-<index>, tier, pm_recommended=true, spec_path=docs/dev/overnight/<session_id>/spec-pipeline-<index>.md`.
@@ -1390,7 +1390,7 @@ layer used in each attempt for that pipeline. Rules:
 **Sort the `qa_failed` pipelines by severity before iterating** (critical first, cosmetic last). Build the iteration plan:
 
 ```bash
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/iterate-failed-pipelines.py" docs/dev/overnight/<session_id>/pipelines.json > docs/dev/overnight/<session_id>/iteration-plan.json
+python3 "<HARNESS_ROOT>/scripts/iterate-failed-pipelines.py" docs/dev/overnight/<session_id>/pipelines.json > docs/dev/overnight/<session_id>/iteration-plan.json
 ```
 
 For each entry in `iteration_plan[]`, the orchestrator runs the Dev+QA inner loop. On every iteration, increment `pipeline.iteration` first (the first iteration after a QA fail runs with `<new-iter> = current_iteration + 1`, starting at 1). No new context is built: Dev is re-dispatched with the pipeline's own context `docs/dev/context-<timestamp_suffix>.json` and the failing QA report (D2). Then dispatch:
@@ -1410,7 +1410,7 @@ Loop termination:
 **Collect and apply permissions from all pipeline QA reports** with one invocation, the aggregator's list piped to the applier as `/dev` does:
 
 ```bash
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/aggregate-permissions.py" docs/dev/ docs/dev/overnight/<session_id>/pipelines.json | bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json
+python3 "<HARNESS_ROOT>/scripts/aggregate-permissions.py" docs/dev/ docs/dev/overnight/<session_id>/pipelines.json | bash "<HARNESS_ROOT>/scripts/apply-permissions.sh" /dev/stdin .claude/settings.json
 ```
 
 The aggregator filters QA reports to those whose `timestamp_suffix` matches a `status: fixed` pipeline, extracts `qa.permissions_verification.validated_permissions[]`, and emits a deduplicated list (by `pattern`). The applier merges each entry into `.permissions.<section>` (allow/ask/deny) atomically, skipping patterns already present.
@@ -1456,7 +1456,7 @@ The aggregator filters QA reports to those whose `timestamp_suffix` matches a `s
 **Time**: <timestamp>
 ```
 
-**TIME CHECK**: invoke `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh" <MAIN_ROOT>/.claude/overnight-state-<session_id>.json`; it reads the record through `hooks/lib/overnight.py`, reports the window verdict with the wall-time remaining to `end_time`, and exits non-zero once the window has closed. If expired, proceed to Step 21 (session ending). Otherwise, mark Step 21 as completed via TodoWrite to trigger the loop reset.
+**TIME CHECK**: invoke `bash "<HARNESS_ROOT>/scripts/overnight-status.sh" <MAIN_ROOT>/.claude/overnight-state-<session_id>.json`; it reads the record through `hooks/lib/overnight.py`, reports the window verdict with the wall-time remaining to `end_time`, and exits non-zero once the window has closed. If expired, proceed to Step 21 (session ending). Otherwise, mark Step 21 as completed via TodoWrite to trigger the loop reset.
 
 **No commit**: the cycle's work stays in the working tree, snapshotted in `refs/checkpoints/<worktree_branch>`, until the owner lands it after the session (Hard Rule 8, Step 21's Post-loop flow).
 

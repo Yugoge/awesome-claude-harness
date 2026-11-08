@@ -82,7 +82,7 @@ if [[ -d "test" ]] && [[ ! -d "tests" || "test" -nt "tests" ]]; then
   fi
 elif [[ -d "test" ]] && [[ -d "tests" ]]; then
   echo "⚠️  Both test/ and tests/ exist - manual review recommended"
-  echo "   Run: bash ${CLAUDE_HOME:-$HOME/.claude}/scripts/migrate-test-to-tests.sh --project-root $(pwd)"
+  echo "   Run: bash <HARNESS_ROOT>/scripts/migrate-test-to-tests.sh --project-root $(pwd)"
 fi
 ```
 
@@ -294,7 +294,7 @@ Before execution, create a safety checkpoint on `refs/checkpoints/<branch>`
 handles the no-changes case (exit 0) internally, so no guard is needed here.
 
 ```bash
-bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/checkpoint.sh" "Before /test execution"
+bash "<HARNESS_ROOT>/hooks/checkpoint.sh" "Before /test execution"
 
 # Record checkpoint ref in context (refs/checkpoints/<branch>, not HEAD)
 CURRENT_BRANCH=$(git branch --show-current)

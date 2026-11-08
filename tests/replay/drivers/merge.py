@@ -190,7 +190,7 @@ class MergeRun:
     def _rules(self):
         return [(r"^the-resolved-merge-source$", lambda m: self.o.values["RESOLVED_REF"]),
                 (r"^resolved-ref$", lambda m: self.o.values["RESOLVED_REF"]),
-                (r"^([A-Z][A-Z_]*)$", lambda m: self.o.values.get(m.group(1), m.group(0)))]
+                (r"^(?!HARNESS_ROOT$)([A-Z][A-Z_]*)$", lambda m: self.o.values.get(m.group(1), m.group(0)))]
 
     def label(self, text: str) -> str:
         return f"{self.tag} {text}"

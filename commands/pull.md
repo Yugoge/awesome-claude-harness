@@ -25,7 +25,7 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 ### Step 1: Execute the pull script
 
 ```bash
-bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/pull.sh"
+bash "<HARNESS_ROOT>/hooks/pull.sh"
 PULL_EXIT_CODE=$?
 ```
 
