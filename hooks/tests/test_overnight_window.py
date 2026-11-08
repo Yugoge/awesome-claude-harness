@@ -149,9 +149,16 @@ def test_no_state_field_closes_the_window(fields):
     assert verdicts.before_end
 
 
-@pytest.mark.parametrize("end_time", [_z(-1), "not-a-date", None])
+# Each end_time is built inside the test, not in the parameter list: the passed one is the clock,
+# and a parameter value that holds the clock gives each xdist worker its own test id, so the
+# workers would collect different lists.
+@pytest.mark.parametrize("end_time", [
+    pytest.param(lambda: _z(-1), id="an-hour-ago"),
+    pytest.param(lambda: "not-a-date", id="not-a-date"),
+    pytest.param(lambda: None, id="None"),
+])
 def test_a_passed_or_unreadable_end_time_closes_the_window(end_time):
-    assert not overnight.state_verdicts({"session_id": SID, "end_time": end_time}).before_end
+    assert not overnight.state_verdicts({"session_id": SID, "end_time": end_time()}).before_end
 
 
 # ------------------------------------------------- acceptance 6: the time-lock
