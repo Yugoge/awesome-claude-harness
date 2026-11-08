@@ -70,7 +70,7 @@ def test_the_in_flight_token_writes_refusal_names_the_push_analyst_route(tmp_pat
     the next line names the route; no other caller's refusal of a token write gains it."""
     state = None if layout == "default state dir" else tmp_path / "state"
     word = _token_word("60229693667929e5", "master")
-    content = json.dumps({"commit_sha": "1" * 40, "branch": "master", "repo_root": "/root/toyproj",
+    content = json.dumps({"commit_sha": "1" * 40, "branch": "master", "repo_root": str(tmp_path / "toyproj"),
                           "session_id": SID})
     proc = _hook(tmp_path, "Write", {"file_path": word, "content": content}, "changelog-analyst", state)
     assert proc.returncode == 2, proc.stderr
