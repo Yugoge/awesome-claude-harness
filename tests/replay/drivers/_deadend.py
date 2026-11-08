@@ -34,7 +34,8 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   next call is the same dispatch in the background, as Step 3's text writes it; the
                   spec reaches its terminal.
   overnight       /dev-overnight (drivers/overnight.py, variant plain: one cycle, the Stop after
-                  end_time) with two departures, G2 advisory in its environment
+                  end_time, in a 20-minute window that holds Step 12's collection on a loaded host)
+                  with two departures, G2 advisory in its environment
                   (CLAUDE_OBLIGATION_STOPGATE=advisory). Step 12's first dev writes its report
                   with dev.status needs_review, a value dev-report.v2 does not allow: its own stop
                   passes (G2 advisory) and the collection check (posttool-overnight-file-check.py)
@@ -421,6 +422,12 @@ def _overnight(rp) -> None:
     # G2 advisory (the switch's own value), so the dev's invalid report passes its stop and the
     # collection check at its return decides it, as cp-pending opts its hook in.
     rp.env["CLAUDE_OBLIGATION_STOPGATE"] = "advisory"
+    # The window holds Step 12's collection: once end_time is past, the check passes every return
+    # (lib/overnight.py window_live), so a first dev returning after it meets no block. Variant plain's
+    # window (launch plus twice CYCLE_WALL_S: 9 minutes) holds the compliant cycle on a 4-CPU runner;
+    # on a 4-CPU host running several replay suites side by side, this case's first dev returned 9.3
+    # minutes after launch, past that window. Its window is twice that; --arg end still sets one.
+    rp.args.setdefault("end", "20m")
 
     class Night(overnight.Night):
         spoiled = stopped = False

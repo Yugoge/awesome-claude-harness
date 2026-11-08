@@ -48,7 +48,9 @@ CASES["dev-early"] = suite.Scenario("dead end: dev-early", "_deadend", (("case",
 CASES["qa-report"] = suite.Scenario("dead end: qa-report", "_deadend", (("case", "qa-report"),), ("dev",), 100)
 CASES["spec-foreground"] = suite.Scenario("dead end: spec-foreground", "_deadend", (("case", "spec-foreground"),),
                                           ("spec",), 110)
-CASES["overnight"] = suite.Scenario("dead end: overnight", "_deadend", (("case", "overnight"),), ("dev-overnight",), 600)
+# Its 20-minute window, waited for before Step 19's TIME CHECK, and the closeout (drivers/_deadend.py).
+CASES["overnight"] = suite.Scenario("dead end: overnight", "_deadend", (("case", "overnight"),), ("dev-overnight",),
+                                    1260)
 ARMED_CASES = ("obligation", "forged-ack")  # G1 and G2 block only armed (CLAUDE_OBLIGATION_*=block)
 DEV = next(s for s in suite.COMPLIANT if s.name == "/dev singular")
 FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
