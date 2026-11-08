@@ -312,9 +312,13 @@ def _dispatch_answer(run, ans, path: str, detail: str, label: str, edits=None):
         return d, role
     call = (ans or {}).get("subagent_call") if isinstance(ans, dict) else None
     if isinstance(ans, dict) and ans.get("source") == "todo_step" and (call or {}).get("subagent_type"):
+        # "a fresh dispatch of that role under the same task id, from the template": the id the template's
+        # artifacts carry (a lane's, in a fan-out cycle)
         role = call["subagent_type"]
+        tid = next((a.get("identity", {}).get("task_id") for a in (ans.get("template") or {}).get("artifacts") or []
+                    if isinstance(a, dict) and a.get("identity", {}).get("task_id")), None)
         return run.producer.dispatch(role, o.s, run.devs, run.label(f"{label} Agent({role})"),
-                                     note=f"{path}: {detail}", edits=edits), role
+                                     note=f"{path}: {detail}", edits=edits, task_id=tid), role
     if isinstance(ans, dict) and ans.get("source") == "todo_step" and not call and not ans.get("template"):
         # "with none, the step is the main agent's own: run it yourself under the same task id"
         if ans.get("command") != run.o.typed and getattr(run.producer, "plays_step", lambda a: False)(ans):
@@ -478,12 +482,23 @@ class DevProducer:
             return found[0]
         raise cmdtext.TextNotFound(f"Step {n} has no template dispatching {role!r}")
 
-    def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None, hashes: bool = False):
+    @contextlib.contextmanager
+    def lane(self, task_id: str | None):
+        """Work on the lane whose id is `task_id` (a fan-out cycle's), else on the cycle itself."""
+        lane = next((l for l in getattr(self.cyc, "lanes", None) or [] if l.tid == task_id), None)
+        if lane is None:
+            yield
+            return
+        with self.cyc.on(lane):
+            yield
+
+    def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None, hashes: bool = False,
+                 task_id=None):
         """`hashes`: dev's report also carries the ledger's final_source_hashes (owned-edits-ledger.v1) of
-        each file it owns, as they stand when it reports."""
+        each file it owns, as they stand when it reports; `task_id`: the lane of a fan-out cycle it works on."""
         from . import dev as devdrv
         cyc = self.cyc
-        with self.on(session, devs) as o:
+        with self.on(session, devs) as o, self.lane(task_id):
             extra = [f"Close routing finding: {note}"] if note else []
             if role == "ba" and hasattr(cyc, "dispatch_ba"):
                 return cyc.dispatch_ba(f"Step {self.step_of('ba')}", label)
@@ -499,14 +514,14 @@ class DevProducer:
                                 guard_respell=o.respell)
                 act = agents.Act(verdict="pass", work=work, summary="QA pass", respell=o.respell,
                                  text_calls=[("Phase 6: Blast-Radius Phase 2 Verification", {})])
-                return o.dispatch(fields, act, label, self.tid, subagent_type="qa")
+                return o.dispatch(fields, act, label, cyc.tid, subagent_type="qa")  # the lane's id on a lane
             if role == "dev":
                 baseline = {"baseline_head_sha": o.values.get("baseline_head_sha", ""),
                             "baseline_dirty_snapshot": o.values.get("baseline_dirty_snapshot", "")}
                 act = agents.Act(work=with_final_hashes(roles.dev(list(edits or []))) if hashes else
                                  roles.dev(list(edits or [])), content={"*": baseline},
                                  summary="the close finding is fixed" if edits else "no change: the work is in place")
-                return o.dispatch(fields, act, label, self.tid, subagent_type="dev")
+                return o.dispatch(fields, act, label, cyc.tid, subagent_type="dev")  # the lane's id on a lane
         raise NotImplementedError(f"no cycle template for role {role!r}")
 
     @staticmethod
@@ -535,7 +550,7 @@ class DoProducer:
         self.turn = turn
         self.tid = turn.tid
 
-    def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None):
+    def dispatch(self, role: str, session, devs, label: str, note: str = "", edits=None, task_id=None):
         raise NotImplementedError(f"/do has no dispatch template for role {role!r} ({note})")
 
     def pending_edits(self) -> list:
@@ -707,8 +722,10 @@ class CloseRun:
             by_artifact: dict = {}
             for g in out["gaps"]:  # each artifact the GAP lines name, with all of its problems at once
                 by_artifact.setdefault(g["artifact"], []).append(f"{g['problem']}: {g['message']}")
+            n = len(self.routed)
             for art, problems in by_artifact.items():
                 self.route_path(art, "; ".join(problems), f"Step 0 round {k}")
+            self.repairs.extend(self.routed[n:])  # a repair Routes completed: a `## Disclosures` line
             out = self.disposition(f"{label} round {k} re-run")
 
     def cp_state(self) -> None:
@@ -1170,7 +1187,8 @@ class CloseRun:
         first = getattr(self, "broken", None) or FIRSTS.get(self.variant)
         if first:
             first = {"path": first["path"], "detail": first["detail"], "new": first.get("new")}
-        last = self.close_round(CLOSE_FINDINGS_ONE if first else CLOSE_YES_PLAIN, first)
+        plain = f"CLOSE: YES - with disclosures: {len(self.repairs)} items" if self.repairs else CLOSE_YES_PLAIN
+        last = self.close_round(CLOSE_FINDINGS_ONE if first else plain, first)
         k = 0
         while last.startswith("CLOSE_FINDINGS") and k < 3:
             k += 1

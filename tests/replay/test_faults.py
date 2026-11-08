@@ -436,12 +436,12 @@ def test_f8q_fanout_cut_before_a_lane_qa_then_close(replays, key):
     tid = r.terminal("close")["task"]
     f = routing.assert_routed(r, typed="close", source="todo_step", check=CHAIN_CALL,
                               path=f"docs/dev/qa-report-{tid}-l2.json")
-    # Each step still lacking ran by its expected producer: the completion report, the main agent's own step.
+    # The lane's QA ran in /close's session, from /dev Step 13's template for that lane.
+    assert f["dispatches"][f["routed"][0]["tool_use_id"]]["session"] != f["dispatches"][next(iter(f["dispatches"]))]["session"]
+    # The disposition owes no completion report (P3's --disposition leaves the chain's completion out): the cut
+    # /dev's Step 17 is no gap of /close's (the reader's answer for that path: test_declaring_dispatch.py).
     done = f"docs/dev/completion-{tid}.md"
-    owing = [o["answer"] for o in f["owing"] if o["path"] == done]
-    assert owing and owing[0]["source"] == "todo_step" and owing[0].get("subagent_call") is None, f["owing"]
-    close_session = f["dispatches"][f["routed"][0]["tool_use_id"]]["session"]
-    assert any(sid == close_session and p.endswith("/" + done) for sid, p in f["main_writes"]), (f["own"], f["main_writes"])
+    assert not [g for _label, g in f["gaps"] if g[0] == done], f["gaps"]
     assert f["chain"][-1]["disposition"] == "chain_pass", f["chain"]
     routing.assert_close_form(r)
 
