@@ -5,7 +5,8 @@ Authoritative grammar: /root/docs/dev/specs/MONOLITH-WRITING-GUIDE.md R6.6.
 Extracted into a sidecar module because spec-verify.py would exceed
 the 800-line quality-gate limit if these parsers were inlined. The
 parent module imports the public API: parse_front_matter,
-parse_role_headings, parse_consumers_tags, lookup_role_block. Regex
+parse_role_headings, parse_consumers_tags, lookup_role_block,
+role_annotated_agents, lines_every_view_carries. Regex
 constants are also re-exported via the spec_verify_parsers namespace.
 
 Parsers are PARSE-ONLY -- they expose structured records that R3.3
@@ -327,3 +328,42 @@ def lookup_role_block(
         return None
     candidates.sort(key=lambda c: c["line_start"])
     return candidates[0]
+
+
+def role_annotated_agents(monolith_text):
+    """Agents the monolith gives role evidence (agents/spec.md R3.4): a
+    `## Role: <agent>` / `### Role: <agent>` heading, or a `consumers:`
+    annotation naming the agent. `[all]` names no agent: it routes a block
+    to every view (M7) and is never Role Mandate evidence."""
+    agents = {r["agent"] for r in parse_role_headings(monolith_text)}
+    for tag in parse_consumers_tags(monolith_text):
+        agents.update(c for c in tag["consumers"] if c != "all")
+    return agents
+
+
+_SECTION_9_RE = re.compile(r"^##\s+Section\s+9\b")
+_H2_RE = re.compile(r"^##\s")
+
+
+def _section_9_line_numbers(lines):
+    """1-indexed lines of the `## Section 9` block, heading included."""
+    start = next((i for i, raw in enumerate(lines) if _SECTION_9_RE.match(raw)), None)
+    if start is None:
+        return set()
+    end = next((j for j in range(start + 1, len(lines)) if _H2_RE.match(lines[j])), len(lines))
+    return set(range(start + 1, end + 1))
+
+
+def lines_every_view_carries(monolith_text):
+    """Stripped monolith lines the split rules route into every view, which
+    two views therefore share by rule, not by fan-out: each block a
+    `consumers: [all]` annotation governs, the annotation line included
+    (R2.A.5), and the whole Section 9 block, its heading and comments too
+    (agents/spec.md M7). Blank and `---` lines are no content."""
+    lines = (monolith_text or "").splitlines()
+    numbers = _section_9_line_numbers(lines)
+    for tag in parse_consumers_tags(monolith_text):
+        if "all" in tag["consumers"]:
+            numbers.update(range(tag["line"], tag["block_end"] + 1))
+    out = {lines[n - 1].strip() for n in numbers if 0 < n <= len(lines)}
+    return out - {"", "---"}

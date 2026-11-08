@@ -10,19 +10,28 @@ Owns the run-record lifecycle for the deliberately-invoked ``/close
                      Refuses immediately, creating no record, when the chain
                      is not late-repair eligible.  Refuses --force outright.
   record-stage      Appends one of BA/Dev/QA's genuine completions to the
-                     run record, enforcing stage order (ba -> dev -> qa),
-                     validating the report path's role, embedding a
-                     retrospective_disclosure block into the artifact, and
-                     independently recomputing its hash from the resulting
-                     on-disk bytes -- never a caller-supplied hash.
+                     run record, enforcing stage order (ba -> dev -> qa) and
+                     taking the report path's role from the dispatch that
+                     declared it (obligation.declaring_dispatch).  It reads
+                     and writes nothing in the report: each report has one
+                     producer, its stage's role, and G2 checks it at that
+                     producer's stop.  It records each dispatch once: a
+                     stage dispatched again records its new report in place
+                     of the earlier one, and the dev report recorded again
+                     clears finalize's outcome.
   finalize          Runs the drift-detection + per-file routing phase
                      (scripts/check-late-repair-provenance.py) and decides
                      finalized_pending_verification / honest_refuse /
-                     fail_closed.  This outcome is PROVISIONAL: it is not
-                     itself sufficient for commit eligibility.
-  verify-disclosure The same independent-recomputation corroboration
-                     /close's own gate invokes, using ONLY task_id +
-                     project_dir -- never a caller-supplied claim.  Only a
+                     fail_closed.  On routed drift it writes the effective
+                     report afresh, on every run, and checks the file it
+                     wrote before it records the outcome and the path.  This
+                     outcome is PROVISIONAL: it is not itself sufficient for
+                     commit eligibility.
+  verify-disclosure Admits the run once finalize has recorded its outcome
+                     (finalize_outcome, which resolve_effective_report_state
+                     calls too), using ONLY task_id + project_dir -- never a
+                     caller-supplied claim; it compares no stage report, and
+                     each refusal names the run record's path.  Only a
                      subsequent, separate 'admitted' from this phase makes a
                      late-repair chain commit-eligible.
 
@@ -47,9 +56,32 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from sibling_loader import load_sibling_module, sha256_bytes  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from hooks.lib.obligation import command_templates, declaring_dispatch  # noqa: E402  (who owes a report)
+
 ROUTE = "R4-late-repair"
-STAGE_ORDER = ("ba", "dev", "qa")
-DISCLOSURE_FIELDS = ("route", "repair_run_id", "original_cycle_at", "produced_at", "artifact")
+# The route runs the /dev cycle's dispatches that produce the chain's reports again.
+CYCLE_COMMAND = "dev"
+
+
+def stage_order(root: Path, task_id: str) -> tuple[str, ...]:
+    """The route's stages, in order: the role of each dispatch template of the
+    /dev cycle (commands/dev.md, in text order) that declares one of the
+    chain's reports for this task (the resolver's parent paths), each role
+    once. The templates are the declaration of who produces which report and
+    in which order the cycle runs them; no list of roles is kept here."""
+    resolver = load_sibling_module("resolve-dev-artifact-chain.py", __file__)
+    reports = {resolver._rel(path, root)
+               for path in resolver._parent_paths(root / "docs" / "dev", task_id).values()}
+    order: list[str] = []
+    for template in command_templates(CYCLE_COMMAND):
+        role = template.get("role")
+        for artifact in template.get("artifacts") or []:
+            path = artifact.get("path") if isinstance(artifact, dict) else None
+            if (isinstance(role, str) and isinstance(path, str) and role not in order
+                    and re.sub(r"<[^<>/]+>", task_id, path) in reports):
+                order.append(role)
+    return tuple(order)
 
 
 def _load_sibling_module(name: str) -> ModuleType:
@@ -71,6 +103,12 @@ def _run_record_path(root: Path, task_id: str) -> Path:
     return root / "docs" / "dev" / f"late-repair-run-{task_id}.json"
 
 
+def _finalize_paths(root: Path, task_id: str) -> tuple[Path, Path]:
+    """The dev report finalize reads and the effective report it writes."""
+    dev_dir = root / "docs" / "dev"
+    return dev_dir / f"dev-report-{task_id}.json", dev_dir / f"dev-report-{task_id}.effective.json"
+
+
 def _write_json(path: Path, doc: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
@@ -80,52 +118,30 @@ def _emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, sort_keys=True))
 
 
-def _stage_accepted_basenames(stage: str, task_id: str) -> set[str]:
-    return {
-        "ba": {f"ticket-{task_id}.md", f"context-{task_id}.json"},
-        "dev": {f"dev-report-{task_id}.json"},
-        "qa": {f"qa-report-{task_id}.json"},
-    }[stage]
+def _rel(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
-def _embed_disclosure(path: Path, disclosure: dict[str, str]) -> None:
-    if path.suffix == ".json":
+def _effective_report_fault(path: Path, disclosure: dict[str, str]) -> str | None:
+    """finalize's own check of the effective report it just wrote.
+
+    finalize is that file's only producer and a script no gate sees, so the
+    rule on it (the file exists, parses and carries the block finalize
+    embedded) is decided here, before the outcome and path are recorded;
+    every later reader takes the file from that record.
+    """
+    try:
         doc = json.loads(path.read_text(encoding="utf-8"))
-        doc["retrospective_disclosure"] = disclosure
-        path.write_text(
-            json.dumps(doc, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        return
-    text = path.read_text(encoding="utf-8")
-    text = re.sub(r"\n*<!--\s*retrospective_disclosure.*?-->\n*", "\n", text, flags=re.DOTALL)
-    lines = ["<!-- retrospective_disclosure"]
-    for key in DISCLOSURE_FIELDS:
-        lines.append(f"{key}: {disclosure[key]}")
-    lines.append("-->")
-    path.write_text(text.rstrip("\n") + "\n\n" + "\n".join(lines) + "\n", encoding="utf-8")
-
-
-def _read_disclosure(path: Path) -> dict[str, str] | None:
-    raw = path.read_text(encoding="utf-8")
-    if path.suffix == ".json":
-        try:
-            doc = json.loads(raw)
-        except ValueError:
-            return None
-        value = doc.get("retrospective_disclosure") if isinstance(doc, dict) else None
-        return value if isinstance(value, dict) else None
-    match = re.search(r"<!--\s*retrospective_disclosure\s*(.*?)-->", raw, re.DOTALL)
-    if not match:
-        return None
-    result: dict[str, str] = {}
-    for line in match.group(1).splitlines():
-        line = line.strip()
-        if not line or ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        result[key.strip()] = value.strip()
-    return result or None
+    except FileNotFoundError:
+        return "effective report missing right after finalize wrote it"
+    except (OSError, ValueError) as exc:
+        return f"effective report unreadable right after finalize wrote it ({exc.__class__.__name__})"
+    if not isinstance(doc, dict) or doc.get("retrospective_disclosure") != disclosure:
+        return "effective report does not carry the retrospective_disclosure block finalize embedded"
+    return None
 
 
 def _derive_original_cycle_at(root: Path, task_id: str) -> tuple[str | None, str]:
@@ -165,8 +181,11 @@ def _derive_original_cycle_at(root: Path, task_id: str) -> tuple[str | None, str
     return None, "none"
 
 
-def _refuse(reason: str, exit_code: int) -> int:
-    _emit({"outcome": "refuse", "reason": reason})
+def _refuse(reason: str, exit_code: int, path: str | None = None) -> int:
+    payload = {"outcome": "refuse", "reason": reason}
+    if path is not None:
+        payload["path"] = path
+    _emit(payload)
     return exit_code
 
 
@@ -175,9 +194,8 @@ def _fail_closed_no_evidence(run_record_path: Path, record: dict[str, Any], stag
 
     Persists outcome=='fail_closed' on the run record itself so a later
     finalize/verify-disclosure call sees the same terminal outcome rather
-    than a stale None. Runs before _embed_disclosure/_sha256_file are ever
-    reached, so no dev-report is written or mutated as a side effect of
-    this refusal.
+    than a stale None. Runs before the report is hashed or recorded, so no
+    fabricated report enters the run record.
     """
     record["outcome"] = "fail_closed"
     _write_json(run_record_path, record)
@@ -210,33 +228,34 @@ def _dev_report_missing_at_init(root: Path, task_id: str, record: dict[str, Any]
     return dev_report_rel in record.get("live_snapshot", {}).get("stage_gaps", [])
 
 
-def cmd_init(ns: argparse.Namespace) -> int:
-    if ns.force:
-        return _refuse("--late-repair combined with --force is not permitted", 2)
+def init_run(root: Path, task_id: str) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    """init's decision: (exit code, payload, the chain result it decided on).
 
-    root = Path(ns.project_dir).resolve()
+    The chain result is /close --late-repair's one call of the chain
+    function; close-route-select.py hands it on verbatim when init declines,
+    so the ordinary route never resolves the chain a second time.
+    """
     resolver = load_sibling_module("resolve-dev-artifact-chain.py", __file__)
-    result = resolver.resolve_chain(root, ns.task_id)
-    if result.get("mode") != "singular" or result.get("late_repair_eligible") is not True:
-        return _refuse("not a beyond-QA gap; use R1's route", 1)
+    result = resolver.resolve_chain(root, task_id)
+    if not resolver.late_repair_eligible(result):
+        return 1, {"outcome": "refuse", "reason": "not a beyond-QA gap; use R1's route"}, result
 
-    run_record_path = _run_record_path(root, ns.task_id)
+    run_record_path = _run_record_path(root, task_id)
     if run_record_path.is_file():
         existing = json.loads(run_record_path.read_text(encoding="utf-8"))
-        _emit({"outcome": "already_initialized", "repair_run_id": existing["repair_run_id"]})
-        return 0
+        return 0, {"outcome": "already_initialized", "repair_run_id": existing["repair_run_id"]}, result
 
-    parents = resolver._parent_paths(root / "docs" / "dev", ns.task_id)
+    parents = resolver._parent_paths(root / "docs" / "dev", task_id)
     pre_route_hashes: dict[str, str | None] = {}
     for key, path in parents.items():
         rel = resolver._rel(path, root)
         pre_route_hashes[rel] = _sha256_file(path) if path.is_file() else None
 
-    original_cycle_at, source = _derive_original_cycle_at(root, ns.task_id)
+    original_cycle_at, source = _derive_original_cycle_at(root, task_id)
     repair_run_id = uuid.uuid4().hex
     record = {
         "schema_version": 1,
-        "task_id": ns.task_id,
+        "task_id": task_id,
         "repair_run_id": repair_run_id,
         "route": ROUTE,
         "live_snapshot": {
@@ -254,8 +273,15 @@ def cmd_init(ns: argparse.Namespace) -> int:
         "effective_report": None,
     }
     _write_json(run_record_path, record)
-    _emit({"outcome": "initialized", "repair_run_id": repair_run_id})
-    return 0
+    return 0, {"outcome": "initialized", "repair_run_id": repair_run_id}, result
+
+
+def cmd_init(ns: argparse.Namespace) -> int:
+    if ns.force:
+        return _refuse("--late-repair combined with --force is not permitted", 2)
+    rc, payload, _chain = init_run(Path(ns.project_dir).resolve(), ns.task_id)
+    _emit(payload)
+    return rc
 
 
 def _load_active_record(root: Path, task_id: str) -> dict[str, Any] | None:
@@ -275,50 +301,52 @@ def cmd_record_stage(ns: argparse.Namespace) -> int:
         return _refuse("no active late-repair run record for this task", 3)
     if record.get("repair_run_id") != ns.repair_run_id:
         return _refuse("repair-run-id does not match the active run record", 3)
-    if ns.stage not in STAGE_ORDER:
-        return _refuse(f"unknown stage: {ns.stage!r}", 2)
+    stages = stage_order(root, ns.task_id)
+    if ns.stage not in stages:
+        return _refuse(f"unknown stage: {ns.stage!r} (stages: {', '.join(stages) or 'none declared'})", 2)
     if (
         record.get("original_cycle_at") is None
         and _dev_report_missing_at_init(root, ns.task_id, record)
     ):
         return _fail_closed_no_evidence(_run_record_path(root, ns.task_id), record, ns.stage)
-    if ns.stage in record["stages"]:
-        return _refuse(f"stage {ns.stage!r} already recorded for this repair_run_id", 3)
-    index = STAGE_ORDER.index(ns.stage)
-    for earlier in STAGE_ORDER[:index]:
+    index = stages.index(ns.stage)
+    for earlier in stages[:index]:
         if earlier not in record["stages"]:
             return _refuse(f"stage {ns.stage!r} recorded before {earlier!r}", 4)
 
     report_path = Path(ns.report_path)
     if not report_path.is_absolute():
         report_path = root / report_path
-    if not report_path.is_file():
-        return _refuse(f"--report-path does not exist: {ns.report_path}", 3)
-    accepted = _stage_accepted_basenames(ns.stage, ns.task_id)
-    if report_path.name not in accepted:
+    # A stage's report is one its own dispatch declared: the stage names the
+    # role, and the declaring dispatch's obligation names the report's owner.
+    owner = declaring_dispatch(ns.task_id, report_path, root)
+    owner_role = owner.get("role") if owner and owner.get("source") == "dispatch" else None
+    if owner_role != ns.stage:
         return _refuse(
-            f"--report-path basename {report_path.name!r} is not valid for stage "
-            f"{ns.stage!r} (expected one of {sorted(accepted)!r})",
+            f"--report-path {_rel(report_path, root)} is not valid for stage {ns.stage!r}: "
+            f"no {ns.stage} dispatch of this task declares it (declared by: {owner_role!r})",
             3,
         )
+    # One record per dispatch: a stage dispatched again (to repair its report
+    # after the record, at /close or /commit) is recorded again; the dispatch
+    # already recorded never is.
+    prior, dispatch = record["stages"].get(ns.stage), owner.get("tool_use_id")
+    if prior is not None and (not dispatch or prior.get("tool_use_id") in (None, dispatch)):
+        return _refuse(f"stage {ns.stage!r} already recorded for this repair_run_id", 3)
 
-    disclosure = {
-        "route": ROUTE,
-        "repair_run_id": record["repair_run_id"],
-        "original_cycle_at": str(record.get("original_cycle_at")),
-        "produced_at": _now_iso(),
-        "artifact": report_path.name,
-    }
-    _embed_disclosure(report_path, disclosure)
-    sha256 = _sha256_file(report_path)
     root_rel = report_path.relative_to(root).as_posix()
     record["stages"][ns.stage] = {
         "report_path": root_rel,
-        "sha256": sha256,
-        "recorded_at": disclosure["produced_at"],
+        "recorded_at": _now_iso(),
+        "tool_use_id": dispatch,
     }
+    if root_rel == _rel(_finalize_paths(root, ns.task_id)[0], root):
+        # finalize decided on the earlier bytes of the report it reads: the
+        # chain is no longer finalized until finalize runs again.
+        record.update(outcome=None, effective_report=None)
+        record.pop("drift_detected", None)
     _write_json(_run_record_path(root, ns.task_id), record)
-    _emit({"outcome": "recorded", "stage": ns.stage, "sha256": sha256})
+    _emit({"outcome": "recorded", "stage": ns.stage})
     return 0
 
 
@@ -329,12 +357,15 @@ def cmd_finalize(ns: argparse.Namespace) -> int:
         return _refuse("no active late-repair run record for this task", 3)
     if record.get("repair_run_id") != ns.repair_run_id:
         return _refuse("repair-run-id does not match the active run record", 3)
-    for stage in STAGE_ORDER:
+    stages = stage_order(root, ns.task_id)
+    if not stages:
+        return _refuse("no stage declared: no /dev dispatch template declares a report of the chain", 3)
+    for stage in stages:
         if stage not in record["stages"]:
             return _refuse(f"stage {stage!r} not yet recorded", 3)
 
     run_record_path = _run_record_path(root, ns.task_id)
-    dev_report_path = root / "docs" / "dev" / f"dev-report-{ns.task_id}.json"
+    dev_report_path, effective_path = _finalize_paths(root, ns.task_id)
     if not dev_report_path.is_file():
         if record.get("original_cycle_at") is None:
             record["outcome"] = "fail_closed"
@@ -344,7 +375,8 @@ def cmd_finalize(ns: argparse.Namespace) -> int:
                 "reason": "no dev-report and no independently corroborable original_cycle_at",
             })
             return 6
-        return _refuse("dev report missing at finalize time despite a recorded dev stage", 3)
+        dev_rel = _rel(dev_report_path, root)
+        return _refuse(f"dev report missing at finalize time despite a recorded dev stage: {dev_rel}", 3, dev_rel)
 
     checker = load_sibling_module("check-late-repair-provenance.py", __file__)
     provenance = checker.check(str(root), ns.task_id, dev_report_path)
@@ -369,7 +401,10 @@ def cmd_finalize(ns: argparse.Namespace) -> int:
         })
         return 5
 
-    effective_path = root / "docs" / "dev" / f"dev-report-{ns.task_id}.effective.json"
+    # Written afresh from the task's dev report on every run, never refused
+    # as a second run: running finalize again is how a file removed or broken
+    # after an earlier run is repaired.
+    effective_rel = _rel(effective_path, root)
     doc = json.loads(dev_report_path.read_text(encoding="utf-8"))
     final_hashes = dict(doc.get("final_source_hashes") or {})
     for rel in provenance["routing"]:
@@ -380,20 +415,21 @@ def cmd_finalize(ns: argparse.Namespace) -> int:
         "drift_detected": provenance["drift_detected"],
         "routing": provenance["routing"],
     }
-    _write_json(effective_path, doc)
-    disclosure = {
+    doc["retrospective_disclosure"] = {
         "route": ROUTE,
         "repair_run_id": record["repair_run_id"],
         "original_cycle_at": str(record.get("original_cycle_at")),
         "produced_at": _now_iso(),
         "artifact": effective_path.name,
     }
-    _embed_disclosure(effective_path, disclosure)
+    _write_json(effective_path, doc)
+    fault = _effective_report_fault(effective_path, doc["retrospective_disclosure"])
+    if fault is not None:
+        return _refuse(f"{fault}: {effective_rel}", 3, effective_rel)
 
     record["outcome"] = "finalized_pending_verification"
     record["drift_detected"] = provenance["drift_detected"]
-    record["effective_report"] = effective_path.relative_to(root).as_posix()
-    record["effective_report_disclosure_sha256"] = _sha256_file(effective_path)
+    record["effective_report"] = effective_rel
     _write_json(run_record_path, record)
     _emit({
         "outcome": "finalized_pending_verification",
@@ -403,122 +439,88 @@ def cmd_finalize(ns: argparse.Namespace) -> int:
     return 0
 
 
-def _refuse_verify(detail: str, missing: bool = False) -> int:
-    if missing:
-        message = f"CLOSE: NO -- retrospective disclosure missing on an expected artifact: {detail}"
-    else:
-        message = f"CLOSE: NO -- retrospective disclosure present but not independently corroborated: {detail}"
-    _emit({"outcome": "refused", "reason": message})
+def _refuse_verify(root: Path, path: Path, detail: str) -> int:
+    # The refusal names the artifact's path, so /close and /commit route the
+    # fault to that artifact's producer.
+    rel = _rel(path, root)
+    _emit({"outcome": "refused", "path": rel, "reason": f"not independently corroborated: {detail}: {rel}"})
     return 3
+
+
+def finalize_outcome(record: dict[str, Any] | None) -> tuple[str, str | None] | None:
+    """The outcome finalize recorded, the one test verify-disclosure and
+    resolve_effective_report_state both take: ("verified", the effective
+    report's root-relative path) for its routed-drift outcome, ("none", None)
+    for its drift-free one, None when the record holds neither.  No stage
+    report is compared: each was checked at its producer's stop (G2), and one
+    removed or broken later is a gap the chain function names (row 7)."""
+    if record is None or record.get("outcome") != "finalized_pending_verification":
+        return None
+    if record.get("effective_report"):
+        return "verified", record["effective_report"]
+    if record.get("drift_detected") == {}:
+        return "none", None
+    return None
 
 
 def cmd_verify_disclosure(ns: argparse.Namespace) -> int:
     root = Path(ns.project_dir).resolve()
+    run_record_path = _run_record_path(root, ns.task_id)
     record = _load_active_record(root, ns.task_id)
     if record is None:
-        return _refuse_verify("no matching run record")
-    expected_run_id = record["repair_run_id"]
-
-    targets: list[tuple[str, Path, str | None]] = []
-    for stage in STAGE_ORDER:
-        info = record.get("stages", {}).get(stage)
-        if info:
-            targets.append((stage, root / info["report_path"], info.get("sha256")))
-    if record.get("effective_report"):
-        targets.append((
-            "effective_report",
-            root / record["effective_report"],
-            record.get("effective_report_disclosure_sha256"),
-        ))
-
-    if not targets:
-        return _refuse_verify("run record has no recorded artifacts to corroborate")
-
-    for label, path, expected_sha in targets:
-        if not path.is_file():
-            return _refuse_verify(label, missing=True)
-        disclosure = _read_disclosure(path)
-        if disclosure is None:
-            return _refuse_verify(label, missing=True)
-        missing_fields = [field for field in DISCLOSURE_FIELDS if not disclosure.get(field)]
-        if missing_fields:
-            return _refuse_verify(f"missing field(s) {missing_fields} on {label}")
-        if disclosure.get("route") != ROUTE:
-            return _refuse_verify(f"route mismatch on {label}: {disclosure.get('route')!r}")
-        if disclosure.get("repair_run_id") != expected_run_id:
-            return _refuse_verify(f"no matching run record for disclosed repair_run_id on {label}")
-        if disclosure.get("artifact") != path.name:
-            return _refuse_verify(f"artifact identity mismatch on {label}")
-        actual_sha = _sha256_file(path)
-        if expected_sha is not None and actual_sha != expected_sha:
-            return _refuse_verify(f"hash mismatch on {label}")
-
-    _emit({"outcome": "admitted", "repair_run_id": expected_run_id})
+        return _refuse_verify(root, run_record_path, "no matching run record")
+    if finalize_outcome(record) is None:
+        return _refuse_verify(root, run_record_path, "finalize has recorded no outcome for this run")
+    _emit({"outcome": "admitted", "repair_run_id": record["repair_run_id"]})
     return 0
 
 
 def resolve_effective_report_state(project_dir: Path, task_id: str) -> tuple[str, Path | None]:
-    """Tri-state guard shared by /commit's dev-report resolution points.
+    """Tri-state answer shared by /commit's dev-report resolution points.
+
+    Every caller takes the state and path verbatim; none re-checks the file.
 
     Returns ("none", None) when there is nothing for a caller to prefer over
     the canonical dev-report: either no late-repair state exists for task_id
-    at all (byte-identical to pre-R4 behavior), or a corroborated run that
-    finalize carried all the way to its drift-free outcome.  Returns
-    ("verified", effective_path) only when verify-disclosure independently
-    corroborates an effective report that exists on disk (State B).  Returns
-    ("invalid", None) when corroboration fails, when it admits an effective
-    report the record names but disk does not have, or when the record
-    carries any other outcome (State C -- callers MUST fail closed here,
-    never fall back to stale canonical provenance).
+    at all (byte-identical to pre-R4 behavior), or a run that finalize
+    carried all the way to its drift-free outcome.  Returns ("verified",
+    effective_path) when finalize recorded its routed-drift outcome with the
+    effective report's path: the path finalize recorded, which finalize
+    checked when it wrote the file; a file removed or broken since is a gap
+    its first use names (the repository plan), repaired by running finalize
+    again.  Returns ("invalid", path) otherwise (State C -- callers MUST fail
+    closed here, never fall back to stale canonical provenance): the record
+    holds neither of finalize's two outcomes (finalize_outcome, the test
+    verify-disclosure takes).  path is the effective report finalize writes
+    when finalize has recorded no outcome (it has not run, or record-stage
+    recorded the dev report again since), so the finding routes to finalize;
+    else the run record.  No stage report is read: a stage report removed or
+    broken after its producer's stop is a gap Step 5's chain call names.
 
     A null effective_report does NOT by itself mean "no drift": finalize
     leaves it null in every terminal state it can reach except the
-    routed-drift one, and cmd_init writes that same null before finalize has
-    run at all.  honest_refuse (drift found but unroutable) reports its drift
+    routed-drift one, and init writes that same null before finalize has run
+    at all.  honest_refuse (drift found but unroutable) reports its drift
     only in the emitted payload and never records it; fail_closed and a
     not-yet-finalized record likewise leave drift_detected absent.  Only the
-    drift-free branch records drift_detected == {}, and only it pairs that
-    with outcome 'finalized_pending_verification' (the routed-drift branch
-    shares the outcome but always records a non-empty drift_detected and an
-    effective_report).  That pair is therefore the discriminator, and every
-    other state keeps the fail-closed answer it had before.
+    drift-free branch records drift_detected == {} with outcome
+    'finalized_pending_verification', in one record write.
     """
     root = Path(project_dir).resolve()
     run_record_path = _run_record_path(root, task_id)
     if not run_record_path.is_file():
         return "none", None
-    ns = argparse.Namespace(task_id=task_id, project_dir=str(root))
-    import io
-    import contextlib
-
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        rc = cmd_verify_disclosure(ns)
-    if rc != 0:
-        return "invalid", None
-    try:
-        payload = json.loads(buffer.getvalue().strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        return "invalid", None
-    if payload.get("outcome") != "admitted":
-        return "invalid", None
     record = _load_active_record(root, task_id)
-    effective_rel = record.get("effective_report") if record else None
-    if not effective_rel:
-        # Null in FIVE record states, only one of which is benign, so this
-        # emptiness cannot decide anything on its own.  Require instead the
-        # positive pair only the drift-free branch writes, and writes in one
-        # atomic record write so the two can never disagree.
-        drift_free = (
-            record is not None
-            and record.get("outcome") == "finalized_pending_verification"
-            and record.get("drift_detected") == {}
-        )
-        return ("none", None) if drift_free else ("invalid", None)
-    effective_path = root / effective_rel
-    if not effective_path.is_file():
-        return "invalid", None
-    return "verified", effective_path
+    outcome = finalize_outcome(record)
+    if outcome is None:
+        if record is not None and record.get("outcome") is None:
+            # Not finalized (not yet, or the report it reads recorded again
+            # since): the artifact finalize writes, whose owner is finalize's
+            # own step.
+            return "invalid", _finalize_paths(root, task_id)[1]
+        return "invalid", run_record_path
+    state, rel = outcome
+    return state, (root / rel if rel else None)
 
 
 def cmd_resolve_effective_report(ns: argparse.Namespace) -> int:
@@ -526,7 +528,9 @@ def cmd_resolve_effective_report(ns: argparse.Namespace) -> int:
 
     Lets callers (e.g. commands/commit.md) invoke a stable, testable
     subcommand instead of dynamically loading this module inline, mirroring
-    how scripts/dev-lifecycle.py exposes list-actionable.
+    how scripts/dev-lifecycle.py exposes list-actionable.  The printed path
+    is the function's, verbatim: the effective report for "verified", the
+    path to route a finding on for "invalid".
     """
     state, path = resolve_effective_report_state(Path(ns.project_dir), ns.task_id)
     _emit({"state": state, "path": str(path) if path else None})
@@ -546,7 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_stage = sub.add_parser("record-stage")
     p_stage.add_argument("--task-id", required=True)
     p_stage.add_argument("--project-dir", required=True)
-    p_stage.add_argument("--stage", required=True, choices=STAGE_ORDER)
+    p_stage.add_argument("--stage", required=True, help="the stage's role (see stage_order)")
     p_stage.add_argument("--report-path", required=True)
     p_stage.add_argument("--repair-run-id", required=True)
     p_stage.set_defaults(func=cmd_record_stage)

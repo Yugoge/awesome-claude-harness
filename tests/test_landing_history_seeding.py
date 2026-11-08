@@ -77,9 +77,14 @@ def to_hooks_state(env, home):
 
 
 def history_landing(env, home, args=()):
-    """The seeding step alone, as the landing runs it before step 5: its stdout."""
-    return run(["python3", str(home / "scripts/install/render-settings"), "land", "--history",
-                *args], env).stdout
+    """The seeding step alone, as the landing runs it before step 5: its stdout. Its log lines
+    (stderr) are appended to logs/landing.log, as scripts/install/land, the log's one writer, does."""
+    proc = run(["python3", str(home / "scripts/install/render-settings"), "land", "--history",
+                *args], env)
+    (home / "logs").mkdir(exist_ok=True)
+    with open(home / "logs" / "landing.log", "a", encoding="utf-8") as log:
+        log.write(proc.stderr)
+    return proc.stdout
 
 
 def shown(notice, home):

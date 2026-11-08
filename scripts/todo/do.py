@@ -11,7 +11,7 @@ _STEPS = [
     ("2", "Develop", "Developing", None),
     ("3", "Codex audit (skip if --codex not in $ARGUMENTS)", "Running codex audit (--codex only)", None),
     ("4", "Summary", "Writing summary", None),
-    ("5", "Write do-report (complete the pending skeleton)", "Writing do-report", None),
+    ("5", "Write do-report", "Writing do-report", None),
 ]
 
 

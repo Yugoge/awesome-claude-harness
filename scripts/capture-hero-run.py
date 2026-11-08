@@ -49,8 +49,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # The fixed, reserved, demo-specific task id (M4). Fixed rather than random so it never
 # has to be normalized away, which would weaken the byte-diff linkage.
 RESERVED_TASK_ID = "readme-hero-demo-reserved"
-SENTINEL_GRANT_DIR = Path("/tmp/claude-grants")
-GRANT_PATH = SENTINEL_GRANT_DIR / f"{RESERVED_TASK_ID}.json"
+sys.path.insert(0, str(REPO_ROOT / "hooks" / "lib"))
+# /allow's own writer: the demo's grant is the grant /allow would write.
+from allowlist import sentinel_grant_path, write_sentinel_grant  # noqa: E402
+
+GRANT_PATH = sentinel_grant_path(RESERVED_TASK_ID)
+SENTINEL_GRANT_DIR = GRANT_PATH.parent
 
 DEFAULT_CAPTURE = REPO_ROOT / ".github/assets/hero-capture.txt"
 DEFAULT_EVIDENCE = REPO_ROOT / ".github/assets/hero-capture-evidence.json"
@@ -77,7 +81,7 @@ def inventory_foreign_grants() -> dict:
     for p in sorted(SENTINEL_GRANT_DIR.iterdir()):
         if not p.is_file():
             continue
-        if p.name == GRANT_PATH.name or p.name.startswith(f"{RESERVED_TASK_ID}-"):
+        if p.name == GRANT_PATH.name:
             continue
         st = p.stat()
         inv[p.name] = {"sha256": sha256_file(p), "mtime_ns": st.st_mtime_ns}
@@ -85,15 +89,9 @@ def inventory_foreign_grants() -> dict:
 
 
 def reserved_grant_files() -> list[Path]:
-    """Only the two reserved-token paths. No directory glob, ever."""
-    out = []
-    if GRANT_PATH.exists():
-        out.append(GRANT_PATH)
-    if SENTINEL_GRANT_DIR.is_dir():
-        for p in sorted(SENTINEL_GRANT_DIR.glob(f"{RESERVED_TASK_ID}-*")):
-            if p.is_file():
-                out.append(p)
-    return out
+    """The reserved token's grant path, the one name write_sentinel_grant() gives it.
+    No directory glob, ever."""
+    return [GRANT_PATH] if GRANT_PATH.exists() else []
 
 
 def preflight() -> None:
@@ -172,24 +170,16 @@ def build_fixture(fixture: Path) -> None:
 
 
 def install_grant() -> None:
-    """One grant, one operation. args_contain is prefix-matched by allowlist.py."""
-    SENTINEL_GRANT_DIR.mkdir(parents=True, exist_ok=True)
-    now = time.time()
-    grant = {
-        "task_id": RESERVED_TASK_ID,
-        "session_id": RESERVED_TASK_ID,
-        "allowed_operations": [
-            {"op": "git", "target": "push", "args_contain": ["push hero-remote main"]}
-        ],
-        "created_at": now,
-        "expires_at": now + 300,
-    }
-    # O_EXCL: preflight is only a snapshot taken seconds earlier, so creation must itself
-    # be the exclusivity check. If a live session's grant appeared in the interim we fail
-    # rather than clobber it. 0o600 so foreign readers cannot see our grant either.
-    fd = os.open(GRANT_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(grant, indent=2, sort_keys=True) + "\n")
+    """One grant, one operation. args_contain is prefix-matched by allowlist.py.
+
+    exclusive: preflight is only a snapshot taken seconds earlier, so creation must
+    itself be the exclusivity check. If a live session's grant appeared in the interim
+    we fail rather than clobber it."""
+    write_sentinel_grant(
+        RESERVED_TASK_ID, RESERVED_TASK_ID,
+        [{"op": "git", "target": "push", "args_contain": ["push hero-remote main"]}],
+        exclusive=True,
+    )
 
 
 class GrantWatcher(threading.Thread):
@@ -338,9 +328,16 @@ def main() -> int:
             t_marker = parse_ts(marker_line)
             pre = [s for s in watcher.samples if s["t"] < t_marker]
             post = [s for s in watcher.samples if s["t"] > t_marker]
-            if not pre or not pre[-1]["present"]:
+            # The marker is stamped when its line is read from the demo's pipe, after
+            # the consumer has unlinked the grant and printed the line, so a sample
+            # taken between that unlink and that read is absent and still precedes the
+            # marker. The grant's last observed presence is what must precede the
+            # marker, with the installed content; the samples after it are absent (up
+            # to the marker by definition, after it by the check below).
+            present_pre = [s for s in pre if s["present"]]
+            if not present_pre:
                 failures.append("grant was NOT present immediately before consumption")
-            elif pre[-1]["sha256"] != watcher.grant_hash_at_install:
+            elif present_pre[-1]["sha256"] != watcher.grant_hash_at_install:
                 failures.append("grant content changed before consumption")
             if not post or any(s["present"] for s in post):
                 failures.append("grant was NOT absent immediately after consumption")
@@ -374,7 +371,7 @@ def main() -> int:
 
         # M4b non-disclosure: no foreign task_id, no foreign grant path in the capture.
         for ln in lines:
-            if "/tmp/claude-grants/" in ln and RESERVED_TASK_ID not in ln:
+            if "/claude-grants/" in ln and RESERVED_TASK_ID not in ln:
                 failures.append(f"capture discloses a foreign grant path: {ln!r}")
 
         evidence = {
@@ -393,7 +390,7 @@ def main() -> int:
             ],
             "grant_sha256_at_install": watcher.grant_hash_at_install,
             "grant_present_before_consumption": bool(
-                marker_line and pre and pre[-1]["present"]
+                marker_line and present_pre
             ),
             "grant_absent_after_consumption": bool(
                 marker_line and post and not any(s["present"] for s in post)

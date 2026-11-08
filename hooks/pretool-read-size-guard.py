@@ -10,25 +10,15 @@ Binary files (images, PDFs) are exempt.
 import json
 import os
 import sys
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib.allowlist import read_grant  # noqa: E402
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
 
 BINARY_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".pdf",
 }
 LINE_LIMIT = 600
 CHUNK_LIMIT = 600
-
-
-def has_consent(session_id: str) -> bool:
-    flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{session_id}.flag")
-    try:
-        return flag.exists() and flag.read_text().strip() == "true"
-    except Exception:
-        return False
 
 
 def is_exempt(data, file_path):
@@ -70,7 +60,7 @@ def main():
     if data.get("tool_name") == "Read" and not data.get("agent_id"):
         sid = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "default")
         try:
-            if has_consent(sid) or read_grant("Read", sid):
+            if has_do_consent(data) or match_sentinel_grant_for_tool(sid, "Read") is not None:
                 sys.exit(0)
         except Exception:
             pass

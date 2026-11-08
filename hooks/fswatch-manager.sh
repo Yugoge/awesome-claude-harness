@@ -12,9 +12,6 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/git-fswatch.sh"
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-  || harness_state_dir() { printf '%s\n' /tmp; }
-STATE_FILE="$(harness_state_dir)/git-fswatch-state-${USER}.txt"
 
 # Show usage
 usage() {
@@ -156,19 +153,13 @@ show_status() {
         echo "  Uptime: $uptime"
         echo ""
     done
-
-    # Check state file
-    if [ -f "$STATE_FILE" ]; then
-        echo "State file: $STATE_FILE"
-        cat "$STATE_FILE"
-        echo ""
-    fi
 }
 
 # Show logs
 show_logs() {
     local path="$1"
-    local log_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs/git-fswatch.log"
+    # The watcher writes one log per repository (git-fswatch-<repo>.log), not a shared one
+    local log_file=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/logs/git-fswatch-*.log)
 
     if [ ! -f "$log_file" ]; then
         echo -e "${YELLOW}⚠${NC} No log file found: $log_file"
@@ -179,9 +170,9 @@ show_logs() {
     echo ""
 
     if [ -n "$path" ]; then
-        tail -f "$log_file" | grep --line-buffered "$path"
+        tail -f "${log_file[@]}" | grep --line-buffered "$path"
     else
-        tail -f "$log_file"
+        tail -f "${log_file[@]}"
     fi
 }
 

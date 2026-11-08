@@ -6,8 +6,10 @@ job tests it. A job runs where the event payload says the repository is public; 
 declares workflow_dispatch also runs on a manual dispatch, the only way anything runs on the
 private repository. The private flag is compared through toJSON() because expression equality
 coerces null to 0: `private == false` would count a payload with no repository object (a
-schedule's) as public. Conditions are read from PARSED YAML, so a comment quoting the gate
-cannot satisfy them.
+schedule's) as public. A job may AND the gate with its own condition (a draft pull request
+runs nothing, a status check), so the gate is the whole condition or one top-level `&&` term in
+parentheses. Conditions are read from PARSED YAML, so a comment quoting the gate cannot satisfy
+them, and a duplicate key fails: PyYAML keeps the last of two `if:` keys, GitHub refuses the file.
 """
 
 from __future__ import annotations
@@ -24,8 +26,33 @@ PUBLIC = "toJSON(github.event.repository.private) == 'false'"
 DISPATCH_OR_PUBLIC = f"github.event_name == 'workflow_dispatch' || {PUBLIC}"
 
 
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that refuses a mapping with a duplicate key."""
+
+    def construct_mapping(self, node, deep=False):
+        keys = [self.construct_object(k, deep=deep) for k, _ in node.value]
+        dup = sorted({str(k) for k in keys if keys.count(k) > 1})
+        if dup:
+            raise yaml.constructor.ConstructorError(None, None, f"duplicate key(s) {dup}", node.start_mark)
+        return super().construct_mapping(node, deep=deep)
+
+
 def _load(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    return yaml.load(path.read_text(encoding="utf-8"), Loader=_StrictLoader)
+
+
+def _terms(cond: str) -> list[str]:
+    """The top-level `&&` terms of an expression (parentheses and quotes respected)."""
+    terms, depth, quote, start = [], 0, False, 0
+    for i, ch in enumerate(cond):
+        if ch == "'":
+            quote = not quote
+        elif not quote and ch in "()":
+            depth += 1 if ch == "(" else -1
+        elif not quote and depth == 0 and cond.startswith("&&", i):
+            terms.append(cond[start:i].strip())
+            start = i + 2
+    return terms + [cond[start:].strip()]
 
 
 def _on(doc: dict) -> dict:
@@ -55,7 +82,8 @@ def test_every_job_carries_the_visibility_gate(path: Path) -> None:
     want = DISPATCH_OR_PUBLIC if "workflow_dispatch" in _on(doc) else PUBLIC
     jobs = doc.get("jobs") or {}
     assert jobs, f"{path.name} declares no jobs"
-    wrong = {jid: _condition(job) for jid, job in jobs.items() if _condition(job) != want}
+    wrong = {jid: cond for jid, job in jobs.items()
+             if (cond := _condition(job)) != want and f"({want})" not in _terms(cond)}
     assert not wrong, f"{path.name}: jobs without the D30 gate `{want}`: {wrong}"
 
 

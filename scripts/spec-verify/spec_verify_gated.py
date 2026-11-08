@@ -19,6 +19,7 @@ Public API:
     run_utility_check(monolith_text, views_dir) -> CheckResult
     run_ambiguous_check(monolith_text, views_dir) -> CheckResult
     run_meta_rule_check(monolith_text, views_dir) -> CheckResult
+    run_split_check(args) -> CheckResult   (the resolver's split predicates, with --project-dir)
 
 Annotation-only by design (R3.3 round-3 Option 1 lineage):
 Heuristic-A (agent-name token search inside basis ranges) is
@@ -27,6 +28,7 @@ heading-based heuristics ONLY at the view level, never at the
 monolith basis-range level.
 """
 
+import importlib.util
 import os
 import re
 
@@ -40,9 +42,6 @@ _VIEW_SKIP_FILES = {
     "orchestrator.md", "manifest.json", "INDEX.md",
     "README.md", "checkpoints.json",
 }
-
-# Required consumer views per R1.1 with hard FAIL semantics.
-_REQUIRED_VIEWS = ("qa.md", "pm.md", "ba.md", "dev.md")
 
 # AMBIGUOUS marker grammar -- mirrors the WHITELIST_PATTERNS regex in
 # spec-verify.py + spec_verify_mandate.py. Re-defining locally avoids
@@ -241,11 +240,13 @@ def _check_dev_view(view_text, monolith_text):
     return True, ""
 
 
+# Required consumer views per R1.1 with hard FAIL semantics, each with the
+# utility rule its content must meet.
 _REQUIRED_CHECKERS = {
-    "qa.md": ("qa", lambda v, _m: _check_qa_view(v)),
-    "pm.md": ("pm", lambda v, _m: _check_pm_view(v)),
-    "ba.md": ("ba", lambda v, _m: _check_ba_view(v)),
-    "dev.md": ("dev", lambda v, m: _check_dev_view(v, m)),
+    "qa.md": lambda v, _m: _check_qa_view(v),
+    "pm.md": lambda v, _m: _check_pm_view(v),
+    "ba.md": lambda v, _m: _check_ba_view(v),
+    "dev.md": lambda v, m: _check_dev_view(v, m),
 }
 
 
@@ -255,7 +256,7 @@ def _check_required_view(view_name, views_dir, monolith_text):
     if not os.path.isfile(path):
         return "fail", f"required view {view_name} is missing from views_dir"
     text = _read_text(path)
-    _, checker = _REQUIRED_CHECKERS[view_name]
+    checker = _REQUIRED_CHECKERS[view_name]
     ok, msg = checker(text, monolith_text)
     if ok:
         return "pass", ""
@@ -274,14 +275,14 @@ def _check_optional_view(name, views_dir, required_consumers):
 
 def _utility_required_iter(views_dir, monolith_text):
     """Yield (status, msg) tuples for the four hard-required views."""
-    for view_name in _REQUIRED_VIEWS:
+    for view_name in _REQUIRED_CHECKERS:
         yield _check_required_view(view_name, views_dir, monolith_text)
 
 
 def _utility_optional_iter(views_dir, required_consumers):
     """Yield (status, msg) tuples for non-required views in views_dir."""
     for name in _list_view_files(views_dir):
-        if name in _REQUIRED_VIEWS:
+        if name in _REQUIRED_CHECKERS:
             continue
         yield _check_optional_view(name, views_dir, required_consumers)
 
@@ -503,3 +504,25 @@ def run_meta_rule_check(monolith_text, views_dir):
     records = _parse_meta_rules(monolith_text)
     _print_meta_rule(records)
     return _meta_rule_status(records)
+
+
+def run_split_check(args):
+    """P1b E4: the split's own predicates (its manifest of this monolith, the monolith hash it records,
+    the views it references) by the rule every /dev* consumer's resolver applies,
+    scripts/resolve-spec-artifacts.py split_problem, before /spec writes the marker. Only with
+    --project-dir (G2 at the spec subagent's stop), the root the manifest's paths are relative to."""
+    if not args.project_dir:
+        return CheckResult("split", "N/A", "no --project-dir", 0)
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "resolve-spec-artifacts.py")
+    spec = importlib.util.spec_from_file_location("resolve_spec_artifacts", path)
+    resolver = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(resolver)
+    except (OSError, ImportError, SyntaxError):  # a resolver that will not load checks nothing
+        return CheckResult("split", "N/A", "resolver unavailable", 0)
+    spec_dir = os.path.dirname(os.path.abspath(args.views_dir))
+    problem = resolver.split_problem(spec_dir, os.path.realpath(args.monolith), args.project_dir)
+    if problem:
+        manifest = os.path.relpath(os.path.join(spec_dir, "views", "manifest.json"), args.project_dir)
+        return CheckResult("split", "FAIL", f"{manifest}: {problem}", 1)
+    return CheckResult("split", "PASS", "", 0)
