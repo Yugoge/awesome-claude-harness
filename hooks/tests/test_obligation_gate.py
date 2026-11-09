@@ -652,18 +652,21 @@ def test_G1_role_the_active_command_declares_no_template_for_passes(tmp_path, co
     pytest.param(lambda: _span_records("dev") + _typed_command("spec") + [_assistant_text()],
                  id="dev_then_spec_latest_span_wins"),
 ])
-def test_G1_spec_span_qa_without_obligation_passes(tmp_path, records):
-    """Acceptance 3 (g): a QA dispatch without an obligation inside a /spec
-    span (the active span, even after an earlier /dev) -> exit 0 in block
-    mode, nothing logged."""
+def test_G1_spec_span_qa_without_obligation_is_refused(tmp_path, records):
+    """Acceptance 3 (g), as P13-1 changed it: /spec's templates now declare qa (panel QA's round 1, split QA's
+    verdict line), so inside a /spec span (the active span, even after an earlier /dev) a QA dispatch without an
+    obligation is refused in block mode, as in every command that declares the role; split QA with its own
+    obligation passes."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("g1spec")
     payload = _dispatch_payload(project, sid, records(), subagent_type="qa",
                                 prompt="judge the spec, no block")
     result = _run_hook(home, project, payload, switch="block")
-    assert result.returncode == 0, result.stderr
-    assert result.stderr == ""
-    assert _written_logs(home) == []
+    assert result.returncode == 2 and "reason=missing_block" in result.stderr, result.stderr
+    split_qa = _block(_obligation_doc(role="qa", pipeline="spec", artifacts=[
+        {"kind": "response_line", "terminal_line_regex": "^SPLIT QA: (pass|fail)$"}])) + "\njudge the split"
+    payload = _dispatch_payload(project, _unique_sid("g1spec"), records(), subagent_type="qa", prompt=split_qa)
+    assert _run_hook(home, project, payload, switch="block").returncode == 2  # before round 1 is asked: ASK_FIRST
 
 
 def test_G1_product_repo_without_schemas_loads_harness_registry(tmp_path):
@@ -757,7 +760,7 @@ def test_G1_declared_roles_come_from_the_active_command_templates():
     assert {"pm", "ba", "dev", "qa"} <= declared["dev-overnight"]
     assert {"qa", "style-inspector", "cleanliness-inspector", "prompt-inspector"} <= declared["close"]
     assert {"qa", "changelog-analyst"} <= declared["commit"]
-    assert declared["spec"] == {"spec"}
+    assert declared["spec"] == {"spec", "ba", "qa"}  # P13-1: the BA panel, panel QA and split QA
     assert declared["do"] == frozenset()
     # P1b E3's fallback: the analysts' templates declare their own obligation.
     assert declared["merge"] == {"merge-analyst"} and declared["push"] == {"push-analyst"}

@@ -84,7 +84,7 @@ CONTRACTS: dict[str, tuple[Spot, ...]] = {
              ("fans them out to N parallel one-issue lanes inside the SAME cycle",)),
         Spot("Requirement Decomposition & Fan-Out", DEV_RULE, lead="**One cycle, no phases.**"),
         # the BA's goal line and the orchestrator's own plan validation
-        Spot("Step 4", ("delivers every requested outcome in this cycle (no phases, nothing deferred)",)),
+        Spot("Step 4c", ("delivers every requested outcome in this cycle (no phases, nothing deferred)",)),
         Spot("Step 6", ("the plan delivers every requested outcome in this cycle",
                         "a plan that splits a requested outcome into sequential phases or defers any part of it",
                         "fails validation")),

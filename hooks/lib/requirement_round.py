@@ -110,6 +110,19 @@ def asked(span, source: str, file=None, after: int = 0) -> bool:
     return False
 
 
+def ba_round_paths(task_id) -> list:
+    """The round files a BA dispatch of the task may write in place of its declared artifacts (the write gate's
+    stand-in paths beside the producer question): the next round, and the latest when it is BA's own (a round G2
+    refused is written again)."""
+    task = task_of(task_id)
+    if not task:
+        return []
+    found = rounds(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(), task)
+    n = found[-1][0] if found else 0
+    own = [ROUND.format(task=task, n=n)] if found and found[-1][1].name.startswith("requirement-round-") else []
+    return own + ([ROUND.format(task=task, n=n + 1)] if found else [])
+
+
 def round_asked(span, project, task: str, n: int) -> bool:
     file = question_file(project, task, n)
     return file is not None and asked(span, f"requirement-round:{task}:r{n}", file)
@@ -280,19 +293,33 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
     if not task:
         return None
     declared = {a.get("path") for a in ob.get("artifacts") or [] if isinstance(a, dict)}
-    parse, returned = _lib("obligation").parse_obligation, {}
-    for call in span.calls("Agent", "Task"):  # whether each role's latest dispatch came back ok
-        found = parse(call.input.get("prompt")) if call.id != current else None
-        if isinstance(getattr(found, "obligation", None), dict):
-            returned[found.obligation.get("role")] = bool(call.result_line and call.ok)
+    obligation = _lib("obligation")
+    latest = {}  # (role, task) -> (call, obligation) of that producer's latest dispatch in the span
+    for call in span.calls("Agent", "Task"):
+        found = obligation.parse_obligation(call.input.get("prompt")) if call.id != current else None
+        doc = getattr(found, "obligation", None)
+        if isinstance(doc, dict):
+            latest[(doc.get("role"), task_of(doc.get("task_id")))] = (call, doc)
     contract = _lib("contract_runtime")
     for path, source, round_file, role in _question_files(project, task):
         rel = path.relative_to(project).as_posix()
         if rel in declared:
             return None
+        owner = task if round_file else task_of(source.split(":")[1])
+        call, doc = latest.get((role, owner), (None, {}))
+        if call is None or not (call.result_line and call.ok):
+            continue  # its producer's latest dispatch has not come back ok: the question is not yet its to ask
+        # A producer question is its producer's latest dispatch's own (written since it was dispatched) and is
+        # asked after that dispatch came back: an earlier question at the same path was relayed already.
+        if round_file is None and obligation.artifact_freshness_satisfied(
+                "json", path.stat().st_mtime, doc.get("dispatched_at")) is not True:
+            continue
         schema = "requirement-round.v1" if round_file else "producer-question.v1"
-        if returned.get(role) and contract.validate_artifact_for_obligation(str(path), schema).get("status") == "pass" \
-                and not asked(span, source, round_file):
+        # A round G2 refuses (an answered question again, a refuted BA's option) is never asked: its producer
+        # writes it again, so it holds no dispatch back.
+        if contract.validate_artifact_for_obligation(str(path), schema).get("status") == "pass" \
+                and not (round_file and check_round(project, {"task_id": task}, rel, span)) \
+                and not asked(span, source, round_file, after=0 if round_file else call.result_line):
             return (f"ASK_FIRST: ask {rel} with one AskUserQuestion, metadata.source \"{source}\", questions exactly "
                     "as written; then dispatch.")
     if declared and not all(_PRE_ASK.search(p or "") for p in declared) and not round_asked(span, project, task, 1):

@@ -221,7 +221,7 @@ Proceed to Step 6 only on a strong signal.
      <obligation v="1">
      {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "spec", "pipeline": "spec", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z>", "artifacts": [{"kind": "spec_views", "path": "docs/dev/specs/<spec-id>/views", "monolith": "docs/dev/specs/spec-<spec-id>.md"}]}
      </obligation>
-     Panel reports: docs/dev/ba-panel-<spec-id>-A.md, -B.md, -C.md; round files: docs/dev/ba-panel-<spec-id>-r1.json and docs/dev/requirement-round-<spec-id>-r<n>.json; answers: Section 5's Requirement round blocks.
+     Panel reports: docs/dev/ba-panel-<spec-id>-A.md, -B.md, -C.md; round files: docs/dev/ba-panel-<spec-id>-r1.json and any later docs/dev/requirement-round-<spec-id>-rN.json; answers: Section 5's Requirement round blocks.
      Do the agent selection, the content extraction and the checkpoint generation, in that order; each owner decision of the rounds reaches the views that act on it.
      Return a JSON summary."
    ```
@@ -237,6 +237,10 @@ Proceed to Step 6 only on a strong signal.
      Monolith: <spec_path>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
+     Obligation block (instantiate per dispatch: dispatched_at is the UTC time captured just before this Agent call):
+     <obligation v="1">
+     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "qa", "pipeline": "spec", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z>", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^SPLIT QA: (pass|fail)$"}]}
+     </obligation>
 
      Check these criteria:
      1. ROLE MANDATE: If the spec defines role responsibilities (look for 'role split',
@@ -273,7 +277,8 @@ Proceed to Step 6 only on a strong signal.
         a later cycle: every requested outcome is delivered in one cycle. Parallel lanes inside
         one cycle are fine. Quote each offending line in `issues`.
 
-     Return JSON: {verdict: pass|fail, issues: [...], summary: '...'}
+     Return JSON: {verdict: pass|fail, issues: [...], summary: '...'}, then end your reply with the line
+     `SPLIT QA: pass` or `SPLIT QA: fail`, its verdict.
      "
    ```
 

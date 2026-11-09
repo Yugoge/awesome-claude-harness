@@ -104,9 +104,10 @@ import re
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from .. import agents, cmdtext, roles
+from .. import agents, cmdtext, hookrun, roles
 from ..pipeline import DROP, DROP_NEXT, Deviations, Orchestrator, Respelling, utc_now
 from ..replay import Deviation
+from . import _round
 
 PIPELINE = "dev"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -352,6 +353,11 @@ class DevCycle:
                               rules=self._rules(), line_rules=self._line_rules(), typed=typed)
         self.tid = self.reg = self.digits = ""   # the task id artifacts are named with; the registry id
         self.graph_lines: list = []
+        # The requirement round (Steps 4-4c): the panel BA being dispatched, the final BA, the round and answer
+        # files, the producer answer the hook wrote.
+        self.angle = self.chosen = self.producer_answer = None
+        self.round_files: list = []
+        self.answer_files: list = []
 
     # ------------------------------------------------------------ binding rules
     def _rules(self):
@@ -375,6 +381,13 @@ class DevCycle:
             (r"^accumulated hints$", lambda m: self.sc.rel),
             (r"JSON array of objections", lambda m: json.dumps(self.objections)),
             (r"^context_json_path$", lambda m: self.context_rel),
+            (r"^angle$", lambda m: self.angle or ""),
+            (r"^A, B or C when you are the chosen panel BA", lambda m: self.chosen or "null"),
+            (r"^the cycle's round files", lambda m: ", ".join(self.round_files) or "none"),
+            (r"^the cycle's answer files", lambda m: ", ".join(self.answer_files) or "none"),
+            (r"^the producer answer file", lambda m: self.producer_answer or "none"),
+            (r"^spec_path$", lambda m: self.o.values.get("spec_path") or "null"),
+            (r"^SPEC_ID$", lambda m: self.spec_id),
         ]
 
     def _line_rules(self):
@@ -470,7 +483,7 @@ class DevCycle:
         for v in {self.reg, self.tid}:
             self.rp.task(v)
         self.digits = re.sub(r"^[A-Za-z-]*?(?=\d{8}-\d{6})", "", self.tid)
-        req = re.search(r"User requirement document:\s*(\S+)", o.template("Step 4")["prompt"]).group(1)
+        req = re.search(r"User requirement document:\s*(\S+)", o.template("Step 4c")["prompt"]).group(1)
         o.values.update(DEV_SESSION_ID=self.reg, TASK_ID=self.tid, timestamp=self.tid,
                         REQUIREMENT_DOC=o.bind(req), orchestrator_resolved_spec_path="")
         o.todo_start()
@@ -505,9 +518,14 @@ class DevCycle:
         o.s.tool("Glob", {"pattern": pattern, "path": o.project}, label="Step 3 Glob prior tickets",
                  deviation=o.devs.at("Step 3 Glob prior tickets"))
 
-    def dispatch_ba(self, heading: str, label: str, question: bool = False, addressed=None):
+    def dispatch_ba(self, heading: str, label: str, question: bool = False, addressed=None, instead=None,
+                    need: str | None = None):
         o, sc = self.o, self.sc
         content, notes = _ba_content(self.tid, self.tier, sc), ""
+        # ba.md "Analysis": every answered question of the cycle's rounds in contract_refs, every other in assumptions.
+        mapping = _round.analysis(self.rp, o.project, self.cycle, sc.ac["id"])
+        content["context.v1"]["requirement"].update(mapping["requirement"])
+        content["context.v1"]["assumptions"] = mapping["assumptions"]
         if addressed:  # Step 8: BA answers each QA objection with evidence and updates its deliverables
             content["context.v1"]["qa_objections_addressed"] = [
                 dict(ob, evidence=f"{sc.before} before the change") for ob in addressed]
@@ -520,10 +538,10 @@ class DevCycle:
                 a["path"] for a in b.obligation["artifacts"] if a.get("schema") == "acceptance-criteria.v1")}}
         # ba.md Step 9: the blast-radius tool's Phase 1 run, as the agent text spells it (not respelled, row 7).
         calls = [("Run Blast-Radius Tool Phase 1", {"<comma-separated files_to_modify>": sc.rel})]
-        act = agents.Act(question=dict(sc.question, schema=self.question_schema()) if question else None,
-                         content=content, status="ready", notes=notes, work=ac_path,
-                         text_calls=[] if question else calls, respell=o.respell,
-                         summary=sc.ba_summary)
+        ask = dict(sc.question, schema=self.question_schema(), **({"need": need} if need else {})) if question else None
+        act = agents.Act(question=ask, content=content, status="ready", notes=notes, work=ac_path,
+                         text_calls=[] if question or instead else calls, respell=o.respell,
+                         summary=sc.ba_summary, instead=instead or {})
         return self._dispatch(o.template(heading), act, label, subagent_type=self.ba_type)
 
     def question_schema(self) -> str:
@@ -535,21 +553,160 @@ class DevCycle:
     def step4_pre(self) -> None:
         self.score_header(4, "ba")
         self.ba_type = self.step_role(4)
+        self.cycle = self.tid  # the round runs once for the cycle, under its task id
+
+    def refused(self, d, needle: str, what: str) -> None:
+        """A dispatch the variant expects the dispatch gate to refuse with ``needle`` in its text."""
+        text = "\n".join(hookrun.refusal(b) for b in (d.pre.blocks if d.pre else []))
+        if not d.blocked or needle not in text:
+            raise AssertionError(f"{what}: expected a refusal naming {needle!r}, got blocked={d.blocked}: {text[:300]}")
+        _round.fact(self.rp, f"refused: {what}", {"needle": needle, "text": text.splitlines()[:2]})
+
+    def stop_refused(self, d, needle: str, what: str) -> None:
+        """A subagent stop the variant expects G2 to refuse with ``needle`` in its text."""
+        text = "\n".join(hookrun.refusal(b) for b in (d.stop.blocks if d.stop else []))
+        if needle not in text:
+            raise AssertionError(f"{what}: expected G2 to refuse the stop naming {needle!r}: {text[:300]}")
+        _round.fact(self.rp, f"stop refused: {what}", {"needle": needle})
+
+    def panel_qa(self, doc: dict, label: str, faults=None):
+        act = agents.Act(content={"requirement-round.v1": doc}, faults=faults or {}, summary="panel QA checked the root causes")
+        return self._dispatch(self.o.template("Step 4a"), act, label)
+
+    def step4_round(self) -> None:
+        """Steps 4-4b (D28, D29, D32): without a spec the BA panel and panel QA, with one one BA intake; then each
+        round asked with one AskUserQuestion, its questions verbatim and its source."""
+        o, v, tid = self.o, self.variant, self.cycle
+        if self.spec_id:
+            act = agents.Act(content={"requirement-round.v1": _round.round1(tid, self.spec_id)}, status="ready",
+                             summary="the spec's open points")
+            self._dispatch(o.template("Step 4", anchor="Mode: intake"), act, "Step 4 Agent(ba) intake",
+                           subagent_type=self.ba_type)
+            rel = f"docs/dev/requirement-round-{tid}-r1.json"
+        else:
+            for angle in _round.ANGLES:
+                self.angle = angle
+                cause = ("a caller passes a wrong type before the function runs"
+                         if v == "panel-disagree" and angle == "B" else None)
+                act = agents.Act(notes=_round.panel_notes(angle, cause), status="ready",
+                                 terminal={"docs/dev/ba-panel-*": f"BA PANEL {angle}: DONE"},
+                                 summary=f"panel {angle}: root cause and solutions")
+                self._dispatch(o.template("Step 4", anchor="Mode: panel"), act, f"Step 4 Agent(ba) panel {angle}",
+                               subagent_type=self.ba_type)
+            self.angle = None
+            self.to("4a")
+            rel = f"docs/dev/ba-panel-{tid}-r1.json"
+            doc = _round.with_paths(_round.round1(tid, panel=_round.panel(refuted="C" if v == "panel-refuted" else "")), tid)
+            if v == "panel-refuted":  # panel QA first offers the refuted BA's option: G2 returns it (D32)
+                bad = json.loads(json.dumps(doc))
+                bad["questions"][1]["options"].append(dict(zip(("label", "description"), _round.SOLUTION["C"]), ba="C"))
+                self.stop_refused(self.panel_qa(bad, "Step 4a Agent(qa) panel QA offering a refuted option"),
+                                  "panel QA did not verify", "a refuted root cause offered as an option")
+            if v == "round-broken":  # an interrupted panel QA left a malformed round 1 (A3)
+                self.panel_qa(doc, "Step 4a Agent(qa) panel QA leaving a malformed round 1",
+                              faults={"docs/dev/ba-panel-*-r1.json": "invalid"})
+            d = self.panel_qa(doc, "Step 4a Agent(qa) panel QA")
+            if d.blocked:
+                raise AssertionError("the panel QA that writes round 1 was refused")
+            if v == "panel-refuted" and any(o_.get("ba") == "C" for q in self.load(rel)["questions"]
+                                            for o_ in q["options"]):
+                raise AssertionError("a refuted root cause reached the owner as an option")
+        self.round_files.append(rel)
+        self.to("4b")
+        self.ask_round(1, rel)
+
+    def ask_round(self, n: int, rel: str) -> None:
+        """Step 4b for round n, with the variant's way of answering, and what the hook wrote."""
+        o, v, tid = self.o, self.variant, self.cycle
+        source, label = f"requirement-round:{tid}:r{n}", f"Step 4b AskUserQuestion r{n}"
+        ans = f"docs/dev/requirement-answers-{tid}-r{n}.json"
+        if n == 1 and v == "round-unasked":  # BA analysis before round 1 is asked: refused (A3)
+            self.refused(self.dispatch_ba("Step 4c", "Step 4c Agent(ba) before round 1 is asked"), "ASK_FIRST",
+                         "BA analysis before round 1 is asked")
+        if n == 1 and v == "round-paraphrase":  # altered questions write no answer file and ask nothing (A3)
+            para = _round.ask_view(self.load(rel))
+            para[0] = dict(para[0], question="Roughly, what should change?")
+            _round.ask(o, rel, source, label + " paraphrased", questions=para)
+            if os.path.isfile(os.path.join(o.project, ans)):
+                raise AssertionError("a paraphrased round wrote an answer file")
+            self.refused(self.dispatch_ba("Step 4c", "Step 4c Agent(ba) after a paraphrased round 1"), "ASK_FIRST",
+                         "BA analysis after a paraphrased round 1")
+        mode = {"round-skip": "skip", "round-decline": "decline", "round-afk": "afk"}.get(v, "answer")
+        call, tin = _round.ask(o, rel, source, label, mode)
+        written = os.path.isfile(os.path.join(o.project, ans))
+        if written:
+            self.answer_files.append(ans)
+            got = json.loads(agents.peek(self.rp, "main", os.path.join(o.project, ans)))
+            if got.get("answers") != (call.response or {}).get("answers"):
+                raise AssertionError(f"{ans}: answers differ from the tool_response")
+        if written != (mode == "answer"):
+            raise AssertionError(f"round r{n} asked with {mode}: answer file written={written}")
+        _round.fact(self.rp, f"round r{n}", {"source": source, "questions": len(tin["questions"]), "mode": mode,
+                                             "answer_file": written, "ok": call.ok})
 
     def step4_lane(self) -> None:
-        d = self.dispatch_ba("Step 4", self.L("Step 4 Agent(ba)"), question=self.variant == "question")
+        """Step 4c: the final BA context's one producer (D24, D32), in analysis mode; while a point needs the
+        owner it writes the next round instead, asked as Step 4b says (D29: no cap)."""
+        v = self.variant
+        if v == "round-many" and not self.tag:
+            answered = next(q["question"] for q in self.load(self.round_files[0])["questions"])
+            for n in (2, 3, 4):
+                rel = f"docs/dev/requirement-round-{self.cycle}-r{n}.json"
+                if n == 3:  # a round that repeats an answered question is refused at G2 (A7)
+                    d = self.dispatch_ba("Step 4c", f"Step 4c Agent(ba) round r{n} repeating an answered question",
+                                         instead={rel: _round.next_round(self.cycle, n, answered)})
+                    self.stop_refused(d, "never ask it again", "a round repeating an answered question")
+                d = self.dispatch_ba("Step 4c", f"Step 4c Agent(ba) writes round r{n}",
+                                     instead={rel: _round.next_round(self.cycle, n)})
+                if d.blocked or (d.stop and d.stop.still_blocked):
+                    raise AssertionError(f"round r{n} in place of BA's artifacts was refused")
+                self.round_files.append(rel)
+                self.ask_round(n, rel)
+        if not self.spec_id:
+            self.chosen = _round.chosen(self.rp, self.o.project, self.cycle) or "A"
+        if v == "panel-disagree" and self.chosen != "A":
+            raise AssertionError(f"the owner's answer picked BA {self.chosen}, not A")
+        d = self.dispatch_ba("Step 4c", self.L("Step 4c Agent(ba)"), question=v in ("question", "devquestion"))
         self.ba_question = d.player.question_written
 
     def step4(self) -> None:
         self.step4_pre()
+        self.step4_round()
+        self.to("4c")
         self.step4_lane()
+
+    def producer_source(self) -> str:
+        """The source Step 5 gives a relayed producer question, bound to the task."""
+        m = re.search(r"`metadata\.source` is `([^`]+)`", self.o.section("Step 5"))
+        return self.o.bind(m.group(1)) if m else ""
+
+    def relay(self, label: str) -> None:
+        """Step 5 item 1: one AskUserQuestion with the question's source; the hook's producer answer."""
+        import hashlib
+        o = self.o
+        q, answer = o.ask(self.ba_question, self.L(label), source=self.producer_source())
+        self.answers.append({"question": q.get("need"), "answer": answer})
+        raw = agents.peek(self.rp, "main", os.path.join(o.project, self.ba_question)).encode()
+        rel = f"docs/dev/producer-answer-{self.tid}-ba-{hashlib.sha256(raw).hexdigest()[:8]}.json"
+        self.producer_answer = rel if os.path.isfile(os.path.join(o.project, rel)) else None
+        _round.fact(self.rp, label, {"producer_answer": self.producer_answer})
 
     def step5(self) -> None:
         if not self.ba_question:
             return
-        o = self.o
-        q, answer = o.ask(self.ba_question, self.L("Step 5 AskUserQuestion"))
-        self.answers.append({"question": q.get("need"), "answer": answer})
+        if self.variant == "devquestion":  # A5: two producer questions in a row, each asked before the next dispatch
+            for k, need in ((1, "a second decision only the owner can make"), (2, None)):
+                self.refused(self.dispatch_ba("Step 5", f"Step 5 Agent(ba) before question {k} is asked"),
+                             "ASK_FIRST", f"BA re-dispatched before producer question {k} is asked")
+                self.relay(f"Step 5 AskUserQuestion question {k}")
+                d = self.dispatch_ba("Step 5", f"Step 5 Agent(ba) after question {k}", question=need is not None,
+                                     need=need)
+                self.ba_question = d.player.question_written
+            answers = sorted(os.listdir(os.path.join(self.o.project, "docs", "dev")))
+            if len([a for a in answers if a.startswith(f"producer-answer-{self.tid}-ba-")]) != 2:
+                raise AssertionError(f"two producer questions gave {answers}")
+            return
+        self.relay("Step 5 AskUserQuestion")
         d = self.dispatch_ba("Step 5", self.L("Step 5 Agent(ba) clarification round 1"))
         self.ba_question = d.player.question_written
 
@@ -825,6 +982,12 @@ class DevCycle:
         self.to(2); self.step2()
         self.to(3); self.step3()
         self.to(4); self.step4()
+        if self.variant == "text-question":  # R7: a turn ending with a question in text is a Stop gap (A8)
+            ev = o.s.stop("Round 1 is asked. Shall I go on with the analysis?", label="Stop with a question in text")
+            text = "\n".join(hookrun.refusal(b) for b in ev.blocks)
+            if "the turn ends with a question in text" not in text:
+                raise AssertionError(f"a question in text met no gap: {text[:300]}")
+            _round.fact(self.rp, "text question", {"blocked": True})
         self.to(5); self.step5()
         self.to(6); self.step6()
         self.to(7)
@@ -878,7 +1041,7 @@ class FanoutCycle(DevCycle):
     # ------------------------------------------------------------ the text's fan-out rules
     def read_fanout_text(self) -> None:
         o = self.o
-        adapter = next((l for l in o.template("Step 4")["prompt"].split("\n")
+        adapter = next((l for l in o.template("Step 4c")["prompt"].split("\n")
                         if "Lane-execution adapter is active" in l), None)
         if adapter is None:
             raise cmdtext.TextNotFound("Step 4's template has no fan-out lane-execution adapter line")
@@ -1034,7 +1197,8 @@ class FanoutCycle(DevCycle):
         self.decompose()
         self.to(2); self.step2()
         self.to(3); self.step3()
-        self.to(4); self.step4_pre(); self.each(self.step4_lane)
+        self.to(4); self.step4_pre(); self.step4_round()
+        self.to("4c"); self.each(self.step4_lane)
         self.to(5); self.each(self.step5)
         self.to(6); self.each(lambda: self.step6(self.L("Step 6")))
         self.to(7)
@@ -1075,11 +1239,14 @@ class FanoutCycle(DevCycle):
 
 
 VARIANTS = ("plain", "qa-fail", "question", "ba-qa-fail", "fanout", "fanout-qa-fail", "formatter")
+# P13-1 (D28, D29, D32): the requirement round's variants; not artifact-check jobs (the round runs in every variant).
+ROUND_VARIANTS = ("round", "round-unasked", "round-paraphrase", "round-broken", "round-skip", "round-decline",
+                  "round-afk", "devquestion", "round-many", "text-question", "panel-disagree", "panel-refuted")
 
 
 def run(rp) -> None:
     variant = rp.args.get("variant", "plain")
-    if variant not in VARIANTS + ("qa-never", "qa-early"):
+    if variant not in VARIANTS + ("qa-never", "qa-early") + ROUND_VARIANTS:
         raise ValueError(f"unknown variant {variant!r}")
     tier = rp.args.get("tier", "STANDARD")
     if variant.startswith("fanout"):

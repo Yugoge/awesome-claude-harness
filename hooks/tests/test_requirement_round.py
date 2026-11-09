@@ -439,3 +439,28 @@ def test_r3_the_spec_window_lets_a_foreground_ba_through():
     spec.loader.exec_module(window)
     assert [window._tool_is_exempt({"tool_input": {"subagent_type": t}}) for t in ("ba", "spec", "qa", "dev")] == [
         True, True, True, False]
+
+
+def test_r5_a_second_producer_question_needs_its_own_ask_and_an_old_one_blocks_nothing(project, tx):
+    """A5's gate half: the first ask does not cover a second question its producer wrote at the same path;
+    a question older than its producer's latest dispatch was relayed already and refuses nothing."""
+    first = round_doc()
+    put(project, ROUND1, first)
+    tx.ask(first)
+    question = rr.QUESTION.format(task=TASK, role="ba")
+    doc = {"task_id": TASK, "role": "ba", "need": "n", "why": "w", "default": "A",
+           "options": [{"label": "A", "description": "a"}, {"label": "B", "description": "b"}]}
+    source = {"metadata": {"source": f"producer-question:{TASK}:ba"}}
+    tx.dispatch("ba", [CONTEXT])
+    put(project, question, doc)
+    tx.tool("AskUserQuestion", dict(source, questions=[]))
+    assert rr.ask_first(span(tx), project, obligation_doc("ba", [CONTEXT])) is None
+    tx.dispatch("ba", [CONTEXT])  # the re-dispatch writes its second question at the same path
+    put(project, question, dict(doc, need="a second decision"))
+    assert rr.ask_first(span(tx), project, obligation_doc("ba", [CONTEXT])).startswith(f"ASK_FIRST: ask {question}")
+    tx.tool("AskUserQuestion", dict(source, questions=[]))
+    assert rr.ask_first(span(tx), project, obligation_doc("ba", [CONTEXT])) is None
+    tx.dispatch("ba", [CONTEXT])  # BA's report this time: the question file stays from before
+    stale = time.mktime((2026, 11, 9, 11, 0, 0, 0, 0, 0)) - time.timezone
+    os.utime(project / question, (stale, stale))
+    assert rr.ask_first(span(tx), project, obligation_doc("qa", [CONTEXT])) is None

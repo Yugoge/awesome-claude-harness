@@ -16,7 +16,8 @@ _STEPS = [
     # The requirement round (D28, D32): BA intake or the BA panel, panel QA, the asks, then BA analysis.
     ("4", "Requirement round: BA intake, or the BA panel without a spec", "Dispatching BA for the requirement round",
      {"subagent_call": {"agent": "ba", "subagent_type": "ba"}}),
-    ("4a", "Panel QA writes round 1 (without a spec)", "Panel QA writing round 1", {"subagent_call": {"agent": "qa", "subagent_type": "qa"}}),
+    # No subagent_call: with a spec there is no panel, and no QA dispatch comes under this step.
+    ("4a", "Panel QA writes round 1 (without a spec)", "Panel QA writing round 1", None),
     ("4b", "Ask each round with AskUserQuestion", "Asking the round with AskUserQuestion", None),
     ("4c", "BA analysis (the final BA context)", "Delegating to BA for analysis", {"subagent_call": {"agent": "ba", "subagent_type": "ba"}}),
     ("5", "BA clarification loop (if needed)", "Running BA clarification loop", None),

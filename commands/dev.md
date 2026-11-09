@@ -226,7 +226,7 @@ For each round file, in round order (`docs/dev/ba-panel-<TASK_ID>-r1.json` or `d
 
 ### Step 4c: BA Analysis (the final BA context)
 
-The final BA context has one producer. With a panel: the BA whose option the owner chose (the chosen option's `ba` in the panel round, read beside the answer file); when the BAs agreed or the owner chose none, the BA whose root cause panel QA verified (A, then B, then C, when more than one). With a spec: one BA. Dispatch it in analysis mode; with lanes, one per lane, each reading the cycle's rounds. While a point still needs the owner, it writes the next round instead of its artifacts: ask it (Step 4b) and dispatch it again; rounds have no cap.
+The final BA context has one producer. Its dispatch lists the cycle's round files (`docs/dev/ba-panel-<TASK_ID>-r1.json` or `docs/dev/requirement-round-<TASK_ID>-r1.json`, then `docs/dev/requirement-round-<TASK_ID>-r<n>.json`) and the answer files the hook wrote (`docs/dev/requirement-answers-<TASK_ID>-r<n>.json`). With a panel: the BA whose option the owner chose (the chosen option's `ba` in the panel round, read beside the answer file); when the BAs agreed or the owner chose none, the BA whose root cause panel QA verified (A, then B, then C, when more than one). With a spec: one BA. Dispatch it in analysis mode; with lanes, one per lane, each reading the cycle's rounds. While a point still needs the owner, it writes the next round instead of its artifacts: ask it (Step 4b) and dispatch it again; rounds have no cap.
 
 ```
 Use Task tool with:
@@ -266,8 +266,8 @@ Use Task tool with:
   You are the BA subagent. Follow .claude/agents/ba.md instructions precisely.
   Mode: analysis
   Angle: <A, B or C when you are the chosen panel BA, else null>
-  Round files: <every docs/dev/requirement-round-<TASK_ID>-r<n>.json and docs/dev/ba-panel-<TASK_ID>-r1.json of the cycle>
-  Answer files: <every docs/dev/requirement-answers-<TASK_ID>-r<n>.json of the cycle, or none>
+  Round files: <the cycle's round files, comma-separated>
+  Answer files: <the cycle's answer files, comma-separated, or none>
 
   <BA_SCORE_HEADER prepended here>
 
@@ -319,7 +319,7 @@ Use Task tool with:
 
   Requirement: '<original requirement>'
   Clarification round: <N>
-  Previous answers: <the producer answer file docs/dev/producer-answer-<timestamp>-ba-<q8>.json, or none when the owner gave no answer>
+  Previous answers: <the producer answer file the hook wrote, or none when the owner gave no answer>
   Codebase hints: <accumulated hints>
   Timestamp: <same timestamp>
   Spec file: <spec_path or null>

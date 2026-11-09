@@ -236,7 +236,7 @@ class Orchestrator:
         return next((i for i, t in enumerate(self.todos) if t.get("status") == "in_progress"), None)
 
     def step_name(self, i: int) -> str:
-        m = re.match(r"(Step \d+)", self.todos[i]["content"])
+        m = re.match(r"(Step \d+[a-z]?)", self.todos[i]["content"])  # Step 4, Step 4a
         return m.group(1) if m else self.todos[i]["content"]
 
     def advance(self, label: str | None = None):
@@ -400,8 +400,9 @@ class Orchestrator:
         return d
 
     # ------------------------------------------------------------ owner questions
-    def ask(self, rel_path: str, label: str):
-        """Relay a producer question artifact with ONE AskUserQuestion; returns (question doc, answer label)."""
+    def ask(self, rel_path: str, label: str, source: str | None = None):
+        """Relay a producer question artifact with ONE AskUserQuestion, with ``metadata.source`` when the text
+        names one (D28: the hook writes the producer answer); returns (question doc, answer label)."""
         path = os.path.join(self.project, rel_path)
         self.s.read(path, label=f"{label} Read question", deviation=self.devs.at(f"{label} Read question"))
         q = json.loads(agents.peek(self.rp, "main", path))
@@ -409,6 +410,8 @@ class Orchestrator:
                     "description": o.get("description", "")} for o in q.get("options", [])]
         tin = {"questions": [{"question": q.get("need", ""), "header": (q.get("role") or "producer")[:12],
                               "options": options, "multiSelect": False}]}
+        if source:
+            tin["metadata"] = {"source": source}
         call = self.s.tool("AskUserQuestion", tin, label=label, deviation=self.devs.at(label))
         ans = (call.response.get("answers") or {}).get(q.get("need", ""), q.get("default", ""))
         return q, ans.replace(" (Recommended)", "")
