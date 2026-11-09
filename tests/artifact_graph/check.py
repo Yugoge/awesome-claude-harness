@@ -1488,13 +1488,27 @@ class _Ctx:
             tasks = [v for v, k in (run.ids.get("ids") or {}).items() if k == "task"]
             if not tasks:
                 continue
+            # where the run held each id before a hook event: the event before which it was first
+            # there (1: at the run's start, in a file of its starting tree or state), from a file a
+            # step of an earlier event wrote, or an earlier event's payload (hook event n's
+            # processes carry n; a driver or tool step carries the last event fired before it)
+            held: dict = {}
+            seen = [(1, p) for p in run.manifest]
+            seen += [(e["event"] + 1, e["raw"]) for e in run.events if e["op"] in ("write", "create", "rename")]
+            seen += [(s + 1, json.dumps(inv.get("payload") or {})) for s, inv in run.invocations.items()]
+            for k, text in seen:
+                for t in tasks:
+                    if t in text:
+                        held[t] = min(held.get(t, k), k)
             first = None
-            # a hook mints an id its output carries and its event's payload did not hand it (a
-            # PreToolUse rewrite of the call's input passes on the ids the call held)
+            # a hook mints an id its output carries that its event's payload did not hand it and
+            # the run did not already hold (a PreToolUse rewrite of the call's input passes on the
+            # ids the call held; a hook that lists a cycle's files names ids the run started with)
             for n, h in sorted(enumerate(run.hooks, 1), key=lambda p: p[1].get("t", 0)):
                 given = json.dumps((run.invocations.get(n) or {}).get("payload") or {})
                 for x in h.get("hooks", []):
-                    if any(t in (x.get("stdout") or "") and t not in given for t in tasks):
+                    if any(t in (x.get("stdout") or "") and t not in given and held.get(t, n + 1) > n
+                           for t in tasks):
                         first = os.path.normpath(x["hook"])
                         break
                 if first:
