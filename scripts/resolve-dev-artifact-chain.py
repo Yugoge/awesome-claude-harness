@@ -1617,7 +1617,7 @@ def disposition(project_root: Path | str, task_id: str, stage: str) -> dict[str,
         not report.is_file() and _do_minted(root, task_id))
     if do_task and report.is_file() and obligation.terminal_status("do-report.v1", do_record) != "completed":
         # Q7: the report of dev, dispatched along the do-report's route, concludes the /do task (G2 verified it),
-        # and the do-report's lists equal that report's (A3.c with no transcript, do_report_gaps)
+        # and that report lists the do-report's files too (A3.c with no transcript, do_report_gaps; P5-62)
         if (record := validator.read_json(report)) is not None:
             validator.validate_dev(record, task_id, report)
         for code, artifact, detail in do_report_gaps(root, task_id, do_path):
@@ -1718,10 +1718,13 @@ def do_report_gaps(
     listed file is written or named and each written file is listed, else one
     gap names the exact expected paths. Without a transcript (the Q7 route of a
     /close or /commit stage: the do-report is not completed and the task's
-    dev-report, which G2 verified at dev's stop, concludes it) its lists must
-    equal that dev-report's dev.files_modified and dev.files_created, else one
-    gap names them; with no dev-report they stand as the report states them.
-    Read-only."""
+    dev-report, which G2 verified at dev's stop, concludes it) that dev-report's
+    dev.files_modified and dev.files_created must hold each file the do-report
+    lists, else one gap names the dev-report and the files it lacks: dev, its
+    producer, repairs it (a file it names counts at G2), while the do-report,
+    whose producer's /do has ended, is no input (D8; it may list fewer files
+    than dev wrote, P5-62); with no dev-report they stand as the report states
+    them. Read-only."""
     harness = str(Path(__file__).resolve().parent.parent)
     if harness not in sys.path:
         sys.path.insert(0, harness)
@@ -1745,12 +1748,12 @@ def do_report_gaps(
             dev = json.loads(dev_path.read_text(encoding="utf-8")).get("dev")
         except (OSError, ValueError, AttributeError):
             return []  # no dev-report to compare (or one the chain's own check reads)
-        expected = listed(dev)
-        if isinstance(do, dict) and listed(do) != expected:
-            return [("FILES_NOT_DEV_REPORT", relative,
-                     "do.files_modified + do.files_created must list exactly the files of "
-                     f"{dev_path.relative_to(root).as_posix()} (dev.files_modified + dev.files_created): "
-                     f"{json.dumps(sorted(expected))}")]
+        lacking = listed(do) - listed(dev)
+        if isinstance(do, dict) and lacking:
+            return [("FILES_NOT_DEV_REPORT", dev_path.relative_to(root).as_posix(),
+                     f"dev.files_modified + dev.files_created must also list the files of {relative} that the /do "
+                     "main agent wrote and this dev takes over (a file counts once one of dev's Bash commands "
+                     f"names it, for example `git diff -- <path>`): {json.dumps(sorted(lacking))}")]
         return []
     schema = contract_runtime.validate_report_artifact(path)
     gaps = [("SCHEMA_VIOLATION", relative, str(error))
