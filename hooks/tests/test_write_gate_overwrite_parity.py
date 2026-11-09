@@ -1,7 +1,8 @@
-"""lib/write_gate/overwrite.py decides as hooks/pretool-write-guard.sh does, message for message.
+"""lib/write_gate/overwrite.py decides as hooks/pretool-write-guard.sh did, message for message.
 
-The write gate runs the Python form; the shell hook stays registered until the gate's
-registration lands. Both run as processes, on one corpus: the main agent and a subagent,
+The write gate runs the Python form. The shell hook is an exit-0 stub since the gate's registration
+landed (D15), so it runs here as the P12 base shipped it (hooks/tests/retired_hooks.py). Both run as
+processes, on one corpus: the main agent and a subagent,
 /do consent on and off, an /allow grant naming the target, naming another one, or none,
 an existing and a new file, the bulk-commit sentinel's name, NotebookEdit, other tools,
 and payloads that do not parse. Each case must give the same exit status, stderr and stdout.
@@ -18,8 +19,9 @@ from pathlib import Path
 
 import pytest
 
+import retired_hooks
+
 ROOT = Path(__file__).resolve().parents[2]
-SHELL = ROOT / "hooks" / "pretool-write-guard.sh"
 PORT = ROOT / "hooks" / "lib" / "write_gate" / "overwrite.py"
 SID = "sess-overwrite-parity"
 
@@ -87,8 +89,9 @@ def test_the_port_answers_as_the_shell_hook(tmp_path, consent, grant):
     _setup(tmp_path, consent, grant, existing, new)
     env = _env(tmp_path)
     compared = 0
+    shell_hook = retired_hooks.materialize("pretool-write-guard.sh", tmp_path / "retired")
     for raw in _payloads(existing, new, sentinel):
-        shell = _run(["bash", str(SHELL)], raw, env, proj)
+        shell = _run(["bash", str(shell_hook)], raw, env, proj)
         port = _run([sys.executable, str(PORT)], raw, env, proj)
         assert port == shell, raw
         compared += 1

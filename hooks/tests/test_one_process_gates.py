@@ -13,6 +13,7 @@ Run with: python3 -m pytest hooks/tests/test_one_process_gates.py -v
 """
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -183,10 +184,17 @@ def test_a_refuse_rule_after_a_witness_is_rejected(tmp_path):
 @pytest.mark.parametrize("gate", ["pretool-dispatch-gate.py", "subagentstop-producer-gate.py",
                                   "posttool-dispatch-record.py"])
 def test_every_gate_rule_is_a_hook_file_and_in_a_valid_order(gate):
+    """Each rule is a hook file in hooks/, or a function of a module under hooks/."""
     rules = _rules(gate)
     gate_runner.check_order(rules)
-    assert rules and all(Path(r.path).is_file() and Path(r.path).parent == HOOKS for r in rules)
-    assert len({r.path for r in rules}) == len(rules)
+    files = [r for r in rules if r.path]
+    assert files and all(Path(r.path).is_file() and Path(r.path).parent == HOOKS for r in files)
+    for r in rules:
+        if r.call:
+            module, _, name = r.call.partition(":")
+            assert (HOOKS / (module.replace(".", "/") + ".py")).is_file(), r
+            assert callable(getattr(importlib.import_module(module), name)), r
+    assert len({r.path or r.call for r in rules}) == len(rules)
 
 
 # ---------------------------------------------------------------- the dispatch witness

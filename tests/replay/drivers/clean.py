@@ -153,7 +153,7 @@ import time
 
 from .. import agents, cmdtext, hookrun
 from ..pipeline import Deviations, Orchestrator, utc_now
-from ..replay import Deviation
+from ..replay import Deviation, rule_files
 from ..sandbox import FIXED_DATE
 
 PIPELINE = "clean"
@@ -211,6 +211,14 @@ SETUP = {
                             "python3 -m pytest -q tests\n",
     "scripts/run-tests.sh.bak": "#!/usr/bin/env bash\npython3 -m pytest tests\n",
 }
+
+
+def _tool_policy_refused(r: dict) -> bool:
+    """The refusal is tool-policy's: reported by hooks/pretool-tool-policy.py itself, or by the merged gate
+    that runs it as a rule (the write gate since P12), in tool-policy's own words."""
+    hook = r.get("hook", "")
+    return hook.endswith("pretool-tool-policy.py") or (
+        "hooks/pretool-tool-policy.py" in rule_files(hook) and "tool-policy.v1" in (r.get("hook_output") or ""))
 
 
 def prepare(project: str, git) -> None:
@@ -980,7 +988,7 @@ class CleanRun:
         for r in refused:
             line = f"{r['action_id']} ({r.get('action')}): {r['operation']} was refused by {r.get('hook')}: " \
                    f"{r.get('hook_output')}"
-            if r.get("hook", "").endswith("pretool-tool-policy.py"):
+            if _tool_policy_refused(r):
                 if not (withdrawn and choice):
                     raise cmdtext.TextNotFound("Workflow Overview: no outcome for an operation the tool policy refused")
                 named.append(f"{line}; {withdrawn.group(1)} and recorded with the hook's output")

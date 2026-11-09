@@ -8,7 +8,10 @@ The rules run in this order, each as its own hook would run alone
    writer;
 2. posttool-overnight-file-check.py: the returned producer's artifacts against the
    cycle contract (exit 2 returns the finding to the agent);
-3. posttool-overnight-trace.py: the overnight trace record.
+3. posttool-overnight-trace.py: the overnight trace record;
+4. lib/dev_loop_checks.py advice(), advice only: for a returned dev dispatch, the
+   layer match, guard integrity and minimum diff checks of the task its obligation
+   names, as additionalContext; it never refuses.
 
 The contract is written before the two rules that read it, so neither reads it half
 way through a write or before it exists on the same return, as they did when the
@@ -22,12 +25,13 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 
-from lib.gate_runner import OBSERVE, REFUSE, Rule, main  # noqa: E402
+from lib.gate_runner import ADVISE, OBSERVE, REFUSE, Rule, main  # noqa: E402
 
 RULES = [
     Rule("cycle-contract-writer", str(HOOKS / "posttool-subagent-track.py"), OBSERVE),
     Rule("overnight-file-check", str(HOOKS / "posttool-overnight-file-check.py"), REFUSE),
     Rule("overnight-trace", str(HOOKS / "posttool-overnight-trace.py"), OBSERVE),
+    Rule("dev-loop-after", call="lib.dev_loop_checks:advice", kind=ADVISE),
 ]
 
 if __name__ == "__main__":

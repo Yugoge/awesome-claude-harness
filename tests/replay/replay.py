@@ -62,14 +62,29 @@ class ToolError(Exception):
 
 @dataclass
 class Deviation:
-    """Pass one block: `hook` is the registered hook file (or its basename), `quote` an excerpt of its text."""
+    """Pass one block: `hook` is the hook file that refuses (or its basename): registered, or a rule of
+    the merged gate that reports the block (tests/replay/sites.py gate_rules); `quote` an excerpt of
+    its text."""
     hook: str
     quote: str
     why: str = ""
 
     def covers(self, block_hook: str, raw: str, text: str) -> bool:
-        same = block_hook == self.hook or block_hook.endswith("/" + self.hook)
+        names = [block_hook] + rule_files(block_hook)
+        same = any(n == self.hook or n.endswith("/" + self.hook) for n in names)
         return same and (self.quote in raw or self.quote in text)
+
+
+_RULES: dict = {}
+
+
+def rule_files(hook: str) -> list:
+    """The refusing rule files of the merged gate `hook` of this tree (none: [])."""
+    if hook not in _RULES:
+        from . import sites
+        repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        _RULES[hook] = [r.file for r in sites.gate_rules(repo, hook) if r.relays]
+    return _RULES[hook]
 
 
 class Event:

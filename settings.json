@@ -410,10 +410,12 @@
         ]
       },
       {
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-subagent-enforce.py\""
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-write-gate.py\"",
+            "timeout": 70
           }
         ]
       },
@@ -423,10 +425,6 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-bash-safety.sh\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-bash-views-guard.py\""
           },
           {
             "type": "command",
@@ -448,38 +446,11 @@
         ]
       },
       {
-        "matcher": "Write|Edit|MultiEdit|Bash|AskUserQuestion",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-overnight-hook-guard.py\""
-          }
-        ]
-      },
-      {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-quality-gate.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-tool-policy.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-cp-state-write-guard.py\""
           }
         ]
       },
@@ -490,15 +461,6 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-attribution-pre.py\"",
             "timeout": 30
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|NotebookEdit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-subagent-code-block.py\""
           }
         ]
       },
@@ -538,49 +500,11 @@
         ]
       },
       {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-write-guard.sh\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
         "matcher": "Agent",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-layer-escalation-check.sh\""
-          },
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-bisect-gate.sh\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-spec-block-foreground-agent.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-orchestrator-prompt-purity.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-aggregate-check.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-gitignore-preflight.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-obligation-gate.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-commit-dispatch-attest.py\""
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-dispatch-gate.py\""
           }
         ]
       },
@@ -590,16 +514,6 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-runcode-watchdog.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write|MultiEdit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-claude-config-guard.py\"",
-            "timeout": 5
           }
         ]
       },
@@ -619,15 +533,6 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-git-privilege-guard.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-push-analyst-grant-guard.py\""
           }
         ]
       }
@@ -687,16 +592,7 @@
         ]
       },
       {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-push-gate-token-verify.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "Bash\\(git commit.*\\)",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -709,15 +605,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-overnight-file-check.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-subagent-track.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-overnight-trace.py\""
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-dispatch-record.py\""
           }
         ]
       },
@@ -769,17 +657,6 @@
         ]
       }
     ],
-    "Notification": [
-      {
-        "matcher": "idle_prompt",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/notification-idle-overnight.py\""
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
@@ -808,55 +685,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagent-stop-diff-check.sh\""
-          },
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-layer-match-gate.sh\""
-          },
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagent-stop-guard-integrity.sh\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstop-restart-track.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstop-codex-enforce.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstop-e2e-enforce.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstop-artifact-contract-enforce.py\""
-          }
-        ]
-      },
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstop-cp-enforce.py\""
+            "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/subagentstop-producer-gate.py\""
           }
         ]
       }

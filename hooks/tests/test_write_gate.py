@@ -47,14 +47,10 @@ def _settings() -> dict:
     return json.loads((ROOT / "settings.json").read_text())
 
 
-def _old_registrations():
-    """(matcher, command, timeout) of the seven guards, in settings.json order."""
-    out = []
-    for group in _settings()["hooks"]["PreToolUse"]:
-        for h in group["hooks"]:
-            if write_gate_settings._replaced(h.get("command", "")):
-                out.append((group.get("matcher", "*"), h["command"], h.get("timeout", 60)))
-    return out
+def _old_registrations(dest: Path):
+    """(matcher, command, timeout) of the seven guards as the P12 base registered them, in its
+    settings.json order (the two retired files run from their base copies under ``dest``)."""
+    return write_gate_settings.old_guards(dest)
 
 
 def _matches(matcher, tool) -> bool:
@@ -154,7 +150,7 @@ def _old(lab: Lab, raw: str):
     except (ValueError, AttributeError):
         tool = None
     refusals, updated, errors = [], None, []
-    for matcher, command, timeout in _old_registrations():
+    for matcher, command, timeout in _old_registrations(lab.tmp / "retired"):
         if tool is not None and not _matches(matcher, tool):
             continue
         rc, out, err = lab.run(command, raw, timeout)
@@ -175,9 +171,9 @@ def lab(tmp_path):
     return Lab(tmp_path)
 
 
-def test_each_rule_sees_the_tools_its_guard_was_registered_for():
+def test_each_rule_sees_the_tools_its_guard_was_registered_for(tmp_path):
     registered = {}
-    for matcher, command, _ in _old_registrations():
+    for matcher, command, _ in _old_registrations(tmp_path):
         name = command.rstrip('"').rsplit("/", 1)[-1]
         registered[name] = None if matcher in ("", "*") else frozenset(matcher.split("|"))
     by_file = {Path(r.path).name: r for r in write_gate.RULES}
@@ -189,14 +185,17 @@ def test_each_rule_sees_the_tools_its_guard_was_registered_for():
     assert all(Path(r.file).is_file() for r in write_gate.RULES)
 
 
-def test_the_scratch_settings_register_the_gate_once_and_no_guard():
-    s = write_gate_settings.gate_settings(_settings())
-    commands = [(g.get("matcher"), h["command"]) for g in s["hooks"]["PreToolUse"] for h in g["hooks"]]
-    assert [c for c in commands if "write-gate" in c[1]] == [("*", write_gate_settings.GATE_COMMAND)]
-    assert not any(write_gate_settings._replaced(c[1]) for c in commands)
-    before = sum(len(g["hooks"]) for g in _settings()["hooks"]["PreToolUse"])
-    assert len(commands) == before - 7 + 1
-    assert s["hooks"]["PostToolUse"] == _settings()["hooks"]["PostToolUse"]
+def _registrations(settings: dict) -> list[tuple]:
+    """(event, matcher, command, timeout) of every registration, in settings.json order."""
+    return [(event, g.get("matcher"), h["command"], h.get("timeout")) for event, groups in settings["hooks"].items()
+            for g in groups for h in g["hooks"]]
+
+
+def test_settings_register_the_gate_once_and_no_guard():
+    regs = _registrations(_settings())
+    gate = [(e, m, c, t) for e, m, c, t in regs if "write-gate" in c]
+    assert gate == [("PreToolUse", "*", write_gate_settings.GATE_COMMAND, write_gate_settings.GATE_TIMEOUT)]
+    assert not any(write_gate_settings._replaced(c) for _, _, c, _ in regs)
 
 
 @pytest.mark.parametrize("setup", ["plain", "consent", "grant", "refactor-sentinel"])
@@ -413,19 +412,23 @@ def test_the_fallback_answers_as_the_gate(lab, monkeypatch):
 
 
 def test_l4s_whole_registration_change():
-    """The registration change L4 asks the integration lane for (hooks/tests/write_gate_settings.py)."""
-    base = _settings()
-    s = write_gate_settings.l4_settings(base)
-    regs = [(event, g.get("matcher"), h["command"]) for event, groups in s["hooks"].items()
-            for g in groups for h in g["hooks"]]
-    gone = write_gate_settings.REPLACED + write_gate_settings.ANTI_LOOP + write_gate_settings.STUBS
-    assert not [r for r in regs if write_gate_settings._names(r[2], gone)]
-    dev_loop = [(e, m) for e, m, c in regs if c == write_gate_settings.DEV_LOOP_COMMAND]
-    assert dev_loop == [("PreToolUse", "Agent"), ("PostToolUse", "Agent")]
-    assert [m for e, m, c in regs if c.rstrip('"').endswith("/posttool-git-warn.sh")] == ["Bash"]
-    before = sum(len(g["hooks"]) for groups in base["hooks"].values() for g in groups)
-    assert len(regs) == before - 7 + 1 - 5 + 2 - 3
-    for _, _, command in regs:  # every registered file exists
+    """The registration change of L4 and L5 together, as settings.json makes it
+    (hooks/tests/write_gate_settings.py): 78 registrations at the P12 base become 52."""
+    w = write_gate_settings
+    regs = _registrations(_settings())
+    gone = w.REPLACED + w.ANTI_LOOP + w.STUBS + w.DISPATCH
+    assert not [r for r in regs if w._names(r[2], gone)]
+    assert not [r for r in regs if "dev_loop_checks" in r[2]]  # a rule of the two dispatch gates instead
+    assert [(e, m) for e, m, c, t in regs if c.rstrip('"').endswith("/" + w.GIT_WARN)] == [("PostToolUse", "Bash")]
+    for event, matcher, gate, dev_loop in w.GATES:
+        assert [(e, m, t) for e, m, c, t in regs if w._names(c, (gate,))] == [(event, matcher, None)], gate
+        ns = {"__name__": "gate", "__file__": str(HOOKS / gate)}
+        exec(compile((HOOKS / gate).read_text(), str(HOOKS / gate), "exec"), ns)
+        calls = [(r.name, r.kind) for r in ns["RULES"] if r.call == w.DEV_LOOP]
+        assert calls == ([(dev_loop, "advise")] if dev_loop else []), gate
+    assert len(regs) == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
+        - len(w.DISPATCH) + len(w.GATES) == 52
+    for _, _, command, _ in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')
         assert (ROOT / path).is_file(), command
 

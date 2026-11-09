@@ -1,5 +1,6 @@
-"""hooks/pretool-push-analyst-grant-guard.py, retired to an exit-0 stub (P1b): settings.json still
-registers it at PreToolUse Bash; scripts/execute-push.py validates and spends the grant."""
+"""hooks/pretool-push-analyst-grant-guard.py, retired to an exit-0 stub (P1b): settings.json no longer
+registers it (P12), and the file stays for a session that loaded an older hook list (D15);
+scripts/execute-push.py validates and spends the grant."""
 import json
 import subprocess
 import sys
@@ -9,12 +10,12 @@ ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "pretool-push-analyst-grant-guard.py"
 
 
-def test_the_registered_stub_decides_nothing(tmp_path):
+def test_the_stub_decides_nothing(tmp_path):
     """One `# STUB:` line; a Bash call that runs execute-push.py, and malformed stdin: exit 0, no output."""
     assert sum(line.startswith("# STUB:") for line in HOOK.read_text().splitlines()) == 1
     settings = json.loads((ROOT / "settings.json").read_text())
-    assert any("pretool-push-analyst-grant-guard.py" in h["command"]
-               for g in settings["hooks"]["PreToolUse"] for h in g["hooks"])
+    assert not any("pretool-push-analyst-grant-guard.py" in h["command"]
+                   for g in settings["hooks"].get("PreToolUse", []) for h in g["hooks"])
     payload = {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(tmp_path),
                "tool_input": {"command": "python3 ~/.claude/scripts/execute-push.py --grant /tmp/grant.json"}}
     for raw in (json.dumps(payload), "{not json"):

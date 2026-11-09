@@ -1,40 +1,9 @@
 #!/usr/bin/env bash
-# pretool-layer-match-gate.sh
-# Triggers: SubagentStop (despite the "pretool" name; retained for naming continuity with the spec)
-# Purpose: After a dev subagent finishes, compare latest dev-report-*.json's fix_layer
-#          against latest context-*.json's diagnosis_layer. Warn on mismatch.
-# Non-blocking: always exit 0. Degrades gracefully when fields/files are missing.
-
-set -euo pipefail
-
-# Resolve project dir; exit silently if not available
-cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || exit 0
-
-# Find most recent context and dev-report
-ctx=$(ls -t docs/dev/context-*.json 2>/dev/null | head -1 || true)
-rep=$(ls -t docs/dev/dev-report-*.json 2>/dev/null | head -1 || true)
-
-if [ -z "$ctx" ] || [ -z "$rep" ]; then
-  exit 0
-fi
-
-# Read layers; tolerate both nested (.dev.fix_layer) and flat (.fix_layer) shapes
-diag=$(jq -r '.diagnosis_layer // empty' "$ctx" 2>/dev/null || true)
-fix=$(jq -r '.dev.fix_layer // .fix_layer // empty' "$rep" 2>/dev/null || true)
-
-if [ -z "$diag" ] || [ -z "$fix" ]; then
-  exit 0
-fi
-
-if [ "$diag" != "$fix" ]; then
-  cat >&2 <<EOF
-LAYER MISMATCH
-BA diagnosed at $diag, Dev fixed at $fix.
-If intentional, dev must declare scope_review_requested with justification.
-Otherwise the orchestrator should reject this fix and request BA re-analysis.
-Context: $ctx
-Report:  $rep
-EOF
-fi
-
+# STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
+# advice as a rule of hooks/posttool-dispatch-record.py (PostToolUse Agent), tied to the dev
+# dispatch's own task.
+# It warned, at a subagent's stop, when the dev report's fix_layer differed from the context's
+# diagnosis_layer. It guessed its task from the newest docs/dev/context-*.json, wrote to stderr and
+# exited 0, so its warning reached no model. A running session keeps the hook list it loaded, so the
+# file stays at its path as an exit-0 stub that reads nothing and decides nothing (D15).
 exit 0

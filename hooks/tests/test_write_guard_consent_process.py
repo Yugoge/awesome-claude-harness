@@ -1,5 +1,9 @@
 """hooks/pretool-write-guard.sh takes the /do consent decision in the interpreter it already starts.
 
+The file is an exit-0 stub since the write gate's registration landed (D15); its checks are the gate's
+overwrite rule (hooks/tests/test_write_gate_overwrite_parity.py). This runs the hook as the P12 base
+shipped it (hooks/tests/retired_hooks.py).
+
 The /do bypass is hooks/lib/allowlist.py has_do_consent (main agent only); the hook takes it in the same
 python3 process that reads whether a subagent calls, so a Write starts one interpreter less (P1b latency,
 review item 2). The decisions stay as they were: consent lets any Write through, a subagent never holds
@@ -16,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-HOOK = ROOT / "hooks" / "pretool-write-guard.sh"
+import retired_hooks
+
 SID = "sess-write-guard-consent"
 
 
@@ -40,7 +44,8 @@ def _run(tmp_path: Path, payload, consent: bool):
     env.update({"HOME": str(tmp_path / "home"), "CLAUDE_STATE_DIR": str(state), "PYTHONDONTWRITEBYTECODE": "1",
                 "PATH": f"{shim}{os.pathsep}{env.get('PATH', '/usr/bin:/bin')}"})
     raw = payload if isinstance(payload, str) else json.dumps(payload)
-    proc = subprocess.run(["bash", str(HOOK)], input=raw, capture_output=True, text=True, env=env,
+    hook = retired_hooks.materialize("pretool-write-guard.sh", tmp_path / "retired")
+    proc = subprocess.run(["bash", str(hook)], input=raw, capture_output=True, text=True, env=env,
                           cwd=str(tmp_path), timeout=60)
     starts = len(log.read_text().splitlines()) if log.exists() else 0
     return proc.returncode, proc.stderr, starts
