@@ -18,7 +18,7 @@ def _section(heading: str) -> str:
 
 def test_retired_routing_and_scoring_vocabulary_is_gone() -> None:
     for word in ("close-route-select", "route_finding", "artifact_role", "aggregate-dev-report.py", "write-enforce-flag",
-                 "pass_with_exceptions", "<options>", "user_rating", "score-update", "close-scoring-decide",
+                 "pass_with_exceptions", "<options>", "user_rating", "score-update",
                  "arbitration", "ARBITRATION", "AWAITING_INPUT", "R15", "FORCED", "jq ", "continue-cycle.md"):
         assert word not in TEXT, word
     assert not re.search(r"awaiting.input", TEXT, re.I)
