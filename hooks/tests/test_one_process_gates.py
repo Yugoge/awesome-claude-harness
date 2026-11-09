@@ -25,7 +25,7 @@ HOOKS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HOOKS))
 
 from lib import gate_runner  # noqa: E402
-from lib.gate_runner import OBSERVE, REFUSE, WITNESS, Rule  # noqa: E402
+from lib.gate_runner import ADVISE, CONSULT, OBSERVE, REFUSE, WITNESS, Rule  # noqa: E402
 
 
 def _hook(tmp_path: Path, name: str, body: str) -> str:
@@ -72,6 +72,19 @@ def test_refusals_are_reported_together_and_the_witness_is_skipped(tmp_path, cap
     assert err.err == "x refuses\nz refuses\n" and err.out == ""
 
 
+def test_a_consulted_refusal_skips_the_witness_and_is_not_reported(tmp_path, capsys):
+    witness_ran = tmp_path / "witness"
+    rules = [Rule("c", _hook(tmp_path, "c.py", "print('c out'); sys.stderr.write('c refuses\\n'); sys.exit(2)\n"),
+                  CONSULT),
+             Rule("w", _hook(tmp_path, "w.py", f"open({str(witness_ran)!r}, 'w')\n"), WITNESS)]
+    outcomes = gate_runner.evaluate(rules, b"{}")
+    assert not witness_ran.exists() and outcomes[-1].ran is False
+    assert gate_runner.report(outcomes) == 0
+    assert capsys.readouterr() == ("", "")
+    with pytest.raises(ValueError):
+        gate_runner.check_order(list(reversed(rules)))
+
+
 def test_each_rule_has_its_own_try_and_its_own_stdin(tmp_path):
     rules = [
         Rule("boom", _hook(tmp_path, "boom.py", "raise ValueError('rule bug')\n")),
@@ -116,6 +129,51 @@ def test_contexts_merge_into_one_object_and_follow_a_refusal(tmp_path, capsys):
     assert gate_runner._context(gate_runner.run_rule(b, b"").stdout) is None  # two lines: not one object
 
 
+@pytest.fixture
+def rules_module(tmp_path, monkeypatch):
+    """A function-rule module, importable as the gates import hooks/lib modules."""
+    (tmp_path / "l5_rules_fixture.py").write_text(
+        "import sys\n"
+        "def refuse(p):\n    return ['reason one: ' + str(p.get('k')), 'reason two'] if p.get('k') else []\n"
+        "def advise(p):\n    print('stray print')\n    return ['look at ' + str(p.get('k'))]\n"
+        "def boom(p):\n    raise RuntimeError('rule bug')\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    yield "l5_rules_fixture"
+    sys.modules.pop("l5_rules_fixture", None)
+
+
+def test_a_function_rule_refuses_by_returning_its_reasons(rules_module, capsys):
+    rule = Rule("f", call=f"{rules_module}:refuse")
+    assert gate_runner.report(gate_runner.evaluate([rule], b'{"k": "x"}')) == 2
+    assert capsys.readouterr().err == "reason one: x\nreason two\n"
+    assert gate_runner.report(gate_runner.evaluate([rule], b"{}")) == 0
+
+
+def test_an_advise_rule_reaches_the_agent_and_never_blocks(rules_module, capsys):
+    raw = b'{"k": "y", "hook_event_name": "PreToolUse"}'
+    rules = [Rule("a", call=f"{rules_module}:advise", kind=ADVISE),
+             Rule("b", call=f"{rules_module}:boom", kind=ADVISE)]
+    outcomes = gate_runner.evaluate(rules, raw)
+    assert outcomes[1].code == 1 and "RuntimeError: rule bug" in outcomes[1].stderr
+    assert gate_runner.report(outcomes) == 0
+    printed = capsys.readouterr()
+    assert json.loads(printed.out) == {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                             "additionalContext": "look at y"}}
+    assert "stray print" in printed.err
+
+
+def test_a_refuse_function_that_raises_is_a_non_blocking_error(rules_module):
+    (outcome,) = gate_runner.evaluate([Rule("b", call=f"{rules_module}:boom")], b"{}")
+    assert outcome.code == 1 and not outcome.refused
+
+
+def test_a_rule_names_a_file_or_a_function(tmp_path):
+    ok = _hook(tmp_path, "ok.py", "pass\n")
+    for bad in (Rule("none"), Rule("both", path=ok, call="m:f")):
+        with pytest.raises(ValueError):
+            gate_runner.check_order([bad])
+
+
 def test_a_refuse_rule_after_a_witness_is_rejected(tmp_path):
     ok = _hook(tmp_path, "ok.py", "pass\n")
     with pytest.raises(ValueError):
@@ -147,9 +205,11 @@ def env(tmp_path):
     return e
 
 
-def _analyst(prompt: str) -> dict:
-    return {"session_id": "s-c7", "tool_name": "Agent", "hook_event_name": "PreToolUse",
-            "tool_input": {"subagent_type": "changelog-analyst", "prompt": prompt, "description": "commit"}}
+def _analyst(prompt: str, **extra) -> dict:
+    tool_input = {"subagent_type": "changelog-analyst", "prompt": prompt, "description": "commit",
+                  "run_in_background": False}
+    tool_input.update(extra)
+    return {"session_id": "s-c7", "tool_name": "Agent", "hook_event_name": "PreToolUse", "tool_input": tool_input}
 
 
 def _witnesses(env: dict) -> list:
@@ -175,6 +235,19 @@ def test_a_dispatch_every_rule_lets_through_is_witnessed(env):
     (name,) = _witnesses(env)
     record = json.loads((Path(env["CLAUDE_STATE_DIR"]) / name).read_text())
     assert record["subagent_type"] == "changelog-analyst" and record["sid"] == "s-c7"
+
+
+def test_a_dispatch_another_hook_refuses_leaves_no_witness(env):
+    """The background rule refuses this dispatch from its own registration (C7's case: the
+    orchestrator forgot run_in_background: false). The gate consults it: no witness is
+    written, and the gate itself refuses nothing and repeats no reason."""
+    payload = _analyst("Commit the task.")
+    del payload["tool_input"]["run_in_background"]
+    own = _run(str(HOOKS / "pretool-block-background-tasks.py"), payload, env)
+    assert own.returncode == 2
+    gate = _run(str(HOOKS / "pretool-dispatch-gate.py"), payload, env)
+    assert gate.returncode == 0 and own.stderr.strip() not in gate.stderr
+    assert _witnesses(env) == []
 
 
 def test_a_witness_that_cannot_write_never_blocks(env):

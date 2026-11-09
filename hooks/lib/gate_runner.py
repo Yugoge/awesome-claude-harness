@@ -5,17 +5,25 @@ read and write the same file race, and a hook that records a dispatch cannot kno
 whether another hook refused it. A gate file built on this module runs its rules
 one after another in its own process instead:
 
-- a rule is a hook file run whole, as `python3 <file>` would run it: the event
-  payload on stdin, its own `__main__` wrapper, its own switches read from the
-  environment, its stdout and stderr captured at the file-descriptor level (so a
-  child process's output is captured too), and its exit status taken from
-  SystemExit;
+- a rule is either a hook file run whole, as `python3 <file>` would run it (the
+  event payload on stdin, its own `__main__` wrapper, its own switches read from
+  the environment, its exit status taken from SystemExit), or a function
+  `module:name` under hooks/ called with the payload dict; either way its stdout
+  and stderr are captured at the file-descriptor level (so a child process's
+  output is captured too);
 - each rule runs in its own try: an exception that escapes the rule's own wrapper
   is recorded as that rule's exit 1 (a non-blocking error, as when it ran alone)
   and the next rule still runs;
-- `refuse` rules decide: exit 2 refuses the call;
+- `refuse` rules decide: exit 2 refuses the call (a function refuses by returning a
+  non-empty list of reasons);
+- `advise` rules never refuse: a function's returned texts reach the agent as the
+  event's additionalContext (a file prints that JSON itself); their errors never block;
+- `consult` rules are hooks that keep their own registration and decide there; the
+  gate runs one only to learn whether that registration refuses the call, never
+  refuses or reports for it, and discards its output;
 - `witness` rules record that the call really happens, so they run only when no
-  refuse rule refused, after all of them; their errors and exit codes never block;
+  refuse rule refused and no consulted hook would refuse, after all of them; their
+  errors and exit codes never block;
 - `observe` rules run in their place in the list whatever the refuse rules decided
   (a writer before the rules that read what it writes); their errors and exit codes
   never block;
@@ -37,15 +45,17 @@ import tempfile
 import traceback
 from dataclasses import dataclass
 
-REFUSE, WITNESS, OBSERVE = "refuse", "witness", "observe"
+REFUSE, WITNESS, OBSERVE, ADVISE, CONSULT = "refuse", "witness", "observe", "advise", "consult"
+KINDS = (REFUSE, WITNESS, OBSERVE, ADVISE, CONSULT)
 REFUSAL_EXIT = 2
 
 
 @dataclass(frozen=True)
 class Rule:
     name: str
-    path: str
+    path: str = ""  # a hook file, run whole
     kind: str = REFUSE
+    call: str = ""  # or "module:function" (importable with hooks/ on sys.path), called with the payload
 
 
 @dataclass
@@ -61,6 +71,11 @@ class Outcome:
     def refused(self) -> bool:
         return self.rule.kind == REFUSE and self.code == REFUSAL_EXIT
 
+    @property
+    def stops_the_call(self) -> bool:
+        """This gate refuses the call, or a consulted hook's own registration does."""
+        return self.code == REFUSAL_EXIT and self.rule.kind in (REFUSE, CONSULT)
+
 
 def _exit_code(value) -> tuple[int, str]:
     """SystemExit's argument as the exit status the interpreter would give it."""
@@ -71,13 +86,33 @@ def _exit_code(value) -> tuple[int, str]:
     return 1, f"{value}\n"
 
 
+def _call(rule: Rule, raw: bytes) -> tuple[int, str, str]:
+    """(exit status, stdout, stderr) of a function rule, as a hook would give them."""
+    import importlib
+    module, _, name = rule.call.partition(":")
+    func = getattr(importlib.import_module(module), name)
+    try:
+        payload = json.loads(raw or b"{}")
+    except ValueError:
+        payload = {}
+    result = func(payload if isinstance(payload, dict) else {})
+    texts = [str(t) for t in (result or []) if str(t).strip()]
+    if not texts:
+        return 0, "", ""
+    if rule.kind == REFUSE:
+        return REFUSAL_EXIT, "", "\n".join(texts) + "\n"
+    event = str(payload.get("hook_event_name") or "") if isinstance(payload, dict) else ""
+    return 0, json.dumps({"hookSpecificOutput": {"hookEventName": event,
+                                                  "additionalContext": "\n".join(texts)}}) + "\n", ""
+
+
 def run_rule(rule: Rule, raw: bytes) -> Outcome:
-    """Run `rule.path` as `__main__` with `raw` on stdin; never raises."""
+    """Run `rule` (its file as `__main__` with `raw` on stdin, or its function); never raises."""
     saved_streams = sys.stdin, sys.stdout, sys.stderr
     saved_argv = sys.argv[:]
     saved_fds = []
     files = []
-    code, extra = 0, ""
+    code, extra, call_out = 0, "", None
     try:
         for stream in (sys.stdout, sys.stderr):
             try:
@@ -92,9 +127,13 @@ def run_rule(rule: Rule, raw: bytes) -> Outcome:
         sys.stdin = io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8")
         sys.stdout = io.TextIOWrapper(os.fdopen(os.dup(1), "wb"), encoding="utf-8", line_buffering=True)
         sys.stderr = io.TextIOWrapper(os.fdopen(os.dup(2), "wb"), encoding="utf-8", line_buffering=True)
-        sys.argv = [rule.path]
+        sys.argv = [rule.path or rule.call]
         try:
-            runpy.run_path(rule.path, run_name="__main__")
+            if rule.call:
+                code, call_out, err = _call(rule, raw)
+                sys.stderr.write(err)
+            else:
+                runpy.run_path(rule.path, run_name="__main__")
         except SystemExit as stop:
             code, extra = _exit_code(stop.code)
         except BaseException:  # the rule's own try: an escaped error is this rule's exit 1
@@ -121,27 +160,31 @@ def run_rule(rule: Rule, raw: bytes) -> Outcome:
         tmp.close()
     while len(captured) < 2:
         captured.append("")
+    if rule.call:  # a function's result is its output; anything it printed is a note on stderr
+        return Outcome(rule, code, call_out or "", captured[0] + captured[1] + extra)
     return Outcome(rule, code, captured[0], captured[1] + extra)
 
 
 def check_order(rules: list[Rule]) -> None:
-    """A witness records a call every refuse rule let through, so none may follow it."""
+    """A witness records a call every refuse and consulted rule let through, so none may follow it."""
     seen_witness = False
     for r in rules:
-        if r.kind not in (REFUSE, WITNESS, OBSERVE):
+        if r.kind not in KINDS:
             raise ValueError(f"{r.name}: unknown rule kind {r.kind!r}")
+        if bool(r.path) == bool(r.call):
+            raise ValueError(f"{r.name}: a rule names a file or a function, one of the two")
         if r.kind == WITNESS:
             seen_witness = True
-        elif r.kind == REFUSE and seen_witness:
-            raise ValueError(f"{r.name}: a refuse rule after a witness")
+        elif r.kind in (REFUSE, CONSULT) and seen_witness:
+            raise ValueError(f"{r.name}: a {r.kind} rule after a witness")
 
 
 def evaluate(rules: list[Rule], raw: bytes) -> list[Outcome]:
-    """Every rule's outcome, in list order; a witness runs only when no refuse rule refused."""
+    """Every rule's outcome, in list order; a witness runs only when nothing stops the call."""
     check_order(rules)
     outcomes: list[Outcome] = []
     for r in rules:
-        if r.kind == WITNESS and any(o.refused for o in outcomes):
+        if r.kind == WITNESS and any(o.stops_the_call for o in outcomes):
             outcomes.append(Outcome(r, ran=False))
         else:
             outcomes.append(run_rule(r, raw))
@@ -171,6 +214,7 @@ def report(outcomes: list[Outcome]) -> int:
     and stderr, and exit 1 if a refuse rule failed with a non-blocking error (as that
     rule alone would have), else 0.
     """
+    outcomes = [o for o in outcomes if o.rule.kind != CONSULT]  # each reports through its own registration
     contexts = [c for c in (_context(o.stdout) for o in outcomes if o.stdout) if c]
     refusals = [o for o in outcomes if o.refused]
     if refusals:
