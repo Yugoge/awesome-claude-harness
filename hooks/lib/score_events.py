@@ -53,23 +53,47 @@ def _dispatches(span) -> list[dict]:
     return found
 
 
+def _sub(ctx, d) -> str:
+    """The path of dispatch d's own transcript, which the CLI keeps beside the main one."""
+    result = _record(ctx, d["id"]).get("toolUseResult")
+    return f"{os.path.splitext(ctx['tp'])[0]}/subagents/agent-{result.get('agentId') if isinstance(result, dict) else None}.jsonl"
+
+
+def _wrote(ctx, d):
+    """The report d's own transcript last wrote to its path, parsed: what the file held before a later dispatch overwrote it."""
+    found = None
+    try:
+        for _, record in command_span._records(_sub(ctx, d)):
+            for block in record["message"]["content"]:
+                if block.get("name") == "Write" and str(block["input"].get("file_path")).endswith(d["path"]):
+                    found = json.loads(block["input"]["content"])
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass
+    return found
+
+
+def _report(ctx, d, later):
+    """d's report file parsed, if it is not older than d's dispatched_at (obligation's slack). When the next dispatch of the
+    same file has overwritten it, what d's own transcript wrote there. None when missing, unreadable or stale."""
+    path = os.path.join(ctx["cwd"], d["path"])
+    try:
+        mtime = os.stat(path).st_mtime
+        if not obligation.artifact_freshness_satisfied("json", mtime, d["ob"]["dispatched_at"]):
+            return None
+        if later and mtime >= obligation.parse_iso8601(later["ob"]["dispatched_at"]).timestamp():
+            return _wrote(ctx, d)
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def _lane_qa(ctx) -> list[dict]:
-    """The lane-QA dispatches (role qa outside close) with rep, the report file when fresh (not older than the dispatch,
-    not overwritten by the next dispatch of the same file), and status (pass, fail, warning or None)."""
+    """The lane-QA dispatches (role qa outside close) in order, each with rep (its report) and status (pass, fail, warning or None)."""
     if "qa" not in ctx:
         ctx["qa"] = qa = [d for d in ctx["ds"] if d["path"]]
         for i, d in enumerate(qa):
-            later, d["rep"] = next((e for e in qa[i + 1:] if e["path"] == d["path"]), None), None
-            try:
-                path = os.path.join(ctx["cwd"], d["path"])
-                mtime = os.stat(path).st_mtime
-                with open(path, encoding="utf-8") as handle:
-                    rep = json.load(handle)
-                end = obligation.parse_iso8601(later["ob"]["dispatched_at"]) if later else None
-                if obligation.artifact_freshness_satisfied("json", mtime, d["ob"]["dispatched_at"]) and (not later or end and mtime < end.timestamp()):
-                    d["rep"] = rep
-            except (OSError, ValueError):
-                pass
+            d["rep"] = _report(ctx, d, next((e for e in qa[i + 1:] if e["path"] == d["path"]), None))
             d["status"] = obligation.terminal_status("qa-report.v2", d["rep"])
     return ctx["qa"]
 
@@ -101,10 +125,8 @@ def _named(ctx, d) -> set:
 
 
 def _written(ctx, d) -> set:
-    """The project-relative files the dev dispatch's own tool calls wrote (its transcript lies beside the main one)."""
-    result = _record(ctx, d["id"]).get("toolUseResult")
-    agent = result.get("agentId") if isinstance(result, dict) else None
-    found = command_span.write_set(f"{os.path.splitext(ctx['tp'])[0]}/subagents/agent-{agent}.jsonl", ctx["cwd"], excluded=())
+    """The project-relative files the dev dispatch's own tool calls wrote."""
+    found = command_span.write_set(_sub(ctx, d), ctx["cwd"], excluded=())
     return set(found.written) if found else set()
 
 

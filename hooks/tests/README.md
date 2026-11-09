@@ -28,7 +28,7 @@
 - `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 - `test_checklist_record.py` - Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
 - `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
-- `test_close_rating.py` - hooks/posttool-close-rating.py, the rating log's one writer
+- `test_close_rating.py` - hooks/posttool-close-rating.py, the rating row's one writer and the owner summary it prints (thro...
 - `test_close_verdict_round_open.py` - `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 - `test_command_span.py` - The span is the records after the latest human-typed harness command outside
 - `test_commit_artifact_rw_boundary.py` - WHY THIS FILE EXISTS

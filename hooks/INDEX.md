@@ -49,7 +49,7 @@ hooks/
 │   ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
-│   ├── `close_rating.py` - Stop gate imports. The /close Step 3b question (source ``close-rating:<task-id>``) is required ask...
+│   ├── `close_rating.py` - handle() writes the owner's one rating row and returns the owner summary (a systemMessage)
 │   ├── `closeout.py` - CLI:
 │   ├── `command_span.py` - The span is the records after the latest human-typed harness command outside
 │   ├── `commit_journal.py` - WHY THIS EXISTS
@@ -107,7 +107,7 @@ hooks/
 │   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 │   ├── `test_checklist_record.py` - Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
 │   ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
-│   ├── `test_close_rating.py` - hooks/posttool-close-rating.py, the rating log's one writer
+│   ├── `test_close_rating.py` - hooks/posttool-close-rating.py, the rating row's one writer and the owner summary it prints (thro...
 │   ├── `test_close_verdict_round_open.py` - `CLOSE_FINDINGS: <n> items` is the never-landing return of a QA judging round
 │   ├── `test_command_span.py` - The span is the records after the latest human-typed harness command outside
 │   ├── `test_commit_artifact_rw_boundary.py` - WHY THIS FILE EXISTS
@@ -208,7 +208,7 @@ hooks/
 ├── `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
 ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 ├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
-├── `posttool-close-rating.py` - main agent's (no agent_id) one close-rating question (metadata.source close-rating:<task-id>) ans...
+├── `posttool-close-rating.py` - AskUserQuestion goes to close_rating.handle (the owner's rating row and summary), Agent and Task ...
 ├── `posttool-codex-skill-ledger.py` - Fires on every PostToolUse for the Skill tool. When tool_input.skill == "codex",
 ├── `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 ├── `posttool-doc-sync.py` - PostToolUse Hook: keep the marked INDEX.md, README.md and CLAUDE.md sections in sync

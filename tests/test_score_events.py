@@ -45,7 +45,7 @@ class Cycle:
         self.subagents = self.store / "sess" / "subagents"
         self.subagents.mkdir(parents=True)
         self.config = tmp_path / "cfg"
-        self.clock, self.count, self.agent = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc), 0, {}
+        self.clock, self.count, self.agent, self.last_qa = datetime(2026, 11, 9, 12, 0, tzinfo=timezone.utc), 0, {}, None
         self.write({"type": "user", "message": {"role": "user", "content": OPENER}})
 
     def write(self, record: dict, stamp: bool = True) -> None:
@@ -96,11 +96,13 @@ class Cycle:
         tid = f"{task}-{lane}" if lane else task
         artifacts = [{"kind": "json", "path": f"docs/dev/qa-report-{tid}.json", "schema": "qa-report.v2",
                       "identity": {"task_id": tid, "request_id": tid}}]
-        return self.dispatch("qa", task=task, lane=lane, pipeline=pipeline, profile="final_verification",
-                             artifacts=artifacts, **options)
+        self.last_qa = self.dispatch("qa", task=task, lane=lane, pipeline=pipeline, profile="final_verification",
+                                     artifacts=artifacts, **options)
+        return self.last_qa
 
-    def report(self, status: str, failures=(), *, task: str = TASK, lane=None, mtime=None, text=None) -> Path:
-        """The QA report file, stamped now on the fake clock unless `mtime` says otherwise."""
+    def report(self, status: str, failures=(), *, task: str = TASK, lane=None, mtime=None, text=None, kept: bool = True) -> Path:
+        """The QA report file, stamped now on the fake clock unless `mtime` says otherwise; the last QA dispatch's own
+        transcript shows it writing the file (unless `kept` is False)."""
         tid = f"{task}-{lane}" if lane else task
         path = self.project / "docs" / "dev" / f"qa-report-{tid}.json"
         body = {"report_version": 2, "request_id": tid, "task_id": tid, "timestamp": _z(self.clock),
@@ -108,6 +110,11 @@ class Cycle:
         path.write_text(text if text is not None else json.dumps(body), encoding="utf-8")
         when = (mtime or self.clock).timestamp()
         os.utime(path, (when, when))
+        if kept and self.last_qa:
+            with (self.subagents / f"agent-{self.agent[self.last_qa]}.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"type": "assistant", "isSidechain": True, "cwd": str(self.project), "message": {
+                    "role": "assistant", "content": [{"type": "tool_use", "id": "wr", "name": "Write",
+                                                      "input": {"file_path": str(path), "content": path.read_text(encoding="utf-8")}}]}}) + "\n")
         return path
 
     def payload(self, **extra) -> dict:
