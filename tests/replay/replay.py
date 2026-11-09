@@ -9,7 +9,8 @@ or a subagent inside a dispatch):
 * a tool call is the T1 order: assistant tool_use appended, PreToolUse, the
   call performed only if not blocked, then the tool_result and PostToolUse
   (PostToolUseFailure and an error tool_result when the call fails; a failing
-  call never raises);
+  call never raises; a dialog the owner turns down, Rejected, is an error
+  tool_result with no PostToolUse and no PostToolUseFailure);
 * a dispatch is the Agent tool_use, PreToolUse, the subagent transcript
   (projects/<slug>/<sid>/subagents/agent-<id>.jsonl, first record the prompt,
   agent-<id>.meta.json beside it), the subagent's own calls through the same
@@ -58,6 +59,12 @@ BASH_TIMEOUT_S = 120
 
 class ToolError(Exception):
     """A tool call that fails the way the CLI's tool would (recorded as an error tool_result)."""
+
+
+class Rejected(ToolError):
+    """A permission dialog the owner turns down (Skip, Esc, decline): the CLI writes an error tool_result
+    (the user row carries toolDenialKind "user-rejected") and runs neither PostToolUse nor PostToolUseFailure
+    hooks, and it is no failed call (cli-facts Q3; drivers/close.py's rating answers skip and decline)."""
 
 
 @dataclass
@@ -584,6 +591,11 @@ class Actor:
             with self.rp.acting(self.role):
                 call.response = perform() or {}
             call.ok = True
+        except Rejected as e:  # the owner said no: an error result, no hook, not a failed call
+            call.error = str(e)
+            self._result(tid, call.error, error=True, denial="user-rejected")
+            self.rp.after(step, call)
+            return call
         except Exception as e:  # a failing call is an error tool_result; the replay goes on
             call.error = str(e) or type(e).__name__
             self.rp.failed_calls.append({"step": label, "tool": name, "error": self.rp.norm_text(call.error)[:600]})
@@ -601,13 +613,15 @@ class Actor:
         self.rp.after(step, call)
         return call
 
-    def _result(self, tid: str, content, error: bool = False, resp=None) -> None:
+    def _result(self, tid: str, content, error: bool = False, resp=None, denial: str | None = None) -> None:
         block = {"type": "tool_result", "tool_use_id": tid, "content": content}
         if error:
             block["is_error"] = True
         rec = {"type": "user", "message": {"role": "user", "content": [block]}}
         if resp is not None:
             rec["toolUseResult"] = resp
+        if denial:
+            rec["toolDenialKind"] = denial
         self.s.append(rec, self.aid)
 
     def bash(self, command: str, description: str = "", label: str | None = None, deviation=None,

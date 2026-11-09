@@ -79,8 +79,16 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   parents=1|2             --auto: the number of /dev cycles closed
   cycle_variant=V         the /dev variant closed (drivers/dev.py; fanout and fanout-qa-fail run the
                           fan-out cycle with `lanes` lanes)
-  rating=label|4|skip|afk|decline|free[,...]   Step 3b's answer, per landed task in order (default label:
-                          the dialog's first option)
+  rating=label|4|skip|decline|afk|free|dismissed[,...]   Step 3b's answer, per landed task in order (default label:
+                          the dialog's first option). As the CLI returns them (cli-facts Q3): label (the first
+                          option) and 4 ("4 - Minor gaps") are answers; free is a typed reply (the response field);
+                          afk is the dialog's timeout (afkTimeoutMs); dismissed is the app's Skip (the tool runs,
+                          annotations mark the question unanswered); skip (terminal Skip or "Chat about this") and
+                          decline (Esc) are the owner turning the dialog down: an error result, and no PostToolUse
+                          hook runs (replay.Rejected)
+  again=A[,B,...]         (not --auto) after Step 3b's question the same question for the same task is asked once
+                          more for each answer listed, in order (a /close typed twice on one task): what the
+                          score log's rating dedup and each answer's hook run are seen on, in one replay
   session=same|later      /close typed in the /dev's session or a later one (default same for plain,
                           later otherwise)
 
@@ -100,7 +108,7 @@ import shlex
 
 from .. import agents, cmdtext, roles, schemagen
 from ..pipeline import Deviations, Orchestrator, Respelling, parse_declare, utc_now
-from ..replay import Deviation
+from ..replay import Deviation, Rejected
 
 PIPELINE = "close"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -572,7 +580,7 @@ PER_TASK = ("tid", "do_report", "producer", "chain", "spec_id", "session_id", "f
             "round", "repairs", "routed", "verdicts", "outcome", "landed")
 
 # The rating answers the owner may give (Step 3b's question), as the dialog returns them.
-RATINGS = ("label", "4", "skip", "afk", "decline", "free")
+RATINGS = ("label", "4", "skip", "decline", "afk", "free", "dismissed")
 
 
 class CloseRun:
@@ -601,6 +609,7 @@ class CloseRun:
         self.stalled = ""
         self.ratings = [r.strip() for r in str(rp.args.get("rating", "label")).split(",") if r.strip()] or ["label"]
         self.asked: list = []          # (task id, answer) of each rating question
+        self.again = [a.strip() for a in str(rp.args.get("again", "")).split(",") if a.strip()]
 
     # ------------------------------------------------------------ text helpers
     def _rules(self):
@@ -1260,31 +1269,38 @@ class CloseRun:
         block = next(b.text for b in cmdtext.blocks(self.o.section("Step 3b")) if '"questions"' in b.text)
         return json.loads(block.replace("<task-id>", self.tid))
 
-    def step4(self, answer: str = "label") -> None:
-        """Step 3b's one AskUserQuestion (its JSON block, the task id bound), answered as `answer` says; the
-        orchestrator does nothing with the answer."""
+    def step4(self, answer: str = "label", nth: int = 1) -> None:
+        """Step 3b's one AskUserQuestion (its JSON block, the task id bound), answered as `answer` says (the
+        module doc, rating=); the orchestrator does nothing with the answer. `nth` is 2 or more for the same
+        question asked again (again=)."""
+        from .. import scorelog
         tin = self.rating_input()
         q = tin["questions"][0]
         labels = [opt["label"] for opt in q["options"]]
 
         def perform():
             if answer == "decline":
-                raise RuntimeError("User declined to answer questions")
-            base = {"questions": tin["questions"]}
+                raise Rejected("User declined to answer questions")
             if answer == "skip":
-                return dict(base, answers={})
+                raise Rejected("The user doesn't want to proceed with this tool use. The tool use was rejected.")
+            base = {"questions": tin["questions"]}
+            if answer == "dismissed":
+                return dict(base, answers={}, annotations={q["question"]: {"unanswered": "skipped"}})
             if answer == "afk":
                 return dict(base, answers={}, afkTimeoutMs=60000)
             if answer == "free":
                 return dict(base, answers={q["question"]: "it mostly worked"}, response="it mostly worked")
             pick = next((l for l in labels if l.startswith(answer + " ")), labels[0])
             return dict(base, answers={q["question"]: pick})
-        lab = self.label("Step 3b AskUserQuestion")
+        lab = self.label("Step 3b AskUserQuestion") + (f" again {nth}" if nth > 1 else "")
         c = self.o.s.tool("AskUserQuestion", tin, perform=perform, label=lab, deviation=self.devs.at(lab))
         self.asked.append((self.tid, answer))
+        with self.rp.acting("driver"):
+            held = [row for row in scorelog.rows(self.rp) if row.get("kind") == "rating"]
         fact(self.rp, "close Step 3b", {"task": "<task>", "header": q.get("header"), "labels": labels,
                                         "multiSelect": q.get("multiSelect"), "source": (tin.get("metadata") or {}).get("source"),
-                                        "answer": answer, "ok": c.ok, "blocked": c.blocked})
+                                        "answer": answer, "nth": nth, "label": lab, "ok": c.ok, "blocked": c.blocked,
+                                        "hook_ran": c.post is not None, "rating_rows": held})
 
     # ------------------------------------------------------------ one close, Steps 0-4
     def body(self) -> str:
@@ -1304,6 +1320,8 @@ class CloseRun:
         o.advance(label=self.label("TodoWrite Step 3 done, Step 3b in_progress"))
         if self.landed:
             self.step4(self.ratings[0])
+            for nth, answer in enumerate(self.again, 2):
+                self.step4(answer, nth)
         o.advance(label=self.label("TodoWrite Step 3b done"))
         return last
 

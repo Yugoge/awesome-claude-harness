@@ -30,6 +30,16 @@ HOOK = "hooks/posttool-close-rating.py"
 LOG = os.path.join("logs", "lifecycle.jsonl")
 
 
+def log_path(rp) -> str:
+    """The replay's score log: under CLAUDE_CONFIG_DIR when the replay sets it, else the home's .claude."""
+    return os.path.join(rp.env.get("CLAUDE_CONFIG_DIR") or os.path.join(rp.env["HOME"], ".claude"), LOG)
+
+
+def rows(rp) -> list:
+    """Every row of the score log as it stands (the driver reads it between two steps)."""
+    return [json.loads(line) for line in _read(log_path(rp)).decode("utf-8").splitlines() if line.strip()]
+
+
 def _read(path: str) -> bytes:
     try:
         with open(path, "rb") as fh:
@@ -72,10 +82,9 @@ def resweep(rp) -> None:
     if payload is None:
         fact(rp, "score resweep", {"error": "the replay made no main-agent dispatch"})
         return
-    config = rp.env.get("CLAUDE_CONFIG_DIR") or os.path.join(rp.env["HOME"], ".claude")
-    log = os.path.join(config, LOG)
+    log = log_path(rp)
     before = _read(log)
-    again = _run(rp, payload, config)
+    again = _run(rp, payload, os.path.dirname(os.path.dirname(log)))
     after = _read(log)
     rebuild = os.path.join(rp.layout.out, "score-rebuild")
     shutil.rmtree(rebuild, ignore_errors=True)

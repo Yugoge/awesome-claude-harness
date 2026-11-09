@@ -1,4 +1,4 @@
-"""P13-2 B2: the score log after a replayed /dev cycle, and after a /close that follows it.
+"""P13-2 B2, B3, B4: the score log after a replayed /dev cycle and after a /close that follows it, and the rating.
 
 The real hooks run under the shipped settings in a sandbox that has its own config directory; the score
 observer (hooks/posttool-close-rating.py, matcher AskUserQuestion|Agent) sweeps the active command span after
@@ -7,14 +7,21 @@ each main-agent dispatch and appends score events to the sandbox's logs/lifecycl
 Edit calls the observer reads, and the lane QA's failure is a qa.failures[] entry in the shape agents/qa.md spells
 (severity, location, issue, recommendation, primary_cause).
 
-Three replays carry every assertion, each run with the driver argument `resweep=1` (tests/replay/scorelog.py:
+Five replays carry every assertion, each run with the driver argument `resweep=1` (tests/replay/scorelog.py:
 the observer hook run once more on the final transcript, the log kept as out/score-log.jsonl):
 
 * QA_FAIL_CLOSE: /dev (variant qa-fail: the lane's first QA fails, its dev is dispatched again, the next QA
-  passes), then /close in the same session: the log gains qa_fail (dev) and qa_catch (qa), no rerun_gap.
+  passes), then a clean /close in the same session, rated "4 - Minor gaps": the log gains qa_fail (dev) and
+  qa_catch (qa), no rerun_gap, nothing for close-qa, and one rating row on the task id the events carry (B2, B3's
+  clean close, B4's answer 4 and its dialog).
 * QA_FAIL_OTHER_FILE: the same cycle, the failure naming a file the re-dispatched dev does not edit
   (`fail_at`): qa_fail, and no qa_catch.
 * FIRST_PASS: /dev variant plain: qa_first_pass for dev and ba, nothing negative.
+* CLOSE_FINDINGS: a /dev cycle whose lane QA passes first, then a /close (variant append) whose first round opens
+  a finding on the file the dev wrote, the dev writes it again and a later round lands (B3).
+* RATING_ANSWERS: a clean /close of a first-pass cycle whose rating question is asked seven times for the one
+  task (`again`): Skip and decline (the CLI runs no hook), a typed reply, the AFK timeout and the app's Skip (the
+  hook runs, no rating row), then "4 - Minor gaps" (the row), then "5 - Fully met" (writes nothing) (B4).
 
 In each, the sweep of the final transcript a second time leaves the log byte for byte as it was, and runs
 without error beside the compliant run's 0 gate blocks and 0 hook errors.
@@ -35,16 +42,30 @@ from tests.replay import suite
 OBSERVER = "hooks/posttool-close-rating.py"
 ZULU = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 LANE_REPORT = re.compile(r"docs/dev/qa-report-[\w.-]+\.json")  # the lane QA's report (the BA-validation QA's is ba-qa-report-...)
+OBLIGATION = re.compile(r'<obligation\s+v="1"\s*>\s*(\{.*?\})\s*</obligation>', re.S)
+RATING_LABEL = "/close Step 3b AskUserQuestion"  # the first question's step label; the n-th asked again adds " again n"
 
 QA_FAIL_CLOSE = suite.Scenario("score: /dev qa-fail, then /close", "close",
-                               (("variant", "plain"), ("cycle_variant", "qa-fail"), ("resweep", "1")),
+                               (("variant", "plain"), ("cycle_variant", "qa-fail"), ("rating", "4"), ("resweep", "1")),
                                ("dev", "close"), 150)
 OTHER_FILE = "toy/util.py"
 QA_FAIL_OTHER_FILE = suite.Scenario("score: /dev qa-fail naming another file", "dev",
                                     (("variant", "qa-fail"), ("fail_at", OTHER_FILE), ("resweep", "1")),
                                     ("dev",), 110)
 FIRST_PASS = suite.Scenario("score: /dev first pass", "dev", (("variant", "plain"), ("resweep", "1")), ("dev",), 90)
-SCENARIOS = {"qa-fail-close": QA_FAIL_CLOSE, "qa-fail-other-file": QA_FAIL_OTHER_FILE, "first-pass": FIRST_PASS}
+CLOSE_FINDINGS = suite.Scenario("score: /close finding after lane QA passed", "close",
+                                (("variant", "append"), ("resweep", "1")), ("dev", "close"), 180)
+ANSWERS = ["skip", "decline", "free", "afk", "dismissed", "4", "5"]  # one task's rating dialog, asked once for each
+RATING_ANSWERS = suite.Scenario("score: /close rating answers", "close",
+                                (("variant", "plain"), ("rating", ANSWERS[0]), ("again", ",".join(ANSWERS[1:])),
+                                 ("resweep", "1")), ("dev", "close"), 150)
+SCENARIOS = {"qa-fail-close": QA_FAIL_CLOSE, "qa-fail-other-file": QA_FAIL_OTHER_FILE, "first-pass": FIRST_PASS,
+             "close-findings": CLOSE_FINDINGS, "rating-answers": RATING_ANSWERS}
+# What a sweep of each replay's final transcript yields on an empty log: its final span is the /dev span of a
+# /dev-only run ("all" the rows), the /close span typed in a later session (the close-time events), or, for a /close
+# typed in the /dev's session, a span that holds no lane QA (none).
+REBUILT = {"qa-fail-close": [], "qa-fail-other-file": "all", "first-pass": "all", "rating-answers": [],
+           "close-findings": [("escaped", "dev"), ("escaped", "qa"), ("close_catch", "close-qa")]}
 KEYS = {name: suite.replay_key(scn, "shipped") for name, scn in SCENARIOS.items()}
 
 
@@ -79,8 +100,9 @@ def project(r) -> str:
 
 def dispatches(r) -> list[dict]:
     """Every main-agent dispatch of the replay in order, with what its subagent's own transcript says it did:
-    `role` (subagent_type), `tool_use_id`, `agent_id`, `wrote` (project-relative files of its Write and Edit
-    calls) and `reports` ({path: parsed content} of each qa-report it wrote)."""
+    `role` (subagent_type), `tool_use_id`, `agent_id`, `identity` (the scored identity its prompt's obligation
+    names, None when it carries none), `wrote` (project-relative files of its Write and Edit calls) and `reports`
+    ({path: parsed content} of each qa-report it wrote)."""
     out, by_use, root = [], {}, project(r)
     mains = sorted(glob.glob(os.path.join(r.run_dir, "transcripts", "*", "*.jsonl")), key=lambda p: _jsonl(p)[0]["timestamp"])
     for main in mains:
@@ -88,7 +110,10 @@ def dispatches(r) -> list[dict]:
             content = (rec.get("message") or {}).get("content")
             for block in content if isinstance(content, list) else ():
                 if block.get("type") == "tool_use" and block.get("name") == "Agent":
-                    out.append({"role": block["input"]["subagent_type"], "tool_use_id": block["id"], "main": main})
+                    found = OBLIGATION.search(block["input"].get("prompt") or "")
+                    ob = json.loads(found.group(1)) if found else {}
+                    out.append({"role": block["input"]["subagent_type"], "tool_use_id": block["id"], "main": main,
+                                "identity": score_log.identity(ob.get("role"), ob.get("pipeline")) if ob else None})
                 elif block.get("type") == "tool_result" and isinstance(rec.get("toolUseResult"), dict):
                     by_use[block["tool_use_id"]] = rec["toolUseResult"].get("agentId")
     for d in out:
@@ -133,10 +158,11 @@ def clean_run(r) -> None:
     assert all((h["rc"], h["verdict"], h["stdout"], h["stderr"]) == (0, "ok", "", "") for h in ran), ran
 
 
-def event_rows(r, shape: list[tuple]) -> list[dict]:
+def event_rows(r, shape: list[tuple], refs: dict | None = None) -> list[dict]:
     """The log holds exactly the events `shape` lists ((event, role), in any order), each a well-formed row:
     kind event, this project's key, this cycle's canonical task id, the rule's points, one line of why text
-    without the task id, a report path as ref, a UTC time and a key no other row has."""
+    without the task id, as ref the lane QA's report path (`refs` names another for an event: the artifact a
+    close finding cites), a UTC time and a key no other row has."""
     rows = events(r)
     assert sorted((e["event"], e["role"]) for e in rows) == sorted(shape), rows
     assert len({e["key"] for e in rows}) == len(rows), rows
@@ -144,8 +170,56 @@ def event_rows(r, shape: list[tuple]) -> list[dict]:
         assert e["kind"] == "event" and e["project"] == project_key(r) and e["task_id"] == task_of(r), e
         assert e["points"] == score_log.points_for(e["event"], e["role"]), e
         assert e["why"].strip() and "\n" not in e["why"] and task_of(r) not in e["why"], e
-        assert e["ref"] == f"docs/dev/qa-report-{task_of(r)}.json" and ZULU.match(e["ts"]), e
+        assert e["ref"] == (refs or {}).get(e["event"], f"docs/dev/qa-report-{task_of(r)}.json") and ZULU.match(e["ts"]), e
     return rows
+
+
+def asks(r) -> list[dict]:
+    """Every AskUserQuestion the main agent made, in order: `input`, `tool_use_id`, and what came back: `is_error`
+    (the tool_result) and `denial` (the user row's toolDenialKind)."""
+    out, by_id = [], {}
+    for main in sorted(glob.glob(os.path.join(r.run_dir, "transcripts", "*", "*.jsonl")), key=lambda p: _jsonl(p)[0]["timestamp"]):
+        for rec in _jsonl(main):
+            content = (rec.get("message") or {}).get("content")
+            for block in content if isinstance(content, list) else ():
+                if block.get("type") == "tool_use" and block.get("name") == "AskUserQuestion":
+                    by_id[block["id"]] = {"input": block["input"], "tool_use_id": block["id"], "is_error": None, "denial": None}
+                    out.append(by_id[block["id"]])
+                elif block.get("type") == "tool_result" and block.get("tool_use_id") in by_id:
+                    by_id[block["tool_use_id"]].update(is_error=bool(block.get("is_error")), denial=rec.get("toolDenialKind"))
+    return out
+
+
+def questions(r) -> list[dict]:
+    """The rating questions among them (metadata.source close-rating:<task id>)."""
+    return [q for q in asks(r) if str(q["input"].get("metadata", {}).get("source", "")).startswith("close-rating:")]
+
+
+def step3b(r) -> list[dict]:
+    """What the driver recorded after each rating question (facts.json "close Step 3b"), in order: the answer it
+    played, whether any PostToolUse hook ran, and the rating rows the score log held right after."""
+    return [f["value"] for f in r.facts if f["key"] == "close Step 3b"]
+
+
+def after_call(r, label: str) -> list[dict]:
+    """The hook events a tool call fired once it ended (PostToolUse, or PostToolUseFailure), by its step label."""
+    return [ev for ev in r.hook_events() if ev["event"] in ("PostToolUse", "PostToolUseFailure") and ev.get("label") == label]
+
+
+def owner_summary(r, label: str) -> str:
+    """The summary the observer hook printed for the call labelled `label`: its one run, exit 0, nothing on stderr,
+    one line of standard output holding one JSON object whose only member is systemMessage."""
+    (event,) = after_call(r, label)
+    (run,) = [h for h in event["hooks"] if h["hook"] == OBSERVER]
+    assert (run["rc"], run["verdict"], run["stderr"]) == (0, "ok", ""), run
+    assert run["stdout"].endswith("\n") and "\n" not in run["stdout"][:-1], run["stdout"]
+    out = json.loads(run["stdout"])
+    assert list(out) == ["systemMessage"] and isinstance(out["systemMessage"], str), out
+    return out["systemMessage"]
+
+
+def rating_rows(r) -> list[dict]:
+    return [json.loads(line) for line in log_bytes(r).decode("utf-8").splitlines() if '"kind": "rating"' in line]
 
 
 # ---------------------------------------------------------------- B2: a QA fail, its fix, then /close
@@ -210,12 +284,144 @@ def test_sweeping_the_final_transcript_again_leaves_the_log_byte_for_byte_unchan
     log = sweep["log"]
     assert log["bytes_before"] > 0 and log["unchanged"] and log["bytes_after"] == log["bytes_before"], log
     assert log["sha256_before"] == log["sha256_after"] == hashlib.sha256(log_bytes(r)).hexdigest(), log
-    # the same sweep on an empty log yields rows (the silence above is not a hook that did nothing); they are
-    # rows the log already holds, and for a /dev-only run, where the final span is the /dev span, all of them
+    # the same sweep on an empty log yields rows (the silence above is not a hook that did nothing): rows the log
+    # already holds, those REBUILT says (the /close span of a later session derives escaped and close_catch)
     rebuilt = sweep["rebuilt"]
     assert (rebuilt["hooks"], rebuilt["rc"], rebuilt["stdout"], rebuilt["stderr"]) == (1, 0, "", ""), rebuilt
     held = {e["key"]: e for e in events(r)}
     assert all(held.get(e["key"]) == e for e in rebuilt["events"]), (rebuilt["events"], held)
-    if SCENARIOS[name].pipelines == ("dev",):
+    want = REBUILT[name]
+    if want == "all":
         assert sorted(e["key"] for e in rebuilt["events"]) == sorted(held), (rebuilt["events"], held)
+    else:
+        assert sorted((e["event"], e["role"]) for e in rebuilt["events"]) == sorted(want), rebuilt["events"]
 
+
+# ---------------------------------------------------------------- B3: a close finding after the lane QA passed
+
+@replay("close-findings")
+def test_a_close_finding_after_lane_qa_passed_logs_escaped_for_dev_and_qa_and_close_catch_for_close_qa(replays):
+    r = replays.get(KEYS["close-findings"])
+    clean_run(r)
+    cited = "toy/__init__.py"
+    rows = event_rows(r, [("qa_first_pass", "dev"), ("qa_first_pass", "ba"), ("escaped", "dev"), ("escaped", "qa"),
+                          ("close_catch", "close-qa")], refs={"escaped": cited, "close_catch": cited})
+    first = {e["role"]: e for e in rows if e["event"] == "qa_first_pass"}
+    escaped = {e["role"]: e for e in rows if e["event"] == "escaped"}
+    (caught,) = [e for e in rows if e["event"] == "close_catch"]
+    assert all(e["points"] < 0 for e in escaped.values()) and caught["points"] > 0
+    assert escaped["dev"]["points"] < escaped["qa"]["points"], escaped  # the producer loses more than the lane QA
+    # what the driver played: lane QA passed the first time, then close QA's first round opened a finding on the
+    # file the dev wrote and the second round landed
+    (lane,) = lane_qa(r)
+    assert list(lane["reports"].values())[0]["qa"]["status"] == "pass"
+    rounds = [f["value"] for f in r.facts if f["key"] == "close QA round"]
+    assert [x["verdict"].split(":")[0] for x in rounds] == ["CLOSE_FINDINGS", "CLOSE"], rounds
+    assert [f["path"] for f in rounds[0]["findings"]] == [cited] and not rounds[1]["findings"], rounds
+    # each row stands for its own dispatch: the finding for the round that opened it, the catch for the round that landed
+    opened, landed = [d for d in dispatches(r) if d["identity"] == "close-qa"]
+    assert all(opened["tool_use_id"] in e["key"] for e in escaped.values()), (opened["tool_use_id"], escaped)
+    assert landed["tool_use_id"] in caught["key"], (landed["tool_use_id"], caught)
+    # the cited artifact's producer is the dev whose own calls wrote it, before the finding and again after it
+    order = [d["tool_use_id"] for d in dispatches(r)]
+    devs = [d for d in dispatches(r) if d["role"] == "dev"]
+    assert len(devs) == 2 and cited in devs[0]["wrote"] and cited in devs[1]["wrote"], [d["wrote"] for d in devs]
+    assert order.index(lane["tool_use_id"]) < order.index(opened["tool_use_id"]) < order.index(devs[1]["tool_use_id"]) \
+        < order.index(landed["tool_use_id"]), order
+    assert first["dev"]["ts"] <= escaped["dev"]["ts"] <= caught["ts"], (first, escaped, caught)
+
+
+@pytest.mark.parametrize("name", [pytest.param(n, id=n, marks=replay(n)) for n in ("qa-fail-close", "rating-answers")])
+def test_a_clean_close_gives_close_qa_no_row(replays, name):
+    r = replays.get(KEYS[name])
+    clean_run(r)
+    rounds = [f["value"] for f in r.facts if f["key"] == "close QA round"]
+    assert len(rounds) == 1 and rounds[0]["verdict"].startswith("CLOSE: YES") and not rounds[0]["findings"], rounds
+    assert len([d for d in dispatches(r) if d["identity"] == "close-qa"]) == 1
+    assert events(r), "the cycle's own events are in the log"
+    assert not [e for e in events(r) if e["role"] == "close-qa" or e["event"] in ("escaped", "close_catch")], events(r)
+
+
+# ---------------------------------------------------------------- B4: the rating
+
+@pytest.mark.parametrize("name", [pytest.param(n, id=n, marks=replay(n)) for n in ("qa-fail-close", "rating-answers")])
+def test_the_rating_dialog_is_one_question(replays, name):
+    r = replays.get(KEYS[name])
+    clean_run(r)
+    asked = questions(r)
+    assert len(asked) == len(step3b(r)) == (1 if name == "qa-fail-close" else len(ANSWERS)), asked
+    for q in asked:  # close.md Step 3b: one question, header Rating, the four rating options, one answer
+        (question,) = q["input"]["questions"]
+        assert q["input"]["metadata"] == {"source": f"close-rating:{task_of(r)}"}, q["input"]
+        assert (question["header"], question["multiSelect"]) == ("Rating", False), question
+        assert [o["label"] for o in question["options"]] == ["5 - Fully met", "4 - Minor gaps", "3 - Major gaps", "1-2 - Not met"]
+        assert task_of(r) in question["question"], question
+    assert {q["input"]["metadata"]["source"] for q in asked} == {f"close-rating:{task_of(r)}"}
+    assert len(asks(r)) == len(asked), f"the replay asked a question besides the rating: {asks(r)}"
+
+
+@replay("qa-fail-close")
+def test_answering_4_minor_gaps_writes_one_rating_row_with_the_roles_and_prints_the_owner_summary(replays):
+    r = replays.get(KEYS["qa-fail-close"])
+    clean_run(r)
+    (asked,) = questions(r)
+    (answered,) = step3b(r)
+    assert answered["answer"] == "4" and answered["ok"] and answered["hook_ran"], answered
+    (row,) = rating_rows(r)
+    roles = sorted({d["identity"] for d in dispatches(r) if d["identity"]})
+    assert row == {"kind": "rating", "ts": row["ts"], "project": project_key(r), "task_id": task_of(r), "rating": 4,
+                   "roles": roles, "tool_use_id": asked["tool_use_id"]}, row
+    assert ZULU.match(row["ts"]) and "close-qa" in roles and len(roles) >= 4, row
+    # the hook's standard output: one JSON object, at most 5 lines, the worst identity and why, no hook name
+    summary = owner_summary(r, RATING_LABEL)
+    lines = summary.splitlines()
+    assert 2 <= len(lines) <= 5, summary
+    (worst,) = [line for line in lines if line.startswith("Worst:")]
+    (failure,) = next(iter(lane_qa(r)[0]["reports"].values()))["qa"]["failures"]
+    assert worst.startswith("Worst: dev ") and failure["issue"] in worst, (worst, failure)  # the one negative event is dev's
+    assert any(line.startswith("Scores") and all(f"{role} " in line for role in roles if role != "main") for line in lines), summary
+    assert any(line.startswith("This cycle") and "rating 4" in line for line in lines), summary
+    assert not re.search(r"posttool|close-rating|PostToolUse|hooks/|\.py\b", summary), summary
+
+
+@replay("rating-answers")
+def test_skip_decline_a_typed_reply_the_afk_timeout_and_the_apps_skip_write_no_rating_row(replays):
+    r = replays.get(KEYS["rating-answers"])
+    clean_run(r)
+    steps, asked = step3b(r), questions(r)
+    assert [s["answer"] for s in steps] == ANSWERS and len(asked) == len(ANSWERS), steps
+    for n, (step, q) in enumerate(zip(steps, asked)):
+        label = step["label"]
+        assert label == RATING_LABEL + (f" again {n + 1}" if n else ""), label
+        if step["answer"] in ("skip", "decline"):
+            # the owner turned the dialog down: an error result, and the CLI runs no hook at all after it
+            assert (step["ok"], step["hook_ran"], q["is_error"], q["denial"]) == (False, False, True, "user-rejected"), (step, q)
+            assert not after_call(r, label), after_call(r, label)
+        else:
+            assert (step["ok"], step["hook_ran"], q["is_error"]) == (True, True, False), (step, q)
+            lines = owner_summary(r, label).splitlines()
+            assert any(line.startswith("Worst:") for line in lines), lines
+            cycle = [line for line in lines if line.startswith("This cycle")]
+            # the summary shows the cycle's rating from the "4" answer on (the second rating, 5, is never in it)
+            assert len(cycle) == 1 and ("rating 4" in cycle[0]) == (step["answer"] in ("4", "5")), (step["answer"], cycle)
+            assert "rating 5" not in cycle[0] and "rating 3" not in cycle[0], cycle
+        # a rating row exists once "4 - Minor gaps" has been answered, and never before
+        assert [row["rating"] for row in step["rating_rows"]] == ([4] if step["answer"] in ("4", "5") else []), step
+    assert [row["rating"] for row in rating_rows(r)] == [4]
+
+
+@pytest.mark.parametrize("name", [pytest.param(n, id=n, marks=replay(n)) for n in ("qa-fail-close", "rating-answers")])
+def test_an_event_row_with_the_same_task_id_does_not_stop_the_rating_row_and_a_second_rating_writes_nothing(replays, name):
+    r = replays.get(KEYS[name])
+    clean_run(r)
+    lines = [json.loads(line) for line in log_bytes(r).decode("utf-8").splitlines() if line.strip()]
+    posted = [(i, row) for i, row in enumerate(lines) if row.get("kind") in ("event", "rating")]
+    found = [row for _, row in posted if row["kind"] == "event"]
+    assert found and {row["task_id"] for _, row in posted} == {task_of(r)}, posted  # events and the rating, one task id
+    (index, rating), = [(i, row) for i, row in posted if row["kind"] == "rating"]
+    assert index > max(i for i, row in posted if row["kind"] == "event") and rating["rating"] == 4, posted
+    asked = questions(r)
+    if name == "rating-answers":  # the dialog asked again for the same task after the row: "5 - Fully met" is not written
+        assert [s["answer"] for s in step3b(r)][-2:] == ["4", "5"] and len(asked) == len(ANSWERS)
+        assert rating["tool_use_id"] == asked[-2]["tool_use_id"] != asked[-1]["tool_use_id"], (rating, asked[-2:])
+        assert [row["rating"] for row in step3b(r)[-1]["rating_rows"]] == [4]
