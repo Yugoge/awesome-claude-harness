@@ -114,6 +114,8 @@ tests/
 ├── `test_late_repair_driftfree_effective_state.py` - scripts/late-repair-controller.py's ``resolve_effective_report_state`` is the
 ├── `test_late_repair_route.py` - Covers AC-7..AC-11, AC-13, AC-14 (spec-20260907-115508-lawful-commit-channel.md,
 ├── `test_no_artificial_lifecycle_ceremony.py` - Prevent host metadata ceremonies from becoming ordinary lifecycle gates.
+├── `test_no_phases_spec_command.py` - commands/spec.md's split-QA criterion and wording carry the owner's no-phases ruling (D33)
+├── `test_no_phases_spec_template.py` - templates/spec-template.md Section 7 carries the owner's no-phases ruling (D33), and the section structure stays
 ├── `test_overnight_guard_in_place_git.py` - Defect (2026-08-09): `hooks/pretool-overnight-hook-guard.py` blocked EVERY git
 ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
 ├── `test_parent_cycle_claimant_reader.py` - THE DEFECT.  Admission to a cycle's ownership-completeness claimant set was
@@ -140,6 +142,18 @@ tests/
 ├── `test_spec_write.py` - Each test runs the script as a subprocess against a throw-away project under
 ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
+├── `test_steps_clean_merge_approvals.py` - Runs scripts/steps/clean-merge-approvals.py against temporary directories
+├── `test_steps_codex_run.py` - Runs scripts/steps/codex-run.py against temporary directories
+├── `test_steps_commit_plan.py` - Runs scripts/steps/commit-plan.py against temporary directories
+├── `test_steps_merge_snapshot.py` - Runs scripts/steps/merge-snapshot.py against temporary directories
+├── `test_steps_paseo_bootstrap.py` - Runs scripts/steps/paseo-bootstrap.py against temporary directories
+├── `test_steps_pull_run.py` - Runs scripts/steps/pull-run.py against temporary directories
+├── `test_steps_push_snapshot.py` - Runs scripts/steps/push-snapshot.py against temporary directories
+├── `test_steps_spec_capture.py` - Runs scripts/steps/spec-capture.py against temporary directories
+├── `test_steps_spec_finalize.py` - Runs scripts/steps/spec-finalize.py against temporary directories
+├── `test_steps_test_context.py` - Runs scripts/steps/test-context.py against temporary directories
+├── `test_steps_test_prepare.py` - Runs scripts/steps/test-prepare.py against temporary directories
+├── `test_steps_test_validators.py` - Runs scripts/steps/test-validators.py against temporary directories
 ├── `test_subagentstop_e2e_enforce.py` - A QA dispatch that carries an obligation is judged on exactly the qa-report
 ├── `test_test_command_routes.py` - /test's failure routes: no typed menu or exit option, and only executor statuses the executor emits (D23, D25).
 ├── `test_todo_md_sync.py` - Regression tests for the session-start todo/Markdown drift detector.

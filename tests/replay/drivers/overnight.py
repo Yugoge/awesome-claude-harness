@@ -2106,14 +2106,15 @@ class Night:
                 out += [self.o.bind(line, self.decision_rules(d)) for d in rows if d["gate"]]
             elif line.startswith("| <index> | <task_id> | <decision>"):
                 out += [self.o.bind(line, self.decision_rules(d)) for d in rows if not d["gate"]]
-            elif re.match(r"^### Cycle \d+: <issue>", line):  # one entry per pipeline of the cycle
+            elif re.match(r"^### Cycle (?:\d+|<cycle>): <issue>", line):  # one entry per pipeline of the cycle
                 body = [line]
                 while i + 1 < len(lines) and lines[i + 1].startswith("- "):
                     i += 1
                     body.append(lines[i])
                 for p in self.pipes:
                     rules = [(r"^issue$", p.rec["description"]), (r"^file$", p.rec["location"]),
-                             (r"^summary$", p.sc.dev_summary), (r"^N$", str(self.attempts(p)))]
+                             (r"^summary$", p.sc.dev_summary), (r"^N$", str(self.attempts(p))),
+                             (r"^cycle$", str(self.cycle))]
                     out += [self.o.bind(b, rules) for b in body] + [""]
                 if out and not out[-1]:
                     out.pop()
