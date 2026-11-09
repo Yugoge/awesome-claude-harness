@@ -1,20 +1,21 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-10-04T00:30:53Z*
-**Total entries**: 7
+*Last updated: 2026-10-29T07:57:38Z*
+**Total entries**: 9
 **Convention**: kebab
 
 ## Tree
 ```
 lib/
-├── `attribution_adjudicator.py` - Phase D cutover (docs/reference/attribution-journal-cutover-flip-plan-20261003.md,
-├── `attribution_aggregate_view.py` - Emits the canonical dev-report document shape that /close and /commit
+├── `attribution_adjudicator.py` - Phase D cutover: the lane-agnostic
 ├── `candidate_tree.py` - An acceptance harness usually has to evaluate its criterion against neither the
 ├── `make_sbom.py` - The SBOM is built from the archive's real contents, not from the source
 ├── `release_membership.py` - Single source of truth shared by every consumer, so the archive builder, the
+├── `score_log.py` - ``scripts/score-update.sh`` (whose rows go through the log's one writer,
 ├── `session_index.py` - A repository has exactly one shared index file (``$GIT_DIR/index``). Every session
-├── `sibling_loader.py` - ``scripts/close-route-select.py``, ``scripts/late-repair-controller.py`` and
+├── `sibling_loader.py` - ``scripts/late-repair-controller.py`` and
+└── `soundness_gate.py` - HUNK-level failure attribution
 ```
 <!-- /AUTO:index-stats -->
 

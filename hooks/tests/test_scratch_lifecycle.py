@@ -43,12 +43,12 @@ VAR_TMP_OVERRIDE_CONF = INSTALL_DIR / "tmpfiles-var-tmp-override.conf"
 SYSTEMD_TMPFILES = shutil.which("systemd-tmpfiles")
 
 
-def _run_hook(hook_path, env_overrides):
+def _run_hook(hook_path, env_overrides, payload="{}"):
     env = dict(os.environ)
     env.update(env_overrides)
     return subprocess.run(
         ["bash", str(hook_path)],
-        input="{}",
+        input=payload,
         capture_output=True,
         text=True,
         env=env,
@@ -126,6 +126,33 @@ class SessionEndScratchSweepTests(unittest.TestCase):
     def setUp(self):
         self.sandbox = Path(tempfile.mkdtemp(prefix="scratch-lifecycle-sweep-"))
         self.addCleanup(shutil.rmtree, self.sandbox, ignore_errors=True)
+        # The project the hook acts in (the CLI exports CLAUDE_PROJECT_DIR to hooks).
+        self.project = Path(tempfile.mkdtemp(prefix="scratch-lifecycle-project-"))
+        self.addCleanup(shutil.rmtree, self.project, ignore_errors=True)
+        os.environ["CLAUDE_PROJECT_DIR"] = str(self.project)
+        self.addCleanup(os.environ.pop, "CLAUDE_PROJECT_DIR", None)
+
+    def test_removes_own_runtime_files_in_the_project_siblings_survive(self):
+        # Keyed by the payload's session id, as prompt-workflow.py writes them; an inherited
+        # CLAUDE_CODE_SESSION_ID (a session started from another session's Bash) names another.
+        claude = self.project / ".claude"
+        own = [claude / "workflow-own-sid.json", claude / "workflow-locks" / "own-sid.lock",
+               claude / "dev-start-replays" / "own-sid" / "d.json"]
+        kept = [claude / "workflow-parent-sid.json", claude / "workflow-locks" / "parent-sid.lock",
+                claude / "dev-start-replays" / "parent-sid" / "d.json",
+                claude / "dev-registry" / "agent-index.json"]
+        for path in own + kept:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}\n")
+        result = _run_hook(
+            SESSION_SWEEP_HOOK,
+            {"TMPDIR": str(self.sandbox), "CLAUDE_CODE_SESSION_ID": "parent-sid"},
+            payload=json.dumps({"session_id": "own-sid"}),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([p for p in own if p.exists()], [])
+        self.assertFalse((claude / "dev-start-replays" / "own-sid").exists())
+        self.assertEqual([p for p in kept if not p.exists()], [])
 
     def test_removes_own_dir_sibling_survives_byte_untouched(self):
         own = self.sandbox / "own-sid"
@@ -168,6 +195,31 @@ class SessionEndScratchSweepTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertTrue(target.exists())
+
+    def test_doc_sync_notice_keeps_state_only_where_the_sweep_would_remove(self):
+        # One ownership rule (hooks/lib/scratch_owner.py): the notice keeps its dedupe
+        # state in exactly the session directories the sweep removes, so it never writes
+        # into a directory the sweep leaves behind (an .owner of another session, or none).
+        import sys
+        sys.path.insert(0, str(REPO_ROOT))
+        from hooks.doc_sync import notice
+        owners = {"same": json.dumps({"sid": "s-x"}), "other": json.dumps({"sid": "s-y"}),
+                  "no-sid": "{}", "malformed": "{", "missing": None}
+        for case, text in owners.items():
+            root = self.sandbox / case
+            target = root / "s-x"
+            target.mkdir(parents=True)
+            if text is not None:
+                (target / ".owner").write_text(text)
+            os.environ[notice.STATE_ROOT_ENV] = str(root)
+            try:
+                keeps_state = notice.state_path_for({"session_id": "s-x"}) is not None
+            finally:
+                del os.environ[notice.STATE_ROOT_ENV]
+            result = _run_hook(SESSION_SWEEP_HOOK, {"TMPDIR": str(root), "CLAUDE_CODE_SESSION_ID": "s-x"})
+            self.assertEqual(result.returncode, 0, case)
+            self.assertEqual(keeps_state, not target.exists(), case)
+            self.assertEqual(keeps_state, case == "same", case)
 
 
 @unittest.skipUnless(SYSTEMD_TMPFILES, "systemd-tmpfiles binary not available")

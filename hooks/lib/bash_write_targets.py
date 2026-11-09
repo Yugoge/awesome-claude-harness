@@ -278,11 +278,8 @@ def _next_token_from_original(original: str, start: int) -> Tuple[str, int]:
     `(` and `)` terminate an UNQUOTED token because they are shell syntax,
     never part of a bare word: without this, `(cmd > /tmp/f)` yields the
     token `/tmp/f)`, which names a path that does not exist. That single
-    absorbed byte is load-bearing in opposite directions for two consumers —
-    it made pretool-overwrite-guard.py resolve a non-existent path and
-    therefore ALLOW a replacement as if it were creation, and it made
-    pretool-tool-policy.py refuse a read-only `(… 2>/dev/null) | head` by
-    inventing a write target named `/dev/null)`.
+    absorbed byte made pretool-tool-policy.py refuse a read-only
+    `(… 2>/dev/null) | head` by inventing a write target named `/dev/null)`.
 
     The QUOTED branch above is deliberately untouched, so a filename that
     really does contain a parenthesis (`> "/tmp/report (1).txt"`) still
@@ -1235,6 +1232,41 @@ def extract_bash_write_targets_with_modes(command: str) -> List[WriteTarget]:
         seen.add(key)
         deduped.append(t)
     return deduped
+
+
+_REMOVE_WORD_RE = re.compile(r"(?:^|[\s;|&])(rm|rmdir|unlink|mv)\b(?!-)")
+# A word bash hands mv as written: a literal path, or an option that keeps the last word the destination.
+_MV_PLAIN_WORD_RE = re.compile(r"-[bfiknuvZ]+|[\w/.,:@%+=~][\w/.,:@%+=~-]*")
+
+
+def extract_bash_touched_paths(command: str) -> List[Tuple[str, bool]]:
+    """(path, removed) for each path a command writes (the write-mode targets above) or deletes or
+    renames away (removed: every operand of rm, rmdir, unlink and mv, `git rm` and `git mv` too,
+    `git rm --cached` aside; of a plain move's destination, written, only the entry of each source's
+    name, all a directory moved into loses), for the protected paths of pretool-tool-policy.py
+    (P5 R2, R3). Read as the write-mode targets are: a heredoc body or quoted text is no command.
+
+    >>> extract_bash_touched_paths('rm -f /tmp/a "/tmp/b c" && mv /tmp/d /tmp/e')
+    [('/tmp/e', False), ('/tmp/a', True), ('/tmp/b c', True), ('/tmp/d', True), ('/tmp/e', False), ('/tmp/e/d', True)]
+    >>> extract_bash_touched_paths("echo 'rm /tmp/a' >| /tmp/f; git rm --cached /tmp/b; /bin/rm /tmp/c")
+    [('/tmp/f', False), ('/tmp/c', True)]
+    """
+    if not isinstance(command, str) or not command.strip():
+        return []
+    out = [(t.path, False) for t in extract_bash_write_targets_with_modes(command)]
+    stripped = _neutralize_command_word_prefixes(_strip_reason_payload(command_without_heredoc_bodies(command)))
+    masked = _strip_quoted_regions(stripped)
+    for m in _verb_matches(_REMOVE_WORD_RE, stripped, masked):
+        tokens = _segment_tokens(stripped, masked, m.end())
+        if m.group(1) == "rm" and _preceding_word(masked, m.end(), "rm") == "git" and "--cached" in tokens:
+            continue
+        paths = [_resolve_path(t) for t in _positionals(tokens)]
+        out.extend((p, True) for p in paths)
+        if (m.group(1) == "mv" and len(paths) > 1 and all(map(_MV_PLAIN_WORD_RE.fullmatch, tokens))
+                and re.split(r"[;|&\n(]", masked[:m.start(1)])[-1].split() in ([], ["git"])):  # no xargs appends
+            dest = paths.pop()
+            out[-1:] = [(dest, False)] + [(os.path.join(dest, os.path.basename(p.rstrip("/"))), True) for p in paths]
+    return out
 
 
 if __name__ == "__main__":

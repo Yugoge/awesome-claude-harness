@@ -151,7 +151,7 @@ EXPECTED_STATUS = {
     'M07': 'SKIPPED_MALFORMED_MARKERS', 'M08': 'SKIPPED_MALFORMED_MARKERS', 'M09': 'SKIPPED_MALFORMED_MARKERS',
     'M10': 'SKIPPED_MALFORMED_MARKERS', 'M11': 'SKIPPED_MALFORMED_MARKERS', 'M12': 'SKIPPED_MALFORMED_MARKERS',
     'M13': 'SKIPPED_MALFORMED_MARKERS', 'M14': 'SKIPPED_NO_OPENING_MARKER', 'M15': 'WRITTEN', 'M16': 'WRITTEN',
-    'M17': 'SKIPPED_MALFORMED_MARKERS', 'M18': 'WRITTEN', 'M19': 'SKIPPED_GITHUB_RESERVED', 'M20': 'WRITTEN',
+    'M17': 'SKIPPED_MALFORMED_MARKERS', 'M18': 'WRITTEN', 'M19': 'SKIPPED_GITHUB_RESERVED', 'M20': 'SKIPPED_ABSENT',
     'M21': 'SKIPPED_NO_OPENING_MARKER', 'M22': 'WRITTEN',
 }
 SKIP_CASES = ['M03', 'M04', 'M05', 'M06', 'M07', 'M08', 'M09', 'M10', 'M11', 'M12', 'M13', 'M14', 'M21']
@@ -210,7 +210,8 @@ def test_idx_status_returns_the_status_for_each_shape(tmp_path, case):
 
     assert result is regions.RegenStatus[EXPECTED_STATUS[case]], (case, result)
     if case == 'M20':
-        assert IO in index.read_text() and IC in index.read_text()
+        # doc-sync updates an INDEX that exists and creates none.
+        assert not index.exists()
 
 
 def test_idx_status_idxs_never_none_all_shapes(tmp_path):
@@ -256,7 +257,7 @@ def test_idx_zero_write_idxz_selfcheck_description_marker(tmp_path, monkeypatch)
         if variant == 'foreign_id':
             # Discriminator: the fence-aware classifier alone calls the would-be file
             # well-formed, so the refusal below can only come from the body-level scan.
-            would_be = module._build_index_content(directory, 'kebab', '')
+            would_be = module._compose_index(directory, module._build_index_block(directory, 'kebab'))
             assert regions.classify_region(would_be, 'index-stats').shape is regions.RegionShape.WELL_FORMED
         before_bytes, before_mtime = pin_mtime(index)
         with monkeypatch.context() as patched:
@@ -266,10 +267,10 @@ def test_idx_zero_write_idxz_selfcheck_description_marker(tmp_path, monkeypatch)
         assert result is regions.RegenStatus.SKIPPED_MALFORMED_MARKERS, variant
         assert spy.calls == [], variant
         assert index.read_bytes() == before_bytes and index.stat().st_mtime_ns == before_mtime, variant
-    # A directory without an INDEX yet is refused the same way and gets no file.
+    # A directory without an INDEX yet gets no file whatever its listing holds.
     project, directory, index = build_index_case(tmp_path / 'fresh', 'M20')
     write_description_marker(directory, [IC])
-    assert module.regen_index(directory, project) is regions.RegenStatus.SKIPPED_MALFORMED_MARKERS
+    assert module.regen_index(directory, project) is regions.RegenStatus.SKIPPED_ABSENT
     assert not index.exists()
 
 
@@ -289,7 +290,7 @@ def assert_single_generated_block(text):
 
 
 @pytest.mark.parametrize('case', [pytest.param(case, id=f'idxt_{case}') for case in
-                                  ['M01', 'M02', 'M15', 'M16', 'M20', 'M22']])
+                                  ['M01', 'M02', 'M15', 'M16', 'M22']])
 def test_idx_stable_rounds_are_byte_stable(tmp_path, monkeypatch, case):
     """Three consecutive rounds give identical bytes and never duplicate the generated block."""
     project, directory, index = build_index_case(tmp_path, case)
@@ -297,9 +298,7 @@ def test_idx_stable_rounds_are_byte_stable(tmp_path, monkeypatch, case):
 
     first, second, third = run_rounds(module, directory, project, index, monkeypatch)
 
-    # Without an INDEX the first round sees a directory that does not hold INDEX.md yet, and the
-    # existing convention guess counts that file: round one may differ, unchanged by this ticket.
-    assert second == third and (case == 'M20' or first == second)
+    assert first == second == third
     text = third.decode()
     assert_single_generated_block(text)
     assert text.count(IO) == (2 if case == 'M15' else 1)
@@ -371,22 +370,6 @@ def test_idx_stable_idxt_no_duplicate_blocks(tmp_path, monkeypatch):
     assert_single_generated_block(index.read_text())
 
 
-def test_idx_stable_idxt_needs_update_agrees_with_classifier(tmp_path):
-    """_index_needs_update is True exactly when the INDEX is absent or its region is well-formed."""
-    regions = load('regions')
-    module = load('regen_index')
-    absent = tmp_path / 'absent' / 'INDEX.md'
-    absent.parent.mkdir()
-    assert module._index_needs_update(absent) is True
-    for case in ['M01', 'M02', 'M03', 'M04', 'M05', 'M06', 'M07', 'M08', 'M09', 'M10', 'M11', 'M12', 'M13',
-                 'M14', 'M15', 'M16', 'M21', 'M22']:
-        path = tmp_path / case / 'INDEX.md'
-        path.parent.mkdir()
-        path.write_bytes(shape_body(case, 'index-stats').encode())
-        expected = regions.classify_region(path.read_text(), 'index-stats').shape is regions.RegionShape.WELL_FORMED
-        assert module._index_needs_update(path) is expected, case
-
-
 @pytest.mark.parametrize('case', [pytest.param(case, id=f'rdm_{case}') for case in
                                   ['M03', 'M04', 'M05', 'M06', 'M07', 'M08', 'M09', 'M10', 'M11', 'M12', 'M13',
                                    'M14', 'M15', 'M21']])
@@ -417,12 +400,12 @@ def test_readme_shapes_rdm_M17_description_newline_marker(tmp_path):
         before_bytes, before_mtime = pin_mtime(readme)
         assert module.regen_readme(directory, project) is regions.RegenStatus.SKIPPED_MALFORMED_MARKERS, variant
         assert readme.read_bytes() == before_bytes and readme.stat().st_mtime_ns == before_mtime, variant
-    # No README yet: the same refusal, and no file is created.
+    # No README yet: none is created whatever the listing holds.
     project = tmp_path / 'fresh' / 'project'
     directory = project / 'folder'
     directory.mkdir(parents=True)
     write_description_marker(directory, [RC])
-    assert module.regen_readme(directory, project) is regions.RegenStatus.SKIPPED_MALFORMED_MARKERS
+    assert module.regen_readme(directory, project) is regions.RegenStatus.SKIPPED_ABSENT
     assert not (directory / 'README.md').exists()
 
 
@@ -457,13 +440,13 @@ def test_readme_shapes_rdm_bare_standalone_skip_and_written(tmp_path):
         assert load('regen_readme').regen_readme(directory, project) is expected, case
 
 
-def test_readme_shapes_rdm_status_identity_five_members(tmp_path):
-    """The status class is one object with five members across regen_readme, regen_index and regions."""
+def test_readme_shapes_rdm_status_identity_six_members(tmp_path):
+    """The status class is one object with six members across regen_readme, regen_index and regions."""
     regions = load('regions')
     assert load('regen_readme').RegenStatus is regions.RegenStatus is load('regen_index').RegenStatus
     assert [member.name for member in regions.RegenStatus] == [
-        'WRITTEN', 'SKIPPED_GITHUB_RESERVED', 'SKIPPED_NO_OPENING_MARKER', 'SKIPPED_NO_CLOSING_MARKER',
-        'SKIPPED_MALFORMED_MARKERS']
+        'WRITTEN', 'SKIPPED_ABSENT', 'SKIPPED_GITHUB_RESERVED', 'SKIPPED_NO_OPENING_MARKER',
+        'SKIPPED_NO_CLOSING_MARKER', 'SKIPPED_MALFORMED_MARKERS']
     project, directory, _ = build_readme_case(tmp_path, 'M01')
     assert load('regen_readme').regen_readme(directory, project) is regions.RegenStatus.WRITTEN
 
@@ -485,9 +468,17 @@ SILENT_CASES = ['M03', 'M14']
 PATCHED_CASES = ['M01', 'M02', 'M15', 'M16']
 
 
-def build_claude_case(tmp_path, monkeypatch, case, text=None):
+# The section these cases patch: its body comes from the project's .claude/ tree, which every
+# case gives one agent file, so a regenerated body is known in advance.
+SECTION = 'claude-inventory'
+SECTION_BODY = '- **agents**: 1 files'
+
+
+def build_claude_case(tmp_path, case, text=None):
     project = tmp_path / 'project'
-    project.mkdir(parents=True)
+    agents = project / '.claude' / 'agents'
+    agents.mkdir(parents=True)
+    (agents / 'a.md').write_text('# a\n')
     claude_md = project / 'CLAUDE.md'
     if text is None:
         if case == 'M17':
@@ -498,37 +489,37 @@ def build_claude_case(tmp_path, monkeypatch, case, text=None):
             skill.mkdir(parents=True)
             text = CLAUDE_HEAD + CLAUDE_GUARD + shape_body('M01', 'skill-list')
         else:
-            text = CLAUDE_HEAD + CLAUDE_GUARD + shape_body(case, 'last-updated')
+            text = CLAUDE_HEAD + CLAUDE_GUARD + shape_body(case, SECTION)
     claude_md.write_bytes(text.encode())
-    monkeypatch.setattr(load('patch'), 'datetime', FixedClock)
     return project, claude_md, text
 
 
 @pytest.mark.parametrize('case', [pytest.param(case, id=f'cmd_{case}') for case in
                                   ['M01', 'M02', 'M03', 'M04', 'M05', 'M06', 'M07', 'M08', 'M09', 'M10', 'M11',
                                    'M12', 'M13', 'M14', 'M15', 'M17']])
-def test_claudemd_shapes_section_records_and_bytes(tmp_path, monkeypatch, case):
+def test_claudemd_shapes_section_records_and_bytes(tmp_path, case):
     """A shape the classifier refuses never corrupts CLAUDE.md and yields exactly one record."""
     regions = load('regions')
-    project, claude_md, text = build_claude_case(tmp_path, monkeypatch, case)
+    project, claude_md, text = build_claude_case(tmp_path, case)
 
     records = load('patch').patch_claude_md(project)
 
     assert isinstance(records, list)
     if case in PATCHED_CASES:
         assert records == []
-        assert claude_md.read_text() != text and '> Last updated: 2026-01-02' in claude_md.read_text()
-        assert claude_md.read_text().count('<!-- AUTO:last-updated -->') == (2 if case == 'M15' else 1)
-        assert claude_md.read_text().startswith(CLAUDE_HEAD + CLAUDE_GUARD)
+        updated = claude_md.read_text()
+        assert updated != text and f'\n{SECTION_BODY}\n' in updated
+        assert updated.count(f'<!-- AUTO:{SECTION} -->') == (2 if case == 'M15' else 1)
+        assert updated.startswith(CLAUDE_HEAD + CLAUDE_GUARD)
         if case == 'M15':
-            assert '```\n<!-- AUTO:last-updated -->\nexample body\n<!-- /AUTO:last-updated -->\n```' in claude_md.read_text()
+            assert f'```\n<!-- AUTO:{SECTION} -->\nexample body\n<!-- /AUTO:{SECTION} -->\n```' in updated
         return
     assert claude_md.read_bytes() == text.encode()
     if case in SILENT_CASES:
         assert records == []
         return
     status, shape = CLAUDE_STATUS[case]
-    marker_id = 'skill-list' if case == 'M17' else 'last-updated'
+    marker_id = 'skill-list' if case == 'M17' else SECTION
     assert len(records) == 1
     record = records[0]
     assert record.kind is regions.ArtifactKind.CLAUDE_MD_SECTION
@@ -537,14 +528,13 @@ def test_claudemd_shapes_section_records_and_bytes(tmp_path, monkeypatch, case):
     assert record.marker_id == marker_id
 
 
-def test_claudemd_shapes_cmd_single_last_updated_bytes_identical(tmp_path, monkeypatch):
-    """A single well-formed last-updated pair is patched to the same bytes the old code produced."""
+def test_claudemd_shapes_cmd_single_section_bytes_identical(tmp_path):
+    """A single well-formed section is patched to the same bytes the old code produced."""
+    start, end = f'<!-- AUTO:{SECTION} -->', f'<!-- /AUTO:{SECTION} -->'
     project, claude_md, text = build_claude_case(
-        tmp_path, monkeypatch, 'M01',
-        text=CLAUDE_HEAD + '<!-- AUTO:last-updated -->\n> Last updated: 2001-01-01\n<!-- /AUTO:last-updated -->\n\nhand notes\n')
-    start, end = '<!-- AUTO:last-updated -->', '<!-- /AUTO:last-updated -->'
+        tmp_path, 'M01', text=CLAUDE_HEAD + f'{start}\n- **agents**: 0 files\n{end}\n\nhand notes\n')
     s, e = text.find(start), text.find(end)
-    legacy = text[:s + len(start)] + '\n' + '> Last updated: 2026-01-02' + '\n' + text[e:]
+    legacy = text[:s + len(start)] + '\n' + SECTION_BODY + '\n' + text[e:]
 
     records = load('patch').patch_claude_md(project)
 
@@ -552,69 +542,71 @@ def test_claudemd_shapes_cmd_single_last_updated_bytes_identical(tmp_path, monke
     assert claude_md.read_bytes() == legacy.encode()
 
 
-def test_claudemd_shapes_cmd_records_per_section(tmp_path, monkeypatch):
+def test_claudemd_shapes_cmd_records_per_section(tmp_path):
     """One record per opted-in section that was refused, in patch order; healthy sections get none."""
+    date_block = '<!-- AUTO:last-updated -->\nold\n<!-- /AUTO:last-updated -->\n'
     text = (CLAUDE_HEAD
             + '<!-- AUTO:claude-inventory -->\n<!-- AUTO:claude-inventory -->\nx\n<!-- /AUTO:claude-inventory -->\n\n'
             + CLAUDE_GUARD
             + '<!-- /AUTO:agent-list -->\n\n'
             + '<!--AUTO:skill-list-->\n\n'
-            + '<!-- AUTO:last-updated -->\nold\n<!-- /AUTO:last-updated -->\n')
-    project, claude_md, _ = build_claude_case(tmp_path, monkeypatch, 'M01', text=text)
+            + date_block)
+    project, claude_md, _ = build_claude_case(tmp_path, 'M01', text=text)
 
     records = load('patch').patch_claude_md(project)
 
     assert [(record.marker_id, record.shape.name) for record in records] == [
         ('claude-inventory', 'DUPLICATE_OPENING'), ('agent-list', 'ONLY_CLOSING'), ('skill-list', 'NEAR_MISS_MARKER')]
     updated = claude_md.read_text()
-    assert '> Last updated: 2026-01-02' in updated
+    # A last-updated block is no section of doc-sync's: no date is written into it.
+    assert updated.endswith(date_block)
     assert '<!--AUTO:skill-list-->' in updated and '<!-- /AUTO:agent-list -->' in updated
 
 
-def test_claudemd_shapes_cmd_unopted_section_silent(tmp_path, monkeypatch):
+def test_claudemd_shapes_cmd_unopted_section_silent(tmp_path):
     """A section without any marker is not opted in: no record, no change, whatever else is present."""
     text = CLAUDE_HEAD + CLAUDE_GUARD + 'plain notes\n'
-    project, claude_md, _ = build_claude_case(tmp_path, monkeypatch, 'M01', text=text)
+    project, claude_md, _ = build_claude_case(tmp_path, 'M01', text=text)
 
     assert load('patch').patch_claude_md(project) == []
     assert claude_md.read_text() == text
     # A prose mention of a marker is not an opt-in either.
-    prose = CLAUDE_HEAD + CLAUDE_GUARD + 'see `<!-- AUTO:last-updated -->` for the date\n'
+    prose = CLAUDE_HEAD + CLAUDE_GUARD + f'see `<!-- AUTO:{SECTION} -->` for the counts\n'
     claude_md.write_text(prose)
     assert load('patch').patch_claude_md(project) == []
     assert claude_md.read_text() == prose
 
 
-def test_claudemd_shapes_cmd_returns_list_of_records(tmp_path, monkeypatch):
+def test_claudemd_shapes_cmd_returns_list_of_records(tmp_path):
     """patch_claude_md returns a list, empty or of six-field RegenRecords, on every path."""
     regions = load('regions')
-    project, _, _ = build_claude_case(tmp_path / 'a', monkeypatch, 'M07')
+    project, _, _ = build_claude_case(tmp_path / 'a', 'M07')
     records = load('patch').patch_claude_md(project)
     assert isinstance(records, list) and all(isinstance(record, regions.RegenRecord) for record in records)
     assert records[0]._fields == ('kind', 'path', 'status', 'marker_id', 'shape', 'detail')
-    # A project without any CLAUDE.md gets the template and an empty list.
+    # A project without any CLAUDE.md gets an empty list and no CLAUDE.md: none is created.
     empty = tmp_path / 'empty'
     empty.mkdir()
     assert load('patch').patch_claude_md(empty) == []
+    assert os.listdir(empty) == []
     # A detail is carried for an unclosed fence: the line the fence starts on.
-    fenced_text = CLAUDE_HEAD + CLAUDE_GUARD + '```\n<!-- AUTO:last-updated -->\nx\n<!-- /AUTO:last-updated -->\n'
-    project, _, _ = build_claude_case(tmp_path / 'b', monkeypatch, 'M01', text=fenced_text)
+    fenced_text = CLAUDE_HEAD + CLAUDE_GUARD + f'```\n<!-- AUTO:{SECTION} -->\nx\n<!-- /AUTO:{SECTION} -->\n'
+    project, _, _ = build_claude_case(tmp_path / 'b', 'M01', text=fenced_text)
     fenced = load('patch').patch_claude_md(project)
     assert [(record.shape.name, record.detail) for record in fenced] == [
         ('UNCLOSED_FENCE', str(fenced_text.split('\n').index('```') + 1))]
 
 
-def test_claudemd_shapes_cmd_toplevel_candidate_guard_unchanged(tmp_path, monkeypatch):
+def test_claudemd_shapes_cmd_toplevel_candidate_guard_unchanged(tmp_path):
     """Pinned boundary: a file is a candidate only when it contains the substring `<!-- AUTO:`."""
     # Only a near miss: the substring is absent, the file is not a candidate, nothing is reported.
-    near_only = CLAUDE_HEAD + '<!--AUTO:last-updated-->\nold\n<!-- /AUTO:last-updated -->\n'
-    project, claude_md, _ = build_claude_case(tmp_path / 'near', monkeypatch, 'M01', text=near_only)
+    near_only = CLAUDE_HEAD + f'<!--AUTO:{SECTION}-->\nold\n<!-- /AUTO:{SECTION} -->\n'
+    project, claude_md, _ = build_claude_case(tmp_path / 'near', 'M01', text=near_only)
     assert load('patch').patch_claude_md(project) == []
     assert claude_md.read_text() == near_only
     # The project file has no marker text: the second candidate .claude/CLAUDE.md is used instead.
-    project, claude_md, _ = build_claude_case(tmp_path / 'second', monkeypatch, 'M01', text=CLAUDE_HEAD + 'notes\n')
+    project, claude_md, _ = build_claude_case(tmp_path / 'second', 'M01', text=CLAUDE_HEAD + 'notes\n')
     inner = project / '.claude' / 'CLAUDE.md'
-    inner.parent.mkdir()
-    inner.write_text(CLAUDE_HEAD + '<!-- AUTO:last-updated -->\nold\n<!-- /AUTO:last-updated -->\n')
+    inner.write_text(CLAUDE_HEAD + f'<!-- AUTO:{SECTION} -->\nold\n<!-- /AUTO:{SECTION} -->\n')
     assert load('patch').patch_claude_md(project) == []
-    assert '> Last updated: 2026-01-02' in inner.read_text() and claude_md.read_text() == CLAUDE_HEAD + 'notes\n'
+    assert f'\n{SECTION_BODY}\n' in inner.read_text() and claude_md.read_text() == CLAUDE_HEAD + 'notes\n'

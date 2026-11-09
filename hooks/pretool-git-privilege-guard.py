@@ -15,7 +15,8 @@ guard must be always-on per spec 5.2.4 line 240-241.
 
 The whitelists below preserve the legitimate paths:
   - `^auto-bulk: end-of-cycle commit for ` blessed bridge from /merge
-  - CLAUDE_MERGE_COMMAND_ACTIVE=1 env exemption for git merge
+  - /merge's own wrapper hooks/merge.sh, whose subprocess runs git merge
+    where no hook sees it
   - reset to HEAD (non-destructive)
   - human-driven commits: the human exits the agent context and runs
     git commit at their own shell; this hook does not see those calls.
@@ -25,8 +26,8 @@ Forbidden agent operations:
     `^auto-bulk: end-of-cycle commit for ` (the blessed bridge from
     /merge per spec section 5.2.1.2 R2). Stderr literal:
     `BLOCKED: agent git commit`.
-  - git merge unless the env var `CLAUDE_MERGE_COMMAND_ACTIVE=1` is
-    set by /merge at start. Stderr literal: `BLOCKED: agent git merge`.
+  - git merge (any form; /merge merges inside hooks/merge.sh). Stderr
+    literal: `BLOCKED: agent git merge`.
   - git push (any form). Stderr literal:
     `BLOCKED: agent git push`.
   - every hard reset form. Stderr literal:
@@ -40,6 +41,14 @@ git ls-files, git ls-tree, git restore (working-tree only), git branch
 and git stash list/show/pop (non-destructive forms). Hard reset and direct
 ref mutation are not agent-accessible.
 
+/do consent (hooks/lib/allowlist.py has_do_consent: main agent, one turn)
+releases the rules on git merge, forbidden plumbing, hard reset and direct ref
+mutation, and adds none (E2). What one of them refuses without it stays refused
+when it can move the protected branch's ref, or when the guard cannot tell the
+branch it lands on (_moves_protected_branch). git commit, git push and a git
+command the guard cannot classify are judged as without it. Each block then
+names the commands that land them (/close then /commit, /push, /merge).
+
 Spec: spec-20260424-233926 section 5.2.4 (R4.3) line 233-249.
 
 Revision history:
@@ -52,7 +61,7 @@ Revision history:
        in the child's environment (NOT inline-prepended on the agent
        command line), AND
     2. a single-use grant manifest at
-       `/tmp/claude-{push|commit}-grant-<sid>.json` whose contents
+       `<state dir>/claude-{push|commit}-grant-<sid>.json` whose contents
        bind the operation to a specific branch + expected_head + remote
        (push) or task_id + allowed_files + expected_message_sha256
        (commit).
@@ -135,12 +144,26 @@ Revision history:
   real pipeline evidence (`hooks/lib/commit_pipeline.verify_pipeline_dispatch`),
   and `_grant_provenance_refusal` here requires grant provenance
   (`minted_by.origin`), a dispatched-subagent caller (non-empty `agent_id`), and
-  a hook-written changelog-analyst dispatch attestation claimed by that caller.
-  See `_grant_provenance_refusal` and hooks/lib/commit_pipeline.py.
+  a hook-written changelog-analyst dispatch attestation of the dispatch that
+  started that caller. See `_grant_provenance_refusal` and
+  hooks/lib/commit_pipeline.py.
+  2026-10-28 (one producer per artifact): the guard no longer writes the
+  artifacts it decides on. A grant is spent by deleting it (an unlink only one
+  event can win), not renamed to `.lck` and restored or tracked in a `.use`
+  record; the attestation is matched to the caller by the digest of the
+  caller's own dispatch prompt instead of being rewritten with a claim; the
+  per-event pointer carries the grant's journal fields to the PostToolUse
+  finalizer. A failed commit's next attempt takes a fresh grant from /commit.
 
 Exit codes:
   0: Allow tool use
   2: Block tool use
+
+An error the guard does not expect, an import that fails at module load
+included, refuses a Bash call that may run git (exit 2, naming the error); it
+is not a policy refusal, and no grant or /do consent lifts it. Another tool,
+and a command that cannot run git (_may_run_git), still exit 0. Unreadable
+input (not a JSON object) is judged on its raw text the same way.
 """
 
 import glob
@@ -148,49 +171,145 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+
+# Fail closed. The code from here to the first hooks/lib import uses the standard
+# library alone, so it still decides when a lib module fails to load or anything
+# later raises; Python's own exit 1 there is a non-blocking hook error, and the
+# harness would run the command unjudged.
+_STDIN = None
+_MAY_RUN_GIT_RE = re.compile(r'git|[$`]|[<>]\(', re.IGNORECASE)
+
+
+def _read_stdin():
+    """The raw hook payload, read once, by main or by the load-failure hook."""
+    global _STDIN
+    if _STDIN is None:
+        try:
+            stream = getattr(sys.stdin, 'buffer', None)
+            _STDIN = stream.read().decode('utf-8', 'replace') if stream else sys.stdin.read()
+        except Exception:
+            _STDIN = ''
+    return _STDIN
+
+
+def _may_run_git(text):
+    """False only when text cannot run git as this guard reads a command.
+
+    The guard refuses only what classify_git_command finds: a command word that
+    names git, one that spells it with quotes or backslashes (`g\\it`, `gi""t`),
+    or one built at run time (`$GIT`, `$(which git)`, a backquote, `<(...)`). With
+    quotes, backslashes and line continuations removed, text holding no `git` in
+    any letter case, no `$`, no backquote and no `<(` or `>(` has none of them.
+    """
+    flat = text.replace('\\\n', '')
+    for ch in '\\\'"':
+        flat = flat.replace(ch, '')
+    return bool(_MAY_RUN_GIT_RE.search(flat))
+
+
+def _judged_text(raw):
+    """What an error is judged on: None for another tool's call, a Bash call's
+    command, and the raw payload when it does not read as a tool call."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return raw
+    if not isinstance(data, dict):
+        return raw
+    if data.get('tool_name', '') != 'Bash':
+        return None
+    tool_input = data.get('tool_input')
+    command = tool_input.get('command') if isinstance(tool_input, dict) else None
+    return command if isinstance(command, str) else raw
+
+
+def _internal_error_exit(exc, what='internal error'):
+    """2, naming exc on stderr, when the call may run git; else 0."""
+    text = _judged_text(_read_stdin())
+    if text is None or not _may_run_git(text):
+        return 0
+    sys.stderr.write(
+        '\nBLOCKED: git-privilege guard %s, not a policy refusal: %s: %s\n'
+        % (what, type(exc).__name__, str(exc)[:300])
+        + 'The guard could not judge this command, which may run git, so it refuses '
+        'it; no /allow grant or /do consent lifts this. Report it.\n')
+    return 2
+
+
+def _refuse_on_load_failure(exc_type, exc, tb):
+    """sys.excepthook while this file runs as the hook: an exception escaping the
+    module (a hooks/lib import that fails, any module-level error) exits through
+    _internal_error_exit instead of Python's exit 1."""
+    try:
+        code = _internal_error_exit(exc)
+    except BaseException:
+        code = 2
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(code)
+
+
+if __name__ == '__main__':
+    sys.excepthook = _refuse_on_load_failure
+
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.allowlist import read_grant_for_git_command, match_sentinel_grant_for_bash_command  # noqa: E402
+from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command  # noqa: E402
+from lib.agent_resolver import resolve_agent_type  # noqa: E402
+from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
     iter_git_invocations, GitInvocation, classify_git_command)
 # Segment/tokenization primitives reused (read-only) so the commit-grant binding
 # can enumerate EVERY git-commit invocation in a chained command string and
 # inspect each invocation's leading env-assignments + global-option flags
 # token-aware (precise, no false match on the word "commit" inside a message).
-# These are consumed, NOT modified — the shared classifier stays untouched
-# (scope: this fix is the COMMIT grant path only).
+# The /do protected-branch rule (_moves_protected_branch) reads segments with
+# them too. They are the classifier's own; this file does not redefine them.
 from lib.git_command_classifier import (  # noqa: E402
+    _unquote_token,
     _segments as _shell_segments,
     _command_token_index as _cmd_token_index,
     _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,
-    _GIT_GLOBAL_VALUE as _GIT_GLOBAL_VALUE,
+    GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS,
 )
 # Commit-grant provenance contract (minted_by / expected_consumer) and the
 # hook-written changelog-analyst dispatch attestation. Shared with
 # scripts/write-commit-grant.py and hooks/pretool-commit-dispatch-attest.py so
 # all three agree by construction. See _grant_provenance_refusal.
 from lib import commit_pipeline  # noqa: E402
-from lib.harness_state_dir import harness_state_dir  # noqa: E402
+# The per-event pointer a spent grant hands to the PostToolUse finalizer, which
+# appends the commit-event journal entry from it.
+from lib import commit_journal  # noqa: E402
 
 
 BLESSED_BRIDGE_RE = re.compile(r'auto-bulk:\s*end-of-cycle commit for\b')
 
-GIT_GLOBAL_OPTION_RE = (
-    r'(?:\s+(?:-[Cc]\s+\S+|-[Cc]\S+|'
-    r'--(?:git-dir|work-tree|namespace|exec-path|super-prefix|config-env)'
-    r'(?:=\S+|\s+\S+)|'
-    r'--(?:bare|no-pager|paginate|no-replace-objects|literal-pathspecs|'
-    r'glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks)|'
-    r'-[pP]))*'
+
+def _option_alternation(opts):
+    return '|'.join(re.escape(o) for o in sorted(opts, key=lambda o: (-len(o), o)))
+
+
+# git's global options between `git` and the subcommand, built from the
+# classifier's option table: a value option and its value (the next word, or
+# `=value` for a long one) or a flag (`=value` allowed: `--exec-path=<dir>`). Git
+# rejects the attached `-C<dir>` / `-cname=value`; the guard still reads them as
+# `-C <dir>` / `-c <name>=<value>`.
+GIT_GLOBAL_OPTION_RE = r'(?:\s+(?:(?:%s)\s*\S+|(?:%s)(?:=\S+|\s+\S+)|(?:%s)(?:=\S+)?))*' % (
+    _option_alternation(o for o in GIT_GLOBAL_VALUE_OPTS if not o.startswith('--')),
+    _option_alternation(o for o in GIT_GLOBAL_VALUE_OPTS if o.startswith('--')),
+    _option_alternation(GIT_GLOBAL_FLAGS),
 )
 GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 
 # Matches a `git <global-options>* commit` invocation and CAPTURES the
-# global-options span (group 1) so `_extract_commit_dash_c_dir` can pull an
+# global-options span (group 1) so `_extract_dash_c_from_span` can pull an
 # explicit `-C <dir>` out of it. Reuses the exact GIT_GLOBAL_OPTION_RE grammar
 # above (kept in sync intentionally) so a change to one does not silently
 # desync from the other.
@@ -204,13 +323,6 @@ GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 # instead of <other-repo> (codex adversarial finding, 2026-07-16).
 GIT_COMMIT_INVOCATION_RE = re.compile(
     r'(?:^|[\s;&|()`])(?:\S*/)?git(' + GIT_GLOBAL_OPTION_RE + r')\s+commit\b'
-)
-
-# Same grammar as GIT_COMMIT_INVOCATION_RE, swapped to `merge` -- used by the
-# merge-grant binding (2026-10-02) to recover the global-options span of a
-# `git ... merge` invocation for -C extraction, mirroring the commit path.
-GIT_MERGE_INVOCATION_RE = re.compile(
-    r'(?:^|[\s;&|()`])(?:\S*/)?git(' + GIT_GLOBAL_OPTION_RE + r')\s+merge\b'
 )
 
 # `-C` (capital only) is "run as if git was started in <dir>". Lowercase `-c`
@@ -255,7 +367,7 @@ def _get_session_id(data):
     """Extract session_id from the parsed PreToolUse stdin payload.
 
     Returns empty string when missing.  Used to compute the per-session
-    grant-file path /tmp/claude-{kind}-grant-<sid>.json.
+    grant-file path <state dir>/claude-{kind}-grant-<sid>.json.
     """
     try:
         sid = data.get('session_id', '') or ''
@@ -264,26 +376,11 @@ def _get_session_id(data):
         return ''
 
 
-def _has_do_consent(data: dict) -> bool:
-    """Return True if main agent has /do consent for this turn."""
-    if data.get('agent_id'):  # subagents cannot use /do
-        return False
-    sid = _get_session_id(data)
-    if not sid:
-        return False
-    try:
-        flag = Path(f'/tmp/claude-orchestrator-consent-{sid}.flag')
-        return flag.exists() and flag.read_text().strip() == 'true'
-    except Exception:
-        return False
-
-
 def _check_git_allowlist(command: str, data: dict) -> bool:
     """Check /allow grant for non-push git operations. Read-only.
 
-    Main-agent only for LEGACY grants. Sentinel grants (task 20260524-133650):
-    extend to subagents — mirrors M2 decision in pretool-bash-safety.sh:484.
-    IS_SUBAGENT check preserved for legacy path only.
+    Sentinel grants (task 20260524-133650) reach subagents too — mirrors the
+    M2 decision in pretool-bash-safety.sh.
     """
     sid = _get_session_id(data)
     if not sid:
@@ -291,12 +388,7 @@ def _check_git_allowlist(command: str, data: dict) -> bool:
     # Sentinel grant check (task 20260524-133650): NOT gated by subagent firewall.
     # User-granted sentinels must be honored in subagent context per M2 (20260521-090200).
     task_id = os.environ.get('CLAUDE_TASK_ID') or sid
-    if match_sentinel_grant_for_bash_command(task_id, command) is not None:
-        return True
-    # Legacy grant check: subagent firewall preserved (original behavior).
-    if data.get('agent_id'):
-        return False
-    return read_grant_for_git_command(command, sid)
+    return match_sentinel_grant_for_bash_command(task_id, command) is not None
 
 
 def _inline_env_present(command, var_name):
@@ -319,14 +411,14 @@ def _find_grant(kind, sid):
     """Return (resolved_path, grant_dict) or (None, None) on miss/invalid.
 
     Per close-report-20260425-push-commit-debate.md §1-2, wrappers write
-    per-nonce filenames `/tmp/claude-{kind}-grant-<sid>-<nonce>.json` so
+    per-nonce filenames `<state dir>/claude-{kind}-grant-<sid>-<nonce>.json` so
     that two concurrent wrapper invocations under the same SID cannot
     collide on a single shared file.  The guard discovers the grant by
     glob, sorts by mtime descending, and returns the most recent
     JSON-parseable candidate.  The caller is responsible for unlinking
     the resolved path (single-use) on validation success.
     """
-    pattern = '/tmp/claude-%s-grant-%s-*.json' % (kind, sid)
+    pattern = os.path.join(harness_state_dir(), 'claude-%s-grant-%s-*.json' % (kind, sid))
     try:
         candidates = glob.glob(pattern)
     except Exception:
@@ -363,34 +455,11 @@ def _load_grant(grant_path):
         return None
 
 
-def _find_grant_any(kind):
-    """Fallback grant search ignoring SID.
-
-    Used when the subagent's session_id (from PreToolUse payload) differs
-    from the orchestrator's CLAUDE_SESSION_ID used when writing the grant.
-    Searches all grants of the given kind, returns the most recent valid one.
-    """
-    pattern = '/tmp/claude-%s-grant-*-*.json' % kind
-    try:
-        candidates = glob.glob(pattern)
-    except Exception:
-        return (None, None)
-    try:
-        candidates.sort(key=lambda p: os.stat(p).st_mtime, reverse=True)
-    except Exception:
-        candidates.sort(reverse=True)
-    for path in candidates:
-        grant = _load_grant(path)
-        if grant is not None:
-            return (path, grant)
-    return (None, None)
-
-
 def _collect_commit_grant_candidates():
     """Return ALL parseable commit-grant candidates as (path, grant) pairs,
     most-recent (highest mtime) first.
 
-    Unlike _find_grant / _find_grant_any (which return only the single newest
+    Unlike _find_grant (which returns only the single newest
     grant), this returns every candidate so _evaluate_commit can SELECT the
     grant whose repo_root/branch/expected_head match the commit's target repo
     instead of blindly trusting the newest one. /commit (BULK=false) writes TWO
@@ -400,11 +469,12 @@ def _collect_commit_grant_candidates():
     a repository mismatch (docs/dev/peer-review-grant-parity.md CRITICAL).
 
     The any-SID glob is a superset of the SID-specific glob, so one glob covers
-    both the fast path and the subagent SID-propagation fallback documented in
-    _find_grant_any. Locked (.lck) grants are excluded (single-use in-flight),
-    matching _find_grant / _find_grant_any.
+    the session's own grants and one written under another id (the writer takes
+    --sid or the env's id); a subagent's PreToolUse payload carries its parent's
+    session_id and main transcript_path, plus agent_id. A spent grant no longer
+    exists, so every match is unspent.
     """
-    pattern = '/tmp/claude-commit-grant-*-*.json'
+    pattern = os.path.join(harness_state_dir(), 'claude-commit-grant-*-*.json')
     try:
         paths = glob.glob(pattern)
     except Exception:
@@ -421,199 +491,44 @@ def _collect_commit_grant_candidates():
     return candidates
 
 
-def _unlink_grant(grant_path):
-    """Remove the grant file, swallowing all errors.
+def _spend_grant(grant_path):
+    """Spend a single-use grant by deleting it; True iff THIS call deleted it.
 
-    Single-use grant unlink: called ONLY on successful validation paths,
-    NEVER on validation-failure paths (so failure does not consume the
-    grant - this preserves forensic visibility and resists brute-force
-    confirm/deny probing).
+    Called ONLY on successful validation paths, NEVER on validation-failure
+    paths (so failure does not consume the grant - this preserves forensic
+    visibility and resists brute-force confirm/deny probing). unlink(2)
+    succeeds for exactly one caller, so two events racing for one grant
+    cannot both spend it: the loser gets False and is not authorized by it.
     """
     try:
         os.unlink(grant_path)
-    except Exception:
-        pass
-
-
-# ---------------------------------------------------------------------------
-# Validation-time use record (audit round 3, F4)
-# ---------------------------------------------------------------------------
-#
-# WHY THIS EXISTS. The deferred path (PreToolUse locks the grant aside, PostToolUse
-# consumes on success / restores on failure) already gives a true single use: the
-# .lck name is invisible to every grant search, so a second event cannot find it.
-# The hole is the UNDEFERRABLE fallback — no per-event key, rename failure, or a
-# pointer write that failed — where the grant is deliberately LEFT IN PLACE so a
-# failed commit can still retry. The safety argument for leaving it was that
-# expected_head neutralizes reuse because a successful commit moves HEAD. It does
-# not:
-#   - `git reset --soft <expected_head>` is permitted by this guard and puts the
-#     repo/branch/HEAD tuple back exactly as the grant recorded it, re-arming the
-#     leftover for another commit — and it can be repeated;
-#   - a deterministic `git commit --amend` (fixed GIT_AUTHOR_DATE and
-#     GIT_COMMITTER_DATE, unchanged tree/parent/message) reproduces the IDENTICAL
-#     sha, so HEAD never moves and the grant never goes stale at all.
-# Both were reproduced against real repositories before this fix.
-#
-# WHAT REPLACES IT. Spentness is no longer inferred from repo state, which the
-# above shows is restorable. The guard records, at validation time, a witness of
-# the target repo that only ever moves FORWARD: the HEAD sha plus the HEAD reflog
-# entry COUNT. The reflog is append-only under every operation an agent can reach
-# here — a commit appends `commit:`, a reset appends `reset:`, an amend appends
-# `commit (amend):` — so the count rises even when the sha is put back or never
-# moves. A later authorization is honored ONLY while the witness still equals the
-# recorded one, i.e. only while nothing has been committed since. That is exactly
-# the retry-after-FAILURE case the leave-in-place decision was made to protect
-# (a failed commit creates no reflog entry), and it fails closed the moment a
-# commit actually lands.
-#
-# RESIDUALS, stated rather than hidden:
-#   - Two authorizations that both happen BEFORE either commit lands still both
-#     pass: at validation time they are indistinguishable from one retry. The
-#     window is now bounded by _MAX_GRANT_USE_ATTEMPTS instead of running to TTL.
-#   - `git reflog delete HEAD@{0}` would restore the witness. It is not blocked
-#     here because `git reflog expire` is a legitimate operation in this repo
-#     (scripts/checkpoint-prune.sh), and narrowing that is a separate change.
-#   - A record whose grant is consumed by the finalizer is orphaned in /tmp until
-#     the >7d sweep; expired-grant records are reaped in _evaluate_commit.
-_GRANT_USE_SUFFIX = '.use'
-
-# How many authorizations one grant may receive while its witness is UNCHANGED
-# (i.e. while no commit has landed). Retry after a failed commit needs more than
-# one; nothing legitimate needs many. Bounds the pre-landing window above.
-_MAX_GRANT_USE_ATTEMPTS = 3
-
-
-def _use_record_path(grant_path):
-    """Sidecar path for a grant's use record.
-
-    Deliberately `<grant>.json.use`, which matches NONE of the existing globs:
-    not the grant searches (`*-*.json`), not the in-flight check (`*.json` /
-    `*.lck`), and not the Stop sweep's pointer/locked globs. The record must be
-    inert to every reader that already scans this namespace.
-    """
-    return grant_path + _GRANT_USE_SUFFIX
-
-
-def _repo_use_witness(repo_root):
-    """Append-only witness of "has anything been committed in this repo".
-
-    (HEAD sha, HEAD reflog entry count). The count is what carries the property:
-    it rises on commit, on reset, and on amend, so neither a soft reset back to
-    expected_head nor a same-sha amend can return it to a previously recorded
-    value. Returns '' when either component is unreadable (unborn HEAD, reflogs
-    disabled, or the repo is gone) — the caller treats '' as "cannot prove the
-    grant is unspent" and fails closed.
-    """
-    head = _commit_target_git_output(repo_root, 'rev-parse', 'HEAD')
-    entries = _commit_target_git_output(
-        repo_root, 'rev-list', '--walk-reflogs', '--count', 'HEAD')
-    # `entries == '0'` is the reflogs-disabled case, and it must be treated as
-    # UNREADABLE, not as a reading of zero. `not '0'` is False in Python, so the
-    # docstring's promise above ("returns '' when ... reflogs disabled") was not
-    # kept: the witness came back as '<sha>:0', which is a CONSTANT — it cannot
-    # rise on commit, reset or amend, so recorded == current would hold forever
-    # and _grant_use_permitted() would re-authorize a spent grant up to the
-    # attempt cap instead of failing closed. Verified 2026-09-03 against a bare
-    # clone (core.logAllRefUpdates unset): `rev-list --walk-reflogs --count HEAD`
-    # prints exactly `0`.
-    if not head or not entries or entries == '0':
-        return ''
-    return '%s:%s' % (head, entries)
-
-
-def _grant_use_permitted(grant, grant_path):
-    """False iff a previous authorization of THIS grant already produced a commit.
-
-    No record means the grant has never been authorized on the undeferrable path,
-    so this is a first use and nothing is in question. With a record, the grant is
-    honored only while the target repo's witness still equals the one captured at
-    that first use, and only up to _MAX_GRANT_USE_ATTEMPTS. Every failure mode
-    (unreadable witness, unparseable counter) resolves to False: an unprovable
-    grant is refused, not guessed.
-    """
-    record = _load_grant(_use_record_path(grant_path))
-    if record is None:
         return True
-    recorded = record.get('witness') or ''
-    current = _repo_use_witness(grant.get('repo_root') or '')
-    if not recorded or not current or recorded != current:
+    except OSError:
         return False
-    try:
-        uses = int(record.get('uses'))
-    except (TypeError, ValueError):
-        return False
-    return uses < _MAX_GRANT_USE_ATTEMPTS
 
 
-def _record_undeferrable_grant_use(grant, grant_path):
-    """Record an authorization that could NOT be deferred to PostToolUse.
-
-    Only this path writes a record: on the deferred path the rename-aside is
-    itself the single-use enforcement, and writing here would change a lifecycle
-    that is pinned byte-for-byte by the finalizer tests.
-
-    The witness is captured ONCE, at first use, and never refreshed — refreshing
-    it on a later use would re-arm a grant whose commit had already landed, which
-    is the whole defect. Best effort: a record that cannot be written leaves the
-    pre-existing (weaker) behavior rather than blocking a commit already
-    authorized.
-    """
-    path = _use_record_path(grant_path)
-    prior = _load_grant(path) or {}
-    try:
-        uses = int(prior.get('uses'))
-    except (TypeError, ValueError):
-        uses = 0
-    record = {
-        'grant_path': grant_path,
-        'repo_root': grant.get('repo_root') or '',
-        'witness': prior.get('witness') or _repo_use_witness(grant.get('repo_root') or ''),
-        'uses': uses + 1,
-        'expires_at': grant.get('expires_at') or '',
-    }
-    tmp_path = '%s.wip.%d.%s' % (path, os.getpid(), os.urandom(4).hex())
-    try:
-        with open(tmp_path, 'w') as fp:
-            json.dump(record, fp)
-            fp.flush()
-            os.fsync(fp.fileno())
-        os.replace(tmp_path, path)
-    except (OSError, ValueError, TypeError):
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
-
-def _grant_can_authorize_here(grant, grant_path, command):
+def _grant_can_authorize_here(grant, command):
     """True iff `grant` could authorize a commit for `command` right now.
 
-    Applies the same two tests the commit validation applies — is the grant
-    unspent (_grant_use_permitted), and is it bound to this target
-    (_grant_matches_commit_target) — but in a NON-BLOCKING form, because the
+    Applies the binding test the commit validation applies
+    (_grant_matches_commit_target), but in a NON-BLOCKING form, because the
     deferral is a scheduling decision and must never turn into an exit-2 on a
-    command the pre-fix code would merely have deferred. The commit path keeps
-    its own blocking copy of the same tests, which stays the single source of
-    truth for the allow.
+    command that would merely have been deferred. The commit path keeps its
+    own blocking copy of the same test, which stays the single source of truth
+    for the allow.
 
     Audit round 3, F6: before this, the deferral honored ANY parseable unexpired
-    grant file, so a post-success leftover or a grant belonging to a completely
-    different repository blocked auto-bulk here for its whole TTL.
+    grant file, so a grant belonging to a completely different repository
+    blocked auto-bulk here for its whole TTL.
 
     Fail closed on doubt: an empty command, or a command whose target cannot be
     resolved without blocking (multiple -C, unresolved ${VAR} — conditions that
     make _grant_matches_commit_target _block()), counts as "could authorize", so
-    this can only ever NARROW deferral, never allow an auto-bulk commit that the
-    pre-fix code would have deferred for a reason that still holds. Swallowing
-    that SystemExit leaves the _block() message it already wrote on stderr while
-    the hook goes on to exit 0 — cosmetic only (PreToolUse blocks on the exit
-    code, not on stderr), and it only occurs for a malformed auto-bulk command.
+    this can only ever NARROW deferral. Swallowing that SystemExit leaves the
+    _block() message it already wrote on stderr while the hook goes on to exit 0
+    — cosmetic only (PreToolUse blocks on the exit code, not on stderr), and it
+    only occurs for a malformed auto-bulk command.
     """
-    if grant_path.endswith('.lck'):
-        grant_path = grant_path[:-len('.lck')]
-    if not _grant_use_permitted(grant, grant_path):
-        return False
     if not command:
         return True
     try:
@@ -622,187 +537,6 @@ def _grant_can_authorize_here(grant, grant_path, command):
         return True
     except Exception:
         return True
-
-
-# Pointer-file path template for deferred commit-grant consumption (Fix B).
-# PreToolUse locks the grant (rename → .lck) and writes this pointer so
-# PostToolUse can locate it for finalization.
-#
-# The `{sid}` slot holds a PER-EVENT key (see _event_key), not a session id. The
-# pointer lives under the hook runtime-state root (harness_state_dir(): CLAUDE_STATE_DIR,
-# default /tmp), resolved at import exactly as the reader does. The template must stay
-# character-identical to _COMMIT_GRANT_POINTER_TEMPLATE in
-# hooks/posttool-allowlist-consume.py, and must keep matching the
-# `<state root>/claude-commit-grant-active-*.json` glob that hooks/stop-cleanup-allowlist.sh
-# sweeps at session end and scripts/write-commit-grant.py enumerates on revocation; all
-# are pinned by hooks/tests/test_posttool_commit_grant_finalize.py.
-_COMMIT_GRANT_ACTIVE_TEMPLATE = harness_state_dir() + '/claude-commit-grant-active-{sid}.json'
-
-# Characters kept verbatim from a tool_use_id when it becomes a filename. Everything
-# else folds to '-', so a payload value can neither escape the pointer namespace
-# (path separators, `..`) nor smuggle a glob metacharacter into the reader's scan.
-_EVENT_KEY_UNSAFE_RE = re.compile(r'[^A-Za-z0-9_-]')
-
-
-def _raw_tool_use_id(data):
-    """The UNSANITIZED tool_use_id from the payload, or '' when unavailable.
-
-    Recorded verbatim inside the pointer (audit R2-2): the filename derivation in
-    _event_key is deliberately lossy (safe-alphabet fold + length cap), so two
-    DISTINCT raw ids can share a derived key. The filename may stay lossy — it only
-    has to be a safe file name — but the ownership check inside the pointer must
-    not be, or a colliding second event could finalize the first event's grant.
-    """
-    try:
-        return str(data.get('tool_use_id') or '').strip()
-    except Exception:
-        return ''
-
-
-def _event_key(data):
-    """Per-event pointer key for this tool invocation, or '' when unavailable.
-
-    `tool_use_id` is the one identifier the runtime hands to BOTH hook events of a
-    single tool call. claude-code 2.1.239 builds the two payloads as
-    `{...,hook_event_name:"PreToolUse",tool_name,tool_input,tool_use_id:t}` and
-    `{...,hook_event_name:"PostToolUse",...,tool_use_id:t}`, and one tool-execution
-    frame passes the SAME `t` into both. It is the `toolu_...` id of the assistant's
-    tool_use block: unique per event, and assigned by the API rather than by the
-    committing agent.
-
-    A session id is NOT a substitute, and replacing it is the point. It proves only
-    that two things share a session, so a later unrelated commit under the same
-    session -- an auto-bulk commit, which mints no grant and no pointer at all --
-    could claim an earlier event's pointer.
-
-    The derivation is NOT injective (audit R2-2): the fold and the cap can map two
-    distinct raw ids to one name. That is acceptable for the FILENAME only because
-    the pointer also records the raw id (_raw_tool_use_id) and the finalizer
-    compares raw values; a filename collision therefore degrades to an O_EXCL
-    refusal on the write side (handled by restoring the grant), never to a
-    cross-finalization.
-
-    Returns '' when the payload carries no usable id; _lock_grant_for_posttool then
-    declines to defer rather than write a pointer nobody can bind to this event.
-    """
-    raw = _raw_tool_use_id(data)
-    if not raw:
-        return ''
-    safe = _EVENT_KEY_UNSAFE_RE.sub('-', raw)[:96]
-    return 'tu-' + safe if safe.strip('-') else ''
-
-
-def _restore_locked_grant(locked_path, grant_path):
-    """Best-effort rename of a just-locked grant back to its original name.
-
-    Used when the deferral pointer cannot be written AFTER the rename-aside
-    already happened (audit R2-3b): a .lck referenced by no pointer is a
-    stranded grant nothing will ever finalize. If the restore itself fails the
-    .lck remains — and with no pointer naming it, the finalizer's stale reaper
-    cannot reach it (that reaper discovers locked grants only through pointers).
-    The residual is reaped by hooks/stop-cleanup-allowlist.sh, which globs .lck
-    files directly (session-owned or over-age), and by the >7d /tmp sweep.
-    """
-    try:
-        os.rename(locked_path, grant_path)
-    except OSError:
-        pass
-
-
-def _lock_grant_for_posttool(grant_path, event_key, raw_event_id=''):
-    """Lock a commit grant for deferred PostToolUse consumption (Fix B).
-
-    Renames grant_path → grant_path + ".lck" to atomically remove it from
-    _find_grant / _find_grant_any searches (prevents double-use), then writes a
-    pointer named for THIS EVENT so posttool-allowlist-consume.py can finalize:
-      - success terminal result → journal the commit event, unlink the .lck (consumed)
-      - any other terminal      → rename .lck back to original (preserved for retry)
-    The finalizer classifies that result from the payload SHAPE, not from an exit
-    code — a successful Bash tool_response carries no exit_code, and a thrown call
-    fires PostToolUseFailure, under which the finalizer is also registered (see
-    _classify_terminal_result in posttool-allowlist-consume.py).
-
-    The pointer records BOTH the derived event_key (its own name, so a squatter
-    file merely occupying the name is refutable) and the RAW tool_use_id (audit
-    R2-2): the filename derivation is lossy, so ownership is proven by the raw
-    id, which the finalizer compares verbatim. Two distinct raw ids that share a
-    derived name can therefore never finalize each other's grant.
-
-    Returns True iff the grant was actually deferred (locked aside AND a pointer
-    published for it). A False return is the caller's signal that this
-    authorization will never reach PostToolUse, so the caller records a
-    validation-time use instead (audit round 3 F4 — the leave-in-place cases
-    below are exactly where the single-use guarantee used to evaporate).
-
-    When the grant cannot be deferred it is LEFT IN PLACE, not destroyed
-    (audit R2-3a — this reverses the earlier "spend it so it is never left
-    reusable" call):
-      - no per-event key, or rename failure: the commit this PreToolUse just
-        authorized is about to run; destroying the grant here meant a FAILED
-        commit could never retry and a successful one had nothing to journal.
-        Reuse-after-success is stopped by the caller's use record, NOT by the
-        expected_head binding: that binding was believed sufficient because a
-        successful commit moves HEAD, but a permitted `git reset --soft
-        <expected_head>` puts the tuple back and a deterministic `--amend`
-        reproduces the same sha, so the leftover stayed live (audit round 3 F4).
-        Residual: no journal entry for this event (inherent — no key means no
-        pointer to finalize).
-      - pointer write failure AFTER the rename (O_EXCL name collision, ENOSPC,
-        permission, serialization error): the .lck would be referenced by
-        nothing (audit R2-3b), so the rename is undone and the grant restored.
-        Same use-record protection as above.
-
-    The pointer is published ATOMICALLY (audit F7): the content is fully
-    written and fsynced under a private temp name in the same directory, then
-    linked into the final name. Writing into an O_EXCL-opened final name let a
-    concurrently colliding event read PARTIAL JSON and reap the still-being-
-    written pointer as corrupt, stranding the owner's .lck with no journal
-    record. link(2) atomically materialises the complete inode at the final
-    name and fails EEXIST when the name is taken — the same no-clobber O_EXCL
-    provided, so a name is still only ever published by the event that owns it
-    and no writer can overwrite another event's -- or another session's --
-    token (a taken name is a duplicate PreToolUse for one tool_use_id, or a
-    lossy-name collision between two distinct raw ids). rename(2) was rejected
-    because it silently REPLACES an existing destination (no-clobber lost);
-    O_EXCL-probe-then-rename was rejected for its probe-to-rename race, in
-    which a concurrent publisher's just-linked pointer would be clobbered.
-    The temp name matches neither the pointer glob nor the .lck glob, so no
-    reaper or sweep can observe it; a crash-orphaned temp file is inert and
-    falls to the >7d /tmp cron.
-    """
-    if not event_key:
-        return False
-    locked_path = grant_path + '.lck'
-    try:
-        os.rename(grant_path, locked_path)
-    except OSError:
-        return False
-    pointer_path = _COMMIT_GRANT_ACTIVE_TEMPLATE.format(sid=event_key)
-    tmp_path = '%s.wip.%d.%s' % (pointer_path, os.getpid(), os.urandom(4).hex())
-    try:
-        handle = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except OSError:
-        _restore_locked_grant(locked_path, grant_path)
-        return False
-    deferred = False
-    try:
-        with os.fdopen(handle, 'w') as fp:
-            json.dump({'locked_path': locked_path,
-                       'original_path': grant_path,
-                       'event_key': event_key,
-                       'tool_use_id': raw_event_id}, fp)
-            fp.flush()
-            os.fsync(fp.fileno())
-        os.link(tmp_path, pointer_path)
-        deferred = True
-    except (OSError, ValueError, TypeError):
-        _restore_locked_grant(locked_path, grant_path)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-    return deferred
 
 
 def _git_output(args):
@@ -845,7 +579,7 @@ def _extract_dash_c_from_span(options_span, command_excerpt):
     """Resolve the single `-C <dir>` value from a commit invocation's
     global-options span, or '' when no explicit `-C` is present.
 
-    changelog-analyst's canonical commit form is `git -C "${GIT_ROOT}" commit
+    changelog-analyst's canonical commit form is `git -C "<GIT_ROOT>" commit
     -F <msgfile>` (agents/changelog-analyst.md) for BOTH the root repo and
     the nested ~/.claude repo -- it never `cd`s, only ever passes `-C`. The
     guard's own CWD is therefore CONTROL_ROOT for the entire session, even
@@ -891,19 +625,6 @@ def _extract_dash_c_from_span(options_span, command_excerpt):
             'submitting the commit command.\n'
         )
     return value
-
-
-def _extract_commit_dash_c_dir(command):
-    """Back-compat single-invocation `-C <dir>` extractor (whole command).
-
-    Retained for external/test callers; the live binding path now enumerates
-    EVERY commit invocation via `_iter_commit_invocations` and calls
-    `_extract_dash_c_from_span` per invocation.
-    """
-    m = GIT_COMMIT_INVOCATION_RE.search(command)
-    if not m:
-        return ''
-    return _extract_dash_c_from_span(m.group(1), command)
 
 
 def _ambient_git_redirect_present():
@@ -965,7 +686,7 @@ def _iter_commit_invocations(command):
         i = 0
         while i < len(after_git):
             a = after_git[i]
-            if a in _GIT_GLOBAL_VALUE:
+            if a in GIT_GLOBAL_VALUE_OPTS:
                 i += 2
                 continue
             if a.startswith('-'):
@@ -1071,7 +792,7 @@ def _enforce_commit_grant_binding(grant, command):
 def _commit_target_git_output(target_dir, *args):
     """Like _git_output, but scoped to `target_dir` via `-C` when non-empty.
 
-    target_dir is the (possibly empty) result of _extract_commit_dash_c_dir.
+    target_dir is the (possibly empty) result of _extract_dash_c_from_span.
     Empty target_dir falls back to the hook's own CWD, matching the
     no-override push-grant precedent.
     """
@@ -1252,17 +973,162 @@ def _extract_commit_message(command):
     m = re.search(r'-m\s+(\S+)', command)
     if m:
         return m.group(1)
-    # -F / --file: changelog-analyst always uses git commit -F <tmpfile>.
-    # Read the subject line from the file so BLESSED_BRIDGE_RE can match.
-    for p in [r'(?:^|\s)-F\s+(\S+)', r'--file[= ](\S+)']:
-        m = re.search(p, command)
-        if m:
+    # -F / --file: changelog-analyst always uses git commit -F <msgfile>. The
+    # operand comes from the tokenised commit invocation, shell-unquoted, so the
+    # subject line BLESSED_BRIDGE_RE matches is the file the analyst wrote.
+    for invocation in iter_git_invocations(command):
+        if invocation.subcommand != 'commit':
+            continue
+        path = _commit_file_operand(invocation.args)
+        if path:
             try:
-                with open(m.group(1)) as fh:
+                with open(path) as fh:
                     return fh.readline().strip()
             except OSError:
                 pass
     return ''
+
+
+def _commit_file_operand(args):
+    for i, tok in enumerate(args):
+        if tok in ('-F', '--file') and i + 1 < len(args):
+            return _unquote_token(args[i + 1])
+        if tok.startswith('--file='):
+            return _unquote_token(tok[len('--file='):])
+        if tok.startswith('-F') and len(tok) > 2:
+            return _unquote_token(tok[2:])
+    return ''
+
+
+# Commit options whose value is the next word when it is not attached.
+_COMMIT_VALUE_OPTS = {'-C', '-c', '-t', '--author', '--date', '--cleanup', '--fixup', '--squash',
+                      '--reuse-message', '--reedit-message', '--template', '--trailer',
+                      '--pathspec-from-file'}
+
+
+def _simple_commands(command):
+    """The command's simple commands as lists of shell-unquoted words, split at
+    unquoted ; & | ( ) < > and newlines, with `#` comments dropped; None when a
+    quote is left open."""
+    cmds, words, word, i, n = [], [], None, 0, len(command)
+    while i < n:
+        ch = command[i]
+        if command.startswith('\\\n', i):
+            i += 2
+            continue
+        if ch in ' \t\r;&|()<>\n' or (ch == '#' and word is None):
+            if word is not None:
+                words.append(''.join(word))
+                word = None
+            if ch == '#':
+                i = command.find('\n', i)
+                i = n if i < 0 else i
+                continue
+            if ch not in ' \t\r' and words:
+                cmds.append(words)
+                words = []
+            i += 1
+            continue
+        word = [] if word is None else word
+        if ch in '\'"':
+            j = i + 1
+            while j < n and command[j] != ch:
+                if ch == '"' and command[j] == '\\' and command[j + 1:j + 2] in ('"', '\\', '$', '`'):
+                    j += 1
+                word.append(command[j])
+                j += 1
+            if j >= n:
+                return None
+            i = j + 1
+        elif ch == '\\' and i + 1 < n:
+            word.append(command[i + 1])
+            i += 2
+        else:
+            word.append(ch)
+            i += 1
+    if word is not None:
+        words.append(''.join(word))
+    return cmds + [words] if words else cmds
+
+
+def _commit_message_text(command, cwd):
+    """The whole message of the command's commit: its -m/--message values as git
+    joins them, or the whole -F/--file regular file. None when the hook cannot
+    read it: an open quote, no message option, stdin or a file it cannot read,
+    or -m with -F (git refuses that combination)."""
+    texts, path = [], None
+    for words in _simple_commands(command) or []:
+        idx = _cmd_token_index(words)
+        if idx is None or os.path.basename(words[idx]) != 'git':
+            continue
+        base, i = cwd, idx + 1
+        while i < len(words) and words[i].startswith('-'):
+            if words[i] in GIT_GLOBAL_VALUE_OPTS:
+                base = os.path.join(base, words[i + 1]) if words[i] == '-C' and i + 1 < len(words) else base
+                i += 1
+            i += 1
+        if words[i:i + 1] != ['commit']:
+            continue
+        args, j = words[i + 1:], 0
+        while j < len(args) and args[j] != '--':
+            a, nxt = args[j], (args[j + 1] if j + 1 < len(args) else None)
+            if a in ('-m', '--message', '-F', '--file'):
+                opt, value, j = a, nxt, j + 2
+            elif a.startswith(('--message=', '--file=')):
+                (opt, value), j = a.split('=', 1), j + 1
+            elif a in _COMMIT_VALUE_OPTS or not a.startswith('-') or a.startswith('--'):
+                j += 2 if a in _COMMIT_VALUE_OPTS else 1
+                continue
+            else:
+                # A short-option cluster (`-am msg`): the first value-taking letter takes the
+                # rest of the word, else the next word; -u/-S take only an attached value.
+                k = next((k for k in range(1, len(a)) if a[k] in 'mFCctuS'), None)
+                if k is None or a[k] in 'uS':
+                    j += 1
+                    continue
+                opt, value, j = '-' + a[k], a[k + 1:] or nxt, j + (1 if a[k + 1:] else 2)
+                if opt[1] in 'Cct':
+                    continue
+            if value is None or (opt in ('-F', '--file') and value == '-'):
+                return None
+            if opt in ('-m', '--message'):
+                texts.append(value)
+            else:
+                path = os.path.join(base, value)
+    if bool(texts) == bool(path):
+        return None
+    if path is None:
+        return '\n\n'.join(texts)
+    try:
+        if not os.path.isfile(path):
+            return None
+        with open(path, encoding='utf-8', errors='replace') as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _task_id_refusal(grant, grant_path, command, data):
+    """Why this grant may not authorize this commit's message, or '' when it may.
+
+    A grant naming a task authorizes only a commit whose whole message carries
+    that task's `Task-id: <task_id>` line -- the line /commit's completion and
+    scripts/dev-lifecycle.py read back from history. A message the hook cannot
+    read is refused rather than guessed."""
+    if grant.get('task_id') is None:
+        return ''
+    line = f"Task-id: {grant['task_id']}"
+    message = _commit_message_text(command, str(data.get('cwd') or '') or os.getcwd())
+    if message is not None and any(row.strip() == line for row in message.splitlines()):
+        return ''
+    return (
+        f'\nBLOCKED: a commit under a /commit grant must carry the line `{line}` in its message.\n'
+        f'  grant: {grant_path}\n'
+        '  message: ' + ('lacks that line' if message is not None else
+                         'unreadable (one readable -F/--file regular file or -m/--message values)')
+        + '\nWrite the whole message, that line included, to the message file and commit it with '
+        '`git commit -F <msgfile>` (agents/changelog-analyst.md, Phase 8).\n'
+    )
 
 
 def _extract_reset_target(invocation):
@@ -1279,12 +1145,6 @@ def _extract_reset_target(invocation):
     except ValueError:
         pass
     return ''
-
-
-def _is_head_ref(ref):
-    if not ref:
-        return True
-    return ref == 'HEAD'
 
 
 def _end_time_passed(end_str):
@@ -1339,84 +1199,71 @@ def _block_default_deny_commit(msg):
 
 
 def _has_bulk_commit_sentinel(data):
-    """Return True if a valid non-expired bulk-commit sentinel exists.
+    """Return True if a bulk-commit sentinel authorizes an auto-bulk commit now.
 
-    Written by /commit --bulk (scripts/write-bulk-commit-sentinel.py) before
-    dispatching changelog-analyst. Multi-use: NOT consumed on validation so
-    that multiple auto-bulk commits in a single session all succeed.
-    Expires 30 minutes after creation (SENTINEL_TTL_MINUTES in the writer).
+    Written by /commit --bulk's UserPromptSubmit capability hook
+    (scripts/write-bulk-commit-sentinel.py) before changelog-analyst is
+    dispatched. Multi-use: NOT consumed on validation so that multiple
+    auto-bulk commits in a single session all succeed. The test on each file is
+    hooks/lib/commit_pipeline.py `bulk_commit_sentinel_live` (kind, origin,
+    expiry), the one rule the Stop cleanup's reap also takes.
 
-    SID fallback rationale (mirrors _find_grant_any for regular commits):
-    changelog-analyst subagents carry a different session_id than the
-    orchestrator that wrote the sentinel. The SID-specific glob is tried
-    first (fast path); the global glob is the fallback so subagents can
-    always find the sentinel written by the user's orchestrator session.
+    SID fallback rationale (mirrors _collect_commit_grant_candidates for regular commits):
+    a changelog-analyst subagent's payload carries its orchestrator's
+    session_id (plus agent_id), so the SID-specific glob (fast path) finds
+    the session's sentinel; the global glob is the fallback for a sentinel
+    written under another id (its writer takes --sid or the env's id).
     Acceptable because: (a) sentinels require user-invoked /commit --bulk
-    to be created at all; (b) 30-min TTL bounds exposure; (c) kind=
-    'bulk-commit' check prevents other JSON files in /tmp from matching.
+    to be created at all; (b) 30-min TTL bounds exposure; (c) the kind and
+    origin test prevents other JSON files in the state dir from matching.
     """
     sid = _get_session_id(data)
     patterns = []
     if sid:
-        patterns.append('/tmp/claude-bulk-commit-sentinel-%s-*.json' % sid)
+        patterns.append(commit_pipeline.bulk_sentinel_glob(sid))
     # Global fallback — see docstring above for rationale.
-    patterns.append('/tmp/claude-bulk-commit-sentinel-*-*.json')
+    patterns.append(commit_pipeline.bulk_sentinel_glob())
     seen = set()
     for pattern in patterns:
         try:
             candidates = glob.glob(pattern)
         except Exception:
             continue
-        try:
-            candidates.sort(key=lambda p: os.stat(p).st_mtime, reverse=True)
-        except Exception:
-            candidates.sort(reverse=True)
         for path in candidates:
             if path in seen:
                 continue
             seen.add(path)
-            sentinel = _load_grant(path)
-            if sentinel is None:
-                continue
-            if sentinel.get('kind') != 'bulk-commit':
-                continue
-            if sentinel.get('origin') != 'userpromptsubmit-hook':
-                continue
-            if not _end_time_passed(sentinel.get('expires_at', '')):
+            if commit_pipeline.bulk_commit_sentinel_live(
+                    commit_pipeline.safe_read_json(path)):
                 return True
     return False
 
 
 def _has_active_commit_grant(command=''):
-    """Return True if a commit grant that could authorize a commit HERE is
-    pending or in-flight (Fix E, narrowed by audit round 3 F6).
+    """Return True if an unspent commit grant that could authorize a commit
+    HERE is pending (Fix E, narrowed by audit round 3 F6).
 
     Used to defer auto-bulk commits while a concurrent /commit cycle is active.
-    Checks .json (written, not yet locked) and .lck (locked by PreToolUse;
-    git commit subprocess is running) grant files.
+    A grant is pending from its mint until the commit it authorizes spends it.
 
     F6: this used to honor ANY parseable unexpired grant file, with none of the
     repo/branch/HEAD binding the commit validation itself applies. A grant that
-    could not possibly authorize a commit here — a post-success leftover on the
-    undeferrable path, or one belonging to an entirely different repository —
-    therefore blocked auto-bulk in THIS repo for its whole TTL, and an
-    artificially long expiry blocked it indefinitely. Observed in the wild: a
-    live grant bound to the home directory deferred an auto-bulk commit in an unrelated
-    checkout. `command` supplies the auto-bulk commit's own target so the same
-    binding + spent test decides both; an empty command (or an unresolvable
-    target) keeps the old defer-on-doubt behavior.
+    could not possibly authorize a commit here — one belonging to an entirely
+    different repository — therefore blocked auto-bulk in THIS repo for its
+    whole TTL, and an artificially long expiry blocked it indefinitely.
+    Observed in the wild: a live grant bound to the home directory deferred an
+    auto-bulk commit in an unrelated checkout. `command` supplies the auto-bulk
+    commit's own target so the same binding test decides both; an empty
+    command (or an unresolvable target) keeps the old defer-on-doubt behavior.
     """
-    for pattern in ('/tmp/claude-commit-grant-*.json',
-                    '/tmp/claude-commit-grant-*.lck'):
-        try:
-            for path in glob.glob(pattern):
-                grant = _load_grant(path)
-                if grant is None or _end_time_passed(grant.get('expires_at', '')):
-                    continue
-                if _grant_can_authorize_here(grant, path, command):
-                    return True
-        except Exception:
-            pass
+    try:
+        for path, grant in _collect_commit_grant_candidates():
+            if _end_time_passed(grant.get('expires_at', '')):
+                continue
+            if _grant_can_authorize_here(grant, command):
+                return True
+    except Exception:
+        pass
     return False
 
 
@@ -1443,20 +1290,21 @@ def _grant_provenance_refusal(grant, grant_path, data):
          PIPELINE_ORIGIN. A grant minted by an older copy of the writer
          carries no `minted_by` at all and is refused -- that is deliberate:
          an unsigned ticket is exactly the thing being retired.
-      2. Is the caller a DISPATCHED SUBAGENT? `agent_id` must be non-empty.
-         Measured, not assumed: hooks/pretool-cp-checkin.py is itself a
-         PreToolUse hook and writes this same payload field into
-         .claude/dev-registry/agent-index.json, where the recorded
-         `a`-prefixed ids map to real agent types -- re-derive the asymmetry
-         from that index rather than from this docstring. A dispatched
-         subagent's payload carries a non-empty id, while the main agent's
-         carries none. This single check is what refuses the
+      2. Is the caller a DISPATCHED SUBAGENT? `agent_id` must be non-empty:
+         a dispatched subagent's payload carries a non-empty id, while the
+         main agent's carries none. This single check is what refuses the
          orchestrator-as-bearer -- step 4 of the measured bypass.
       3. Is it THE subagent this pipeline run dispatched? A live
          hook-written changelog-analyst dispatch attestation must exist,
-         dated at or after the mint, and must be claimable by this
-         agent_id. First claim wins and binds; a second, unrelated subagent
-         presenting the same grant is refused.
+         dated at or after the mint, whose `subagent_type` is the caller's
+         CLI role (lib.agent_resolver.resolve_agent_type) and whose
+         `prompt_sha256` is the digest of the prompt that dispatched this
+         agent_id (read from the caller's own transcript, as the producer-stop
+         gate reads it). Every repository of that dispatch's plan is committed
+         under the same attestation; a dev or QA presenting the grant is
+         refused naming its role and changelog-analyst, and a second,
+         unrelated subagent was dispatched with another prompt and is refused.
+         Nothing is written to decide this.
 
     Returns a reason string rather than blocking directly, so the caller can
     move on to the next candidate grant instead of letting one stale or
@@ -1497,14 +1345,21 @@ def _grant_provenance_refusal(grant, grant_path, data):
         )
 
     sids = [str(grant.get('sid') or ''), _get_session_id(data)]
+    prompt_digest, digest_why = commit_pipeline.caller_prompt_sha256(
+        _get_session_id(data), agent_id,
+        os.environ.get('CLAUDE_PROJECT_DIR') or str(data.get('cwd') or '') or os.getcwd(),
+        str(data.get('agent_transcript_path') or '') or None,
+        str(data.get('transcript_path') or '') or None)
+    role = resolve_agent_type(data)
     attestation, why = commit_pipeline.select_dispatch_attestation(
-        sids, str(grant.get('created_at') or ''), agent_id)
+        sids, str(grant.get('created_at') or ''), prompt_digest,
+        caller_role=role, prompt_why=digest_why)
     if not attestation:
         return (
             '\nBLOCKED: no changelog-analyst dispatch attestation backs this commit '
-            'grant.\n'
+            'grant for this caller.\n'
             f'  grant: {grant_path}\n'
-            f'  caller agent_id: {agent_id}\n'
+            f'  caller agent_id: {agent_id}, role: {role or "unresolved"}\n'
             f'  reason: {why}\n'
             'The only intended writer of an attestation is '
             'hooks/pretool-commit-dispatch-attest.py, on the real PreToolUse:Agent '
@@ -1512,22 +1367,11 @@ def _grant_provenance_refusal(grant, grant_path, data):
             'are intercepted verb by verb (hooks/pretool-bash-safety.sh Layer 1.E3), '
             'which raises the cost of forging one without being an absolute barrier. '
             'The requirement being enforced here is identity: an attestation counts '
-            'only when a dispatched subagent claims it under its own agent_id. Its '
-            'absence means the commit pipeline never dispatched changelog-analyst for '
-            'this grant, so the grant is being spent by a bearer rather than by the '
-            'pipeline.\n'
+            'only for the subagent whose own dispatch prompt it records. Its absence '
+            'means the commit pipeline never dispatched this caller as '
+            'changelog-analyst for this grant, so the grant is being spent by a bearer '
+            'rather than by the pipeline.\n'
             'To commit: invoke /commit so the dispatch actually happens.\n'
-        )
-
-    claimed, claim_why = commit_pipeline.claim_attestation(attestation, agent_id)
-    if not claimed:
-        return (
-            '\nBLOCKED: this commit grant belongs to a different dispatched subagent.\n'
-            f'  grant: {grant_path}\n'
-            f'  caller agent_id: {agent_id}\n'
-            f'  reason: {claim_why}\n'
-            'One changelog-analyst dispatch authorizes one consumer. A second subagent '
-            'presenting the same grant is a bearer, not the dispatched analyst.\n'
         )
     return ''
 
@@ -1543,7 +1387,7 @@ def _evaluate_commit(command, data):
             if _has_active_commit_grant(command):
                 _block(
                     '\nDEFERRED: auto-bulk commit skipped — an active single-use '
-                    'commit grant exists (/tmp/claude-commit-grant-*.json or *.lck) '
+                    'commit grant exists (<state dir>/claude-commit-grant-*.json) '
                     'that is bound to THIS repo/branch/HEAD and still unspent.\n'
                     'A /commit cycle is in progress; auto-bulk will retry on the '
                     'next scheduled cycle.\n'
@@ -1553,7 +1397,7 @@ def _evaluate_commit(command, data):
             '\nBLOCKED: auto-bulk commit requires a bulk-commit sentinel.\n'
             'The `auto-bulk:` prefix is only authorized when changelog-analyst '
             'is dispatched by the user via /commit --bulk, which writes '
-            '/tmp/claude-bulk-commit-sentinel-<sid>-<nonce>.json (30 min TTL).\n'
+            '<state dir>/claude-bulk-commit-sentinel-<sid>-<nonce>.json (30 min TTL).\n'
             'To run bulk commits: invoke /commit --bulk from your Claude session.\n'
         )
     if _check_git_allowlist(command, data):
@@ -1566,33 +1410,21 @@ def _evaluate_commit(command, data):
     # (docs/dev/peer-review-grant-parity.md CRITICAL). Collect every candidate
     # (the any-SID glob is a superset of the SID-specific one, covering the
     # subagent SID-propagation fallback) and pick the one bound to this target.
-    live = []
-    for path, grant in _collect_commit_grant_candidates():
-        if _end_time_passed(grant.get('expires_at', '')):
-            # An expired grant can never authorize again, so its use record has
-            # nothing left to protect — reap it here rather than leaving /tmp
-            # litter for the >7d sweep.
-            _unlink_grant(_use_record_path(path))
-            continue
-        live.append((path, grant))
+    live = [(path, grant) for path, grant in _collect_commit_grant_candidates()
+            if not _end_time_passed(grant.get('expires_at', ''))]
     provenance_refusal = ''
     for grant_path, grant in live:
-        # A grant already spent on the undeferrable path is not a candidate at
-        # all (audit round 3, F4). Checked BEFORE the target match so a spent
-        # grant falls through to the next candidate / default-deny instead of
-        # being selected and then blocked on a confusing binding diagnostic.
-        if not _grant_use_permitted(grant, grant_path):
-            continue
         if _grant_matches_commit_target(grant, command):
             # WHO is spending this grant, and did the pipeline it authorizes
-            # actually run? Checked after the target match so no attestation
-            # is claimed on behalf of a grant bound to another repository,
+            # actually run? Checked after the target match so the caller's
+            # transcript is read only for a grant bound to this repository,
             # and recorded-then-skipped rather than blocking here so one
             # stale or legacy grant cannot shadow a legitimate one that
             # appears later in a nondeterministic glob order. If nothing
             # authorizes the commit, the FIRST refusal is what gets reported
             # below -- it is the precise reason, where default-deny is not.
-            refusal = _grant_provenance_refusal(grant, grant_path, data)
+            refusal = (_grant_provenance_refusal(grant, grant_path, data)
+                       or _task_id_refusal(grant, grant_path, command, data))
             if refusal:
                 provenance_refusal = provenance_refusal or refusal
                 continue
@@ -1600,18 +1432,21 @@ def _evaluate_commit(command, data):
             # across EVERY invocation): a matching grant passes; any redirect
             # still _block()s (exit 2). Single source of truth for the allow.
             _enforce_commit_grant_binding(grant, command)
-            # Key the pointer on THIS EVENT, not on any session id: the grant's sid
-            # and the finalizer's sid legitimately differ (see _find_grant_any), and
-            # a session-named pointer is claimable by an unrelated later commit.
-            # The RAW tool_use_id rides along so ownership survives the lossy
-            # filename derivation (audit R2-2).
-            if not _lock_grant_for_posttool(grant_path, _event_key(data),
-                                            _raw_tool_use_id(data)):
-                # Undeferrable: this authorization will never reach PostToolUse,
-                # so the grant stays on disk with nothing to consume it. Record
-                # the use now — that record, not the (restorable) expected_head
-                # binding, is what refuses the second one (audit round 3, F4).
-                _record_undeferrable_grant_use(grant, grant_path)
+            # Spend it: the unlink only one event can win is the single use, so a
+            # concurrent event that read the same grant falls through to the next
+            # candidate. A failed commit does not get it back; its retry takes a
+            # fresh grant from /commit.
+            if not _spend_grant(grant_path):
+                continue
+            # Hand the grant's journal fields to the PostToolUse finalizer under
+            # THIS EVENT's key, never a session id: the grant's sid and the
+            # finalizer's sid legitimately differ (see
+            # _collect_commit_grant_candidates), and a session-named pointer is
+            # claimable by an unrelated later commit. No key, or a taken name,
+            # leaves this commit authorized and unjournaled.
+            commit_journal.write_event_pointer(
+                commit_journal.event_key(data), commit_journal.raw_tool_use_id(data),
+                grant)
             return
     # A grant was bound to this exact target but its bearer was not entitled to
     # spend it. Reported ahead of the binding/default-deny diagnostics below
@@ -1631,396 +1466,177 @@ def _evaluate_commit(command, data):
     _block_default_deny_commit(msg)
 
 
-def _iter_merge_invocations(command):
-    """Yield one descriptor dict per `git ... merge` invocation in `command`.
-
-    Mirrors _iter_commit_invocations (hooks/pretool-git-privilege-guard.py:890)
-    exactly -- segment-aware, token-aware, enumerates EVERY invocation in a
-    chained command -- with one addition: `branch_arg`, the first non-flag
-    positional token after the `merge` subcommand. That is the branch the
-    merge-analyst grant's `branch`/`source_tip` fields must bind to; merge.sh
-    always invokes `git merge "$BRANCH_NAME" --no-edit`, so there is no need
-    to look past the first positional.
-
-    Each descriptor:
-      segment              : the raw shell segment (for -C extraction + excerpts)
-      options_span         : global-options text between `git` and `merge`
-      branch_arg           : first non-flag positional token after `merge`, or ''
-      inline_env_redirect  : True iff a GIT_DIR/GIT_WORK_TREE/GIT_COMMON_DIR
-                             assignment is inline-prefixed before the git token
-      flag_redirect        : True iff --git-dir/--work-tree/--namespace appears
-                             as a git global option before the merge subcommand
-      cwd_redirected       : True iff a cd/pushd/popd segment executes BEFORE
-                             this merge in the same command string (the probe
-                             cannot see the post-cd cwd -> fail closed)
-    """
-    cwd_redirected = False
-    for seg in _shell_segments(command):
-        toks = seg.split()
-        if not toks:
-            continue
-        idx = _cmd_token_index(toks)
-        if idx is None:
-            continue
-        if os.path.basename(toks[idx].strip('\'"')) in _CWD_CHANGE_CMDS:
-            cwd_redirected = True
-            continue
-        if os.path.basename(toks[idx]) != 'git':
-            continue
-        after_git = toks[idx + 1:]
-        i = 0
-        while i < len(after_git):
-            a = after_git[i]
-            if a in _GIT_GLOBAL_VALUE:
-                i += 2
-                continue
-            if a.startswith('-'):
-                i += 1
-                continue
-            break
-        global_opts = after_git[:i]
-        subcommand = after_git[i] if i < len(after_git) else None
-        if subcommand != 'merge':
-            continue
-        inline_env_redirect = any(
-            _ENV_ASSIGN_RE.match(t) and t.split('=', 1)[0] in _GIT_REDIRECT_ENV_VARS
-            for t in toks[:idx]
-        )
-        flag_redirect = any(
-            t.split('=', 1)[0] in _GIT_REDIRECT_FLAGS for t in global_opts
-        )
-        m = GIT_MERGE_INVOCATION_RE.search(seg)
-        options_span = m.group(1) if m else ''
-        yield {
-            'segment': seg,
-            'options_span': options_span,
-            'branch_arg': _extract_merge_branch_arg(after_git[i + 1:]),
-            'inline_env_redirect': inline_env_redirect,
-            'flag_redirect': flag_redirect,
-            'cwd_redirected': cwd_redirected,
-        }
-
-
-def _extract_merge_branch_arg(merge_args):
-    """First non-flag positional token in a `git merge` invocation's
-    remaining args, or '' when none present (e.g. `git merge --continue`,
-    `git merge --abort`)."""
-    for tok in merge_args:
-        if tok == '--':
-            continue
-        if tok.startswith('-'):
-            continue
-        return tok
-    return ''
-
-
-def _extract_merge_dash_c_from_span(options_span, command_excerpt):
-    """Resolve the single `-C <dir>` value from a merge invocation's
-    global-options span, or '' when no explicit `-C` is present.
-
-    Mirrors _extract_dash_c_from_span's multiple-`-C` / unresolved-${VAR}
-    fail-closed handling (hooks/pretool-git-privilege-guard.py:812) with its
-    own merge-labeled diagnostics, so a merge-time block never claims to be
-    about a commit.
-    """
-    matches = list(DASH_CAPITAL_C_RE.finditer(options_span))
-    if not matches:
-        return ''
-    if len(matches) > 1:
-        _block(
-            '\nBLOCKED: agent git merge - multiple -C directory overrides '
-            'in one merge invocation are not supported.\n'
-            'Command excerpt: %s\n' % command_excerpt[:200]
-            + 'Re-issue the merge with exactly one -C <dir> (or none).\n'
-        )
-    dm = matches[0]
-    value = dm.group(1) or dm.group(2) or dm.group(3) or ''
-    if '$' in value:
-        _block(
-            '\nBLOCKED: agent git merge - the -C argument %r looks like an '
-            'unresolved shell variable reference, not a concrete path.\n' % value
-            + 'Command excerpt: %s\n' % command_excerpt[:200]
-            + 'Substitute the concrete resolved absolute directory before '
-            'submitting the merge command.\n'
-        )
-    return value
-
-
-def _block_merge_redirect(segment, vector):
-    _block(
-        '\nBLOCKED: agent git merge - %s redirect detected.\n' % vector
-        + 'A merge-analyst grant is bound to a specific repo/branch/HEAD '
-        'resolved at issuance time; --git-dir / --work-tree / --namespace '
-        'flags and GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR env assignments '
-        'repoint the merge at a DIFFERENT target the grant never authorized. '
-        'Only a bare `git merge` or `git -C <dir> merge` (validated against '
-        'the grant) is permitted.\n'
-        + 'Command excerpt: %s\n' % segment[:200]
-        + 'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
-        'redirect-vector closure (fail closed, mirrors the commit-grant model).\n'
-    )
-
-
-def _validate_merge_grant_repo(grant, target_dir):
-    """Grant.repo_root must match the toplevel of the merge's target repo
-    (mirrors _validate_commit_grant_repo)."""
-    grant_repo = grant.get('repo_root') or ''
-    current_repo = _commit_target_git_output(target_dir, 'rev-parse', '--show-toplevel')
-    if not grant_repo or not current_repo or grant_repo != current_repo:
-        _block(
-            '\nBLOCKED: agent git merge - repository mismatch.\n'
-            'Grant repo_root  : %r\n' % grant_repo
-            + 'Current repo_root: %r\n' % current_repo
-            + 'A merge-analyst grant issued for one repository may not '
-            'authorize a merge in another. Re-run /merge from within the '
-            'target repository.\n'
-            + 'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
-            'binding fix (mirrors _validate_commit_grant_repo).\n'
-        )
-
-
-def _validate_merge_grant_branch(grant, branch_arg):
-    """Grant.branch must match the branch argument of `git merge <branch>`
-    (mirrors _validate_commit_grant_branch)."""
-    grant_branch = grant.get('branch') or ''
-    if not grant_branch or not branch_arg or grant_branch != branch_arg:
-        _block(
-            '\nBLOCKED: agent git merge - branch mismatch.\n'
-            'Grant branch      : %r\n' % grant_branch
-            + 'git merge argument: %r\n' % branch_arg
-            + 'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
-            'binding fix (mirrors _validate_commit_grant_branch).\n'
-        )
-
-
-def _validate_merge_grant_source_tip(grant, target_dir, branch_arg):
-    """Grant.source_tip must match the live tip of the branch being merged
-    (mirrors _validate_commit_grant_head's expected_head binding)."""
-    grant_tip = grant.get('source_tip') or ''
-    current_tip = (
-        _commit_target_git_output(target_dir, 'rev-parse', 'refs/heads/%s' % branch_arg)
-        if branch_arg else ''
-    )
-    if not grant_tip or not current_tip or grant_tip != current_tip:
-        _block(
-            '\nBLOCKED: agent git merge - source_tip mismatch.\n'
-            'Grant source_tip  : %r\n' % grant_tip
-            + 'Current branch tip: %r\n' % current_tip
-            + 'The merged-in branch moved since merge-analyst ran; re-run '
-            '/merge to get a fresh analysis.\n'
-        )
-
-
-def _validate_merge_grant_default_branch(grant, target_dir):
-    """Grant.default_branch must match the current branch of the merge's
-    target repo (merge.sh checks out the default branch before merging)."""
-    grant_default_branch = grant.get('default_branch') or ''
-    current_branch = _commit_target_git_output(target_dir, 'branch', '--show-current')
-    if not grant_default_branch or grant_default_branch != current_branch:
-        _block(
-            '\nBLOCKED: agent git merge - default_branch mismatch.\n'
-            'Grant default_branch: %r\n' % grant_default_branch
-            + 'Current branch      : %r\n' % current_branch
-            + 'The branch merge is running against does not match '
-            'merge-analyst\'s analysis; re-run /merge to get a fresh analysis.\n'
-        )
-
-
-def _validate_merge_grant_default_tip(grant, target_dir):
-    """Grant.default_tip must match the current HEAD of the merge's target
-    repo (mirrors _validate_commit_grant_head)."""
-    grant_default_tip = grant.get('default_tip') or ''
-    current_head = _commit_target_git_output(target_dir, 'rev-parse', 'HEAD')
-    if not grant_default_tip or grant_default_tip != current_head:
-        _block(
-            '\nBLOCKED: agent git merge - default_tip mismatch.\n'
-            'Grant default_tip: %r\n' % grant_default_tip
-            + 'Current HEAD     : %r\n' % current_head
-            + 'HEAD moved since merge-analyst ran; re-run /merge to get a '
-            'fresh analysis.\n'
-            + 'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
-            'binding fix (mirrors _validate_commit_grant_head).\n'
-        )
-
-
-def _enforce_merge_grant_binding(grant, command):
-    """Validate the grant's repo/branch/tip binding against the SINGLE merge
-    invocation in `command`, failing CLOSED on any unresolvable redirect.
-
-    Mirrors _enforce_commit_grant_binding (hooks/pretool-git-privilege-guard.py:980)
-    exactly in structure -- ambient redirect first, then per-invocation
-    inline-env/flag/cwd redirect checks, then field validation -- with TWO
-    differences dictated by what a merge actually binds: a merge grant
-    authorizes exactly one merge (there is no changelog-analyst-style
-    multi-invocation caller for merge, so >1 invocation is already a replay
-    or injection attempt and is rejected the same as zero), and merge
-    validates FIVE fields (repo_root, branch, source_tip, default_branch,
-    default_tip) instead of commit's three, because a merge binds both the
-    branch being merged in AND the branch it lands on.
-    """
-    if _ambient_git_redirect_present():
-        _block(
-            '\nBLOCKED: agent git merge - ambient GIT_DIR/GIT_WORK_TREE/'
-            'GIT_COMMON_DIR environment redirect present.\n'
-            'The merge target repo cannot be verified against the grant '
-            'binding while these are set. Unset them and re-run /merge.\n'
-            'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
-            'redirect-vector closure (fail closed).\n'
-        )
-    invocations = list(_iter_merge_invocations(command))
-    if not invocations:
-        _block(
-            '\nBLOCKED: agent git merge - a merge was detected but its '
-            'effective target repository could not be resolved for grant '
-            'validation.\n'
-            'Command excerpt: %s\n' % command[:200]
-            + 'Fail closed: an unlocatable merge target is rejected, not '
-            'guessed.\n'
-        )
-    if len(invocations) > 1:
-        _block(
-            '\nBLOCKED: agent git merge - %d merge invocations in ONE command; '
-            'a merge-analyst grant authorizes exactly ONE merge.\n' % len(invocations)
-            + 'Command excerpt: %s\n' % command[:200]
-        )
-    inv = invocations[0]
-    if inv['inline_env_redirect']:
-        _block_merge_redirect(inv['segment'], 'inline-env GIT_DIR/GIT_WORK_TREE')
-    if inv['flag_redirect']:
-        _block_merge_redirect(inv['segment'], '--git-dir/--work-tree/--namespace flag')
-    if inv.get('cwd_redirected'):
-        _block_merge_redirect(inv['segment'], 'cd/pushd cwd-change before merge')
-    target_dir = _extract_merge_dash_c_from_span(inv['options_span'], inv['segment'])
-    branch_arg = inv.get('branch_arg') or ''
-    _validate_merge_grant_repo(grant, target_dir)
-    _validate_merge_grant_branch(grant, branch_arg)
-    _validate_merge_grant_source_tip(grant, target_dir, branch_arg)
-    _validate_merge_grant_default_branch(grant, target_dir)
-    _validate_merge_grant_default_tip(grant, target_dir)
-
-
-def _block_merge_grant_not_approved(verdict):
-    _block(
-        '\nBLOCKED: agent git merge - merge-analyst grant verdict is %r, '
-        'not "approved".\n' % verdict
-        + 'A blocked, unrecognized, or missing verdict never authorizes a '
-        'merge.\n'
-    )
-
-
-def _block_missing_merge_grant():
-    _block(
-        '\nBLOCKED: agent git merge - CLAUDE_MERGE_COMMAND_ACTIVE=1 is set '
-        'but no valid merge-analyst grant was found for this repo/session.\n'
-        'Single-use grants are unlinked on first valid consumption; a '
-        'missing grant means it was already used, never written, or was '
-        'reaped after expiry.\n'
-        'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
-        'binding fix (mirrors _block_missing_push_grant).\n'
-    )
-
-
-def _block_expired_merge_grant():
-    _block(
-        '\nBLOCKED: agent git merge - merge-analyst grant has expired '
-        '(60s TTL).\n'
-        'Re-run /merge to get a fresh analysis.\n'
-        'Spec: pretool-git-privilege-guard.py 2026-10-02 merge-grant '
-        'binding fix (mirrors _end_time_passed).\n'
-    )
-
-
-def _merge_repo_hash():
-    """sha256(realpath(repo toplevel))[:16], matching commands/merge.md Step 1's
-    REPO_HASH computation exactly (`realpath "$(git rev-parse --show-toplevel)"`
-    piped through sha256sum, first 16 hex chars), so the hook locates the SAME
-    on-disk grant directory merge-analyst wrote to. Always resolved from the
-    hook's OWN cwd (no -C override), matching how /merge's Step 1 computes it
-    from the orchestrator's cwd before the wrapper is ever invoked.
-    """
-    toplevel = _commit_target_git_output('', 'rev-parse', '--show-toplevel')
-    if not toplevel:
-        return ''
-    try:
-        real = os.path.realpath(toplevel)
-    except Exception:
-        return ''
-    return hashlib.sha256(real.encode('utf-8')).hexdigest()[:16]
-
-
-def _find_merge_grant(sid):
-    """Return (resolved_path, grant_dict) or (None, None) on miss/invalid.
-
-    merge-analyst grants live at a NESTED path -- not the flat
-    /tmp/claude-{kind}-grant-<sid>-<nonce>.json convention _find_grant
-    assumes (agents/merge-analyst.md Phase 8):
-      /tmp/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json
-    REPO_HASH is recomputed fresh from the hook's OWN live repo state (never
-    trusted from the grant), so a grant cannot claim membership in a repo it
-    does not match. REQUEST_ID (nonce) is unknown to the hook -- the
-    orchestrator that dispatched merge-analyst and calls merge.sh is the only
-    session_id this hook ever sees for a merge, so the session directory is
-    globbed in full and the newest JSON-parseable candidate wins (mirrors
-    _find_grant's mtime-descending selection).
-    """
-    if not sid:
-        return (None, None)
-    repo_hash = _merge_repo_hash()
-    if not repo_hash:
-        return (None, None)
-    pattern = '/tmp/agentic-commit/merge-analyst/%s/%s/*.json' % (repo_hash, sid)
-    try:
-        candidates = glob.glob(pattern)
-    except Exception:
-        return (None, None)
-    try:
-        candidates.sort(key=lambda p: os.stat(p).st_mtime, reverse=True)
-    except Exception:
-        candidates.sort(reverse=True)
-    for path in candidates:
-        grant = _load_grant(path)
-        if grant is not None:
-            return (path, grant)
-    return (None, None)
-
-
-def _enforce_merge_grant(command, data):
-    """2026-10-02: CLAUDE_MERGE_COMMAND_ACTIVE=1 is necessary but no longer
-    sufficient on its own -- it must be paired with a live, unexpired,
-    verdict=approved merge-analyst grant bound to THIS repo/branch/HEAD,
-    mirroring _evaluate_commit's grant-binding model
-    (hooks/pretool-git-privilege-guard.py:1391-1468). Closes the gap where a
-    merge-analyst grant that was never written, stale, verdict=blocked, or
-    bound to the wrong repo/branch/HEAD had zero effect on whether the
-    env-var-gated merge proceeded -- the wrapper (hooks/merge.sh) sets the
-    env var unconditionally, so it alone never proved Steps 2-4 of
-    commands/merge.md actually ran.
-    """
-    sid = _get_session_id(data)
-    grant_path, grant = _find_merge_grant(sid)
-    if grant is None:
-        _block_missing_merge_grant()
-    if _end_time_passed(grant.get('expires_at', '')):
-        _block_expired_merge_grant()
-    if grant.get('verdict') != 'approved':
-        _block_merge_grant_not_approved(grant.get('verdict'))
-    _enforce_merge_grant_binding(grant, command)
-    # All validations passed. Consume grant (single-use), then allow.
-    _unlink_grant(grant_path)
-
-
 def _evaluate_merge(command, data):
-    if os.environ.get('CLAUDE_MERGE_COMMAND_ACTIVE') == '1':
-        _enforce_merge_grant(command, data)
-        return
+    """Every agent `git merge` is refused unless /allow grants it.
+
+    /merge merges through hooks/merge.sh, whose own subprocess runs git merge,
+    which no hook sees; the merge-analyst grant that decides /merge is checked
+    at the merge-analyst's own Write of it (hooks/posttool-allowlist-consume.py,
+    hooks/lib/merge_grant.py) and read verbatim by /merge.
+    """
     if _check_git_allowlist(command, data):
         return
     _block(
-        '\nBLOCKED: agent git merge - only the /merge slash command '
-        'may run git merge from an overnight context.\n'
+        '\nBLOCKED: agent git merge - only /merge may merge, through its '
+        'wrapper hooks/merge.sh.\n'
         'Command excerpt: %s\n' % command[:200]
-        + 'To bypass: set env var CLAUDE_MERGE_COMMAND_ACTIVE=1.\n'
+        + 'Main agent may bypass with /allow <pattern> before the git merge command.\n'
         'Spec: spec-20260424-233926 section 5.2.4 (R4.3).\n'
+    )
+
+
+# E2: added to every block the guard emits while the main agent holds /do consent.
+DO_NOT_COVERED = (
+    '/do consent does not cover git commit, git push, a git operation this guard refuses '
+    'without it that can move the protected branch, or a git command this guard cannot '
+    'classify, which may be any of them: a commit lands through /close, then /commit; a '
+    'push through /push; a merge into the protected branch through /merge.\n'
+)
+
+# E2: with one of these words in a command, git may run in another directory
+# than the hook's (_DIR_CHANGE_RE) or on another branch than the hook-time HEAD
+# (_BRANCH_CHANGE_RE). Read anywhere in the command: `&`, `|`, loops, functions
+# and traps run its parts in an order the text does not give. `\.` is the dot
+# builtin (source).
+_DIR_CHANGE_RE = re.compile(
+    r'(?<![\w./-])(?:cd|pushd|popd|source|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)(?![\w./-])'
+    r'|(?:^|[;&|(){]|\b(?:then|do|else))\s*\.\s')
+_BRANCH_CHANGE_RE = re.compile(r'(?<![\w./-])(?:checkout|switch|symbolic-ref)(?![\w./-])')
+_EXPANSION = re.compile(r'[$`*?\[{]')  # a name the shell or git may expand
+
+
+# E2: the git subcommands that can move a branch ref: on HEAD's branch, or by name.
+_MOVES_HEAD = frozenset({'merge', 'pull', 'rebase', 'cherry-pick', 'revert', 'am', 'reset'})
+_MOVES_NAMED = frozenset({'pull', 'fetch', 'rebase', 'update-ref', 'symbolic-ref', 'branch',
+                          'checkout', 'switch', 'worktree', 'filter-branch', 'filter-repo',
+                          'fast-import'})
+
+
+def _operands(words, takes_value=()):
+    """The words that are not options, nor the value of an option in `takes_value`."""
+    return [w for i, w in enumerate(words) if (not w.startswith('-') or w == '-')
+            and not (i and words[i - 1] in takes_value)]
+
+
+def _reset_moves(args):
+    """`git reset <args>` moves HEAD's branch: one commit operand other than
+    HEAD and no pathspec; an operand that names no commit is a path."""
+    if '--' in args:
+        if args[args.index('--') + 1:]:
+            return False
+        args = args[:args.index('--')]
+    ops = _operands(args)
+    if len(ops) != 1 or {'-p', '--patch'} & set(args) or any(
+            a.startswith('--pathspec-from-file') for a in args):
+        return False
+    return ops[0] not in ('HEAD', '@') and bool(_EXPANSION.search(ops[0]) or _git_output(
+        ['rev-parse', '-q', '--verify', ops[0] + '^{commit}']))
+
+
+def _branch_writes(inv):
+    """E2: (moves the branch HEAD is on, [branch names it writes]) for one git
+    invocation; the name `*` stands for refs the guard cannot list."""
+    sub = inv.subcommand
+    if sub not in _MOVES_HEAD | _MOVES_NAMED:
+        return False, []
+    try:  # the words as the shell passes them (ref names hold no space)
+        args = shlex.split(' '.join(inv.args))
+    except ValueError:  # the segment splitter cut a quoted word: its operands are unknown
+        return sub in _MOVES_HEAD, ['*'] if sub in _MOVES_NAMED else []
+    ops = _operands(args)
+    if sub in ('cherry-pick', 'revert') and {'-n', '--no-commit'} & set(args):
+        return False, []
+    if sub in ('merge', 'cherry-pick', 'revert', 'am', 'reset'):
+        return sub != 'reset' or _reset_moves(args), []
+    if sub in ('pull', 'fetch'):  # a refspec's destination is a local ref
+        return sub == 'pull', [o.rpartition(':')[2] for o in ops if ':' in o]
+    if sub == 'rebase':
+        ops = _operands(args, ('--onto', '-x', '--exec', '-s', '--strategy', '-X',
+                               '--strategy-option'))
+        branch = ops[:1] if '--root' in args else ops[1:2]
+        return not branch, branch + (['*'] if '--update-refs' in args else [])
+    if sub in ('update-ref', 'symbolic-ref'):
+        ops = _operands(args, ('-m',))
+        if '--stdin' in args:
+            return False, ['*']
+        if sub == 'symbolic-ref' and len(ops) < 2 and not {'-d', '--delete'} & set(args):
+            return False, []
+        if ops[:1] == ['HEAD']:  # update-ref HEAD writes HEAD's branch; symbolic-ref switches
+            return sub == 'update-ref' and '--no-deref' not in args, []
+        return False, ops[:1]
+    if sub == 'branch':
+        flags = {f for a in args if a.startswith('-') for f in (
+            [a.partition('=')[0]] if a.startswith('--') else ['-' + c for c in a[1:]])}
+        if flags & {'-d', '-D', '--delete'}:
+            return False, ops
+        if flags & {'-m', '-M', '--move'}:  # one operand renames HEAD's branch
+            return len(ops) == 1, ops
+        if flags & {'-c', '-C', '--copy'}:
+            return False, ops[-1:]
+        return False, ops[:1] if flags & {'-f', '--force'} else []
+    if sub in ('checkout', 'switch', 'worktree'):  # -B/-C reset the branch they name
+        return False, [args[i + 1] for i, a in enumerate(args[:-1])
+                       if a in ('-B', '-C', '--force-create')] + [
+                           a.partition('=')[2] for a in args if a.startswith('--force-create=')]
+    return False, ['*'] if sub in ('filter-branch', 'filter-repo', 'fast-import') else []
+
+
+def _names_protected(name, protected):
+    """The branch `name` (a ref, a refspec destination) is or may be `protected`."""
+    name = name.lstrip('+')
+    if re.match(r'refs/(?!heads/)[\w.-]+/', name):
+        return False
+    name = re.sub(r'^(?:refs/)?heads/', '', name)
+    return name == protected or bool(_EXPANSION.search(name))
+
+
+def _protected_branch():
+    """The branch refs/remotes/origin/HEAD names (local refs, as the overnight
+    launcher resolves it), or ''. Full ref names: `--short` prints `heads/main`
+    once a tag is named `main` too."""
+    ref = _git_output(['symbolic-ref', 'refs/remotes/origin/HEAD'])
+    return ref[len('refs/remotes/origin/'):] if ref.startswith('refs/remotes/origin/') else ''
+
+
+def _moves_protected_branch(command, invocations):
+    """E2: True when a git operation in `command` can move the protected
+    branch's ref (_branch_writes: one on HEAD's branch while HEAD is on it, or
+    one that writes it by name), or the guard cannot tell where it lands: a
+    directory change or GIT_DIR-style redirect in the command, a branch change
+    in it for an operation on HEAD, a prefix or an option before the operation's
+    subcommand, a detached HEAD, or an unset origin/HEAD."""
+    writes = [_branch_writes(inv) for inv in invocations]
+    on_head = any(head for head, _names in writes)
+    names = [name for _head, named in writes for name in named]
+    if not (on_head or names):
+        return False
+    if (_ambient_git_redirect_present() or _DIR_CHANGE_RE.search(command)
+            or (on_head and _BRANCH_CHANGE_RE.search(command))):
+        return True
+    for seg in _shell_segments(command):
+        toks = seg.split()
+        if any(any(_branch_writes(inv)) and (
+                _cmd_token_index(toks) or toks[1:2] != [inv.subcommand])
+               for inv in iter_git_invocations(seg)):
+            return True
+    protected = _protected_branch()
+    if not protected or any(_names_protected(name, protected) for name in names):
+        return True
+    head = _git_output(['symbolic-ref', '--quiet', 'HEAD']) if on_head else None
+    return head in ('', 'refs/heads/' + protected)
+
+
+def _evaluate_protected_move(command, data):
+    if _check_git_allowlist(command, data):
+        return
+    _block(
+        '\nBLOCKED: agent git ref move - this merge, plumbing, hard reset or ref '
+        'mutation, refused without /do, can move the protected branch (%s), or the '
+        'guard cannot tell the branch it lands on: a cd, pushd, popd, '
+        'source or GIT_DIR-style redirect in it, a checkout, switch or symbolic-ref '
+        'with an operation on HEAD, a prefix or an option before the subcommand, a '
+        'detached HEAD or an unset origin/HEAD.\n'
+        'Command excerpt: %s\n' % (_protected_branch() or 'unresolved', command[:200])
     )
 
 
@@ -2093,7 +1709,7 @@ def _validate_push_grant_remote(grant, push_invocation):
 
 def _block_missing_push_grant(sid):
     """AC-A4: env present but no on-disk grant for this SID."""
-    pattern = '/tmp/claude-push-grant-%s-*.json' % sid
+    pattern = os.path.join(harness_state_dir(), 'claude-push-grant-%s-*.json' % sid)
     _block(
         '\nBLOCKED: agent git push - CLAUDE_PUSH_COMMAND_ACTIVE=1 '
         'is set but no valid grant manifest matching %s.\n' % pattern
@@ -2143,7 +1759,7 @@ def _evaluate_push(command, invocations, data):
     _validate_push_grant_head(grant)
     _validate_push_grant_remote(grant, push_inv)
     # All validations passed.  Consume grant (single-use), then allow.
-    _unlink_grant(grant_path)
+    _spend_grant(grant_path)
 
 
 def _evaluate_reset_hard(command, invocations, data):
@@ -2202,6 +1818,11 @@ def _evaluate_forbidden_plumbing(command, data):
     )
 
 
+# E2: the rules /do consent releases (_evaluate_command).
+_DO_RELEASED = (_looks_like_git_merge, _looks_like_git_forbidden_plumbing,
+                _looks_like_git_reset_hard, _looks_like_git_direct_ref_mutation)
+
+
 # ---------------------------------------------------------------------------
 # Residual-refusal recovery route (2026-09-03)
 #
@@ -2225,19 +1846,17 @@ def _evaluate_forbidden_plumbing(command, data):
 # command that was never refused, and it is single-use and short-lived.
 #
 # What this route does NOT claim. It does not claim an agent cannot forge the
-# file. This repository has already MEASURED that it can -- see route_id
-# "grant-self-minting" in hooks/tests/fixtures/overwrite_corpus.json: a grant
-# under /tmp is an ordinary JSON file, creating a path that does not yet exist
-# is never denied, so any agent with Bash can mint one. That finding is
-# declared there rather than claimed closed, and this route inherits exactly
-# that declared limitation and adds no new surface. What the route does supply
+# file: a grant under /tmp is an ordinary JSON file, creating a path that does
+# not yet exist is never denied, so any agent with Bash can mint one. That
+# limitation is declared rather than claimed closed, and this route inherits
+# exactly that declared limitation and adds no new surface. What the route does supply
 # is the property forgery cannot erase: honoring an override emits a
 # non-suppressible stderr audit record naming who authorized it, why, and what
 # was refused, so a forged authorization is visible in the transcript rather
 # than silent.
 # ---------------------------------------------------------------------------
 
-_RESIDUAL_OVERRIDE_DIR = '/tmp/claude-git-residual-override'
+_RESIDUAL_OVERRIDE_DIR = os.path.join(harness_state_dir(), 'claude-git-residual-override')
 _RESIDUAL_OVERRIDE_KIND = 'git-residual-override'
 _RESIDUAL_HUMAN_ORIGIN = 'userpromptsubmit-hook'
 
@@ -2360,8 +1979,8 @@ def _consume_residual_override(path):
         return False
 
 
-def _audit_residual_override(path, ovr, command, kinds, segments, digest, data):
-    """Emit the honor record. stderr first: the transcript is the durable copy."""
+def _audit_residual_override(path, ovr, kinds, segments, digest):
+    """Emit the honor record on stderr: the transcript is the durable copy."""
     sys.stderr.write(
         '\nRESIDUAL-OVERRIDE HONORED: a human authorization cleared the '
         '"could not be statically classified" refusal for this command.\n'
@@ -2375,26 +1994,14 @@ def _audit_residual_override(path, ovr, command, kinds, segments, digest, data):
         + 'This clears ONLY the unparseable-token refusal. Every other policy '
         'check still applies to every part of this command the guard can read.\n'
     )
-    _append_residual_record('audit.jsonl', {
-        'event': 'residual_override_honored',
-        'at': datetime.now(timezone.utc).isoformat(),
-        'override_path': str(path),
-        'authorized_by': ovr.get('authorized_by', ''),
-        'reason': ovr.get('reason', ''),
-        'origin': ovr.get('origin', ''),
-        'issued_session_id': ovr.get('session_id', ''),
-        'used_session_id': _get_session_id(data),
-        'used_agent_id': str(data.get('agent_id') or ''),
-        'command_sha256': digest,
-        'command_excerpt': command[:200],
-        'residual_kinds': kinds,
-        'residual_segments': [s.strip()[:200] for s in segments],
-        'created_at': ovr.get('created_at', ''),
-        'expires_at': ovr.get('expires_at', ''),
-    })
 
 
-def _evaluate_command(command, data):
+def _evaluate_command(command, data, do_consent=False):
+    # do_consent: the main agent holds /do consent, which releases the rules in
+    # _DO_RELEASED and adds none (E2): what one of them refuses stays refused when
+    # it can move the protected branch or the guard cannot tell the branch it lands
+    # on (_moves_protected_branch); git commit, git push and a git command the
+    # guard cannot classify are judged as without it.
     # Classify once: build invocations list for all _looks_like_* and _evaluate_* calls.
     # iter_git_invocations uses token-aware parsing so path-qualified forms like
     # /usr/bin/git are detected alongside bare 'git' (closes RISK-3 bypass).
@@ -2438,8 +2045,7 @@ def _evaluate_command(command, data):
             # control falls through to every check below, so each part of the
             # command the guard CAN parse is still judged on its merits.
             _consume_residual_override(ovr_path)
-            _audit_residual_override(
-                ovr_path, ovr, command, kinds, segments, digest, data)
+            _audit_residual_override(ovr_path, ovr, kinds, segments, digest)
         else:
             _block(
                 '\nBLOCKED: agent git command could not be statically classified.\n'
@@ -2473,15 +2079,18 @@ def _evaluate_command(command, data):
     # (force-push must stay blocked even with a broad /allow grant).
     if not _looks_like_git_push(invocations) and _check_git_allowlist(command, data):
         return
-    if _looks_like_git_forbidden_plumbing(invocations):
+    if (do_consent and any(rule(invocations) for rule in _DO_RELEASED)
+            and _moves_protected_branch(command, invocations)):
+        _evaluate_protected_move(command, data)
+    if not do_consent and _looks_like_git_forbidden_plumbing(invocations):
         _evaluate_forbidden_plumbing(command, data)
-    if _looks_like_git_reset_hard(invocations):
+    if not do_consent and _looks_like_git_reset_hard(invocations):
         _evaluate_reset_hard(command, invocations, data)
-    if _looks_like_git_direct_ref_mutation(invocations):
+    if not do_consent and _looks_like_git_direct_ref_mutation(invocations):
         _evaluate_direct_ref_mutation(command, data)
     if _looks_like_git_push(invocations):
         _evaluate_push(command, invocations, data)
-    if _looks_like_git_merge(invocations):
+    if not do_consent and _looks_like_git_merge(invocations):
         _evaluate_merge(command, data)
     if _looks_like_git_commit(invocations):
         _evaluate_commit(command, data)
@@ -2489,9 +2098,11 @@ def _evaluate_command(command, data):
 
 def main():
     try:
-        data = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+        data = json.loads(_read_stdin())
+    except ValueError as exc:
+        # No tool or command to read: 0 as before, unless the raw text may run git
+        # (the hook is registered for Bash calls alone).
+        sys.exit(_internal_error_exit(exc, 'could not read its input'))
     try:
         if data.get('tool_name', '') != 'Bash':
             sys.exit(0)
@@ -2501,14 +2112,20 @@ def main():
         command = (data.get('tool_input', {}) or {}).get('command', '') or ''
         if not command:
             sys.exit(0)
-        # /do bypass: main-agent-only; subagents never benefit from consent flag.
-        if _has_do_consent(data):
-            sys.exit(0)
-        _evaluate_command(command, data)
+        # /do consent (main agent only) releases rules and adds none (E2,
+        # _evaluate_command).
+        do_consent = has_do_consent(data)
+        try:
+            _evaluate_command(command, data, do_consent)
+        except SystemExit as exc:
+            if do_consent and exc.code == 2:
+                sys.stderr.write(DO_NOT_COVERED)
+            raise
     except SystemExit:
         raise
-    except Exception:
-        sys.exit(0)
+    except Exception as exc:
+        # An error is no verdict: refuse what may run git (_internal_error_exit).
+        sys.exit(_internal_error_exit(exc))
     sys.exit(0)
 
 

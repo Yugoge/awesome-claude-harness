@@ -17,8 +17,8 @@
 #   2. CLAUDE_SESSION_ID env var
 #   3. hashed PPID+process-start-time fallback (last resort)
 #
-# Counter file: /tmp/claude-pressure-warn-<sanitized_token>
-# Lock file:    /tmp/claude-pressure-warn-<sanitized_token>.lock
+# Counter file: <state dir>/claude-pressure-warn-<sanitized_token>
+# Lock file:    <state dir>/claude-pressure-warn-<sanitized_token>.lock
 # Both are regular files (flock primitive is the SOLE acceptable lock per OBJ-3;
 # atomic-mkdir is FORBIDDEN — lock directories would never match the M3
 # `-type f` hook-state sweep predicate and would leak indefinitely). Both

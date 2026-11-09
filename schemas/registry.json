@@ -2,7 +2,6 @@
   "schemas": {
     "cycle-contract.v1": "cycle-contract.v1.json",
     "qa-report.v1": "qa-report.v1.json",
-    "dev-report.v1": "dev-report.v1.json",
     "do-report.v1": "do-report.v1.json",
     "context.v1": "context.v1.json",
     "test-plan.v1": "test-plan.v1.json",
@@ -13,7 +12,6 @@
     "dev-report.v2": "dev-report.v2.json",
     "qa-report.v2": "qa-report.v2.json",
     "obligation.v1": "obligation.v1.json",
-    "repair-map.v1": "repair-map.v1.json",
     "changelog-status.v1": "changelog-status.v1.json",
     "acceptance-criteria.v1": "acceptance-criteria.v1.json",
     "style-inspector-report.v1": "style-inspector-report.v1.json",
@@ -22,6 +20,9 @@
     "test-writer-report.v1": "test-writer-report.v1.json",
     "test-writer-manifest.v1": "test-writer-manifest.v1.json",
     "producer-question.v1": "producer-question.v1.json",
-    "ba-qa-report.v1": "ba-qa-report.v1.json"
+    "ba-qa-report.v1": "ba-qa-report.v1.json",
+    "triage-report.v1": "triage-report.v1.json",
+    "retro-report.v1": "retro-report.v1.json",
+    "specialist-report.v1": "specialist-report.v1.json"
   }
 }

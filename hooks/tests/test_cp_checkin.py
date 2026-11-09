@@ -394,29 +394,77 @@ def test_stale1_new_owner_takeover_still_refreshes_checked_in_at(tmp_path):
     assert after.get("is_running") is True
 
 
-# -------------------- graphify registration (spec-20260527-061433) ----------
+# -------------------- the roster decides who registers (P1b row 18) ----------
 
-def test_graphify_in_cp_agents():
-    """Verify 'graphify' is registered in CP_AGENTS (pretool-cp-checkin.py).
-
-    AC5 from spec-20260527-061433: graphify must appear in CP_AGENTS, ALLOWED_AGENTS,
-    and agent_types list together (arch-2 precedent: test-writer pattern).
-    """
-    hook_text = HOOK.read_text(encoding="utf-8")
-    assert ('"graphify"' in hook_text or "'graphify'" in hook_text), (
-        "CP_AGENTS in pretool-cp-checkin.py must include 'graphify' (spec-20260527-061433 AC5)"
-    )
+def _roster_roles():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("roster_under_test", HOOK.parent / "lib" / "roster.py")
+    roster = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(roster)
+    return roster.roles()
 
 
-def test_graphify_in_allowed_agents():
-    """Verify 'graphify' is registered in ALLOWED_AGENTS (scripts/spec-check.py).
+def test_every_roster_role_registers_and_nothing_else(tmp_path):
+    """Both triggers accept exactly the roster (agents/*.md with front
+    matter), graphify among it (spec-20260527-061433 AC5); neither keeps a
+    list of its own. A sentinel or cp-state name that is no agent registers
+    nobody."""
+    roles = _roster_roles()
+    assert "graphify" in roles and "changelog-analyst" in roles
+    registry = tmp_path / ".claude" / "dev-registry" / "dev-roster-sid"
+    for index, name in enumerate(sorted(roles) + ["wizard", "README"]):
+        rc = _run_hook(tmp_path, {"tool_name": "Read",
+                                  "tool_input": {"file_path": str(registry / f"{name}.json")},
+                                  "agent_id": f"agent-{index}"})
+        _assert_no_traceback(rc, name)
+    index = json.loads((tmp_path / ".claude" / "dev-registry" / "agent-index.json").read_text())
+    assert {entry["agent_type"] for entry in index.values()} == roles
 
-    Symmetry with CP_AGENTS per arch-2 precedent.
-    """
-    spec_check_text = SPEC_CHECK.read_text(encoding="utf-8")
-    assert ('"graphify"' in spec_check_text or "'graphify'" in spec_check_text), (
-        "ALLOWED_AGENTS in scripts/spec-check.py must include 'graphify' (spec-20260527-061433 AC5)"
-    )
+
+def test_a_dispatched_roles_read_creates_its_sentinel_in_the_armed_registry(tmp_path):
+    """The hook is the sentinel's one producer (P1b goal 2): a subagent's FIRST ACTION
+    Read of <registry>/<role>.json creates it in a registry the cycle's start armed,
+    whole, right before the read; it leaves an existing sentinel as it is and
+    creates none for a main-agent read, a name that is no role, a registry nobody
+    armed or a symlinked one."""
+    root = tmp_path / ".claude" / "dev-registry"
+    armed = root / "dev-armed-sid"
+    armed.mkdir(parents=True)
+
+    def read(path, agent_id="agent-1"):
+        payload = {"tool_name": "Read", "tool_input": {"file_path": str(path)}}
+        if agent_id:
+            payload["agent_id"] = agent_id
+        _assert_no_traceback(_run_hook(tmp_path, payload), str(path))
+
+    read(armed / "qa.json")
+    assert json.loads((armed / "qa.json").read_text()) == {"agent_type": "qa", "session_id": "dev-armed-sid"}
+    (armed / "dev.json").write_text("kept\n")
+    read(armed / "dev.json")
+    assert (armed / "dev.json").read_text() == "kept\n"
+    read(armed / "ba.json", agent_id=None)
+    read(armed / "wizard.json")
+    read(root / "dev-unarmed-sid" / "qa.json")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (root / "dev-linked-sid").symlink_to(elsewhere)
+    read(root / "dev-linked-sid" / "qa.json")
+    assert sorted(p.name for p in armed.iterdir()) == ["dev.json", "qa.json"]
+    assert not (root / "dev-unarmed-sid").exists() and not list(elsewhere.iterdir())
+
+
+def test_spec_check_accepts_exactly_the_roster(tmp_path):
+    """spec-check.py's agents are the roster: graphify and the analysts check
+    in; a name no agent file declares is refused naming the roster."""
+    for agent in ("graphify", "pull-analyst", "test-writer"):
+        rc = _run_spec_check(tmp_path, ["check-in", "--spec-id", "spec-roster", "--agent", agent,
+                                        "--agent-id", f"id-{agent}"])
+        assert rc.returncode == 0, (agent, rc.stderr)
+    refused = _run_spec_check(tmp_path, ["check-in", "--spec-id", "spec-roster", "--agent", "wizard",
+                                         "--agent-id", "id-wizard"])
+    assert refused.returncode == 1
+    assert "unknown agent 'wizard'" in refused.stderr
+    assert ", ".join(sorted(_roster_roles())) in refused.stderr
 
 
 # -------------------- check-in over a missing, corrupt or empty primary ---------------------
@@ -508,3 +556,94 @@ def test_48_way_checkin_allocates_distinct_numbered_slots(tmp_path, run):
         assert payload["generation"] == 1
         assert payload["checkpoints"] == []
     assert primary.read_bytes() == before
+
+
+# -------------------- spec-check.py is the one writer (P1b row 8) ---------------------
+
+def test_checkpoints_sets_the_checklist_of_the_callers_slot(tmp_path):
+    spec_id, agent = "spec-test-cps", "ba"
+    rc = _run_spec_check(tmp_path, ["check-in", "--spec-id", spec_id, "--agent", agent,
+                                    "--agent-id", "spec-lead-ba"])
+    _assert_no_traceback(rc, "check-in")
+    path = tmp_path / ".claude" / "specs" / spec_id / f"cp-state-{agent}.json"
+    rc = _run_spec_check(tmp_path, ["checkpoints", "--spec-id", spec_id, "--agent", agent,
+                                    "--agent-id", "spec-lead-ba", "--action", "Write the ticket",
+                                    "--action", "Write the context"])
+    _assert_no_traceback(rc, "checkpoints")
+    cps = _read_cp(path)["checkpoints"]
+    assert [(c["id"], c["action"], c["state"]) for c in cps] == [
+        ("cp-01", "Write the ticket", "pending"), ("cp-02", "Write the context", "pending")]
+    # The checklist waits idle for the agent it is for (P9 F-E4): the setter's id only labels it.
+    assert _read_cp(path)["is_running"] is False and _read_cp(path)["agent_id"] == "spec-lead-ba"
+    before = path.read_bytes()
+    rc = _run_spec_check(tmp_path, ["checkpoints", "--spec-id", spec_id, "--agent", agent,
+                                    "--agent-id", "someone-else", "--action", "x"])
+    assert rc.returncode == 1 and "owned by agent_id 'someone-else'" in rc.stderr
+    assert path.read_bytes() == before
+
+
+def test_a_reader_takes_the_slot_it_read_and_a_running_holder_moves(tmp_path):
+    """P9 F-E4: the file a subagent Read names its own CLI id; a parallel same-role agent
+    still running on it moves, id and states kept, to a new numbered slot."""
+    spec_id, agent = "spec-test-clone", "qa"
+    primary = _make_cp_state(tmp_path, spec_id, agent, _baseline_payload(
+        spec_id, agent, generation=1, agent_id="a-qa-lane-1", is_running=True,
+        checkpoints=[_cp("cp-01"), _cp("cp-02", state="done")]))
+    before = _read_cp(primary)
+    rc = _run_hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": str(primary)},
+                              "agent_id": "a-qa-lane-2", "agent_type": agent})
+    _assert_no_traceback(rc, "register")
+    moved, now = _read_cp(primary.with_name(f"cp-state-{agent}-2.json")), _read_cp(primary)
+    assert moved == dict(before, instance_id=2)
+    assert now["agent_id"] == "a-qa-lane-2" and now["is_running"] is True and now["instance_id"] is None
+    assert [c["state"] for c in now["checkpoints"]] == ["pending", "done"]
+    _run_hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": str(primary)},
+                         "agent_id": "a-qa-lane-1", "agent_type": agent})  # a holder's re-read keeps its slot
+    assert _read_cp(primary) == now and _read_cp(primary.with_name(f"cp-state-{agent}-2.json")) == moved
+
+
+def test_a_read_by_another_role_registers_nobody(tmp_path):
+    """The payload's role decides (P9 F-E4): the /spec subagent reading a slot it set, or a
+    dev reading qa's, binds nothing; the path's role counts only without a payload role."""
+    spec_id = "spec-test-other-role"
+    path = _make_cp_state(tmp_path, spec_id, "dev", _baseline_payload(
+        spec_id, "dev", generation=1, agent_id="dev-label", checkpoints=[_cp("cp-01")]))
+    before = path.read_bytes()
+    for role in ("spec", "qa"):
+        rc = _run_hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": str(path)},
+                                  "agent_id": f"a-{role}", "agent_type": role})
+        _assert_no_traceback(rc, role)
+    assert path.read_bytes() == before
+    _run_hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": str(path)},
+                         "agent_id": "a-dev", "agent_type": "dev"})
+    assert _read_cp(path)["agent_id"] == "a-dev" and _read_cp(path)["is_running"] is True
+
+
+def test_a_read_without_an_agent_id_registers_nobody(tmp_path):
+    spec_id, agent = "spec-test-main-read", "dev"
+    path = _make_cp_state(tmp_path, spec_id, agent, _baseline_payload(spec_id, agent, generation=1))
+    before = path.read_bytes()
+    rc = _run_hook(tmp_path, {"tool_name": "Read", "tool_input": {"file_path": str(path)}})
+    _assert_no_traceback(rc, "main read")
+    assert path.read_bytes() == before
+
+
+def test_cp_enforce_and_role_resolution_take_one_running_rule(tmp_path):
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+    from agent_resolver import cp_state_running
+
+    enforce = Path(__file__).parent.parent / "subagentstop-cp-enforce.py"
+    spec_id, agent = "spec-test-running", "dev"
+    fresh = _baseline_payload(spec_id, agent, generation=1, agent_id="a-1", is_running=True,
+                              checkpoints=[_cp("cp-01")])
+    fresh["checked_in_at"] = _now_iso()
+    stale = dict(fresh, checked_in_at="2020-01-01T00:00:00Z")
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(tmp_path), "CP_ENFORCE_MODE": "block"}
+    for payload, running, code in ((fresh, True, 2), (stale, False, 0)):
+        _make_cp_state(tmp_path, spec_id, agent, payload)
+        assert cp_state_running(payload) is running
+        # The stopping subagent is the slot's owner (P1c X6, P9 E4: the hook judges only its own slots).
+        rc = subprocess.run(["python3", str(enforce)], input=json.dumps({"agent_id": "a-1"}), text=True,
+                            capture_output=True, env=env, timeout=15)
+        assert rc.returncode == code, rc.stderr

@@ -80,7 +80,7 @@ Otherwise, proceed:
 ### 2. Generate unique output path
 
 Run this first to establish where output will be written. The canonical path is
-`$CLAUDE_PROJECT_DIR/docs/codex/<task_id>/<role>.txt` when `CODEX_OUT_TASK_ID`
+`<PROJECT_ROOT>/docs/codex/<task_id>/<role>.txt` when `CODEX_OUT_TASK_ID`
 and `CODEX_OUT_ROLE` env vars are set, safe, and non-empty. Falls back to
 `/var/tmp/codex-outputs/` (disk-backed, 601G) otherwise.
 
@@ -92,7 +92,7 @@ if [ -n "${CODEX_OUT_TASK_ID:-}" ] && [ -n "${CODEX_OUT_ROLE:-}" ] \
     && [[ "$CODEX_OUT_TASK_ID" != "." && "$CODEX_OUT_TASK_ID" != ".." ]] \
     && [[ "$CODEX_OUT_ROLE" != "." && "$CODEX_OUT_ROLE" != ".." ]]; then
   _CODEX_USE_CANONICAL=1
-  _base="$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID"
+  _base="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/codex/$CODEX_OUT_TASK_ID"
   mkdir -p "$_base"
   echo "$_base/$CODEX_OUT_ROLE.txt"
 else
@@ -124,7 +124,7 @@ CODEX_ISO_BIN="${CODEX_ISO_BIN:-$HOME/bin/codex-iso}"
 
 ```bash
 if [ "${_CODEX_USE_CANONICAL:-0}" = "1" ]; then
-  "$CODEX_ISO_BIN" review -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
+  "$CODEX_ISO_BIN" review -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
 else
   "$CODEX_ISO_BIN" review -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
 fi
@@ -159,7 +159,7 @@ Then Read the output file with the Read tool.
 **Without --model (default gpt-5.6-sol):**
 ```bash
 if [ "${_CODEX_USE_CANONICAL:-0}" = "1" ]; then
-  "$CODEX_ISO_BIN" exec -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
+  "$CODEX_ISO_BIN" exec -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
 else
   "$CODEX_ISO_BIN" exec -c 'model="gpt-5.6-sol"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
 fi
@@ -168,7 +168,7 @@ fi
 **With --model (user-specified model, still xhigh reasoning):**
 ```bash
 if [ "${_CODEX_USE_CANONICAL:-0}" = "1" ]; then
-  "$CODEX_ISO_BIN" exec -c 'model="<model>"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "$CLAUDE_PROJECT_DIR/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
+  "$CODEX_ISO_BIN" exec -c 'model="<model>"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/codex/$CODEX_OUT_TASK_ID/$CODEX_OUT_ROLE.txt"
 else
   "$CODEX_ISO_BIN" exec -c 'model="<model>"' -c 'reasoning_effort="xhigh"' "$PROMPT" < /dev/null 2>&1 | tee "/var/tmp/codex-outputs/codex-output-$$-$(date +%s).txt"
 fi

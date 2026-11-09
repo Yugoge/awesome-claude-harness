@@ -51,20 +51,6 @@
     }
   ],
   "mode": "fanout",
-  "optional_parent_artifacts": {
-    "context": {
-      "path": "docs/dev/context-20260101-000000.json",
-      "present": false
-    },
-    "qa_report": {
-      "path": "docs/dev/qa-report-20260101-000000.json",
-      "present": false
-    },
-    "ticket": {
-      "path": "docs/dev/ticket-20260101-000000.md",
-      "present": false
-    }
-  },
   "parallel_workers": [
     "lane-a",
     "lane-b"

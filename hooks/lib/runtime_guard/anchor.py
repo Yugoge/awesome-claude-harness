@@ -4,9 +4,8 @@
 The cleanly-extractable leaf subset of the HEAD-AGNOSTIC P0 anchor scan.
 Depends on shell_lex (`_strip_quotes`) + constants (`RUNTIMES`,
 `EXEC_RUNNER_TOKENS`, `SERVICE_VERBS`) + stdlib; references nothing from _core.
-See docs/reference/monolith-split-plan.md for the decomposition rationale (incl.
-why the irreducible P0 decision ENGINE `_p0_anchor` and every forward-referencing
-anchor helper stay in _core) and the INV-3 dual-context import contract.
+The P0 decision ENGINE `_p0_anchor` and every forward-referencing anchor helper
+stay in _core.
 
 Scope: the exec-token scanner (`_anchor_exec_tokens`), the launch-position and
 fused-option-value primitives (`_anchor_in_launch_position`,
@@ -24,8 +23,8 @@ import os
 import re
 
 # The anchor predicates key on the phase-1 quote stripper and the phase-2 runtime
-# /runner/service-verb lookup tables. Dual-context import (INV-3) --
-# see docs/reference/monolith-split-plan.md.
+# /runner/service-verb lookup tables. Dual-context import (INV-3; the contract
+# is stated at _core's first re-import block).
 try:
     from .shell_lex import _strip_quotes
     from .constants import EXEC_RUNNER_TOKENS, RUNTIMES, SERVICE_VERBS

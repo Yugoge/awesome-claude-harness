@@ -25,5 +25,6 @@
 # After editing the ranges below, REGENERATE the lockfiles — an edit here alone
 # changes nothing about what actually gets installed.
 pytest>=7.0,<9
+pytest-xdist>=3.8,<4
 jsonschema>=4.0,<5
 pyyaml>=6.0,<7

@@ -146,7 +146,7 @@ over every tracked file whatever its class. Path = first back-ticked token; clas
 | `requirements.txt` | `shared/infra` | Python dependency manifest for the harness venv — build/infra. Human-authored ABSTRACT spec (compatible ranges); the concrete resolutions live in `requirements/`. |
 | `requirements/` | `shared/infra` | Per-Python-version hash-pinned lockfiles (`py310/py311/py312.txt`) that every install call site uses with `pip install --require-hashes` — build/infra, and shipped, since the harness cannot install without them. |
 | `VERSION` | `shared/infra` | Release version marker — release meta. |
-| `tests/` | `shared/infra` | Test net (incl. generated AC skeletons + fixture strings) that supports the core; not itself the shippable harness. |
+| `tests/` | `shared/infra` | Test net (incl. fixture strings) that supports the core; not itself the shippable harness. The AC skeletons test-writer generates under `tests/generated/` are gitignored. |
 | `PUBLIC-CORE.md` | `shared/infra` | This boundary manifest — governance/meta (self-classified for forward completeness once tracked). |
 | `release-membership.v1.json` | `shared/infra` | Shipping ledger: the EXPLICIT path set a release archive contains, plus per-path rationale. Governance/meta, beside this boundary ledger; consumed by the release workflow and by `scripts/verify-release-manifest.sh`. |
 | `push.sh` | `private-lab` | Maintainer pre-push wrapper: `/root/.claude/push.sh` invocation, author git-workflow automation (identity now env-parameterized, purpose still maintainer-specific). |

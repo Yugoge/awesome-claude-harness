@@ -90,8 +90,9 @@ Init is idempotent and safe to re-run on a populated home. In order, it:
    `python3.10` that has a hash-locked lockfile under `requirements/`;
 2. writes the machine overlay `<harness-home>/settings.machine.json` — **only when it is
    absent** — holding the module choices and `env.CLAUDE_HOME = <harness-home>`;
-3. registers the settings filter in the clone's local git config and renders the working
-   `settings.json` (clean form + enabled modules + overlay);
+3. registers the settings filter in the clone's local git config, sets `harness.autoPush false`
+   there when the key is absent ([automatic push, per repository](#automatic-push-per-repository)),
+   and renders the working `settings.json` (clean form + enabled modules + overlay);
 4. creates, **only when absent** (it never overwrites any of them):
    - `<harness-home>/logs/`;
    - the `TMPDIR` root named by the rendered settings (`/var/tmp/claude-scratch` by default), mode 1777;
@@ -129,6 +130,27 @@ files in it to have the guard protect them.
 Module flags take effect only when init writes a new overlay. Once an overlay exists its
 `modules` key wins: change it there and re-run init.
 
+#### Automatic push, per repository
+
+The automatic pushes (the checkpoint push, git-fswatch's push, session-git-init's first push, and
+the post-commit backup hook `hooks/git-hooks/post-commit-auto-push` where you copied it into a
+repository) run where `GIT_AUTO_PUSH` is `"1"`; set it in the overlay's `env` (the tracked clean
+form sets `"0"`).
+A repository's own git config decides before that switch, for that repository only:
+
+```bash
+git -C <repo> config --local harness.autoPush true      # this repository pushes automatically
+git -C <repo> config --local harness.autoPush false     # this repository never does
+git -C <repo> config --local --unset harness.autoPush   # GIT_AUTO_PUSH decides again
+```
+
+Init and the landing set `false` in the harness home when the key is absent, because its `origin`
+is the public repository; they never change a value you set. A value git cannot read as a boolean
+means no push. `/push` is not affected. The post-commit hook reads the switch through the
+harness's `hooks/lib/auto_push.sh`, found under `CLAUDE_HOME` or `~/.claude` (none there: no
+push, and the commit prints why); a copy made before this rule existed keeps its old test until
+you copy the hook again.
+
 **Upgrading a home that predates the overlay.** A home that ran code from before the settings
 filter (its HEAD reflog, or `ORIG_HEAD`, holds such a revision) lands by itself at the next turn
 end of any of its sessions; nothing has to be stopped or typed. `hooks/auto-commit.sh` runs
@@ -139,7 +161,9 @@ new overlay (a `GIT_AUTO_PUSH` of `"1"` is not carried over), seeds an empty
 `private-literals.txt` from values the machine already holds, renames aside post-commit hooks
 that push unless `GIT_AUTO_PUSH` is `0` (here and in the repositories under `$HOME`), restarts
 git-fswatch daemons running older code with their own environment (one in its git work, or in a
-repository with a stopped rebase, at a later turn end), and runs init steps 3-5.
+repository with a stopped rebase, at a later turn end), and runs init steps 3-5. At each turn
+end it also sets `harness.autoPush false` in the home when the key is absent, already-landed
+homes included.
 A rebase or merge stopped in the home is left alone: the landing says so and waits.
 `logs/landing.log` lists what it did (counts and key names, never a value). For a home without
 sessions, `scripts/bootstrap --migrate-from <rev>` and `scripts/install/render-settings migrate`
@@ -346,8 +370,13 @@ like a file or scope option is denied as one (`git config alias.ff '-c pull.ff=o
 The commit checks themselves do not see a commit that `git merge`, `cherry-pick`, `revert` or
 `rebase` makes (git runs no pre-commit hook for them), the commit message, or a literal stored
 in another encoding. They run their engines from the working tree, so an edit to
-`scripts/check-public-core.sh` or `scripts/install/render-settings` changes what they refuse;
-an agent can make such an edit today (denying it is planned, P5-a). Deleting both the overlay
+`scripts/check-public-core.sh` or `scripts/install/render-settings` changes what they refuse.
+These edits are denied: `hooks/pretool-tool-policy.py` refuses the main agent and every subagent,
+with `/do` or without, a write, delete or rename of the harness home's two engines,
+`hooks/git-hooks/pre-commit`, `.git/config`, `.git/hooks/`, `.gitattributes`,
+`settings.machine.json` and `private-literals.txt`, as a Write or Edit or as a Bash redirect,
+`tee`, `cp`, `mv`, `rm` or `sed -i` it reads (not what a script or interpreter writes); the same
+names in another repository stay writable. Deleting both the overlay
 and `<git dir>/claude-settings.applied` leaves the clean filter and `check --staged` no record of
 the machine values, so `git commit -a` can land them; doctor still fails on that state. Git
 copies neither hooks nor local config into a clone, so in a clone that never ran init no local
@@ -418,7 +447,7 @@ Run the guard demo: `bash examples/guard-demo/run-demo.sh`
 | **Evidence-gated BA → Dev → QA pipeline** | The analysis is QA'd *before* coding; every claim needs proof (git blame, grep, import-chain); the user's verbatim words are the binding spec. Pipeline: `/spec → /dev → /close → /commit → /push`. | `commands/dev.md`, `agents/ba.md`, `agents/qa.md` |
 | **Release-readiness gate** | `/close` proves not just "the code works" but "the system can ship it" — four Workflow-Integrity checks, optionally a multi-round QA↔Codex debate. | `commands/close.md` |
 | **Git protection kernel** | `commit / push / merge / reset --hard` refused unless a per-operation authorization grant is present (commit grant is single-use; push grant is wrapper-managed and retryable on failure); wide-path checkout, stash-as-buffer, and hard resets blocked by default. Each guard maps to a specific failure class it prevents. | `hooks/pretool-git-privilege-guard.py`, `hooks/pretool-bash-safety.sh` |
-| **Autonomous overnight pipeline** | `/dev-overnight 6:00` runs an unattended explore → triage → fix → verify → commit loop until a wall-clock end time. Stop-hook physically refuses early termination. | `commands/dev-overnight.md`, `hooks/stop-overnight-timelock.py` |
+| **Autonomous overnight pipeline** | `/dev-overnight 6:00` runs an unattended explore → triage → fix → verify loop until a wall-clock end time, committing nothing; you land the work once, afterwards. Stop-hook physically refuses early termination. | `commands/dev-overnight.md`, `hooks/stop-overnight-timelock.py` |
 | **Lossless quota recovery** | `/restart` resumes every recoverable interrupted child in the current parent transcript by its original `agent_id`; replacement agents are forbidden, and success requires response evidence from every candidate. | `commands/restart.md`, `hooks/lib/subagent_restart.py` |
 | **Structured break-glass grants** | `/allow` writes a structured grant (`{op, target, args_contain}`) matched by command structure — consumed on any terminal result. | `hooks/lib/allowlist.py`, `commands/allow.md` |
 | **Branch / PR / worktree firewall** | Creating a branch, PR, or worktree is forbidden by default everywhere, with explicit human escape hatches and a live-overnight exception. | `hooks/pretool-block-branch-pr-worktree.py`, `hooks/pretool-block-enterworktree.sh` |
@@ -433,7 +462,7 @@ Run the guard demo: `bash examples/guard-demo/run-demo.sh`
 
 ```mermaid
 graph TD
-    U([Human]) --> CMD[Slash commands<br/>20 entry points]
+    U([Human]) --> CMD[Slash commands<br/>21 entry points]
     CMD --> ORC{{Main Agent / Orchestrator<br/>think + route — no direct writes}}
 
     ORC -.->|PreToolUse gate| HL
@@ -528,12 +557,12 @@ flowchart TD
     H4 --> C{which verb?}
     C -->|commit| G1{"grant file present + unexpired (ISO expiry),<br/>single-use unlink?"}
     C -->|push| G2{grant file: branch + expected-head<br/>+ remote bound?}
-    C -->|merge| G3{"env=1 + merge-analyst grant:<br/>repo_root+branch+source/default tip?"}
+    C -->|merge| G3{"matching /allow grant?<br/>(/merge merges inside hooks/merge.sh)"}
     C -->|reset --hard| G4[blocked by default in agent flow]
 
-    G1 -->|yes| OK[(allow, then unlink commit grant)]
+    G1 -->|yes| OK[(allow — the guard spends the commit grant,<br/>unlinking it as it authorizes)]
     G2 -->|yes| OK2[(allow — push.sh manages lifecycle<br/>unlink on success, retain on failure)]
-    G3 -->|yes| OK
+    G3 -->|yes| OK3[(allow — the /allow grant is consumed<br/>on the call's result)]
     G1 & G2 & G3 -->|no grant/env| NO[BLOCKED / exit 2]
     G4 --> NO
 
@@ -551,10 +580,10 @@ Note: `pretool-bulk-commit-detector.py` is warn-only — it exits 0 and never bl
 |---|---|---|---|---|
 | `pretool-bash-safety.sh` | PreToolUse Bash | stash-buffer, wide checkout (-- . / -- *), git restore --source -- ., reset --hard | BLOCK (exit 2) | /do or matching /allow |
 | `pretool-bulk-commit-detector.py` | PreToolUse Bash | 93-file 'sync all uncommitted' shape (3+ subsystems + sync subject) | WARN only (exits 0) | N/A — warn-only per current policy |
-| `pretool-git-privilege-guard.py` | PreToolUse Bash | commit, push (any form), merge, reset --hard, direct ref mutation | BLOCK (exit 2) | /commit, /push, or /merge grant, or /allow (subagents); /do (main agent only) |
+| `pretool-git-privilege-guard.py` | PreToolUse Bash | commit, push (any form), merge, reset --hard, direct ref mutation | BLOCK (exit 2) | /commit or /push grant, or /allow (subagents too); /do (main agent only). An agent's own `git merge` has no grant: `/merge` merges inside `hooks/merge.sh` |
 | `pretool-orchestrator-gate.py` | PreToolUse (all tools) | Non-whitelisted tools in main-agent context; streak rate-limit | BLOCK (rate-limited) | /do |
-| `pretool-tool-policy.py` | PreToolUse Write | Role-scoped deny rules from policies/tool-policy.v1.json | FAIL CLOSED (non-dev roles); fail-safe ALLOW (dev role when policy missing) | N/A |
-| `stop-overnight-timelock.py` | Stop | Early session termination before declared end-time | BLOCK (exit 2) | /stop at or after end-time; defaults to 8h if no end-time set |
+| `pretool-tool-policy.py` | PreToolUse (all tools) | For every caller including the main agent: a write, delete or rename of a protected file (the harness home's commit engines, git hooks and config, `.gitattributes`, overlay and private-literal list; session transcripts; /do task sidecars), a ScheduleWakeup prompt typing a harness command outside CONTROL, and a write (Write/Edit/MultiEdit/NotebookEdit or a Bash write target) to a path another dispatch's obligation declares; then a subagent's role-scoped deny rules from policies/tool-policy.v1.json | BLOCK (exit 2); for the role rules FAIL CLOSED (non-dev roles), fail-safe ALLOW (dev role when policy missing) | N/A |
+| `stop-command-gate.py` (time-lock, behind `stop-launch.py`) | Stop | Session end before the declared end-time, then while the wake has no CronDelete; a `/dev-overnight` Stop after it until the closeout is on disk | BLOCK (exit 2) | A human-typed /stop releases the window at any time; after end-time, a PM retrospective report and an overnight summary written since the start release the closeout; end-time defaults to 8h if none is set |
 | `posttool-doc-sync.py` | PostToolUse | INDEX.md / README / CLAUDE stat block regeneration | UPDATE (idempotent) | N/A |
 
 Read-only git (`status`, `log`, `show`, `diff`, `blame`, `ls-files`, `branch` listing, `stash list/show`) stays freely available. `add`, single-file working-tree `restore`, and `stash pop` are also permitted — they mutate the index or working tree but never history or the remote.
@@ -563,11 +592,11 @@ Read-only git (`status`, `log`, `show`, `diff`, `blame`, `ls-files`, `branch` li
 
 | Grant type | Written by | Key fields | Expiry | Consumed on | Honored for |
 |---|---|---|---|---|---|
-| Commit grant `/tmp/claude-commit-grant-<sid>-<nonce>.json` | /commit command | nonce, expires_at (ISO-8601 UTC) | Time-boxed ISO expiry | Consumed on success (exit 0) only — renamed to `.lck` at PreToolUse validation, unlinked by `posttool-allowlist-consume.py` on exit 0; validation failures do NOT consume the grant | Main agent + subagents |
+| Commit grant `/tmp/claude-commit-grant-<sid>-<nonce>.json` | /commit command (`scripts/write-commit-grant.py`) | task_id, nonce, repo_root, branch, expected_head, expires_at (ISO-8601 UTC), minted_by | Time-boxed ISO expiry | Spent by the privilege guard when it authorizes the commit: it unlinks the grant (only one event can win) and leaves a per-event pointer from which `posttool-allowlist-consume.py` writes the commit journal entry; a failed commit does not get it back (its retry takes a fresh grant); validation failures do NOT consume the grant | The changelog-analyst dispatch /commit made (a live dispatch attestation carrying the digest of its dispatching prompt) |
 | Push grant `/tmp/claude-push-grant-<sid>-<nonce>.json` | /push command | nonce, branch, expected-head SHA, remote | None — branch/head/remote-bound | Unlinked by `push.sh` after a successful `git push`; left in place on failure (for retry). The privilege guard does not fire on `push.sh` subprocesses — `push.sh` manages the lifecycle directly. | Main agent + subagents |
 | /allow sentinel `/tmp/claude-grants/<task_id>.json` | /allow command | task_id, session_id, allowed_operations[] ({op, target?, args_contain?}), expires_at | ISO expiry | Any terminal result (posttool-allowlist-consume.py) | Main agent + subagents |
 
-Match channel for /allow: structural (`op` = first token of sub-command; `args_contain` = leading argument sequence prefix). Command-text substring grep is not the match channel. Refuse-by-default is the rule — the match-all hole was closed; the grant is single-use and consumed on any terminal result. Legacy git-allowlist grants are main-agent only.
+Match channel for /allow: structural (`op` = first token of sub-command; `args_contain` = leading argument sequence prefix). Command-text substring grep is not the match channel. Refuse-by-default is the rule — the match-all hole was closed; the grant is single-use and consumed on any terminal result. The structured sentinel is the only `/allow` grant: no pattern-string grant is written or read.
 
 ---
 
@@ -575,22 +604,23 @@ Match channel for /allow: structural (`op` = first token of sub-command; `args_c
 
 ```mermaid
 flowchart LR
-    S([/dev-overnight 6:00 fix bugs]) --> WT[linked git worktree<br/>created by launch hook]
+    S([/dev-overnight 6:00 fix bugs]) --> WT["working root: the checkout,<br/>a worktree only with --worktree"]
     WT --> PM[PM: explore app w/ Playwright<br/>build test plan]
     PM --> SP[specialists scan<br/>architect / product-owner / user / ui]
     SP --> TR[PM triage<br/>tier + route to pipelines]
     TR --> PARA[parallel BA→QA-of-BA→Dev→QA<br/>one pipeline per issue]
-    PARA --> CM[end-of-cycle commit<br/>blessed bridge grant]
+    PARA --> CM[checkpoint snapshots<br/>refs/checkpoints, no commit]
     CM --> RT[PM retrospective<br/>hand off to next cycle]
     RT -->|time remaining| PM
     RT -->|end-time reached| SUM([summary + stop])
+    SUM --> LAND["owner types afterwards:<br/>/close --auto · /commit --auto<br/>/merge · /push"]
 
     TL[[Stop-hook time-lock:<br/>refuses to terminate before end-time]] -.guards.-> RT
 ```
 
-`/dev-overnight` runs a todo-completion-driven loop inside a dedicated worktree. A `Stop` hook (`hooks/stop-overnight-timelock.py`) physically refuses to end the conversation until your wall-clock end time, defaulting to an 8-hour session if no end time is provided. Each issue gets its own one-issue-per-subagent pipeline; cycles deduplicate against state and end with a real, merge-ready commit. Cancel any time with `/stop`.
+`/dev-overnight` runs a todo-completion-driven loop in your current checkout by default (this needs bubblewrap: without it the launch is refused and writes no state), or in an isolated worktree with `--worktree`. A `Stop` hook (`hooks/stop-overnight-timelock.py`) physically refuses to end the conversation until your wall-clock end time, defaulting to an 8-hour session if no end time is provided; after that time the session ends once its closeout is on disk: a PM retrospective report under `docs/dev/overnight/<session>/` and an overnight summary under `docs/dev/` written since the session started. Each issue gets its own one-issue-per-subagent pipeline; cycles deduplicate against state. Nothing is committed per cycle: the work stays in `refs/checkpoints/<branch>`, and after the session you land it once by typing `/close --auto`, `/commit --auto`, `/merge <worktree_branch>` (`--worktree` sessions only) and `/push`; the session runs none of them. Cancel any time with `/stop`: a typed `/stop` ends the session at once, with no closeout check.
 
-> **Limitation.** The overnight session runs in a *linked* worktree that shares the repository `.git` common-dir with the main checkout — an accepted deviation, not a clean isolation guarantee, documented in `commands/dev-overnight.md`.
+> **Limitation.** By default the overnight session works in your checkout itself, with no worktree boundary; with `--worktree` it runs in a *linked* worktree that shares the repository `.git` common-dir with the main checkout — an accepted deviation, not a clean isolation guarantee, documented in `commands/dev-overnight.md`.
 
 ---
 
@@ -604,7 +634,7 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **`dev`** | after BA validated by QA | /dev pipeline step 2 dispatch | context-*.json | implementation + dev-report-*.md |
 | **`qa`** | always-on | BA spec or dev report delivered (twice per /dev cycle) | BA spec or dev report | pass/fail + structured objections |
 | **`test-writer`** | complexity ≥ STANDARD or risk_level = high | acceptance-criteria-*.json generated | acceptance-criteria-*.json | pytest skeletons with TEST_INCOMPLETE hard-stops |
-| **`graphify`** | GRAPHIFY_ENABLED=auto and binary present | blast-radius-map.json generated | blast-radius-map.json | graph_context patch injected into context JSON |
+| **`graphify`** | GRAPHIFY_ENABLED=auto and binary present | blast-radius-map.json generated | blast-radius-map.json | run record + focused subgraph under the dev-registry (Dev and QA dispatches name it); the context is read, never written |
 | **`spec`** | /spec invocation | monolithic spec file provided | monolithic spec file | per-agent view files + Gawande-style checkpoints |
 | **`architect`** | overnight + on-demand | /dev-overnight or PM PLAN dispatch | live app URL | structured JSON report per specialist |
 | **`product-owner`** | overnight + on-demand | /dev-overnight or PM PLAN dispatch | live app URL | structured JSON report per specialist |
@@ -626,9 +656,11 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 
 > Full, auto-maintained roster: [`agents/README.md`](agents/README.md).
 
+Agents remove a tracked file with a non-forced `git rm` (with or without `-r`, `-n`, `-q` or `--`): git refuses a file that differs from HEAD or the index, so a removed file comes back with `git checkout <sha> -- <path>`. bash-safety allows it for literal paths outside the harness home that are not submodules, and refuses a forced or wrapped `git rm`, `rm`, `unlink`, and a `git rm` that removes a file in the harness home.
+
 ---
 
-## The command surface: 20 slash commands
+## The command surface: 21 slash commands
 
 | Group | Command | What it does | When to use |
 |---|---|---|---|
@@ -638,8 +670,8 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Develop** | `/dev-command` | Command-authoring dev pipeline. | The thing you're building is itself a command or agent. |
 | **Develop** | `/dev-overnight` | Autonomous overnight loop. | A backlog to grind through unattended, all night. |
 | **Develop** | `/redev` | Re-attach the /dev workflow harness to the current in-conversation development need. | The /dev workflow context is already present; new requirement text is optional. |
-| **Ship** | `/close` | Release-readiness gate (QA verdict + optional Codex debate). | After dev finishes, before committing — the go/no-go gate. |
-| **Ship** | `/commit` | Surgical staging + conventional commit message + commit grant. | Once /close passes and you're ready to record the change. |
+| **Ship** | `/close` | Release-readiness gate (QA verdict + optional Codex debate); it first completes an unfinished cycle and ends by asking you to rate it. | After dev finishes, to land the close verdict. Optional before `/commit <task-id>`, which closes an unclosed task itself. |
+| **Ship** | `/commit` | Surgical staging + conventional commit message + commit grant. | When you're ready to record the change; an unfinished or unclosed cycle is completed and closed first. |
 | **Ship** | `/merge` | Bridge to target branch with pre-merge analyst grant. | After commit, to carry the change into a target branch. |
 | **Ship** | `/push` | Single-process gated push with push analyst grant. | After commit/merge, to publish the branch to remote. |
 | **Ship** | `/pull` | Post-pull advisory risk analysis. | Just pulled — you want a read on what the incoming commits touch. |
@@ -650,10 +682,11 @@ The orchestrator dispatches specialists by *describing the problem* — never th
 | **Control** | `/allow` | Structured single-use break-glass grant for one specific operation. | Green-light one specific blocked operation, a single time. |
 | **Control** | `/restart` | Resume every quota-interrupted subagent from its original transcript and ID; with no recoverable subagent, continue the invoking session's own main agent. Optional trailing text is carried verbatim as guidance for the next phase. | A session/usage limit interrupted running subagents — or interrupted a session that had none, leaving only the main agent to continue. |
 | **Control** | `/stop` | Cancel an overnight session. | Mid-overnight, to abort a running session. |
+| **Control** | `/tickets` | Read-only lifecycle table: the state and next action of every ticket, spec and lane. | Before `/close` or `/commit`, to see where every task stands. |
 | **Control** | `/codex` | OpenAI Codex adversarial delegation. | You want an adversarial second opinion from an outside model. |
 | **Control** | `/paseo-daemon` | Multi-session monitoring and three-account scheduling control plane. | Bootstrapping or advancing the persistent scheduling state machine. |
 
-> Full, auto-maintained list: [`commands/README.md`](commands/README.md).
+> Each command's own file: [`commands/`](commands/).
 
 ---
 
@@ -698,7 +731,7 @@ The model is *encouraged* toward the right path and *physically prevented* from 
 | Main Agent | via /do | /commit grant (time-boxed ISO expiry) | /push grant (branch+head+remote-bound) | via /do or matching /allow | ✓ | /do — breaks all gates for one turn |
 | Subagent | role-restricted | /commit grant | /push grant | matching /allow only — /do never applies to subagents | ✗ (subagents never get /do) | /allow only |
 
-Commit grant = time-boxed ISO expiry, single-use (unlinked by posttool hook on success). Push grant = branch+head+remote-bound, no expiry, wrapper-managed lifecycle (push.sh unlinks on success; left in place on failure for retry). /allow sentinel = structured match (op+target+args_contain), ISO expiry, single-use (consumed on any terminal result), honored for subagents. For git reset --hard: subagents can use /allow; they cannot use /do.
+Commit grant = time-boxed ISO expiry, single-use (spent by the privilege guard, which unlinks it as it authorizes the commit). Push grant = branch+head+remote-bound, no expiry, wrapper-managed lifecycle (push.sh unlinks on success; left in place on failure for retry). /allow sentinel = structured match (op+target+args_contain), ISO expiry, single-use (consumed on any terminal result), honored for subagents. For git reset --hard: subagents can use /allow; they cannot use /do.
 
 ---
 
@@ -752,9 +785,12 @@ file has to be rewritten. What carries that, and where it stops:
 | **A broken install is reported, not silent** | `scripts/doctor`: every hook path resolves, the filter round-trips, `protected-runtime.json` loads | — |
 | **External extras degrade gracefully, never fall back unsafely** | D2 dependency table (below) | Codex CLI **never** falls back to a bare unsafe `codex`; bwrap absence → fail closed |
 
-Not yet portable: the prompts in `commands/` and `agents/` still name harness scripts as
-`~/.claude/...`, so in a clone outside `~/.claude` the commands they issue still go to
-`~/.claude` until prompt path substitution moves to `$CLAUDE_HOME`.
+The prompts in `commands/`, `agents/` and `skills/` run harness files through the same
+`${CLAUDE_HOME:-$HOME/.claude}` channel and take the project root as
+`${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}`, so the commands they issue reach a clone
+outside `~/.claude`. Not yet portable: one line of `commands/close.md` (its `--force` audit log)
+still names `~/.claude/...`; every other
+mention of `~/.claude` in the prompts only names the default location.
 
 ---
 
@@ -767,7 +803,7 @@ Not yet portable: the prompts in `commands/` and `agents/` still name harness sc
 | Tier 0 — core | Claude Code, Python 3 + venv, git ≥ 2.4x, jq, Bash/GNU userland | Everything | Guards fail silently / kernel inactive |
 | Tier 1 — release | openssl | /merge, /push nonce grants | Those commands fail at grant-write step |
 | Tier 1 — release | pytest + jsonschema + pyyaml (via bootstrap) | /test, generated AC tests | /test fails; test skeletons cannot execute |
-| Tier 2 — overnight | bwrap (bubblewrap) | /dev-overnight write boundary | Fail closed — non-worktree-local write blocked (security-relevant) |
+| Tier 2 — overnight | bwrap (bubblewrap) | /dev-overnight write boundary | Fail closed — the default in-place launch is refused (no state written); a `--worktree` launch runs, its non-worktree-local writes blocked (security-relevant) |
 | Tier 2 — overnight | Playwright MCP | User-facing QA, UI audits, overnight PM | QA fails closed for user-facing changes |
 | Tier 3 — optional | Codex CLI + CODEX_ISO_BIN | --codex adversarial rounds | --codex unavailable; pipeline unaffected |
 | Tier 3 — optional | graphify + GRAPHIFY_BIN | Code-graph enrichment in Dev context | Dev skips enrichment; proceeds degraded |
@@ -781,13 +817,13 @@ Not yet portable: the prompts in `commands/` and `agents/` still name harness sc
 | [Claude Code](https://claude.com/claude-code) | **REQUIRED** | The host. Must be recent enough to fire `UserPromptSubmit` / `Notification` / `SubagentStop` hook events, honor `disable-model-invocation` frontmatter, and enforce `Skill(*)` permission denies — older clients silently skip these and the guardrails won't engage. | All hooks fail silently — the entire guardrail stack disengages. |
 | Python 3 + the harness venv at `<harness-home>/venv` | **REQUIRED** | Hook commands run `python3` (the git kernel, gates); several hooks, the helper scripts and the tests use the venv's interpreter. The venv is not tracked — init (`scripts/bootstrap`) creates it from a hash-locked lockfile and installs the manifest, or reuses one that already has the manifest packages. | Python hooks fail at import time; git kernel inactive. |
 | `git` | **REQUIRED** | The whole harness is git-native (checkpoints, grants, keystone). Any recent git (2.4x+) works for normal use; the overnight keystone needs **git ≥ 2.46** (verified by `scripts/overnight-git-selftest.sh`). | No checkpoints, no grant-gated git operations, no overnight loop. |
-| `git reference-transaction` hook (keystone) | **REQUIRED keystone** | The overnight keystone (`hooks/git-keystone/`) installs a `reference-transaction` hook into `<git-common-dir>/keystone-hooks/` and sets `core.hooksPath`; it fires atomically on every HEAD/ref move. Needs git ≥ 2.46. | Without it, the overnight linked worktree has no structural protection against unauthorized `HEAD` rewrites. Core `/dev` pipeline is unaffected. |
+| `git reference-transaction` hook (keystone) | **REQUIRED keystone** | The overnight keystone (`hooks/git-keystone/`) installs a `reference-transaction` hook into `<git-common-dir>/keystone-hooks/` and sets `core.hooksPath`; it fires atomically on every HEAD/ref move. Needs git ≥ 2.46. | Without it, the overnight session (in the checkout, or in its linked worktree under `--worktree`) has no structural protection against unauthorized `HEAD` rewrites. Core `/dev` pipeline is unaffected. |
 | `jq` | **REQUIRED** | JSON parsing in shell hooks/scripts across the pipeline. | Shell hooks that parse grant files or settings.json silently fail or misparse JSON. |
 | Bash + GNU userland (coreutils, util-linux/`flock`, findutils, `grep`, `sed`, `awk`/gawk) | **REQUIRED** | `realpath`, `flock`, `stat`, `sha256sum`, `date`, `grep`, `sed`, `awk`, `find` are used pervasively. The GNU forms are assumed — BSD/macOS variants differ in flags; install the GNU userland there. | Hook failures on BSD/macOS with wrong flag variants; `flock`-based serialization unavailable. |
 | `pytest`, `jsonschema`, `pyyaml` (the test/runtime manifest) | **REQUIRED** for `/test` + generated tests | Pinned in [`requirements.txt`](requirements.txt) and installed automatically by `scripts/bootstrap`; `scripts/doctor` reports any that are missing. | `/test` fails; test-writer skeletons cannot be executed; schema validation unavailable. |
 | OpenAI Codex CLI + an isolation wrapper (`CODEX_ISO_BIN`) | **REQUIRED** for `--codex` / `/codex` | The adversarial second-opinion rounds shell out to the Codex CLI through a fail-closed isolation wrapper. **You must supply your own** Codex CLI and wrapper and point `CODEX_ISO_BIN` at it. | `--codex` / `/codex` unavailable; rest of the pipeline unaffected. |
 | `openssl` | **REQUIRED** for `/merge`, `/push` | Nonce / token generation in the grant-gated git release path. | `/merge` and `/push` cannot generate nonce-keyed grants → those commands fail at grant-write step. |
-| `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash bind-mount boundary that isolates overnight main-tree writes. | Overnight launch still works; non-worktree-local write fails closed (security-relevant). |
+| `bwrap` (bubblewrap) | **REQUIRED** for `/dev-overnight` | The per-Bash bind-mount boundary that isolates overnight main-tree writes. | The default in-place launch is refused, writing no state and naming bubblewrap and the `--worktree` remedy; a `--worktree` launch still works, and its non-worktree-local writes fail closed (security-relevant). |
 | `graphify` CLI (`graphifyy` v0.8.25 on PyPI; the binary is `graphify`) | OPTIONAL (graceful) | Incremental code-graph enrichment injected into the Dev context. Default-enabled (`CLAUDE_GRAPHIFY_ENABLED=auto`). Install: `<harness-home>/venv/bin/pip install graphifyy`, then put `graphify` on `PATH` or set `GRAPHIFY_BIN` to it in the overlay's `env`. | Code-graph context absent from Dev dispatch; Dev still runs — quality may be lower on large refactors. |
 | [Playwright MCP](https://github.com/microsoft/playwright-mcp) | OPTIONAL overall; **REQUIRED for user-facing QA/E2E + UI audits** | Powers the UI-audit skill suite, the overnight PM's live-app exploration, and QA's live browser verification of user-facing changes. Not needed for doc/config/non-user-facing cycles. | Non-user-facing cycles unaffected; QA fails closed only when a user-facing change cannot be browser-verified. |
 | Python pkg `websocket-client` | OPTIONAL (graceful) | A few websocket enrichments; hooks fall back to lenient paths when missing. | Websocket enrichments silently skipped; fallback path active. |
@@ -841,7 +877,7 @@ Each row maps to a capability in the dependency table above.
 ├── settings.json      # clean form: hook wiring and permissions (paseo module off)
 ├── settings.machine.example.json  # documented example of the untracked machine overlay
 ├── agents/            # 23 subagent definitions (BA, dev, QA, architect, …)
-├── commands/          # 20 slash-command workflows (/spec, /dev, /close, /commit, …)
+├── commands/          # 21 slash-command workflows (/spec, /dev, /close, /commit, …)
 ├── hooks/             # SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Notification / Stop / SubagentStop gates
 │   ├── lib/           #   shared libs: allowlist (structured sentinel grants), checkpoint-core
 │   ├── doc_sync/      #   self-updating INDEX/README/CLAUDE regeneration
@@ -883,12 +919,14 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 | SessionStart | 8 | Environment setup, scratch-directory init, resolver announcement, dependency checks |
 | UserPromptSubmit | 6 | Per-turn sentinel pre-creation, prompt-purity enforcement, dedup check |
 | PreToolUse | 35 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
-| PostToolUse | 18 | Doc-sync, allowlist grant consumption, checkpoint writes |
+| PostToolUse | 19 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | PostToolUseFailure | 1 | Allowlist grant consumption on a failed tool result |
 | Notification | 1 | User-facing notification routing |
-| Stop | 3 | Workflow coordinator (overnight time-lock, spec coverage, auto-commit, allowlist cleanup phases), `/do` report gate, obligation gate |
+| Stop | 3 | Workflow coordinator (overnight time-lock, spec coverage, auto-commit, allowlist cleanup phases), `/do` report gate, obligation gate (an exit-0 stub: artifacts are decided at each producer's stop) |
 | SessionEnd | 1 | Scratch-directory sweep |
 | SubagentStop | 8 | cp-state enforcement, artifact contract, subagent output capture |
+
+Retired hooks stay in the tree as exit-0 stubs (marked by a `# STUB:` line), so a running session whose loaded hook list still names one gets exit 0, never a missing file. `render-settings check` (run by `scripts/doctor`) fails a hook command whose file is missing or is a stub the clean form does not register. The landing repairs an overlay that registers one: at the first Stop after HEAD moves, it drops from `settings.machine.json`, and from the working `settings.json`, each hook command whose script is a harness hook HEAD deleted or marks `# STUB:`, or that another registered command already runs, and `logs/landing.log` names the drops by event and count.
 
 ---
 
@@ -911,11 +949,11 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 
 **Does the orchestrator-only rule make simple edits slow?** For a one-line fix you can `/do` to let the main agent act directly for one turn. The delegation overhead is the price of consistent quality on real tasks — and the autonomous loop pays for itself overnight.
 
-**Can the agent disable its own guardrails?** The design makes it *hard*, not metaphysically impossible. Release commands are `disable-model-invocation: true` *and* denied as `Skill(<name>:*)`; the git-privilege-guard is always-on and default-denies every agent — a matching structured `/allow` sentinel is honored even for subagents (only legacy git-allowlist grants are main-agent-only) and subagents never get `/do`; the commit grant is single-use and time-boxed; the push grant is branch/head/remote-bound and wrapper-managed (unlinked on success, retryable on failure); the bash-safety hook blocks destructive shell forms by shape. One residual remains: during overnight runs the linked worktree shares the `.git` common-dir — `commands/dev-overnight.md` documents this as an accepted deviation.
+**Can the agent disable its own guardrails?** The design makes it *hard*, not metaphysically impossible. Release commands are `disable-model-invocation: true` *and* denied as `Skill(<name>:*)`; the git-privilege-guard is always-on and default-denies every agent — a matching structured `/allow` sentinel is honored even for subagents (only legacy git-allowlist grants are main-agent-only) and subagents never get `/do`; the commit grant is single-use and time-boxed; the push grant is branch/head/remote-bound and wrapper-managed (unlinked on success, retryable on failure); the bash-safety hook blocks destructive shell forms by shape. One residual remains: during `--worktree` overnight runs the linked worktree shares the `.git` common-dir (an in-place run works in the checkout itself, with no worktree boundary) — `commands/dev-overnight.md` documents this as an accepted deviation.
 
 **Can I use this with a team or in CI?** The harness is designed for single-developer use. For team use, each developer clones it to their own `~/.claude`; hooks and grants are per-session and use `$HOME`-relative paths. CI use requires the full Claude Code environment — hooks fire only when Claude Code runs. The test suite (`pytest hooks/tests tests`) is CI-safe and runs without Claude Code.
 
-**What about parallel Claude Code sessions?** Multiple sessions on the same machine share the same `~/.claude` working tree. Grant files in `/tmp/` are session-keyed by session ID. The `flock`-based serialization in checkpoint writes prevents concurrent corruption. The overnight loop runs in a dedicated linked worktree and should not be started alongside an interactive session editing the same files. The doc-sync hook is idempotent.
+**What about parallel Claude Code sessions?** Multiple sessions on the same machine share the same `~/.claude` working tree. Grant files in `/tmp/` are session-keyed by session ID. The `flock`-based serialization in checkpoint writes prevents concurrent corruption. The overnight loop works in your checkout by default (in a linked worktree only with `--worktree`) and should not be started alongside an interactive session editing the same files. The doc-sync hook is idempotent.
 
 **Where do I go deeper?**
 - The constitution: [`CLAUDE.md`](CLAUDE.md)

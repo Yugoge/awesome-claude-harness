@@ -8,9 +8,9 @@ Covers the lane's acceptance criteria:
   AC-1  valid nested v2 dev report passes as dev-report.v2
   AC-2  v2-declared-but-invalid fails naming the offending field
   AC-3  unversioned records skip exactly as today (+ full-corpus regression)
-  AC-4  report_version 1 behaves byte-identically to the pre-change engine
-        (the "full pre-existing suite green" clause of AC-4 is verified by
-        actually running the suite, which this file is part of)
+  AC-4  a dev report declaring any version but 2 is judged by dev-report.v2,
+        the kind's one schema since P10 R7 deleted dev-report.v1; qa and do
+        reports keep their v1 path
   AC-5  validate_artifact_for_obligation: obligation-supplied schema id
         overrides self-declaration; absent file fails; unregistered id skips
   AC-6  qa-report.v2 nested contract incl. the EXACT 5-value e2e enum
@@ -44,13 +44,13 @@ E2E_ENUM = {
     "skipped_without_justification",
 }
 
-# The 10 registry entries as they existed at the pre-cycle baseline
+# The registry entries as they existed at the pre-cycle baseline
 # (baseline_head_sha 025f4c8a — schemas/registry.json was clean in the
-# dispatch-time git status snapshot, so the blob IS the pre-cycle content).
+# dispatch-time git status snapshot, so the blob IS the pre-cycle content),
+# less dev-report.v1, which P10 R7 deleted with its projection.
 PREEXISTING_REGISTRY_ENTRIES = [
     ("cycle-contract.v1", "cycle-contract.v1.json"),
     ("qa-report.v1", "qa-report.v1.json"),
-    ("dev-report.v1", "dev-report.v1.json"),
     ("do-report.v1", "do-report.v1.json"),
     ("context.v1", "context.v1.json"),
     ("test-plan.v1", "test-plan.v1.json"),
@@ -212,11 +212,11 @@ def test_unversioned_record_skips_with_existing_reason(tmp_path):
 
 
 def _pre_change_engine_status(path: Path) -> str:
-    """The pre-change (v1-only) gate, reproduced verbatim from its documented
-    behavior: unversioned -> skip; versioned -> validate against the kind's
-    v1 schema with the fail-safe infra split."""
+    """The pre-change (v1-only) gate of the qa and do reports, reproduced
+    verbatim from its documented behavior: unversioned -> skip; versioned ->
+    validate against the kind's v1 schema with the fail-safe infra split. A
+    dev report's v1 is gone (P10 R7): the test judges those on their own."""
     kinds = {
-        "dev-report": "dev-report.v1",
         "qa-report": "qa-report.v1",
         "do-report": "do-report.v1",
     }
@@ -336,6 +336,13 @@ def test_legacy_corpus_never_retro_rejected(tmp_path):
             if isinstance(record, dict) and record.get("report_version") == 2:
                 v2_declared += 1
                 continue  # v2-declared records are the NEW opt-in surface
+            if (path.name.startswith("dev-report-") and isinstance(record, dict)
+                    and "report_version" in record):
+                # P10 R7: a dev report declaring version 1 is refused by its
+                # one schema, which the refusal names.
+                result = cr.validate_report_artifact(str(path))
+                assert (result["status"], result["schema"]) == ("fail", "dev-report.v2"), path
+                continue
         except (OSError, json.JSONDecodeError):
             pass
         if new_status != old_status:
@@ -349,59 +356,40 @@ def test_legacy_corpus_never_retro_rejected(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# AC-4 — v1 path byte-identical
+# AC-4 — a dev report declaring another version is judged by dev-report.v2
 # ---------------------------------------------------------------------------
 
 
-def _valid_flat_v1_record() -> dict:
-    return {
-        "report_version": 1,
-        "task_id": "20260929-104216-a",
-        "status": "completed",
-        "files_modified": [],
-        "files_created": [],
-        "root_cause_addressed": "x",
+def test_v1_declared_dev_report_is_refused_naming_v2(tmp_path):
+    """A pre-P2 overnight contract asked for a report_version 1 dev report:
+    the self-declared gate refuses it naming dev-report.v2, and the same
+    report rewritten as v2 passes (P10 Exp 8)."""
+    root = "The shared boundary now enforces the producer contract."
+    v1 = {
+        "report_version": 1, "task_id": "20260929-104216-a", "status": "completed",
+        "files_modified": [], "files_created": [], "root_cause_addressed": root,
         "ac_status": {"AC-1": "met"},
-        # Canonical source the dev-report.v1 projection pre-pass requires.
-        "dev": {
-            "status": "completed",
-            "files_modified": [],
-            "files_created": [],
-            "ac_status": {"AC-1": "met"},
-            "git_rationale": {"how_fix_addresses_root": "x"},
-        },
+        "dev": {"status": "completed", "files_modified": [], "files_created": [],
+                "ac_status": {"AC-1": "met"}, "git_rationale": {"how_fix_addresses_root": root}},
     }
+    result = cr.validate_report_artifact(_write_report(tmp_path, "dev-report-actest.json", v1))
+    assert (result["status"], result["schema"]) == ("fail", "dev-report.v2")
+    assert "report_version: 2 was expected" in result["errors"]
+    rewritten = _valid_v2_dev_record()
+    result = cr.validate_report_artifact(_write_report(tmp_path, "dev-report-actest.json", rewritten))
+    assert (result["status"], result["schema"]) == ("pass", "dev-report.v2")
 
 
-def test_v1_records_behave_exactly_as_today(tmp_path):
-    valid = _valid_flat_v1_record()
-    result = cr.validate_report_artifact(
-        _write_report(tmp_path, "dev-report-actest.json", valid)
-    )
-    assert result["status"] == "pass"
-    assert result["schema"] == "dev-report.v1"
-
-    invalid = _valid_flat_v1_record()
-    del invalid["status"]
-    result = cr.validate_report_artifact(
-        _write_report(tmp_path, "dev-report-actest.json", invalid)
-    )
-    assert result["status"] == "fail"
-    assert result["schema"] == "dev-report.v1"
-    # Error TEXT identity with the underlying v1 engine (same validate() path).
-    assert result["errors"] == cr.validate(invalid, "dev-report.v1")["errors"]
-
-
-def test_alien_report_version_keeps_todays_v1_const_fail(tmp_path):
-    """Declared version 3 (and any non-1/2 value) follows today's exact path:
-    validate against the kind's v1 schema, whose report_version const fails.
-    Mapping alien versions to SKIP was explicitly rejected (ticket M5)."""
+def test_alien_report_version_keeps_todays_const_fail(tmp_path):
+    """Declared version 3 (and any value but 2) is validated against the
+    kind's one schema, whose report_version const fails. Mapping alien
+    versions to SKIP was explicitly rejected (ticket M5)."""
     record = _valid_v2_dev_record(report_version=3)
     result = cr.validate_report_artifact(
         _write_report(tmp_path, "dev-report-actest.json", record)
     )
     assert result["status"] == "fail"
-    assert result["schema"] == "dev-report.v1"
+    assert result["schema"] == "dev-report.v2"
 
 
 def test_do_report_version_2_falls_through_to_v1(tmp_path):
@@ -441,6 +429,8 @@ def test_obligation_override_still_fails_genuine_violations(tmp_path):
     )
     assert result["status"] == "fail"
     assert "baseline_head_sha" in _joined_errors(result)
+    # The producer is told which schema to rewrite it to (P10 Exp 8).
+    assert result["reason"] == "schema-invalid under obligation-supplied schema 'dev-report.v2'"
 
 
 def test_obligation_absent_file_is_blocking(tmp_path):
@@ -466,12 +456,14 @@ def test_obligation_unparseable_json_fails(tmp_path):
 
 def test_self_declared_gate_unchanged_by_obligation_normalization(tmp_path):
     """The version-override applies ONLY under obligation authority: the
-    self-declared gate still routes a report_version:1 record to v1."""
+    self-declared gate judges a report_version:1 record as it declares it,
+    so the v2 const refuses what the obligation's authority passes."""
     path = _write_report(
         tmp_path, "dev-report-actest.json", _valid_v2_dev_record(report_version=1)
     )
     result = cr.validate_report_artifact(path)
-    assert result["schema"] == "dev-report.v1"
+    assert (result["status"], result["schema"]) == ("fail", "dev-report.v2")
+    assert cr.validate_artifact_for_obligation(path, "dev-report.v2")["status"] == "pass"
 
 
 # ---------------------------------------------------------------------------
@@ -531,8 +523,11 @@ def test_obligation_example_payload_passes():
 def test_obligation_variants_fail_named():
     cases = []
     v = _obligation_example()
-    v["role"] = "wizard"
+    v["role"] = ""
     cases.append((v, "role"))
+    v = _obligation_example()
+    v["pipeline"] = 7
+    cases.append((v, "pipeline"))
     v = _obligation_example()
     v["profile"] = "unrecognized"
     cases.append((v, "profile"))
@@ -549,6 +544,23 @@ def test_obligation_variants_fail_named():
         result = cr.validate(copy.deepcopy(record), "obligation.v1")
         assert not result["ok"], offender
         assert offender in _joined_errors(result), offender
+
+
+def test_obligation_schema_lists_no_role_or_pipeline():
+    """P1b row 18: the schema states that role and pipeline are names, and the
+    grammar library checks them against the roster and the command files; a
+    role no agent file declares passes the schema and is refused there."""
+    from lib import obligation
+
+    v = _obligation_example()
+    v["role"] = "wizard"
+    v["pipeline"] = "ship"
+    assert cr.validate(copy.deepcopy(v), "obligation.v1")["ok"]
+    schema = schema_registry.get_schema("obligation.v1")
+    assert "enum" not in schema["properties"]["role"]
+    assert "enum" not in schema["properties"]["pipeline"]
+    refused = obligation.validate_obligation(v)
+    assert isinstance(refused, obligation.Rejection) and refused.field == "role"
 
 
 def test_obligation_null_task_id_gate():

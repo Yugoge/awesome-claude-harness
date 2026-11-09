@@ -9,6 +9,8 @@ filter declared, the clean form, the scripts under test copied from this checkou
 CLAUDE_CONFIG_DIR and the global git config point into the test's temporary directory, and no
 Claude Code variable is inherited. All values are stand-ins (acct-test-*, demo-*, /opt/demo/*).
 """
+import copy
+import itertools
 import json
 import os
 import shutil
@@ -20,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_settings_filter import (CODE_NEW, CODE_OLD, canon, clean_form, hook,
-                                        previous_settings)
+from tests.test_settings_filter import (CODE_NEW, CODE_OLD, NOTIFY_GROUP, canon, clean_form,
+                                        hook, previous_settings)
 
 REPO = Path(__file__).resolve().parent.parent
 HARNESS_FILES = ("scripts/install/land", "scripts/install/render-settings", "scripts/bootstrap",
@@ -190,9 +192,9 @@ def test_check_names_git_auto_push_one_without_failing(tmp_path, env):
 
 
 def test_migrate_skips_hooks_upstream_unregistered(tmp_path, env):
-    """A hook of a harness script the previous revision tracks is public there; missing from
-    the clean form, upstream unregistered it (P1's retired Stop gate): it is not migrated. A
-    personal hook (outside the harness, or an untracked script) still is."""
+    """A hook of a harness script the previous revision tracks and HEAD no longer has (P1's
+    retired Stop gate, once deleted) is not migrated. A personal hook (outside the harness, or an
+    untracked script) still is."""
     prev = previous_settings()
     retired = {"hooks": [hook("python3", "hooks/retired-gate.py", prefix="/opt/demo/.claude")]}
     personal = {"hooks": [hook("bash", "hooks/personal-acct-test-123.sh", prefix="/opt/demo/.claude")]}
@@ -209,6 +211,198 @@ def test_migrate_skips_hooks_upstream_unregistered(tmp_path, env):
     stop = [h["command"] for g in overlay(home)["hooks"]["Stop"] for h in g["hooks"]]
     assert stop == [personal["hooks"][0]["command"]]
 
+
+def test_migrate_skips_what_head_retired_or_runs_and_carries_other_personal_hooks(tmp_path, env):
+    """P10 R2: a hook command whose script is a harness hook HEAD lacks or marks `# STUB:`, or one
+    that a command HEAD's clean form registers at that event already runs (a script it names, as
+    P5's launcher names the coordinator and the coordinator its phases), is not migrated, and is
+    named by event and count only. Any other personal hook command still is: one of a live
+    harness hook nothing runs, the same script at an event where nothing runs it, and one of an
+    untracked script. A docstring or a comment naming a script does not run it."""
+    old = lambda rel: hook("python3" if rel.endswith(".py") else "bash", rel,  # noqa: E731
+                           prefix="/opt/demo/.claude")
+    stop = ["hooks/gone-gate.py", "hooks/stub-gate.py", "hooks/coordinator.py", "hooks/phase.sh",
+            "hooks/live-extra.py", "hooks/personal-acct-test-123.sh"]
+    prev = previous_settings()
+    prev["hooks"]["Stop"] += [{"hooks": [old(rel)]} for rel in stop]
+    prev["hooks"]["PreToolUse"].append({"matcher": "Edit", "hooks": [old("hooks/phase.sh")]})
+    home, rev = make_home(tmp_path, env, prev)
+    git(env, home, "checkout", "-q", rev)
+    for rel in stop[:5]:
+        write(home / rel, "exit 0\n")
+    git(env, home, "add", "-A")
+    git(env, home, "commit", "-q", "-m", "pre-P7: the harness hooks tracked")
+    rev2 = git(env, home, "rev-parse", "HEAD").stdout.strip()
+    git(env, home, "checkout", "-q", "master")
+    write(home / "hooks/stub-gate.py", "#!/usr/bin/env python3\n# STUB: retired; exits 0.\n")
+    write(home / "hooks/launch.py", '"""Runs coordinator.py, never live-extra.py."""\nimport sys\n'
+          'COORDINATOR = "coordinator.py"\n')
+    write(home / "hooks/coordinator.py", 'PHASES = [("bash", "hooks/phase.sh")]\n')
+    write(home / "hooks/phase.sh", "# live-extra.py is not run here\nexit 0\n")
+    write(home / "hooks/live-extra.py", "import sys\n")
+    clean = clean_settings(tmp_path)
+    clean["hooks"]["Stop"].append({"hooks": [hook("python3", "hooks/launch.py")]})
+    write(home / "settings.json", canon(clean).decode())
+    git(env, home, "add", "-A")
+    git(env, home, "commit", "-q", "-m", "HEAD: a launcher runs the coordinator, which runs a phase")
+    proc = run([sys.executable, str(home / "scripts/install/render-settings"), "migrate", "--from",
+                rev2], env, cwd=str(home))
+    carried = {event: [h["command"] for g in groups for h in g["hooks"]]
+               for event, groups in overlay(home)["hooks"].items()}
+    assert carried["Stop"] == [old(rel)["command"] for rel in stop[4:]]
+    assert carried["PreToolUse"] == [old("hooks/phase.sh")["command"]]
+    assert "  not migrated: hooks.Stop: 4 hook commands HEAD retired or already runs\n" in proc.stdout
+    assert "not migrated: hooks.PreToolUse" not in proc.stdout
+    for word in ("gate", "coordinator", "phase", "/opt/demo"):
+        assert word not in proc.stdout + proc.stderr
+
+
+
+# --------------------------------------------------------------- P10 R2: the overlay repair
+
+def repair_home(tmp_path, env):
+    """A landed home whose owner registered harness hooks in the overlay and rendered, then took a
+    revision (settings.json untouched, so no smudge runs) that marks one `# STUB:`, deletes one
+    and has the clean form's Stop hook run a third. The CLI then appended an allow entry. Returns
+    (home, the overlay's bytes, the overlay object the repair must leave)."""
+    home, _rev = make_home(tmp_path, env)
+    land(env, home)
+    assert_landed(env, home)
+    for rel in ("hooks/retired.py", "hooks/gone.py", "hooks/phase.sh", "hooks/live.py"):
+        write(home / rel, "exit 0\n")
+    git(env, home, "add", "-A")
+    git(env, home, "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "four harness hooks")
+    mine = lambda rel: hook("bash" if rel.endswith(".sh") else "python3", rel,  # noqa: E731
+                            prefix=str(home))
+    ov = overlay(home)
+    assert list(ov).index("hooks") not in (0, len(ov) - 1)  # in the middle: rest before and after
+    ov["hooks"]["Stop"] = [{"hooks": [mine("hooks/retired.py"), mine("hooks/gone.py")]},
+                           {"hooks": [mine("hooks/phase.sh")]}]
+    ov["hooks"]["PreToolUse"] = [{"matcher": "Write",
+                                  "hooks": [mine("hooks/live.py"), mine("hooks/gone.py")]}]
+    (home / "settings.machine.json").write_bytes(canon(ov))
+    run([sys.executable, str(home / "scripts/install/render-settings"), "render"], env,
+        cwd=str(home))
+    write(home / "hooks/retired.py", "#!/usr/bin/env python3\n# STUB: retired; exits 0.\n")
+    write(home / "hooks/stop-demo.py", 'PHASE = ("bash", "hooks/phase.sh")\n')
+    git(env, home, "rm", "-q", "hooks/gone.py")
+    git(env, home, "add", "-A")
+    git(env, home, "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "a later revision")
+    append_allow(home / "settings.json", "Bash(demo-cli-approved:*)")
+    want = copy.deepcopy(ov)
+    del want["hooks"]["Stop"]
+    want["hooks"]["PreToolUse"][0]["hooks"] = [mine("hooks/live.py")]
+    return home, canon(ov), want
+
+
+def hook_path_lines(env, home):
+    """The lines render-settings check prints under its hook paths line."""
+    out = run([sys.executable, str(home / "scripts/install/render-settings"), "check"], env,
+              cwd=str(home), check=False).stdout.splitlines()
+    start = next(i for i, ln in enumerate(out) if " hook paths: " in ln)
+    return list(itertools.takewhile(lambda ln: ln.startswith("       "), out[start + 1:]))
+
+
+def commands(home):
+    doc = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    return [h["command"] for groups in doc["hooks"].values() for g in groups for h in g["hooks"]]
+
+
+def test_the_landing_repairs_an_overlay_registering_what_head_retired_or_runs(tmp_path, env):
+    """P10 R2 (option (a) of experiment 2): at the next Stop the landing drops from the overlay,
+    through the migration's rule, the hook commands whose harness script HEAD marks `# STUB:` or
+    lacks, or that the clean form's Stop hook already runs: the overlay is replaced atomically,
+    mode 0600, every byte outside them as it was; settings.json loses the same commands and keeps
+    the rest (the CLI's allow entry too), and check passes. Only counts reach the log and the
+    notice; a second Stop does nothing and logs nothing."""
+    home, before, want = repair_home(tmp_path, env)
+    path = home / "settings.machine.json"
+    outside = "       %s: a hook outside the clean form (see settings.machine.json)"
+    personal = [outside % "Notification"]  # the stand-in personal hook, whose file is not here
+    assert hook_path_lines(env, home) == [
+        outside % "PreToolUse", "       Stop: hooks/retired.py is a stub the clean form does not "
+        "register", outside % "Stop"] + personal
+    inode, log = path.stat().st_ino, landing_log(home)
+    notice = land(env, home)
+    assert notice == ("Harness landing: 4 hook command(s) of settings.machine.json that HEAD "
+                      "retired or already runs dropped.\n")
+    after = path.read_bytes()
+    assert after == canon(want)
+    head, tail = before.index(b'  "hooks": {'), before.index(b'\n  },\n', before.index(b'"hooks"'))
+    assert after.startswith(before[:head]) and after.endswith(before[tail:])
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600 and path.stat().st_ino != inode
+    assert not list(home.glob(".settings.render.*"))
+    cmds = commands(home)
+    for gone in ("retired.py", "gone.py", "phase.sh"):
+        assert not any(gone in c for c in cmds), gone
+    assert sum("live.py" in c for c in cmds) == 1 and NOTIFY_GROUP["hooks"][0]["command"] in cmds
+    rendered = json.loads((home / "settings.json").read_text(encoding="utf-8"))
+    assert "Bash(demo-cli-approved:*)" in rendered["permissions"]["allow"]
+    assert hook_path_lines(env, home) == personal
+    check = run([sys.executable, str(home / "scripts/install/render-settings"), "check"], env,
+                cwd=str(home), check=False).stdout
+    assert "[ ok ] settings filter: registered, required, exact round trip" in check
+    added = landing_log(home)[len(log):]
+    assert "land: overlay repaired: hooks.Stop=3 hooks.PreToolUse=1\n" in added
+    for word in ("retired", "gone", "phase", "live.py", str(home)):
+        assert word not in added
+    mtime = path.stat().st_mtime_ns
+    assert land(env, home) == "" and path.read_bytes() == after
+    assert path.stat().st_mtime_ns == mtime and landing_log(home)[len(log):] == added
+
+
+def test_a_landed_home_checks_its_overlay_once_each_time_head_moves(tmp_path, env):
+    """Whether an overlay command is retired or already run changes only with HEAD, so a landed
+    home whose overlay keeps a live harness hook runs the check once after HEAD moved (python
+    costs about 75 ms, above P7b's 50 ms a Stop) and not at the Stops after: the check leaves the
+    overlay's bytes as they are, logs nothing and says nothing."""
+    home, _before, want = repair_home(tmp_path, env)
+    land(env, home)
+    path = home / "settings.machine.json"
+    after, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    log = landing_log(home)
+    assert land(env, home) == "" and path.stat().st_mtime_ns == mtime
+    write(home / "notes.txt", "a later note\n")
+    git(env, home, "-c", "core.hooksPath=/dev/null", "commit", "-q", "-am", "HEAD moves")
+    assert land(env, home) == ""
+    assert path.read_bytes() == after == canon(want) and path.stat().st_mtime_ns > mtime
+    mtime = path.stat().st_mtime_ns
+    assert land(env, home) == "" and path.stat().st_mtime_ns == mtime
+    assert landing_log(home) == log
+
+
+def test_the_overlay_repair_waits_while_a_rebase_is_stopped(tmp_path, env):
+    """P7b's S4 rule holds for the repair: with a rebase stopped in the harness home the landing
+    changes nothing and logs nothing; once it is gone, the next Stop repairs."""
+    home, before, want = repair_home(tmp_path, env)
+    gd = home / ".git"
+    (gd / "rebase-merge").mkdir()
+    (gd / "rebase-merge" / "head-name").write_text("refs/heads/master\n")
+    log, working = landing_log(home), (home / "settings.json").read_bytes()
+    assert land(env, home) == ""
+    assert (home / "settings.machine.json").read_bytes() == before
+    assert (home / "settings.json").read_bytes() == working and landing_log(home) == log
+    shutil.rmtree(gd / "rebase-merge")
+    assert "4 hook command(s)" in land(env, home)
+    assert (home / "settings.machine.json").read_bytes() == canon(want)
+
+
+def test_an_upgraded_home_whose_overlay_exists_has_it_repaired_by_the_landing(tmp_path, env):
+    """The repair works on every home: one that pulled P7 alone and kept an overlay it wrote then
+    (the landing never rewrites it by migration) has it repaired when it lands."""
+    home, _rev = make_home(tmp_path, env)
+    write(home / "hooks/retired.py", "#!/usr/bin/env python3\n# STUB: retired; exits 0.\n")
+    git(env, home, "add", "-A")
+    git(env, home, "commit", "-q", "-m", "a retired hook")
+    kept = {"modules": {"paseo": True}, "env": {"CLAUDE_HOME": str(home)},
+            "hooks": {"Stop": [{"hooks": [hook("python3", "hooks/retired.py", prefix=str(home))]}],
+                      "Notification": [NOTIFY_GROUP]}}
+    write(home / "settings.machine.json", canon(kept).decode(), 0o600)
+    notice = land(env, home)
+    assert "P7 landed" in notice and "1 hook command(s) of settings.machine.json" in notice
+    assert overlay(home) == dict(kept, hooks={"Notification": [NOTIFY_GROUP]})
+    assert_landed(env, home)
+    assert not any("retired.py" in c for c in commands(home))
 
 # ------------------------------------------------------------------ R1, R3: the pre-pull revision
 
@@ -683,6 +877,66 @@ def test_an_owners_own_doc_conflict_runs_no_repair_at_each_stop(tmp_path, env):
     assert "UU CLAUDE.md" in git(env, home, "status", "--porcelain").stdout
 
 
+GEN_INDEX = "# %s\n\n<!-- AUTO:index-stats -->\n*Last updated: %s*\n**Total entries**: %d\n\n## Tree\n```\n" \
+    "%s```\n<!-- /AUTO:index-stats -->\n\n---\n*Auto-generated by doc-sync hook.*"
+GEN_README = "# %s\n\nHand-written notes.\n\n<!-- AUTO:readme-stats -->\n## Overview\n- **Total files**: %d\n" \
+    "<!-- /AUTO:readme-stats -->\n\n---\n*Auto-generated by doc-sync hook.*\n"
+ROWS = "├── `a.py` - A\n├── `b.py` - B, %s\n└── `c.py` - C\n"
+
+
+def test_doc_sync_regenerated_lines_take_upstreams_side(tmp_path, env):
+    """P10 R5 (Exp 10): on a live home doc-sync rewrites a stale index's count, rows and title (the
+    old one kept below the region) and a README's AUTO region, not only the date line. Upstream deletes an index and its README and
+    removes the row next to one doc-sync rewrote in another index (DU, DU, UU at the pop): the
+    next Stop takes upstream's side for all three, the stash entry kept, and the next pull runs.
+    A README whose stash change includes the owner's line outside the region stays unmerged."""
+    origin, rev = make_home(tmp_path, env, name="origin")
+    write(origin / "commands/INDEX.md", GEN_INDEX % ("commands", "2026-01-01T00:00:00Z", 3, ROWS % "old"))
+    write(origin / "commands/README.md", GEN_README % ("commands", 3))
+    write(origin / "scripts/INDEX.md", GEN_INDEX % ("dot-claude", "2026-01-01T00:00:00Z", 3, ROWS % "old"))
+    write(origin / "agents/README.md", GEN_README % ("agents", 3))
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "indexes")
+    home = clone_home(env, tmp_path, origin)
+    git(env, home, "checkout", "-q", "-B", "master", rev)
+    git(env, home, "merge", "-q", "--ff-only", "origin/master")
+    land(env, home)
+    assert_landed(env, home)
+    git(env, origin, "rm", "-q", "commands/INDEX.md", "commands/README.md")
+    upstream = GEN_INDEX % ("dot-claude", "2026-01-01T00:00:00Z", 3, "├── `a.py` - A\n└── `b.py` - B, old\n")
+    write(origin / "scripts/INDEX.md", upstream)
+    write(origin / "agents/README.md", GEN_README % ("agents", 3) + "an upstream line\n")
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "upstream")
+    write(home / "commands/INDEX.md", GEN_INDEX % ("commands", "2026-02-02T00:00:00Z", 4, ROWS % "new"))
+    write(home / "commands/README.md", GEN_README % ("commands", 4))
+    # doc-sync keeps a stale title it does not recognise below the region and writes its own
+    write(home / "scripts/INDEX.md", (GEN_INDEX % ("scripts", "2026-02-02T00:00:00Z", 4, ROWS % "new"))
+          .replace("\n\n---\n", "\n\n# dot-claude\n\n---\n"))
+    write(home / "agents/README.md", GEN_README % ("agents", 4) + "the owner's line\n")
+    git(env, home, "stash", "push", "-q", "-m", "Auto-stash before pull")
+    git(env, home, "pull", "-q", "--rebase", "origin", "master")
+    assert git(env, home, "stash", "pop", check=False).returncode != 0
+    status = git(env, home, "status", "--porcelain").stdout
+    for entry in ("DU commands/INDEX.md", "DU commands/README.md", "UU scripts/INDEX.md", "UU agents/README.md"):
+        assert entry in status, status
+    assert land(env, home) == "Harness landing: 3 file(s) a pull left conflicted taken from upstream (3 " \
+        "doc-sync), 0 staged path(s) unstaged, the stash entry kept; 1 other conflicted path(s) left as " \
+        "they are.\n"
+    assert git(env, home, "diff", "--name-only", "--diff-filter=U").stdout.split() == ["agents/README.md"]
+    assert not (home / "commands/INDEX.md").exists() and not (home / "commands/README.md").exists()
+    assert (home / "scripts/INDEX.md").read_text(encoding="utf-8") == upstream
+    assert len(git(env, home, "stash", "list").stdout.splitlines()) == 1
+    assert "repair resolved=3 doc-sync=3 unstaged=0 unmerged-left=1" in landing_log(home)
+    log = landing_log(home)  # review LH-5: the owner's README left unmerged runs no repair at later Stops
+    assert land(env, home) == "" and landing_log(home) == log
+    git(env, home, "checkout", "-q", "HEAD", "--", "agents/README.md")  # the owner's own conflict
+    write(origin / "upstream-note.md", "next upstream change\n")
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "next")
+    assert git(env, home, "pull", "-q", "--rebase", "origin", "master").returncode == 0
+
+
 def append_allow(path, entry):  # at the end of the list, the way the CLI adds one
     doc = json.loads(path.read_text(encoding="utf-8"))
     doc["permissions"]["allow"].append(entry)
@@ -1056,6 +1310,45 @@ def test_fswatch_safe_pull_pops_only_an_entry_its_own_push_made(tmp_path, env, k
     assert git(env, work, "status", "--porcelain").stdout == "?? scratch-note.txt\n"
 
 
+@pytest.mark.parametrize("step", ["fetch", "stash-push", "pull", "tee"])
+def test_fswatch_safe_pull_judges_each_step_by_its_git_command(tmp_path, env, step):
+    """R20 (fact 1): safe_pull piped its fetch, stash push and pull into tee without pipefail, so
+    tee's status chose. A failed fetch (origin gone), stash push or pull (index.lock held; an
+    owner's edit to stash) was logged as success and safe_pull returned 0 behind upstream; a log
+    tee could not open (no logs/ directory) failed a fetch git had done. Each step is judged by
+    its git command's own exit status now."""
+    origin, work = tmp_path / "up", tmp_path / "watched"
+    git(env, tmp_path, "init", "-q", "-b", "master", str(origin))
+    write(origin / "a.txt", "one\n")
+    write(origin / "b.txt", "two\n")
+    git(env, origin, "add", "-A")
+    git(env, origin, "commit", "-q", "-m", "a")
+    git(env, tmp_path, "clone", "-q", str(origin), str(work))
+    write(origin / "a.txt", "upstream\n")
+    git(env, origin, "commit", "-q", "-am", "upstream")
+    if step != "tee":
+        (Path(env["CLAUDE_CONFIG_DIR"]) / "logs").mkdir()
+    if step == "fetch":
+        git(env, work, "remote", "set-url", "origin", str(tmp_path / "gone"))
+    if step in ("stash-push", "pull"):
+        write(work / ".git/index.lock", "")
+    if step == "stash-push":
+        write(work / "b.txt", "an owner's edit\n")
+    head = git(env, work, "rev-parse", "HEAD").stdout
+    script = ('source <(sed "\\$d" "$1") "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
+              'echo "safe_pull rc=$?"')
+    proc = run(["bash", "-c", script, "x", str(REPO / "hooks/git-fswatch.sh"), str(work)], env,
+               cwd=str(work), check=False)
+    if step == "tee":
+        assert "safe_pull rc=0" in proc.stdout and "Pull successful" in proc.stdout, proc.stdout
+        assert (work / "a.txt").read_text() == "upstream\n"
+        return
+    said = {"fetch": "Failed to fetch", "stash-push": "Failed to stash", "pull": "Pull failed"}
+    assert "safe_pull rc=1" in proc.stdout and said[step] in proc.stdout, proc.stdout[-900:]
+    assert "Pull successful" not in proc.stdout
+    assert git(env, work, "rev-parse", "HEAD").stdout == head
+
+
 # ------------------------------------------- a landed home's settings.json stat (review N1)
 
 def cli_write(path, key, value):  # the way the CLI writes a key of its own
@@ -1073,11 +1366,11 @@ def landed_home_behind(tmp_path, env):
     return home
 
 
-def update_index_runs(env, home, trace):
+def update_index_runs(env, home, trace, *args):
     """The landing's stdout, and how many `git update-index` and `git diff` (through the filter)
     it ran (GIT_TRACE to a file)."""
     trace.write_text("")
-    notice = land(dict(env, GIT_TRACE=str(trace)), home)
+    notice = land(dict(env, GIT_TRACE=str(trace)), home, *args)
     runs = [line.split("trace: built-in: git ", 1)[1] for line in trace.read_text().splitlines()
             if "trace: built-in: git " in line]
     return notice, sum(r.startswith("update-index") for r in runs), \
@@ -1181,6 +1474,30 @@ def test_a_cli_write_is_re_recorded_whatever_wrote_the_index_since(tmp_path, env
     assert proc.returncode == 0, proc.stdout[-600:] + proc.stderr[-600:]
     assert git(env, home, "merge-base", "--is-ancestor", "origin/master", "HEAD").returncode == 0
     assert (home / "upstream-note.md").exists()
+
+
+def test_settings_stat_alone_re_records_a_cli_write_on_a_landed_home_only(tmp_path, env):
+    """X9, R20: `land --settings-stat`, which /pull and fswatch's has_changes run on the harness
+    home before their stash decision, is the landed fast path's re-record alone: after a CLI
+    `model` write it runs the one diff through the filter and refresh_index's two update-index,
+    with no notice and no log line, and /pull pulls before any Stop. On a home that is not landed
+    it does nothing: the landing itself waits for a Stop."""
+    home = landed_home_behind(tmp_path, env)
+    blob, log = git(env, home, "rev-parse", ":settings.json").stdout, landing_log(home)
+    cli_write(home / "settings.json", "model", "demo-live-model-2")
+    trace = tmp_path / "git-trace.txt"
+    assert update_index_runs(env, home, trace, "--settings-stat") == ("", 2, 1)
+    assert update_index_runs(env, home, trace, "--settings-stat") == ("", 0, 0)
+    assert landing_log(home) == log
+    assert git(env, home, "rev-parse", ":settings.json").stdout == blob
+    assert git(env, home, "diff-files", "--name-only").stdout == ""
+    proc = run(["bash", str(REPO / "hooks/pull.sh")], env, cwd=str(home), check=False)
+    assert proc.returncode == 0, proc.stdout[-600:] + proc.stderr[-600:]
+    assert (home / "upstream-note.md").exists()
+    upgraded, _rev = make_home(tmp_path, env, name="upgraded")
+    assert land(env, upgraded, "--settings-stat") == ""
+    assert land(env, upgraded, "--state").strip() == "upgraded"
+    assert not (upgraded / "settings.machine.json").exists() and landing_log(upgraded) == ""
 
 # ------------------------------------------------------------------------------ R5: seeding
 
@@ -1745,7 +2062,7 @@ def r7_home(tmp_path, settings_env, raw=None):
     """A minimal harness home (the structural sentinels) whose settings.json env is given."""
     home = tmp_path / "r7"
     for rel in ("hooks/lib/claude_home.py", "hooks/lib/checkpoint-core.sh",
-                "hooks/lib/harness_state_dir.sh"):
+                "hooks/lib/harness_state_dir.sh", "hooks/lib/auto_push.sh"):
         (home / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / rel, home / rel)
     (home / "policies").mkdir()
@@ -1793,6 +2110,37 @@ def test_settings_env_rule(tmp_path, env):
     assert json.loads(run(cmd, dict(env, CLAUDECODE="1")).stdout) == {}
     out = run([sys.executable, str(home / "hooks/lib/claude_home.py"), "env", "A"], env).stdout
     assert out == ""
+
+
+def test_settings_env_any_session(tmp_path, env):
+    """P1b E4: any_session=True reads the harness home's settings.json env also for a process whose
+    env has CLAUDE_HOME (a session started since the landing); the other rules stay."""
+    home = r7_home(tmp_path, {"CLAUDE_OBLIGATION_STOPGATE": "block", "N": 1})
+    code = ("import json, sys; sys.path.insert(0, sys.argv[1]); from lib import claude_home as c;"
+            "print(json.dumps(c.settings_env('CLAUDE_OBLIGATION_STOPGATE', 'N', 'ABSENT', any_session=True)))")
+    cmd = [sys.executable, "-c", code, str(home / "hooks")]
+    want = {"CLAUDE_OBLIGATION_STOPGATE": "block"}
+    assert json.loads(run(cmd, dict(env, CLAUDECODE="1")).stdout) == want
+    assert json.loads(run(cmd, dict(env, CLAUDECODE="1", CLAUDE_HOME="/x")).stdout) == want
+    assert json.loads(run(cmd, dict(env, CLAUDE_PROJECT_DIR="/p", CLAUDE_HOME=str(home))).stdout) == want
+    assert json.loads(run(cmd, dict(env, CLAUDECODE="1", CLAUDE_HOME="/x",
+                                    CLAUDE_OBLIGATION_STOPGATE="advisory")).stdout) == {}
+    assert json.loads(run(cmd, dict(env, CLAUDE_HOME="/x")).stdout) == {}  # not a Claude Code process
+    (home / "settings.json").write_text("<<<<<<< conflict")
+    assert json.loads(run(cmd, dict(env, CLAUDECODE="1", CLAUDE_HOME="/x")).stdout) == {}
+
+
+def test_settings_switch(tmp_path, env):
+    """P1b E4: G2's switch as a running session whose env lacks it meets it: the harness home's
+    settings.json value, stripped and lowercased, with or without CLAUDE_HOME; the default when
+    that env does not set it."""
+    home = r7_home(tmp_path, {"CLAUDE_OBLIGATION_STOPGATE": " Block "})
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); from lib import claude_home as c;"
+            "print(c.settings_switch('CLAUDE_OBLIGATION_STOPGATE', 'advisory'), c.settings_switch('ABSENT', 'x'))")
+    cmd = [sys.executable, "-c", code, str(home / "hooks")]
+    assert run(cmd, dict(env, CLAUDECODE="1")).stdout.split() == ["block", "x"]
+    assert run(cmd, dict(env, CLAUDECODE="1", CLAUDE_HOME="/x")).stdout.split() == ["block", "x"]
+    assert run(cmd, env).stdout.split() == ["advisory", "x"]  # not a Claude Code process
 
 
 def test_subagent_restart_reads_the_accounts_root_from_rendered_settings(tmp_path, env):

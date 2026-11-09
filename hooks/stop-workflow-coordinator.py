@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 """Serialize Stop phases and call the sole receipt-gated resource finalizer.
 
-LANE-B (20260808-035658) M4/M7: the registered Stop hook, running the four former Stop
-entries as phases in order. A passing phase may end its stdout with a JSON object whose
+LANE-B (20260808-035658) M4/M7, P5 R9: run by hooks/stop-launch.py (directly by a session that
+loaded an older hook list), in order: coverage, auto_commit, completion (hooks/stop-command-gate.py,
+the one Stop gate), cleanup. A passing phase may end its stdout with a JSON object whose
 systemMessage (auto-commit's refused-snapshot notice) main() shows as this hook's own.
 
-Only timelock and coverage may block (TC-11). A block relays failed_phase=<name> and the
-last 4 KB of that phase's stderr. An auto_commit or cleanup failure, and a coverage failure
-other than exit 2, is recorded in the result JSON and allowed; the loop continues. A
-timelock instrument failure (exit outside {0, 2}, timeout, launch error, missing file,
-invalid structured decision) blocks with a fixed line only while the human-typed command
-is /dev-overnight (stop_contract.active_command), where /stop releases it; otherwise it is
-recorded and allowed. The finalizer runs only when every phase allowed cleanly.
+Only coverage and completion block: a coverage block relays failed_phase=coverage and the last
+4 KB of its stderr, completion's stderr (its block text, or advisory `would block`) is relayed
+whole and first. Other failures are recorded in the result JSON and allowed; a completion that did
+not decide (exit outside {0, 2}, timeout, launch error, missing file) goes to `fallback`. Cleanup
+runs only on an allowed Stop, the finalizer only when every phase allowed cleanly. `gate_mode`
+reads the process environment only. The gate prints an allowed Stop's terminal time-lock status as
+its last stdout line, and this coordinator alone publishes the receipt finalize reads (P1b row 15).
 
 Resource preflight/finalize is opt-in: LANEB_SESSION_RESOURCE_TRUST_KEY and _TRUST_ROOT
 are set nowhere by default (no SessionStart provisioning). Without both, only the phases
 run and session_resources.resolve_current_resource_session() must NOT be called: it
 raises when the trust authority is unconfigured, which would make that default state a
 permanent Stop block. Fail-closed finalization applies once a resource session exists.
+No phase receives either key.
 """
 
 from __future__ import annotations
@@ -36,11 +38,11 @@ HOOKS = Path(__file__).resolve().parent
 if str(HOOKS) not in sys.path:
     sys.path.insert(0, str(HOOKS))
 
-from lib import session_resources, stop_contract
+from lib import command_span, session_resources
 
 
-PHASE_ORDER = ("timelock", "coverage", "auto_commit", "cleanup")
-BLOCKING_PHASES = ("timelock", "coverage")
+PHASE_ORDER = ("coverage", "auto_commit", "completion", "cleanup")
+BLOCKING_PHASES = ("coverage", "completion")
 STDERR_RELAY_BYTES = 4096
 TRUST_ENVIRONMENT_KEYS = (
     session_resources.TRUST_KEY_ENV,
@@ -62,21 +64,35 @@ class Phase:
     timeout: float = 30.0
 
 
-def _default_phases() -> list[Phase]:
+# hooks/stop-launch.py sets it for the coordinator it runs (arming option 1, P5 "Arming").
+LAUNCHER_MARK = "CLAUDE_STOP_LAUNCHER"
+
+
+def gate_mode(environment: Mapping[str, str]) -> str:
+    """The Stop gate's mode, from the process environment only: CLAUDE_COMMAND_GATE=off is
+    off; any other value, or none, blocks (P5-d) when the launcher ran this coordinator. A
+    session that loaded an older hook list runs it directly, unmarked: completion runs
+    advisory there and the time-lock still blocks; a forged mark only arms."""
+    if environment.get("CLAUDE_COMMAND_GATE", "") == "off":
+        return "off"
+    return "block" if environment.get(LAUNCHER_MARK) == "1" else "advisory"
+
+
+def _default_phases(mode: str = "block") -> list[Phase]:
     return [
-        Phase("timelock", (sys.executable, str(HOOKS / "stop-overnight-timelock.py"))),
         Phase(
             "coverage", (sys.executable, str(HOOKS / "stop-spec-coverage-enforce.py"))
         ),
         Phase("auto_commit", ("bash", str(HOOKS / "auto-commit.sh")), 120.0),
+        Phase("completion", (sys.executable, str(HOOKS / "stop-command-gate.py"), "--mode", mode), 60.0),
         Phase("cleanup", ("bash", str(HOOKS / "stop-cleanup-allowlist.sh"))),
     ]
 
 
-def _configured_phases(environment: Mapping[str, str]) -> list[Phase]:
+def _configured_phases(environment: Mapping[str, str], mode: str) -> list[Phase]:
     encoded = environment.get("LANEB_COORDINATOR_PHASES_JSON")
     if not encoded:
-        return _default_phases()
+        return _default_phases(mode)
     value = json.loads(encoded)
     if not isinstance(value, list) or len(value) != len(PHASE_ORDER):
         raise ValueError("phase configuration must define the four exact phases")
@@ -112,25 +128,6 @@ def _environment_views(
     return phase_environment, trust_environment
 
 
-def _structured_timelock_decision(stdout: str) -> str | None:
-    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    if not lines or lines[-1][0] not in "{[":
-        return None
-    text = lines[-1]
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        return "invalid"
-    if not isinstance(value, dict):
-        return "invalid"
-    decision = value.get("decision")
-    if decision in {"allow", "approve", "pass"}:
-        return "allow"
-    if decision in {"block", "deny"}:
-        return "block"
-    return "invalid"
-
-
 def _phase_script(argv: Sequence[str]) -> str | None:
     """The script a phase runs: its first argument after the interpreter that
     names a .py or .sh file (python3 on a missing file exits 2, a block)."""
@@ -145,11 +142,7 @@ def _run_phase(
     phase_environment: Mapping[str, str],
 ) -> dict:
     child_env = {
-        **{
-            key: value
-            for key, value in phase_environment.items()
-            if key not in TRUST_ENVIRONMENT_KEYS
-        },
+        **phase_environment,
         "CLAUDE_PROJECT_DIR": str(project_dir),
         "LANEB_COORDINATED_STOP": "1",
     }
@@ -177,15 +170,15 @@ def _run_phase(
         if result.returncode == 0
         else ("block" if result.returncode == 2 else "fail")
     )
-    if phase.name == "timelock" and result.returncode == 0:
-        decision = _structured_timelock_decision(stdout)
-        if decision in {"invalid", "block"}:
-            status = decision
-    try:  # the notice of the module docstring; main() relays it
-        notice = json.loads(stdout.strip().splitlines()[-1])["systemMessage"]
+    try:  # the last stdout line: a notice (module docstring), or the gate's terminal status
+        last = json.loads(stdout.strip().splitlines()[-1])
     except (LookupError, TypeError, ValueError):
-        notice = None
-    failure = {"fail": f"exit code {result.returncode}", "invalid": "invalid decision"}.get(status)
+        last = {}
+    last = last if isinstance(last, dict) else {}
+    notice, terminal = last.get("systemMessage"), last.get("timelock_terminal")
+    failure = {"fail": f"exit code {result.returncode}"}.get(status)
+    # The gate's own text is relayed whole and first (P5 R9); a coverage block's last 4 KB.
+    relayed = stderr if phase.name == "completion" else stderr[-STDERR_RELAY_BYTES:]
     return {
         "phase": phase.name,
         "status": status,
@@ -194,8 +187,52 @@ def _run_phase(
         "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(),
         **({"failure": failure} if failure else {}),
         **({"notice": notice} if status == "allow" and isinstance(notice, str) else {}),
-        **({"_stderr": stderr[-STDERR_RELAY_BYTES:]} if status == "block" else {}),
+        **({"_terminal": terminal} if status == "allow" and phase.name == "completion"
+           and isinstance(terminal, str) else {}),
+        **({"_stderr": relayed} if status == "block" or phase.name == "completion" else {}),
     }
+
+
+def fallback(payload: Mapping[str, object], mode: str, reason: str) -> tuple[int, str]:
+    """A completion that did not decide (exit outside {0, 2}, timeout, launch error,
+    missing file), decided on the transcript reader alone: block while the session's
+    overnight window is open (overnight.window_open) or, in block mode, while the latest
+    human-typed command is a gated one; else allow. The reader reads the whole transcript:
+    an opener may lie far back. A check whose module cannot load counts as not holding."""
+    try:
+        from lib import overnight
+
+        window = bool(overnight.window_open(dict(payload)))
+    except Exception:
+        window = False
+    gated = mode == "block" and (
+        command_span.active_command(payload.get("transcript_path")) in command_span.GATED_COMMANDS
+    )
+    if window or gated:
+        return 2, (
+            f"COMMAND_GATE instrument failure: {reason}. The gate is broken; "
+            "the human can type /stop\n"
+        )
+    return 0, ""
+
+
+def _publish_receipt(root: Path, session_id: str, terminal: str, payload: Mapping[str, object]) -> str | None:
+    """The terminal receipt finalize reads (P1b row 15), published from the gate's terminal
+    time-lock status; None, else the reason it was not published (recorded, allowed)."""
+    try:
+        from lib import overnight
+
+        _state_file, state = overnight.session_state_file(  # as the gate's time-lock found it
+            session_id, (os.environ.get("CLAUDE_PROJECT_DIR"), payload.get("cwd") or str(root))
+        )
+        if state is None:
+            return "no overnight state record"
+        result = session_resources.publish_overnight_receipt(
+            root, claude_session_id=session_id, state=state, terminal_status=terminal
+        )
+    except Exception as exc:  # recorded by type only: trust diagnostics never cross hook output
+        return f"receipt not published ({type(exc).__name__})"
+    return None if isinstance(result, Mapping) and result.get("status") == "pass" else "receipt not published"
 
 
 def run_coordinator(
@@ -235,23 +272,17 @@ def run_coordinator(
         }, 0
     if raw_payload is None:
         raw_payload = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    mode = gate_mode(phase_environment)
     try:
         selected = (
             list(phases)
             if phases is not None
-            else _configured_phases(phase_environment)
+            else _configured_phases(phase_environment, mode)
         )
     except (TypeError, ValueError, json.JSONDecodeError):
         return {
             "status": "blocked",
             "reason": "invalid_phase_configuration",
-            "phases": [],
-            "finalizer_called": False,
-        }, 2
-    if tuple(phase.name for phase in selected) != PHASE_ORDER:
-        return {
-            "status": "blocked",
-            "reason": "invalid_phase_order",
             "phases": [],
             "finalizer_called": False,
         }, 2
@@ -280,7 +311,12 @@ def run_coordinator(
                 "finalizer_called": False,
             }, 2
     results = []
+    relays = []
     for phase in selected:
+        if phase.name == "completion" and mode == "off":
+            results.append({"phase": phase.name, "status": "skipped", "returncode": None,
+                            "reason": "CLAUDE_COMMAND_GATE=off"})
+            continue
         result = _run_phase(
             phase,
             raw_payload=raw_payload,
@@ -289,31 +325,47 @@ def run_coordinator(
         )
         results.append(result)
         stderr = result.pop("_stderr", "")
+        terminal = result.pop("_terminal", None)
+        if phase.name == "completion" and result["status"] in ("allow", "block") and stderr:
+            relays.append(stderr)
+        if terminal and resource_session_id is not None:  # finalize decides on the receipt
+            receipt = _publish_receipt(root, session_id, terminal, payload)
+            if receipt:
+                result["receipt"] = receipt
         if result["status"] == "allow":
             continue
         if result["status"] == "block" and phase.name in BLOCKING_PHASES:
-            relay = f"failed_phase={phase.name}\n{stderr}"
-        elif phase.name == "timelock" and (
-            stop_contract.active_command(payload.get("transcript_path")) == "dev-overnight"
-        ):
-            relay = f"timelock instrument failure: {result['failure']}; the human can type /stop\n"
-        else:
+            return {
+                "status": "blocked",
+                "reason": "phase_block",
+                "failed_phase": phase.name,
+                "phases": results,
+                "finalizer_called": False,
+                "_relay": "".join(relays) if phase.name == "completion" else f"failed_phase={phase.name}\n{stderr}",
+            }, result["returncode"]  # the phase's own exit (2), relayed as stop-launch.py relays its child
+        if phase.name != "completion":
+            continue  # recorded in the result and allowed
+        code, relay = fallback(payload, mode, result["failure"])
+        result["fallback"] = "block" if code == 2 else "allow"
+        if code != 2:
             continue  # recorded in the result and allowed
         return {
             "status": "blocked",
-            "reason": f"phase_{result['status']}",
+            "reason": "completion_instrument_failure",
             "failed_phase": phase.name,
             "phases": results,
             "finalizer_called": False,
             "_relay": relay,
         }, 2
-    if any(result["status"] != "allow" for result in results):
+    advisory = "".join(relays)
+    if any(result["status"] not in ("allow", "skipped") for result in results):
         # A recorded failure is allowed but never followed by the destructive finalizer.
         return {
             "status": "pass",
             "phases": results,
             "finalizer_called": False,
             "reason": "phase_failure_recorded",
+            **({"_relay": advisory} if advisory else {}),
         }, 0
     if resource_session_id is None:
         # No resource session was provisioned (the default): the phases passed and
@@ -323,6 +375,7 @@ def run_coordinator(
             "phases": results,
             "finalizer_called": False,
             "reason": "resource_broker_not_configured",
+            **({"_relay": advisory} if advisory else {}),
         }, 0
     try:
         finalized = session_resources.finalize(
@@ -360,6 +413,7 @@ def run_coordinator(
         "finalizer_called": True,
         "resource_session_id": resource_session_id,
         "finalizer": finalized,
+        **({"_relay": advisory} if advisory else {}),
     }, 0
 
 

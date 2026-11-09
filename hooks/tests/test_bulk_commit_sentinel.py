@@ -39,11 +39,12 @@ def _load_module(path, name):
 guard = _load_module(HOOKS_DIR / "pretool-git-privilege-guard.py", "pretool_git_privilege_guard")
 
 
-def _make_data(agent_id=None, session_id="test-sid-abc123"):
+def _make_data(agent_id=None, session_id="test-sid-abc123", agent_type=None):
     return {
         "tool_name": "Bash",
         "session_id": session_id,
         **({"agent_id": agent_id} if agent_id else {}),
+        **({"agent_type": agent_type} if agent_type else {}),
         "tool_input": {"command": ""},
     }
 
@@ -167,7 +168,7 @@ class TestEvaluateCommitBlessedBridge(unittest.TestCase):
             # No candidate grants => the regular path fails closed (default-deny);
             # the key assertion is that the sentinel path is never consulted.
             # (Post grant-selection refactor _evaluate_commit collects candidates
-            # via _collect_commit_grant_candidates, not _find_grant/_find_grant_any.)
+            # via _collect_commit_grant_candidates, not _find_grant.)
             with patch.object(guard, "_collect_commit_grant_candidates", return_value=[]):
                 try:
                     guard._evaluate_commit(self.REGULAR_CMD, _make_data())
@@ -630,25 +631,33 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
         return str(path)
 
     def _arm_dispatched_consumer(self, sid):
-        """Put the caller in the entitled-consumer position; return its agent_id.
+        """Put the caller in the entitled-consumer position; return its payload
+        identity: the agent_id and the role Claude Code records with it.
 
         The guard now additionally requires that whoever presents a grant BE the
         subagent the pipeline dispatched: a non-empty `agent_id` in the payload,
-        plus a live changelog-analyst dispatch attestation it can claim. Without
-        this, every test in this class would block on consumer entitlement and
-        would no longer reach the repo-match-versus-recency decision at all --
-        the negative tests would still pass while guarding nothing, which is the
-        failure mode this helper exists to prevent.
+        plus a live changelog-analyst dispatch attestation recording the prompt
+        that dispatched it. Without this, every test in this class would block
+        on consumer entitlement and would no longer reach the repo-match-versus-
+        recency decision at all -- the negative tests would still pass while
+        guarding nothing, which is the failure mode this helper exists to prevent.
 
         The attestation is written by the SAME production writer the attesting
         hook calls, into the real state dir, and is registered for cleanup. It
         must be created AFTER the grants so its `dispatched_at` lands at or
-        after their `created_at` (the pipeline mints, then dispatches).
+        after their `created_at` (the pipeline mints, then dispatches). Reading
+        the caller's own transcript is tests/test_commit_event_pointer.py's
+        subject; here the caller's prompt digest is given.
         """
+        digest = "d" * 64
         path = guard.commit_pipeline.write_attestation(
-            sid, task_id="grant-sel-test", dryrun=False)
+            sid, task_id="grant-sel-test", dryrun=False, prompt_sha256=digest)
         self._attestations.append(path)
-        return "a" + "0" * 16
+        identity = patch.object(guard.commit_pipeline, "caller_prompt_sha256",
+                                return_value=(digest, ""))
+        identity.start()
+        self.addCleanup(identity.stop)
+        return {"agent_id": "a" + "0" * 16, "agent_type": guard.commit_pipeline.CHANGELOG_ANALYST}
 
     @staticmethod
     def _fake_glob_returning(grant_paths):
@@ -681,14 +690,14 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
             g_other = self._write_grant(
                 gdir, sid, other["top"], other["branch"], other["head"], mtime=base
             )
-            cmd = f'git -C {root["top"]} commit -m "chore: root commit"'
+            cmd = f'git -C {root["top"]} commit -m "chore: root commit" -m "Task-id: grant-sel-test"'
             # Armed AFTER both grants exist: the attestation's dispatch time must
             # land at or after their created_at, since the pipeline mints first
             # and dispatches second.
-            data = _make_data(agent_id=self._arm_dispatched_consumer(sid),
+            data = _make_data(**self._arm_dispatched_consumer(sid),
                               session_id=sid)
             with patch("glob.glob", side_effect=self._fake_glob_returning([g_root, g_other])):
-                with patch.object(guard, "_lock_grant_for_posttool") as mock_lock:
+                with patch.object(guard, "_spend_grant", return_value=True) as mock_spend:
                     try:
                         guard._evaluate_commit(cmd, data)
                     except SystemExit as exc:
@@ -697,17 +706,17 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
                             "the newer non-matching grant instead of the repo-matching one."
                             % exc.code
                         )
-            mock_lock.assert_called_once()
-            selected_path = mock_lock.call_args.args[0]
+            mock_spend.assert_called_once()
+            selected_path = mock_spend.call_args.args[0]
             self.assertEqual(
                 selected_path,
                 g_root,
-                "Guard must select/lock the ROOT-repo grant, not the newer OTHER-repo grant.",
+                "Guard must select/spend the ROOT-repo grant, not the newer OTHER-repo grant.",
             )
 
     def test_blocks_when_no_grant_matches_target_repo(self):
         """NEGATIVE (security preserved): only an OTHER-repo grant exists; a commit
-        targeting the ROOT repo is BLOCKED (exit 2) and no grant is locked."""
+        targeting the ROOT repo is BLOCKED (exit 2) and no grant is spent."""
         root = self._init_repo()
         other = self._init_repo()
         sid = "grant-sel-sid-neg"
@@ -719,14 +728,14 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
             # Armed too: unarmed, this test would block because the caller is not
             # an entitled consumer, NOT because no grant matches the target repo,
             # and would keep passing while guarding nothing.
-            data = _make_data(agent_id=self._arm_dispatched_consumer(sid),
+            data = _make_data(**self._arm_dispatched_consumer(sid),
                               session_id=sid)
             with patch("glob.glob", side_effect=self._fake_glob_returning([g_other])):
-                with patch.object(guard, "_lock_grant_for_posttool") as mock_lock:
+                with patch.object(guard, "_spend_grant") as mock_spend:
                     with self.assertRaises(SystemExit) as ctx:
                         guard._evaluate_commit(cmd, data)
                     self.assertEqual(ctx.exception.code, 2)
-                    mock_lock.assert_not_called()
+                    mock_spend.assert_not_called()
 
     def test_blocks_when_no_grant_present(self):
         """NEGATIVE (security preserved): no grant at all => default-deny (exit 2)."""
@@ -735,11 +744,11 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
         cmd = f'git -C {root["top"]} commit -m "chore: root commit"'
         data = _make_data(session_id=sid)
         with patch("glob.glob", side_effect=self._fake_glob_returning([])):
-            with patch.object(guard, "_lock_grant_for_posttool") as mock_lock:
+            with patch.object(guard, "_spend_grant") as mock_spend:
                 with self.assertRaises(SystemExit) as ctx:
                     guard._evaluate_commit(cmd, data)
                 self.assertEqual(ctx.exception.code, 2)
-                mock_lock.assert_not_called()
+                mock_spend.assert_not_called()
 
 
 class TestAutoBulkDeferralBinding(unittest.TestCase):
@@ -870,17 +879,15 @@ class TestAutoBulkDeferralBinding(unittest.TestCase):
             self.assertFalse(self._defers([path], self._bulk_cmd(target)))
 
     def test_spent_grant_does_not_defer(self):
-        """F4 interaction, called out explicitly by the finding: a grant marked
-        spent by the guard's own use record must stop deferring too -- even
-        though its file is still present, unexpired, and repo/branch-bound."""
+        """A grant the guard spent (deleted when it admitted its commit) stops
+        deferring, even while a stale name for it is still enumerated."""
         target = self._init_repo()
         with tempfile.TemporaryDirectory() as gdir:
             path, grant = self._grant_file(gdir, target)
-            # Precondition: before the use record exists it DOES defer, so the
-            # assertion below cannot pass for some unrelated reason.
+            # Precondition: before it is spent it DOES defer, so the assertion
+            # below cannot pass for some unrelated reason.
             self.assertTrue(self._defers([path], self._bulk_cmd(target)))
-            guard._record_undeferrable_grant_use(grant, path)
-            self._advance(target)   # the authorized commit lands
+            self.assertTrue(guard._spend_grant(path))
             self.assertFalse(self._defers([path], self._bulk_cmd(target)))
 
     def test_unresolvable_command_still_defers(self):

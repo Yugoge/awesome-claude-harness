@@ -2,11 +2,9 @@
 """find/fd destructive-command argument parsing for the guard.
 
 Depends on shell_lex (`_strip_quotes`) + pathmatch (`_glob_to_segment_regex`,
-`_has_shell_glob`) + stdlib; references nothing from _core. See
-docs/reference/monolith-split-plan.md for the decomposition rationale (incl. why
-the forward-referencing orchestrators `_find_destructive_target_hits` /
-`_find_filter_exonerates_reverse` / `_find_is_destructive` stay in _core) and the
-INV-3 dual-context import contract.
+`_has_shell_glob`) + stdlib; references nothing from _core. The
+forward-referencing orchestrators `_find_destructive_target_hits` /
+`_find_filter_exonerates_reverse` / `_find_is_destructive` stay in _core.
 
 Scope: the pure argv PARSERS for a find/fd invocation -- path-operand and fd
 search-dir collection (`_find_path_operands`, `_fd_positional_roots`), PATH/NAME
@@ -22,8 +20,8 @@ import os
 import re
 
 # find/fd argv parsers key on the phase-1 quote stripper and the phase-3
-# basename-glob matchers. Dual-context import (INV-3) --
-# see docs/reference/monolith-split-plan.md.
+# basename-glob matchers. Dual-context import (INV-3; the contract
+# is stated at _core's first re-import block).
 try:
     from .shell_lex import _strip_quotes
     from .pathmatch import _glob_to_segment_regex, _has_shell_glob

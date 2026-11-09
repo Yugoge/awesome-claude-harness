@@ -323,3 +323,203 @@ def test_span_libraries_read_no_error_or_pause_markers():
             if forbidden.search(line)
         ]
         assert hits == [], (name, hits)
+
+
+# --------------------------------------------------------------------------
+# write_set: TC-46's write set of one transcript (P1b E6)
+# --------------------------------------------------------------------------
+
+def _rooted(tx, project):
+    for record in tx.records:
+        if "cwd" in record:
+            record["cwd"] = str(project)
+    return tx
+
+
+def test_write_set_takes_ok_edit_targets_and_named_bash_paths(tmp_path):
+    project = tmp_path / "proj"
+    (project / "toy").mkdir(parents=True)
+    (project / "toy" / "a.py").write_text("x = 1\n")
+    tx = _Transcript()
+    tx.tool("Write", {"file_path": str(project / "toy" / "a.py"), "content": "x = 2\n"})
+    tx.tool("Edit", {"file_path": str(project / "toy" / "b.py"), "old_string": "a", "new_string": "b"},
+            result="String to replace not found in file.", is_error=True)
+    tx.tool("MultiEdit", {"file_path": "toy/c.py", "edits": []})
+    tx.tool("NotebookEdit", {"notebook_path": str(project / "nb" / "x.ipynb"), "new_source": ""})
+    tx.tool("Write", {"file_path": str(project / "docs" / "dev" / "dev-report-x.json"), "content": "{}"})
+    tx.tool("Write", {"file_path": "/etc/elsewhere.conf", "content": ""})
+    tx.tool_use("Write", {"file_path": str(project / "toy" / "unanswered.py"), "content": ""})
+    tx.tool("Bash", {"command": "printf '{}' > toy/gen.json && "
+                                "python3 -c \"open('toy/out.txt','w').write('1')\""})
+    tx.tool("Bash", {"command": "grep -n 'x' toy/a.py; git status --porcelain"})
+    found = command_span.write_set(_rooted(tx, project).write(tmp_path / "agent.jsonl"), project)
+    assert found.written == {"toy/a.py", "toy/c.py", "nb/x.ipynb"}
+    assert found.named == {"toy/gen.json", "toy/out.txt", "toy/a.py"}
+
+
+def test_write_set_starts_after_the_given_line(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    tx = _Transcript()
+    tx.tool("Write", {"file_path": str(project / "before.py"), "content": ""})
+    start = tx.typed(DEV_TEXT)
+    tx.tool("Write", {"file_path": str(project / "after.py"), "content": ""})
+    path = _rooted(tx, project).write(tmp_path / "main.jsonl")
+    assert command_span.write_set(path, project, start_line=start).written == {"after.py"}
+    assert command_span.write_set(path, project).written == {"before.py", "after.py"}
+
+
+def test_write_set_none_for_missing_transcript(tmp_path):
+    assert command_span.write_set(tmp_path / "missing.jsonl", tmp_path) is None
+
+
+# --------------------------------------------------------------------------
+# calls() and last_todos(): the span's tool uses as the record holds them (P1b E7)
+# --------------------------------------------------------------------------
+
+def _todos(*statuses):
+    return [{"content": f"Step {n}", "activeForm": f"Doing {n}", "status": s}
+            for n, s in enumerate(statuses, 1)]
+
+
+def test_calls_attach_results_and_stay_inside_the_span(tmp_path):
+    tx = _Transcript()
+    tx.tool("Bash", {"command": "before"})
+    start = tx.command("dev", "fix the bug")
+    ok = tx.tool("Bash", {"command": "ls"})
+    refused = tx.tool("Agent", {"subagent_type": "ba"}, result="PreToolUse:Agent hook error", is_error=True)
+    pending = tx.tool("Agent", {"subagent_type": "qa"}, result=None)
+    tx.add(tx._envelope("assistant", isSidechain=True, message={"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_side", "name": "Bash", "input": {"command": "sub"}}]}))
+    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
+    assert span.start_line == start
+    calls = span.calls()
+    assert [(c.id, c.name, c.ok) for c in calls] == [
+        (ok, "Bash", True), (refused, "Agent", False), (pending, "Agent", False)]
+    assert all(c.line > start for c in calls)
+    assert calls[0].result_line > calls[0].line and calls[2].result_line == 0
+    assert [c.id for c in span.calls("Agent")] == [refused, pending]
+
+
+def test_last_todos_is_the_last_ok_todowrite(tmp_path):
+    tx = _Transcript()
+    tx.tool("TodoWrite", {"todos": _todos("completed")})  # an earlier command's list
+    tx.command("dev")
+    path = tx.write(tmp_path / "start.jsonl")
+    assert command_span.active_span(path).last_todos() is None
+    first = tx.tool("TodoWrite", {"todos": _todos("in_progress", "pending")})
+    tx.tool("TodoWrite", {"todos": _todos("completed", "completed")}, result="blocked", is_error=True)
+    tx.tool_use("TodoWrite", {"todos": _todos("pending", "pending")})  # no result yet
+    second = tx.tool("TodoWrite", {"todos": _todos("completed", "in_progress")})
+    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
+    assert span.last_todos() == _todos("completed", "in_progress")
+    # A PostToolUse reader names its own call: the list before it.
+    assert span.last_todos(before=second) == _todos("in_progress", "pending")
+    assert span.last_todos(before=first) is None
+
+
+def _obligation_prompt(task_id, role="qa", pipeline="close"):
+    from hooks.lib import obligation
+    doc = {"task_id": task_id, "role": role, "pipeline": pipeline, "profile": "singular",
+           "dispatched_at": "2026-10-19T12:00:00Z",
+           "artifacts": [{"kind": "response_line", "terminal_line_regex": "^DONE$"}]}
+    return "FIRST ACTION: register.\n" + obligation.serialize_obligation(doc)
+
+
+def test_result_text_is_the_agents_own_reply_or_the_results_text(tmp_path):
+    tx = _Transcript()
+    tx.command("close", "20261019-120000")
+    agent = tx.tool_use("Agent", {"subagent_type": "qa", "prompt": "judge"})
+    tx.add(tx._envelope("user", message={"role": "user", "content": [{
+        "type": "tool_result", "tool_use_id": agent, "content": [
+            {"type": "text", "text": "Judged.\nCLOSE: YES"},
+            {"type": "text", "text": "agentId: a1\n<usage>total_tokens: 9</usage>"}]}]},
+        toolUseResult={"status": "completed", "agentId": "a1",
+                       "content": [{"type": "text", "text": "Judged.\nCLOSE: YES"}]}))
+    bash = tx.tool("Bash", {"command": "ls"}, result="a\nb")
+    odd = tx.tool("Bash", {"command": "true"}, result=7)  # neither text nor a list of blocks
+    pending = tx.tool_use("AskUserQuestion", {"questions": []})
+    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
+    assert span.result_text(agent) == "Judged.\nCLOSE: YES"
+    assert span.result_text(bash) == "a\nb" and span.result_text(odd) == ""
+    assert span.result_text(pending) == "" and span.result_text("toolu_none") == ""
+
+
+def test_obligations_are_the_ok_dispatches_well_formed_blocks(tmp_path):
+    tx = _Transcript()
+    tx.tool("Agent", {"subagent_type": "qa", "prompt": _obligation_prompt("20261019-110000")})  # before the span
+    tx.command("close", "--auto")
+    first = tx.tool("Agent", {"subagent_type": "qa", "prompt": _obligation_prompt("dev-20261019-120000")})
+    tx.tool("Agent", {"subagent_type": "qa", "prompt": _obligation_prompt("20261019-130000")},
+            result="PreToolUse:Agent hook error", is_error=True)
+    tx.tool("Agent", {"subagent_type": "qa", "prompt": "no block"})
+    tx.tool("Agent", {"subagent_type": "qa", "prompt": '<obligation v="1">{not json}</obligation>'})
+    lane = tx.tool("Task", {"subagent_type": "dev", "prompt": _obligation_prompt("20261019-140000-l1", "dev", "dev")})
+    span = command_span.active_span(tx.write(tmp_path / "main.jsonl"))
+    found = span.obligations()
+    assert [(call.id, doc["task_id"], doc["role"]) for call, doc in found] == [
+        (first, "dev-20261019-120000", "qa"), (lane, "20261019-140000-l1", "dev")]
+    # Each pair's call is the dispatch's Call, its result's line included (P4's close rating
+    # orders the rating question after it); the families drop a fan-out lane's suffix.
+    assert all(type(call) is command_span.Call and call.result_line > call.line for call, _doc in found)
+    assert span.session_families() == {"20261019-120000", "20261019-140000"}
+
+
+def test_body_is_the_text_the_cli_recorded_for_the_typed_command(tmp_path):
+    """Span.body(): the isMeta record whose parentUuid is the opener's uuid
+    (the command's text as the session loaded it), not a later Skill
+    expansion's text and not the file on disk; each typed command has its
+    own; None when no record links to the opener or the opener has no uuid."""
+    tx = _Transcript()
+    tx.queue_operations()
+    tx.command("dev", "build it")
+    tx.skill("spec", "<command-name>/spec</command-name> Skill text")
+    path = tx.write(tmp_path / "first.jsonl")
+    assert command_span.active_span(path).body() == "# /dev\nCommand body for dev."
+    tx.command("close")
+    assert command_span.active_span(tx.write(tmp_path / "second.jsonl")).body() == \
+        "# /close\nCommand body for close."
+
+    bare = _Transcript()
+    bare.typed("<command-name>/dev</command-name><command-args></command-args>")
+    bare.attachment()  # the record after the opener is no isMeta text
+    assert command_span.active_span(bare.write(tmp_path / "bare.jsonl")).body() is None
+    unlinked = _Transcript()
+    unlinked.command("dev")
+    for record in unlinked.records:
+        record.pop("uuid", None)
+    assert command_span.active_span(unlinked.write(tmp_path / "unlinked.jsonl")).body() is None
+
+
+def _context(tx, content):
+    """The context record the CLI writes for a UserPromptSubmit hook's output."""
+    return tx.add(tx._envelope("attachment", attachment={
+        "type": "hook_additional_context", "content": content, "hookName": "UserPromptSubmit"}))
+
+
+def test_opener_heads_and_minted_id_read_only_the_openers_hook_context(tmp_path):
+    """Span.opener_heads(): (branch, commit) of each HEAD line the UserPromptSubmit hook printed for
+    the /push opener (branch None: detached), in order, from the context records between the opener
+    and the turn's first assistant record, the ones Span.minted_id() reads. A line an agent echoes
+    (a tool result, a context record after it), one not at a line's start or with a short commit,
+    and an opener with no such line read as none."""
+    sha, other = "a" * 40, "b" * 64
+    tx = _Transcript()
+    tx.queue_operations()
+    tx.command("push", "origin")
+    _context(tx, f"PROJECT_ROOT=/p\nx [/push] HEAD at the opener: refs/heads/main {sha}\n"
+                 f"[/push] HEAD at the opener: refs/heads/main abc123\n"
+                 f"[/push] HEAD at the opener: refs/heads/topic/x {sha}\n")
+    _context(tx, [{"type": "text", "text": f"[/push] HEAD at the opener: detached {other}"}])
+    tx.tool("Bash", {"command": "true"}, result=f"[/push] HEAD at the opener: refs/heads/main {sha}")
+    _context(tx, f"[/push] HEAD at the opener: refs/heads/main {sha}\n")
+    span = command_span.active_span(tx.write(tmp_path / "push.jsonl"))
+    assert span.opener_heads() == [("topic/x", sha), (None, other)]
+    assert span.minted_id() is None
+
+    tx.command("do", "fix it")
+    _context(tx, "[/do] Consent granted.\n[/do] task-id minted: 20261019-120000 - resolve via ...\n")
+    span = command_span.active_span(tx.write(tmp_path / "do.jsonl"))
+    assert (span.minted_id(), span.opener_heads()) == ("20261019-120000", [])
+    tx.command("push")
+    assert command_span.active_span(tx.write(tmp_path / "bare.jsonl")).opener_heads() == []

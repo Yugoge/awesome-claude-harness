@@ -32,6 +32,7 @@ repositories touched are created there.
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -129,6 +130,16 @@ BYPASS_CASES = [
     "echo \"\\\\$(git commit -n)\"",
     "bash -c 'echo $(git commit -n)'",
     "git -c 'alias.ci=!echo `git commit -n`' ci",
+    # P5 R6, fail closed where the guard cannot read the commit: an alias whose value
+    # --config-env takes from the environment, a double-quoted bash -c / eval string inside
+    # a double-quoted $(...), and nesting past the expansion limit (five bash -c levels).
+    "git --config-env=alias.ci=CI_VALUE ci -m x",
+    "git --config-env alias.ci=CI_VALUE ci -m x",
+    "echo \"$(bash -c \"git commit -n\")\"",
+    "echo \"$(eval \"git commit --no-verify\")\"",
+    "echo \"$(sh -c \"git commit -m x\")\"",
+    shlex.join(["bash", "-c"] + [shlex.join(["bash", "-c"] + [shlex.join(["bash", "-c"] + [shlex.join(
+        ["bash", "-c", shlex.join(["bash", "-c", "git commit -m x"])])])])]),
 ]
 
 # item 4: git config WRITES to a keystone key (core.hooksPath / alias.* /
@@ -422,6 +433,16 @@ ALLOWED_CASES = [
     "echo \"\\$(git commit -n)\" > notes.md",
     "cd \"$(git rev-parse --show-toplevel)\" && git commit -m 'forbid `git commit -n`'",
     "x=$(echo '$(git commit -n)'); git status",
+    # P5 R6: single-quoted text stays data beside a trailing # comment or a $'..' word; a
+    # --config-env alias that is not called, a double-quoted $( ) nested without bash -c or
+    # eval, and deep nesting that names no git commit or config pass.
+    "echo '$(git commit -n)' # a note",
+    "git commit -m 'never run `git commit -n`' # see the commit guard",
+    "echo '$(git commit -n)' $'tab\\there'",
+    "git --config-env=alias.ci=CI_VALUE status",
+    "git commit -m \"$(date +\"%Y\")\"",
+    shlex.join(["bash", "-c"] + [shlex.join(["bash", "-c"] + [shlex.join(["bash", "-c"] + [shlex.join(
+        ["bash", "-c", shlex.join(["bash", "-c", "echo commit"])])])])]) + " && git status",
 ]
 
 
@@ -570,6 +591,30 @@ def test_local_keystone_write_aimed_at_the_harness_home_is_blocked(sandbox, harn
     assert str(harness_home) in r.stderr.splitlines()[0], r.stderr
 
 
+# P5 R6: from the harness home, a write that names another repository by a literal absolute
+# -C, --git-dir or GIT_DIR prefix reaches that repository whatever the shell's cwd, so it passes;
+# a target an export or a cd sets may not hold where the write runs, so those stay denied.
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("write", LOCAL_WRITES)
+@pytest.mark.parametrize("form", ("dash-C", "git-dir", "GIT_DIR"))
+def test_local_keystone_write_to_another_repository_from_the_harness_home_is_allowed(
+        sandbox, harness_home, user_project, caller, form, write):
+    assert_allowed(run_hook(sandbox, target_command(form, user_project, write), harness_home, caller))
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("command", (
+    "cd {project} && git config core.hooksPath .githooks",
+    "export GIT_DIR={project}/.git && git config alias.st status",
+    "(export GIT_DIR={project}/.git); git -C {home} config core.hooksPath .githooks",
+    "git -C \"$HOME\"/.. config core.hooksPath .githooks",
+))
+def test_keystone_write_whose_target_rests_on_the_shell_state_stays_denied_in_the_harness_home(
+        sandbox, harness_home, user_project, caller, command):
+    command = command.format(project=user_project, home=harness_home)
+    assert_blocked(run_hook(sandbox, command, harness_home, caller), "config-keystone-write", command)
+
+
 @pytest.mark.parametrize("caller", sorted(CALLERS))
 @pytest.mark.parametrize("command", REACHES_HARNESS_CASES)
 def test_keystone_write_that_can_reach_the_harness_is_blocked_from_a_user_project(
@@ -626,6 +671,23 @@ def test_unregistered_filter_with_changed_settings_is_blocked(sandbox, filtered_
     assert str(filtered_repo) in r.stderr.splitlines()[0]
     assert any("scripts/bootstrap" in line and str(filtered_repo) in line
                for line in r.stderr.splitlines()[1:]), r.stderr
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("committed", [False, True], ids=["changed", "as-committed"])
+def test_unregistered_filter_with_unusable_settings_names_the_loads_reason(sandbox, filtered_repo,
+                                                                          caller, committed):
+    """settings.json unparseable at the same size is judged by the one load of a settings file
+    (hooks/lib/claude_home.py load_settings): blocked with its reason, also when HEAD holds it."""
+    _, env = sandbox
+    path = filtered_repo / "settings.json"
+    path.write_bytes(b"{" * path.stat().st_size)
+    if committed:
+        git(env, filtered_repo, "commit", "-q", "-am", "unusable")
+    command = "git commit -m x"
+    r = run_hook(sandbox, command, filtered_repo, caller)
+    assert_blocked(r, "unregistered-settings-filter", command)
+    assert f"settings.json is unusable: {path}: not valid JSON (" in r.stderr, r.stderr
 
 
 @pytest.mark.parametrize("caller", sorted(CALLERS))
@@ -755,7 +817,10 @@ def test_do_consent_does_not_bypass(sandbox, filtered_repo, harness_home, caller
     plain = make_repo(env, tmp_path / "plain" / "repo", declare_filter=False)
     assert run_hook(sandbox, CONTROL[caller], plain, caller).returncode == 2
     (tmp_path / "state" / f"claude-orchestrator-consent-{SID}.flag").write_text("true")
-    assert_allowed(run_hook(sandbox, CONTROL[caller], plain, caller))  # consent is live
+    if caller == "main":
+        assert_allowed(run_hook(sandbox, CONTROL[caller], plain, caller))  # consent is live
+    else:  # a subagent never holds /do consent (hooks/lib/allowlist.py has_do_consent)
+        assert run_hook(sandbox, CONTROL[caller], plain, caller).returncode == 2
     command = "git commit --no-verify -m x"
     assert_blocked(run_hook(sandbox, command, plain, caller), "commit-hook-bypass", command)
     cw = "git config core.hooksPath /dev/null"

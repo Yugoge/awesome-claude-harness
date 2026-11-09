@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marker to a stable version is a separate, later decision and is deliberately not
   gated here.
 
+### Fixed
+- **The worktree guard can no longer lock a session.** `hooks/pretool-worktree-guard.sh`
+  runs before every tool and exited 2 while any agent worktree was behind the main
+  branch. That blocked the `git worktree remove` it recommended, and every Read,
+  AskUserQuestion and Agent call, while the other half of its advice, `git branch -D`,
+  is refused by `pretool-bash-safety.sh`; only the human could end the state. The
+  guard is now advisory: it always exits 0 and hands the lesson (a stale worktree
+  causes merge conflicts) to Claude as PreToolUse `additionalContext` and to the user
+  as `systemMessage`, with the exact `git worktree remove` command for each stale
+  worktree. Branch deletion is left to the user. Covered by
+  `hooks/tests/test_worktree_guard.py`.
+
 ## [1.0.0] - 2026-07-05
 
 ### Added

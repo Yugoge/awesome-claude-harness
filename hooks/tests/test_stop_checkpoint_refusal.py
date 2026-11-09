@@ -1,6 +1,6 @@
 """A refused checkpoint snapshot never blocks a Stop (PR 4 review R5).
 
-Drives the registered Stop hook, hooks/stop-workflow-coordinator.py with its four default
+Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 phases, in a throwaway copy of the harness home (hooks/ plus the two engines the refusal
 runs). When the private-literal rule, the settings check or, with the filter registered, the
 settings clean filter (a settings.json it cannot clean: a byte order mark, not JSON, not an
@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 STANDIN = "acct-test-123"  # stand-in personal value / listed literal
 SID = "sess-r5-test"
 REF = "refs/checkpoints/main"
-PHASES = ["timelock", "coverage", "auto_commit", "cleanup"]
+PHASES = ["coverage", "auto_commit", "completion", "cleanup"]
 LITERAL_RULE = "the private-literal rule"
 SETTINGS_CHECK = "the settings check (render-settings check --staged)"
 SETTINGS_FILTER = "the settings filter (render-settings clean)"
@@ -78,8 +78,9 @@ def harness(tmp_path: Path) -> tuple[Path, dict]:
 
 def _stop(home: Path, env: dict, *, active: bool) -> dict:
     """One Stop event through the registered hook, as Claude Code sends it."""
-    # An unconsumed /allow grant: the cleanup phase expires it at every Stop.
-    flag = Path(env["CLAUDE_STATE_DIR"]) / f"claude-bash-allowlist-{SID}.json"
+    # An /allow grant the reader rejects: the cleanup phase reaps it at every Stop.
+    flag = Path(env["CLAUDE_STATE_DIR"]) / "claude-grants" / f"{SID}.json"
+    flag.parent.mkdir(exist_ok=True)
     flag.write_text("{}\n")
     payload = {
         "session_id": SID,
@@ -89,7 +90,7 @@ def _stop(home: Path, env: dict, *, active: bool) -> dict:
         "stop_hook_active": active,
     }
     proc = subprocess.run(
-        [sys.executable, str(home / "hooks" / "stop-workflow-coordinator.py")],
+        [sys.executable, str(home / "hooks" / "stop-launch.py")],
         input=json.dumps(payload),
         text=True,
         capture_output=True,

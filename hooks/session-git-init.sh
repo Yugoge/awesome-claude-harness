@@ -42,45 +42,10 @@ echo -e "${BLUE}🚀 No Git repository found. Initializing...${NC}"
 # Initialize git
 git init > /dev/null 2>&1
 
-# Create .gitignore (if doesn't exist)
-if [ ! -f .gitignore ]; then
-  cat > .gitignore << 'EOF'
-# Dependencies
-node_modules/
-venv/
-__pycache__/
-*.pyc
-.Python
-env/
-build/
-dist/
-*.egg-info/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Claude Code local settings
-.claude/settings.local.json
-EOF
+# Create .gitignore (if doesn't exist), through the one writer of a project's
+# .gitignore, scripts/update-gitignore.sh.
+HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ "$(bash "$HARNESS_DIR/scripts/update-gitignore.sh" "$PWD" --init)" = "created" ]; then
   echo -e "${GREEN}✅ Created .gitignore${NC}"
 fi
 
@@ -126,13 +91,15 @@ fi
 # Remote repository step (environment variables):
 #   CLAUDE_AUTO_CREATE_REPO  unset or "ask": print the manual command and skip;
 #                            {1,true,TRUE,yes,YES} (the gate set above): create it;
-#                            anything else: skip.
-#   GIT_AUTO_PUSH            push the initial commit only when exactly "1";
-#                            otherwise create without pushing (push later with /push).
+#                            {0,false,FALSE,no,NO}: skip; anything else: skip, saying so.
+#   GIT_AUTO_PUSH            push the initial commit only when exactly "1", unless the new
+#                            repository's harness.autoPush (from a git init template) says
+#                            otherwise (lib/auto_push.sh); else create without pushing (/push later).
 AUTO_CREATE=${CLAUDE_AUTO_CREATE_REPO:-ask}
 CREATE_ARGS=(--private --source=. --remote=origin)
-PUSH_NOTE="Initial commit not pushed: automatic push is off (enable with GIT_AUTO_PUSH=1). Push with /push or: git push -u origin HEAD"
-if [ "${GIT_AUTO_PUSH:-}" = "1" ]; then
+PUSH_NOTE="Initial commit not pushed: automatic push is off for this repository (enable with git config harness.autoPush true, or GIT_AUTO_PUSH=1). Push with /push or: git push -u origin HEAD"
+. "$(dirname "${BASH_SOURCE[0]}")/lib/auto_push.sh" 2>/dev/null || harness_auto_push() { return 1; }  # no reader, no push
+if harness_auto_push .; then
   CREATE_ARGS+=(--push)
   PUSH_NOTE=""
 fi
@@ -145,15 +112,18 @@ case "$AUTO_CREATE" in
     echo -e "${YELLOW}   Skipping for now. Run manually: $MANUAL_CMD${NC}"
     [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
     exit 0 ;;
-  *)
+  0|false|FALSE|no|NO)
     echo -e "${YELLOW}⚠️  Auto-create disabled. Skipping GitHub repository creation.${NC}"
+    exit 0 ;;
+  *)
+    echo -e "${YELLOW}⚠️  CLAUDE_AUTO_CREATE_REPO value not recognised (true/1/yes create, false skips). Skipping GitHub repository creation.${NC}"
     exit 0 ;;
 esac
 
 # Auto-create GitHub repository
 echo -e "${BLUE}🌐 Creating GitHub repository: $REPO_NAME${NC}"
 
-# Create private repository (pushed only when GIT_AUTO_PUSH=1 added --push)
+# Create private repository (pushed only when harness_auto_push added --push)
 if gh repo create "$REPO_NAME" "${CREATE_ARGS[@]}" > /dev/null 2>&1; then
   USERNAME=$(gh api user -q .login)
   echo -e "${GREEN}✅ Repository created: https://github.com/$USERNAME/$REPO_NAME${NC}"
@@ -161,6 +131,7 @@ if gh repo create "$REPO_NAME" "${CREATE_ARGS[@]}" > /dev/null 2>&1; then
 else
   echo -e "${RED}❌ Failed to create GitHub repository.${NC}"
   echo -e "${YELLOW}   You can create it manually: $MANUAL_CMD${NC}"
+  [ -z "$PUSH_NOTE" ] || echo -e "${YELLOW}   $PUSH_NOTE${NC}"
   exit 1
 fi
 

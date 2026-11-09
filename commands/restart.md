@@ -7,7 +7,12 @@ disable-model-invocation: true
 
 Human-only emergency recovery; invoke only after a session or usage limit has
 interrupted this session — every recoverable interrupted subagent, or, when the
-session had none, the main agent's own work.
+session had none, the main agent's own work. Inside `/dev-overnight` the session's
+own wake (dev-overnight.md Step 0) starts the same Mandatory procedure with no
+human: `userprompt-restart-authorize.py` issues the capability to the wake's fixed
+text only while the `/dev-overnight` span is open (never after `/stop`), and
+`prompt-workflow.py` hands this procedure over; with 0 candidates it finalizes and
+the session carries on with its checklist step in progress (D20).
 
 ## Usage
 
@@ -67,7 +72,7 @@ directive to this session's own main agent — see
    `RESTART_BLOCKED_SESSION_ID_UNAVAILABLE` when neither exists:
 
    ```text
-   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py prepare
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py" prepare
    ```
 
    The output is the transcript-derived candidate set for THIS parent session
@@ -114,7 +119,7 @@ directive to this session's own main agent — see
    helper with a tool timeout of at least 600000 ms:
 
    ```text
-   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py status --wait-seconds 540
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py" status --wait-seconds 540
    ```
 
    If `complete` is false, report `RESTART_INCOMPLETE` with every
@@ -127,10 +132,14 @@ directive to this session's own main agent — see
 5. **Finalize only after all responses.** When `complete` is true, invoke:
 
    ```text
-   $HOME/.claude/venv/bin/python $HOME/.claude/scripts/restart-subagents.py finalize
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py" finalize
    ```
 
    Report the recovered agent IDs and point to their existing transcript paths.
+   Then go on with the command whose subagents were cut, from the checklist step
+   that was in progress: each resumed agent's original `Agent` call is that
+   step's dispatch (`pretool-todo-validate.py` reads the recovery journal), so
+   complete the step once its artifacts are checked; never dispatch a replacement.
 
 ## Zero-candidate continuation
 
@@ -182,9 +191,10 @@ complete, valid prepare result, never an error to retry.
    - **No stand-in agent.** Continuation is the main agent resuming its own
      work. It never becomes an `Agent`/`Task` dispatch carrying the session's
      transcript as a prompt.
-   - **Report honestly.** If the interrupted work cannot be resumed from the
-     surviving state, say so and name what is missing. Never claim a phase
-     complete when no evidence of it exists.
+   - **Rebuild what is missing.** When the surviving state lacks what the next
+     phase needs, name what is missing and produce it again by the step that
+     makes it, then continue. Never claim a phase complete when no evidence of it
+     exists.
 
 ## Non-negotiable prohibitions
 
@@ -199,8 +209,8 @@ complete, valid prepare result, never an error to retry.
 - **DO NOT copy a transcript into a fresh prompt** and call that a restart.
 - **DO NOT repeat irreversible operations.** The fixed recovery message requires
   each resumed agent to inspect its last tool result and workspace side effects first.
-- **DO NOT overwrite or complete the active `/dev`, `/redev`, `/spec`, or
-  `/dev-overnight` TodoWrite/workflow bookmark.** `/restart` is an orthogonal
+- **DO NOT overwrite the active `/dev`, `/redev`, `/spec`, or `/dev-overnight`
+  TodoWrite/workflow bookmark, nor complete its steps before step 5.** `/restart` is an orthogonal
   control operation and intentionally has no todo script. Because of this,
   `pretool-workflow-gate.py` exempts the exact `restart-subagents.py`
   invocations in steps 2, 4, and 5 from the checklist gate: even a session

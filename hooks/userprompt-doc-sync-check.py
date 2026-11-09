@@ -3,12 +3,14 @@
 UserPromptSubmit Hook: Periodic file deletion detection for doc-sync.
 
 Compares current file lists in watched directories against cached state.
-If deletions detected, regenerates INDEX.md for affected directories
-by invoking posttool-doc-sync.py via subprocess.
+If deletions detected, re-runs posttool-doc-sync.py via subprocess for the
+affected directories (it updates their marked INDEX.md), and removes the
+INDEX.md of a directory left empty.
 
 Hook type: UserPromptSubmit
 Exit codes: 0 always (never blocks)
-Cache file: ~/.claude/.doc-sync-cache.json
+Cache file: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.doc-sync-cache.json (runtime state);
+the child hooks run from this file's own directory (harness assets)
 Check interval: 300 seconds
 """
 
@@ -19,7 +21,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-CACHE_FILE: Path = Path.home() / '.claude' / '.doc-sync-cache.json'
+CACHE_FILE: Path = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / '.doc-sync-cache.json'
 CHECK_INTERVAL: int = 300  # seconds between checks
 HOOK_EVENT_NAME: str = 'UserPromptSubmit'
 MAX_OUTPUT_CHARS: int = 10000  # documented cap for hook output strings
@@ -158,7 +160,7 @@ def main() -> None:
 
         # Resync affected directories via posttool-doc-sync.py
         if dirs_to_resync:
-            hook_dir: Path = Path.home() / '.claude' / 'hooks'
+            hook_dir: Path = Path(__file__).resolve().parent
             for dir_path in dirs_to_resync:
                 # Find any remaining file to use as trigger
                 remaining: list[Path] = [
@@ -169,10 +171,14 @@ def main() -> None:
                 if remaining:
                     trigger_file: str = str(remaining[0])
                 else:
-                    # Directory empty or gone, just remove INDEX.md
+                    # Directory empty or gone: remove its INDEX.md through the one writer of
+                    # that file (run as a file, so this hook still imports nothing of doc_sync).
                     idx: Path = dir_path / 'INDEX.md'
                     if idx.exists():
-                        idx.unlink()
+                        subprocess.run(
+                            ['python3', str(hook_dir / 'doc_sync' / 'folder_doc.py'), '--remove', str(idx)],
+                            capture_output=True, timeout=5,
+                        )
                     continue
 
                 fake_input: str = json.dumps({

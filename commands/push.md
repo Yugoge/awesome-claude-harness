@@ -6,7 +6,7 @@ disable-model-invocation: true
 # Push Command
 
 `/push` is the validated wrapper for normal branch publication. Note: pretool-git-privilege-guard.py is REGISTERED in settings.json (PreToolUse, Bash matcher) and enforces commit authorization — agents must hold a valid commit grant or use the `auto-bulk:` bridge prefix to commit. The wrapper
-script `~/.claude/hooks/push.sh` produces a valid push grant recognized by the guard.
+script `<HARNESS_ROOT>/hooks/push.sh` produces a valid push grant recognized by the guard.
 
 The slash entry has `disable-model-invocation: true` to prevent the model
 from autonomously self-dispatching `/push` via SlashCommand. It does NOT
@@ -31,15 +31,14 @@ accepts only an optional remote and `--auto` for non-interactive lock handling.
 
 ## Behavior summary
 
-1. Refuse detached HEAD.
+1. Refuse detached HEAD (the protocol asks first: Step 2).
 2. Print staged / modified / untracked files for context only.
 3. Treat dirty worktree state as non-blocking; only committed objects push.
-4. Exit cleanly when there is nothing ahead of upstream.
+4. Exit cleanly when nothing is ahead of `refs/remotes/<remote>/<branch>` (none: a first push).
 5. Emit a single-use push grant binding branch, current HEAD, remote, SID,
    nonce, ppid, and timestamp.
 6. Export the wrapper-only push env var for the child process.
 7. Run a normal branch push, with `-u` only when setting an upstream.
-8. Append the push audit log on success.
 
 ## Safety contract
 
@@ -62,10 +61,12 @@ gate proves only that a real `/commit` produced something still part of HEAD's h
 check proves that as well as equality does, and there is no cross-tenant boundary to enforce (one
 machine, one user, many cooperating sessions).
 
-Token base directory: `/tmp/agentic-commit/push/<repo-hash>/`
+Token base directory: `<state dir>/agentic-commit/push/<repo-hash>/`, where `<state dir>` is
+`$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp` (`hooks/lib/harness_state_dir`),
+for the token's one writer (`scripts/write-push-gate-token.py`) and for `push.sh` alike.
 
 - `repo-hash` = `sha256(os.path.realpath(repo_root)).hexdigest()[:16]`
-- `/commit` still WRITES its token to a session-scoped path under that base,
+- The writer puts each token at a session-scoped path under that base,
   `<repo-hash>/<session-digest>/<branch-encoded>.json`, where `session-digest` =
   `sha256(<raw session id>).hexdigest()[:16]` (raw session id: `CLAUDE_CODE_SESSION_ID`, else
   `CLAUDE_SESSION_ID`, else the literal `unknown`; digested because it becomes a path segment and
@@ -97,7 +98,8 @@ Token base directory: `/tmp/agentic-commit/push/<repo-hash>/`
   that files did exist and parse; they just don't name anything still reachable from HEAD).
 
 **Resolution**: run `/commit [<task-id>]` — in ANY session on this branch, not necessarily this
-one. The `changelog-analyst` subagent writes the token after a successful real-branch commit; as
+one. The `changelog-analyst` subagent (or, under `/clean`, the cleaner) runs the token's writer
+after a successful real-branch commit; as
 long as that commit is still reachable from HEAD (not reset/rebased away), its token remains
 usable by any session's `/push` indefinitely, not just the session that minted it. The token is
 consumed (deleted) after a successful push.
@@ -107,7 +109,7 @@ consumed (deleted) after a successful push.
 ## Pre-conditions for success
 
 - On a real branch.
-- Branch has commits ahead of upstream, or has no upstream yet.
+- Branch has commits ahead of the remote's tracking ref, or the remote lacks the branch.
 - The selected remote exists locally.
 - A valid push-gate token exists at the path above (see Session commit prerequisite).
 
@@ -118,10 +120,14 @@ consumed (deleted) after a successful push.
 | 0    | Push succeeded, or nothing to push |
 | 1    | Detached HEAD, missing remote, or normal push failure |
 | 2    | Blocked option such as force/delete/ref-rewrite mode |
+| 3    | No push-gate token names an ancestor of HEAD (see Session commit prerequisite) |
 
 ## Agentic dispatch protocol (pre-execution)
 
-Before calling `push.sh`, the orchestrator MUST execute the following steps in order:
+Before calling `push.sh`, the orchestrator MUST execute the following steps in order. Where one refuses,
+ask ONE AskUserQuestion in this turn instead of exiting: the question is the refusal's message with its
+facts; the options are the action the refusal names, marked (Recommended), and "I give another
+instruction". Act on the answer; a refusal met again after it is reported in the reply, not asked again.
 
 **Step 0: Parse arguments and resolve remote**
 
@@ -137,16 +143,10 @@ fi
 # Explicit user-provided remote argument overrides the above
 ```
 
-**Step 1: Validate push-gate token (Chain A — cross-session, ancestor-based)**
+**Step 1: Push-gate token (Chain A)**
 
-This is the existing session commit prerequisite check, now cross-session and ancestor-based
-(see Session commit prerequisite above for the full rationale). Scan every `<branch-encoded>.json`
-candidate under `/tmp/agentic-commit/push/<repo-hash>/` (own session slot, every other session's
-slot, and the legacy session-less path — all equal candidates now, no ownership test), and accept
-the first one (newest-mtime-first) whose `commit_sha` passes `git merge-base --is-ancestor
-<commit_sha> HEAD`. Abort and instruct the user to run `/commit` (in any session) first only when
-NO candidate anywhere validates — either none exist, or every one that parses names a commit that
-is not an ancestor of current HEAD.
+`push.sh` is the push-gate token's one decider (Session commit prerequisite): it refuses the push (exit 3)
+when no candidate names an ancestor of HEAD. This step reads nothing; go on to Step 2.
 
 **Step 2: Compute pre-push snapshot**
 
@@ -160,12 +160,12 @@ REQUEST_ID=$(openssl rand -hex 16)
 SESSION_ID="${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
 ```
 
-If `SESSION_ID` is empty or unset, abort immediately with:
-"Cannot dispatch push-analyst: CLAUDE_SESSION_ID (and CLAUDE_CODE_SESSION_ID) not set. Invoke /push from within a Claude Code session."
+If `BRANCH` is `HEAD`, refuse: "HEAD is detached" (action "check out the branch to push"). If `SESSION_ID` is
+empty, refuse: "Cannot dispatch push-analyst: no session id" (action "re-run the snapshot now").
 
 **Step 3: Dispatch push-analyst subagent**
 
-Dispatch the `push-analyst` subagent with the following context:
+Dispatch the `push-analyst` subagent (Agent tool, `run_in_background: false`) with the following context:
 
 ```
 BRANCH=<BRANCH>
@@ -175,7 +175,13 @@ REMOTE_URL=<REMOTE_URL>
 REQUEST_ID=<REQUEST_ID>
 SESSION_ID=<SESSION_ID>
 REPO_HASH=<REPO_HASH>
+
+<obligation v="1">
+{"task_id": null, "lane": null, "lane_set": null, "role": "push-analyst", "pipeline": "push", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^push-analyst grant written: \\S+\\.json$"}]}
+</obligation>
 ```
+
+The obligation names this dispatch's role and command. The grant itself lives in the state dir, outside the repository, where no obligation path can name it, so the artifact it declares is the push-analyst's closing `push-analyst grant written: <GRANT_PATH>` line (agents/push-analyst.md Phase 7).
 
 Wait for the subagent to complete before proceeding.
 
@@ -186,7 +192,8 @@ MUST NOT manually read, validate, or unlink the push-analyst grant file. Pass al
 snapshot values to the script directly. No subagent delegation.
 
 For reference, the script validates the following grant fields from
-`/tmp/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json`:
+`<state dir>/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json` (the state dir
+is `$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`, the same for every reader and writer):
 - File exists and is valid JSON
 - `nonce` field matches `REQUEST_ID`
 - `branch` field matches `BRANCH`
@@ -211,15 +218,15 @@ atomically, and exec's push.sh — all in a single process. See Step 5.
 validate-push and the actual push MUST be a
 **single-process exec pattern** — `execute-push.py` writes a Chain-B success
 sentinel at
-`/tmp/agentic-commit/push-analyst/<REPO_HASH>/<BRANCH_ENCODED>-chainB.validated.sentinel.json`
+`<state dir>/agentic-commit/push-analyst/<REPO_HASH>/<BRANCH_ENCODED>-chainB.validated.sentinel.json`
 (atomic temp+rename, mtime ≤ 60s, bound to `request_id` + `head` + `branch` + `remote`)
-and then `os.execv`s `~/.claude/hooks/push.sh` so both run as ONE PID. The sentinel
+and then `os.execv`s `<HARNESS_ROOT>/hooks/push.sh` so both run as ONE PID. The sentinel
 is read ONLY once from inside push.sh; missing / expired / FAIL / mismatched sentinel
 triggers `exit 1` BEFORE any `git push` is reached.
 
 ```bash
 # Without --auto:
-python3 ~/.claude/scripts/execute-push.py \
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/execute-push.py" \
   --repo-hash "${REPO_HASH}" \
   --branch "${BRANCH}" \
   --remote "${RESOLVED_REMOTE}" \
@@ -227,7 +234,7 @@ python3 ~/.claude/scripts/execute-push.py \
   --repo-root "${REPO_ROOT}"
 
 # With --auto (only when /push was invoked with --auto):
-python3 ~/.claude/scripts/execute-push.py \
+python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/execute-push.py" \
   --repo-hash "${REPO_HASH}" \
   --branch "${BRANCH}" \
   --remote "${RESOLVED_REMOTE}" \
@@ -239,16 +246,14 @@ python3 ~/.claude/scripts/execute-push.py \
 This script validates the grant (non-head_sha fields), acts on verdict, checks HEAD drift
 (single check: grant.head_sha vs current HEAD), consumes the grant, writes the Chain-B
 sentinel atomically, and replaces itself with push.sh via `os.execv`. No subagent
-delegation. No `&&` chaining. The orchestrator calls this directly.
+delegation. No `&&` chaining. The orchestrator calls this directly. Its refusals: "push BLOCKED
+by push-analyst" (action "resolve the listed risks first"); exit 3, no push-gate token (action "run /commit first").
 
 `--auto` is a boolean flag with no value argument. Do NOT pass `--auto "$AUTO"`.
 `CLAUDE_SESSION_ID` is read from the environment automatically; do NOT pass it as a
 CLI argument.
 
-Note: `python3` is used directly (no venv activation needed) because the script
-uses only Python stdlib modules (argparse, json, os, subprocess, sys, tempfile,
-datetime, pathlib). This matches the `Bash(python3:*)` allow entry in settings.json
-— no additional permission is required.
+Note: `python3` runs it directly (stdlib only, no venv), matching the `Bash(python3:*)` allow entry.
 
 ## Push-analyst grant TTL
 

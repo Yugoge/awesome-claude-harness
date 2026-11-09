@@ -11,7 +11,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -32,7 +32,6 @@ sys.modules[spec.name] = coordinator
 spec.loader.exec_module(coordinator)
 
 TRACKER = HOOKS / "posttool-todo-tracker.py"
-TIMELOCK = HOOKS / "stop-overnight-timelock.py"
 
 
 @pytest.fixture(autouse=True)
@@ -77,6 +76,15 @@ def _publish(root: Path, binding: dict) -> None:
     )
 
 
+def _closeout_on_disk(root: Path, sid: str) -> None:
+    """The overnight closeout the time-lock reads after end_time (lib/overnight
+    closeout_gaps): Step 20's PM retrospective and Step 21's summary."""
+    retro = root / "docs" / "dev" / "overnight" / sid / "retro-report-cycle1.json"
+    retro.parent.mkdir(parents=True, exist_ok=True)
+    retro.write_text("{}")
+    (root / "docs" / "dev" / "overnight-summary-2026-11-01.md").write_text("done")
+
+
 def _tree_digest(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
@@ -109,14 +117,12 @@ SLOW_SOURCE = "import time; time.sleep(3)\n"
 SLOW_TIMEOUT = 0.5  # below slow.py's 3 s sleep
 # The phase a non-success outcome lands on when _phases names no target.
 OUTCOME_PHASE = {
-    "invalid": "timelock",
     "block": "coverage",
     "fail": "auto_commit",
     "timeout": "cleanup",
 }
 _OUTCOME_BODY = {
     "allow": "",
-    "invalid": "print(json.dumps({'decision':'mystery'}))",
     "block": "raise SystemExit(2)",
     "fail": "raise SystemExit(1)",
     "timeout": "time.sleep(0.2)",
@@ -142,8 +148,8 @@ def _outcome_phase(root: Path, name: str, outcome: str):
 def _phases(root: Path, outcome: str = "allow", target: str | None = None) -> list:
     """The four phases in PHASE_ORDER, each logging its name to phase.log and
     allowing, except ``target`` (default OUTCOME_PHASE[outcome]), which runs
-    ``outcome``: block (exit 2), fail (exit 1), timeout, invalid (a structured
-    {"decision": "mystery"} on exit 0), crash, slow, missing or launch (error)."""
+    ``outcome``: block (exit 2), fail (exit 1), timeout, crash, slow, missing or
+    launch (error)."""
     target = target or OUTCOME_PHASE.get(outcome)
     return [
         _outcome_phase(root, name, outcome if name == target else "allow")
@@ -151,57 +157,206 @@ def _phases(root: Path, outcome: str = "allow", target: str | None = None) -> li
     ]
 
 
-def test_timelock_uses_exact_state_and_publishes_without_finalizing(
+def _overnight_state(root: Path, sid: str, binding: dict) -> None:
+    """The session's overnight record, which the coordinator's receipt call reads."""
+    state = {
+        "session_id": sid,
+        "dev_registry_session_id": binding["resource_session_id"],
+        "end_time": (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+    }
+    (root / ".claude").mkdir(parents=True, exist_ok=True)
+    (root / ".claude" / f"overnight-state-{sid}.json").write_text(json.dumps(state))
+
+
+def _terminal_completion(root: Path, terminal: str = "completed_by_deadline"):
+    """A completion phase that allows and prints the gate's terminal time-lock line."""
+    body = f"print(json.dumps({{'timelock_terminal': {terminal!r}}}))"
+    return coordinator.Phase("completion", (sys.executable, str(_phase_script(root, "completion", body))))
+
+
+def test_the_coordinator_publishes_the_receipt_from_the_gates_terminal_line_and_finalize_reads_it(
     tmp_path: Path,
 ) -> None:
+    """R9, P1b row 15 (acceptance 21): the coordinator alone makes the receipt call, on the
+    gate's terminal time-lock line; finalize reads the receipt at that Stop and its own
+    finalized.json at the next one, where the receipt is not written again. No phase gets
+    either trust key."""
     root = tmp_path / "project"
     root.mkdir()
     sid = "claude-overnight"
     binding = _binding("overnight", command="dev-overnight", session=sid)
     provisioned = session_resources.provision(root, binding)
+    _overnight_state(root, sid, binding)
+    phase_list = []
+    for name in coordinator.PHASE_ORDER:
+        if name == "completion":
+            phase_list.append(_terminal_completion(root))
+            continue
+        body = (
+            "import os\n"
+            f"pathlib.Path({str(root / f'{name}-keys.json')!r}).write_text(json.dumps(["
+            f"os.environ.get({session_resources.TRUST_KEY_ENV!r}),"
+            f"os.environ.get({session_resources.TRUST_ROOT_ENV!r})]))"
+        )
+        phase_list.append(
+            coordinator.Phase(name, (sys.executable, str(_phase_script(root, name, body))))
+        )
+    receipt = (
+        root / ".claude/session-resources" / binding["resource_session_id"] / "terminal.json"
+    )
+
+    def stop() -> tuple[dict, int]:
+        return coordinator.run_coordinator(
+            {"session_id": sid, "cwd": str(root)},
+            project_dir=root,
+            environment={**os.environ, "CLAUDE_PROJECT_DIR": str(root)},
+            phases=phase_list,
+        )
+
+    first, first_exit = stop()
+    assert first_exit == 0 and first["status"] == "pass", first
+    assert first["finalizer_called"] is True and first["finalizer"]["idempotent"] is False
+    assert json.loads(receipt.read_text())["terminal_status"] == "completed_by_deadline"
+    assert not Path(provisioned["scratch_path"]).exists()
+    written = receipt.read_bytes()
+
+    second, second_exit = stop()
+    assert second_exit == 0 and second["status"] == "pass", second
+    assert second["finalizer_called"] is True and second["finalizer"]["idempotent"] is True
+    assert receipt.read_bytes() == written
+    for name in ("coverage", "auto_commit", "cleanup"):
+        assert json.loads((root / f"{name}-keys.json").read_text()) == [None, None]
+
+
+def test_no_receipt_without_a_terminal_line_or_without_a_resource_session(tmp_path: Path) -> None:
+    """An allowed completion that prints no terminal line publishes nothing; a terminal
+    line with no resource session provisioned publishes nothing either."""
+    root = tmp_path / "project"
+    root.mkdir()
+    sid = "claude-overnight"
+    binding = _binding("overnight", command="dev-overnight", session=sid)
+    _overnight_state(root, sid, binding)
+    phase_list = _phases(root)
+    phase_list[coordinator.PHASE_ORDER.index("completion")] = _terminal_completion(root)
+    plain = {k: v for k, v in os.environ.items() if k not in coordinator.TRUST_ENVIRONMENT_KEYS}
+    result, exit_code = coordinator.run_coordinator(
+        {"session_id": sid, "cwd": str(root)}, project_dir=root,
+        environment={**plain, "CLAUDE_PROJECT_DIR": str(root)}, phases=phase_list,
+    )
+    assert exit_code == 0 and result["reason"] == "resource_broker_not_configured", result
+    assert not (root / ".claude/session-resources").exists()
+
+
+@pytest.mark.parametrize("verdict", ["raises", "no_identity", "resolved", "unconfigured"])
+def test_the_receipt_publish_takes_the_preflights_verdict_on_the_session_resources_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verdict: str
+) -> None:
+    """P1c c0ad6d6 where P5 publishes the receipt: one rule decides on the session-resources
+    pointer and session.json, the coordinator's preflight read
+    (session_resources.resolve_current_resource_session). Its verdict comes before any receipt
+    call: with no current resource session for the Claude session (it raises, or resolves no
+    identity) no receipt is attempted; resolved, the receipt follows it once, for the same
+    session; with the trust authority unconfigured neither the read nor a receipt happens."""
+    root = tmp_path / "project"
+    root.mkdir()
+    sid = "claude-overnight"
+    _overnight_state(root, sid, _binding("overnight", command="dev-overnight", session=sid))
+    calls: list = []
+
+    def resolve(project_dir, claude_session_id, *, trust_environment):
+        calls.append(("resolve", Path(project_dir), claude_session_id))
+        if verdict == "raises":
+            raise ValueError("no current resource session")
+        return {"resource_session_id": "resource-x"} if verdict == "resolved" else {}
+
+    def publish(project_dir, *, claude_session_id, state, terminal_status):
+        calls.append(("publish", Path(project_dir), claude_session_id, terminal_status))
+        return {"status": "pass"}
+
+    def finalize(project_dir, *, claude_session_id, resource_session_id, trust_environment):
+        calls.append(("finalize", resource_session_id))
+        return {"status": "pass", "idempotent": False}
+
+    monkeypatch.setattr(coordinator.session_resources, "resolve_current_resource_session", resolve)
+    monkeypatch.setattr(coordinator.session_resources, "publish_overnight_receipt", publish)
+    monkeypatch.setattr(coordinator.session_resources, "finalize", finalize)
+    phase_list = _phases(root)
+    phase_list[coordinator.PHASE_ORDER.index("completion")] = _terminal_completion(root)
+    plain = {k: v for k, v in os.environ.items() if k not in coordinator.TRUST_ENVIRONMENT_KEYS}
+    trust = {} if verdict == "unconfigured" else {
+        session_resources.TRUST_KEY_ENV: "c7" * 32, session_resources.TRUST_ROOT_ENV: str(tmp_path / "trust")}
+    result, exit_code = coordinator.run_coordinator(
+        {"session_id": sid, "cwd": str(root)}, project_dir=root,
+        environment={**plain, **trust, "CLAUDE_PROJECT_DIR": str(root)}, phases=phase_list,
+    )
+    if verdict == "resolved":
+        assert exit_code == 0 and result["status"] == "pass", result
+        assert calls == [("resolve", root, sid), ("publish", root, sid, "completed_by_deadline"),
+                         ("finalize", "resource-x")]
+    elif verdict == "unconfigured":
+        assert exit_code == 0 and result["reason"] == "resource_broker_not_configured", result
+        assert calls == []
+    else:
+        assert exit_code == 2 and result["reason"] == "resource_preflight_contract_error", result
+        assert calls == [("resolve", root, sid)]
+
+
+def test_the_real_gate_hands_the_receipt_its_terminal_status_once_the_closeout_is_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2's time-lock receipt where it now lives: the completion phase is the real gate
+    (hooks/stop-command-gate.py, P2's real window_open and closeout_gaps) on a session whose
+    end_time has passed, in no gated span. With the closeout incomplete the gate allows and
+    prints no terminal status, so there is no receipt to publish. With Step 20's
+    retrospective and Step 21's summary on disk it prints completed_by_deadline, and the
+    coordinator publishes that receipt (one cycle ended: its generation is 2) and
+    finalizes."""
+    root = tmp_path / "project"
+    root.mkdir()
+    sid = "claude-overnight"
+    binding = {**_binding("overnight", command="dev-overnight", session=sid), "workflow_generation": 2}
+    provisioned = session_resources.provision(root, binding)
     scratch = Path(provisioned["scratch_path"])
     (scratch / "evidence").write_text("preserve")
     before = _tree_digest(scratch)
-    summary = root / "summary.md"
-    summary.write_text("done")
-    state = {
-        "session_id": sid,
-        "dev_registry_session_id": binding["resource_session_id"],
-        "cycle_count": 0,
-        "end_time": (datetime.now() - timedelta(seconds=5)).isoformat(),
-        "final_summary_path": str(summary),
-        "pm_retro_reports": ["retro"],
-        "artifact_checkpoint_status": "checkpointed",
-        "current_issues": [],
-        "unresolved_issues": [],
-    }
-    state_path = root / ".claude" / f"overnight-state-{sid}.json"
-    state_path.write_text(json.dumps(state))
-    result = subprocess.run(
-        [sys.executable, str(TIMELOCK)],
-        input=json.dumps({"session_id": sid}),
-        text=True,
-        capture_output=True,
-        env={**os.environ, "CLAUDE_PROJECT_DIR": str(root)},
-    )
-    assert result.returncode == 0, result.stderr
-    receipt = (
-        root
-        / ".claude/session-resources"
-        / binding["resource_session_id"]
-        / "terminal.json"
-    )
+    _overnight_state(root, sid, binding)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(root))  # the coordinator's own process, as the CLI starts it
+    transcript = _transcript(tmp_path / "transcript.jsonl", ["summarise the night"])
+    phase_list = _phases(root)
+    phase_list[COMPLETION] = coordinator.Phase(
+        "completion", (sys.executable, str(HOOKS / "stop-command-gate.py"), "--mode", "block"), 60.0)
+    receipt = root / ".claude/session-resources" / binding["resource_session_id"] / "terminal.json"
+
+    def stop() -> tuple[dict, int]:
+        return coordinator.run_coordinator(
+            {"session_id": sid, "transcript_path": str(transcript), "cwd": str(root)},
+            project_dir=root, environment={**os.environ, "CLAUDE_PROJECT_DIR": str(root)}, phases=phase_list)
+
+    def gate() -> subprocess.CompletedProcess:
+        return subprocess.run(list(phase_list[COMPLETION].argv), text=True, capture_output=True,
+                              input=json.dumps({"session_id": sid, "transcript_path": str(transcript),
+                                                "cwd": str(root)}),
+                              env={**os.environ, "CLAUDE_PROJECT_DIR": str(root)}, cwd=str(root), timeout=60)
+
+    held = gate()
+    assert (held.returncode, held.stdout, held.stderr) == (0, "", "")
+    assert not receipt.exists() and _tree_digest(scratch) == before
+    _closeout_on_disk(root, sid)
+    done = gate()
+    assert (done.returncode, done.stdout) == (0, '{"timelock_terminal": "completed_by_deadline"}\n'), done.stderr
+    result, exit_code = stop()
+    assert exit_code == 0 and result["status"] == "pass" and result["finalizer_called"] is True, result
     assert json.loads(receipt.read_text())["terminal_status"] == "completed_by_deadline"
-    assert _tree_digest(scratch) == before
+    assert not scratch.exists()
 
 
-@pytest.mark.parametrize("outcome", ["block", "fail", "timeout", "invalid"])
+@pytest.mark.parametrize("outcome", ["block", "fail", "timeout"])
 def test_non_success_phase_changes_zero_resource_bytes(
     tmp_path: Path, outcome: str
 ) -> None:
-    """P1 (TC-11): coverage exit 2 blocks; an auto_commit exit 1, a cleanup timeout
-    and a timelock invalid decision with no typed command are recorded and allowed.
-    No outcome reaches the finalizer or changes a resource byte."""
+    """P1 (TC-11): coverage exit 2 blocks; an auto_commit exit 1 and a cleanup timeout
+    are recorded and allowed. No outcome reaches the finalizer or changes a resource
+    byte."""
     root = tmp_path / outcome
     root.mkdir()
     binding = _binding(outcome)
@@ -221,7 +376,7 @@ def test_non_success_phase_changes_zero_resource_bytes(
         assert exit_code == 2 and result["status"] == "blocked"
         assert result["failed_phase"] == "coverage"
         assert result["_relay"] == "failed_phase=coverage\n"
-        assert [p["phase"] for p in result["phases"]] == ["timelock", "coverage"]
+        assert [p["phase"] for p in result["phases"]] == ["coverage"]
     else:
         assert exit_code == 0 and result["status"] == "pass"
         assert result["reason"] == "phase_failure_recorded"
@@ -232,7 +387,7 @@ def test_non_success_phase_changes_zero_resource_bytes(
             (
                 target,
                 outcome,
-                {"fail": "exit code 1", "timeout": "timeout", "invalid": "invalid decision"}[outcome],
+                {"fail": "exit code 1", "timeout": "timeout"}[outcome],
             )
         ]
     assert _tree_digest(resource_tree) == before
@@ -403,7 +558,7 @@ def test_preflight_precedes_phases_and_finalizes_retained_exact_identity(
     def mutate_pointer_after_first_phase(*args: object, **kwargs: object) -> dict:
         result = original_run_phase(*args, **kwargs)
         phase = args[0] if args else kwargs["phase"]
-        if phase.name == "timelock":
+        if phase.name == "coverage":
             pointer["resource_session_id"] = "resource-rebound"
         return result
 
@@ -426,12 +581,14 @@ def test_preflight_precedes_phases_and_finalizes_retained_exact_identity(
     assert trust_calls[0][1] is trust_calls[1][1]
     for name in coordinator.PHASE_ORDER:
         observed = json.loads((root / f"{name}-environment.json").read_text())
+        # R9: no phase gets either key; the coordinator itself makes the receipt call.
+        keys: dict = {}
         assert observed == {
             "coordinated": "1",
-            "key": None,
+            "key": keys.get(session_resources.TRUST_KEY_ENV),
             "ordinary": "ordinary",
             "project": str(root),
-            "root": None,
+            "root": keys.get(session_resources.TRUST_ROOT_ENV),
             "visible": "retained",
         }
 
@@ -524,23 +681,29 @@ def test_finalizer_failure_is_fixed_and_cannot_echo_trust_material(
 
 
 # --------------------------------------------------------------------------
-# P1 coordinator failure handling (TC-11, TC-39, B3.a, B3.b; acceptance 9, 9b)
+# P5 R9: the coordinator's phases, mode, fallback and relay (acceptance 9, 11, 13; P1's TC-11)
 # --------------------------------------------------------------------------
 
 COORDINATOR = HOOKS / "stop-workflow-coordinator.py"
 STOP_SESSION = "8b2f4c1d-6a3e-4f70-9d12-3c5e7a9b0f14"
 # The prompts each transcript records: (command, args) is a typed slash command,
-# a str a plain typed prompt. ACTIVE is stop_contract.active_command of each.
+# a str a plain typed prompt. ACTIVE is command_span.active_command of each.
 TRANSCRIPTS = {
     "dev-overnight": [("dev-overnight", "8h fix the flaky suite")],
     "dev-overnight-then-stop": [("dev-overnight", "8h fix the flaky suite"), ("stop", "")],
+    "dev-overnight-then-spec": [("dev-overnight", "8h fix the flaky suite"), ("spec", "add a flag")],
     "dev": [("dev", "fix the flaky suite")],
+    "dev-then-stop": [("dev", "fix the flaky suite"), "keep going", ("stop", "")],
+    "spec": [("spec", "a spec")],
     "no-command": ["summarise the open issues"],
 }
 ACTIVE = {
     "dev-overnight": "dev-overnight",
     "dev-overnight-then-stop": "stop",
+    "dev-overnight-then-spec": "spec",
     "dev": "dev",
+    "dev-then-stop": "stop",
+    "spec": "spec",
     "no-command": None,
 }
 # (status, returncode, failure) the result JSON records for each instrument failure.
@@ -549,9 +712,9 @@ INSTRUMENT_FAILURES = {
     "slow": ("timeout", None, "timeout"),
     "missing": ("fail", None, "missing file"),
     "launch": ("fail", None, "launch error"),
-    "invalid": ("invalid", 0, "invalid decision"),
 }
 NOTICE = "Checkpoint snapshot refused: settings.json carries machine-local paths."
+COMPLETION = coordinator.PHASE_ORDER.index("completion")
 
 
 def _cli_record(index: int, record_type: str, **fields) -> dict:
@@ -630,19 +793,20 @@ def _project(tmp_path: Path, transcript: str) -> tuple[Path, Path]:
     root = tmp_path / "project"
     root.mkdir()
     path = _transcript(tmp_path / "transcript.jsonl", TRANSCRIPTS[transcript])
-    assert coordinator.stop_contract.active_command(path) == ACTIVE[transcript]
+    assert coordinator.command_span.active_command(path) == ACTIVE[transcript]
     return root, path
 
 
-def _plain_environment(tmp_path: Path, root: Path) -> dict:
+def _plain_environment(tmp_path: Path, root: Path, gate: str | None = None) -> dict:
     """The ambient environment without the resource-broker trust keys (so no
-    broker runs), HOME and CLAUDE_CONFIG_DIR pinned to a tmp home."""
+    broker runs), HOME and CLAUDE_CONFIG_DIR pinned to a tmp home, and
+    CLAUDE_COMMAND_GATE set to ``gate`` (unset for None)."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     environment = {
         key: value
         for key, value in os.environ.items()
-        if key not in coordinator.TRUST_ENVIRONMENT_KEYS
+        if key not in coordinator.TRUST_ENVIRONMENT_KEYS and key != "CLAUDE_COMMAND_GATE"
     }
     environment.update(
         {
@@ -651,26 +815,37 @@ def _plain_environment(tmp_path: Path, root: Path) -> dict:
             "CLAUDE_PROJECT_DIR": str(root),
         }
     )
+    if gate is not None:
+        environment["CLAUDE_COMMAND_GATE"] = gate
     return environment
 
 
-def _stop(tmp_path: Path, root: Path, phases: list, transcript: Path) -> subprocess.CompletedProcess:
-    """One Stop through the coordinator's main(), the phases passed through its
-    LANEB_COORDINATOR_PHASES_JSON override."""
-    environment = _plain_environment(tmp_path, root)
-    environment["LANEB_COORDINATOR_PHASES_JSON"] = json.dumps(
-        [{"name": p.name, "argv": list(p.argv), "timeout": p.timeout} for p in phases]
-    )
-    payload = {
+def _payload(root: Path, transcript: Path) -> dict:
+    return {
         "session_id": STOP_SESSION,
         "transcript_path": str(transcript),
         "cwd": str(root),
         "hook_event_name": "Stop",
         "stop_hook_active": False,
     }
+
+
+def _stop(tmp_path: Path, root: Path, phases: list, transcript: Path, gate: str | None = None,
+          extra: dict | None = None, marked: bool = True) -> subprocess.CompletedProcess:
+    """One Stop through the coordinator's main(), the phases passed through its
+    LANEB_COORDINATOR_PHASES_JSON override, CLAUDE_COMMAND_GATE=``gate`` (None:
+    unset), run as the launcher runs it (``marked``) or directly by an older hook
+    list."""
+    environment = _plain_environment(tmp_path, root, gate)
+    environment.update(extra or {})
+    if marked:
+        environment[coordinator.LAUNCHER_MARK] = "1"
+    environment["LANEB_COORDINATOR_PHASES_JSON"] = json.dumps(
+        [{"name": p.name, "argv": list(p.argv), "timeout": p.timeout} for p in phases]
+    )
     return subprocess.run(
         [sys.executable, str(COORDINATOR)],
-        input=json.dumps(payload),
+        input=json.dumps(_payload(root, transcript)),
         text=True,
         capture_output=True,
         cwd=str(root),
@@ -684,122 +859,242 @@ def _logged(root: Path) -> list:
     return log.read_text().splitlines() if log.exists() else []
 
 
+def _completion(root: Path, body: str):
+    return coordinator.Phase("completion", (sys.executable, str(_phase_script(root, "completion", body))), 5.0)
+
+
+INSTRUMENT_LINE = "COMMAND_GATE instrument failure: {}. The gate is broken; the human can type /stop\n"
+
+
 @pytest.mark.parametrize("failure", sorted(INSTRUMENT_FAILURES))
-def test_timelock_instrument_failure_under_typed_dev_overnight_blocks_with_fixed_line(
+def test_a9_completion_instrument_failure_blocks_a_gated_span_naming_stop(
     tmp_path: Path, failure: str
 ) -> None:
-    """Acceptance 9: a crashing, slow, missing, unlaunchable or undecided timelock
-    blocks a typed /dev-overnight Stop with only the fixed line naming /stop: no
-    exception text, argv or phase stderr, and no later phase runs."""
-    root, transcript = _project(tmp_path, "dev-overnight")
-    phases = _phases(root, failure, target="timelock")
+    """A9: a crashing (tools/proto crash.py), slow (slow.py past its lowered timeout),
+    missing or unlaunchable gate blocks a /dev Stop in block mode with the fixed line
+    naming /stop: no exception text, argv or gate stderr, and cleanup does not run."""
+    root, transcript = _project(tmp_path, "dev")
+    phases = _phases(root, failure, target="completion")
     status, returncode, reason = INSTRUMENT_FAILURES[failure]
 
+    started = time.monotonic()
     proc = _stop(tmp_path, root, phases, transcript)
 
+    assert time.monotonic() - started < 300
     assert proc.returncode == 2, proc.stdout + proc.stderr
-    assert "timelock instrument failure" in proc.stderr and "/stop" in proc.stderr
-    assert proc.stderr == (
-        f"timelock instrument failure: {reason}; the human can type /stop\n"
-    )
-    for leaked in ("ImportError", "simulated", "Traceback", "failed_phase=", phases[0].argv[-1]):
+    assert proc.stderr == INSTRUMENT_LINE.format(reason)
+    for leaked in ("ImportError", "simulated", "Traceback", "failed_phase=", phases[COMPLETION].argv[-1]):
         assert leaked not in proc.stderr and leaked not in proc.stdout
     out = json.loads(proc.stdout)
-    assert out["status"] == "blocked" and out["failed_phase"] == "timelock"
+    assert out["status"] == "blocked" and out["failed_phase"] == "completion"
+    assert out["reason"] == "completion_instrument_failure"
     assert out["finalizer_called"] is False and "_relay" not in out
     assert [
-        (p["phase"], p["status"], p["returncode"], p["failure"]) for p in out["phases"]
-    ] == [("timelock", status, returncode, reason)]
-    assert _logged(root) == (["timelock"] if failure == "invalid" else [])
+        (p["phase"], p["status"], p["returncode"], p.get("failure")) for p in out["phases"]
+    ] == [("coverage", "allow", 0, None), ("auto_commit", "allow", 0, None),
+          ("completion", status, returncode, reason)]
+    assert _logged(root) == ["coverage", "auto_commit"]  # no cleanup on a blocked Stop
 
 
 @pytest.mark.parametrize("failure", sorted(INSTRUMENT_FAILURES))
-@pytest.mark.parametrize("transcript", ["dev-overnight-then-stop", "dev", "no-command"])
-def test_timelock_instrument_failure_outside_dev_overnight_is_recorded_and_allowed(
-    tmp_path: Path, transcript: str, failure: str
+@pytest.mark.parametrize(
+    ("transcript", "marked"),
+    [("dev-then-stop", True), ("dev-overnight-then-stop", True), ("no-command", True), ("dev", False)],
+)
+def test_a9_completion_instrument_failure_outside_a_gated_armed_span_is_recorded_and_allowed(
+    tmp_path: Path, transcript: str, marked: bool, failure: str
 ) -> None:
-    """Acceptance 9: after a typed /stop (the phase still failing), under a typed
-    /dev, or with no typed command, a timelock instrument failure is recorded in
-    the result JSON and allowed, and the later phases run."""
+    """A9: after the human's /stop (the gate still failing), with no typed command, or run
+    directly by an older hook list (advisory, arming option 1), a gate instrument failure
+    with no open window is recorded and allowed, and cleanup runs."""
     root, path = _project(tmp_path, transcript)
     status, returncode, reason = INSTRUMENT_FAILURES[failure]
 
-    proc = _stop(tmp_path, root, _phases(root, failure, target="timelock"), path)
+    proc = _stop(tmp_path, root, _phases(root, failure, target="completion"), path, marked=marked)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stderr == ""
     out = json.loads(proc.stdout)
     assert out["status"] == "pass" and out["reason"] == "phase_failure_recorded"
-    assert out["finalizer_called"] is False
-    assert "failed_phase" not in out and "systemMessage" not in out
+    assert out["finalizer_called"] is False and "failed_phase" not in out
     assert [p["phase"] for p in out["phases"]] == list(coordinator.PHASE_ORDER)
-    timelock, *later = out["phases"]
-    assert (timelock["status"], timelock["returncode"], timelock["failure"]) == (
-        status,
-        returncode,
-        reason,
-    )
-    assert all(p["status"] == "allow" and "failure" not in p for p in later)
-    assert _logged(root)[-3:] == ["coverage", "auto_commit", "cleanup"]
+    recorded = out["phases"][COMPLETION]
+    assert (recorded["status"], recorded["returncode"], recorded["failure"], recorded["fallback"]) == (
+        status, returncode, reason, "allow")
+    assert _logged(root) == ["coverage", "auto_commit", "cleanup"]
 
 
+def _window(root: Path, is_open: bool) -> None:
+    """The session's overnight record, read by P2's real overnight.window_open (its end_time an
+    hour ahead, or an hour past)."""
+    (root / ".claude").mkdir(exist_ok=True)
+    end = datetime.now(timezone.utc) + timedelta(hours=1 if is_open else -1)
+    (root / ".claude" / f"overnight-state-{STOP_SESSION}.json").write_text(json.dumps(
+        {"session_id": STOP_SESSION, "end_time": end.strftime("%Y-%m-%dT%H:%M:%SZ")}))
+
+
+@pytest.mark.parametrize("failure", ["crash", "slow", "missing"])
 @pytest.mark.parametrize(
-    ("phase", "shape"),
-    [("timelock", "exit-2"), ("timelock", "structured-block"), ("coverage", "exit-2")],
+    ("transcript", "window", "code"),
+    [
+        ("dev-overnight-then-spec", True, 2),  # a human /spec inside the window
+        ("dev-overnight-then-stop", True, 0),  # the human's /stop closes the window
+        ("no-command", False, 0),  # no window and no gated command
+    ],
 )
-def test_block_relays_failed_phase_and_last_4kb_of_its_stderr(
-    tmp_path: Path, phase: str, shape: str
+def test_a9_a_failed_gate_blocks_while_the_window_is_open_whatever_the_command(
+    tmp_path: Path, failure: str, transcript: str, window: bool, code: int
 ) -> None:
-    """A timelock exit 2, a structured timelock block on exit 0, and a coverage
-    exit 2 block whatever the typed command, relaying failed_phase=<name> and the
-    last 4 KB of that phase's stderr on the coordinator's stderr."""
-    root, transcript = _project(tmp_path, "no-command")
-    reason = f"{phase}: overnight window still open until 06:00"
-    phase_stderr = "diagnostic padding line\n" * 300 + reason + "\n"
-    assert len(phase_stderr) > 4096
-    body = f"sys.stderr.write({phase_stderr!r})\n" + (
-        f"print(json.dumps({{'decision': 'block', 'reason': {reason!r}}}))"
-        if shape == "structured-block"
-        else "raise SystemExit(2)"
-    )
+    """P2 acceptance 9, where the time-lock now lives (the completion phase, P5 R9): copies of
+    the plan's crash.py and slow.py (and a missing phase file) as the gate. While the
+    session's time-lock window is open (its state's end_time ahead, no human /stop since its
+    /dev-overnight: P2's real lib/overnight window_open) the failure blocks with the fixed
+    line naming /stop, whatever command the human typed last; after the human's /stop, or
+    with no window and no gated command, it is recorded and allowed."""
+    root, path = _project(tmp_path, transcript)
+    if window:
+        _window(root, True)
+    proc = _stop(tmp_path, root, _phases(root, failure, target="completion"), path)
+    assert proc.returncode == code, proc.stdout + proc.stderr
+    reason = INSTRUMENT_FAILURES[failure][2]
+    assert proc.stderr == (INSTRUMENT_LINE.format(reason) if code else "")
+
+
+@pytest.mark.parametrize("marked", [True, False])
+def test_a9_an_open_window_blocks_a_failed_gate_whatever_the_latest_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, marked: bool
+) -> None:
+    """A9: the window open (P2's real window_open on the session's record) and the latest
+    human command /spec: a crashing gate still blocks, armed or run directly by an older hook
+    list; the window closed (end_time passed), it allows."""
+    root, transcript = _project(tmp_path, "spec")
+    environment = _plain_environment(tmp_path, root)
+    environment.update({coordinator.LAUNCHER_MARK: "1"} if marked else {})
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)  # the in-process fallback reads the payload's cwd
+    for is_open, code in ((True, 2), (False, 0)):
+        _window(root, is_open)
+        result, exit_code = coordinator.run_coordinator(
+            _payload(root, transcript), project_dir=root, environment=environment,
+            phases=_phases(root, "crash", target="completion"),
+        )
+        assert exit_code == code, result
+        if code == 2:
+            assert result["_relay"] == INSTRUMENT_LINE.format("exit code 1")
+
+
+def test_a9_gate_off_skips_completion_and_its_failure(tmp_path: Path) -> None:
+    """A9, A11: CLAUDE_COMMAND_GATE=off skips the completion phase (and the time-lock it
+    holds): a /dev Stop whose gate would block or crash is allowed, cleanup runs."""
+    root, transcript = _project(tmp_path, "dev")
+    for phases in (_phases(root, "crash", target="completion"),
+                   _phases(root, "block", target="completion")):
+        proc = _stop(tmp_path, root, phases, transcript, gate="off")
+        assert proc.returncode == 0 and proc.stderr == "", proc.stdout + proc.stderr
+        out = json.loads(proc.stdout)
+        assert out["phases"][COMPLETION] == {"phase": "completion", "status": "skipped", "returncode": None,
+                                             "reason": "CLAUDE_COMMAND_GATE=off"}
+    assert "completion" not in _logged(root)
+
+
+def test_a11_the_mode_comes_from_the_process_environment_only(tmp_path: Path) -> None:
+    """A11: CLAUDE_COMMAND_GATE=off written into settings.machine.json between two Stops
+    of one session changes nothing: the mode is read from the process environment."""
+    root, transcript = _project(tmp_path, "dev")
+    body = "sys.stderr.write('COMMAND_GATE /dev: not complete\\n- todo: not completed: x\\n')\nraise SystemExit(2)"
     phases = _phases(root)
-    index = coordinator.PHASE_ORDER.index(phase)
-    phases[index] = coordinator.Phase(
-        phase, (sys.executable, str(_phase_script(root, phase, body))), 1.0
+    phases[COMPLETION] = _completion(root, body)
+    first = _stop(tmp_path, root, phases, transcript)
+    machine = tmp_path / "home" / ".claude" / "settings.machine.json"
+    machine.write_text(json.dumps({"env": {"CLAUDE_COMMAND_GATE": "off"}}))
+    second = _stop(tmp_path, root, phases, transcript, extra={"CLAUDE_HOME": str(machine.parent)})
+    assert first.returncode == second.returncode == 2
+    assert first.stderr == second.stderr == "COMMAND_GATE /dev: not complete\n- todo: not completed: x\n"
+
+
+def test_a11_after_p5_d_any_value_but_off_blocks_and_only_the_launchers_mark_arms() -> None:
+    """A11 (P5-d), arming option 1: launched, unset, `advisory`, `block` or any other value
+    blocks and `off` is off; run directly by an older hook list (no mark), the gate runs
+    advisory and `off` is still off; a forged mark only arms."""
+    mark = {coordinator.LAUNCHER_MARK: "1"}
+    for value, launched, direct in (("", "block", "advisory"), ("advisory", "block", "advisory"),
+                                    ("block", "block", "advisory"), ("on", "block", "advisory"),
+                                    ("off", "off", "off")):
+        gate = {"CLAUDE_COMMAND_GATE": value} if value else {}
+        assert coordinator.gate_mode({**gate, **mark}) == launched, value
+        assert coordinator.gate_mode(gate) == direct, value
+    assert coordinator._default_phases().pop(COMPLETION).argv[-1] == "block"
+
+
+def test_completion_block_relays_the_gates_whole_stderr_first(tmp_path: Path) -> None:
+    """R9: a completion block relays the gate's stderr whole and first (its head line
+    `COMMAND_GATE /<command>: not complete` survives any length), with no phase prefix."""
+    root, transcript = _project(tmp_path, "dev")
+    text = "COMMAND_GATE /dev: not complete\n" + "".join(f"- gap {k}\n" for k in range(600))
+    assert len(text) > 4096
+    phases = _phases(root)
+    phases[COMPLETION] = _completion(root, f"sys.stderr.write({text!r})\nraise SystemExit(2)")
+
+    proc = _stop(tmp_path, root, phases, transcript)
+
+    assert proc.returncode == 2 and proc.stderr == text
+    out = json.loads(proc.stdout)
+    assert out["status"] == "blocked" and out["failed_phase"] == "completion" and out["reason"] == "phase_block"
+    assert _logged(root) == ["coverage", "auto_commit", "completion"]
+
+
+def test_an_allowed_completions_stderr_is_relayed(tmp_path: Path) -> None:
+    """A11, A21 (advisory, run directly by an older hook list): the gate's `would block`
+    text on an allowed Stop reaches the coordinator's stderr; the Stop is allowed and
+    cleanup runs."""
+    root, transcript = _project(tmp_path, "dev")
+    text = "would block\nCOMMAND_GATE /dev: not complete\n- todo: not completed: x\n"
+    phases = _phases(root)
+    phases[COMPLETION] = _completion(root, f"sys.stderr.write({text!r})")
+
+    proc = _stop(tmp_path, root, phases, transcript, marked=False)
+
+    assert proc.returncode == 0 and proc.stderr == text, proc.stdout
+    assert _logged(root) == list(coordinator.PHASE_ORDER)
+
+
+def test_coverage_block_relays_failed_phase_and_last_4kb_of_its_stderr(tmp_path: Path) -> None:
+    """A coverage exit 2 blocks whatever the typed command, relaying failed_phase=coverage
+    and the last 4 KB of its stderr; no later phase runs."""
+    root, transcript = _project(tmp_path, "no-command")
+    reason = "coverage: the split is short"
+    phase_stderr = "diagnostic padding line\n" * 300 + reason + "\n"
+    phases = _phases(root)
+    phases[0] = coordinator.Phase(
+        "coverage",
+        (sys.executable, str(_phase_script(root, "coverage", f"sys.stderr.write({phase_stderr!r})\nraise SystemExit(2)"))),
+        1.0,
     )
 
     proc = _stop(tmp_path, root, phases, transcript)
 
     assert proc.returncode == 2, proc.stdout + proc.stderr
-    assert proc.stderr == f"failed_phase={phase}\n" + phase_stderr[-4096:]
-    assert f"failed_phase={phase}" in proc.stderr and reason in proc.stderr
-    assert "timelock instrument failure" not in proc.stderr
+    assert proc.stderr == "failed_phase=coverage\n" + phase_stderr[-4096:]
     out = json.loads(proc.stdout)
-    assert out["status"] == "blocked" and out["failed_phase"] == phase
-    assert out["finalizer_called"] is False and "_relay" not in out
-    assert [p["phase"] for p in out["phases"]] == list(coordinator.PHASE_ORDER[: index + 1])
-    assert (out["phases"][-1]["status"], out["phases"][-1]["returncode"]) == (
-        "block",
-        0 if shape == "structured-block" else 2,
-    )
-    assert _logged(root) == list(coordinator.PHASE_ORDER[: index + 1])
+    assert out["status"] == "blocked" and out["failed_phase"] == "coverage"
+    assert [p["phase"] for p in out["phases"]] == ["coverage"]
+    assert _logged(root) == ["coverage"]
 
 
 @pytest.mark.parametrize("failure", ["crash", "slow", "missing", "launch"])
 @pytest.mark.parametrize("phase", ["coverage", "auto_commit", "cleanup"])
-def test_non_timelock_failure_is_recorded_and_allowed_and_later_phases_run(
+def test_non_completion_failure_is_recorded_and_allowed_and_later_phases_run(
     tmp_path: Path, phase: str, failure: str
 ) -> None:
-    """TC-11: coverage blocks only by exit 2. A coverage exit 1, an auto_commit
-    exit 1, a cleanup timeout, and any other coverage, auto_commit or cleanup
-    failure is recorded and allowed, also under a typed /dev-overnight; after an
-    auto_commit failure the cleanup phase still runs."""
+    """TC-11, A13: coverage blocks only by exit 2. A coverage exit 1, an auto_commit exit 1,
+    a cleanup timeout, and any other coverage, auto_commit or cleanup failure is recorded
+    and allowed, also under a typed /dev-overnight; after an auto_commit failure the
+    completion and cleanup phases still run."""
     root, transcript = _project(tmp_path, "dev-overnight")
 
     result, exit_code = coordinator.run_coordinator(
-        {"session_id": STOP_SESSION, "cwd": str(root), "transcript_path": str(transcript)},
+        _payload(root, transcript),
         project_dir=root,
-        environment=_plain_environment(tmp_path, root),
+        environment={**_plain_environment(tmp_path, root), coordinator.LAUNCHER_MARK: "1"},
         phases=_phases(root, failure, target=phase),
     )
 
@@ -818,35 +1113,62 @@ def test_non_timelock_failure_is_recorded_and_allowed_and_later_phases_run(
     assert _logged(root) == [name for name in coordinator.PHASE_ORDER if name != phase]
 
 
-def test_default_phase_timeouts_fit_the_registered_stop_timeout() -> None:
-    """Acceptance 9b: 30 + 30 + 120 + 30 = 210 s of phase timeouts under the
-    coordinator Stop entry's 300 s registration timeout."""
-    defaults = coordinator._default_phases()
-    assert tuple(p.name for p in defaults) == coordinator.PHASE_ORDER
+def test_a13_phase_order_and_timeouts_fit_the_launcher_and_the_registration() -> None:
+    """A13, R9: coverage, auto_commit, completion (the gate, 60 s), cleanup; 30 + 120 + 60
+    + 30 = 240 s of phase timeouts under the launcher's 280 s and the Stop entry's 300 s."""
+    defaults = coordinator._default_phases("block")
+    assert tuple(p.name for p in defaults) == coordinator.PHASE_ORDER == (
+        "coverage", "auto_commit", "completion", "cleanup")
+    assert coordinator.BLOCKING_PHASES == ("coverage", "completion")
+    completion = defaults[COMPLETION]
+    assert completion.argv[1:] == (str(HOOKS / "stop-command-gate.py"), "--mode", "block")
+    assert completion.timeout == 60
     total = sum(p.timeout for p in defaults)
-    assert total == 210 < 300
+    launcher = (HOOKS / "stop-launch.py").read_text(encoding="utf-8")
+    assert total == 240 < 280 and "COORDINATOR_TIMEOUT = 280" in launcher
     # The pre-launch missing-file check finds every default phase script.
     assert all(Path(coordinator._phase_script(p.argv)).is_file() for p in defaults)
     settings = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
-    entries = [
-        hook
-        for group in settings["hooks"]["Stop"]
-        for hook in group["hooks"]
-        if "stop-workflow-coordinator.py" in hook.get("command", "")
-    ]
-    assert len(entries) == 1
-    assert entries[0]["timeout"] == 300
-    assert total < entries[0]["timeout"]
+    entries = [hook for group in settings["hooks"]["Stop"] for hook in group["hooks"]
+               if "stop-launch.py" in hook.get("command", "")]
+    assert len(entries) == 1 and entries[0]["timeout"] == 300
 
 
-@pytest.mark.parametrize("cleanup", ["allow", "slow"])
-def test_passing_phase_notice_is_still_relayed(tmp_path: Path, cleanup: str) -> None:
-    """P7: a passing phase's last-line systemMessage is shown as the coordinator's
-    own, also when a later phase's failure is recorded."""
+def test_a13_a_blocked_stop_runs_auto_commit_before_the_gate_and_no_cleanup(tmp_path: Path) -> None:
+    """A13: a blocked Stop has run auto_commit (the refs/checkpoints snapshot) and keeps
+    the /allow grants (cleanup does not run); an allowed one runs cleanup; an auto_commit
+    failure on a complete span is recorded in the JSON, allowed, and cleanup runs."""
     root, transcript = _project(tmp_path, "dev")
-    phases = _phases(root, cleanup, target="cleanup")
+    phases = _phases(root, "block", target="completion")
+    assert _stop(tmp_path, root, phases, transcript).returncode == 2
+    assert _logged(root) == ["coverage", "auto_commit", "completion"]
+    (root / "phase.log").unlink()
+    assert _stop(tmp_path, root, _phases(root), transcript).returncode == 0
+    assert _logged(root) == list(coordinator.PHASE_ORDER)
+    (root / "phase.log").unlink()
+    proc = _stop(tmp_path, root, _phases(root, "fail", target="auto_commit"), transcript)
+    out = json.loads(proc.stdout)
+    assert proc.returncode == 0 and out["reason"] == "phase_failure_recorded"
+    assert out["phases"][1]["failure"] == "exit code 1"
+    assert _logged(root) == list(coordinator.PHASE_ORDER)
+
+
+def test_a13_coverage_blocks_nothing_at_a_spec_orchestrator_stop(tmp_path: Path) -> None:
+    """A13: the registered coverage phase (an exit-0 stub) allows a /spec Stop with no
+    window, whatever its split."""
+    root, transcript = _project(tmp_path, "spec")
+    coverage = coordinator._default_phases()[0]
+    done = subprocess.run(list(coverage.argv), input=json.dumps(_payload(root, transcript)), text=True,
+                          capture_output=True, cwd=str(root), env=_plain_environment(tmp_path, root, "block"))
+    assert (done.returncode, done.stderr) == (0, "")
+
+
+def test_passing_phase_notice_is_still_relayed(tmp_path: Path) -> None:
+    """P7: a passing phase's last-line systemMessage is shown as the coordinator's own."""
+    root, transcript = _project(tmp_path, "no-command")
+    phases = _phases(root)
     body = f"print('snapshot refused')\nprint(json.dumps({{'systemMessage': {NOTICE!r}}}))"
-    phases[2] = coordinator.Phase(
+    phases[1] = coordinator.Phase(
         "auto_commit", (sys.executable, str(_phase_script(root, "auto_commit", body))), 1.0
     )
 
@@ -858,20 +1180,14 @@ def test_passing_phase_notice_is_still_relayed(tmp_path: Path, cleanup: str) -> 
     assert out["systemMessage"] == NOTICE
     assert all("notice" not in p for p in out["phases"])
     assert out["status"] == "pass" and out["finalizer_called"] is False
-    assert out["reason"] == (
-        "resource_broker_not_configured" if cleanup == "allow" else "phase_failure_recorded"
-    )
-    assert out["phases"][2]["status"] == "allow"
-    assert out["phases"][3]["status"] == ("allow" if cleanup == "allow" else "timeout")
 
 
 @pytest.mark.parametrize("phase", ["auto_commit", "cleanup"])
 def test_auto_commit_or_cleanup_exit_2_is_recorded_and_never_relayed(
     tmp_path: Path, phase: str
 ) -> None:
-    """TC-11: only timelock and coverage may block. An auto_commit or cleanup exit
-    2 under a typed /dev-overnight is recorded and allowed, its stderr is not
-    relayed, and the later phases run."""
+    """TC-11: only coverage and completion may block. An auto_commit or cleanup exit 2
+    under a typed /dev-overnight is recorded and allowed, its stderr is not relayed."""
     root, transcript = _project(tmp_path, "dev-overnight")
     phases = _phases(root)
     index = coordinator.PHASE_ORDER.index(phase)
@@ -887,7 +1203,6 @@ def test_auto_commit_or_cleanup_exit_2_is_recorded_and_never_relayed(
     out = json.loads(proc.stdout)
     assert out["status"] == "pass" and out["reason"] == "phase_failure_recorded"
     assert out["finalizer_called"] is False and "failed_phase" not in out
-    assert [p["phase"] for p in out["phases"]] == list(coordinator.PHASE_ORDER)
     recorded = out["phases"][index]
     assert recorded["returncode"] == 2 and recorded["status"] != "allow"
     assert "diagnostic" not in proc.stdout

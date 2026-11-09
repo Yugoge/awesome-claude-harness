@@ -13,6 +13,9 @@ that cycle-contract.json's required_calls bookmark independently.
 
 # (label, content, activeForm, extra_meta) tuples for each step
 _STEPS = [
+    # The wake (P1c X8): one recurring CronCreate of the session's wake prompt
+    # (hooks/lib/overnight.py WAKE_PROMPT); its completion is gated on that call.
+    ("0", "Schedule the wake", "Scheduling the wake", {"wake_call": True}),
     ("1", "Create worktree (first run only)", "Creating worktree", None),
     (
         "2",
@@ -74,7 +77,14 @@ _STEPS = [
         "Running QA subagents in parallel",
         {"subagent_call": {"agent": "qa", "subagent_type": "qa"}},
     ),
-    ("16", "Process QA results", "Processing QA results", None),
+    # A pipeline whose QA passes is a /dev chain under its own task id; the main agent writes its
+    # completion report here (or at Step 17's loop exit), as /dev's Step 17 does.
+    (
+        "16",
+        "Process QA results",
+        "Processing QA results",
+        {"artifacts": [{"kind": "markdown", "path": "docs/dev/completion-<task>.md"}]},
+    ),
     ("17", "Run iteration loops for failed pipelines", "Running iteration loops for failed pipelines", None),
     ("18", "Update settings.json permissions (aggregated)", "Updating settings.json permissions", None),
     ("19", "Log cycle results and check time", "Logging cycle results and checking time", None),
@@ -101,9 +111,10 @@ def _build_step(label, desc, active, meta):
 
 
 def get_todos():
-    """Return todo items for the dev-overnight workflow (21 integer steps + the
-    letter-suffix Step 11g graphify Dev-dispatch precondition; the letter-suffix
-    avoids cascading the integer Steps 12-21 and their contract step-ids)."""
+    """Return todo items for the dev-overnight workflow (Step 0, the wake, 21
+    integer steps and the letter-suffix Step 11g graphify Dev-dispatch
+    precondition; Step 0 and the letter-suffix avoid cascading the integer Steps
+    and their contract step-ids)."""
     return [
         _build_step(label, desc, active, meta)
         for label, desc, active, meta in _STEPS

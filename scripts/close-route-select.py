@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
-"""Thin production entrypoint /close's Step 0 shells out to.
+"""Compatibility entry point: /close Step 0's route select as origin/master's command text calls it.
 
-Without ``--late-repair`` this is a pass-through: it resolves the artifact
-chain exactly as before and NEVER touches ``late-repair-controller.py`` --
-bare ``/close`` has zero R4 side effects (AC-11). With ``--late-repair`` it
-delegates the eligibility check and run-record creation entirely to
-``late-repair-controller.py init`` (the single source of truth for
-eligibility -- this script never recomputes it).
+COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
+delete this file and tests/test_close_route_select_compat.py together once no session predates
+merge train 2's landing. Nothing in this tree calls it. P10 (R6, cc27c36) deleted the route
+selector because this tree's /close no longer runs it, and that deletion stands for everything
+else; but a session that took up origin/master's /close text before the landing keeps running
 
-The pass-through payload is ``{"outcome": "not_selected", "artifact_chain":
-<resolver result>}`` with ``artifact_chain`` byte-identical to the resolver's
-own result.  Only when that result carries the resolver's additive
-``AC_DEVIATION_REJECTION_CODE`` error (a malformed AC-deviation record) does the
-payload gain a top-level ``explicit_rejection`` ``{code, path, detail}`` copied
-from that error; the outcome and the exit code do not change.  The code is read
-from the resolver module, never re-typed here.
+    python3 ~/.claude/scripts/close-route-select.py --task-id T --project-dir P [--late-repair]
 
-Exit codes:
-  0  not_selected (no --late-repair) with a passing chain (status "pass" or
-     "pass_with_exceptions" -- ticket 20260911-011232), or initialized
-  1  refuse (usage error, e.g. --late-repair + --force)
-  2  not_selected with a failing chain, or late-repair refuse (ineligible)
+at Step 0. Without this file that call exits 2 (can't open file), which that text routes as a
+resolver finding no producer owns, and the session's /close dead-ends at Step 0.
+
+It answers that call as the deleted selector did, from this tree's own resolver and controller:
+without ``--late-repair``, ``{"outcome": "not_selected", "artifact_chain": <resolver result>}``,
+the result of resolve-dev-artifact-chain.py verbatim, with the resolver's own exit status; with
+``--late-repair``, late-repair-controller.py's init decides (the one eligibility check) and its
+payload is printed, or, when init declines, the not_selected payload above carrying init's
+refusal under ``late_repair``. No verdict of its own, and no file written but init's run record.
+
+Exit codes: 0 a passing chain, or initialized / already_initialized; 2 any other chain status.
 """
 
 from __future__ import annotations
@@ -29,64 +28,32 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from types import ModuleType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from sibling_loader import load_sibling_module  # noqa: E402
 
 
-def _controller_module() -> ModuleType:
-    return load_sibling_module("late-repair-controller.py", __file__)
-
-
-def _resolver_module() -> ModuleType:
-    return load_sibling_module("resolve-dev-artifact-chain.py", __file__)
-
-
-def run(task_id: str, project_dir: str, late_repair: bool, force: bool) -> tuple[int, dict]:
-    if late_repair and force:
-        payload = {"outcome": "refuse", "reason": "--late-repair combined with --force is not permitted"}
-        return 1, payload
-
-    if not late_repair:
-        resolver = _resolver_module()
-        result = resolver.resolve_chain(project_dir, task_id)
-        payload = {"outcome": "not_selected", "artifact_chain": result}
-        rejection = next(
-            (e for e in result["errors"] if e.get("code") == resolver.AC_DEVIATION_REJECTION_CODE),
-            None,
-        )
-        if rejection is not None:
-            payload["explicit_rejection"] = {
-                "code": rejection["code"],
-                "path": rejection["path"],
-                "detail": rejection["detail"],
-            }
-        return (0 if result["status"] in ("pass", "pass_with_exceptions") else 2), payload
-
-    controller = _controller_module()
-    ns = argparse.Namespace(task_id=task_id, project_dir=project_dir, force=False)
-    import contextlib
-    import io
-
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer):
-        rc = controller.cmd_init(ns)
-    try:
-        payload = json.loads(buffer.getvalue().strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        payload = {"outcome": "error", "reason": "controller produced no parseable output"}
-    return (0 if rc == 0 else 2), payload
+def run(task_id: str, project_dir: str, late_repair: bool) -> tuple[int, dict]:
+    if late_repair:
+        controller = load_sibling_module("late-repair-controller.py", __file__)
+        rc, payload = controller.init_run(Path(project_dir).resolve(), task_id)
+        if payload.get("outcome") != "refuse":
+            return (0 if rc == 0 else 2), payload
+    resolver = load_sibling_module("resolve-dev-artifact-chain.py", __file__)
+    result = resolver.resolve_chain(project_dir, task_id)
+    selected = {"outcome": "not_selected", "artifact_chain": result}
+    if late_repair:
+        selected["late_repair"] = payload
+    return resolver.exit_status(result), selected
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--project-dir", required=True)
     parser.add_argument("--late-repair", action="store_true")
-    parser.add_argument("--force", action="store_true")
     ns = parser.parse_args(argv)
-    exit_code, payload = run(ns.task_id, ns.project_dir, ns.late_repair, ns.force)
+    exit_code, payload = run(ns.task_id, ns.project_dir, ns.late_repair)
     print(json.dumps(payload, sort_keys=True))
     return exit_code
 

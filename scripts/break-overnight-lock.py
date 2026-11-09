@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Break every active overnight time-lock + workflow-enforce.
+"""Record the human's /stop in the stopping session's own overnight state.
 
-Backdates end_time on every active overnight-state-*.json so
-stop-overnight-timelock.py releases, and marks all todos completed so
-stop-workflow-enforce.py releases.
+The time-lock is released by the human-typed /stop record itself
+(hooks/lib/command_span.py timelock_released, which the Stop gate's time-lock,
+hooks/stop-command-gate.py, reads), never by anything this script writes:
+it writes no end_time. It records current_phase=completed in the stopping
+session's record, found by hooks/lib/overnight.py's locator (no other
+session's record is touched), which closes that record's share of the
+session-agnostic overnight exemption (overnight.is_overnight_active). The CLI's
+todo list is its own record: nothing here writes it (P1b E7).
 
-Used by /stop slash command (commands/stop.md → hooks/stop.sh → here).
+Used by /stop (commands/stop.md -> hooks/stop.sh -> here).
 
-fix-4 (Cycle-2): helper-side sentinel VALIDATION before mutation (defense in
-depth). Even if the PreTool sentinel guard (hooks/pretool-wrapper-userintent.py)
-is bypassed, this helper refuses to set `isolation_released_at` unless a fresh,
-unexpired helper-auth token minted by that guard for a real /stop is present,
-and it CONSUMES the token one-shot so a replay cannot re-release.
+The isolation guarantee fields, isolation_released_at and
+isolation_active_until, are released only with a fresh helper-auth token, which
+the PreTool user-intent guard (hooks/pretool-wrapper-userintent.py) mints for a
+human-typed /stop; the token is consumed one-shot so a replay cannot release
+again, and it gates nothing else.
 """
 import glob
 import json
@@ -21,25 +26,24 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# WS1: resolve the project dir via the shared claude_home resolver (this script
-# lives at <harness home>/scripts/break-overnight-lock.py, so the resolver is at
+# WS1: the state's locator and write path are the shared lib (this script
+# lives at <harness home>/scripts/break-overnight-lock.py, so the lib is at
 # ../hooks/lib). Never default to the author literal /root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
-import claude_home  # noqa: E402
-
-CLAUDE_DIR = claude_home.project_dir() / ".claude"
-TODOS_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "todos"
+from harness_state_dir import harness_state_dir  # noqa: E402
+import overnight  # noqa: E402
 
 # Where the PreTool user-intent guard mints the helper-auth token
 # (claude-stop-helper-auth-<sid>.json). Overridable for sandbox tests.
-_SENTINEL_DIR = os.environ.get("CLAUDE_USERINTENT_SENTINEL_DIR", "/tmp")
+_SENTINEL_DIR = os.environ.get("CLAUDE_USERINTENT_SENTINEL_DIR", harness_state_dir())
 
 
-def _consume_helper_auth() -> bool:
+def _consume_helper_auth() -> tuple:
     """fix-4 components (c)+(d): validate + one-shot consume the helper-auth
-    token the PreTool /stop guard minted. Returns True iff a fresh, unexpired
-    token for this session existed and was consumed. No token / expired /
-    already-consumed -> False (the helper then refuses to release isolation)."""
+    token the PreTool /stop guard minted. Returns (valid, session id): valid iff
+    a fresh, unexpired token existed and was consumed (no token / expired /
+    already-consumed: the helper refuses to release isolation); the session is
+    the environment's, else the consumed token's."""
     sid = os.environ.get("CLAUDE_SESSION_ID", "") or os.environ.get(
         "CLAUDE_CODE_SESSION_ID", "")
     candidates = []
@@ -70,69 +74,33 @@ def _consume_helper_auth() -> bool:
         except OSError:
             pass
         if exp >= int(time.time()):
-            return True
-    return False
-
-
-def _backdate(sf: Path, past: str, release_isolation: bool) -> str:
-    d = json.loads(sf.read_text())
-    sid = d.get("session_id", "?")
-    old = d.get("end_time", "?")
-    d["end_time"] = past
-    d["current_phase"] = "completed"
-    # M10/AC8 + fix-4: this user `/stop` release path is the ONLY sanctioned
-    # setter of isolation_released_at and the closer of isolation_active_until.
-    # update-overnight-state.sh rejects --set on these fields. The release of the
-    # isolation guarantee fields happens here ONLY when a valid /stop user-intent
-    # helper-auth token was consumed (release_isolation); otherwise the helper
-    # MUST NOT touch isolation_released_at / isolation_active_until — so an
-    # overnight actor that reaches this helper directly (bypassing the PreTool
-    # guard) still cannot self-release isolation.
-    if release_isolation:
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        d["isolation_released_at"] = now_iso
-        if "isolation_active_until" in d:
-            d["isolation_active_until"] = past
-        sf.write_text(json.dumps(d, indent=2))
-        print(f"  state {sid[:8]}: end_time {old} -> {past}; isolation_released_at={now_iso}")
-    else:
-        sf.write_text(json.dumps(d, indent=2))
-        print(f"  state {sid[:8]}: end_time {old} -> {past}; isolation_released_at WITHHELD "
-              "(no valid /stop user-intent token — actors cannot self-release isolation)")
-    return sid
-
-
-def _complete_todos(sid: str) -> None:
-    todos = TODOS_DIR / f"{sid}-agent-{sid}.json"
-    if not todos.exists():
-        return
-    items = json.loads(todos.read_text())
-    for t in items:
-        if isinstance(t, dict):
-            t["status"] = "completed"
-    todos.write_text(json.dumps(items))
-    print(f"  todos {sid[:8]}: marked all {len(items)} completed")
+            return True, sid or str(doc.get("session_id") or "")
+    return False, sid
 
 
 def main() -> int:
-    states = sorted(CLAUDE_DIR.glob("overnight-state-*.json"))
-    if not states:
-        print("no overnight state files found — nothing to unlock")
+    # fix-4 (c)+(d): helper-side validation before mutation; the consume is
+    # one-shot so a replayed token cannot release isolation again.
+    release_isolation, sid = _consume_helper_auth()
+    # The stopping session's record only (CLAUDE_PROJECT_DIR, else the cwd: the
+    # session's project directory, its worktree included).
+    state_file, record = overnight.locate(sid) if sid else (None, None)
+    if record is None:
+        print("no overnight state for this session — nothing to record")
         return 0
-    # fix-4 (c)+(d): helper-side validation before mutation. Releasing the
-    # isolation guarantee fields requires a fresh /stop helper-auth token; the
-    # consume is one-shot so a replayed token cannot re-release.
-    release_isolation = _consume_helper_auth()
-    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for sf in states:
-        sid = _backdate(sf, past, release_isolation)
-        _complete_todos(sid)
+    record["current_phase"] = "completed"
     if release_isolation:
-        print("done — both Stop hooks released; session can now terminate")
+        now = datetime.now(timezone.utc)
+        record["isolation_released_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if "isolation_active_until" in record:
+            record["isolation_active_until"] = (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    overnight.write_state(state_file, record)
+    print(f"  state {sid[:8]}: current_phase=completed; end_time {record.get('end_time')} unchanged")
+    if release_isolation:
+        print("done — isolation released; the human's /stop record releases the time-lock")
         return 0
-    # No valid /stop user intent: the time-lock backdate still releases the Stop
-    # hooks (so a stuck session is not wedged), but isolation_released_at is
-    # WITHHELD and we exit non-zero so the unsanctioned caller is signalled.
+    # No valid /stop user intent: isolation_released_at is WITHHELD and we exit
+    # non-zero so the unsanctioned caller is signalled.
     print("WARNING: isolation_released_at WITHHELD (no valid /stop user-intent "
           "token). An overnight actor cannot self-release isolation.",
           file=sys.stderr)

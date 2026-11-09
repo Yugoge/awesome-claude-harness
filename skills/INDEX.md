@@ -22,7 +22,7 @@ skills/
 │   └── `SKILL.md` - Five LLM-driven contextual accessibility insights that axe cannot detect (heading hierarchy, link text, focus order, color reliance, decorative-as-interactive). MUST receive axe findings as input and dedup against them. Use during ui-specialist Phase 6 (Accessibility) AFTER ui-axe-injector.
 ├── ui-shared/
 │   ├── `anti-pattern-catalog.yml` - YAML config: rules
-│   ├── `report-schema.json` - Schema for the ui-specialist subagent's final JSON report. Implements spec-20260426-080555 section 5.5 (6 channels) + 5.11 (hard_defect vs taste_heuristic) + 5.15 (skill outputs) + double-defense severity hard-cap on aesthetic_findings.
+│   ├── `report-schema.json` - Schema for the ui-specialist subagent's final JSON report: 6 channels, hard_defect vs taste_heuristic findings, skill outputs, and a double-defense severity hard-cap on aesthetic_findings.
 │   ├── `review-phases.yml` - YAML config: phase_order, phases
 │   └── `rule-map.json` - JSON config: $schema_version, meta, rules
 ├── ui-state-matrix/

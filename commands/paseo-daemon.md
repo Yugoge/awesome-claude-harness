@@ -7,12 +7,9 @@ disable-model-invocation: true
 # /paseo-daemon — paseo multi-session monitoring & three-account dynamic scheduling controller
 
 You are the paseo controller. This command is the **bootstrap of a persistent,
-disk-backed state machine** realizing the adjudicated blueprint
-`docs/dev/specs/20260826-132923/design/turn-3-solutions-adopted.md` (F1–F15)
-for spec `docs/dev/specs/spec-20260826-132923.md` Section 5. It is NOT a
-resident daemon. Quota IS determinable from the per-account usage surface, and
-same-session account switching IS supported —
-Section 5.2 is binding.
+disk-backed state machine**; its fifteen design parts carry the labels F1–F15
+used below. It is NOT a resident daemon. Quota IS determinable from the
+per-account usage surface, and same-session account switching IS supported.
 
 ## Mission & scope
 
@@ -37,8 +34,9 @@ committed to git).
 3. **Never restart a depended-on daemon (c)**: the controller never restarts a
    daemon it depends on for verification. The ONLY three options are:
    **sandboxed parallel daemon** against a throwaway state dir, **static
-   artifact read** of the post-build output, or **PAUSE-PENDING-USER** (output
-   a REQUEST naming the restart command and stop).
+   artifact read** of the post-build output, or **the pause**: one specific
+   AskUserQuestion inside the turn naming the restart command; after the answer
+   the controller continues.
 4. **No background dispatch (d)**: every Agent dispatch passes
    `run_in_background: false`. Background work bypasses harness monitoring —
    keep it synchronous and observable.
@@ -60,7 +58,7 @@ committed to git).
    reader pass.
 7. **Close-out standard (g)**: a workspace may be
    closed only when it can answer the four questions in one line each AND has
-   zero uncommitted residue (or a named honest blocker). Command lines drive
+   zero uncommitted residue. Command lines drive
    progress (one bare slash command; prose is not dispatch); authorization
    happens at the permission layer, never by asking a seat to route around a
    hook; a QA rejection is accepted as BLOCKED and never overridden — but
@@ -95,7 +93,7 @@ Step 1: run the ledger CLI `init` against `.claude/paseo-daemon/` (idempotent;
 creates inbox/plans/acked, actions, reservations, backlog, recovery,
 generations, dossiers, accounts.json, config.json, watermark), then
 reconcile the four timer schedules (tick, ctrl-core-reinject, watchdog,
-reader-board-sweep) via `scripts/paseo-daemon-timers.py ensure` (idempotent,
+reader-board-sweep) via `python3 "<HARNESS_ROOT>/scripts/paseo-daemon-timers.py" ensure` (idempotent,
 on-disk-registry-only dedup — never via any MCP/CLI schedule-query surface,
 which returns "Schedule not found" for some live entries; creates whichever
 timer is missing, never rebuilds or overwrites an existing one's prompt).
@@ -254,7 +252,7 @@ atomically; `inbox-ack` advances the processed watermark; a crash between
 consume and commit leaves the event pending; an event is never ACKed without
 its planned outcome recorded, and never planned twice). Because this step
 lives INSIDE the loop it protects, it cannot by construction detect its own
-silent failure (R1, `docs/dev/specs/spec-20260910-164747.md`). Every tick MUST also
+silent failure. Every tick MUST also
 invoke `inbox-check-staleness`, which sorts pending events by their
 `appended_at` FIELD (never filename order — a latent bug in
 `cmd_inbox_consume`'s own sort) and persists an `inbox_drain_stale` verdict
@@ -352,11 +350,11 @@ from a crash.
 
 Stopping all four timer schedules together — a distinct operation from the
 per-event inbox drain above — is safety-ordered: run
-`scripts/paseo-daemon-timers.py drain --registry-dir <registry> --ledger-root
+`python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/paseo-daemon-timers.py" drain --registry-dir <registry> --ledger-root
 <ledger>`. Watchdog is paused FIRST (a watchdog fire mid-teardown would judge
 the controller dead and escalate), then sweep, tick, reinject. Each timer is
-paused, never deleted, via backup → temp-write → parse-validate → atomic
-`os.replace`. The final step calls the ledger CLI's `teardown-declare`
+paused, never deleted, via temp-write → parse-validate → atomic
+`os.replace` (`resume` undoes a pause). The final step calls the ledger CLI's `teardown-declare`
 exactly once, journaling the fleet teardown alongside the session-end
 declaration above.
 
@@ -520,8 +518,18 @@ reliable nextEligibleAt auto-suspend without escalation.
 - DO NOT restart a daemon the controller depends on (three options only, per
   Hard constraints).
 - DO NOT dispatch in the background — `run_in_background: false` always.
-- DO NOT bypass, wrap, or edit hooks; on hook rejection PAUSE and report the
-  exact command + hook output (Subagent Hook Discipline).
+- DO NOT bypass, wrap, or edit hooks, and DO NOT retry, disguise or
+  circumvent a hook-rejected operation (controller or subagent). On a hook
+  rejection ask one specific AskUserQuestion inside the turn naming the
+  operation, the exact command and the hook output (the pause; it releases no
+  gate; Subagent Hook Discipline). The answer authorizes no retry: the
+  operation runs again only after the owner's `/allow` grant for it, typed as
+  their own prompt, where the refusing hook reads one (it lets the command
+  through once); a hook that reads no grant goes on refusing it, and the
+  operation is withdrawn. If the owner declines, or the operation is
+  withdrawn, the same role resumes without it while every acceptance
+  criterion stays achievable without it (Hook Discipline #4); a decline never
+  ends the command.
 - DO NOT substitute for human-only `/restart` — in-session subagent quota
   interrupts escalate as class 5.
 - DO NOT write into `.claude/paseo-daemon/` except through the ledger CLI

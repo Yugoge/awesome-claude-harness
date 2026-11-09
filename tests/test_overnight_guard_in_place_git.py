@@ -50,6 +50,14 @@ ALLOW_EXIT = 0
 # ---------------------------------------------------------------------------
 
 
+def test_keystone_config_scan_skips_every_value_option_of_the_table():
+    """--attr-source takes a value (the classifier's option table), so a config
+    injection after it is still in the global-option region."""
+    guard = _load_guard_module()
+    assert guard._git_invocation_injects_keystone_config(
+        ["--attr-source", "HEAD", "-c", "core.hooksPath=/dev/null", "commit"])
+
+
 def _load_guard_module():
     """Import the hyphenated hook file as a module for direct-invariant asserts."""
     spec = importlib.util.spec_from_file_location("overnight_hook_guard", HOOK)
@@ -717,3 +725,71 @@ def test_push_of_a_non_protected_branch_is_not_blocked_by_this_rule(
                     {"command": "git push origin work-branch"},
                     session_id="sid-iso", cwd=str(isolated_worktree))
     assert res.returncode == ALLOW_EXIT, res.stderr
+
+
+# ---------------------------------------------------------------------------
+# A harness script named through `~` is read, as bash runs it (P1c X4 (b))
+# ---------------------------------------------------------------------------
+
+
+def _home_script(home: Path, name: str, body: str) -> str:
+    """A script under <home>/.claude/scripts/, named the way the command texts name it."""
+    scripts = home / ".claude" / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    (scripts / name).write_text(body)
+    return f"~/.claude/scripts/{name}"
+
+
+def test_tilde_script_operand_is_scanned_not_refused_as_unreadable(main_root, tmp_path, monkeypatch):
+    """dev-overnight.md Step 6 runs `python3 ~/.claude/scripts/build-pipelines-from-triage.py ...`
+    with operands under the main root. The scan read the operand without bash's tilde expansion,
+    found no such file and failed closed (OVERNIGHT SUBPROCESS GIT BLOCK) on a git-free script."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    guard = _load_guard_module()
+    state = f"{main_root}/.claude/overnight-state-sid.json"
+    clean = _home_script(home, "build.py", "import json, sys\njson.dump([], sys.stdout)\n")
+    assert guard._scan_script_files_for_main_git(f"python3 {clean} {state}", str(main_root)) is False
+    # The refusals the scan exists for are unchanged: a script that switches the main
+    # checkout's branch, and an operand that names no readable script.
+    bad = _home_script(home, "switch.py", "import subprocess\nsubprocess.run(['git', 'checkout', 'master'])\n")
+    assert guard._scan_script_files_for_main_git(f"python3 {bad} {state}", str(main_root)) is True
+    assert guard._scan_script_files_for_main_git(
+        f"python3 ~/.claude/scripts/absent.py {state}", str(main_root)) is True
+
+
+def test_tilde_script_switching_the_main_branch_still_blocked(main_root, tmp_path):
+    """The same refusal through the hook, for an in-place overnight actor."""
+    home = tmp_path / "home"
+    bad = _home_script(home, "switch.py", "import subprocess\nsubprocess.run(['git', 'checkout', 'master'])\n")
+    _write_state(main_root, "sid-inplace", "in_place", main_root)
+    res = _run_hook(main_root, "Bash", {"command": f"python3 {bad} {main_root}/x.json"},
+                    session_id="sid-inplace", cwd=str(main_root), extra_env={"HOME": str(home)})
+    assert res.returncode == BLOCK_EXIT
+    assert "OVERNIGHT SUBPROCESS GIT BLOCK" in res.stderr
+
+
+def test_bwrap_boundary_gives_a_pinned_tmpdir_a_private_tmpfs(main_root, monkeypatch):
+    """settings.json pins TMPDIR outside /tmp (/var/tmp/claude-scratch): inside the boundary's
+    read-only host bind every mktemp of an overnight actor's command failed (Step 18's
+    apply-permissions.sh). That TMPDIR is private and writable, as /tmp is; a TMPDIR that holds the
+    main root or the worktree is never mounted over. Stand-in bwrap path: the argv is built, not run."""
+    import tempfile
+    guard = _load_guard_module()
+    monkeypatch.setattr(guard, "_resolve_bwrap", lambda: "/standin/bin/bwrap")
+    base = Path(tempfile.mkdtemp(prefix="claude-tmpdir-bind-", dir="/var/tmp"))
+    try:
+        def tmpfs(tmpdir: Path, root: Path) -> list[str]:
+            monkeypatch.setenv("TMPDIR", str(tmpdir))
+            argv = guard._build_bwrap_argv("mktemp", str(root), str(root), "in_place")
+            return [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--tmpfs"]
+
+        scratch = base / "claude-scratch"
+        scratch.mkdir()
+        assert tmpfs(scratch, main_root) == ["/tmp", os.path.realpath(scratch)]
+        assert tmpfs(Path("/tmp"), main_root) == ["/tmp"]
+        held = base / "held" / "main"
+        (held / ".git").mkdir(parents=True)
+        assert tmpfs(base / "held", held) == ["/tmp"]
+    finally:
+        shutil.rmtree(base, ignore_errors=True)

@@ -4,7 +4,7 @@ hooks/prompt-workflow.py ``_clear_turn_state`` runs at every UserPromptSubmit: i
 ``claude-tool-streak-<sid>.json`` and, unless the prompt is /do, also
 ``claude-orchestrator-consent-<sid>.flag``, both in the hook state dir (CLAUDE_STATE_DIR,
 hooks/lib/harness_state_dir.py). The Stop-time clearers in hooks/stop-cleanup-allowlist.sh and
-hooks/stop-do-report-gate.py are gone, so /do consent lasts exactly one turn: a Stop (blocked or
+the retired hooks/stop-do-report-gate.py are gone, so /do consent lasts exactly one turn: a Stop (blocked or
 not) and an AskUserQuestion answered inside the turn keep it, and the next UserPromptSubmit ends
 it, whether the human typed it or the CLI fired it for a scheduled task or a task notification.
 
@@ -15,7 +15,8 @@ tmp_path (the project a git-less directory); a second session's streak and flag 
 state dir must survive everything.
 
 Also here (acceptance 19, row 16): hooks/pretool-tool-policy.py lets a BA subagent write its own
-question artifact docs/dev/producer-question-<task>-ba.json and refuses dev's
+question artifact docs/dev/producer-question-<task>-ba.json, which its dispatch's obligation names
+(the permission derived from the dispatch record, P1b E3), and refuses dev's
 docs/dev/producer-question-<task>-dev.json. hooks/tests/test_tool_policy_contracts.py calls
 policy_registry in process, so its helpers do not fit a subprocess run of the hook.
 """
@@ -37,7 +38,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HOOKS = ROOT / "hooks"
 PROMPT_WORKFLOW = HOOKS / "prompt-workflow.py"
 ORCHESTRATOR_GATE = HOOKS / "pretool-orchestrator-gate.py"
-DO_REPORT_GATE = HOOKS / "stop-do-report-gate.py"
+STOP_HOOK = HOOKS / "stop-launch.py"  # the registered Stop hook; its gate holds the /do span (P5)
 CLEANUP = HOOKS / "stop-cleanup-allowlist.sh"
 TOOL_POLICY = HOOKS / "pretool-tool-policy.py"
 SETTINGS = ROOT / "settings.json"
@@ -209,14 +210,6 @@ def _streak_state(count: int) -> dict:
             "bash_consecutive": {"last_tool": "Bash", "count": count}}
 
 
-def _complete_do_report(sess: Session) -> None:
-    report = sess.do_report()
-    record = json.loads(report.read_text())
-    record["do"].update({"status": "completed", "summary": "Renamed the README heading.",
-                         "files_modified": ["README.md"], "files_created": []})
-    report.write_text(json.dumps(record, indent=2))
-
-
 def _matcher_applies(matcher, tool_name: str) -> bool:
     """Claude Code matcher semantics: absent, "" and "*" match every tool; a plain
     name list (letters, digits, _ and |) matches exactly; anything else is a regex."""
@@ -256,8 +249,7 @@ def sess(tmp_path: Path) -> Session:
 
 def test_plain_prompt_after_a_blocked_stop_removes_the_streak(sess):
     assert sess.prompt("/do rename heading").returncode == 0
-    report = sess.do_report()
-    assert json.loads(report.read_text())["do"]["status"] == "pending"
+    assert not sess.do_report().exists(), "the /do hook writes no do-report"
     # Next turn: consent is gone, so the orchestrator gate counts the main agent's Bash calls.
     assert sess.prompt("go on, list the files first").returncode == 0
     assert not sess.flag().exists()
@@ -271,9 +263,9 @@ def test_plain_prompt_after_a_blocked_stop_removes_the_streak(sess):
         assert gate.returncode == 0, gate.stderr
     assert json.loads(sess.streak().read_text())["bash_consecutive"] == {
         "last_tool": "Bash", "count": 2}
-    # The Stop is blocked: the /do report is still pending.
-    stop = sess.stop([sys.executable, str(DO_REPORT_GATE)])
-    assert stop.returncode == 2 and "DO_REPORT_GATE_BLOCKED" in stop.stderr, stop.stderr
+    # The Stop is blocked: the /do span is not complete.
+    stop = sess.stop([sys.executable, str(STOP_HOOK)])
+    assert stop.returncode == 2 and "COMMAND_GATE /do: not complete" in stop.stderr, stop.stderr
     assert sess.streak().exists(), "a blocked Stop must not be what clears the streak"
 
     proc = sess.prompt("why did it stop?")
@@ -328,11 +320,16 @@ def test_ask_user_question_round_trip_keeps_the_flag(sess):
         assert sess.flag().read_text() == "true", f"{event} {hook} removed the /do consent flag"
 
     # The workflow's FIRST ACTION: TodoWrite with the canonical list the hook just printed.
+    # The CLI holds no list before it (no hook writes the CLI's todo file).
     todos = json.loads(proc.stdout.strip().splitlines()[-1])
-    old = json.loads(sess.todos_file().read_text())
-    sess.tool("TodoWrite", {"todos": todos}, {"oldTodos": old, "newTodos": todos},
-              perform=lambda: sess.todos_file().write_text(json.dumps(todos)),
-              after_hook=flag_kept)
+    assert not sess.todos_file().exists()
+
+    def cli_writes_its_todo_file():
+        sess.todos_file().parent.mkdir(parents=True, exist_ok=True)
+        sess.todos_file().write_text(json.dumps(todos))
+
+    sess.tool("TodoWrite", {"todos": todos}, {"oldTodos": [], "newTodos": todos},
+              perform=cli_writes_its_todo_file, after_hook=flag_kept)
     ran = sess.tool("AskUserQuestion", ASK_INPUT, ASK_RESPONSE, after_hook=flag_kept)
     assert {hook for _event, hook, _proc in ran} == hooks
     sess.assert_other_session_untouched()
@@ -340,27 +337,22 @@ def test_ask_user_question_round_trip_keeps_the_flag(sess):
 
 # -- (d) the former Stop-time clearers leave the flag and the streak ----------------------
 
-def test_do_report_gate_with_a_completed_report_keeps_the_flag_and_streak(sess):
+def test_a_blocked_then_an_allowed_stop_keep_the_flag_and_streak(sess):
     assert sess.prompt("/do rename heading").returncode == 0
     sess.streak().write_text(json.dumps(_streak_state(2)))
-    blocked = sess.stop([sys.executable, str(DO_REPORT_GATE)])
-    assert blocked.returncode == 2, "the gate must see this /do cycle (pending report)"
-    _complete_do_report(sess)
-    proc = sess.stop([sys.executable, str(DO_REPORT_GATE)])
+    blocked = sess.stop([sys.executable, str(STOP_HOOK)])
+    assert blocked.returncode == 2, "the gate must see this /do span (no report yet)"
+    proc = sess.stop([sys.executable, str(STOP_HOOK)], {"CLAUDE_COMMAND_GATE": "off"})
     assert proc.returncode == 0, proc.stderr
-    assert not (sess.state / f"claude-do-report-gate-{sess.sid}.json").exists(), \
-        "the compliant branch ran (it removes the block counter)"
     assert sess.flag().read_text() == "true"
     assert json.loads(sess.streak().read_text()) == _streak_state(2)
     sess.assert_other_session_untouched()
 
 
-def test_do_report_gate_forced_allow_keeps_the_flag(sess):
+def test_refused_stops_keep_the_flag(sess):
     assert sess.prompt("/do rename heading").returncode == 0
-    for _ in range(2):
-        assert sess.stop([sys.executable, str(DO_REPORT_GATE)]).returncode == 2
-    forced = sess.stop([sys.executable, str(DO_REPORT_GATE)])
-    assert forced.returncode == 0 and "FORCED ALLOW" in forced.stderr, forced.stderr
+    for _ in range(3):  # no count of refused stops releases the gate (D23, D25)
+        assert sess.stop([sys.executable, str(STOP_HOOK)]).returncode == 2
     assert sess.flag().read_text() == "true"
     sess.assert_other_session_untouched()
 
@@ -368,12 +360,15 @@ def test_do_report_gate_forced_allow_keeps_the_flag(sess):
 def test_stop_cleanup_keeps_the_flag_and_streak(sess):
     assert sess.prompt("/do rename heading").returncode == 0
     sess.streak().write_text(json.dumps(_streak_state(2)))
-    # An unconsumed /allow grant: the cleanup still expires it, which shows it ran.
-    grant = sess.state / f"claude-bash-allowlist-{sess.sid}.json"
-    grant.write_text(json.dumps({"pattern": "git status"}))
+    # An expired /allow grant: the cleanup still reaps it, which shows it ran.
+    grant = sess.state / "claude-grants" / f"{sess.sid}.json"
+    grant.parent.mkdir(exist_ok=True)
+    grant.write_text(json.dumps({"task_id": sess.sid, "session_id": sess.sid,
+                                 "allowed_operations": [{"op": "git"}],
+                                 "created_at": 0, "expires_at": 1}))
     proc = sess.stop(["bash", str(CLEANUP)])
     assert proc.returncode == 0, proc.stderr
-    assert not grant.exists(), "stop-cleanup-allowlist.sh did not run its grant expiry"
+    assert not grant.exists(), "stop-cleanup-allowlist.sh did not run its grant reap"
     assert sess.flag().read_text() == "true"
     assert json.loads(sess.streak().read_text()) == _streak_state(2)
     sess.assert_other_session_untouched()
@@ -454,8 +449,26 @@ def test_ba_write_of_a_producer_question_artifact(tmp_path, name, expected_rc):
     (home / ".claude").mkdir(parents=True)
     target = _POLICY_PROJECT / "docs" / "dev" / name
     content = json.dumps({"task_id": "dev-20261019-101010", "role": "ba"})
+    agent_id = "a" + uuid.uuid4().hex[:16]
+    # The BA dispatch record the CLI keeps: the session's Agent call, the child's
+    # first record (its prompt) and the meta naming the call.
+    obligation = {"task_id": "dev-20261019-101010", "role": "ba", "pipeline": "dev",
+                  "profile": "singular", "dispatched_at": "2026-10-19T10:10:10Z",
+                  "artifacts": [{"kind": "markdown", "path": "docs/dev/ticket-dev-20261019-101010.md",
+                                 "identity_anchor": "dev-20261019-101010"}]}
+    prompt = f'You are the BA subagent.\n<obligation v="1">\n{json.dumps(obligation)}\n</obligation>\n'
+    transcript = tmp_path / "sess-tool-policy.jsonl"
+    call = {"type": "tool_use", "id": "toolu_ba", "name": "Agent",
+            "input": {"description": "BA", "prompt": prompt}}
+    transcript.write_text(json.dumps({"type": "assistant", "message": {"role": "assistant",
+                                                                       "content": [call]}}) + "\n")
+    subagents = tmp_path / "sess-tool-policy" / "subagents"
+    subagents.mkdir(parents=True)
+    (subagents / f"agent-{agent_id}.jsonl").write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n")
+    (subagents / f"agent-{agent_id}.meta.json").write_text(json.dumps({"toolUseId": "toolu_ba"}))
     payload = {
-        "session_id": "sess-tool-policy", "transcript_path": str(tmp_path / "t.jsonl"),
+        "session_id": "sess-tool-policy", "transcript_path": str(transcript),
         "cwd": str(_POLICY_PROJECT), "hook_event_name": "PreToolUse",
         "permission_mode": "default", "tool_name": "Write",
         "tool_input": {"file_path": str(target), "content": content},
@@ -463,7 +476,7 @@ def test_ba_write_of_a_producer_question_artifact(tmp_path, name, expected_rc):
         # agent_id/agent_type as the CLI sends them for a subagent's call; the role label
         # resolve_agent_type reads first (payload.subagent_type), as in
         # tests/test_tool_policy_note_fail_closed.py.
-        "agent_id": "a" + uuid.uuid4().hex[:16], "agent_type": "ba", "subagent_type": "ba",
+        "agent_id": agent_id, "agent_type": "ba", "subagent_type": "ba",
     }
     env = {k: v for k, v in os.environ.items()
            if not (k.startswith("CLAUDE") and k != "CLAUDE_PYTHON_BIN")}

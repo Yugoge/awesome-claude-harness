@@ -372,17 +372,7 @@ CORPUS = [
     # ------------------------------------------------------------------
     # Shell context forms — all three must agree
     # ------------------------------------------------------------------
-    # bash -c 'git status': the single-quote is not in the anchor class, so the
-    # regex does NOT treat 'git' as a git command here (it sees 'git status' as
-    # string argument text, not a command token). The classifier segments on
-    # ; | & ` ( ) separators -- the entire payload is one segment with 'bash'
-    # as command token. All three: False.
-    (
-        "bash -c 'git status'",
-        False, False, False,
-        None,
-        "git inside bash -c quoted string -- all three correctly return False",
-    ),
+    # bash -c 'git status': see test_a_shell_c_string_is_seen_by_the_classifier_only.
     (
         "command git status",
         True, True, True,
@@ -659,6 +649,20 @@ def test_nondivergent_entries_agree():
         "mechanisms (RISK-2). Disagreeing rows must be marked xfail with a reason:\n"
         + "\n".join(violations)
     )
+
+
+def test_a_shell_c_string_is_seen_by_the_classifier_only():
+    """`bash -c 'git status'` runs git, inside a quoted -c string.
+
+    The single quote is not in either regex anchor class, so both regexes see a
+    quoted argument. The classifier resolves a shell's -c string (2026-11-07) and
+    yields the invocation; bash-safety's rules read it through the classifier's
+    `nested` channel, as they read a path-qualified invocation.
+    """
+    command = "bash -c 'git status'"
+    assert _bash_matches(command) is False
+    assert _python_matches(command) is False
+    assert _classifier_matches(command) is True
 
 
 def test_regex_patterns_are_extractable():

@@ -20,22 +20,190 @@ Exit codes:
     1   Grant validation failed, HEAD drift, blocked verdict, or grant-consume failure
     2   Infrastructure failure: CLAUDE_SESSION_ID unset, push.sh missing/not executable,
         os.execv raised OSError after sentinel write, or invalid --repo-root path (OSError on chdir)
+
+In-flight compatibility (train 2, A17; D15, D18, D25), kept until no session
+predates train 2's landing: 2acc29b's changelog-analyst text writes the
+push-gate token with the Write tool, which hooks/pretool-tool-policy.py refuses
+for every agent (P5 review H2, or its role row where the state dir is not
+/tmp), so a /commit that session runs lands its commit with no token. Step 9b
+below is the route that refusal names: once the push-analyst grant its own
+dispatch binds has passed Steps 5-9, and while no token names an ancestor of
+HEAD, the token's one writer (scripts/write-push-gate-token.py) writes the
+token for HEAD when a session transcript records that refusal for HEAD
+(_refused_inflight_token_write). No agent writes the token, and push.sh stays
+its one decider.
 """
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Sentinel/grant base directory — push.sh reads from here (push.sh:97-98)
-_SENTINEL_BASE = "/tmp/agentic-commit/push-analyst"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+from harness_state_dir import harness_state_dir  # noqa: E402
+
+# Sentinel/grant base directory under the hook state directory, where push.sh reads it
+_SENTINEL_BASE = os.path.join(harness_state_dir(), "agentic-commit", "push-analyst")
 
 # Push.sh location — resolved from this script's install location (<harness home>/hooks)
 _PUSH_SH_TILDE = str(Path(__file__).resolve().parent.parent / "hooks" / "push.sh")
+
+# The push-gate token's one writer, beside this script.
+_TOKEN_WRITER = str(Path(__file__).resolve().parent / "write-push-gate-token.py")
+
+
+# -- in-flight compatibility (train 2, A17): Step 9b ---------------------------
+# COMPATIBILITY CODE (module docstring), kept only until no running session
+# predates train 2's landing (D15); then Step 9b, these helpers and
+# hooks/tests/test_inflight_push_route.py go, with the refusal note in
+# hooks/pretool-tool-policy.py (_note_inflight_token_route).
+# The record read is the CLI's own: a subagent transcript and its meta under
+# <config dir>/projects, which no agent writes, deletes or renames (P5 R2).
+# 2acc29b's Phase 10 writes the token at <dir>/agentic-commit/push/<repo hash>/
+# <session digest>/<branch>.json, <dir> its literal /tmp.
+_REFUSED_TOKEN_WRITE_RE = re.compile(r"/agentic-commit/push/([0-9a-f]{16})/[0-9a-f]{16}/([^/]+)\.json\Z")
+_REFUSAL = "BLOCKED by tool-policy.v1"
+
+
+def _git_ok(*args: str) -> bool:
+    return subprocess.run(["git", *args], capture_output=True, timeout=20).returncode == 0
+
+
+def _git_out(*args: str) -> str:
+    r = subprocess.run(["git", *args], capture_output=True, text=True, timeout=20)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _token_names_ancestor(repo_hash: str, branch: str, head: str) -> bool:
+    """push.sh's READ side: a token of BRANCH at either depth under the repo
+    hash names an ancestor of HEAD (or HEAD itself)."""
+    base = Path(harness_state_dir()) / "agentic-commit" / "push" / repo_hash
+    name = branch.replace("/", "__") + ".json"
+    for path in [base / name, *base.glob(f"*/{name}")]:
+        try:
+            sha = json.loads(path.read_text()).get("commit_sha")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(sha, str) and sha and _git_ok("merge-base", "--is-ancestor", sha, head):
+            return True
+    return False
+
+
+def _text_of(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(b.get("text", "") for b in content if isinstance(b, dict))
+    return ""
+
+
+def _in_commit_span(session: Path, call: str) -> bool:
+    """Whether the dispatch record of tool call ``call`` in the session transcript
+    lies in a /commit span: the latest human-typed harness command before it is
+    /commit (lib/command_span's rule of a typed command)."""
+    import command_span  # hooks/lib, stdlib only (P5 R10)
+
+    needle = json.dumps(call).encode()
+    try:
+        with open(session, "rb") as fh:
+            line = next((n for n, raw in enumerate(fh, 1) if needle in raw and b'"tool_use"' in raw), 0)
+    except OSError:
+        return False
+    before = [cmd for n, cmd, _args in command_span.openers(session) if n < line]
+    return bool(line) and bool(before) and before[-1] == "commit"
+
+
+def _refused_inflight_token_write(repo_root: str, repo_hash: str, branch: str, head: str) -> str | None:
+    """The subagent transcript recording an in-flight /commit's refused token
+    Write for HEAD, else None: a changelog-analyst subagent (its meta), whose
+    dispatch lies in a /commit span, Wrote a push-gate token path of this
+    repository hash and branch whose content names HEAD, this repository and
+    BRANCH, and the Write came back refused by the tool policy. Only transcripts
+    written to since HEAD's commit are read, each only when its bytes name the
+    repository's token directory."""
+    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")) / "projects"
+    try:
+        committed = int(_git_out("log", "-1", "--format=%ct", head) or 0)
+    except ValueError:
+        return None
+    needle = f"/agentic-commit/push/{repo_hash}/".encode()
+    name = branch.replace("/", "__")
+    for agent in projects.glob("*/*/subagents/agent-*.jsonl"):
+        try:
+            if agent.stat().st_mtime < committed - 1:
+                continue
+            data = agent.read_bytes()
+            if needle not in data:
+                continue
+            meta = json.loads(agent.with_suffix(".meta.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta, dict) or meta.get("agentType") != "changelog-analyst":
+            continue
+        call, session = meta.get("toolUseId"), agent.parent.parent
+        if not isinstance(call, str) or not call:
+            continue
+        writes, refused = {}, set()
+        for raw in data.splitlines():
+            if needle not in raw and b'"tool_result"' not in raw:
+                continue
+            try:
+                content = (json.loads(raw).get("message") or {}).get("content")
+            except (ValueError, AttributeError):
+                continue
+            for block in content if isinstance(content, list) else []:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use" and block.get("name") == "Write":
+                    ti = block.get("input") if isinstance(block.get("input"), dict) else {}
+                    m = _REFUSED_TOKEN_WRITE_RE.search(str(ti.get("file_path") or ""))
+                    if m and m.group(1) == repo_hash and m.group(2) == name:
+                        writes[block.get("id")] = ti.get("content")
+                elif (block.get("type") == "tool_result" and block.get("is_error")
+                      and _REFUSAL in _text_of(block.get("content"))):
+                    refused.add(block.get("tool_use_id"))
+        for use, content in writes.items():
+            try:
+                token = json.loads(content)
+            except (TypeError, ValueError):
+                continue
+            if (use in refused and isinstance(token, dict) and token.get("commit_sha") == head
+                    and token.get("branch") == branch
+                    and os.path.realpath(str(token.get("repo_root") or "/nonexistent")) == os.path.realpath(repo_root)
+                    and _in_commit_span(session.parent / (session.name + ".jsonl"), call)):
+                return str(agent)
+    return None
+
+
+def _inflight_token(repo_hash: str, branch: str, head: str) -> None:
+    """Step 9b: the token for HEAD by its one writer, on the record of an
+    in-flight /commit's refused token Write (module docstring). Never fails
+    the push: on any miss push.sh decides as before (its exit 3)."""
+    try:
+        root = _git_out("rev-parse", "--show-toplevel")
+        if not root or hashlib.sha256(os.path.realpath(root).encode()).hexdigest()[:16] != repo_hash:
+            return
+        if _token_names_ancestor(repo_hash, branch, head):
+            return
+        record = _refused_inflight_token_write(root, repo_hash, branch, head)
+        if record is None:
+            return
+        r = subprocess.run([sys.executable, _TOKEN_WRITER, "--repo-root", root, "--branch", branch,
+                            "--commit", head], capture_output=True, text=True, timeout=60)
+        if r.returncode == 0:
+            print(f"execute-push: no push-gate token named HEAD {head}; an in-flight /commit's token Write "
+                  f"was refused ({record}), so its one writer wrote it: {r.stdout.strip()}", flush=True)
+        else:
+            print(f"execute-push: the push-gate token for HEAD {head} was not written "
+                  f"(write-push-gate-token.py exit {r.returncode}): {r.stderr.strip()}", file=sys.stderr)
+    except Exception as exc:  # the push itself is push.sh's decision
+        print(f"execute-push: in-flight token check skipped: {exc}", file=sys.stderr)
 
 
 def _parse_args(argv: list) -> argparse.Namespace:
@@ -250,6 +418,10 @@ def main(argv: list = None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Step 9b: in-flight compatibility (module docstring): an in-flight /commit's
+    # token, refused to its Write, by the token's one writer, before push.sh reads it.
+    _inflight_token(repo_hash, branch, current_head)
 
     # Step 10: Consume (unlink) grant file — only after steps 5-9 all pass
     try:

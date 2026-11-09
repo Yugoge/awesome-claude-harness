@@ -2,10 +2,8 @@
 """Config-file loading and STEP0 self-protection for the protected-runtime guard.
 
 Depends on shell_lex (`_strip_quotes`, `_has_redirect_to`) + pathmatch
-(`_normalize_path`) + stdlib; references nothing from _core. See
-docs/reference/monolith-split-plan.md for the decomposition rationale (incl. the
-`_ANCESTOR_STOP_ROOTS` cluster-completion move and the DATA_FILE_PATH import-time
-reload contract) and the INV-3 dual-context import contract.
+(`_normalize_path`) + stdlib; references nothing from _core. The DATA_FILE_PATH
+import-time reload contract is stated at _core's `_importlib.reload(_config)`.
 
 Scope: the single generic `DATA_FILE_PATH` (env-overridable, read at MODULE-IMPORT
 time so a test that sets the env then reloads the guard sees the fresh path),
@@ -23,8 +21,8 @@ import os
 from typing import Optional
 
 # _targets_config_file needs the phase-1 quote stripper + redirect scanner and
-# the phase-3 path normalizer. Dual-context import (INV-3) --
-# see docs/reference/monolith-split-plan.md.
+# the phase-3 path normalizer. Dual-context import (INV-3; the contract
+# is stated at _core's first re-import block).
 try:
     from .shell_lex import _has_redirect_to, _strip_quotes
     from .pathmatch import _normalize_path

@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit: mint a session-bound capability for a human /restart invocation."""
+"""UserPromptSubmit: mint a session-bound capability for a human /restart invocation, or for
+the /dev-overnight session's own wake (lib.overnight.WAKE_PROMPT) inside its open span.
+
+The hook cannot tell a scheduled prompt from a typed one: its payload names no origin, and the
+prompt's own record is written after it runs (P1c X8). So the wake is recognised by its fixed
+text and only while a /dev-overnight span is the transcript's active one (never after the
+owner's /stop opened its own); every prompt that starts with /restart keeps the capability.
+The capability's reader in lib/subagent_restart.py stays its one deciding rule."""
 
 from __future__ import annotations
 
@@ -10,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import subagent_restart as restart  # noqa: E402
+from lib import overnight, subagent_restart as restart  # noqa: E402
 
 COMMAND = "/restart"
 
@@ -131,10 +138,10 @@ def main() -> int:
     if payload.get("agent_id"):
         return 0
     invoked, args = split_invocation(payload.get("prompt"))
-    if not invoked:
-        return 0
     session_id = payload.get("session_id")
     transcript_path = payload.get("transcript_path")
+    if not invoked and not overnight.wake_fired(payload.get("prompt"), transcript_path):
+        return 0
     # The capability comes FIRST and alone: this hook runs on prompt submission
     # for a human-only emergency command, so nothing about the operator's
     # optional guidance -- not a stale file that resists removal, not a failed

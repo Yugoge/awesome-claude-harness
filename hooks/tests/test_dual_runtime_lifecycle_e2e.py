@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -21,7 +22,7 @@ SOURCE_ROOT = Path(__file__).resolve().parents[2]
 PROMPT = SOURCE_ROOT / "hooks" / "prompt-workflow.py"
 PRETOOL = SOURCE_ROOT / "hooks" / "pretool-workflow-gate.py"
 POSTTODO = SOURCE_ROOT / "hooks" / "posttool-todo-tracker.py"
-CLAUDE_STOP = SOURCE_ROOT / "hooks" / "stop-overnight-timelock.py"
+CLAUDE_STOP = SOURCE_ROOT / "hooks" / "stop-launch.py"  # the registered Stop hook (P5 R12)
 ACTIVE_CONFIGS = {
     "claude": SOURCE_ROOT / "settings.json",
 }
@@ -135,7 +136,7 @@ def _owner_command(runtime: str, event: str) -> str:
         "UserPromptSubmit": "prompt-workflow.py",
         "PreToolUse": "pretool-workflow-gate.py",
         "PostToolUse": "posttool-todo-tracker.py",
-        "Stop": "stop-workflow-coordinator.py",
+        "Stop": "stop-launch.py",
     }[event]
 
 
@@ -175,24 +176,43 @@ def make_configured_fixture(base: Path, runtime: str, name: str) -> dict:
     }
 
 
+def _transcript(fixture: dict) -> Path:
+    """The session's transcript (outside the snapshotted trees): every prompt
+    and TodoWrite the CLI records, which the checklist readers read."""
+    return fixture["home"] / "projects" / f"{fixture['sid']}.jsonl"
+
+
+def _record(fixture: dict, record: dict) -> None:
+    path = _transcript(fixture)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record) + "\n")
+
+
+def _canonical(root: Path) -> list:
+    """The canonical /dev checklist, from the todo script the hooks run."""
+    out = subprocess.run([sys.executable, str(root / "scripts" / "todo" / "dev.py")],
+                         capture_output=True, text=True, cwd=root, check=True)
+    return json.loads(out.stdout)
+
+
 def configured_payload(fixture: dict, event: str, *, prompt: str | None = None, frontier: int = 0) -> dict:
-    root, home, sid, runtime = (
-        fixture["root"], fixture["home"], fixture["sid"], fixture["runtime"]
-    )
-    payload: dict = {"session_id": sid, "cwd": str(root), "hook_event_name": event}
+    root, sid, runtime = fixture["root"], fixture["sid"], fixture["runtime"]
+    payload: dict = {"session_id": sid, "cwd": str(root), "hook_event_name": event,
+                     "transcript_path": str(_transcript(fixture))}
     if event == "UserPromptSubmit":
         selected_prompt = prompt or f"/dev configured {runtime}"
         event_id = "event-" + hashlib.sha256(selected_prompt.encode()).hexdigest()[:20]
         payload.update({"prompt": selected_prompt, "event_id": event_id})
     elif event in {"PreToolUse", "PostToolUse"}:
-        todos_path = home / ".claude" / "todos" / f"{sid}-agent-{sid}.json"
-        items = json.loads(todos_path.read_text(encoding="utf-8"))
+        items = _canonical(root)
         for index, item in enumerate(items):
             item["status"] = (
                 "completed" if index < frontier else
                 "in_progress" if index == frontier else "pending"
             )
-        payload.update({"tool_name": "TodoWrite", "tool_input": {"todos": items}})
+        payload.update({"tool_name": "TodoWrite", "tool_input": {"todos": items},
+                        "tool_use_id": f"toolu-{event}-{frontier}"})
     return payload
 
 
@@ -308,21 +328,38 @@ def _current_identity(fixture: dict) -> tuple[str, int]:
 
 
 def _frontier(fixture: dict) -> int:
-    path = fixture["home"] / ".claude" / "todos" / f"{fixture['sid']}-agent-{fixture['sid']}.json"
-    items = json.loads(path.read_text())
+    """Completed steps of the checklist the transcript records (its last ok TodoWrite)."""
+    sys.path.insert(0, str(SOURCE_ROOT))
+    from hooks.lib import command_span
+    items = command_span.active_span(_transcript(fixture)).last_todos()
     return sum(item.get("status") == "completed" for item in items)
 
 
 def _full_start(fixture: dict, prompt: str) -> dict:
-    return execute_configured_chain(
+    """UserPromptSubmit, then the command record the CLI writes after it."""
+    started = execute_configured_chain(
         fixture, "UserPromptSubmit", configured_payload(fixture, "UserPromptSubmit", prompt=prompt)
     )
+    name, _, args = prompt[1:].partition(" ")
+    _record(fixture, {"type": "user", "message": {"role": "user", "content": (
+        f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>\n"
+        f"<command-args>{args}</command-args>")}})
+    return started
 
 
 def _full_progress(fixture: dict, frontier: int) -> tuple[dict, dict]:
+    """One TodoWrite as the CLI records it: tool_use, PreToolUse, tool_result, PostToolUse."""
     pre_payload = configured_payload(fixture, "PreToolUse", frontier=frontier)
+    tool_use_id = f"toolu-{uuid.uuid4().hex[:12]}"
+    pre_payload["tool_use_id"] = tool_use_id
+    _record(fixture, {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": tool_use_id, "name": "TodoWrite", "input": pre_payload["tool_input"]}]}})
     pre = execute_configured_chain(fixture, "PreToolUse", pre_payload)
+    _record(fixture, {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tool_use_id, "content": "ok",
+         **({"is_error": True} if pre["aggregate"]["decision"] == "block" else {})}]}})
     post_payload = configured_payload(fixture, "PostToolUse", frontier=frontier)
+    post_payload["tool_use_id"] = tool_use_id
     post = execute_configured_chain(fixture, "PostToolUse", post_payload)
     return pre, post
 
@@ -343,8 +380,7 @@ def test_claude_root_real_entrypoint_stop_is_not_time_locked(tmp_path: Path, fro
     assert start.returncode == 0, start.stderr
     registry = root / ".claude" / "dev-registry"
     assert len(list(registry.iterdir())) == 1
-    todos_path = root / ".claude" / "todos" / f"{sid}-agent-{sid}.json"
-    todos = json.loads(todos_path.read_text())
+    todos = _canonical(root)
     for next_frontier in range(1, frontier + 1):
         updated = []
         for index, item in enumerate(todos):
@@ -366,11 +402,11 @@ def test_claude_root_real_entrypoint_stop_is_not_time_locked(tmp_path: Path, fro
     assert len(list((root / "docs" / "dev").glob("user-requirement-*.md"))) == 1
 
 
-def test_claude_root_bare_dev_replay_mints_new_id_after_terminal_dev_report(tmp_path: Path) -> None:
-    """AC-L5-03/04: an identical bare /dev prompt still replays byte-for-byte
-    while the prior cycle's dev-report is missing (unchanged behavior); once
-    that dev-report exists with a terminal dev.status, the IDENTICAL prompt
-    must mint a brand-new task_id instead of replaying, and say so."""
+def test_claude_root_bare_dev_replays_only_while_its_record_is_younger_than_60s(tmp_path: Path) -> None:
+    """P3 R10: an identical bare /dev prompt replays byte-for-byte while its
+    replay record is younger than 60 s, whatever the prior cycle's dev-report
+    says (missing, blocked or completed); once the record is 120 s old, the
+    IDENTICAL prompt mints a brand-new task_id, with no terminal notice."""
     root = tmp_path / "claude-terminal-replay"
     (root / "scripts" / "todo").mkdir(parents=True)
     shutil.copy2(SOURCE_ROOT / "scripts" / "todo" / "dev.py", root / "scripts" / "todo" / "dev.py")
@@ -385,27 +421,32 @@ def test_claude_root_bare_dev_replay_mints_new_id_after_terminal_dev_report(tmp_
     assert len(list(registry.iterdir())) == 1
     first_task_id = next(registry.iterdir()).name
 
-    # Prior dev-report MISSING: identical envelope must still replay verbatim.
-    replay = _run(PROMPT, None, payload, env)
-    assert replay.returncode == 0 and replay.stdout == first.stdout, \
-        "replay with a non-terminal (missing) dev-report must stay byte-identical"
-    assert len(list(registry.iterdir())) == 1, "no new task_id while prior cycle is non-terminal"
+    # Within 60 s the dev-report decides nothing: missing, blocked or completed,
+    # the identical envelope replays verbatim.
+    for status in (None, "blocked", "completed"):
+        if status:
+            (root / "docs" / "dev" / f"dev-report-{first_task_id}.json").write_text(json.dumps({
+                "request_id": first_task_id, "task_id": first_task_id,
+                "dev": {"status": status, "files_modified": [], "files_created": []},
+            }))
+        replay = _run(PROMPT, None, payload, env)
+        assert replay.returncode == 0 and replay.stdout == first.stdout, \
+            f"replay within 60 s with dev-report {status} must stay byte-identical"
+        assert len(list(registry.iterdir())) == 1, f"no new task_id within 60 s ({status})"
 
-    # Prior dev-report now reaches a terminal state.
-    (root / "docs" / "dev" / f"dev-report-{first_task_id}.json").write_text(json.dumps({
-        "request_id": first_task_id, "task_id": first_task_id,
-        "dev": {"status": "completed", "files_modified": [], "files_created": []},
-    }))
+    [record] = (root / ".claude" / "dev-start-replays" / sid).iterdir()
+    stat = record.stat()
+    os.utime(record, ns=(stat.st_atime_ns, stat.st_mtime_ns - 120 * 10**9))
 
     second = _run(PROMPT, None, payload, env)
     assert second.returncode == 0, second.stderr
-    assert len(list(registry.iterdir())) == 2, "terminal prior cycle must mint a NEW task_id, not replay"
+    assert len(list(registry.iterdir())) == 2, "a record 120 s old must mint a NEW task_id, not replay"
     new_ids = {p.name for p in registry.iterdir()} - {first_task_id}
     assert len(new_ids) == 1
     second_task_id = next(iter(new_ids))
-    assert second_task_id != first_task_id
-    assert "already reached a terminal state" in second.stdout, second.stdout
-    assert first_task_id in second.stdout
+    assert f"DEV_SESSION_ID pre-initialized by hook: {second_task_id}\n" in second.stdout
+    assert "terminal state" not in second.stdout, second.stdout
+    assert first_task_id not in second.stdout
 
 
 @pytest.mark.parametrize("runtime", ["claude"])
@@ -416,6 +457,14 @@ def test_r03_configured_full_chain_resolution_execution_and_aggregation(
     evidence = []
     evidence.append(_full_start(fixture, f"/dev r03 full chain {runtime}"))
     evidence.extend(_full_progress(fixture, 0))
+    # P5: a Stop inside an unfinished /dev span is the Stop gate's block (its own tests,
+    # test_stop_command_gate.py, decide it); this test checks the configured chain's resolution,
+    # execution and aggregation, so its Stop runs with the gate's process-env off switch, and the
+    # same Stop armed is checked to block naming the gate.
+    armed = execute_configured_chain(fixture, "Stop", configured_payload(fixture, "Stop"))
+    assert armed["aggregate"]["decision"] == "block"
+    assert "COMMAND_GATE /dev: not complete" in armed["aggregate"]["combined_user_visible_output"]
+    fixture["env"]["CLAUDE_COMMAND_GATE"] = "off"
     evidence.append(execute_configured_chain(fixture, "Stop", configured_payload(fixture, "Stop")))
     assert [item["event"] for item in evidence] == [
         "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"
@@ -492,10 +541,9 @@ def test_r03_immediate_same_clock_distinct_active_reentry_preserves_prior_family
     families = _task_families(fixture)
     assert set(families) == {first_task, second_task}
     assert families[first_task] == prior_bytes
-    history = fixture["root"] / ".claude" / "workflow-history" / fixture["sid"]
-    archived = list(history.glob(f"*-{first_task}/bookmark.json"))
-    assert len(archived) == 1
-    assert json.loads(archived[0].read_text())["task_id"] == first_task
+    # The prior family survives in its dev-registry directory; the start no
+    # longer copies the bookmark and checklist into a history directory.
+    assert not (fixture["root"] / ".claude" / "workflow-history").exists()
 
 
 @pytest.mark.parametrize("runtime", ["claude"])
@@ -508,6 +556,9 @@ def test_r03_whole_stop_then_next_generation_progress(tmp_path: Path, runtime: s
     prior_bytes = _task_families(fixture)[prior_task]
     family_count = len(_task_families(fixture))
 
+    # P5: the unfinished /dev span's Stop is the Stop gate's block; this test checks what a whole
+    # Stop leaves for the next generation, so it stops with the gate's process-env off switch.
+    fixture["env"]["CLAUDE_COMMAND_GATE"] = "off"
     stopped = execute_configured_chain(fixture, "Stop", configured_payload(fixture, "Stop"))
     combined = stopped["aggregate"]["combined_user_visible_output"].lower()
     assert stopped["aggregate"]["decision"] == "allow", combined

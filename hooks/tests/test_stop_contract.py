@@ -212,6 +212,9 @@ def test_is_human_prompt_false_for_non_human_markers():
     queue = _queue_operations()[0]
     queue["content"] = text
     attachment = _attachment(text=text)
+    # A compaction's summary: a user record with no isMeta, origin or turnOrigin.
+    compaction = _envelope("user", 1, isCompactSummary=True, isVisibleInTranscriptOnly=True, message={
+        "role": "user", "content": "This session is being continued from a previous conversation.\n" + text})
     cases = {
         "isMeta": is_meta,
         "isSidechain": sidechain,
@@ -226,6 +229,7 @@ def test_is_human_prompt_false_for_non_human_markers():
         "assistant": assistant,
         "queue-operation": queue,
         "attachment": attachment,
+        "isCompactSummary": compaction,
     }
     for name, record in cases.items():
         assert stop_contract.is_human_prompt(record) is False, name

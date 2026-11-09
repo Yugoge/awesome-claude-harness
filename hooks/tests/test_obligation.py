@@ -10,8 +10,10 @@ Covers the four implementation ACs of ticket-20260929-104216-b:
 - AC4 (-k fixture): tmpdir fixture store, both persisted content shapes,
   rungs L0 and L1, distinct unresolvable reasons, role mismatch.
 
-Phase P1 (terminal grammar): TERMINAL_VOCABULARY drift against the schemas,
-TASK_ID_RE / schema pattern parity, the closed json kind (no required_values,
+Phase P1 (terminal grammar): TERMINAL_VOCABULARY and PROFILES read from the
+schemas (an unreadable schema is no import error), P1b row 18: role and
+pipeline read from the agent and command files, artifact kinds and null
+task_id profiles from the schema, terminal_status, TASK_ID_RE / schema pattern parity, the closed json kind (no required_values,
 no waived_by_response), producer-question.v1 option bounds, the task-id family
 helpers and read_first_record_prompt skipping non-message records.
 
@@ -26,6 +28,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 # Add repo root to path so we can import hooks.lib.obligation as a module,
 # matching hooks/tests/test_agent_resolver.py's convention.
@@ -236,6 +240,84 @@ def test_reject_unknown_pipeline():
     _assert_rejected(_parse(doc), "unknown_enum_value", field="pipeline")
 
 
+def test_role_is_an_agent_of_the_roster(tmp_path, monkeypatch):
+    # P1b row 18: a role is legal because agents/<role>.md exists with front
+    # matter, read when the block is validated; no list here names the roles.
+    for role in ("pm", "architect", "ui-specialist", "graphify", "style-inspector"):
+        doc = _example()
+        doc["role"] = role
+        assert isinstance(_parse(doc), obligation.ParsedObligation), role
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "wizard.md").write_text("---\nname: wizard\n---\n", encoding="utf-8")
+    (agents / "README.md").write_text("# agents\n", encoding="utf-8")
+    monkeypatch.setattr(obligation.roster, "AGENTS_DIR", agents)
+    doc = _example()
+    doc["role"] = "wizard"
+    assert isinstance(_parse(doc), obligation.ParsedObligation)
+    for role in ("qa", "README"):
+        doc["role"] = role
+        _assert_rejected(_parse(doc), "unknown_enum_value", field="role")
+
+
+def test_pipeline_is_a_command_file(tmp_path, monkeypatch):
+    # A pipeline is legal because commands/<pipeline>.md exists with front
+    # matter (the roster's rule on the command files), never a literal list.
+    for pipeline in ("spec", "redev", "do", "dev-overnight"):
+        doc = _example()
+        doc["pipeline"] = pipeline
+        assert isinstance(_parse(doc), obligation.ParsedObligation), pipeline
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    (commands / "ship.md").write_text("---\ndescription: ship\n---\n", encoding="utf-8")
+    (commands / "INDEX.md").write_text("# commands\n", encoding="utf-8")
+    monkeypatch.setattr(obligation, "_COMMANDS_DIR", commands)
+    doc = _example()
+    doc["pipeline"] = "ship"
+    assert isinstance(_parse(doc), obligation.ParsedObligation)
+    for pipeline in ("close", "INDEX"):
+        doc["pipeline"] = pipeline
+        _assert_rejected(_parse(doc), "unknown_enum_value", field="pipeline")
+
+
+def test_missing_agent_or_command_directory_refuses_the_block(tmp_path, monkeypatch):
+    # An unreadable roster or command directory makes nothing legal: the gate
+    # that validates the block refuses it; nothing raises.
+    monkeypatch.setattr(obligation, "_COMMANDS_DIR", tmp_path / "no-commands")
+    _assert_rejected(_parse(_example()), "unknown_enum_value", field="pipeline")
+    monkeypatch.setattr(obligation.roster, "AGENTS_DIR", tmp_path / "no-agents")
+    _assert_rejected(_parse(_example()), "unknown_enum_value", field="role")
+
+
+def test_artifact_kinds_and_null_task_id_profiles_read_the_schema(tmp_path, monkeypatch):
+    # The per-kind field sets and the profiles that may carry a null task_id
+    # are the schema's: another schema gives other sets, none gives none.
+    schema = json.loads((REPO_ROOT / "schemas" / "obligation.v1.json").read_text(encoding="utf-8"))
+    items = schema["properties"]["artifacts"]["items"]
+    items["properties"]["kind"]["enum"].append("blob")
+    items["allOf"].append({"if": {"properties": {"kind": {"const": "blob"}}, "required": ["kind"]},
+                           "then": {"required": ["path"], "properties": {"path": {}, "note": {}}}})
+    schema["allOf"][0]["if"]["properties"]["profile"]["not"]["enum"] = ["ad_hoc", "commit-qa"]
+    (tmp_path / "obligation.v1.json").write_text(json.dumps(schema), encoding="utf-8")
+    monkeypatch.setattr(obligation, "_SCHEMAS_DIR", tmp_path)
+    fields = obligation._artifact_fields_by_kind()
+    assert fields["blob"] == (("kind", "path"), ("note",))
+    assert fields["markdown"] == (("kind", "path", "identity_anchor"),
+                                  ("terminal_line_regex", "waived_by_response"))
+    assert obligation._null_task_id_profiles() == {"ad_hoc", "commit-qa"}
+    monkeypatch.setattr(obligation, "_SCHEMAS_DIR", tmp_path / "absent")
+    assert obligation._artifact_fields_by_kind() == {}
+    assert obligation._null_task_id_profiles() == frozenset()
+    # The shipped schema gives the grammar the design states.
+    assert obligation.ARTIFACT_FIELDS_BY_KIND["json"] == (("kind", "path", "schema", "identity"), ())
+    assert obligation.NULL_TASK_ID_PROFILES == {"ad_hoc", "commit-bulk"}
+    # A file kind (its fields require a path) has the file slack, a response
+    # kind none: every declared kind has an entry, spec_views included.
+    assert obligation.FRESHNESS_SLACK_SECONDS_BY_KIND == {
+        "json": 2, "markdown": 2, "spec_views": 2, "response_block": None, "response_line": None}
+    assert obligation.artifact_freshness_satisfied("spec_views", 10**10, "2026-10-28T00:00:00Z") is True
+
+
 def test_reject_unknown_profile():
     doc = _example()
     doc["profile"] = "mystery"
@@ -252,6 +334,19 @@ def test_reject_unknown_format():
     doc = _example()
     doc["artifacts"][2]["format"] = "yaml"
     _assert_rejected(_parse(doc), "unknown_enum_value", field="artifacts[2].format")
+
+
+def test_response_block_repo_roots_is_an_optional_list_of_roots():
+    # /commit's changelog-analyst obligation carries its plan's roots (or null
+    # in bulk mode); anything else is a malformed declaration.
+    for roots in (["/r/control", "/r/nested"], [], None):
+        doc = _example()
+        doc["artifacts"][2]["repo_roots"] = roots
+        assert not isinstance(_parse(doc), obligation.Rejection), roots
+    for roots in ("/r/control", [""], ["/r/control", 3], {"0": "/r/control"}):
+        doc = _example()
+        doc["artifacts"][2]["repo_roots"] = roots
+        _assert_rejected(_parse(doc), "bad_repo_roots", field="artifacts[2].repo_roots")
 
 
 def test_reject_unknown_consistency():
@@ -387,6 +482,46 @@ def test_failclosed_no_block_vs_multiple_blocks_distinct():
     assert many.reason == "multiple_blocks"
 
 
+def _extracted_searching_from_the_start(prompt):
+    """extract_obligation_block as it searched for the opening tag from the prompt's start (the oracle)."""
+    if not isinstance(prompt, str):
+        return obligation.Rejection(reason="bad_prompt")
+    count = prompt.count(obligation.OBLIGATION_OPEN_TOKEN)
+    if count == 0:
+        return obligation.NoBlock()
+    if count > 1:
+        return obligation.Rejection(reason="multiple_blocks")
+    match = obligation._OPEN_TAG_RE.search(prompt)
+    if match is None:
+        return obligation.Rejection(reason="unsupported_version", detail="malformed opening tag")
+    attrs = obligation._VERSION_ONLY_ATTRS_RE.fullmatch(match.group(1))
+    if attrs is None or attrs.group(1) != obligation.OBLIGATION_VERSION:
+        return obligation.Rejection(reason="unsupported_version", detail=match.group(1).strip())
+    close = prompt.find(obligation.OBLIGATION_CLOSE_TAG, match.end())
+    if close < 0:
+        return obligation.Rejection(reason="unterminated_block")
+    return obligation.ExtractedBlock(body=prompt[match.end():close])
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_the_opening_tag_is_searched_from_the_one_opener(seed):
+    # extract_obligation_block searches for the opening tag from the one opener token, where alone the
+    # tag can start: every outcome equals the search from the prompt's start.
+    import random
+
+    rng = random.Random(seed)
+    pieces = ['<obligation v="1">', '<obligation v="2">', "<obligation>", '<obligation v="1"', "<obligation",
+              '<obligationx v="1">', '<obligation\nv="1">', '<obligation  v="1" >', "</obligation>", "<", ">",
+              "x", '{"a": 1}', "\n", "obligation", "é", "<<obligation v=\"1\">"]
+    seen = set()
+    for _ in range(6000):
+        prompt = "".join(rng.choice(pieces) for _ in range(rng.randrange(0, 7)))
+        got = obligation.extract_obligation_block(prompt)
+        assert got == _extracted_searching_from_the_start(prompt), prompt
+        seen.add(getattr(got, "reason", type(got).__name__))
+    assert seen >= {"NoBlock", "multiple_blocks", "unsupported_version", "unterminated_block", "ExtractedBlock"}
+
+
 # --------------------------------------------------------------------------
 # Pure helper coverage (S1)
 # --------------------------------------------------------------------------
@@ -432,7 +567,7 @@ def test_lane_set_roster_equality_helper():
 
 
 # --------------------------------------------------------------------------
-# P1 grammar: vocabulary drift, task-id parity, closed json kind
+# P1 grammar: vocabulary read from the schemas, task-id parity, closed json kind
 # --------------------------------------------------------------------------
 
 SCHEMAS_DIR = REPO_ROOT / "schemas"
@@ -457,35 +592,93 @@ def _enum_at(schema, dotted):
     return node["enum"]
 
 
-def test_terminal_vocabulary_drift_equals_schema_enums():
-    registry = json.loads(
-        (SCHEMAS_DIR / "registry.json").read_text(encoding="utf-8")
-    )["schemas"]
-    checked = []
-    for schema_id, paths in obligation.TERMINAL_VOCABULARY.items():
-        assert registry.get(schema_id) == f"{schema_id}.json", schema_id
-        assert paths, schema_id
-        schema = _schema(schema_id)
-        for dotted, legal in paths.items():
-            enum = _enum_at(schema, dotted)
-            assert len(enum) == len(set(enum)), (schema_id, dotted, enum)
-            assert set(enum) == set(legal), (schema_id, dotted, sorted(legal), enum)
-            checked.append((schema_id, dotted))
-    assert ("ba-qa-report.v1", "verdict") in checked
-    assert obligation.TERMINAL_VOCABULARY["ba-qa-report.v1"] == {
-        "verdict": frozenset({"pass", "fail"})
-    }
+def test_schema_enum_reads_the_schema_file_it_names(tmp_path, monkeypatch):
+    # The values come from the schema on disk, not from a copy: a schema with
+    # another enum gives another set, a missing file or path gives none.
+    (tmp_path / "x.v1.json").write_text(json.dumps({"properties": {"a": {
+        "type": "object", "properties": {"b": {"enum": ["one", "two", 3]}}}}}))
+    (tmp_path / "broken.v1.json").write_text("{not json")
+    monkeypatch.setattr(obligation, "_SCHEMAS_DIR", tmp_path)
+    assert obligation._schema_enum("x.v1", "a.b") == {"one", "two"}
+    assert obligation._schema_enum("x.v1", "a.c") == frozenset()
+    assert obligation._schema_enum("broken.v1", "a.b") == frozenset()
+    assert obligation._schema_enum("absent.v1", "a.b") == frozenset()
+
+
+def test_unreadable_schemas_are_no_import_error(tmp_path):
+    # A harness tree without its schemas: the module still imports, nothing is
+    # terminal and no profile is legal, so the gate that reads one refuses it.
+    import shutil
+    import subprocess
+
+    lib = tmp_path / "hooks" / "lib"
+    lib.mkdir(parents=True)
+    for source in (REPO_ROOT / "hooks" / "lib").glob("*.py"):
+        shutil.copy(source, lib / source.name)
+    probe = (
+        "import json, sys; sys.path.insert(0, sys.argv[1]); import obligation as o; "
+        "r = o.validate_obligation(json.loads(sys.argv[2])); "
+        "print(json.dumps({'vocabulary': {k: {p: sorted(v) for p, v in d.items()} "
+        "for k, d in o.TERMINAL_VOCABULARY.items()}, 'profiles': sorted(o.PROFILES), "
+        "'kinds': sorted(o.ARTIFACT_KINDS), 'null': sorted(o.NULL_TASK_ID_PROFILES), "
+        "'refusal': [r.reason, r.field], "
+        "'status': o.terminal_status('do-report.v1', {'do': {'status': 'completed'}})}))"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe, str(lib), json.dumps(NORMALIZED_EXAMPLE)],
+        capture_output=True, text=True,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    seen = json.loads(proc.stdout)
+    assert seen["vocabulary"] and all(
+        paths == {dotted: [] for dotted in paths} for paths in seen["vocabulary"].values())
+    assert seen["profiles"] == [] and seen["status"] is None
+    # Nor any agent or command directory: no kind, no null task_id profile,
+    # and the block's role is refused by the gate that validates it.
+    assert seen["kinds"] == [] and seen["null"] == []
+    assert seen["refusal"] == ["unknown_enum_value", "role"]
+
+
+@pytest.mark.parametrize("record, expected", [
+    ({"do": {"status": "completed"}}, "completed"),
+    ({"do": {"status": "blocked"}}, None),  # P5 R21: completed is the one terminal value
+    ({"do": {"status": "pending"}}, None),
+    ({"do": {"status": "in_progress"}}, None),
+    ({"do": {}}, None),
+    ({"do": "completed"}, None),
+    ({"status": "completed"}, None),
+    ("not a record", None),
+])
+def test_terminal_status_of_a_do_report(record, expected):
+    assert obligation.terminal_status("do-report.v1", record) == expected
+
+
+def test_terminal_status_reads_each_declared_field():
+    assert obligation.terminal_status("dev-report.v2", {"dev": {"status": "completed"}}) == "completed"
+    assert obligation.terminal_status("dev-report.v2", {"dev": {"status": "blocked"}}) is None
+    assert obligation.terminal_status("qa-report.v2", {"qa": {"status": "warning"}}) == "warning"
+    assert obligation.terminal_status("ba-qa-report.v1", {"verdict": "fail"}) == "fail"
+    assert obligation.terminal_status("no-such-report.v1", {"status": "completed"}) is None
+
+
+def test_do_report_vocabulary_has_no_pending():
+    # E8: nothing writes a pending do-report, so the schema declares no pending; P5 R21 (D2:
+    # one terminal) leaves completed the one value, the vocabulary read from the schema.
+    assert "pending" not in obligation.TERMINAL_VOCABULARY["do-report.v1"]["do.status"]
+    assert "pending" not in _enum_at(_schema("do-report.v1"), "do.status")
+    assert obligation.TERMINAL_VOCABULARY["do-report.v1"]["do.status"] == frozenset(
+        _enum_at(_schema("do-report.v1"), "do.status")) == {"completed"}
 
 
 def test_terminal_vocabulary_dev_report_single_completed_status():
-    v2 = obligation.TERMINAL_VOCABULARY["dev-report.v2"]["dev.status"]
-    v1 = obligation.TERMINAL_VOCABULARY["dev-report.v1"]["status"]
-    assert v2 == v1 == {"completed"}
-    assert (
-        set(_enum_at(_schema("dev-report.v2"), "dev.status"))
-        == set(_enum_at(_schema("dev-report.v1"), "status"))
-        == {"completed"}
-    )
+    assert obligation.TERMINAL_VOCABULARY["dev-report.v2"]["dev.status"] == {"completed"}
+    assert set(_enum_at(_schema("dev-report.v2"), "dev.status")) == {"completed"}
+    # dev-report.v2 is the dev report's one schema (P10 R7), and every row is
+    # its schema's enum at the field the row names.
+    assert [s for s in obligation.TERMINAL_VOCABULARY if s.startswith("dev-report.")] == ["dev-report.v2"]
+    for schema_id, fields in obligation.TERMINAL_VOCABULARY.items():
+        for dotted, legal in fields.items():
+            assert legal and legal == set(_enum_at(_schema(schema_id), dotted)), schema_id
 
 
 def test_task_id_pattern_parity_with_schema():
@@ -1066,6 +1259,44 @@ def test_read_first_record_prompt_assistant_first_message_is_none(tmp_path):
         _attachment(0),
     ])
     assert obligation.read_first_record_prompt(only_leading) is None
+
+
+# --------------------------------------------------------------------------
+# dispatch_obligations: the dispatch-record walk (P1b row 3)
+# --------------------------------------------------------------------------
+
+def test_dispatch_obligations_walks_the_records_and_judges_nothing(tmp_path):
+    """Each Agent/Task dispatch record whose prompt carries a well-formed
+    obligation, in record order, with its call's id, line and subagent_type.
+    A malformed block, a dispatch without one, another tool's call and an
+    unreadable transcript contribute nothing; no declared artifact is read
+    (none of the declared paths exists)."""
+    good = _example()
+    second = dict(_example(), task_id="20260928-153000-c")
+    malformed = dict(_example())
+    del malformed["profile"]
+
+    def dispatch(use_id, name, prompt, subagent_type="dev"):
+        return {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": use_id, "name": name,
+             "input": {"subagent_type": subagent_type, "prompt": prompt}}]}}
+
+    transcript = tmp_path / "session.jsonl"
+    _write_jsonl(transcript, [
+        {"type": "user", "message": {"role": "user", "content": "/dev build it"}},
+        dispatch("toolu_a", "Agent", _prompt_for(good)),
+        dispatch("toolu_b", "Agent", "no block in this prompt"),
+        dispatch("toolu_c", "Agent", _prompt_for(malformed)),
+        dispatch("toolu_d", "Bash", _prompt_for(good)),
+        dispatch("toolu_e", "Task", _prompt_for(second), subagent_type="qa"),
+    ])
+
+    found = obligation.dispatch_obligations(transcript)
+
+    assert [(f["tool_use_id"], f["line"], f["subagent_type"]) for f in found] == [
+        ("toolu_a", 2, "dev"), ("toolu_e", 6, "qa")]
+    assert [f["obligation"]["task_id"] for f in found] == [good["task_id"], "20260928-153000-c"]
+    assert obligation.dispatch_obligations(tmp_path / "absent.jsonl") == []
 
 
 # --------------------------------------------------------------------------

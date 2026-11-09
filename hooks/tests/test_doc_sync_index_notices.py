@@ -44,7 +44,7 @@ RELAY_HOOK = REPO_ROOT / 'hooks' / 'userprompt-doc-sync-check.py'
 DOC_SYNC_PACKAGE = REPO_ROOT / 'hooks' / 'doc_sync'
 sys.path.insert(0, str(REPO_ROOT))
 
-SCRUBBED_ENV = ('CLAUDE_PROJECT_DIR', 'CLAUDE_DOC_SYNC_ROOTS', 'CLAUDE_DOC_SYNC_STATE_ROOT')
+SCRUBBED_ENV = ('CLAUDE_PROJECT_DIR', 'CLAUDE_DOC_SYNC_ROOTS', 'CLAUDE_DOC_SYNC_STATE_ROOT', 'CLAUDE_CONFIG_DIR')
 STATE_ROOT_SEAM = 'CLAUDE_DOC_SYNC_STATE_ROOT'
 NOTICE_CAP = 2000
 
@@ -225,13 +225,12 @@ def test_hook_chain_hc_silent_github_reserved(tmp_path):
 
 
 def test_hook_chain_hc_silent_new_index(tmp_path):
-    """A directory without INDEX (or README) gets both, first generation, silently."""
+    """A directory without INDEX or README gets neither, silently: doc-sync creates none."""
     world = World(tmp_path)
 
     assert_silent(run_hook(world))
 
-    assert IO in world.index.read_text() and IC in world.index.read_text()
-    assert RO in world.readme.read_text()
+    assert not world.index.exists() and not world.readme.exists()
 
 
 def test_hook_chain_hc_readme_and_index_one_object(tmp_path):
@@ -252,14 +251,14 @@ def test_hook_chain_hc_readme_and_index_one_object(tmp_path):
 def test_hook_chain_hc_claude_section_notice(tmp_path):
     """A CLAUDE.md section the classifier refuses is reported (the fallback shape: a near miss)."""
     world = World(tmp_path)
-    text = CLAUDE_HEAD + CLAUDE_GUARD + '<!--AUTO:last-updated-->\nold\n<!-- /AUTO:last-updated -->\n'
+    text = CLAUDE_HEAD + CLAUDE_GUARD + '<!--AUTO:claude-inventory-->\nold\n<!-- /AUTO:claude-inventory -->\n'
     world.claude_md.write_text(text)
 
     notice = parse_single_notice(run_hook(world))
 
     assert notice.startswith('doc-sync: CLAUDE.md section not regenerated (SKIPPED_MALFORMED_MARKERS)')
     assert 'NEAR_MISS_MARKER' in notice and 'Action:' in notice
-    assert f'CLAUDE.md: {os.path.realpath(world.claude_md)} section: last-updated' in notice
+    assert f'CLAUDE.md: {os.path.realpath(world.claude_md)} section: claude-inventory' in notice
     assert world.claude_md.read_text() == text
 
 
@@ -376,7 +375,7 @@ def long_world(tmp_path):
     world.readme.write_text(f'# sub\n\n{RO}\nstale\n')
     world.index.write_text('# sub\n\nhand written\n')
     sections = ''.join(f'<!-- AUTO:{name} -->\nx\n<!-- AUTO:{name} -->\n<!-- /AUTO:{name} -->\n\n'
-                       for name in ('claude-inventory', 'agent-list', 'skill-list', 'last-updated'))
+                       for name in ('claude-inventory', 'agent-list', 'skill-list', 'docker-services'))
     world.claude_md.write_text(CLAUDE_HEAD + CLAUDE_GUARD + sections)
     world.register_session('sess-a')
     return world
@@ -403,7 +402,7 @@ def state_entry_ids(world):
 
 
 ALL_ENTRIES = {'README', 'INDEX', 'section:claude-inventory', 'section:agent-list', 'section:skill-list',
-               'section:last-updated'}
+               'section:docker-services'}
 
 
 def test_hook_chain_hc_cap_printed_equals_recorded(tmp_path):
@@ -471,7 +470,7 @@ def test_notice_unit_nu_exhaustive_kind_status_shape():
     notice = load('notice')
     count = 0
     for kind in ('README', 'INDEX', 'CLAUDE_MD_SECTION'):
-        marker_id = 'last-updated' if kind == 'CLAUDE_MD_SECTION' else None
+        marker_id = 'claude-inventory' if kind == 'CLAUDE_MD_SECTION' else None
         for status in NOTIFYING:
             shapes = MALFORMED_SHAPES if status == 'SKIPPED_MALFORMED_MARKERS' else [None, 'REVERSED', 'ONLY_OPENING']
             for shape in shapes:
@@ -483,7 +482,7 @@ def test_notice_unit_nu_exhaustive_kind_status_shape():
                 if shape in MALFORMED_SHAPES:
                     assert shape in text
                 if kind == 'CLAUDE_MD_SECTION':
-                    assert text.endswith('section: last-updated')
+                    assert text.endswith('section: claude-inventory')
                 assert regions.ArtifactKind[kind].name  # kind stays a member
     assert count == 3 * (3 + 9 + 3)
 
@@ -551,11 +550,11 @@ def test_notice_unit_nu_index_text_prefix_pinned():
 
 
 def register_state(tmp_path, monkeypatch):
-    """A registered session directory reachable through the documented state-root seam."""
+    """A session directory that belongs to its session, reachable through the documented state-root seam."""
     root = tmp_path / 'state-root'
     session_dir = root / 'sess-u'
     session_dir.mkdir(parents=True)
-    (session_dir / '.owner').write_text('{}')
+    (session_dir / '.owner').write_text(json.dumps({'sid': 'sess-u'}))
     monkeypatch.setenv(STATE_ROOT_SEAM, str(root))
     return session_dir / 'doc-sync-notices-main.json', {'session_id': 'sess-u'}
 
@@ -690,74 +689,6 @@ def test_notice_unit_nu_cap_records_only_printed(tmp_path, monkeypatch, capsys):
     assert shown_first.isdisjoint(shown_second) and shown_second
 
 
-def ledger_failures(count, path_length):
-    """Recorder-failure descriptors whose rendered lines are of realistic repository length."""
-    return [{'class': 'agent_unresolvable',
-             'reason': 'the dev agent id could not be resolved to a registry entry',
-             'path': f'/{index}' + 'p' * path_length + '/INDEX.md'}
-            for index in range(count)]
-
-
-def test_notice_unit_nu_ledger_cap_records_only_shown(tmp_path, monkeypatch, capsys):
-    """A failure withheld by the cap is not marked delivered: it is counted, then shown next edit.
-
-    The failure half's copy of test_notice_unit_nu_cap_records_only_printed. Recording a
-    truncated-away failure as seen matched its digest on every later edit and suppressed it
-    permanently, which is the silent loss this channel exists to report.
-    """
-    notice = load('notice')
-    state_file, payload = register_state(tmp_path, monkeypatch)
-    failures = ledger_failures(8, 150)
-    body = '\n'.join(notice._ledger_failure_text(failure) for failure in failures)
-    assert len(body) > NOTICE_CAP, 'fixture must drive the body over the cap'
-
-    notice.emit_post_tool_notice([], payload, ledger_failures=failures)
-    first = json.loads(capsys.readouterr().out)['systemMessage']
-    recorded_first = set(json.loads(state_file.read_text()))
-    notice.emit_post_tool_notice([], payload, ledger_failures=failures)
-    second_out = capsys.readouterr().out
-    assert second_out.strip(), 'a failure withheld by the cap was suppressed permanently'
-    second = json.loads(second_out)['systemMessage']
-
-    shown_first = {failure['path'] for failure in failures if failure['path'] in first}
-    shown_second = {failure['path'] for failure in failures if failure['path'] in second}
-    assert 0 < len(shown_first) < len(failures)
-    assert {key.split('|', 2)[2] for key in recorded_first} == shown_first
-    assert shown_first.isdisjoint(shown_second) and shown_second
-    assert shown_first | shown_second == {failure['path'] for failure in failures}
-    assert re.search(r'(\d+) more recorder failure\(s\) not shown', first).group(1) == str(
-        len(failures) - len(shown_first))
-    notice.emit_post_tool_notice([], payload, ledger_failures=failures)
-    assert capsys.readouterr().out == '', 'a fully drained set must go quiet'
-
-
-def test_notice_unit_nu_ledger_cut_line_never_marked_delivered(tmp_path, monkeypatch, capsys):
-    """One line longer than the whole cap is shown to nobody; an under-cap repeat still dedupes."""
-    notice = load('notice')
-    state_file, payload = register_state(tmp_path, monkeypatch)
-    huge = [{'class': 'ledger_write_failed', 'reason': 'x' * 2400, 'path': '/deep/INDEX.md'}]
-
-    notice.emit_post_tool_notice([], payload, ledger_failures=huge)
-    text = json.loads(capsys.readouterr().out)['systemMessage']
-    assert len(text) <= NOTICE_CAP and 'more recorder failure(s) not shown' in text
-    assert json.loads(state_file.read_text()) == {}, 'a cut line must not be marked delivered'
-    notice.emit_post_tool_notice([], payload, ledger_failures=huge)
-    assert capsys.readouterr().out.strip(), 'a cut line must be retried on the next edit'
-
-    under_cap = ledger_failures(1, 10)
-    notice.emit_post_tool_notice([], payload, ledger_failures=under_cap)
-    assert capsys.readouterr().out.strip()
-    notice.emit_post_tool_notice([], payload, ledger_failures=under_cap)
-    assert capsys.readouterr().out == '', 'an under-cap repeat must still be suppressed'
-
-    # The counting tail is itself inside the cap at every descriptor length, so the
-    # line that says how much was withheld can never be what overflows.
-    for path_length in range(10, 700, 37):
-        shown, body = notice.render_ledger_body(ledger_failures(9, path_length))
-        assert len(body) <= NOTICE_CAP, path_length
-        assert len(shown) == 9 or 'more recorder failure(s) not shown' in body, path_length
-
-
 def test_notice_unit_nu_never_raises_on_malformed_results(capsys):
     """Nothing a caller passes can raise out of emit_post_tool_notice or change the exit path."""
     notice = load('notice')
@@ -857,7 +788,8 @@ def run_relay(home, tmp_root):
     environment.update(HOME=str(home), TMPDIR=str(tmp_root),
                        PATH=os.path.dirname(sys.executable) + os.pathsep + os.environ.get('PATH', ''),
                        PYTHONDONTWRITEBYTECODE='1')
-    return subprocess.run([sys.executable, str(RELAY_HOOK)], capture_output=True, text=True, env=environment,
+    installed = shutil.copy(RELAY_HOOK, home / '.claude' / 'hooks' / RELAY_HOOK.name)  # runs its siblings
+    return subprocess.run([sys.executable, str(installed)], capture_output=True, text=True, env=environment,
                           cwd=str(home), timeout=120)
 
 

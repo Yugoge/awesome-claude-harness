@@ -55,24 +55,19 @@ def guards():
     sys.path.insert(0, str(HOOKS))
     return {
         "pre": _load_module(HOOKS / "pretool-todo-validate.py", "lguards_pre_todo"),
-        "post": _load_module(HOOKS / "posttool-todo-sequence.py", "lguards_post_todo"),
         "gate": _load_module(HOOKS / "pretool-workflow-gate.py", "lguards_workflow_gate"),
         "canonical": _load_module(HOOKS / "lib/todo_canonical.py", "lguards_todo_canonical"),
     }
 
 
 def test_real_generic_validators_accept_every_projected_transition(todos, guards):
-    pre, post, gate, canonical = (
-        guards["pre"], guards["post"], guards["gate"], guards["canonical"]
-    )
+    pre, gate, canonical = guards["pre"], guards["gate"], guards["canonical"]
     errors: list[str] = []
     last = _frontier(todos, 0)
-    post.check_initial_status(last, errors)
+    errors.extend(canonical.initial_status_violations(last))
     for index in range(1, len(todos)):
         new = _frontier(todos, index)
         errors.extend(pre.validate(last, new))
-        post.check_content_immutability(last, new, errors)
-        post.check_completion_rules(last, new, errors)
         errors.extend(
             gate.validate_codex_transition(
                 {"subagent_calls": {str(index - 1): True}}, last, new

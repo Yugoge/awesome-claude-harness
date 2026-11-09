@@ -9,7 +9,6 @@ from .regen_index import regen_index
 from .regen_readme import regen_readme
 from .patch import patch_claude_md
 from .notice import emit_post_tool_notice
-from .hook_ledger import record_landed_files
 from .regions import (
     INDEX_MARKER_ID, README_MARKER_ID, ArtifactKind, RegenRecord, RegenStatus, RegionShape,
     classify_region,
@@ -38,6 +37,9 @@ EXCLUDED_PATTERNS = (
     '.claude/specs/',
     '.claude/dev-registry/',
     'tests/generated/',  # keep test snapshots out of auto-indexing
+    # The pipelines' artifact directory: an index there was picked by /dev-command's spec
+    # auto-detect as if it were a spec, and nothing reads one.
+    'docs/dev/',
 )
 
 
@@ -68,14 +70,6 @@ def _get_relative_path(fp: Path, project_dir: Path) -> str | None:
         return '.claude/' + str(fp.relative_to(global_claude))
     except ValueError:
         pass
-    return None
-
-
-def _match_watch_dir(rel: str):
-    """Find matching watched dir prefix, or None."""
-    for wd in WATCHED_DIRS:
-        if rel.startswith(wd + '/') or rel.startswith(wd + os.sep):
-            return wd
     return None
 
 
@@ -119,40 +113,23 @@ def _regen_if_dir(d: Path, project_dir: Path, results: list | None = None):
     return status
 
 
-def _maybe_regen_global(parent_dir: Path, rel: str, results: list | None = None):
-    """Same for the matching global directory; the README status, or None when not applicable."""
-    wd = _match_watch_dir(rel)
-    if wd is None:
-        return None
-    global_dir = Path.home() / wd
-    if global_dir.is_dir() and global_dir.resolve() != parent_dir.resolve():
-        # Global dirs live under ~/.claude; anchor the reserved-subtree check to
-        # $HOME so it is framed the same way global rel paths are (.claude/...).
-        status = _regen_and_record(regen_readme, ArtifactKind.README, global_dir, Path.home(), results)
-        _regen_and_record(regen_index, ArtifactKind.INDEX, global_dir, Path.home(), results)
-        return status
-    return None
-
-
 def process_parent_dirs(parent_dir: Path, project_dir: Path, results: list | None = None):
-    """Regenerate the parent (and matching global) directory; returns the `results` list.
+    """Regenerate the written file's own directory; returns the `results` list.
 
-    Records (README first, then INDEX, per directory) are appended to the caller's `results`
-    as each call finishes, so a failure in a later call does not lose what an earlier one
-    already reported.
+    Records (README first, then INDEX) are appended to the caller's `results` as each call
+    finishes, so a failure in a later call does not lose what an earlier one already reported.
+    No other directory is touched: a product repository's write leaves the global ~/.claude
+    copies alone.
     """
     if results is None:
         results = []
     _regen_if_dir(parent_dir, project_dir, results)
-    rel = str(parent_dir.relative_to(project_dir))
-    _maybe_regen_global(parent_dir, rel, results)
     return results
 
 
 def main():
     results: list = []
     payload = {}
-    ledger_failures: list = []
     try:
         data = json.load(sys.stdin)
         payload = data
@@ -169,26 +146,13 @@ def main():
         if not should_sync(fp, rel):
             sys.exit(0)
         process_parent_dirs(fp.parent, project_dir, results)
-        # backlog #122 M1: declare every real (WRITTEN) regeneration above to
-        # the hook-authored side-effect ledger, so it can later be merged
-        # into a dev-report's files_landed_whole exemption channel
-        # (backlog #121) instead of being an unattributable files_modified
-        # path. Fail-open internally; never affects the patch_claude_md call
-        # below. It returns bounded structured descriptors for the six FAILURE
-        # no-op classes (never raises, never blocks); the four legitimate no-op
-        # classes return nothing, so an ordinary non-dev edit stays silent.
-        returned = record_landed_files(results, payload, project_dir)
-        if isinstance(returned, list):
-            ledger_failures = returned
         section_skips = patch_claude_md(project_dir)
         if isinstance(section_skips, list):
             results.extend(section_skips)
     except Exception:
         pass
     # Outside the try: skips collected before a later failure still reach the caller.
-    # Both channels go into the SAME single output object -- a PostToolUse hook's
-    # stdout is read as one JSON object, so a second print would corrupt the first.
-    emit_post_tool_notice(results, payload, ledger_failures)
+    emit_post_tool_notice(results, payload)
     sys.exit(0)
 
 

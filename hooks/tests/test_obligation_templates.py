@@ -37,6 +37,7 @@ def _now() -> str:
 
 def _fill(text: str) -> str:
     text = re.sub(r'<("[^"]*") when BULK=false, else [^>]*>', r"\1", text)
+    text = re.sub(r"<the JSON array of [^<>]* when BULK=false, else [^>]*>", '["/repo/control", "/repo/nested"]', text)
     text = re.sub(r'("dispatched_at"\s*:\s*)"[^"]*"', rf'\1"{_now()}"', text)
     text = text.replace("{pipeline.timestamp_suffix}", f"{TASK_ID}-1")
     text = re.sub(r'<TASK_ID or \\"bulk\\">', TASK_ID, text)

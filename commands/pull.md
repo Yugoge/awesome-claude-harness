@@ -25,15 +25,15 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 ### Step 1: Execute the pull script
 
 ```bash
-bash ~/.claude/hooks/pull.sh
+bash "<HARNESS_ROOT>/hooks/pull.sh"
 PULL_EXIT_CODE=$?
 ```
 
 ### Step 2: Capture post-pull HEAD
 
 Always capture, regardless of exit code — pull.sh may change HEAD during a partial
-rebase before a conflict (line 151 exit), or after a fully successful rebase before
-stash pop fails (line 174 exit):
+rebase before a conflict (its Step 6 exit), or after a fully successful rebase before
+stash pop fails (its Step 7 exit):
 
 ```bash
 POST_PULL_HEAD=$(git rev-parse HEAD)
@@ -71,8 +71,8 @@ else (PULL_EXIT_CODE != 0):
 
     else if NOT rebase_state_exists AND PRE_PULL_HEAD != POST_PULL_HEAD:
         pull_exit_phase = "stash_restoration_failed"
-        # Rebase fully succeeded (HEAD advanced past line 154 success message);
-        # then stash pop failed at pull.sh line 174.
+        # Rebase fully succeeded (HEAD advanced past its "Pull completed successfully");
+        # then stash pop failed at pull.sh Step 7.
         # No rebase state remains because rebase completed cleanly.
         proceed to Step 5
 
@@ -85,7 +85,7 @@ else (PULL_EXIT_CODE != 0):
 
 ### Step 5: Dispatch pull-analyst subagent
 
-Dispatch the `pull-analyst` subagent with the following context (only reached for
+Dispatch the `pull-analyst` subagent (Agent tool, `run_in_background: false`) with the following context (only reached for
 `pull_exit_phase = "success"` or `pull_exit_phase = "stash_restoration_failed"`):
 
 ```
@@ -107,7 +107,7 @@ it does not gate any future command.
 After displaying the pull-analyst report, run a non-blocking incremental Graphify cache update. This ensures the global knowledge graph reflects the newly pulled commits.
 
 ```bash
-source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintain.py update || true
+source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-maintain.py" update || true
 ```
 
 This call is advisory: if GRAPHIFY_BIN is absent, CLAUDE_GRAPHIFY_ENABLED=0, or the cache is unavailable, it exits 0 immediately with a status=unavailable message. The update MUST NOT block the pull workflow or require user confirmation. Failure is silent (logged to stderr only).
@@ -117,4 +117,4 @@ This call is advisory: if GRAPHIFY_BIN is absent, CLAUDE_GRAPHIFY_ENABLED=0, or 
 - `/push` - Push changes with untracked file detection
 - `git status` - Check current working directory state
 
-The implementation is in `~/.claude/hooks/pull.sh`.
+The implementation is in `<HARNESS_ROOT>/hooks/pull.sh`.

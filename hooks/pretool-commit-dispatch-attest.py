@@ -62,10 +62,10 @@ def _dryrun_from_prompt(prompt: str):
 
 
 def _task_id_from_prompt(prompt: str) -> str:
-    """Best-effort task-id reading from the dispatch prompt. Forensic only."""
-    import re
-    match = re.search(r'\b(20\d{6}-\d{6})\b', prompt)
-    return match.group(1) if match else ""
+    """Best-effort task-id reading from the dispatch prompt (the one reading of
+    an id's timestamp, lib/obligation.py task_stamp). Forensic only."""
+    from lib.obligation import task_stamp
+    return task_stamp(prompt) or ""
 
 
 def main() -> int:
