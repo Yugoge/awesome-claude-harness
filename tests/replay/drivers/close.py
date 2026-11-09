@@ -982,7 +982,14 @@ class CloseRun:
         self.read(rel, self.label("Step 1 Read canonical dev report"))
         return list((self.load(rel).get("dev") or {}).get("files_modified") or [])
 
+    def no_registry(self) -> bool:
+        """Whether the text has a /do task leave out Step 1's registry call and the FIRST ACTION line of every
+        dispatch of Steps 1 and 2 (a /do task has no registry directory)."""
+        return bool(self.do_report) and "leave the FIRST ACTION line out" in self.o.section("Step 1")
+
     def registry_name(self) -> None:
+        if self.no_registry():
+            return
         c = self.run_text(self.o.block("Step 1", lang="bash", index=0), self.label("Step 1 Bash registry-dir"),
                           "The task's registry directory")
         self.session_id = (c.response.get("stdout") or "").strip() if c.ok else ""
@@ -1029,8 +1036,8 @@ class CloseRun:
         self.registry_name()
         self.inspector_reports = []
         for role, first, ob, report in self.inspector_bullets():
-            prompt = "\n".join([first, ob, f"--changed-files {' '.join(self.files)}",
-                                f"Write your report to: {report}"])
+            prompt = "\n".join(([] if self.no_registry() else [first]) + [ob, f"--changed-files {' '.join(self.files)}",
+                                                                          f"Write your report to: {report}"])
             prompt = o.bind(o.instantiate(prompt, self.tid))
             left = cmdtext.placeholders(prompt)
             if left:
@@ -1092,7 +1099,8 @@ class CloseRun:
         o = self.o
         tpl = next(b.text for b in cmdtext.blocks(o.section("Step 2")) if "<obligation" in b.text)
         lines = [line for line in tpl.split("\n")
-                 if self.spec_id or not line.strip().startswith("SECOND ACTION (only if SPEC_ID is non-empty")]
+                 if (self.spec_id or not line.strip().startswith("SECOND ACTION (only if SPEC_ID is non-empty"))
+                 and not (self.no_registry() and line.startswith("FIRST ACTION:"))]
         prompt = self.input_lines("\n".join(lines))
         if self.late:
             self.late_inputs("Step 2 inputs", **{"Input artifacts": [
@@ -1415,14 +1423,12 @@ class CloseRun:
         if extra:
             self.mode_question(extra)
         disc = o.block("`--auto` mode", lang="bash", index=0)
-        c = self.run_text(disc, "/close --auto Bash discovery", "Discover the close_pending parents",
-                          capture=("CLOSE_PENDING_PARENTS",))
+        c = self.run_text(disc, "/close --auto Bash discovery", "Discover the close_pending parents")
         skipped = [l for l in ((c.response.get("stderr") or "") if c.ok else (c.error or "")).splitlines()
                    if ": skipped: " in l]
         fact(self.rp, "close --auto skipped", skipped)
-        lines = o.values.get("CLOSE_PENDING_PARENTS") or []
-        if isinstance(lines, str):
-            lines = [lines] if lines else []
+        # each stdout line's first word is a parent's task-id (the text's own reading of the call)
+        lines = ((c.response.get("stdout") or "") if c.ok else "").splitlines()
         parents = [line.split()[0] for line in lines if line.strip()]
         fact(self.rp, "close --auto parents", len(parents))
         states = []
