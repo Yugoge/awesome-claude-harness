@@ -58,7 +58,8 @@ What each step does is taken from the tree's commands/clean.md:
   compared; Written at the step's `Save to:` path.
 * Step 14: the two counts Read from their files and compared.
 * Step 15: the checkpoint hook, the checkpoint ref read, the step's `record-checkpoint` call.
-* Step 16: the step's jq block (the checkpoint commit bound where the text has the placeholder), then
+* Step 16: the step's merge script call (scripts/steps/clean-merge-approvals.py, the checkpoint commit its
+  `<checkpoint_commit>` argument), then
   the cleaner dispatch from the step's `Agent tool invocation:` prompt (its obligation block, where the
   text has one, instantiated as Step 5's). The cleaner is played from its
   agent file: the report files the prompt names Read, the checkpoint check (Safety First), each
@@ -98,7 +99,7 @@ Text points the driver resolves (each also reported as a text defect):
   context); the report path is the one the step says the inspector writes, added as a `Write your
   report to:` line (likewise for Step 10A's report). Step 5's Bash block
   runs before the dispatch (its output says the inspectors can now be invoked).
-* "activate venv" (Step 1; the base cleaner's token script) names no venv a product repository has:
+* "activate venv" (the base cleaner's token script) names no venv a product repository has:
   the call runs without one, as row 7 runs `source venv/bin/activate &&` calls (E5 (b)).
 * The cleanliness-inspector includes each MANDATORY script's JSON output in full under the findings key
   its section names; the scripts list the harness install's own files too, and those items name no
@@ -421,7 +422,7 @@ class CleanRun:
         self.facts["folders"] = folders
         fresh_cmd = self.code("Step 4", "Run freshness check", contains="check-readme-freshness.sh")
         fresh_rel = self.code("Step 4", "Run freshness check", startswith="docs/clean/")
-        self.bash(f"{fresh_cmd} > {fresh_rel}", "Step 4 Bash freshness", "README freshness check, saved")
+        self.bash(self.fill(f"{fresh_cmd} > {fresh_rel}"), "Step 4 Bash freshness", "README freshness check, saved")
         self.read(self.fill(fresh_rel), "Step 4 Read freshness")
         try:
             fresh = self.load(self.fill(fresh_rel))
@@ -442,8 +443,7 @@ class CleanRun:
             ctx["parameters"][code[0]] = code[1] == "true"
         self.rule_rel = rule_rel
         self.write(rule_rel, json.dumps(ctx, indent=2) + "\n", "Step 4 Write rule context")
-        o.values["RULE_CONTEXT"] = rule_rel
-        inv = self.code("Step 4", "Invoke:", contains="rule-inspect")
+        inv = self.fill(self.code("Step 4", "Invoke:", contains="rule-inspect"))
         c = self.bash(inv, "Step 4 Bash rule-inspect", "Rule inspection orchestration")
         nxt = (_json_out(c.response.get("stdout", "")) or {}) if c.ok else {}
         role = self.role_in("Step 4")
@@ -940,7 +940,8 @@ class CleanRun:
         c = self.bash(f"git rev-parse {shlex.quote(ref)}", "Step 15 Bash checkpoint ref", "Read the checkpoint ref")
         self.checkpoint = c.response.get("stdout", "").strip() if c.ok else ""
         o.values["CHECKPOINT_COMMIT"] = self.checkpoint
-        rec = self.fill(self.code("Step 15", "checkpoint.sh", contains="record-checkpoint"))
+        rec = self.fill(self.code("Step 15", "checkpoint.sh", contains="record-checkpoint")).replace(
+            "<checkpoint_commit>", self.checkpoint)
         c = self.bash(rec, "Step 15 Bash record-checkpoint", "Record the checkpoint commit")
         out = (_json_out(c.response.get("stdout", "")) or {}) if c.ok else {}
         self.checkpoint = out.get("checkpoint_commit") or self.checkpoint
@@ -948,10 +949,9 @@ class CleanRun:
     # ------------------------------------------------------------ Step 16: the cleaner
     def step16(self) -> None:
         o = self.o
-        block = next(b for _n, b, _p in o.step_blocks("Step 16") if "context-with-approvals" in b.text)
-        text = self.fill(block.text)
-        text = re.sub(r"<checkpoint_commit from Step 15>", self.checkpoint, text)
-        self.bash(text, "Step 16 Bash context-with-approvals", "Merge the approvals into the cleaner's context")
+        block = next(b for _n, b, _p in o.step_blocks("Step 16") if "clean-merge-approvals" in b.text)
+        text = self.fill(block.text).replace("<checkpoint_commit>", self.checkpoint)
+        self.bash(text, "Step 16 Bash clean-merge-approvals", "Merge the approvals into the cleaner's context")
         inv = cmdtext.block(o.text, "Step 16", anchor="Agent tool invocation:")
         m = re.search(r'prompt:\s*"(.*)"\s*$', inv.rstrip("\n"), re.S)
         prompt = o.instantiate(self.fill(m.group(1)), None)
