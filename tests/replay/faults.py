@@ -7,8 +7,9 @@ At the first tool step whose label matches the glob (a subagent's Write of an ar
 
     missing   writes nothing
     invalid   writes the document with <what> applied: a comma list of `dotted.key:value` (value
-              JSON, else a string) and `-dotted.key` (the key removed); with no <what>, without the
-              first field its schema requires
+              JSON, else a string), `+dotted.key:value` (value appended to the list there) and
+              `-dotted.key` (the key removed); with no <what>, without the first field its schema
+              requires
     notjson   writes the first half of the text (truncated JSON)
     bash      writes the document as it meant to, by a shell redirection instead of the Write tool:
               a route no Write or Edit hook sees
@@ -78,6 +79,25 @@ at injection and release, each SESSION-INDEX line and sync report a Bash call pr
 paths whose shared entry is not HEAD's, whether the holder's own unlink found its lock, and after
 each main-agent Stop the lock left, HEAD's paths and `git status --porcelain`.
 
+    harness@<label glob>=<path>
+
+P6 F3.a: before the first subagent step whose label matches, that subagent Writes `path` under the
+harness home (its hooks/ or scripts/) with a syntax error Python's compiler rejects, meaning the same
+file compiling, and its dev report then declares that file in dev.files_created (absolute: the
+harness home is a repository of its own) as the file-list rule asks. A path under hooks/ is a
+harness-hook cycle, which the owner opts into with the project's `.claude/.hook-refactor-allow`
+(pretool-claude-config-guard.py): the fault puts it in place first. The agent repairs the file at
+its next round when its stop's block names it, as for a write fault.
+
+    claim@<label glob>=<Tool>:<argument>
+
+P6 A8: before the first subagent step whose label matches, that subagent makes a call its role has
+no right to, a grant claimed by the wrong role: `Bash:<command>` (a commit that spends another
+role's commit grant) or `Write:<path>` (a file in another role's grant directory). `{task}`,
+`{project}` and `{state}` (the hooks' state directory) are bound. Its record keeps whether the call
+was refused, by which hooks, with which text; nothing repairs it (a refused call changes nothing),
+and the agent goes on with its own step.
+
 Each fault records what it did in faults.json beside blocks.json: kind, label, path, the faulted
 agent, and whether that agent repaired it (the number of returned stops it took).
 """
@@ -136,22 +156,25 @@ def _required_first(rp, path: str, text: str) -> str | None:
 
 
 def _edit(doc: dict, what: str) -> list:
-    """Apply `what` (`a.b:value`, `-a.b`, comma separated) to doc in place; the edits applied."""
+    """Apply `what` (`a.b:value`, `+a.b:value`, `-a.b`, comma separated) to doc in place; the edits applied."""
     done = []
     for item in [w.strip() for w in what.split(",") if w.strip()]:
-        drop = item.startswith("-")
-        key, _, raw = item.lstrip("-").partition(":")
+        drop, add = item.startswith("-"), item.startswith("+")
+        key, _, raw = item.lstrip("-+").partition(":")
         *head, last = key.split(".")
         node = doc
         for k in head:
             node = node.setdefault(k, {})
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            value = raw
         if drop:
             node.pop(last, None)
+        elif add:
+            node[last] = list(node.get(last) or []) + [value]
         else:
-            try:
-                node[last] = json.loads(raw)
-            except ValueError:
-                node[last] = raw
+            node[last] = value
         done.append(item)
     return done
 
@@ -434,6 +457,76 @@ def _plant(rp, glob: str, what: str) -> callable:
     return fn
 
 
+_BROKEN = "def probe(:\n    return 0\n"  # F3.a: a file Python's compiler rejects
+_FIXED = "def probe():\n    return 0\n"
+HOOK_ALLOW = ".claude/.hook-refactor-allow"  # the owner's per-project opt-in to a harness-hook cycle
+
+
+def _harness(rp, glob: str, what: str) -> tuple:
+    """F3.a: the matched step's subagent Writes `what` under the harness home broken; its dev report
+    declares it (`declare`, at that agent's Write of its report)."""
+    st: dict = {}
+    full = os.path.join(rp.layout.harness, what)
+
+    def inject(rp_, phase, step):
+        actor = step.get("actor")
+        if phase != "before" or st or getattr(actor, "agent", None) is None:
+            return
+        rec = st["rec"] = {"kind": "harness", "label": step["label"], "path": full, "agent": actor.aid,
+                           "role": actor.role, "repaired": False, "rounds": 0}
+        allow = os.path.join(rp.layout.project, HOOK_ALLOW)
+        if what.startswith("hooks/") and not os.path.exists(allow):
+            with rp.acting("fault"):
+                os.makedirs(os.path.dirname(allow), exist_ok=True)
+                open(allow, "w").close()
+            rec["hook_refactor_allow"] = HOOK_ALLOW
+        from . import agents
+        call = agents.put(actor, full, _BROKEN, f"{actor.role} Write {what}")
+        rec.update(written=bool(call and call.ok), hooks=[h["hook"] for h in (call.pre.blocks if call and call.pre else [])])
+        rp.fault_pending[full] = {"meant": _FIXED, "faulted": _BROKEN, "rec": rec, "forged": False}
+        _record(rp, rec)
+
+    def declare(rp_, phase, step):
+        rec = st.get("rec")
+        if phase != "before" or rec is None or rec.get("declared") or step.get("name") != "Write" \
+                or getattr(step.get("actor"), "aid", None) != rec["agent"] \
+                or not fnmatch.fnmatchcase(_path_of(rp, step), "docs/dev/dev-report-*.json"):
+            return
+        doc = json.loads(step["input"].get("content", ""))
+        dev = doc.setdefault("dev", {})
+        dev["files_created"] = sorted(set(dev.get("files_created") or []) | {full})
+        step["input"] = dict(step["input"], content=json.dumps(doc, indent=2) + "\n")
+        rec["declared"] = _path_of(rp, step)
+        _record(rp, rec)
+    return inject, declare
+
+
+def _claim(rp, glob: str, what: str) -> callable:
+    done: list = []
+    tool, _, arg = what.partition(":")
+    if tool not in ("Bash", "Write"):
+        raise ValueError(f"claim takes Bash:<command> or Write:<path>, not {what!r}")
+
+    def fn(rp_, phase, step):
+        actor = step.get("actor")
+        if phase != "before" or done or step.get("kind") != "tool" or getattr(actor, "agent", None) is None:
+            return
+        done.append(1)
+        task = min((v for v, k in rp.ids.values.items() if k == "task"), key=len, default="")
+        text = arg.replace("{task}", str(task)).replace("{project}", rp.layout.project).replace("{state}", rp.layout.state)
+        label = f"{actor.role} claim {tool}"
+        call = actor.bash(text, "claim", label=label) if tool == "Bash" else actor.write(text, "{}\n", label=label)
+        blocks = call.pre.blocks if call.pre else []
+        rec = {"kind": "claim", "label": step["label"], "call": label, "tool": tool, "target": rp.norm_text(text),
+               "agent": actor.aid, "role": actor.role, "denied": call.blocked, "hooks": [h["hook"] for h in blocks],
+               "text": rp.norm_text("\n".join((h.get("stderr") or "") + (h.get("stdout") or "") for h in blocks))}
+        if tool == "Write":
+            with rp.acting("fault"):
+                rec["landed"] = os.path.exists(text)
+        _record(rp, rec)
+    return fn
+
+
 _HOLDER = ("import os, sys\nfd = os.open(sys.argv[1], os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)\n"
            "print('held', flush=True)\nsys.stdin.readline()\n"
            "try:\n    os.unlink(sys.argv[1]); print('unlinked', flush=True)\n"
@@ -587,6 +680,11 @@ def install(rp, spec: str) -> None:
         elif kind in ("pretemplate", "noblock"):
             rp.earlier_templates = set()
             rp.faults.append((glob, _dispatch_fault(rp, kind, glob, what)))
+        elif kind == "harness":
+            inject, declare = _harness(rp, glob, what)
+            rp.faults += [(glob, inject), ("*", declare)]
+        elif kind == "claim":
+            rp.faults.append((glob, _claim(rp, glob, what)))
         elif kind == "lock":
             glob, _, holder = rest.partition("=")
             inject, observe = _lock(rp, glob, holder)

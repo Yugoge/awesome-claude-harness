@@ -95,6 +95,30 @@ def _const_str(node) -> list[str]:
     return out
 
 
+def _flow_text(mod, func, call) -> list[str]:
+    """The string constants a Name argument of `call` is built from inside `func`: the values
+    assigned to it (transitively through the names they read) and the `return` values of the
+    module's own functions those values call."""
+    todo, seen, out = [a.id for a in call.args if isinstance(a, ast.Name)], set(), []
+    assigns = [n for n in ast.walk(func) if isinstance(n, (ast.Assign, ast.AugAssign, ast.AnnAssign)) and n.value]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for a in assigns:
+            if not any(isinstance(t, ast.Name) and t.id == name for t in getattr(a, "targets", None) or [a.target]):
+                continue
+            out += _const_str(a.value)
+            for n in ast.walk(a.value):
+                if isinstance(n, ast.Name):
+                    todo.append(n.id)
+                elif isinstance(n, ast.Call) and _call_name(n.func)[0] is None and _call_name(n.func)[1] in mod.funcs:
+                    out += [t for r in ast.walk(mod.funcs[_call_name(n.func)[1]])
+                            if isinstance(r, ast.Return) and r.value is not None for t in _const_str(r.value)]
+    return out
+
+
 def _call_name(func) -> tuple:
     if isinstance(func, ast.Name):
         return (None, func.id)
@@ -819,6 +843,17 @@ class Enumerator:
                             mod.top_level(node, func) and (rel, func.name) not in helpers and (rel, func.name) != tgt:
                         helpers[(rel, func.name)] = [as_site(mod, node, "call")]
                         changed = True
+        # A helper's refusals off its top level (a helper call under a test, the helper still blocking
+        # at its end) leave through the same call site as its own: their message pieces join the
+        # helper's, the pieces of the values a variable message is assigned from included, so match()
+        # maps a refusal one of them printed to the site calling the helper.
+        for (rel, name), hs in helpers.items():
+            mod, f = mods[rel], mods[rel].funcs.get(name)
+            for node in ast.walk(f) if f is not None and hs and hs[0].kind == "call" else ():
+                if isinstance(node, ast.Call) and self._resolve(mod, node.func) in helpers \
+                        and mod.enclosing_func(node) is f and not mod.top_level(node, f):
+                    hs[0].text += [t for t in _const_str(mod.statement(node)) + _flow_text(mod, f, node)
+                                   if t not in hs[0].text]
         called = set()
         for rel, mod in mods.items():
             for node in ast.walk(mod.ast):
