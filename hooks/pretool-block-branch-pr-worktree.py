@@ -77,9 +77,15 @@ Coexistence
   tightens — it never loosens an existing block.
 
 Exit codes
-  0 = allow, 2 = block (stderr shown to the agent). Fails OPEN (exit 0) on any
-  unexpected error so a parser bug never bricks a session — same fail-open
-  convention as pretool-git-privilege-guard.py.
+  0 = allow, 2 = block (stderr shown to the agent).
+
+Fails closed. An error the hook does not expect, a hooks/lib import that fails at
+module load included, refuses a Bash call that may create a branch, PR or
+worktree (exit 2, naming the hook and the error) unless one of the bypasses above
+is confirmed; it is not a policy refusal. A call that cannot create one
+(_may_create) and another tool's call still exit 0, so a broken hook does not
+refuse ordinary commands. Unreadable input (not a JSON object) is judged on its
+raw text the same way.
 """
 
 import json
@@ -87,6 +93,168 @@ import os
 import re
 import sys
 from pathlib import Path
+
+
+# Fail closed. The code from here to the first hooks/lib import uses the standard
+# library alone, so it still decides when a lib module fails to load or anything
+# later raises; Python's own exit 1 there is a non-blocking hook error, and the
+# harness would run the command unjudged.
+_HOOK_NAME = 'pretool-block-branch-pr-worktree.py'
+_STDIN = None
+
+
+def _read_stdin():
+    """The raw hook payload, read once, by main or by the load-failure hook."""
+    global _STDIN
+    if _STDIN is None:
+        try:
+            stream = getattr(sys.stdin, 'buffer', None)
+            if stream is not None:
+                _STDIN = stream.read().decode('utf-8', 'replace')
+            else:
+                _STDIN = sys.stdin.read()
+        except Exception:
+            _STDIN = ''
+    return _STDIN
+
+
+def _may_create(text):
+    """False only when text cannot create a branch, PR or worktree as this hook
+    reads a command.
+
+    The hook refuses only a command word whose basename is `git` or `gh`, in the
+    command or in a shell `-c` string it runs (_classify_segment). The texts it
+    classifies keep the command's letters in order, and between two letters of a
+    word its reading may delete only white space, a backslash, a quote, a quoted
+    span and a comment up to a newline (`gi'a b't` reads as `git`); a run-time
+    value reads as a placeholder that spells neither word. So text where no `g`
+    is followed by `i` then `t`, or by `h`, in any letter case, past only such
+    text, holds no such word. A quoted span may end at any later same quote and a
+    comment at any later newline, which covers every way of pairing them. One
+    right-to-left pass, linear in len(text).
+    """
+    n = len(text)
+    # reach[k][p]: from p, past deletable text only, the rest of a word follows:
+    # k = 0 't', 1 'i' then 't', 2 'h'.
+    reach = [[False] * (n + 1) for _ in range(3)]
+    # later[c][k]: reach[k] just past a later quote c, or at a later newline.
+    later = {c: [False] * 3 for c in '\'"\n'}
+    for p in range(n - 1, -1, -1):
+        ch = text[p]
+        low = ch.lower()
+        own = (low == 't', low == 'i' and reach[0][p + 1], low == 'h')
+        for k in range(3):
+            reach[k][p] = (own[k]
+                           or ((ch.isspace() or ch in '\\\'"') and reach[k][p + 1])
+                           or (ch in '\'"' and later[ch][k])
+                           or (ch == '#' and later['\n'][k]))
+        if ch in '\'"':
+            later[ch] = [later[ch][k] or reach[k][p + 1] for k in range(3)]
+        elif ch == '\n':
+            later[ch] = [later[ch][k] or reach[k][p] for k in range(3)]
+    return any(text[p] in 'gG' and (reach[1][p + 1] or reach[2][p + 1])
+               for p in range(n))
+
+
+def _payload(raw):
+    """The payload as a dict, or None when raw does not read as a JSON object."""
+    try:
+        data = json.loads(raw)
+    except Exception:  # ValueError, or RecursionError for deep nesting
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _judged_text(raw, data):
+    """What an error is judged on: None for another tool's call, a Bash call's
+    command, and the raw payload when it does not read as a tool call."""
+    if data is None:
+        return raw
+    if data.get('tool_name', '') != 'Bash':
+        return None
+    tool_input = data.get('tool_input')
+    command = tool_input.get('command') if isinstance(tool_input, dict) else None
+    return command if isinstance(command, str) else raw
+
+
+def _bypassed(text, data):
+    """(confirmed, problems): confirmed is True only when a bypass is confirmed
+    for this call; problems names each bypass check that is missing or raised,
+    which confirms nothing."""
+    checks = (
+        ('is_overnight_active', lambda f: f(data.get('cwd'))),
+        ('has_do_consent', lambda f: f(data)),
+        ('_allow_grant_matches', lambda f: f(text, data)),
+    )
+    problems = []
+    for name, call in checks:
+        func = globals().get(name)
+        if func is None:
+            problems.append(f'{name} did not load')
+            continue
+        try:
+            if call(func):
+                return True, problems
+        except Exception as exc:
+            problems.append(f'{name} raised {type(exc).__name__}')
+    return False, problems
+
+
+def _internal_error_exit(exc, what='internal error'):
+    """2, naming the hook and exc on stderr, when the call may create a branch,
+    PR or worktree and no bypass is confirmed; else 0."""
+    raw = _read_stdin()
+    data = _payload(raw)
+    text = _judged_text(raw, data)
+    if text is None or not _may_create(text):
+        return 0
+    if data is not None:
+        confirmed, problems = _bypassed(text, data)
+        if confirmed:
+            return 0
+    lines = [
+        '',
+        f'BLOCKED: {_HOOK_NAME} {what}, not a policy refusal: '
+        f'{type(exc).__name__}: {str(exc)[:300]}',
+        'The hook could not judge this command, which may create a branch, PR or '
+        'worktree, so it refuses it.',
+        'To proceed: run it inside a live /dev-overnight session, or (main agent) '
+        'use /do, or /allow the specific command first. Report the error.',
+    ]
+    if data is None:
+        lines.append('Its input is not a JSON object, so no bypass can be read for it.')
+    elif problems:
+        lines.append('Bypass checks that could not run: ' + '; '.join(problems) + '.')
+    if data is not None and data.get('agent_id'):
+        lines.append(
+            'You are a subagent: PAUSE and report this block to the user per '
+            'Subagent Hook Discipline — do NOT attempt to work around it.')
+    sys.stderr.write('\n'.join(lines) + '\n')
+    return 2
+
+
+def _fail_closed_exit(exc, what='internal error'):
+    """_internal_error_exit's code; 2 when judging the error raises too."""
+    try:
+        return _internal_error_exit(exc, what)
+    except BaseException:
+        return 2
+
+
+def _refuse_on_load_failure(exc_type, exc, tb):
+    """sys.excepthook while this file runs as the hook: an exception escaping the
+    module (a hooks/lib import that fails, any module-level error) exits through
+    _internal_error_exit instead of Python's exit 1."""
+    code = _fail_closed_exit(exc)
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(code)
+
+
+if __name__ == '__main__':
+    sys.excepthook = _refuse_on_load_failure
 
 sys.path.insert(0, str(Path(__file__).parent))
 try:
@@ -622,9 +790,11 @@ def _block(kind, command, data):
 
 def main():
     try:
-        data = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
+        data = json.loads(_read_stdin())
+    except Exception as exc:
+        # No tool or command to read: 0 as before, unless the raw text may create
+        # a branch, PR or worktree (the hook is registered for Bash calls alone).
+        sys.exit(_fail_closed_exit(exc, 'could not read its input'))
     try:
         if data.get('tool_name', '') != 'Bash':
             sys.exit(0)
@@ -644,8 +814,9 @@ def main():
         _block(kind, command, data)
     except SystemExit:
         raise
-    except Exception:
-        sys.exit(0)
+    except Exception as exc:
+        # An error is no verdict: refuse what may create one (_internal_error_exit).
+        sys.exit(_fail_closed_exit(exc))
     sys.exit(0)
 
 
