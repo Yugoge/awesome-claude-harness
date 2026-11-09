@@ -710,13 +710,35 @@ def registry_dir_for(project_dir: str | Path, task_id: Any) -> Path | None:
     stamp = task_stamp(task_id)
     if stamp is None:
         return None
-    root = Path(project_dir) / ".claude" / "dev-registry"
+    root = _registry_root(project_dir)
     if task_id.startswith("dev-command-"):
         return root / f"dev-command-{stamp}"
     candidates = [root / f"dev-{stamp}"]
     if not task_id.startswith("dev-"):
         candidates.append(root / f"dev-command-{stamp}")
     return next((c for c in candidates if c.is_dir()), candidates[0])
+
+
+def _registry_root(project_dir: str | Path) -> Path:
+    """``<project>/.claude/dev-registry``: both rules name directories in it."""
+    return Path(project_dir) / ".claude" / "dev-registry"
+
+
+def registry_dir_named(project_dir: str | Path, name: Any) -> Path | None:
+    """The registry directory a registry *name* names, for a script that is
+    handed the name (DEV_SESSION_ID, an overnight session id) rather than a
+    task id. A minted name (``dev-<ts>``, ``dev-command-<ts>``) is a task id,
+    so its directory is registry_dir_for's; any other name names a directory
+    of its own: the session id /dev-overnight arms its registry under (no task,
+    so registry_dir_for names none; lib/agent_cycle.py reads it by that name),
+    and a per-pipeline graphify name ``<session>-pipeline-<n>``. None for a
+    name that is not one plain path component."""
+    if not isinstance(name, str) or name in ("", ".", "..") or Path(name).name != name:
+        return None
+    stamp = task_stamp(name)
+    if stamp is not None and name in (f"dev-{stamp}", f"dev-command-{stamp}"):
+        return registry_dir_for(project_dir, name)
+    return _registry_root(project_dir) / name
 
 
 # --------------------------------------------------------------------------

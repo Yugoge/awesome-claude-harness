@@ -1250,16 +1250,17 @@ def _dev_clock() -> datetime:
 
 def _reserve_dev_registry(cmd_name: str, project_dir: Path) -> tuple[str, Path]:
     """Atomically reserve a pure-timestamp task family without a global lock."""
+    from lib.obligation import registry_dir_for  # the one rule its readers name the directory by
     prefix = 'dev-command' if cmd_name == 'dev-command' else 'dev'
-    parent = project_dir / '.claude' / 'dev-registry'
-    parent.mkdir(parents=True, exist_ok=True)
     base = _dev_clock().replace(microsecond=0)
+    parent = registry_dir_for(project_dir, f"{prefix}-{base.strftime('%Y%m%d-%H%M%S')}").parent
+    parent.mkdir(parents=True, exist_ok=True)
     for offset in range(86400):
         task_id = f"{prefix}-{(base + timedelta(seconds=offset)).strftime('%Y%m%d-%H%M%S')}"
         requirement = project_dir / 'docs' / 'dev' / f'user-requirement-{task_id}.md'
         if requirement.exists():
             continue
-        directory = parent / task_id
+        directory = registry_dir_for(project_dir, task_id)
         try:
             directory.mkdir()
         except FileExistsError:
@@ -1775,6 +1776,10 @@ def cli(argv: list) -> int:
       registry through _arm_registry.
     registry-dir TASK_ID: the name of the task's registry directory
       (obligation.registry_dir_for), for command text that needs it.
+    registry-dir --project-dir D --name NAME: the path of the registry
+      directory a registry name names (obligation.registry_dir_named), for the
+      scripts handed the name: write-enforce-flag.sh, overnight-init.sh and
+      create-overnight-state.sh.
     """
     if argv[:1] == ['start']:
         sid = os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID') or ''
@@ -1803,10 +1808,12 @@ def cli(argv: list) -> int:
         parser.add_argument('--project-dir', required=True)
         parser.add_argument('--flag', action='append', default=[])
         args = parser.parse_args(argv[1:])
+        from lib.obligation import registry_dir_named
         project_dir = Path(args.project_dir)
-        registry_dir = project_dir / '.claude' / 'dev-registry' / args.name
-        if Path(args.name).name != args.name or args.name in ('.', '..') or registry_dir.is_symlink():
-            print(f'arm-registry: refusing to write the registry at {registry_dir}', file=sys.stderr)
+        registry_dir = registry_dir_named(project_dir, args.name)
+        if registry_dir is None or registry_dir.is_symlink():
+            print(f'arm-registry: refusing to write the registry {registry_dir or repr(args.name)}',
+                  file=sys.stderr)
             return 1
         registry_dir.mkdir(parents=True, exist_ok=True)
         # A relaunch in the same session arms the same registry again: the
@@ -1829,7 +1836,17 @@ def cli(argv: list) -> int:
             return 2
         print(directory.name)
         return 0
-    print('usage: prompt-workflow.py start | arm-registry ... | registry-dir TASK_ID', file=sys.stderr)
+    if argv[:1] == ['registry-dir'] and argv[1:2] == ['--project-dir'] and argv[3:4] == ['--name'] \
+            and len(argv) == 5:
+        from lib.obligation import registry_dir_named
+        directory = registry_dir_named(argv[2], argv[4])
+        if directory is None:
+            print(f'registry-dir: {argv[4]!r} is not a registry name', file=sys.stderr)
+            return 2
+        print(directory)
+        return 0
+    print('usage: prompt-workflow.py start | arm-registry ... | registry-dir TASK_ID'
+          ' | registry-dir --project-dir D --name NAME', file=sys.stderr)
     return 2
 
 

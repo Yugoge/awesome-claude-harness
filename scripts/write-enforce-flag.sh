@@ -37,7 +37,12 @@ done
 [[ "$SESSION_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
   echo "ERROR: --session-id contains unsafe characters: $SESSION_ID" >&2; exit 1; }
 
-REGISTRY_DIR="${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}/.claude/dev-registry/$SESSION_ID"
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}"
+# The directory the registry name names: obligation.registry_dir_named, the one
+# rule, through its CLI in hooks/prompt-workflow.py (this script's harness).
+REGISTRY_DIR="$(python3 -B "$(cd "$(dirname "$0")/.." && pwd)/hooks/prompt-workflow.py" \
+  registry-dir --project-dir "$PROJECT_DIR" --name "$SESSION_ID")" \
+  || { echo "ERROR: no registry directory for --session-id $SESSION_ID" >&2; exit 1; }
 CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Per-flag output filename.
