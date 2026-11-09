@@ -28,7 +28,7 @@ def get_todos():
         {"content": "Step 12: Invoke test executor", "activeForm": "Step 12: Invoking test executor", "status": "pending"},
         {"content": "Step 13: Process execution results", "activeForm": "Step 13: Processing execution results", "status": "pending"},
         {"content": "Step 14: Present test failures to user", "activeForm": "Step 14: Presenting test failures", "status": "pending"},
-        {"content": "Step 15: Collect user decision", "activeForm": "Step 15: Collecting user decision", "status": "pending"},
+        {"content": "Step 15: Fix failures and re-run", "activeForm": "Step 15: Fixing failures and re-running", "status": "pending"},
         {"content": "Step 16: Generate completion report", "activeForm": "Step 16: Generating completion report", "status": "pending"}
     ]
 
