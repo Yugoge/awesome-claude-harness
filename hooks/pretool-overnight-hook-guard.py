@@ -1464,7 +1464,7 @@ def _worktree_into_main(command: str, main_real: str) -> bool:
     return False
 
 
-def _scan_script_files_for_main_git(command: str, main_real: str) -> bool:
+def _scan_script_files_for_main_git(command: str, main_real: str, worktree_path: str = '') -> bool:
     """fix-2/codex#3: cover `python3 script.py` where the OUTER command does not
     mention git. Scan readable script-file operands (and any main_root mention)
     for a dangerous main-targeting git op. Cooperative threat model: a readable
@@ -1480,6 +1480,11 @@ def _scan_script_files_for_main_git(command: str, main_real: str) -> bool:
         # channel-spelled operand is read at the path the shell expands it to (P2 R6).
         t = os.path.expanduser(_CHANNEL_RE.sub(lambda _m: home, tok.strip('\'"')))
         if not t or t.startswith('-'):
+            continue
+        # P2-5: a file of this harness's hooks/ or scripts/ is the code the guard itself runs from,
+        # not an actor-written script (a text that carries no comment word "git" used to meet
+        # this scan: `python3 ~/.claude/hooks/lib/overnight.py`, Step 1 of the p1b and master text).
+        if _harness_script(tok, worktree_path, main_real):
             continue
         # heuristically a script operand: a path ending in a known script ext OR
         # an existing readable file under the project.
@@ -1507,7 +1512,8 @@ def _scan_script_files_for_main_git(command: str, main_real: str) -> bool:
     return False
 
 
-def _interpreter_hides_main_git(command: str, main_real: str, main_git_dir: str) -> bool:
+def _interpreter_hides_main_git(command: str, main_real: str, main_git_dir: str,
+                                worktree_path: str = '') -> bool:
     """fix-2 PRIMARY: True iff the OUTER Bash command launches an interpreter /
     subprocess whose payload carries a dangerous MAIN-TARGETING git op. This is
     the env-independent block for the git-2.43 symref-switch incident shape (the
@@ -1519,7 +1525,7 @@ def _interpreter_hides_main_git(command: str, main_real: str, main_git_dir: str)
     has_git = bool(_GIT_TOKEN_RE.search(command))
     if not has_git:
         # The git op may live in a script file (no `git` token in the outer cmd).
-        return _scan_script_files_for_main_git(command, main_real)
+        return _scan_script_files_for_main_git(command, main_real, worktree_path)
     if not _DANGEROUS_GIT_OP_RE.search(command):
         return False
     # A dangerous git op is present in an interpreter payload. Now require a
@@ -1601,7 +1607,7 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
             'it would write the main worktree in place.\n'
         )
     # fix-2 PRIMARY: interpreter/subprocess hiding a main-targeting git op.
-    if _interpreter_hides_main_git(command, main_real, main_git_dir):
+    if _interpreter_hides_main_git(command, main_real, main_git_dir, worktree_path):
         _block(
             '\nOVERNIGHT SUBPROCESS GIT BLOCK: an interpreter/subprocess that '
             'could run a main-targeting git op (checkout/switch/reset/protected-branch '
@@ -2046,7 +2052,7 @@ def _command_is_worktree_local(command: str, main_root: str, worktree_path: str,
         return False
     if _gitdir_into_main(command, main_real, main_git_dir):
         return False
-    if _interpreter_hides_main_git(command, main_real, main_git_dir):
+    if _interpreter_hides_main_git(command, main_real, main_git_dir, worktree_path):
         return False
     # any explicit write path resolving under main but outside the worktree -> not local
     for p in _extract_bash_write_paths(command):
@@ -2058,7 +2064,7 @@ def _command_is_worktree_local(command: str, main_root: str, worktree_path: str,
             return False
     # a bare interpreter/subprocess that could write anywhere is not provably local; one that
     # runs a harness script is the harness's own code (P2-5)
-    if _INTERPRETER_LAUNCHER_RE.search(_without_harness_launches(command, worktree_path)):
+    if _INTERPRETER_LAUNCHER_RE.search(_without_harness_launches(command, worktree_path, main_root)):
         return False
     return True
 
@@ -2072,24 +2078,25 @@ _HARNESS_LAUNCH_RE = re.compile(
     r'(?<![\w./-])(?:/[\w./-]*/)?(?:python3?|bash|sh)[ \t]+("[^"\n]+"|\'[^\'\n]+\'|[^\s;&|()<>]+)')
 
 
-def _harness_script(operand: str, worktree_path: str) -> bool:
-    """True iff `operand` names a file of this harness's hooks/ or scripts/ (not in the worktree)."""
+def _harness_script(operand: str, worktree_path: str, main_root: str = '') -> bool:
+    """True iff `operand` names a file of this harness's hooks/ or scripts/ that lies in neither the
+    worktree nor the main root (there an actor can write it)."""
     home = os.environ.get('CLAUDE_HOME') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     t = os.path.expanduser(_CHANNEL_RE.sub(lambda _m: home, operand.strip('\'"')))
     if not os.path.isabs(t) or any(ch in t for ch in '$`*?[\\'):
         return False
     real = os.path.realpath(t)
     own = os.path.realpath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if worktree_path and _path_under_prefix(real, os.path.realpath(worktree_path)):
+    if any(r and _path_under_prefix(real, os.path.realpath(r)) for r in (worktree_path, main_root)):
         return False
     return os.path.isfile(real) and any(
         _path_under_prefix(real, os.path.join(own, d)) for d in ('hooks', 'scripts'))
 
 
-def _without_harness_launches(command: str, worktree_path: str) -> str:
+def _without_harness_launches(command: str, worktree_path: str, main_root: str = '') -> str:
     """`command` with every interpreter launch of a harness script blanked out."""
     return _HARNESS_LAUNCH_RE.sub(
-        lambda m: ' ' if _harness_script(m.group(1), worktree_path) else m.group(0), command)
+        lambda m: ' ' if _harness_script(m.group(1), worktree_path, main_root) else m.group(0), command)
 
 
 def _targets_git_config(file_path: str) -> bool:
