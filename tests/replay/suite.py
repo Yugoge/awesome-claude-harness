@@ -76,6 +76,9 @@ COMPLIANT = (
     Scenario("/close after /dev", "close", (("variant", "plain"),), ("dev", "close"), 150),
     Scenario("/close after /do", "do", (("then", "close"),), ("do", "close"), 110),
     Scenario("/close append round", "close", (("variant", "append"),), ("dev", "close"), 180),
+    # The /do task's close routing round: close QA names the file the /do main agent wrote, and Routes'
+    # /do bullet dispatches dev under the same task id (drivers/close.py do_dev).
+    Scenario("/close /do route round", "do", (("then", "close"), ("variant", "main-file")), ("do", "close"), 150),
     Scenario("/commit", "commit", (("variant", "auto"),), ("dev", "close", "commit"), 170),
     Scenario("/merge", "merge", (("variant", "plain"),), ("merge",), 40),
     Scenario("/push", "push", (), ("do", "close", "commit", "push"), 130),

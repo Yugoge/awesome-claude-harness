@@ -925,7 +925,9 @@ class CloseRun:
         done: dict = {}
         if edits is None and hasattr(self.producer, "pending_edits"):
             edits = self.producer.pending_edits()
-        dev_work = roles.dev(list(edits or []), baseline_fallback=True)
+        # The files dev declares are the ones it wrote (agents/dev.md's file-list rule, since P6): no
+        # baseline is needed to derive them, so a /do task's absent baseline takes no fallback.
+        dev_work = roles.dev(list(edits or []))
 
         def work(sub, brief, player):
             done.update(dev_work(sub, brief, player) or {})
@@ -936,7 +938,7 @@ class CloseRun:
                 agents.put(sub, os.path.join(o.project, art["path"]), json.dumps(doc, indent=2) + "\n",
                            f"{sub.role} Write {art['path']}")
             return done
-        # no baseline was captured for a /do task: the agent text's fallback (empty values, git status)
+        # no baseline was captured for a /do task: the two baseline fields are the agent text's empty strings
         act = agents.Act(work=work, content={"do-report.v1": {"do": {"status": "completed"}},
                                              "dev-report.v2": {"baseline_head_sha": "", "baseline_dirty_snapshot": ""}},
                          faults={a["path"]: "missing" for a in arts} if short else {},
