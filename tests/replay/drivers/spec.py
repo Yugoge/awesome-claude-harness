@@ -13,15 +13,18 @@ commands/spec.md, commands/spec-update.md and agents/spec.md of the tree under t
      its findings integrated into Section 1 as the "Exploration findings arrive" branch says.
   3. a follow-up requirement: the capture precondition (nothing to capture), then the
      "Another requirement" branch: a `### 5.2: <title>` block appended to Section 5.
-  4. a design-only turn (inline HOW-text): the Design & Evidence Capture Routine: its Bash
-     blocks (the resolver's de-prefixed id, the bound folders), the design file written
-     verbatim, the Section 9.1 reference line appended; no Section 5 append.
-  5. "thanks": the strong signal; Step 6 Finalize: the Section 9 reference guard, the
-     MONOLITH_LINES line, the spec subagent dispatched from the text's template (its
-     obligation instantiated where the template has one), the split QA from its template
-     and its loop (the re-split template on a fail), the `.split-complete` marker, the
-     finalize guard block where the text has one and the lint block; Step 7: the /spec-update --temp note
-     (mktemp, Read, Write, as that command's text says) and the result display; Stop.
+  4. a design-only turn (inline HOW-text): the Design & Evidence Capture Routine: its persist
+     call (scripts/steps/spec-capture.py, the HOW-text on stdin; it prints the de-prefixed id,
+     the bound folder and the artifact path), the Section 9.1 reference line appended; no
+     Section 5 append.
+  5. "thanks": the strong signal; Step 6 Finalize: the pre-split call (scripts/steps/spec-finalize.py
+     prepare: the Section 9 reference guard, the id and the line count), the spec subagent dispatched
+     from the text's template (its obligation instantiated), the split QA from its template (its prompt must
+     carry the criterion that fails phased or deferred work, D33) and its loop (on a fail the same spec
+     dispatch with the text's QA-feedback paragraph added), the completion call (spec-finalize.py complete:
+     the `.split-complete` marker and the advisory lint);
+     Step 7: the /spec-update --temp note (mktemp, Read, Write, as that command's text says) and the
+     result display; Stop.
 
 Every spec write follows the tree's own text: where it names scripts/spec-write.py, every
 write runs that script (the command assembled from the text's block and inline calls);
@@ -189,7 +192,6 @@ UPDATE_TITLE, UPDATE_TEXT = "bool arguments", "bool arguments keep being accepte
 DEVIATIONS = Deviations([])
 
 _SECTION_RE = re.compile(r"^## Section (\d+):")
-_SENTINEL_FALLBACK = r"^\s*-\s*\((inline|unpersisted design|unpersisted)\)\s"
 
 
 def _calls(script: str, verb: str) -> "re.Pattern":
@@ -207,6 +209,16 @@ def _read(rp, path: str) -> str:
     """A file the actor already Read (or wrote), read again by the driver on its behalf."""
     with open(path, encoding="utf-8") as fh:
         return fh.read()
+
+
+def _facts(call) -> dict:
+    """The key=value lines a step script printed (what the text says to read by key)."""
+    out = {}
+    for line in call.response.get("stdout", "").splitlines():
+        key, sep, value = line.partition("=")
+        if sep and re.fullmatch(r"[a-z_]+", key):
+            out[key] = value
+    return out
 
 
 # ---------------------------------------------------------------- spec text helpers
@@ -768,7 +780,7 @@ class SpecRun:
             (r"^spec-id$", lambda m: self.spec_id),
             (r"^de-prefixed-id$", lambda m: self.spec_id),
             (r"^YYYYMMDD-HHMMSS$", lambda m: self.ts),
-            (r"^MONOLITH_LINES$", lambda m: self.o.values.get("MONOLITH_LINES", "")),
+            (r"^monolith_lines$", lambda m: self.o.values.get("monolith_lines", "")),
             (r"^\$CLAUDE_PROJECT_DIR$", lambda m: self.project),
             (r"^ISO-8601", lambda m: utc_now()),
             (r"^what the user mentioned$", MENTIONED),
@@ -903,21 +915,20 @@ class SpecRun:
         s.prompt(DESIGN, label="prompt design", deviation=o.devs.at("prompt design"))
         routine = "Design & Evidence Capture Routine"
         o.values.update(spec_path=self.path, CLAUDE_PROJECT_DIR=self.project)
-        for name, b, _para in o.step_blocks(routine):
-            o.run_text(b.text, f"Capture Bash {name}", f"Capture routine: {name}",
-                       capture=("SPEC_DIR_ID", "BOUND_ROOT"))
-        self.spec_id = o.values.get("SPEC_DIR_ID") or ""
-        if not self.spec_id:
-            raise cmdtext.TextNotFound("the capture routine's resolver block gave no SPEC_DIR_ID")
-        bound = o.values.get("BOUND_ROOT") or f"{self.project}/docs/dev/specs/{self.spec_id}"
-        # sub-step 3/4: design/turn-<N>-<slug>.md, the user's HOW-text verbatim.
-        name = f"turn-{self.turn}-{DESIGN_SLUG}.md"
-        s.write(f"{bound}/design/{name}", DESIGN + "\n", label="Capture Write design turn",
-                deviation=o.devs.at("Capture Write design turn"))
-        ref_tpl = next(b.text for b in cmdtext.blocks(o.section(routine), None) if "/design/turn-<N>-<slug>.md" in b.text)
-        ref = o.bind(ref_tpl.strip().replace("turn-<N>-<slug>.md", name),
-                     [(r"^one-line description$", DESIGN_LINE)])
-        self.write_append("9.1", ref, "Capture Section 9.1 reference", (routine, "ADDITIVE mirror"),
+        # sub-step 2: the persist call, the user's HOW-text verbatim on its stdin; the script names the file
+        # turn-<N>-<slug>.md and prints the id, the bound folder and the artifact path.
+        call = o.run_text(o.block(routine, anchor="spec-capture.py", lang="bash"), "Capture Bash spec-capture design",
+                          "Capture routine: persist the design",
+                          extra_rules=[(r"^the user's HOW-text", DESIGN), (r"^N$", str(self.turn)),
+                                       (r"^short title$", DESIGN_SLUG)])
+        facts = _facts(call)
+        if facts.get("status") != "persisted" or not facts.get("spec_dir_id") or not facts.get("artifact"):
+            raise cmdtext.TextNotFound(f"the capture routine's persist call did not persist the design: {facts}")
+        self.spec_id = facts["spec_dir_id"]
+        # sub-step 3: the Section 9.1 reference line for that artifact, through the writer.
+        ref_tpl = o.block(routine, anchor="`<artifact>`")
+        ref = o.bind(ref_tpl.strip(), [(r"^artifact$", facts["artifact"]), (r"^one-line description$", DESIGN_LINE)])
+        self.write_append("9.1", ref, "Capture Section 9.1 reference", (routine, "--section 9.1"),
                           replace_placeholder=True)
         self.end_turn("Saved the design and referenced it in Section 9.", "Stop turn 4")
 
@@ -938,23 +949,15 @@ class SpecRun:
 
     def finalize(self) -> None:
         o, s = self.o, self.s
-        sec = o.section("Step 6")
-        # 0. Section-9 dangling-reference guard: the sentinel lines skipped, every real reference checked.
-        sentinel = re.search(r"sentinel\s+pattern `([^`]+)`", sec)
-        rx = re.compile(sentinel.group(1) if sentinel else _SENTINEL_FALLBACK)
-        lines = self.spec_text().split("\n")
-        start, end = section_range(lines, r"^## Section 9\b", 2)
-        refs = []
-        for l in lines[start:end]:
-            if rx.search(l):
-                continue
-            refs += re.findall(r"`(docs/dev/specs/[^`]+/(?:design|evidence)/[^`]+)`", l)
-        if refs:
-            o.run("ls -l " + " ".join(shlex.quote(f"{self.project}/{r}") for r in refs),
-                  "Section 9 guard: every referenced design/evidence file exists", "Step 6 Bash Section 9 guard")
-        # 1. MONOLITH_LINES.
-        count = next(c for c in cmdtext.inline_codes(o.text, "Step 6", "Count monolith lines") if "MONOLITH_LINES=" in c)
-        o.run_text(count, "Step 6 Bash MONOLITH_LINES", "Count monolith lines", capture=("MONOLITH_LINES",))
+        o.values.update(spec_path=self.path, CLAUDE_PROJECT_DIR=self.project)
+        # 1. The pre-split call: the Section 9 reference guard, the id, the line count.
+        call = o.run_text(o.block("Step 6", anchor="spec-finalize.py\" prepare", lang="bash"),
+                          "Step 6 Bash spec-finalize prepare", "Pre-split checks: Section 9 guard and line count")
+        facts = _facts(call)
+        if facts.get("status") != "ok" or not facts.get("monolith_lines") or not facts.get("spec_id"):
+            raise cmdtext.TextNotFound(f"the pre-split call did not pass: {facts}")
+        o.values["monolith_lines"] = facts["monolith_lines"]
+        self.spec_id = facts["spec_id"]
         # 2-3. The spec subagent and the split QA loop.
         self.dispatch_spec(0, "Step 6 Agent(spec)")
         verdict = self.split_qa()
@@ -965,29 +968,29 @@ class SpecRun:
             for issue in self.issues:
                 named = re.search(r"\(([^)]+)\)", issue["issue"])
                 self.agent.extra.setdefault(issue["view"], []).append(named.group(1))
-            self.dispatch_spec(2, f"Step 6 Agent(spec) re-split round {self.qa_round}")
+            self.dispatch_spec(1, f"Step 6 Agent(spec) re-split round {self.qa_round}")
             verdict = self.split_qa()
         self.split_verdict = verdict
-        # 4. The marker, written by this command after the split QA's last verdict.
-        marker_item = next(it for it in re.split(r"\n(?=\d+\.\s)", sec) if ".split-complete" in it and "Mark split" in it)
-        content = re.search(r'Write `"([^`]+)"` to `([^`]+)`', marker_item)
-        marker_path = f"{self.project}/{o.bind(content.group(2))}"
-        o.run(f'printf \'%s\\n\' "{content.group(1)}" > {shlex.quote(marker_path)}', "Mark the split complete",
-              "Step 6 Bash split-complete")
-        # 5. Finalize guard, where the text still runs one (the base); 6. centralization lint.
-        o.values.update(spec_path=self.path, CLAUDE_PROJECT_DIR=self.project)
-        if "FINALIZE BLOCKED" in sec:
-            o.run_text(o.block("Step 6", anchor="FINALIZE BLOCKED"), "Step 6 Bash finalize guard", "Finalize guard",
-                       capture=("VIEWS_AVAILABLE", "ARTIFACT_ID"))
-        o.run_text(o.block("Step 6", anchor="lint-spec-id-centralization"), "Step 6 Bash centralization lint",
-                   "Centralization lint (advisory)")
+        # 4. The completion call, after the split QA's last verdict: the marker and the advisory lint.
+        call = o.run_text(o.block("Step 6", anchor="spec-finalize.py\" complete", lang="bash"),
+                          "Step 6 Bash spec-finalize complete", "Mark the split complete")
+        facts = _facts(call)
+        if not facts.get("marker") or not facts.get("lint"):
+            raise cmdtext.TextNotFound(f"the completion call did not mark the split: {facts}")
 
     def spec_template(self, index: int) -> dict:
         return o_template(self.o, "Step 6", index)
 
-    def dispatch_spec(self, index: int, label: str):
+    def dispatch_spec(self, resplit: int, label: str):
+        """The spec subagent's dispatch from the text's template; a re-split (`resplit` 1) is the same dispatch
+        with the text's QA-feedback paragraph added after the obligation block, under the re-split description."""
         o = self.o
-        fields = self.spec_template(index)
+        fields = dict(self.spec_template(0))
+        if resplit:
+            added = o.block("Step 6", anchor="qa_feedback_from_previous_round")
+            desc = re.search(r'description "(Spec agent re-split[^"]*)"', o.section("Step 6")).group(1)
+            fields["description"] = desc
+            fields["prompt"] = fields["prompt"].replace("</obligation>", "</obligation>\n\n" + added.rstrip("\n"), 1)
         prompt = o.render(fields, self.spec_id)
         atype = fields.get("subagent_type") or _subagent_of(o, prompt)
         brief = dict(re.findall(r"^\s*(Spec id|Monolith|Monolith lines|Output folder|Project dir):\s*(\S+)\s*$",
@@ -1002,6 +1005,15 @@ class SpecRun:
         self.qa_round += 1
         fields = o_template(o, "Step 6", 1)
         prompt = o.render(fields, self.spec_id)
+        # The owner's "no phases" ruling: the QA the replay dispatches must be told to fail a split that phases or
+        # defers a requested outcome (a criterion naming each of them and keeping parallel lanes). The replayed QA
+        # is the driver's verdict, so this is where the replay shows that the text asks for the check.
+        criteria = re.split(r"\n\s*(?=\d+\.\s+[A-Z])", prompt)
+        if not any(all(re.search(w, re.sub(r"\s+", " ", c), re.I) for w in (
+                r"\bfail\b", r"phase 2", r"MVP first", r"deferred parts", r"later cycle", r"parallel lanes"))
+                for c in criteria):
+            raise cmdtext.TextNotFound("the split-QA prompt has no criterion that fails phased or deferred work "
+                                       "and keeps parallel lanes")
         fail = self.variant == "split-qa-fail" and self.qa_round == 1
         views = f"{self.project}/docs/dev/specs/{self.spec_id}/views"
         codes = re.findall(r"`([^`\n]+)`", prompt[prompt.index("3. COVERAGE"):prompt.index("4. CONTENT")])

@@ -17,7 +17,7 @@ def get_todos():
         {"content": "Step 1: Initialize workflow", "activeForm": "Step 1: Initializing workflow", "status": "pending"},
         {"content": "Step 2: Scan project structure", "activeForm": "Step 2: Scanning project structure", "status": "pending"},
         {"content": "Step 3: Build inspection context", "activeForm": "Step 3: Building inspection context", "status": "pending"},
-        {"content": "Step 4: Initialize folder rules", "activeForm": "Step 4: Initializing folder rules", "status": "pending"},
+        {"content": "Step 4: Rule inspection and README updates", "activeForm": "Step 4: Inspecting rules and updating READMEs", "status": "pending"},
         {"content": "Step 5: Invoke cleanliness inspector", "activeForm": "Step 5: Invoking cleanliness inspector", "status": "pending", "subagent_call": {"agent": "cleanliness-inspector", "subagent_type": "cleanliness-inspector"}},
         {"content": "Step 6: Invoke style inspector", "activeForm": "Step 6: Invoking style inspector", "status": "pending", "subagent_call": {"agent": "style-inspector", "subagent_type": "style-inspector"}},
         {"content": "Step 7: Plan style inspection", "activeForm": "Step 7: Planning style inspection", "status": "pending"},

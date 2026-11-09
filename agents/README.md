@@ -6,8 +6,8 @@ Agents remove tracked files with a non-forced `git rm`, recoverable from history
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 23
-- **Subdirectories**: 0
+- **Total files**: 24
+- **Subdirectories**: 1
 - **Naming convention**: kebab
 
 ## Files
@@ -34,6 +34,9 @@ Agents remove tracked files with a non-forced `git rm`, recoverable from history
 - `test-writer.md` - Generate pytest skeleton tests from BA-produced acceptance-criteria-<task_id>.json with pytest.fail("TEST_INCOMPLETE:...") hard-stops; manage the per-task manifest tests/generated/<task_id>/manifest.json with UPDATE vs CREATE logic keyed on ac_uid hashes. Triggered by /dev when complexity_tier >= STANDARD or any tier with risk_level = high.
 - `ui-specialist.md` - UI/UX review specialist: /dev and /dev-command dispatch it at Step 3 when their specialist assessment marks it RELEVANT, and /dev-overnight at Step 3 of an exploration cycle. Evaluates visual design quality, aesthetic beauty, design system adherence, styling consistency, responsive design, and component quality. Returns structured JSON report with beauty score and design quality assessment. Accessibility checks are advisory.
 - `user.md` - End-user simulation specialist: /dev and /dev-command dispatch it at Step 3 when their specialist assessment marks it RELEVANT, and /dev-overnight at Step 3 of an exploration cycle. Tests actual usage scenarios, checks if things work as expected, identifies UX friction, broken flows, and confusing behavior. Returns structured JSON report.
+
+## Subdirectories
+- `shared/`
 <!-- /AUTO:readme-stats -->
 
 ---

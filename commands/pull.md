@@ -5,7 +5,7 @@ disable-model-invocation: true
 
 # Pull Command
 
-Execute safe git pull with automatic stash management and conflict detection.
+Safe `git pull --rebase` with automatic stash management and conflict detection, then an advisory analysis of what arrived. `<HARNESS_ROOT>/hooks/pull.sh` does the pull; `<HARNESS_ROOT>/scripts/steps/pull-run.py` runs it and reads what changed.
 
 ## Usage
 
@@ -15,106 +15,64 @@ Execute safe git pull with automatic stash management and conflict detection.
 
 ## Command Implementation
 
+Steps 0-4 are one script call, in Step 1. Its facts are read by key below.
+
 ### Step 0: Capture pre-pull HEAD
 
-```bash
-PRE_PULL_HEAD=$(git rev-parse HEAD)
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-```
+Step 1's script reads `PRE_PULL_HEAD` and `BRANCH` before it runs the pull.
 
 ### Step 1: Execute the pull script
 
 ```bash
-bash "<HARNESS_ROOT>/hooks/pull.sh"
-PULL_EXIT_CODE=$?
+python3 "<HARNESS_ROOT>/scripts/steps/pull-run.py" run
 ```
+
+`pull.sh`'s own output (stash, rebase, conflict list) comes first, unchanged. After the line `--- pull-run ---` come `KEY=value` lines: `PRE_PULL_HEAD`, `POST_PULL_HEAD`, `BRANCH`, `PULL_EXIT_CODE`, `REBASE_STATE` (`yes` when a rebase is stopped mid-way), `PULL_EXIT_PHASE` and `ACTION`. The call itself ends with status 0 whatever `pull.sh` did.
 
 ### Step 2: Capture post-pull HEAD
 
-Always capture, regardless of exit code — pull.sh may change HEAD during a partial
-rebase before a conflict (its Step 6 exit), or after a fully successful rebase before
-stash pop fails (its Step 7 exit):
-
-```bash
-POST_PULL_HEAD=$(git rev-parse HEAD)
-```
+`POST_PULL_HEAD` is read whatever the exit code: `pull.sh` can move HEAD in a rebase that then stops on a conflict, and after a rebase that finished but whose stash pop failed.
 
 ### Step 3: No-op check (exit 0, HEAD unchanged)
 
-```
-if PULL_EXIT_CODE == 0 AND PRE_PULL_HEAD == POST_PULL_HEAD:
-    Print: "No HEAD change (pull was no-op or cancelled). Skipping pull-analyst."
-    Stop.
-```
+`ACTION=no_change`: print "No HEAD change (pull was no-op or cancelled). Skipping pull-analyst." and stop.
 
 ### Step 4: Determine pull_exit_phase
 
-```
-if PULL_EXIT_CODE == 0:
-    pull_exit_phase = "success"
-    proceed to Step 5
+`PULL_EXIT_PHASE` is decided by the script; act on `ACTION`:
 
-else (PULL_EXIT_CODE != 0):
-    Check for rebase state directories (worktree-aware paths):
-        REBASE_MERGE=$(git rev-parse --git-path rebase-merge 2>/dev/null || echo ".git/rebase-merge")
-        REBASE_APPLY=$(git rev-parse --git-path rebase-apply 2>/dev/null || echo ".git/rebase-apply")
-        rebase_state_exists = test -d "${REBASE_MERGE}" OR test -d "${REBASE_APPLY}"
+| `PULL_EXIT_PHASE` | When | `ACTION` |
+|---|---|---|
+| `success` | exit code 0 | `analyze` (`no_change`: Step 3) |
+| `stash_restoration_failed` | exit code not 0, no rebase stopped, HEAD moved: the rebase finished, the stash pop failed, the local changes remain in `stash@{0}` | `analyze` |
+| `rebase_conflict` | exit code not 0 and `REBASE_STATE=yes` | `stop` |
+| `rebase_conflict` | exit code not 0, no rebase, HEAD unchanged: a failure before the rebase (no upstream, detached HEAD, stash or lock failure), classified the same way | `stop` |
 
-    if rebase_state_exists:
-        pull_exit_phase = "rebase_conflict"
-        # Rebase stopped mid-operation; HEAD may have changed but rebase is in progress.
-        # The rebase-state-directory is the primary discriminant.
-        Display pull.sh error output.
-        Print guidance: "Resolve conflicts, then run: git rebase --continue"
-        Print guidance: "Or abort the rebase: git rebase --abort"
-        STOP — do NOT dispatch pull-analyst.
-
-    else if NOT rebase_state_exists AND PRE_PULL_HEAD != POST_PULL_HEAD:
-        pull_exit_phase = "stash_restoration_failed"
-        # Rebase fully succeeded (HEAD advanced past its "Pull completed successfully");
-        # then stash pop failed at pull.sh Step 7.
-        # No rebase state remains because rebase completed cleanly.
-        proceed to Step 5
-
-    else (NOT rebase_state_exists AND PRE_PULL_HEAD == POST_PULL_HEAD):
-        pull_exit_phase = "rebase_conflict"
-        # Unknown pre-rebase failure; HEAD unchanged; classify conservatively.
-        Display pull.sh error output.
-        STOP — do NOT dispatch pull-analyst.
-```
+On `ACTION=stop`, do not dispatch pull-analyst. Show the user `pull.sh`'s error output. With `REBASE_STATE=yes`, add: "Resolve conflicts, then run: git rebase --continue" and "Or abort the rebase: git rebase --abort". Then stop.
 
 ### Step 5: Dispatch pull-analyst subagent
 
-Dispatch the `pull-analyst` subagent (Agent tool, `run_in_background: false`) with the following context (only reached for
-`pull_exit_phase = "success"` or `pull_exit_phase = "stash_restoration_failed"`):
+On `ACTION=analyze`, dispatch the `pull-analyst` subagent (`run_in_background: false`) with this context, filled from the facts:
 
 ```
 PRE_PULL_HEAD=<PRE_PULL_HEAD>
 POST_PULL_HEAD=<POST_PULL_HEAD>
 BRANCH=<BRANCH>
-PULL_EXIT_PHASE=<pull_exit_phase>
+PULL_EXIT_PHASE=<PULL_EXIT_PHASE>
 ```
 
-Wait for the subagent to complete.
+Wait for it to complete.
 
 ### Step 6: Display pull-analyst report
 
-Display the pull-analyst advisory report to the user. The report is informational only —
-it does not gate any future command.
+Display the advisory report to the user. It is informational only and gates no later command.
 
 ### Post-pull Graphify update (advisory, non-blocking)
 
-After displaying the pull-analyst report, run a non-blocking incremental Graphify cache update. This ensures the global knowledge graph reflects the newly pulled commits.
+After Step 6, refresh the global knowledge graph with the pulled commits:
 
 ```bash
-source "${CLAUDE_HOME:-$HOME/.claude}/venv/bin/activate" && python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/graphify-maintain.py" update || true
+python3 "<HARNESS_ROOT>/scripts/steps/pull-run.py" graphify
 ```
 
-This call is advisory: if GRAPHIFY_BIN is absent, CLAUDE_GRAPHIFY_ENABLED=0, or the cache is unavailable, it exits 0 immediately with a status=unavailable message. The update MUST NOT block the pull workflow or require user confirmation. Failure is silent (logged to stderr only).
-
-## Related Commands
-
-- `/push` - Push changes with untracked file detection
-- `git status` - Check current working directory state
-
-The implementation is in `<HARNESS_ROOT>/hooks/pull.sh`.
+It never blocks the pull or asks for confirmation: it ends with status 0, and a failure is a line on stderr. With no Graphify CLI or `CLAUDE_GRAPHIFY_ENABLED=0` it does nothing.
