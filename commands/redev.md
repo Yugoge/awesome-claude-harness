@@ -1,5 +1,5 @@
 ---
-description: /redev is /dev when saving context: it re-enters the harness in the same conversation without repeating /dev's text and is /dev in every other respect (same arguments, steps, gates and artifacts; a fresh task id each invocation; no earlier cycle continued).
+description: /redev is /dev when saving context — it re-enters the harness in the same conversation without repeating /dev's text and is /dev in every other respect (same arguments, steps, gates and artifacts; a fresh task id each invocation; no earlier cycle continued). Pass --codex to enable adversarial codex consultation on each subagent's draft; default is self-review only.
 argument-hint: "[--codex] [--spec <path>] [<requirement>]"
 disable-model-invocation: true
 ---
