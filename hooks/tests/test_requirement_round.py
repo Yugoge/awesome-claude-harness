@@ -46,7 +46,7 @@ class TX:
                   f"<command-message>{name} is running…</command-message>\n<command-name>/{name}</command-name>\n"
                   "<command-args>a request</command-args>"}})
         self.add({"type": "user", "isMeta": True, "message": {"role": "user", "content": [
-            {"type": "text", "text": f"body of {name}"}]}})
+            {"type": "text", "text": f"body of {name}: its requirement-round is asked first"}]}})
         if context:
             self.add({"type": "attachment", "attachment": {"type": "hook_additional_context", "content": context,
                                                            "hookName": "UserPromptSubmit"}})

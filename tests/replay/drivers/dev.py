@@ -358,6 +358,10 @@ class DevCycle:
         self.angle = self.chosen = self.producer_answer = None
         self.round_files: list = []
         self.answer_files: list = []
+        # The text this cycle runs asks the round (Steps 4-4c); a session that loaded an earlier text does not
+        # (live landing): it runs that text's Step 4, which dispatches BA's analysis directly.
+        self.has_round = bool(re.search(r"^#+\s+Step 4c\b", self.o.text, re.M))
+        self.ba_heading = "Step 4c" if self.has_round else "Step 4"
 
     # ------------------------------------------------------------ binding rules
     def _rules(self):
@@ -460,10 +464,10 @@ class DevCycle:
         """A file the main agent has Read (its content, read again on the main agent's behalf)."""
         return json.loads(agents.peek(self.rp, "main", os.path.join(self.o.project, rel)))
 
-    def _dispatch(self, fields: dict, act: agents.Act, label: str, subagent_type=None):
+    def _dispatch(self, fields: dict, act: agents.Act, label: str, subagent_type=None, on_stop_block=None):
         """Every dispatch of the cycle: the task id the current lane carries (the cycle's own in a
         singular cycle)."""
-        return self.o.dispatch(fields, act, label, self.tid, subagent_type=subagent_type)
+        return self.o.dispatch(fields, act, label, self.tid, subagent_type=subagent_type, on_stop_block=on_stop_block)
 
     def iterations(self) -> int:
         return self.iteration
@@ -483,7 +487,7 @@ class DevCycle:
         for v in {self.reg, self.tid}:
             self.rp.task(v)
         self.digits = re.sub(r"^[A-Za-z-]*?(?=\d{8}-\d{6})", "", self.tid)
-        req = re.search(r"User requirement document:\s*(\S+)", o.template("Step 4c")["prompt"]).group(1)
+        req = re.search(r"User requirement document:\s*(\S+)", o.template(self.ba_heading)["prompt"]).group(1)
         o.values.update(DEV_SESSION_ID=self.reg, TASK_ID=self.tid, timestamp=self.tid,
                         REQUIREMENT_DOC=o.bind(req), orchestrator_resolved_spec_path="")
         o.todo_start()
@@ -528,7 +532,7 @@ class DevCycle:
                  deviation=o.devs.at("Step 3 Glob prior tickets"))
 
     def dispatch_ba(self, heading: str, label: str, question: bool = False, addressed=None, instead=None,
-                    need: str | None = None):
+                    need: str | None = None, on_stop_block=None):
         o, sc = self.o, self.sc
         content, notes = _ba_content(self.tid, self.tier, sc), ""
         # ba.md "Analysis": every answered question of the cycle's rounds in contract_refs, every other in assumptions.
@@ -551,7 +555,7 @@ class DevCycle:
         act = agents.Act(question=ask, content=content, status="ready", notes=notes, work=ac_path,
                          text_calls=[] if question or instead else calls, respell=o.respell,
                          summary=sc.ba_summary, instead=instead or {})
-        return self._dispatch(o.template(heading), act, label, subagent_type=self.ba_type)
+        return self._dispatch(o.template(heading), act, label, subagent_type=self.ba_type, on_stop_block=on_stop_block)
 
     def question_schema(self) -> str:
         m = re.search(r"\(schema ([\w.-]+\.v\d+)", self.o.section("Step 5"))
@@ -573,14 +577,28 @@ class DevCycle:
 
     def stop_refused(self, d, needle: str, what: str) -> None:
         """A subagent stop the variant expects G2 to refuse with ``needle`` in its text."""
-        text = "\n".join(hookrun.refusal(b) for b in (d.stop.blocks if d.stop else []))
+        text = "\n".join(b["text"] for b in self.rp.blocks if b["step"] == f"{d.label} stop")
         if needle not in text:
             raise AssertionError(f"{what}: expected G2 to refuse the stop naming {needle!r}: {text[:300]}")
         _round.fact(self.rp, f"stop refused: {what}", {"needle": needle})
 
-    def panel_qa(self, doc: dict, label: str, faults=None):
+    def panel_qa(self, doc: dict, label: str, faults=None, on_stop_block=None):
         act = agents.Act(content={"requirement-round.v1": doc}, faults=faults or {}, summary="panel QA checked the root causes")
-        return self._dispatch(self.o.template("Step 4a"), act, label)
+        return self._dispatch(self.o.template("Step 4a"), act, label, on_stop_block=on_stop_block)
+
+    def rewrite(self, rel: str, doc: dict, reply: str):
+        """on_stop_block: the same subagent, its stop refused by G2, writes ``rel`` again as ``doc`` and stops
+        again (D25: the producer repairs at its next stop)."""
+        def again(sub, _ev):
+            agents.put(sub, os.path.join(self.o.project, rel), json.dumps(doc, indent=2) + "\n", f"{sub.role} Write {rel}")
+            return reply
+        return again
+
+    def repaired(self, d, needle: str, what: str) -> None:
+        """G2 refused the first stop naming ``needle``; the same subagent's next stop passed."""
+        self.stop_refused(d, needle, what)
+        if d.stop is None or d.stop.still_blocked:
+            raise AssertionError(f"{what}: the subagent's next stop after its repair was refused too")
 
     def step4_round(self) -> None:
         """Steps 4-4b (D28, D29, D32): without a spec the BA panel and panel QA, with one one BA intake; then each
@@ -609,15 +627,18 @@ class DevCycle:
             self.to("4a")
             rel = f"docs/dev/ba-panel-{tid}-r1.json"
             doc = _round.with_paths(_round.round1(tid, panel=_round.panel(refuted="C" if v == "panel-refuted" else "")), tid)
-            if v == "panel-refuted":  # panel QA first offers the refuted BA's option: G2 returns it (D32)
+            if v == "round-broken":  # an interrupted panel QA left a malformed round 1 (A3): its re-dispatch passes
+                with self.rp.acting("driver"):
+                    with open(os.path.join(o.project, rel), "w") as fh:
+                        fh.write('{"task_id": "' + tid + '", "round": 1, "questions": [')
+            if v == "panel-refuted":  # panel QA first offers the refuted BA's option: G2 returns it, it repairs (D32)
                 bad = json.loads(json.dumps(doc))
                 bad["questions"][1]["options"].append(dict(zip(("label", "description"), _round.SOLUTION["C"]), ba="C"))
-                self.stop_refused(self.panel_qa(bad, "Step 4a Agent(qa) panel QA offering a refuted option"),
-                                  "panel QA did not verify", "a refuted root cause offered as an option")
-            if v == "round-broken":  # an interrupted panel QA left a malformed round 1 (A3)
-                self.panel_qa(doc, "Step 4a Agent(qa) panel QA leaving a malformed round 1",
-                              faults={"docs/dev/ba-panel-*-r1.json": "invalid"})
-            d = self.panel_qa(doc, "Step 4a Agent(qa) panel QA")
+                d = self.panel_qa(bad, "Step 4a Agent(qa) panel QA offering a refuted option",
+                                  on_stop_block=self.rewrite(rel, doc, "Round 1 rewritten without the refuted option."))
+                self.repaired(d, "panel QA did not verify", "a refuted root cause offered as an option")
+            else:
+                d = self.panel_qa(doc, "Step 4a Agent(qa) panel QA")
             if d.blocked:
                 raise AssertionError("the panel QA that writes round 1 was refused")
             if v == "panel-refuted" and any(o_.get("ba") == "C" for q in self.load(rel)["questions"]
@@ -651,7 +672,9 @@ class DevCycle:
             got = json.loads(agents.peek(self.rp, "main", os.path.join(o.project, ans)))
             if got.get("answers") != (call.response or {}).get("answers"):
                 raise AssertionError(f"{ans}: answers differ from the tool_response")
-        if written != (mode == "answer"):
+        # The round's own variants hold the hook to its file; a session whose hook list predates the
+        # AskUserQuestion hook (a live landing on an earlier base) asks the round and records no answer.
+        if self.variant in ROUND_VARIANTS and written != (mode == "answer"):
             raise AssertionError(f"round r{n} asked with {mode}: answer file written={written}")
         _round.fact(self.rp, f"round r{n}", {"source": source, "questions": len(tin["questions"]), "mode": mode,
                                              "answer_file": written, "ok": call.ok})
@@ -664,27 +687,31 @@ class DevCycle:
             answered = next(q["question"] for q in self.load(self.round_files[0])["questions"])
             for n in (2, 3, 4):
                 rel = f"docs/dev/requirement-round-{self.cycle}-r{n}.json"
-                if n == 3:  # a round that repeats an answered question is refused at G2 (A7)
+                good = _round.next_round(self.cycle, n)
+                if n == 3:  # a round that repeats an answered question is refused at G2; BA writes it again (A7)
                     d = self.dispatch_ba("Step 4c", f"Step 4c Agent(ba) round r{n} repeating an answered question",
-                                         instead={rel: _round.next_round(self.cycle, n, answered)})
-                    self.stop_refused(d, "never ask it again", "a round repeating an answered question")
-                d = self.dispatch_ba("Step 4c", f"Step 4c Agent(ba) writes round r{n}",
-                                     instead={rel: _round.next_round(self.cycle, n)})
+                                         instead={rel: _round.next_round(self.cycle, n, answered)},
+                                         on_stop_block=self.rewrite(rel, good, f"Round r{n} rewritten."))
+                    self.repaired(d, "never ask it again", "a round repeating an answered question")
+                else:
+                    d = self.dispatch_ba("Step 4c", f"Step 4c Agent(ba) writes round r{n}", instead={rel: good})
                 if d.blocked or (d.stop and d.stop.still_blocked):
                     raise AssertionError(f"round r{n} in place of BA's artifacts was refused")
                 self.round_files.append(rel)
                 self.ask_round(n, rel)
-        if not self.spec_id:
+        if not self.spec_id and self.has_round:
             self.chosen = _round.chosen(self.rp, self.o.project, self.cycle) or "A"
         if v == "panel-disagree" and self.chosen != "A":
             raise AssertionError(f"the owner's answer picked BA {self.chosen}, not A")
-        d = self.dispatch_ba("Step 4c", self.L("Step 4c Agent(ba)"), question=v in ("question", "devquestion"))
+        d = self.dispatch_ba(self.ba_heading, self.L(f"{self.ba_heading} Agent(ba)"),
+                             question=v in ("question", "devquestion"))
         self.ba_question = d.player.question_written
 
     def step4(self) -> None:
         self.step4_pre()
-        self.step4_round()
-        self.to("4c")
+        if self.has_round:
+            self.step4_round()
+            self.to("4c")
         self.step4_lane()
 
     def producer_source(self) -> str:
@@ -1076,7 +1103,7 @@ class FanoutCycle(DevCycle):
     # ------------------------------------------------------------ the text's fan-out rules
     def read_fanout_text(self) -> None:
         o = self.o
-        adapter = next((l for l in o.template("Step 4c")["prompt"].split("\n")
+        adapter = next((l for l in o.template(self.ba_heading)["prompt"].split("\n")
                         if "Lane-execution adapter is active" in l), None)
         if adapter is None:
             raise cmdtext.TextNotFound("Step 4's template has no fan-out lane-execution adapter line")
@@ -1146,9 +1173,9 @@ class FanoutCycle(DevCycle):
     def lane_set(self) -> list:
         return [l.name for l in self.lanes]
 
-    def _dispatch(self, fields: dict, act: agents.Act, label: str, subagent_type=None):
+    def _dispatch(self, fields: dict, act: agents.Act, label: str, subagent_type=None, on_stop_block=None):
         if self.lane is None:
-            return super()._dispatch(fields, act, label, subagent_type)
+            return super()._dispatch(fields, act, label, subagent_type, on_stop_block)
         # The three lane fields every lane dispatch carries, after the requirement document line (or the
         # FIRST ACTION line where the template has none).
         lines = fields["prompt"].split("\n")
@@ -1232,8 +1259,11 @@ class FanoutCycle(DevCycle):
         self.decompose()
         self.to(2); self.step2()
         self.to(3); self.step3()
-        self.to(4); self.step4_pre(); self.step4_round()
-        self.to("4c"); self.each(self.step4_lane)
+        self.to(4); self.step4_pre()
+        if self.has_round:
+            self.step4_round()
+            self.to("4c")
+        self.each(self.step4_lane)
         self.to(5); self.each(self.step5)
         self.to(6); self.each(lambda: self.step6(self.L("Step 6")))
         self.to(7)

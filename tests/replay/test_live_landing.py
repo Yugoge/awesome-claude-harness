@@ -359,9 +359,12 @@ STOP, TODO = ("Stop", None), ("PostToolUse", "TodoWrite")
 # The registrations (event, matcher) where this tree's settings.json differs from the base's that each
 # scenario's events after the landing reach (the harness-home session writes no todo list); together
 # they must be every one that differs (test_your_settings_differs_only_where_a_replay_runs_it).
-EXERCISES = {PRE.name: {STOP, TODO}, HOME.name: {STOP}, A.name: {STOP, TODO}, B.name: {STOP, TODO}}
-# The registrations two phases ahead of P5 change, which those phases name and no scenario here reaches
-# after the landing (none asks with AskUserQuestion after it): P2's overnight guard on AskUserQuestion
+# P13-1: the pre-merge /dev starts after the landing, on this tree's text, so it asks the requirement round:
+# it reaches the AskUserQuestion registrations (P2's guard under its new matcher, the AskUserQuestion hook).
+EXERCISES = {PRE.name: {STOP, TODO, ("PreToolUse", P2_MATCHER[1]), ("PostToolUse", "AskUserQuestion")},
+             HOME.name: {STOP}, A.name: {STOP, TODO}, B.name: {STOP, TODO}}
+# The registrations two phases ahead of P5 change, which those phases name and no other scenario here
+# reaches after the landing (none of them asks with AskUserQuestion after it): P2's overnight guard on AskUserQuestion
 # too (P2_MATCHER: its registration under the old matcher goes, the new one comes) and P4's close-rating
 # hook (PostToolUse AskUserQuestion). Each is held to exactly that change; a replay that reaches one
 # fails test_again_with_your_settings's `hooklist` part.

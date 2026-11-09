@@ -386,7 +386,7 @@ class Orchestrator:
         return prompt
 
     def dispatch(self, fields: dict, act: agents.Act, label: str, task_id: str, subagent_type=None,
-                 extra_rules=(), extra_line_rules=(), actor=None, lane=None, lane_set=None):
+                 extra_rules=(), extra_line_rules=(), actor=None, lane=None, lane_set=None, on_stop_block=None):
         prompt = self.render(fields, task_id, extra_rules, extra_line_rules, lane, lane_set)
         atype = subagent_type or fields.get("subagent_type") or agents.registry_role(prompt)
         if not atype:
@@ -394,7 +394,8 @@ class Orchestrator:
         description = self.bind(fields.get("description", "") or atype, extra_rules)
         player = agents.Player(self.tree, prompt, act, role=atype)
         d = (actor or self.s.main).dispatch(atype, prompt, description=description, body=player.body,
-                                            result=player.final, label=label, deviation=self.devs.at(label))
+                                            result=player.final, label=label, deviation=self.devs.at(label),
+                                            **({"on_stop_block": on_stop_block} if on_stop_block else {}))
         d.player = player
         self.dispatches.append(d)
         return d

@@ -123,6 +123,25 @@ def ba_round_paths(task_id) -> list:
     return own + ([ROUND.format(task=task, n=n + 1)] if found else [])
 
 
+# What names the round in a command's text or its checklist (commands/dev.md Step 4b's source, dev-command.md's and
+# spec.md's round files; scripts/todo's Step 4b and Step 3a).
+ROUND_MARKERS = ("requirement-round", "Ask each round with AskUserQuestion", "Requirement round")
+
+
+def runs_round(span) -> bool:
+    """The span's command, as the session took it up, runs the requirement round: the text it loaded (Span.body)
+    or its own checklist names it. A session that loaded an earlier text follows that text, which asks no round
+    (live landing, D15, D25): no round rule binds it, as the Stop gate holds a span to the text it loaded. A span
+    with no recorded text is held to the current one."""
+    if span is None:
+        return False
+    body = span.body()
+    if body is None:
+        return True
+    todos = " ".join(str(t.get("content", "")) for t in span.last_todos() or () if isinstance(t, dict))
+    return any(m in body or m in todos for m in ROUND_MARKERS)
+
+
 def round_asked(span, project, task: str, n: int) -> bool:
     file = question_file(project, task, n)
     return file is not None and asked(span, f"requirement-round:{task}:r{n}", file)
@@ -287,7 +306,7 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
     """G1 inside an ask span (R5), for the span's task: the refusal of a dispatch made before an owner question was
     asked, else None. A dispatch that declares the question file itself (its repair) or carries no obligation passes.
     ``current`` is the tool_use id of the dispatch being decided, never counted as its role's latest dispatch."""
-    if span is None or span.command not in ASK_COMMANDS or not isinstance(ob, dict):
+    if span is None or span.command not in ASK_COMMANDS or not isinstance(ob, dict) or not runs_round(span):
         return None
     task = task_of(ob.get("task_id") if span.command == "spec" else span.minted_id())
     if not task:

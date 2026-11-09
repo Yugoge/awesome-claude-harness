@@ -56,8 +56,9 @@ def test_a20_qa_never_dispatched_is_held_until_qa_passes(replays):
 def test_a20_a_question_round_trip_completes_with_no_blocked_stop(replays):
     r = replays.get(_key(QUESTION))
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    # the producer question's relay (Step 5); P13-1's requirement round asks round 1 before it (Step 4b)
     asked = [ev for ev in r.hook_events() if ev.get("event") == "PostToolUse"
-             and ev.get("tool") == "AskUserQuestion"]
+             and ev.get("tool") == "AskUserQuestion" and str(ev.get("label", "")).startswith("Step 5")]
     assert len(asked) == 1, [ev.get("label") for ev in r.hook_events()]
     assert not r.blocks and not r.hook_errors and r.reached(), r.explain()
 

@@ -1935,7 +1935,7 @@ def test_r7_a_dev_turn_ending_with_a_question_in_text_is_a_gap(env, ending):
 
 
 def test_r7_spec_is_checked_for_the_text_question_only(env):
-    env.tx.command("spec", "a new report")
+    env.tx.command("spec", "a new report", body="the spec text: its requirement-round is asked")
     env.tx.say("Which report did you mean?")
     assert run(env) == (2, f"COMMAND_GATE /spec: not complete\n- spec: {QUESTION_GAP}\nFinish the gaps above. "
                            "Ask with AskUserQuestion only for a real decision the user must make.\n")
@@ -1948,3 +1948,11 @@ def test_r7_the_same_text_in_a_close_span_is_no_gap(env):
     env.tx.command("close", "")
     env.tx.say("Shall I go on?")
     assert QUESTION_GAP not in run(env)[1]
+
+
+def test_r7_a_session_whose_text_asks_no_round_is_not_held_to_it(env):
+    """Live landing: a /spec session that loaded an earlier text (no round) ending a turn with a question meets no
+    R7 gap; it follows the text it loaded."""
+    env.tx.command("spec", "a new report", body="an earlier spec text")
+    env.tx.say("Which report did you mean?")
+    assert run(env) == (0, "")

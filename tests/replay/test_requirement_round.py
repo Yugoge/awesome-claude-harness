@@ -17,7 +17,7 @@ CASES = [
     ("dev", "round", []),                                                      # A2
     ("dev", "round-unasked", ["Step 4c Agent(ba) before round 1 is asked"]),   # A3
     ("dev", "round-paraphrase", ["Step 4c Agent(ba) after a paraphrased round 1"]),
-    ("dev", "round-broken", ["Step 4a Agent(qa) panel QA leaving a malformed round 1"]),
+    ("dev", "round-broken", []),  # a malformed round 1 left by an interrupted run: its re-dispatch is not refused
     ("dev", "round-skip", []),                                                 # A4
     ("dev", "round-decline", []),
     ("dev", "round-afk", []),

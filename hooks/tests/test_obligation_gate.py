@@ -1080,6 +1080,15 @@ def test_R17_a_refused_redispatch_has_not_returned(tmp_path):
 # P13-1 R5 (D28): inside a /spec or /dev-family span the owner is asked first
 # --------------------------------------------------------------------------
 
+def _round_span_records(command):
+    """A /<command> span whose loaded text asks the requirement round (P13-1): the rules bind only such a session."""
+    records = _span_records(command)
+    for r in records:
+        if r.get("isMeta"):
+            r["message"]["content"] = [{"type": "text", "text": f"Command body of {command}: requirement-round first."}]
+    return records
+
+
 def test_r5_ask_first_refuses_a_dispatch_before_round_1_is_asked(tmp_path):
     """The gate's process, block mode: in /spec a BA analysis declaring its context before any round 1 was asked
     is refused with ASK_FIRST (exit 2); BA intake, declaring round 1 itself, passes; advisory mode never refuses."""
@@ -1090,9 +1099,26 @@ def test_r5_ask_first_refuses_a_dispatch_before_round_1_is_asked(tmp_path):
                "schema": "requirement-round.v1", "identity": {"task_id": TASK_ID}}]
     for artifacts, code in ((context, 2), (intake, 0)):
         prompt = _block(_obligation_doc(role="ba", pipeline="spec", artifacts=artifacts)) + "\nwork"
-        payload = _dispatch_payload(project, _unique_sid("r5"), _span_records("spec"), subagent_type="ba",
+        payload = _dispatch_payload(project, _unique_sid("r5"), _round_span_records("spec"), subagent_type="ba",
                                     prompt=prompt)
         result = _run_hook(home, project, payload, switch="block")
         assert result.returncode == code, result.stderr
         assert ("ASK_FIRST: no requirement round r1 of task" in result.stderr) is (code == 2)
         assert _run_hook(home, project, payload, switch="advisory").returncode == 0
+
+
+def test_r5_a_session_whose_text_asks_no_round_is_not_held_to_it(tmp_path):
+    """Live landing (D15, D25): a /spec session that loaded an earlier text, which asks no requirement round, is
+    not refused ASK_FIRST after the hooks land: it follows the text it loaded."""
+    home, project = _dirs(tmp_path)
+    context = [{"kind": "json", "path": f"docs/dev/context-{TASK_ID}.json", "schema": "context.v1",
+                "identity": {"task_id": TASK_ID}}]
+    prompt = _block(_obligation_doc(role="ba", pipeline="spec", artifacts=context)) + "\nwork"
+    records = _span_records("spec")
+    for r in records:  # the CLI's record of the text the session loaded, linked to the opener (Span.body)
+        if r.get("origin") == {"kind": "human"} and "<command-name>" in str(r.get("message")):
+            r["uuid"] = "opener-r5old"
+        elif r.get("isMeta"):
+            r["parentUuid"] = "opener-r5old"
+    payload = _dispatch_payload(project, _unique_sid("r5old"), records, subagent_type="ba", prompt=prompt)
+    assert _run_hook(home, project, payload, switch="block").returncode == 0

@@ -260,7 +260,7 @@ def _evaluate(data: dict, mode: str) -> None:
                 os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or os.getcwd(),
                 obligation, data.get("tool_use_id")) if mode == "block" else None
             if refusal:
-                sys.stderr.write(f"\n{refusal}\n")
+                sys.stderr.write("\nOBLIGATION GATE ASK_FIRST (pretool-obligation-gate, R5):\n" + refusal + "\n")
                 sys.exit(2)
             return
     elif isinstance(parsed, NoBlock):  # reached only where a block is required

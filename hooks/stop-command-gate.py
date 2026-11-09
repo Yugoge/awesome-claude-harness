@@ -757,7 +757,8 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     transcript = payload.get("transcript_path") or ""
     span = command_span.active_span(transcript) if transcript else None  # (3)
     gated = span is not None and span.command in command_span.GATED_COMMANDS
-    asking = span is not None and span.command in _lib_round().ASK_COMMANDS  # /spec: R7 alone, never gated
+    # /spec: R7 alone, never gated; a session whose loaded text asks no round is not held to R7
+    asking = span is not None and span.command in _lib_round().ASK_COMMANDS and _lib_round().runs_round(span)
     try:  # (4)
         lock = time_lock(payload)
     except Exception as exc:  # a window it cannot read holds in any span and mode, as an open one does

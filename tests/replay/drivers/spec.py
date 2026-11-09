@@ -828,9 +828,10 @@ class SpecRun:
         # Step 1: no --codex token; non-empty requirement -> Step 3. Step 2: not triggered.
         self.to(3)
         self.step3()
-        self.to("3a")
-        self.step3a()
-        o.advance()  # Step 3a done, Step 4 in progress
+        if re.search(r"^#+\s+Step 3a\b", o.text, re.M):  # a text that asks the round (an earlier one does not)
+            self.to("3a")
+            self.step3a()
+        o.advance()  # Step 3 (or 3a) done, Step 4 in progress
         if self.variant == "text-question":  # R7: a turn ending with a question in text is a Stop gap (A8)
             ev = self.s.stop("Spec written. Shall I add more requirements?", label="Stop with a question in text")
             text = "\n".join(hookrun.refusal(b) for b in ev.blocks)
