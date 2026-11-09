@@ -3689,8 +3689,12 @@ class Analyzer:
                 if lit in flags and idx + 1 < len(args):
                     code = args[idx + 1]
                     break
-                if lit is not None and any(
-                        lit.startswith(f) and len(lit) > len(f) for f in flags
+                # The attached form reads the word's STATIC PREFIX: `-c"..$HOME.."`
+                # has no literal, yet the flag it starts with is fixed text.
+                head = lit if lit is not None else _static_prefix(a)
+                if any(
+                        head.startswith(f) and (len(head) > len(f) or lit is None)
+                        for f in flags
                         if f.startswith("-") and len(f) == 2):
                     code = a
                     break
@@ -3711,7 +3715,7 @@ class Analyzer:
             self.add(PROVEN_INERT, "interpreter_script_file", base)
             return
         if code.literal() is None:
-            self.scoped("dynamic_interpreter_code", code.raw.text[:60])
+            self._dynamic_interpreter_code(base, code)
             return
         text = code.literal()
         mark = len(self.boundaries)
@@ -3722,6 +3726,35 @@ class Analyzer:
                or b["reason"].startswith("interpreter_code_without_removal_token")
                for b in self.boundaries[mark:]) and self.boundaries[mark:]:
             self.cover(code)
+
+    def _dynamic_interpreter_code(self, base, code):
+        """An inline program whose word holds an expansion (P2-6).
+
+        The scoped check alone refused only when the raw command carried an
+        rm/unlink/shred/srm word, so `python3 -c "shutil.rmtree('$HOME/x')"`
+        was judged inert while its literal-path form was refused. The fixed
+        text is now classified by the SAME classifier as the literal form, with
+        each expansion replaced by a neutral placeholder: a refusal it finds is
+        kept with the literal form's reason. An expansion that can change the
+        program itself, not only a value inside one of its string literals,
+        fails closed. Otherwise the old scoped check runs unchanged, so no
+        earlier refusal weakens and no inert verdict changes its reason.
+        """
+        text, why = _program_with_placeholders(code, base, self.raw)
+        mark = len(self.boundaries)
+        saved = (list(self._pending_shapes), list(self.removal_shapes),
+                 self.removal_shape)
+        self._classify_inline_code(base, text)
+        if any(b["verdict"] != PROVEN_INERT for b in self.boundaries[mark:]):
+            return
+        del self.boundaries[mark:]
+        self._pending_shapes, self.removal_shapes, self.removal_shape = (
+            saved[0], saved[1], saved[2])
+        if why:
+            self.structural("interpreter_expansion_changes_program",
+                            "%s:%s" % (base, why))
+            return
+        self.scoped("dynamic_interpreter_code", code.raw.text[:60])
 
     def _classify_inline_code(self, base, text):
         # DYNAMIC ATTRIBUTE ACCESS FIRST. `getattr(os,"remove")(p)`,
@@ -3989,6 +4022,156 @@ class Analyzer:
 
 _IDENT_TAIL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_.]*)$")
 _QUOTE_OP_RE = re.compile(r"(%?q[qwrx]?)$")
+
+
+# A placeholder for one expansion inside an inline program. A space keeps the
+# characters on either side from joining into a name the scans would miss.
+_PLACEHOLDER = " "
+_MARK = "\x00"
+_PLAIN_PARAM_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]|[*#?$!0-]")
+_PLAIN_VALUE_RE = r"[A-Za-z0-9_./:%+,~-]*"
+
+
+def _expansion_quoting(raw):
+    """Shell double-quote state at each `$`/backtick expansion of a word, in order."""
+    out = []
+    t = raw
+    n = len(t)
+    i = 0
+    dq = False
+    while i < n:
+        c = t[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'" and not dq:
+            j = t.find("'", i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if c == '"':
+            dq = not dq
+            i += 1
+            continue
+        if c == "$" and i + 1 < n:
+            nxt = t[i + 1]
+            if nxt == "'" and not dq:
+                j = _find_ansi_end(t, i + 2)
+                i = n if j < 0 else j + 1
+                continue
+            if nxt in "({[":
+                out.append(dq)
+                end = _match_pair(t, i + 1, nxt, {"(": ")", "{": "}", "[": "]"}[nxt])
+                i = n if end < 0 else end
+                continue
+            if nxt.isalnum() or nxt in "_@*#?-$!":
+                out.append(dq)
+                i += 2
+                if nxt.isalpha() or nxt == "_":
+                    while i < n and (t[i].isalnum() or t[i] == "_"):
+                        i += 1
+                continue
+            i += 1
+            continue
+        if c == "`":
+            out.append(dq)
+            j = i + 1
+            while j < n and t[j] != "`":
+                j += 2 if t[j] == "\\" else 1
+            i = j + 1
+            continue
+        i += 1
+    return out
+
+
+def _marks_inside_string_literals(text):
+    """True when every _MARK sits inside a program string literal.
+
+    A literal here is '...', "..." or `...`, with backslash escapes. A mark
+    after an unclosed `{` in the same literal is code (f-strings, `${}`,
+    `#{}`), and a mark in a backtick literal is treated as code too.
+    """
+    quote = None
+    brace = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if quote is None:
+            if c == _MARK:
+                return False
+            if c in "'\"`":
+                quote, brace = c, 0
+            i += 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if c == _MARK:
+            if quote == "`" or brace > 0:
+                return False
+        elif c == "{":
+            brace += 1
+        elif c == "}" and brace:
+            brace -= 1
+        elif c == quote:
+            quote = None
+        i += 1
+    return quote is None
+
+
+def _variable_set_unplainly(name, raw):
+    """True when the command binds ``name`` to anything but one plain value."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return False
+    esc = re.escape(name)
+    for m in re.finditer(r"(?:^|[^A-Za-z0-9_])%s\+?=" % esc, raw):
+        if not re.match(_PLAIN_VALUE_RE + r"(?:[\s;&|)]|$)", raw[m.end():]):
+            return True
+    binders = (r"(?:^|[\s;&|(])(?:read|mapfile|readarray|for|select|getopts"
+               r"|printf\s+-v|declare|typeset|local|export|readonly|let)"
+               r"\b[^;&|\n]*?(?:^|[^A-Za-z0-9_$])%s(?![A-Za-z0-9_=])" % esc)
+    return re.search(binders, raw) is not None
+
+
+def _program_with_placeholders(word, base, raw):
+    """(program text with each expansion as a placeholder, fail-closed reason).
+
+    The reason is empty when every expansion only supplies a value inside one
+    of the program's string literals; otherwise it names the first expansion
+    that could change the program itself.
+    """
+    quoting = _expansion_quoting(word.raw.text)
+    k = 0
+    why = ""
+    chars = []
+    for kind, s, _ in word.segs:
+        if kind == "lit":
+            chars.append(s.text)
+            continue
+        if kind == "ansi":
+            chars.append(ansi_decode(s.text))
+            continue
+        chars.append(_MARK)
+        if kind not in ("param", "sub", "arith"):
+            why = why or "unquoted_" + kind
+            continue
+        quoted = quoting[k] if k < len(quoting) else False
+        k += 1
+        if not quoted:
+            why = why or "unquoted_expansion"
+        elif kind == "sub":
+            why = why or "command_substitution"
+        elif kind == "param":
+            if not _PLAIN_PARAM_RE.fullmatch(s.text):
+                why = why or "parameter_operator"
+            elif _variable_set_unplainly(s.text, raw or ""):
+                why = why or "variable_set_in_command"
+    if len(quoting) != k:
+        why = why or "expansion_count_mismatch"
+    text = "".join(chars)
+    if not why and not _marks_inside_string_literals(text):
+        why = "expansion_outside_string_literal"
+    return text.replace(_MARK, _PLACEHOLDER), why
 
 
 def _enclosing_call(text, pos):
