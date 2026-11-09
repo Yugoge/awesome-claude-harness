@@ -4,8 +4,10 @@ Every requested outcome is delivered in the same cycle and the cycle ends only w
 home in commands/dev.md ("One cycle, no phases") and commands/dev-overnight.md ("Delivery rule"); the BA-validation
 QA dispatch of both fails a plan that phases or defers a requested outcome inside the existing scope_alignment
 dimension (no sixth dimension); /dev's Steps 16-17 and /dev-overnight's Steps 17 and 21 have no exit with an outcome
-left over; /do delivers the whole task this turn; /redev is /dev and says so. A replay scripts its agents, so it cannot
-show that a real QA agent fails a phased plan: the text is the evidence, and it is read here from the tree under test.
+left over; /do delivers the whole task this turn; /redev and /dev-command are /dev and say so. A replay scripts its
+agents, so it cannot show that a real QA agent fails a phased plan: the text is the evidence, and it is read here from
+the tree under test. One more guard rides along: the frontmatter of the five /dev-family command files must parse as
+YAML (a colon and a space inside a plain description once made redev.md's invalid and nothing caught it).
 
 Each assertion is a helper that returns its problems. The real files must give none; the mutation tests at the end
 feed the same helpers a deliberately bad text (built here, so they hold whatever the files say) and require every
@@ -19,6 +21,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+import yaml
 
 from tests.replay import cmdtext
 
@@ -113,6 +116,21 @@ CONTRACTS: dict[str, tuple[Spot, ...]] = {
                         "list them in the Step 4 summary",),
              forbidden=(r"separate cycle", r"defer")),
         Spot("Step 4", ("which out-of-scope findings were left unfixed",)),
+    ),
+    "dev-command.md": (
+        # inherits the rule from /dev instead of restating it; it carries no continuation-spec branch of its own
+        Spot(None, ('A `/dev` rule this file does not mention applies as written, including "One cycle, no phases"',
+                    "every requested outcome is delivered in this cycle, with no sequential phases or deferred parts",
+                    "read `<HARNESS_ROOT>/commands/dev.md` (again after a compaction) and follow it"),
+             forbidden=(r"continuation", r"workflow update")),
+        # no dispatch block of its own: the five-dimension enum lives in /dev Step 7, this line points at it
+        Spot("Step 7", ("As `/dev` Step 7", "all five dimensions",
+                        "the no-phases check inside `scope_alignment` among them")),
+        Spot("Step 15", ("the loop repeats until QA passes",
+                         "The Stop gate keeps the command open until the disposition is chain_pass",
+                         "There is no other exit.")),
+        Spot("Step 16", ("## Follow-up Suggestions (outside the request)",),
+             forbidden=(r"continuation", r"workflow update", r"spec-update", r"next steps")),
     ),
     "redev.md": (
         Spot(None, ("every requested outcome is delivered in this cycle, with no sequential phases or deferred parts",
@@ -319,6 +337,43 @@ def test_redev_says_the_rule_in_the_words_the_other_files_pin() -> None:
     assert "every requested outcome is delivered in this cycle" in _flat(_read("redev.md"))
 
 
+FRONTMATTER_FILES = ("dev.md", "dev-command.md", "dev-overnight.md", "redev.md", "do.md")
+_FRONTMATTER = re.compile(r"---\n(.*?)\n---[ \t]*(?:\n|$)", re.S)
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that also refuses a key given twice (PyYAML otherwise keeps the last one silently)."""
+
+    def construct_mapping(self, node, deep=False):
+        keys = [self.construct_object(key, deep=True) for key, _ in node.value]
+        twice = sorted({str(k) for k in keys if keys.count(k) > 1})
+        if twice:
+            raise yaml.constructor.ConstructorError(None, None, f"duplicate key {twice}", node.start_mark)
+        return super().construct_mapping(node, deep)
+
+
+def frontmatter_problems(text: str) -> list[str]:
+    """The frontmatter parses as YAML and holds a non-empty string `description` and `disable-model-invocation`."""
+    block = _FRONTMATTER.match(text)
+    if block is None:
+        return ["no frontmatter block between two '---' lines at the top"]
+    try:
+        data = yaml.load(block.group(1), Loader=_StrictLoader)  # noqa: S506 (a SafeLoader subclass)
+    except yaml.YAMLError as err:
+        return [f"the frontmatter is not valid YAML: {' '.join(str(err).split())}"]
+    if not isinstance(data, dict):
+        return [f"the frontmatter is a {type(data).__name__}, not a mapping"]
+    problems = [f"no {key!r} key" for key in ("description", "disable-model-invocation") if key not in data]
+    if "description" in data and not (isinstance(data["description"], str) and data["description"].strip()):
+        problems.append(f"'description' is {data['description']!r}, not a non-empty string")
+    return problems
+
+
+@pytest.mark.parametrize("name", FRONTMATTER_FILES)
+def test_the_frontmatter_of_each_command_file_parses_as_yaml(name: str) -> None:
+    assert frontmatter_problems(_read(name)) == []
+
+
 # === mutation evidence: the same helpers must flag a deliberately bad text ==============================
 
 GOOD_DISPATCH = """\
@@ -409,15 +464,20 @@ def test_every_pinned_fragment_of_a_contract_is_load_bearing(name: str) -> None:
                 f"{name} {spot.heading}: dropping {fragment!r} goes unnoticed"
 
 
-def test_dev_contract_flags_a_continuation_spec_branch_in_step_17() -> None:
-    spots = CONTRACTS["dev.md"]
-    assert spots[-1].heading == "Step 17", "the branch below is appended to the last section"
+@pytest.mark.parametrize("name,last,words", [
+    ("dev.md", "Step 17", ("continuation", "spec-update", "next steps")),
+    ("dev-command.md", "Step 16", ("continuation", "workflow update", "spec-update", "next steps")),
+])
+def test_contract_flags_a_continuation_spec_branch_in_the_last_step(name: str, last: str, words: tuple) -> None:
+    spots = CONTRACTS[name]
+    assert spots[-1].heading == last, "the branch below is appended to the last section"
     good = contract_doc(spots)
-    branch = "When work is left over, emit a continuation spec through `/spec-update` and show the next steps."
+    branch = ("**Workflow update.** When work is left over, emit a continuation spec through `/spec-update` and show "
+              "the next steps.")
     bad = good + "\n" + branch + "\n"
-    problems = contract_problems(bad, spots, "dev.md")
-    for word in ("continuation", "spec-update", "next steps"):
-        assert any(f"must not say {word!r}" in p for p in problems), word
+    problems = contract_problems(bad, spots, name)
+    for word in words:
+        assert any(f"must not say {word!r}" in p.lower() for p in problems), word
     assert licensing_scan(bad)[0], "the licensing scan flags the same branch"
 
 
@@ -488,3 +548,38 @@ def test_the_scan_leaves_technical_uses_of_phase_and_triage_alone(technical: str
 def test_the_scan_still_flags_a_deferral_that_borrows_the_triage_words() -> None:
     licences, _ = licensing_scan("Defer the second outcome by PM triage to the next cycle of the session.")
     assert licences
+
+
+# a description whose plain scalar holds a colon and a space: not valid YAML (the redev.md defect)
+_COLON_IN_PLAIN_SCALAR = (
+    "---\n"
+    "description: /redev is /dev when saving context: it re-enters the harness in the same conversation\n"
+    'argument-hint: "[--codex] [--spec <path>] [<requirement>]"\n'
+    "disable-model-invocation: true\n"
+    "---\n\nBody.\n")
+
+
+def test_the_frontmatter_helper_flags_a_colon_and_a_space_inside_a_plain_description() -> None:
+    problems = frontmatter_problems(_COLON_IN_PLAIN_SCALAR)
+    assert len(problems) == 1 and "not valid YAML" in problems[0], problems
+    # the same description with the colon replaced (the repair), or quoted, is accepted
+    assert frontmatter_problems(_COLON_IN_PLAIN_SCALAR.replace("context: it", "context - it")) == []
+    assert frontmatter_problems(_COLON_IN_PLAIN_SCALAR.replace("description: /redev", 'description: "/redev').replace(
+        "conversation\n", 'conversation"\n', 1)) == []
+
+
+@pytest.mark.parametrize("bad,expected", [
+    ("---\ndescription: x\n---\nBody.\n", "no 'disable-model-invocation' key"),
+    ("---\ndisable-model-invocation: true\n---\nBody.\n", "no 'description' key"),
+    ("---\ndescription:\ndisable-model-invocation: true\n---\nBody.\n", "not a non-empty string"),
+    ("---\ndescription: '  '\ndisable-model-invocation: true\n---\nBody.\n", "not a non-empty string"),
+    ("---\ndescription: 12\ndisable-model-invocation: true\n---\nBody.\n", "not a non-empty string"),
+    ("---\ndescription: a\ndescription: b\ndisable-model-invocation: true\n---\nBody.\n", "duplicate key"),
+    ("---\n- description\n- disable-model-invocation\n---\nBody.\n", "not a mapping"),
+    ("description: x\ndisable-model-invocation: true\n\nBody.\n", "no frontmatter block"),
+], ids=["no-disable-key", "no-description-key", "null-description", "blank-description", "number-description",
+        "duplicate-key", "list", "no-fence"])
+def test_the_frontmatter_helper_flags_a_missing_key_an_empty_description_or_a_broken_block(bad: str,
+                                                                                             expected: str) -> None:
+    problems = frontmatter_problems(bad)
+    assert any(expected in p for p in problems), problems
