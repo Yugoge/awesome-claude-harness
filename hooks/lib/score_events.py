@@ -1,20 +1,24 @@
-"""Score events from facts: observe(payload) runs after the main agent's dispatches and appends what files on disk and the
-CLI's transcripts show about lane QA to the score log. It never blocks, prints or raises, and takes no gate's verdict. A
-rule is f(ctx) -> event dicts (build one with _event); observe adds kind, project and the table's points. A lane adds a
-rule by writing that function and listing it in RULES. Every run sweeps all ok dispatches of the span: the log's
-first-row-per-key makes a repeat write nothing, and a dispatch whose facts are not on disk yet is scored by a later run."""
+"""Score events from facts: observe(payload) turns lane-QA reports and dev writes into rows of the score log.
+It runs after the main agent's dispatches, reads only files on disk and the CLI's transcripts, takes no gate's verdict,
+and never blocks, prints or raises. A rule is f(ctx) -> event dicts (build one with _event); observe adds kind, project
+and the table's points. A lane adds a rule by writing that function and listing it in RULES. Each run sweeps all ok
+dispatches of the span: the log's first-row-per-key makes a repeat write nothing, and a dispatch whose facts are not on
+disk yet is scored by a later run."""
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
 from collections import Counter
 from datetime import datetime, timezone
 
-try:  # imported as hooks.lib.score_events (tests) or from hooks/lib on the path
-    from . import command_span, obligation, score_log
-except ImportError:
-    import command_span, obligation, score_log  # type: ignore[no-redef]
+
+def _lib(name):  # as hooks.lib.score_events, or from hooks/lib on the path
+    return importlib.import_module(f".{name}" if __package__ else name, __package__ or None)
+
+
+command_span, obligation, score_log = _lib("command_span"), _lib("obligation"), _lib("score_log")
 
 CAUSE_ROLE = {"dev_implementation": "dev", "ba_spec": "ba"}  # a failure's primary_cause -> the role it costs
 
@@ -25,10 +29,11 @@ def _utc(value=None) -> str:
 
 def _record(ctx, ident) -> dict:
     """The CLI's record of a dispatch's result (timestamp, toolUseResult); {} when unreadable."""
-    uses = ctx.setdefault("uses", {u.id: u for u in ctx["span"].uses("Agent", "Task")})
+    if "uses" not in ctx:  # one pass over the span's dispatches, the first time a result is read
+        ctx["uses"] = {u.id: u for u in ctx["span"].uses("Agent", "Task")}
     try:
         with open(ctx["tp"], "rb") as handle:
-            handle.seek(uses[ident].result_at)
+            handle.seek(ctx["uses"][ident].result_at)
             return json.loads(handle.readline()) or {}
     except (KeyError, OSError, TypeError, ValueError):
         return {}
@@ -42,8 +47,7 @@ def _event(ctx, d, event, role, why, key=None) -> dict:
 
 
 def _dispatches(span) -> list[dict]:
-    """The span's ok dispatches with an obligation: id, who (scored identity), task (canonical), lane, ob, path (the
-    qa-report.v2 file a lane QA declares, else None)."""
+    """The span's ok dispatches with an obligation: id, who (scored identity), task (canonical id), lane, ob, path (lane QA's report)."""
     found = []
     for call, ob in span.obligations():
         who, task = score_log.identity(ob.get("role"), ob.get("pipeline")), obligation.canonical_task_id(ob.get("task_id"))
@@ -60,7 +64,7 @@ def _sub(ctx, d) -> str:
 
 
 def _wrote(ctx, d):
-    """The report d's own transcript last wrote to its path, parsed: what the file held before a later dispatch overwrote it."""
+    """The report d's own transcript last wrote to its path: what the file held before a later dispatch overwrote it."""
     found = None
     try:
         for _, record in command_span._records(_sub(ctx, d)):
@@ -73,8 +77,8 @@ def _wrote(ctx, d):
 
 
 def _report(ctx, d, later):
-    """d's report file parsed, if it is not older than d's dispatched_at (obligation's slack). When the next dispatch of the
-    same file has overwritten it, what d's own transcript wrote there. None when missing, unreadable or stale."""
+    """d's report: its file when not older than d's dispatched_at, what d's transcript wrote when the next dispatch of the
+    file has overwritten it; None when missing, unreadable or stale."""
     path = os.path.join(ctx["cwd"], d["path"])
     try:
         mtime = os.stat(path).st_mtime
@@ -89,7 +93,7 @@ def _report(ctx, d, later):
 
 
 def _lane_qa(ctx) -> list[dict]:
-    """The lane-QA dispatches (role qa outside close) in order, each with rep (its report) and status (pass, fail, warning or None)."""
+    """The lane-QA dispatches (role qa outside close) in order, each with rep (its report) and status (pass, fail, warning, None)."""
     if "qa" not in ctx:
         ctx["qa"] = qa = [d for d in ctx["ds"] if d["path"]]
         for i, d in enumerate(qa):
@@ -118,18 +122,6 @@ def qa_fail(ctx):
             yield _event(ctx, d, "qa_fail", role, issue)
 
 
-def _named(ctx, d) -> set:
-    """The project-relative files the failures of d's report name in their location (file:line)."""
-    names = (re.sub(r"(?::\d+)+(?:-\d+)?$", "", str(f.get("location") or "").strip()) for f in _failures(d))
-    return {os.path.relpath(os.path.join(ctx["cwd"], name), ctx["cwd"]) for name in names if name}
-
-
-def _written(ctx, d) -> set:
-    """The project-relative files the dev dispatch's own tool calls wrote."""
-    found = command_span.write_set(_sub(ctx, d), ctx["cwd"], excluded=())
-    return set(found.written) if found else set()
-
-
 def qa_catch(ctx):
     """A lane-QA failure, then the lane's next dev dispatch wrote a file a failure names, then its QA passes: qa's catch."""
     _lane_qa(ctx)
@@ -137,12 +129,14 @@ def qa_catch(ctx):
     for d in ctx["ds"]:
         key = d["task"], d["lane"]
         if d["who"] == "dev" and pending.get(key) and pending[key][1] is None:
-            pending[key][1] = bool(pending[key][0] & _written(ctx, d))
+            written = command_span.write_set(_sub(ctx, d), ctx["cwd"], excluded=())  # the files its own tool calls wrote
+            pending[key][1] = bool(pending[key][0] & set(getattr(written, "written", ())))
         elif "status" in d:
             if d["status"] == "pass" and pending.get(key) and pending[key][1] and taken[d["task"]] < 2:
                 taken[d["task"]] += 1
                 yield _event(ctx, d, "qa_catch", "qa", "a failure it reported was fixed in the file it named", f"qa_catch:{d['id']}")
-            pending[key] = [_named(ctx, d), None] if d["status"] == "fail" else None
+            names = (re.sub(r"(?::\d+)+(?:-\d+)?$", "", str(f.get("location") or "").strip()) for f in _failures(d))  # file:line
+            pending[key] = [{os.path.relpath(os.path.join(ctx["cwd"], n), ctx["cwd"]) for n in names if n}, None] if d["status"] == "fail" else None
 
 
 RULES = [qa_first_pass, qa_fail, qa_catch]
@@ -153,11 +147,11 @@ def observe(payload) -> None:
     try:
         if not isinstance(payload, dict) or payload.get("agent_id") or payload.get("tool_name") not in ("Agent", "Task"):
             return
-        span = command_span.active_span(payload["transcript_path"])
+        tp, cwd = payload.get("transcript_path"), payload.get("cwd")
+        span = command_span.active_span(tp) if isinstance(tp, str) and isinstance(cwd, str) else None  # an int would be a descriptor
         if span is None:
             return
-        ctx, rows = {"span": span, "tp": payload["transcript_path"], "cwd": payload["cwd"], "ds": _dispatches(span),
-                     "project": score_log.project_key(payload["cwd"])}, []
+        ctx, rows = {"span": span, "tp": tp, "cwd": cwd, "ds": _dispatches(span), "project": score_log.project_key(cwd)}, []
         for rule in RULES:
             try:
                 for e in rule(ctx):

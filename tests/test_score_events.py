@@ -21,10 +21,8 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "hooks" / "lib"))
-import obligation  # noqa: E402
-import score_events  # noqa: E402
-import score_log  # noqa: E402
+sys.path.insert(0, str(REPO_ROOT))
+from hooks.lib import obligation, score_events, score_log  # noqa: E402
 
 TASK = "20261109-120000"
 OPENER = "<command-message>dev is running</command-message>\n<command-name>/dev</command-name>\n<command-args>x</command-args>"
@@ -59,18 +57,18 @@ class Cycle:
         return self.clock
 
     def dispatch(self, role: str, *, task: str = TASK, lane=None, pipeline: str = "dev", profile: str = "singular",
-                 artifacts=None, wrote=(), launch: bool = False, ok: bool = True, stamp: bool = True) -> str:
+                 artifacts=None, wrote=(), launch: bool = False, ok: bool = True, stamp: bool = True, suffix: bool = True) -> str:
         """One Agent dispatch, its result 30 s later; `wrote` are files its subagent transcript shows it writing."""
         self.count += 1
         ident, agent = f"toolu_{self.count:03d}", f"agent{self.count:03d}"
-        tid = f"{task}-{lane}" if lane else task
+        tid = f"{task}-{lane}" if lane and suffix else task
         if artifacts is None:
             artifacts = [{"kind": "json", "path": f"docs/dev/{role}-report-{tid}.json", "schema": "dev-report.v2",
                           "identity": {"task_id": tid}}]
         doc = {"task_id": tid, "role": role, "pipeline": pipeline, "profile": profile, "artifacts": artifacts,
                "dispatched_at": _z(self.tick()).replace(".000Z", "Z")}
         if lane:
-            doc.update(lane=lane, lane_set=["l1", "l2"], profile="fanout-lane")
+            doc.update(lane=lane, lane_set=["l1", "l2", "l3"], profile="fanout-lane")
         prompt = f"You are the {role} subagent.\n{obligation.serialize_obligation(doc)}"
         self.write({"type": "assistant", "cwd": str(self.project), "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": ident, "name": "Agent", "input": {"subagent_type": role, "prompt": prompt}}]}})
@@ -91,19 +89,20 @@ class Cycle:
         (self.subagents / f"agent-{agent}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
         return ident
 
-    def qa(self, *, task: str = TASK, lane=None, pipeline: str = "dev", **options) -> str:
+    def qa(self, *, task: str = TASK, lane=None, pipeline: str = "dev", suffix: bool = True, **options) -> str:
         """A lane-QA dispatch declaring its qa-report.v2 file."""
-        tid = f"{task}-{lane}" if lane else task
+        tid = f"{task}-{lane}" if lane and suffix else task
         artifacts = [{"kind": "json", "path": f"docs/dev/qa-report-{tid}.json", "schema": "qa-report.v2",
                       "identity": {"task_id": tid, "request_id": tid}}]
         self.last_qa = self.dispatch("qa", task=task, lane=lane, pipeline=pipeline, profile="final_verification",
-                                     artifacts=artifacts, **options)
+                                     artifacts=artifacts, suffix=suffix, **options)
         return self.last_qa
 
-    def report(self, status: str, failures=(), *, task: str = TASK, lane=None, mtime=None, text=None, kept: bool = True) -> Path:
+    def report(self, status: str, failures=(), *, task: str = TASK, lane=None, mtime=None, text=None, kept: bool = True,
+               suffix: bool = True) -> Path:
         """The QA report file, stamped now on the fake clock unless `mtime` says otherwise; the last QA dispatch's own
         transcript shows it writing the file (unless `kept` is False)."""
-        tid = f"{task}-{lane}" if lane else task
+        tid = f"{task}-{lane}" if lane and suffix else task
         path = self.project / "docs" / "dev" / f"qa-report-{tid}.json"
         body = {"report_version": 2, "request_id": tid, "task_id": tid, "timestamp": _z(self.clock),
                 "qa": {"status": status, "e2e_enforcement": {"status": "ran"}, "failures": list(failures)}}
@@ -255,11 +254,13 @@ def test_a_bash_command_naming_the_file_is_not_a_write(cycle, monkeypatch):
     assert cycle.facts() == [("qa_fail", "dev", -6)]
 
 
-def test_at_most_two_catches_a_task_the_first_two_in_span_order(cycle, monkeypatch):
+@pytest.mark.parametrize("sweep_between_rounds", [False, True])
+def test_at_most_two_catches_a_task_the_first_two_in_span_order(cycle, monkeypatch, sweep_between_rounds):
     passes = []
     for _ in range(3):
         passes.append(fail_fix_pass(cycle, monkeypatch, wrote=["src/app.py"]))
-        cycle.observe(monkeypatch)  # a sweep between rounds finds each report before the next overwrites it
+        if sweep_between_rounds:
+            cycle.observe(monkeypatch)
     cycle.observe(monkeypatch)
     catches = sorted(r["key"] for r in cycle.rows() if r["event"] == "qa_catch")
     assert catches == sorted(f"qa_catch:{p}" for p in passes[:2])
@@ -310,9 +311,9 @@ def test_a_report_without_a_pass_or_fail_gives_nothing(cycle, monkeypatch, statu
 def test_lanes_are_judged_apart_and_task_ids_compare_canonically(cycle, monkeypatch):
     cycle.qa(lane="l1")
     cycle.report("pass", lane="l1")
-    cycle.qa(task=f"dev-{TASK}", lane="l2")  # the minted form of the same task id
+    cycle.qa(lane="l2")
     cycle.report("fail", [failure("dev_implementation")], lane="l2")
-    cycle.dispatch("dev", lane="l2", wrote=["src/app.py"])
+    cycle.dispatch("dev", task=f"dev-{TASK}", lane="l2", wrote=["src/app.py"])  # the minted form of the same task id
     cycle.qa(lane="l2")
     cycle.report("pass", lane="l2")
     cycle.observe(monkeypatch)
@@ -320,14 +321,49 @@ def test_lanes_are_judged_apart_and_task_ids_compare_canonically(cycle, monkeypa
     assert {r["task_id"] for r in cycle.rows()} == {f"{TASK}-l1", f"{TASK}-l2"}
 
 
-def test_a_report_overwritten_by_the_next_dispatch_is_not_read_as_the_earlier_ones(cycle, monkeypatch):
-    first = cycle.qa()
+def test_lanes_that_share_a_task_id_are_judged_apart_by_the_lane_field(cycle, monkeypatch):
+    cycle.qa(lane="l1", suffix=False)
+    cycle.report("pass", lane="l1", suffix=False)
+    cycle.qa(lane="l2", suffix=False)
+    cycle.report("pass", lane="l2", suffix=False)
+    cycle.observe(monkeypatch)
+    assert len(cycle.rows()) == 4  # the second lane's pass is its own first pass
+
+
+def test_another_lanes_dev_dispatch_is_not_the_fix(cycle, monkeypatch):
+    cycle.qa(lane="l1", suffix=False)
+    cycle.report("fail", [failure("dev_implementation")], lane="l1", suffix=False)
+    cycle.dispatch("dev", lane="l2", suffix=False, wrote=["src/app.py"])
+    cycle.qa(lane="l1", suffix=False)
+    cycle.report("pass", lane="l1", suffix=False)
+    cycle.observe(monkeypatch)
+    assert cycle.facts() == [("qa_fail", "dev", -6)]
+
+
+def test_a_fix_in_a_file_under_docs_dev_still_counts(cycle, monkeypatch):
+    fail_fix_pass(cycle, monkeypatch, wrote=["docs/dev/notes.md"], location="docs/dev/notes.md:3")
+    cycle.observe(monkeypatch)
+    assert ("qa_catch", "qa", 1) in cycle.facts()
+
+
+def test_a_report_overwritten_by_the_next_dispatch_is_read_from_the_dispatchs_own_transcript(cycle, monkeypatch):
+    cycle.qa()
     cycle.report("fail", [failure("dev_implementation")])
     cycle.dispatch("dev", wrote=["src/app.py"])
     cycle.qa()
-    cycle.report("pass")  # same file: the failing report is gone, and the sweep never saw it
+    cycle.report("pass")  # the same file: the failing report is gone from disk, and no sweep ran before
     cycle.observe(monkeypatch)
-    assert cycle.rows() == [] and first
+    assert cycle.facts() == [("qa_catch", "qa", 1), ("qa_fail", "dev", -6)]
+
+
+def test_an_overwritten_report_its_dispatch_never_wrote_gives_nothing_and_the_next_pass_is_not_first(cycle, monkeypatch):
+    cycle.qa()
+    cycle.report("fail", [failure("dev_implementation")], kept=False)
+    cycle.dispatch("dev", wrote=["src/app.py"])
+    cycle.qa()
+    cycle.report("pass")
+    cycle.observe(monkeypatch)
+    assert cycle.rows() == []
 
 
 def test_a_report_read_before_it_was_overwritten_stays_scored(cycle, monkeypatch):
