@@ -5,113 +5,13 @@ disable-model-invocation: true
 
 # Push Command
 
-`/push` is the validated wrapper for normal branch publication. Note: pretool-git-privilege-guard.py is REGISTERED in settings.json (PreToolUse, Bash matcher) and enforces commit authorization — agents must hold a valid commit grant or use the `auto-bulk:` bridge prefix to commit. The wrapper
-script `<HARNESS_ROOT>/hooks/push.sh` produces a valid push grant recognized by the guard.
+`/push [<remote>] [--auto]` publishes the current branch through the wrapper `<HARNESS_ROOT>/hooks/push.sh`, after the push-analyst has reviewed what would go out. Run the dispatch protocol below yourself, in order, and reach `push.sh` only through Step 5. Do not hand the push back to the user as "please run X". `disable-model-invocation: true` only stops the model from invoking the slash command on its own; it does not forbid running the wrapper.
 
-The slash entry has `disable-model-invocation: true` to prevent the model
-from autonomously self-dispatching `/push` via SlashCommand. It does NOT
-forbid agent execution of the wrapper script. When the user invokes
-`/push` in conversation and this docstring is injected into the agent's
-context, the agent's correct response is to execute the **Agentic dispatch
-protocol** documented below (Steps 0-5), then call `push.sh` ONLY after
-push-analyst grant validation passes. Do NOT call `push.sh` directly
-without first dispatching `push-analyst` — the analyst gate is mandatory.
-Do NOT bounce the work back to the user with "please run X manually" —
-that violates the harness's delegation design.
-
-## Usage
-
-```bash
-/push
-/push <remote>
-```
-
-No force, delete, or ref-rewrite mode is available through `/push`. The wrapper
-accepts only an optional remote and `--auto` for non-interactive lock handling.
-
-## Behavior summary
-
-1. Refuse detached HEAD (the protocol asks first: Step 2).
-2. Print staged / modified / untracked files for context only.
-3. Treat dirty worktree state as non-blocking; only committed objects push.
-4. Exit cleanly when nothing is ahead of `refs/remotes/<remote>/<branch>` (none: a first push).
-5. Emit a single-use push grant binding branch, current HEAD, remote, SID,
-   nonce, ppid, and timestamp.
-6. Export the wrapper-only push env var for the child process.
-7. Run a normal branch push, with `-u` only when setting an upstream.
-
-## Safety contract
-
-- `/push` never stages, commits, resets, deletes branches, force-publishes, or
-  mutates refs directly.
-- `--force`, `-f`, `--force-with-lease`, `--delete`, `-d`, and `--mirror`
-  fail with exit 2 before any grant is written.
-- Automatic post-commit backup is separate from `/push` and uses only
-  `refs/backups/claude/<branch>/<short-sha>` recovery refs. It never publishes
-  `refs/heads/<branch>` in the background.
+`/push` never stages, commits, resets, deletes branches or writes refs itself, and has no force, delete or ref-rewrite mode: push.sh refuses `--force`, `-f`, `--force-with-lease`, `--delete`, `-d` and `--mirror` with exit 2 before any grant is written. A dirty worktree does not block it (only committed objects are pushed), and push.sh exits 0 when nothing is ahead of `refs/remotes/<remote>/<branch>`. Never run `git push` directly (`hooks/pretool-git-privilege-guard.py`).
 
 ## Session commit prerequisite (push-gate)
 
-`/push` requires SOME valid push-gate token to exist proving a real `/commit` happened on this
-branch — written by ANY session, not necessarily this one, and its recorded commit need only be
-an ANCESTOR of current HEAD, not equal to it. The token need NOT belong to the calling session and
-its `commit_sha` need NOT equal HEAD: on a branch shared by many concurrent sessions, equality would
-let any session's next commit invalidate every other session's token although nothing was lost. The
-gate proves only that a real `/commit` produced something still part of HEAD's history; an ancestor
-check proves that as well as equality does, and there is no cross-tenant boundary to enforce (one
-machine, one user, many cooperating sessions).
-
-Token base directory: `<state dir>/agentic-commit/push/<repo-hash>/`, where `<state dir>` is
-`$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp` (`hooks/lib/harness_state_dir`),
-for the token's one writer (`scripts/write-push-gate-token.py`) and for `push.sh` alike.
-
-- `repo-hash` = `sha256(os.path.realpath(repo_root)).hexdigest()[:16]`
-- The writer puts each token at a session-scoped path under that base,
-  `<repo-hash>/<session-digest>/<branch-encoded>.json`, where `session-digest` =
-  `sha256(<raw session id>).hexdigest()[:16]` (raw session id: `CLAUDE_CODE_SESSION_ID`, else
-  `CLAUDE_SESSION_ID`, else the literal `unknown`; digested because it becomes a path segment and
-  a raw value could contain `/`/`..` or collide with another id). This keeps two sessions
-  committing back-to-back from contending for one write slot.
-  A legacy session-less path, `<repo-hash>/<branch-encoded>.json`, still exists from
-  pre-migration `/commit` runs and is treated as just another candidate now (see below) — no
-  special-casing needed.
-- `branch-encoded` = branch name with `/` replaced by `__`
-- Token content: `{"commit_sha": "<sha>", "branch": "<branch>", "repo_root": "<root>", "session_id": "<raw session id, undigested>"}`.
-  `push.sh` reads only `commit_sha` for the gate decision; `branch`, `repo_root`, `session_id` are
-  written for auditability only and are no longer gate inputs — session identity does not gate
-  reads (see rationale above), only writes (via the path it's written to).
-- **READ side**: `push.sh` scans every `<branch-encoded>.json` file found at either depth under
-  the repo-hash directory (`find <repo-hash-dir> -maxdepth 2 -name '<branch-encoded>.json'`) —
-  every session's slot, plus the legacy path, all as equal candidates, sorted newest-mtime-first.
-  For each candidate it parses `commit_sha` and tests `git merge-base --is-ancestor <commit_sha>
-  HEAD`; the first candidate that passes wins and is consumed. Malformed/unparseable candidates
-  are skipped (not fatal) as long as some other candidate is valid — the gate only fails closed
-  when NO candidate anywhere validates.
-
-**Rejection conditions** (push is blocked if any hold):
-- No usable token: the repo-hash directory doesn't exist, contains no `<branch-encoded>.json`
-  file at any session depth, or every candidate found either fails to parse or has a `commit_sha`
-  that is not an ancestor of current HEAD (e.g. it names a commit that was reset/rebased away, or
-  belongs to an unrelated branch/repo state).
-- No ancestor-passing candidate: every discovered candidate's `commit_sha` fails
-  `git merge-base --is-ancestor <commit_sha> HEAD` (distinct from "no usable token" above only in
-  that files did exist and parse; they just don't name anything still reachable from HEAD).
-
-**Resolution**: run `/commit [<task-id>]` — in ANY session on this branch, not necessarily this
-one. The `changelog-analyst` subagent (or, under `/clean`, the cleaner) runs the token's writer
-after a successful real-branch commit; as
-long as that commit is still reachable from HEAD (not reset/rebased away), its token remains
-usable by any session's `/push` indefinitely, not just the session that minted it. The token is
-consumed (deleted) after a successful push.
-
-**Guard registration note**: `pretool-git-privilege-guard.py` is REGISTERED in `settings.json` (PreToolUse, Bash matcher). changelog-analyst commits require either a valid commit grant (written by `/commit` Step 5) or the `auto-bulk:` prefix (matched by `BLESSED_BRIDGE_RE`). Direct `git commit` by agents without a grant or blessed prefix is blocked.
-
-## Pre-conditions for success
-
-- On a real branch.
-- Branch has commits ahead of the remote's tracking ref, or the remote lacks the branch.
-- The selected remote exists locally.
-- A valid push-gate token exists at the path above (see Session commit prerequisite).
+`hooks/push.sh` is the push-gate token's one decider: it exits 3 unless some token for this branch, written by any session's `/commit` (`scripts/write-push-gate-token.py`), names a commit that is an ancestor of HEAD, not necessarily HEAD itself (on a shared branch, equality would let any session's next commit void every other session's token). Run `/commit [<task-id>]` in any session to mint one; a successful push consumes it.
 
 ## Exit codes
 
@@ -120,48 +20,33 @@ consumed (deleted) after a successful push.
 | 0    | Push succeeded, or nothing to push |
 | 1    | Detached HEAD, missing remote, or normal push failure |
 | 2    | Blocked option such as force/delete/ref-rewrite mode |
-| 3    | No push-gate token names an ancestor of HEAD (see Session commit prerequisite) |
+| 3    | No push-gate token names an ancestor of HEAD |
 
 ## Agentic dispatch protocol (pre-execution)
 
-Before calling `push.sh`, the orchestrator MUST execute the following steps in order. Where one refuses,
-ask ONE AskUserQuestion in this turn instead of exiting: the question is the refusal's message with its
-facts; the options are the action the refusal names, marked (Recommended), and "I give another
-instruction". Act on the answer; a refusal met again after it is reported in the reply, not asked again.
+Run these steps in order. Where one refuses, ask ONE AskUserQuestion in this turn instead of exiting: the question is the refusal's message with its facts; the options are the action the refusal names, marked (Recommended), and "I give another instruction". Act on the answer; a refusal met again after it is reported in the reply, not asked again.
 
 **Step 0: Parse arguments and resolve remote**
 
-Parse user-supplied arguments (optional `<remote>`, optional `--auto`). Resolve the push
-target remote using the same fork-prefer-origin logic as push.sh lines 38-42:
-
-```bash
-if git remote get-url fork >/dev/null 2>&1; then
-    RESOLVED_REMOTE="fork"
-else
-    RESOLVED_REMOTE="origin"
-fi
-# Explicit user-provided remote argument overrides the above
-```
+Read the typed arguments: an optional `<remote>` and an optional `--auto`. Step 2's call resolves the remote: the typed one, else `fork` when that remote exists locally, else `origin`.
 
 **Step 1: Push-gate token (Chain A)**
 
-`push.sh` is the push-gate token's one decider (Session commit prerequisite): it refuses the push (exit 3)
-when no candidate names an ancestor of HEAD. This step reads nothing; go on to Step 2.
+`push.sh` is the push-gate token's one decider (Session commit prerequisite): it exits 3 when no token names an ancestor of HEAD. This step reads nothing; go on to Step 2.
 
 **Step 2: Compute pre-push snapshot**
 
 ```bash
-PRE_HEAD=$(git rev-parse HEAD)
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-REMOTE_URL=$(git remote get-url "${RESOLVED_REMOTE}" 2>/dev/null || echo "unknown")
-REPO_ROOT=$(realpath "$(git rev-parse --show-toplevel)")
-REPO_HASH=$(printf '%s' "${REPO_ROOT}" | sha256sum | cut -c1-16)
-REQUEST_ID=$(openssl rand -hex 16)
-SESSION_ID="${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
+# Bare /push:
+python3 "<HARNESS_ROOT>/scripts/steps/push-snapshot.py"
+
+# /push <remote>:
+python3 "<HARNESS_ROOT>/scripts/steps/push-snapshot.py" --remote <remote>
 ```
 
-If `BRANCH` is `HEAD`, refuse: "HEAD is detached" (action "check out the branch to push"). If `SESSION_ID` is
-empty, refuse: "Cannot dispatch push-analyst: no session id" (action "re-run the snapshot now").
+It prints `KEY=value` lines: `BRANCH`, `PRE_HEAD`, `RESOLVED_REMOTE`, `DEFAULT_REMOTE` (what a bare `/push` targets), `REMOTE_URL` (`unknown` when that remote does not exist), `REQUEST_ID`, `SESSION_ID`, `REPO_ROOT` and `REPO_HASH`. Later steps are separate calls: copy these values from the output into the placeholders of the same name.
+
+If `BRANCH` is `HEAD`, refuse: "HEAD is detached" (action "check out the branch to push"). If `SESSION_ID` is empty, refuse: "Cannot dispatch push-analyst: no session id" (action "re-run the snapshot now").
 
 **Step 3: Dispatch push-analyst subagent**
 
@@ -181,90 +66,33 @@ REPO_HASH=<REPO_HASH>
 </obligation>
 ```
 
-The obligation names this dispatch's role and command. The grant itself lives in the state dir, outside the repository, where no obligation path can name it, so the artifact it declares is the push-analyst's closing `push-analyst grant written: <GRANT_PATH>` line (agents/push-analyst.md Phase 7).
-
-Wait for the subagent to complete before proceeding.
+The grant lives in the state dir, outside the repository, so the artifact the obligation declares is the push-analyst's closing `push-analyst grant written: <GRANT_PATH>` line (agents/push-analyst.md Phase 7). Wait for the subagent to complete before proceeding.
 
 **Step 4: Grant validation and sentinel write (Chain B) — performed by execute-push.py**
 
-`execute-push.py` (Step 5) is the sole grant validator and consumer. The orchestrator
-MUST NOT manually read, validate, or unlink the push-analyst grant file. Pass all Step 2
-snapshot values to the script directly. No subagent delegation.
-
-For reference, the script validates the following grant fields from
-`<state dir>/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json` (the state dir
-is `$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`, the same for every reader and writer):
-- File exists and is valid JSON
-- `nonce` field matches `REQUEST_ID`
-- `branch` field matches `BRANCH`
-- `head_sha` field matches current `git rev-parse HEAD` (single drift check at step 9)
-- `remote_name` field matches `RESOLVED_REMOTE`
-- `session_id` field matches `SESSION_ID`
-- `verdict` field is one of: `"approved"`, `"warn"`, `"blocked"`
-- `risks` field is a JSON array
-- `expires_at` is in the future (ISO-8601 UTC, Z-suffix normalized)
-
-The script applies verdict logic, consumes the grant, writes the Chain-B sentinel
-atomically, and exec's push.sh — all in a single process. See Step 5.
+`execute-push.py` (Step 5) is the sole validator and consumer of the push-analyst grant at `<state dir>/agentic-commit/push-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json`. Do not read, validate or delete the grant file yourself, and delegate nothing: pass Step 2's values to the script.
 
 **Step 5: Call push.sh via execute-push.py (single-process pattern)**
 
-> **WARNING — ORCHESTRATOR MUST EXECUTE DIRECTLY, NOT VIA SUBAGENT**: Steps 4 and 5
-> MUST NOT be delegated to a subagent. Two reasons: (a) subagents legitimately reject
-> writing the Chain-B sentinel as a privilege escalation; (b) the Chain-B sentinel's
-> 60-second mtime gate in `push.sh` cannot survive two sequential agent dispatch delays
-> (30-90s each). The orchestrator MUST run the bash invocation below directly.
-
-validate-push and the actual push MUST be a
-**single-process exec pattern** — `execute-push.py` writes a Chain-B success
-sentinel at
-`<state dir>/agentic-commit/push-analyst/<REPO_HASH>/<BRANCH_ENCODED>-chainB.validated.sentinel.json`
-(atomic temp+rename, mtime ≤ 60s, bound to `request_id` + `head` + `branch` + `remote`)
-and then `os.execv`s `<HARNESS_ROOT>/hooks/push.sh` so both run as ONE PID. The sentinel
-is read ONLY once from inside push.sh; missing / expired / FAIL / mismatched sentinel
-triggers `exit 1` BEFORE any `git push` is reached.
+Run this yourself, never through a subagent: a subagent rightly refuses to write the Chain-B sentinel as a privilege escalation, and push.sh's 60-second sentinel window cannot survive two dispatch delays. `execute-push.py` validates and spends the grant, writes the sentinel and `os.execv`s `<HARNESS_ROOT>/hooks/push.sh`, so validation and push run as one process; push.sh exits 1 on a missing, stale or mismatched sentinel before any `git push`.
 
 ```bash
 # Without --auto:
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/execute-push.py" \
-  --repo-hash "${REPO_HASH}" \
-  --branch "${BRANCH}" \
-  --remote "${RESOLVED_REMOTE}" \
-  --request-id "${REQUEST_ID}" \
-  --repo-root "${REPO_ROOT}"
+python3 "<HARNESS_ROOT>/scripts/execute-push.py" \
+  --repo-hash "<REPO_HASH>" \
+  --branch "<BRANCH>" \
+  --remote "<RESOLVED_REMOTE>" \
+  --request-id "<REQUEST_ID>" \
+  --repo-root "<REPO_ROOT>"
 
 # With --auto (only when /push was invoked with --auto):
-python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/execute-push.py" \
-  --repo-hash "${REPO_HASH}" \
-  --branch "${BRANCH}" \
-  --remote "${RESOLVED_REMOTE}" \
-  --request-id "${REQUEST_ID}" \
-  --repo-root "${REPO_ROOT}" \
+python3 "<HARNESS_ROOT>/scripts/execute-push.py" \
+  --repo-hash "<REPO_HASH>" \
+  --branch "<BRANCH>" \
+  --remote "<RESOLVED_REMOTE>" \
+  --request-id "<REQUEST_ID>" \
+  --repo-root "<REPO_ROOT>" \
   --auto
 ```
 
-This script validates the grant (non-head_sha fields), acts on verdict, checks HEAD drift
-(single check: grant.head_sha vs current HEAD), consumes the grant, writes the Chain-B
-sentinel atomically, and replaces itself with push.sh via `os.execv`. No subagent
-delegation. No `&&` chaining. The orchestrator calls this directly. Its refusals: "push BLOCKED
-by push-analyst" (action "resolve the listed risks first"); exit 3, no push-gate token (action "run /commit first").
-
-`--auto` is a boolean flag with no value argument. Do NOT pass `--auto "$AUTO"`.
-`CLAUDE_SESSION_ID` is read from the environment automatically; do NOT pass it as a
-CLI argument.
-
-Note: `python3` runs it directly (stdlib only, no venv), matching the `Bash(python3:*)` allow entry.
-
-## Push-analyst grant TTL
-
-The push-analyst writes its Chain-B grant with a default TTL of
-`PUSH_ANALYST_GRANT_TTL_SECONDS = 600` seconds (10 minutes), sized to cover the full
-orchestrator → push-analyst → orchestrator result-processing → execute-push.py round
-trip. The 600s TTL is the named constant defined in `agents/push-analyst.md` Phase 7.
-The commit-grant mechanism at `scripts/write-commit-grant.py`
-(`GRANT_TTL_MINUTES = 30`) is a DIFFERENT mechanism with its own TTL.
-
-## Related
-
-- `/commit <task-id>` — automatic semantic commit for a closed task.
-- Direct `git push` — agents must use `/push` via the wrapper script; the privilege guard is registered and enforces commit authorization before push is meaningful.
+`--auto` takes no value, and the session id comes from the environment, not from an argument. Run the call alone, with no `&&` chaining. Its refusals: "push BLOCKED by push-analyst" (action "resolve the listed risks first"); exit 3, no push-gate token (action "run /commit first").
